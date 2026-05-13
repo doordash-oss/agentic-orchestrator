@@ -1,0 +1,22 @@
+{{- /*
+  roadmap_revision.user: the Plan/Roadmap-phase user prompt for REVISION
+  after critic feedback. Inquireness is hard-coded to "none" (revisions
+  never re-open the human-decision loop).
+*/ -}}
+{{- define "roadmap_revision.user" -}}
+{{ if .RoadmapFormatPath }}The methodology references the roadmap output format at: {{ .RoadmapFormatPath }} — read this file in addition to the SKILL.md before producing the revised roadmap.
+
+{{ end }}# Revision Context
+
+This is revision attempt {{ .Attempt }}.
+
+{{ if .PreviousRoadmapPath }}## Roadmap to Revise
+
+Roadmap: {{ .PreviousRoadmapPath }}
+
+{{ end }}## Critic Feedback
+
+{{ .CriticFeedback }}
+
+{{ template "prior_axis_approvals" .PriorAxisApprovals }}{{ template "autonomous_inquireness" .Inquireness }}
+{{ end -}}

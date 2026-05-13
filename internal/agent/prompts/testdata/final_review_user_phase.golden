@@ -1,0 +1,23 @@
+## Visual References
+
+IMPORTANT: The user attached the image(s) below when creating this feature. They communicate intent that text alone cannot — mockups, desired-state screenshots, annotated whiteboards, bug repros, or reference designs. Before conducting this final review, Read each image via tool-use and treat its visual information as a binding specification for what the output should look like. If an image shows a specific layout, palette, typography, or interaction, match it; do not substitute generic defaults.
+
+- [Image #1]: /tmp/login.png
+
+# Review Context
+
+**Review iteration**: 1
+**Diff base**: main
+
+## Feature Intent
+
+**Roadmap**: /state/feat-x/run-1/roadmap/plan.md
+
+**Exit criteria**:
+Relevant tests pass.
+
+## Verification Context
+
+**Testing contract**: /state/feat-x/run-1/phase-1/contract.yaml
+**Verification report**: /state/feat-x/run-1/phase-1/iter-2/verification-report.yaml
+

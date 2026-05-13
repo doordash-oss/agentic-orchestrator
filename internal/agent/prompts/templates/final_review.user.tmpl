@@ -1,0 +1,32 @@
+{{- /*
+  final_review.user: the Final-Review user prompt for the interactive
+  reviewer session (full tool access — can read the diff, run tests/build,
+  explore the codebase). Distinct from review.user.tmpl which is for the
+  per-iteration print-mode review gate that audits the verification report.
+*/ -}}
+{{- define "final_review.user" -}}
+{{ template "visual_references" .VisualReferences }}# Review Context
+
+**Review iteration**: {{ .Iteration }}
+**Diff base**: {{ .DiffBase }}
+
+## Feature Intent
+
+{{ if .RoadmapPath }}**Roadmap**: {{ .RoadmapPath }}
+{{ end }}
+{{ if .ExitCriteria }}**Exit criteria**:
+{{ .ExitCriteria }}
+
+{{ end }}{{ if .CycleFocus }}## Current Cycle Focus
+
+{{ .CycleFocus }}
+
+{{ end }}{{ if .TestingContractPath }}## Verification Context
+
+**Testing contract**: {{ .TestingContractPath }}
+**Verification report**: {{ .VerificationPath }}
+
+{{ else if .VerificationPath }}**Verification report**: {{ .VerificationPath }}
+{{ end }}{{ if not .Publishable }}NOTE: Local-only repository — no remote (origin) available.
+{{ end }}
+{{- end -}}

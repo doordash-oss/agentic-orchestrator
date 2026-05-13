@@ -1,0 +1,54 @@
+{{- /*
+  review.user: the Review-gate user prompt. Run inside a bounded read-only
+  helper — large artifacts (plan, roadmap, progress, verification report)
+  are referenced by path so the reviewer reads them via tool use,
+  preserving budget for the reasoning step.
+*/ -}}
+{{- define "review.user" -}}
+Iteration under review: {{ .Iteration }}
+Iteration artifacts directory: {{ .IterDir }}
+
+{{ if .RoadmapPath }}## Approved Roadmap
+
+This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
+
+Scope guidance:
+- Your review MUST be scoped to the current phase's objectives only.
+- Consult the roadmap to understand what this phase is responsible for and what later phases will handle.
+- Do NOT flag missing functionality that is explicitly deferred to a subsequent phase in the roadmap.
+- Do NOT request changes for incomplete features that are scheduled for later phases.
+- DO flag issues where this phase's specific objectives are not met.
+
+{{ end }}## Implementation Plan
+
+Read the implementation plan (source of truth) at: {{ .PlanPath }}
+
+{{ if .ExitCriteria }}## Exit Criteria
+
+{{ .ExitCriteria }}
+
+{{ end }}{{ if .VerificationReportPath }}## Verification Report
+
+Read the verification report at: {{ .VerificationReportPath }}
+
+{{ end }}{{ if .ContractPath }}## Testing Contract
+
+Read the binding testing contract at: {{ .ContractPath }}
+
+{{ else if .RequiredVerification }}## Required Verification Items
+
+{{ range $i, $item := .RequiredVerification }}{{ inc $i }}. {{ if $item.Name }}{{ $item.Name }}
+   Requirement: {{ $item.Requirement }}{{ else }}{{ $item.Requirement }}{{ end }}
+{{ end }}
+Apply the "Review Rules (With Verification Items)" section from the methodology.
+
+{{ else }}Apply the "Review Rules (Without Verification Items)" section from the methodology.
+
+{{ end }}{{ if .ProgressPath }}## Progress
+
+Read the current progress at: {{ .ProgressPath }}
+
+{{ end }}{{ template "behavioral_evidence_review" .BehavioralEvidence }}{{ template "visual_evidence_review" .VisualEvidence }}{{ if .PhaseType }}## Phase Type
+
+This is a **{{ .PhaseType }}** phase. Apply the corresponding phase-aware review criteria from the methodology.
+{{ end }}{{- end -}}

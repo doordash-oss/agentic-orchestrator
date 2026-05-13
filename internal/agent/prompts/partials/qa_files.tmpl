@@ -1,0 +1,14 @@
+{{- /*
+  qa_files: lists the Q&A artifact paths captured during earlier phases so
+  the agent reads the user's prior decisions verbatim instead of
+  re-asking. Wording differs slightly between phases (whether to mention
+  "do not re-ask"); the Lead field controls the lead sentence and the
+  optional "do-not-re-ask" clause.
+*/ -}}
+{{- define "qa_files" -}}
+{{ if .Paths }}## User Decisions
+
+The user answered clarifying questions during earlier phases. {{ .Lead }}
+{{ range .Paths }}- {{ . }}
+{{ end }}{{ if .TrailingBlank }}
+{{ end }}{{ end }}{{- end -}}

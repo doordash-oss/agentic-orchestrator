@@ -1,0 +1,10 @@
+## Visual Evidence (when UI code changes this iteration)
+
+If this iteration adds or modifies user-facing UI, capture the rendered state of each affected screen into:
+
+    /state/feat-x/run-1/phase-1/iter-2/screenshots/
+
+See skills/frontend-design/SKILL.md (loaded as a mandatory read for this feature) for the full methodology: which harness to use, naming, storage, why it matters. The reviewer on the next hop reads any files it finds in that directory and cannot approve UI changes without them.
+
+If this iteration touches no UI code, the directory's absence is expected.
+

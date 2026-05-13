@@ -1,0 +1,30 @@
+{{- /*
+  implement.user: the per-iteration Implement-phase user prompt.
+
+  Role-internal output roots, artifact paths, resource catalogs, and
+  completion ordering live in the RoleSpec-backed system prompt and the
+  implement SKILL.md. This template carries only per-call arguments.
+*/ -}}
+{{- define "implement.user" -}}
+# Implementation Context
+
+**Plan**: {{ .PlanPath }}
+
+**Exit criteria**: {{ .ExitCriteria }}
+{{- if gt .Iteration 1 }}
+
+This is iteration {{ .Iteration }}. Resume according to the implement skill handoff rules and use the delta context below.
+{{- end }}{{- if .Feedback }}
+
+Reviewer feedback from previous iteration:
+{{ .Feedback }}
+{{- end }}{{- if .PriorUserInputAnswers }}
+
+Resolved NEED_USER_INPUT from previous iterations:
+{{ .PriorUserInputAnswers }}
+{{- end }}{{- if .HelpAnswers }}
+
+Answers to NEED_HELP questions:
+{{ .HelpAnswers }}
+{{ end -}}
+{{ end -}}

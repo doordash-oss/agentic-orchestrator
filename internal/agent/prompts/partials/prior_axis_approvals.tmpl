@@ -1,0 +1,18 @@
+{{- /*
+  prior_axis_approvals: when revising a roadmap or phase plan after partial
+  approval, lists the axes that already approved sections so the reviser
+  preserves them via the Sticky Approval Respect procedure.
+
+  ArtifactName is "roadmap" or "phase plan". Approvals is a list of {Axis,
+  FrozenSections}; each FrozenSections is a list of section heading strings.
+*/ -}}
+{{- define "prior_axis_approvals" -}}
+{{ if .Approvals }}## Prior Axis Approvals
+
+The following axes have already APPROVED portions of this {{ .ArtifactName }} on prior attempts. Their `frozen_sections` are sticky — apply the Sticky Approval Respect procedure from the corresponding revise skill to decide what you may edit.
+
+{{ range .Approvals }}### {{ .Axis }}
+{{ if not .FrozenSections }}- (no specific sections listed; treat the axis's prior approval as general and avoid gratuitous rewrites)
+{{ end }}{{ range .FrozenSections }}- {{ . }}
+{{ end }}
+{{ end }}{{ end }}{{- end -}}

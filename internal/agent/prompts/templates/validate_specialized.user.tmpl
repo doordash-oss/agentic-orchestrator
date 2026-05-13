@@ -1,0 +1,46 @@
+{{- /*
+  validate_specialized.user: prompt for the per-axis specialized
+  validators (architecture, scope, security, performance, testing,
+  grounding, structural). The DomainName drives the closing verdict
+  ("Evaluate ... from a <axis> perspective"), and a few axis/kind
+  combinations gate optional sub-blocks:
+
+    - The Grounding axis on phase-plan kind injects a "Prior Phase Context"
+      block listing already-shipped prior-phase plans so the critic does
+      not flag legitimate prior-phase symbols as missing on master.
+    - Roadmap kind injects a "Validation Stage" preface that limits the
+      scope of acceptable findings (no per-phase implementation detail).
+
+  The plan body is referenced by path (PlanPath) rather than inlined
+  because plans can be large and the validator reads them via tool use.
+*/ -}}
+{{- define "validate_specialized.user" -}}
+{{ if not .IsRoadmapKind }}## Feature Under Review
+
+**Name**: {{ .Name }}
+
+**Description**:
+> {{ blockquote .Description }}
+
+{{ if .ExitCriteria }}**Exit Criteria**:
+> {{ blockquote .ExitCriteria }}
+
+{{ end }}{{ if .RiskLevel }}**Risk Level**: {{ .RiskLevel }}
+
+{{ end }}{{ end }}{{ if .IncludePriorPhaseContext }}## Prior Phase Context
+
+The worktree is on a feature branch that already contains commits from earlier phases. Symbols introduced by those commits ARE EXPECTED to ground as EXISTS against this worktree — do NOT flag them as missing because they are absent on `master`. Read the prior-phase plans below and treat every symbol their Grounding / Changes Required sections listed as EXISTS on this branch:
+
+{{ range $i, $p := .PriorPhasePlanPaths }}- Phase {{ inc $i }} plan: {{ $p }}
+{{ end }}
+{{ end }}{{ if .IsRoadmapKind }}
+{{ end }}{{ if .ResearchPath }}## Research Findings
+
+Read the research findings at: {{ .ResearchPath }}
+
+Use the research to verify that the plan respects discovered constraints, existing patterns, and integration requirements.
+
+{{ end }}## Plan to Evaluate
+
+Read the plan at: {{ .PlanPath }}
+{{ end -}}

@@ -1,0 +1,12 @@
+## Behavioral Evidence From This Iteration
+
+Driven user-journey artifacts (if produced) live under:
+
+    /state/feat-x/run-1/phase-1/iter-2/behaviors/
+
+Read what's there: Playwright traces, AppleScript logs, headless harness output, HTTP smoke transcripts, CLI session captures. For each artifact, confirm it actually shows the journey completing — the test drove the user's action, and the expected on-disk or backend effect followed. Rendering or launching the binary alone is not enough; the user-task must complete.
+
+If the diff touches a primary user-mutation surface (entrypoint, wizard, submit handler, top-level command, IPC bridge method that fronts a mutation) and this directory is empty or absent — or the artifacts only show launch/render without journey completion — return CHANGES_REQUESTED with a Critical finding. Compile + screenshots + unit tests are not a substitute for an observed user-task; you cannot approve a binary that has not been seen performing its primary mutation.
+
+If the diff does not touch a user-mutation surface, the directory's absence is expected.
+

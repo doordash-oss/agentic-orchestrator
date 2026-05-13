@@ -1,0 +1,23 @@
+The methodology references the plan output format at: /skills/plan-phase/format.md — read this file in addition to the SKILL.md before producing the revised plan.
+
+# Revision Context
+
+Revision attempt 2 for Phase 2 — Wire up auth UI
+
+## Critic Feedback
+
+Plan groundwork is fine but missing PKCE.
+
+## Prior Axis Approvals
+
+The following axes have already APPROVED portions of this phase plan on prior attempts. Their `frozen_sections` are sticky — apply the Sticky Approval Respect procedure from the corresponding revise skill to decide what you may edit.
+
+### scope
+- ## Scope
+
+## Plan to Revise
+
+Plan: /state/feat-x/run-1/phase-2/plan.md
+
+## Ambiguity Resolution [none]
+Resolve all ambiguity autonomously. Do NOT ask the user any questions or request clarification. Make your best judgment on all decisions and proceed.

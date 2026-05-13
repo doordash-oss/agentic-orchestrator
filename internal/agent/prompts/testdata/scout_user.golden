@@ -1,0 +1,14 @@
+## Research Scout Task
+
+Analyze the following source files to answer this research question:
+> How does the auth module wrap errors?
+
+Write concise findings as bullet points. Focus only on the files provided below.
+
+### `auth/login.go` — login flow
+```
+package auth
+
+func Login() error { ... }
+```
+

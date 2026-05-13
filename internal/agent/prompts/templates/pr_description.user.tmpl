@@ -1,0 +1,51 @@
+{{- /*
+  pr_description.user: the Publish-phase prompt for generating a PR
+  title + body from structured signals (feature context, roadmap, commit
+  bodies, diff stat). The raw line-level diff is intentionally NOT
+  injected — commit messages + stats are sufficient for description and
+  fit comfortably inside CLI prompt budgets even on very large features.
+
+  Output format is rigid: TITLE: + BODY: markers so ParsePRDescription
+  can split deterministically.
+*/ -}}
+{{- define "pr_description.user" -}}
+# Generate PR Description
+
+{{ if or .FeatureName .FeatureDescription }}## Feature
+
+{{ if .FeatureName }}Name: {{ .FeatureName }}
+
+{{ end }}{{ if .FeatureDescription }}{{ .FeatureDescription }}
+
+{{ end }}{{ end }}{{ if .Roadmap }}## Roadmap / Plan
+
+{{ .Roadmap }}
+
+{{ end }}{{ if .CommitBodies }}## Commit Messages
+
+```
+{{ .CommitBodies }}
+```
+
+{{ end }}{{ if .DiffStat }}## Changes (file stats)
+
+```
+{{ .DiffStat }}
+```
+
+{{ end }}## Instructions
+
+Generate a pull request description using the feature, roadmap, commit messages,
+and file-level change stats above. The raw line-level diff is intentionally not
+included — rely on the commit messages and stats to describe the change.
+
+Produce:
+1. A concise title (under 70 characters) that captures the feature intent
+2. A Summary section with 1-3 bullets on what changed and why
+3. A Test plan section
+
+Output format (exactly):
+TITLE: <title>
+BODY:
+<body in markdown>
+{{ end -}}

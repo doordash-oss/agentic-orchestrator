@@ -1,0 +1,25 @@
+{{- /*
+  final_fix.user: user prompt for the Final-Review fix agent (post-review
+  iteration). Carries reviewer feedback + verification report path; the
+  fix agent is scoped to addressing review feedback only — no new
+  features.
+
+  Manual-verification-outcomes guidance is conditionally injected when
+  the feedback mentions a manual-verification gate (so the fix agent
+  knows the two valid YAML outcomes and stops re-emitting command-mode
+  evidence on a manual bullet).
+*/ -}}
+{{- define "final_fix.user" -}}
+{{ template "visual_references" .VisualReferences }}# Fix Context
+
+This is fix iteration {{ .Iteration }}.
+
+{{ if .ExitCriteria }}**Exit criteria**:
+{{ .ExitCriteria }}
+
+{{ end }}{{ if .FeedbackPath }}## Reviewer Feedback
+
+Read the reviewer feedback at: {{ .FeedbackPath }}
+
+{{ end }}{{ if .IncludeManualVerificationOutcomes }}{{ template "manual_verification_outcomes" . }}{{ end }}{{ if not .Publishable }}NOTE: Local-only repository — no remote (origin) available.
+{{ end }}{{- end -}}

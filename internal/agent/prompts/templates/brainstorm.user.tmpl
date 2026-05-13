@@ -1,0 +1,39 @@
+{{- /*
+  brainstorm.user: the Brainstorm-phase user prompt body. Receives the
+  research artifact + Q&A files + feature context and produces a design
+  document. Multi-repo Target Repositories block only renders for
+  features spanning ≥ 2 repos (single-repo brainstorms inherit the repo
+  set implicitly from the workdir). The RoleSpec system prompt owns primary
+  skill discovery, Useful Resources, output roots, and completion.
+*/ -}}
+{{- define "brainstorm.user" -}}
+# Feature Context
+
+## Feature Request
+
+**Name**: {{ .Name }}
+
+**Description**:
+
+> {{ blockquote .Description }}
+
+{{ if .Images }}Attached Images:
+{{ range $i, $p := .Images }}- [Image #{{ inc $i }}]: {{ $p }}
+{{ end }}
+{{ end }}{{ if .Attachments }}Attached Files:
+{{ range .Attachments }}- [{{ base . }}]: {{ . }}
+{{ end }}
+{{ end }}{{ if and .MultiRepo (gt (len .Repos) 1) }}## Target Repositories
+
+This is a multi-repo feature spanning the following repositories. Your design must account for interactions between them:
+{{ range .Repos }}- **{{ .Name }}** ({{ .Path }})
+{{ end }}
+{{ end }}{{ if .ResearchArtifactPath }}## Research Findings
+
+Read the research document produced by the previous phase at:
+{{ .ResearchArtifactPath }}
+
+Read this file completely before proceeding.
+
+{{ end }}{{ template "qa_files" .QAFiles }}{{ template "grillme_inquireness" .Inquireness }}
+{{ end -}}

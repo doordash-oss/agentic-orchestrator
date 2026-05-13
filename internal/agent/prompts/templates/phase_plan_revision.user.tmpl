@@ -1,0 +1,25 @@
+{{- /*
+  phase_plan_revision.user: the per-phase plan revision user prompt.
+  Always strict-inquireness=none (revisions don't re-open decisions).
+
+  Feature name, visual references, and prior phase plan paths are
+  intentionally omitted: a revision is a text-level edit driven by critic
+  feedback against the prior plan, not a fresh design pass.
+*/ -}}
+{{- define "phase_plan_revision.user" -}}
+{{ if .PhasePlanFormatPath }}The methodology references the plan output format at: {{ .PhasePlanFormatPath }} — read this file in addition to the SKILL.md before producing the revised plan.
+
+{{ end }}# Revision Context
+
+Revision attempt {{ .Attempt }} for Phase {{ .Phase.Number }} — {{ .Phase.Name }}
+
+## Critic Feedback
+
+{{ .Feedback }}
+
+{{ template "prior_axis_approvals" .PriorAxisApprovals }}{{ if .PhasePlanPath }}## Plan to Revise
+
+Plan: {{ .PhasePlanPath }}
+
+{{ end }}{{ template "autonomous_inquireness" .Inquireness }}
+{{ end -}}

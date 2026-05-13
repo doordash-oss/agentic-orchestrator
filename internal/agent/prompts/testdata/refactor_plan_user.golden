@@ -1,0 +1,15 @@
+# Refactor Plan
+
+## Refactor Request
+
+Extract shared config loading.
+
+## Feature Context
+
+Existing feature context stays available for planning.
+
+## Workspace
+
+Repos in this feature:
+- `api` - `/repos/api`
+- `web` - `/repos/web`

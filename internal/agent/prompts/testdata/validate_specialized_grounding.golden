@@ -1,0 +1,27 @@
+## Feature Under Review
+
+**Name**: OAuth login
+
+**Description**:
+> Sign in with Google.
+
+**Exit Criteria**:
+> Relevant tests pass.
+
+**Risk Level**: medium
+
+## Prior Phase Context
+
+The worktree is on a feature branch that already contains commits from earlier phases. Symbols introduced by those commits ARE EXPECTED to ground as EXISTS against this worktree — do NOT flag them as missing because they are absent on `master`. Read the prior-phase plans below and treat every symbol their Grounding / Changes Required sections listed as EXISTS on this branch:
+
+- Phase 1 plan: /state/feat-x/run-1/phase-1/plan.md
+
+## Research Findings
+
+Read the research findings at: /state/feat-x/run-1/research/research.md
+
+Use the research to verify that the plan respects discovered constraints, existing patterns, and integration requirements.
+
+## Plan to Evaluate
+
+Read the plan at: /state/feat-x/run-1/phase-2/plan.md

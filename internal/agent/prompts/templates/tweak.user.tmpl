@@ -1,0 +1,20 @@
+{{- /*
+  tweak.user: the Tweak-session user prompt. Carries the orientation
+  context an attached tweak session needs. Tweak is fully interactive —
+  the user drives the PTY directly and ends the session with Ctrl+D —
+  so it does NOT participate in the autonomous Implement loop's
+  progress.md / NEED_USER_INPUT handoff contract.
+
+  PlanPath / PRURL render only when the feature has them.
+*/ -}}
+{{- define "tweak.user" -}}
+{{ if .SkillPath }}Before starting your tweak session, read the methodology instructions at: {{ .SkillPath }}
+
+Read the file completely, then use it for this interactive session.
+
+{{ end }}# Tweak Session Context
+
+**Feature**: {{ .Name }}
+{{ if .PlanPath }}**Plan**: {{ .PlanPath }}
+{{ end }}{{ if .PRURL }}**PR**: {{ .PRURL }}
+{{ end }}{{- end -}}

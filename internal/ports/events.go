@@ -1,0 +1,68 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ports
+
+import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
+
+// EventType enumerates domain events emitted by the orchestrator.
+type EventType int
+
+const (
+	FeatureCreated EventType = iota
+	FeatureStarted
+	FeatureAdvanced
+	FeatureCompleted
+	FeatureFailed
+	FeatureInterrupted
+	PhaseStarted
+	PhaseCompleted
+	ReviewRequired
+	PublishStarted
+	PublishCompleted
+	RepoStatusChanged
+	RecoveryScanned
+	RecoveryExecuted
+	SessionOutput
+	// TweakReviewApproved fires when the Final Review session for an active
+	// per-repo CycleTweak cycle lands an APPROVED verdict in its
+	// review-feedback.md handoff. The TUI consumes it to invoke
+	// CompleteTweakFinish (commit review fixes, rebase/push,
+	// CompleteRepoCycle / FailRepoCycle on conflict). Emitted from the
+	// per-repo cycle dispatcher — see CompleteRepoCycle's CycleTweak case
+	// in cycles.go for the one caller.
+	TweakReviewApproved
+	// FeatureConfigChanged fires after Orchestrator.UpdateFeatureConfig
+	// atomically writes the three editable per-feature config axes
+	// (Models, Inquireness, Checkpoints). Carries only {Type, FeatureID};
+	// the typed before/after diff flows through observe.Observer.ConfigChanged,
+	// which owns events.jsonl emission with run_number tagging. The TUI
+	// consumes this as OrchFeatureConfigChangedMsg and reloads the feature.
+	FeatureConfigChanged
+	// NeedUserInputRequired fires when an implement iteration emits
+	// `## Iteration State: NEED_USER_INPUT` and the orchestrator persists
+	// the gate artifact. The TUI consumes it to surface a `Needs user input`
+	// banner. Message carries the agent's gate summary.
+	NeedUserInputRequired
+)
+
+// Event is a typed domain event emitted by the orchestrator.
+type Event struct {
+	Type      EventType
+	FeatureID string
+	Feature   *feature.Feature // non-nil for FeatureCreated
+	Phase     feature.Phase    // set for phase-related events
+	Error     error            // set for failure events
+	Message   string           // human-readable detail
+}

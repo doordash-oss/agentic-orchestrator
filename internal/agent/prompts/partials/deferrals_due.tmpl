@@ -1,0 +1,54 @@
+{{- /*
+  deferrals_due: surfaces ledger entries whose DueByPhase matches the
+  current phase so the agent must address each one explicitly. Wording
+  differs by Kind:
+    - "plan":      the planner must include the entry in scope or re-defer
+                   with a cited reason.
+    - "implement": before SUCCESS, the implementer must close (with
+                   evidence) or re-defer each entry.
+    - "review":    the reviewer verifies that closures are backed by diff
+                   evidence and re-deferrals are plausible.
+*/ -}}
+{{- define "deferrals_due" -}}
+{{ if .Entries }}## Deferrals Due This Phase
+
+{{ if eq .Kind "plan" }}The following work was deferred to phase {{ .Phase }} in earlier iterations. Your plan MUST address each entry in one of two ways:
+
+1. **Include in this phase's scope** — represent the work in `## Tasks` acceptance criteria or `## Success Criteria` so the implementer ships it.
+2. **Escalate for roadmap revision** — if the work genuinely cannot land this phase, stop and emit `AGENT_LOOP_NEED_INPUT: deferred work cannot fit this phase — revise roadmap`. Do not create a plan-level deferrals section or silently punt the work again.
+
+Silent omission is a validator failure (scope axis).
+
+{{ else if eq .Kind "implement" }}The following work was deferred to phase {{ .Phase }} in earlier iterations. Before emitting `## Iteration State: SUCCESS` in `progress.md` you MUST resolve each entry in one of two ways. Both happen in `progress.md`'s `## Deferrals` fenced YAML block (NOT in `verification-report.yaml`):
+
+1. **Close it** — do the work, produce verification evidence in `verification-report.yaml`, and cite the ID in `closed_deferrals:` under `## Deferrals` in `progress.md`:
+   ```yaml
+   closed_deferrals:
+     - D-a3f1c0
+   ```
+2. **Re-defer it** — emit an entry in `deferrals:` citing the ledger ID verbatim as `id:`. The `id:` is the match key — if you re-type the description without citing the id, the gate will treat it as a fresh entry and leave the original unaddressed:
+   ```yaml
+   deferrals:
+     - id: D-a3f1c0        # verbatim from the list below
+       description: (can be rewritten for clarity; the id match wins)
+       due_by_phase: 7
+       reason: |
+         Cited reason for slipping the work to phase 7.
+   ```
+
+_Optional_: if you are emitting a deferral whose work is repo-local — only relevant to one or a subset of this feature's repos — include `repo_scope: [repo-a, repo-b]` in the YAML. Omit the field for cross-cutting work that touches every repo (this is the default).
+
+The Report Integrity Gate refuses SUCCESS while any entry below is still open in the ledger and neither closed nor re-deferred.
+
+{{ else if eq .Kind "review" }}The following deferrals were due by phase {{ .Phase }}. When reviewing this iteration, verify each entry's state:
+
+- If the iteration's `closed_deferrals:` cites an ID below, Read the diff and confirm the work actually landed. Self-reported closures without diff evidence are a Critical finding.
+- If the iteration's `deferrals:` re-defers an ID below, confirm the cited reason is plausible against the phase plan; chronic re-deferrals (a single ID punted across ≥ 2 phases) are a signal the work is being avoided and worth flagging as High.
+- If neither happened and an entry is still open, the Report Integrity Gate should already have rejected the iteration. If somehow it reached you, return CHANGES_REQUESTED citing the unresolved ID.
+
+{{ end }}{{ range .Entries }}- **[{{ .ID }}]** {{ .Description }}
+  - Created in phase {{ .CreatedInPhase }} ({{ .CreatedInKind }}); due by phase {{ .DueByPhase }}
+{{ if .Reason }}  - Reason: {{ .Reason }}
+{{ end }}{{ if .RedeferralCount }}  - Re-deferred {{ .RedeferralCount }} time(s) — chronic slippage
+{{ end }}{{ end }}
+{{ end }}{{- end -}}

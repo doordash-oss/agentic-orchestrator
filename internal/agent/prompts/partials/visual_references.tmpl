@@ -1,0 +1,18 @@
+{{- /*
+  visual_references: re-injects user-attached images (mockups, design
+  comps, annotated whiteboards, bug repros) so phases downstream of
+  Brainstorm don't lose visual specification. Tag-gated per phase by the
+  caller (no-op when Images is empty).
+
+  Label is a short phase-specific noun woven into the imperative so each
+  phase's prompt reads naturally — "implementing", "reviewing",
+  "planning". Defaults to "working on this feature".
+*/ -}}
+{{- define "visual_references" -}}
+{{ if .Images }}## Visual References
+
+IMPORTANT: The user attached the image(s) below when creating this feature. They communicate intent that text alone cannot — mockups, desired-state screenshots, annotated whiteboards, bug repros, or reference designs. Before {{ .Label }}, Read each image via tool-use and treat its visual information as a binding specification for what the output should look like. If an image shows a specific layout, palette, typography, or interaction, match it; do not substitute generic defaults.
+
+{{ range $i, $p := .Images }}- [Image #{{ inc $i }}]: {{ $p }}
+{{ end }}
+{{ end }}{{- end -}}

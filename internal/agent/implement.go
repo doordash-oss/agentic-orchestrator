@@ -1,0 +1,1640 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package agent
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+)
+
+// ImplementConfig holds configuration for the implementation loop.
+type ImplementConfig struct {
+	Feature             *feature.Feature
+	FeatureStore        ports.FeatureStore // for reading updated help answers
+	WorkDir             string
+	PlanPath            string // absolute path to the plan artifact; the agent reads it via tool use
+	MaxIterations       int
+	MaxConsecFails      int
+	MaxConsecNoProgress int
+	ExitCriteria        string
+	Model               string
+	ReviewModel         string
+	ArtifactDir         string // base dir for iteration artifacts
+	StateDir            string // feature state directory for PID files
+
+	// AdditionalDirs are extra directories to pass as --add-dir flags to the
+	// claude CLI, giving the agent file-system access beyond WorkDir and StateDir.
+	// Under the unified phase-implement flow this carries every repo in
+	// Feature.Repos beyond the cwd state dir; the per-stage upstream context
+	// injection of the legacy per-repo flow is gone.
+	AdditionalDirs []string
+
+	// KBInfos are repo knowledge base paths to include in prompts.
+	KBInfos []KBInfo
+
+	// PhaseType is the roadmap phase type ("tracer-bullet", "tdd-fill-in", "collapsed", or "").
+	// Used to inject phase-aware review criteria.
+	PhaseType string
+
+	// RoadmapPath is the absolute path to the approved roadmap artifact.
+	// Included in the review prompt so the reviewer has full context.
+	RoadmapPath string
+
+	// BrainstormArtifactPath is the absolute path to the brainstorm design
+	// document, if one was produced. Retained for caller compatibility;
+	// implementation prompts no longer re-inject it.
+	BrainstormArtifactPath string
+
+	// DangerouslySkipPermissions enables --dangerously-skip-permissions for
+	// interactive sessions, replacing the default --permission-mode flag.
+	DangerouslySkipPermissions bool
+
+	// PermissionCache is the shared permission cache for auto-approving
+	// previously remembered tool requests. Nil means no caching.
+	PermissionCache *permission.Cache
+
+	// BuildSession creates CLI command args, env vars, and session opts
+	// by routing through the provider registry. In tests, provide a mock
+	// function. In production, set to PhaseRunner.BuildSession.
+	BuildSession func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
+
+	// Observer is the observability facade for lifecycle event emission (nil = no-op).
+	Observer *observe.Observer
+
+	// RepoName is the repo name for session ID namespacing in multi-repo features.
+	RepoName string
+
+	// EffortLevel is the pipeline-driven effort level passed to providers.
+	EffortLevel llm.EffortLevel
+
+	// SkillsDir is the path to the reconciled skills directory on disk.
+	SkillsDir string
+
+	// GuidelinesDir is the path to the reconciled guidelines directory on disk.
+	GuidelinesDir string
+
+	// OnReviewingChange is called when the implementation loop enters or exits
+	// the review gate. This allows the orchestrator to update per-repo status
+	// to "reviewing". The bool parameter is true when entering review, false
+	// when exiting.
+	OnReviewingChange func(reviewing bool)
+
+	// SessionStartFunc overrides SessionManager.StartSession in tests.
+	// When non-nil, called instead of sm.StartSession. Return
+	// ports.ErrSessionShuttingDown to exit the loop cleanly.
+	SessionStartFunc func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
+
+	// AskingClause is the pre-resolved "Asking Questions" prompt section
+	// from the PromptAdapter for the implementation model. Set by PhaseRunner
+	// before launching the loop.
+	AskingClause string
+
+	// SkipIterationReview, when true, causes the implementation loop to skip
+	// the per-iteration review gate on SUCCESS and immediately return
+	// "review_passed". Medium and Large profiles set this to true in the
+	// single-repo path, relying on the Final Review for quality gating.
+	// Moonshot, multi-repo orchestration, repo-scoped cycles, and refactor loops
+	// keep per-iteration review enabled.
+	SkipIterationReview bool
+}
+
+// LoopResult represents the outcome of the full implementation loop.
+//
+// FinalStatus values:
+//   - "review_passed":     iteration emitted SUCCESS and the review gate APPROVED.
+//   - "max_iterations":    hit cfg.MaxIterations without a passing review.
+//   - "safety_rail":       no-progress / consecutive-failure rail tripped.
+//   - "interrupted":       shutdown / feature stopped while running.
+//   - "need_user_input":   iteration emitted NEED_USER_INPUT — single-repo
+//     pause gate. NeedUserInputPath points to the persisted gate artifact
+//     and Iterations carries the iteration that emitted the gate so the
+//     orchestrator can resume at iteration N+1.
+type LoopResult struct {
+	FinalStatus string
+	Iterations  int
+	LastError   string
+
+	// NeedUserInputPath is the absolute path of the persisted gate
+	// artifact written when FinalStatus == "need_user_input". Empty for
+	// every other status.
+	NeedUserInputPath string
+}
+
+// RunImplementationLoop manages the iterative agent loop.
+// It creates sessions for each iteration, monitors progress, and handles
+// the review gate. Returns when SUCCESS+APPROVED, max iterations reached,
+// or safety rails triggered.
+func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result *LoopResult, err error) {
+	am := NewArtifactManager(cfg.ArtifactDir)
+	pt := NewProgressTracker()
+	progressPath := filepath.Join(cfg.ArtifactDir, "progress.md")
+	summaryPath := filepath.Join(cfg.ArtifactDir, "summary.log")
+	aggregateLogPath := filepath.Join(cfg.ArtifactDir, "output.txt")
+	// implProtocol is built per-iteration below with the correct iterDir
+	// so the agent writes phase_complete to the iteration directory.
+
+	// Phase-level instrumentation
+	featureCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun)
+	phaseCtx := featureCtx.Child()
+	phaseStart := time.Now()
+	cfg.Observer.PhaseStarted(phaseCtx, "implement")
+	defer func() {
+		var finalErr error
+		if err != nil {
+			finalErr = err
+		} else if result != nil && result.FinalStatus != "review_passed" {
+			finalErr = fmt.Errorf("%s", result.FinalStatus)
+			if result.LastError != "" {
+				finalErr = fmt.Errorf("%s: %s", result.FinalStatus, result.LastError)
+			}
+		}
+		cfg.Observer.PhaseCompleted(phaseCtx, "implement", time.Since(phaseStart), finalErr)
+	}()
+
+	// Resume from the latest completed iteration, if any.
+	startIter := am.LatestIteration()
+	var consecutiveFailures int
+	var reviewerFeedback string
+
+	// Mid-iteration restart: if the next iteration's dir already has
+	// phase_complete (but no meta.yaml, otherwise LatestIteration would have
+	// advanced past it), the implement phase finished before the prior run
+	// was interrupted — likely during the review gate. Skip the implement
+	// session and jump straight to the review for that iteration.
+	skipImplement := false
+	if nextIter := startIter + 1; nextIter <= cfg.MaxIterations {
+		nextIterDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", nextIter))
+		skipImplement = HasPhaseComplete(nextIterDir)
+	}
+
+	if startIter > 0 {
+		// Recover consecutiveFailures: count trailing iterations that
+		// consumed the unified failure budget before restart.
+		for j := startIter; j >= 1; j-- {
+			iterDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", j))
+			meta, err := am.ReadMeta(iterDir)
+			if err != nil || !isFailureBudgetAgentStatus(meta.AgentStatus) {
+				break
+			}
+			consecutiveFailures++
+		}
+		// Recover reviewer feedback: walk backwards to find the most recent
+		// CHANGES_REQUESTED review. FAILED iterations (e.g. API errors) sit
+		// between the last review and the restart point and must be skipped.
+		for j := startIter; j >= 1; j-- {
+			jDir := filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", j))
+			jMeta, jErr := am.ReadMeta(jDir)
+			if jErr != nil {
+				continue
+			}
+			if jMeta.ReviewStatus == "CHANGES_REQUESTED" {
+				if data, err := os.ReadFile(filepath.Join(jDir, "review-feedback.md")); err == nil {
+					reviewerFeedback = strings.TrimSpace(string(data))
+				}
+				break
+			}
+			// Stop searching once we hit an iteration that had a successful
+			// review (APPROVED) or a non-FAILED agent run — earlier feedback
+			// would already have been addressed by that iteration.
+			if !isFailureBudgetAgentStatus(jMeta.AgentStatus) {
+				break
+			}
+		}
+	}
+
+	for i := startIter + 1; i <= cfg.MaxIterations; i++ {
+		iterStart := time.Now()
+		iterCtx := phaseCtx.Child()
+		cfg.Observer.IterationStarted(iterCtx, i)
+
+		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+			cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "interrupted")
+			return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+		}
+
+		// Update iteration counter so the TUI dashboard reflects progress
+		if cfg.FeatureStore != nil {
+			_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+				f.CurrentIteration = i
+				return nil
+			})
+		}
+
+		var (
+			iterDir      string
+			agentStatus  string
+			duration     time.Duration
+			cost         SessionCost
+			madeProgress bool
+			exitCode     int
+			sess         ports.SessionHandle
+			waitResult   waitForStatusResult
+		)
+
+		if skipImplement {
+			// Resume point: implement phase already finished in the prior run.
+			// Skip session creation and jump to the review gate. Cost was
+			// already accounted at that run's line ~430, so leave zero here.
+			skipImplement = false
+			iterDir = filepath.Join(cfg.ArtifactDir, fmt.Sprintf("iteration-%02d", i))
+			agentStatus = agentStatusSuccess
+			madeProgress, _ = pt.Check(progressPath)
+		} else {
+			// Read help answers from the latest feature state
+			helpAnswers := ""
+			if cfg.FeatureStore != nil {
+				if latestFeature, err := cfg.FeatureStore.Load(cfg.Feature.ID); err == nil {
+					helpAnswers = buildHelpAnswers(latestFeature.HelpQueue)
+				}
+			}
+
+			// Create iteration directory and write prompt
+			var createErr error
+			iterDir, createErr = am.CreateIterationDir(i)
+			if createErr != nil {
+				return nil, fmt.Errorf("creating iteration dir: %w", createErr)
+			}
+			planContent := readPlanContent(cfg.PlanPath)
+			requiredVerification := BuildRequiredVerification(planContent)
+			verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
+			testingContractPath := ""
+			if contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName); ok {
+				testingContractPath = contractPath
+				contract := compileImplementationTestingContract(cfg, planContent)
+				if err := WriteTestingContract(contractPath, contract); err != nil {
+					return nil, fmt.Errorf("writing testing contract: %w", err)
+				}
+				if err := WriteVerificationReportStubFromContract(verificationReportPath, contractPath, &contract); err != nil {
+					return nil, fmt.Errorf("writing contract verification report stub: %w", err)
+				}
+			} else if err := WriteVerificationReportStub(verificationReportPath, requiredVerification); err != nil {
+				return nil, fmt.Errorf("writing verification report stub: %w", err)
+			}
+			// Build prompt
+			prompt := BuildImplementPrompt(
+				cfg.PlanPath,
+				cfg.ExitCriteria,
+				progressPath,
+				verificationReportPath,
+				testingContractPath,
+				reviewerFeedback,
+				helpAnswers,
+				buildPriorUserInputAnswers(cfg.ArtifactDir),
+				cfg.SkillsDir,
+				cfg.GuidelinesDir,
+				nil,
+				i,
+				cfg.KBInfos...,
+			)
+			// Re-inject user-attached visual references (mockups, design
+			// comps, desired-state screenshots) on every implement
+			// iteration. They communicate intent that text-only phase
+			// plans can't carry; without this they die at Brainstorm.
+			if cfg.Feature != nil {
+				if block := visualReferencesSection(cfg.Feature.Images, "implementing this iteration"); block != "" {
+					prompt = block + prompt
+				}
+			}
+			// For frontend-tagged features, publish the screenshots path
+			// so the implementer knows where to deposit visual evidence.
+			// Methodology lives in skills/frontend-design/SKILL.md (loaded
+			// as a mandatory read via utilskill for frontend features).
+			if block := visualEvidenceImplementSection(cfg.Feature, iterDir); block != "" {
+				prompt = block + prompt
+			}
+			// And the behaviors path for driven user-journey artifacts.
+			// Visual evidence answers "does it look right"; behavioral
+			// evidence answers "does it actually work for the user" — the
+			// gap that lets compile + screenshots + unit tests approve a
+			// binary whose primary mutation flow is broken. Same SKILL.md.
+			if block := behavioralEvidenceImplementSection(cfg.Feature, iterDir); block != "" {
+				prompt = block + prompt
+			}
+			// Surface cross-phase deferrals owed by the current phase so
+			// the agent cannot silently drop prior-phase commitments.
+			// Closing or re-deferring is enforced by the Report Integrity
+			// Gate (see internal/agent/report_integrity.go).
+			if cfg.Feature != nil {
+				if run := cfg.Feature.Run(); run != nil {
+					currentPhase := cfg.Feature.CurrentRoadmapPhase
+					if block := deferralsDueThisPhaseSection(run.Deferrals, currentPhase, deferralPromptKindImplement, cfg.RepoName); block != "" {
+						prompt = block + prompt
+					}
+				}
+			}
+			// Remove stale phase_complete signal from previous turns
+			RemovePhaseComplete(iterDir)
+
+			// Build the RoleSpec-backed system prompt with the iteration-specific
+			// completion marker and output roots.
+			implProtocol := BuildImplementSystemPrompt(BuildImplementSystemPromptInput{
+				IterationDir:  iterDir,
+				SkillsDir:     cfg.SkillsDir,
+				GuidelinesDir: cfg.GuidelinesDir,
+				KBInfos:       cfg.KBInfos,
+				AskingClause:  cfg.AskingClause,
+			})
+
+			// Derive repo name for permission scoping. cfg.RepoName is empty for
+			// single-repo features (preserves legacy "session.pid" PID naming), but the
+			// permission cache needs the actual repo name to scope rules per-repo.
+			permRepoName := cfg.RepoName
+			if permRepoName == "" && len(cfg.Feature.Repos) > 0 {
+				permRepoName = cfg.Feature.Repos[0].Name
+			}
+
+			// Build command + session opts via BuildSession. The additional dirs
+			// list includes the state dir + any upstream repo dirs.
+			dirs := append([]string{cfg.StateDir}, cfg.AdditionalDirs...)
+			command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
+				Model:                          cfg.Model,
+				Prompt:                         prompt,
+				SystemPrompt:                   implProtocol,
+				AdditionalDirs:                 dirs,
+				AgentNames:                     []string{},
+				PIDDir:                         cfg.StateDir,
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
+				RepoName:                       cfg.RepoName,
+				WorkDir:                        cfg.WorkDir,
+				EffortLevel:                    cfg.EffortLevel,
+				Phase:                          feature.PhaseImplement,
+				FeatureTags:                    featureTags(cfg.Feature),
+				SystemPromptHasUsefulResources: true,
+			})
+			if buildErr != nil {
+				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
+			}
+
+			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
+			// Merge iteration-specific fields into session opts
+			sessOpts.Iteration = i
+			sessOpts.PermCacheScope = permRepoName
+
+			// Start session in interactive mode
+			var sessionID string
+			if cfg.Feature.CurrentRoadmapPhase > 0 {
+				sessionID = fmt.Sprintf("%s-phase-%02d-impl", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
+			} else {
+				sessionID = cfg.Feature.ID + "-impl"
+			}
+			sessionID += fmt.Sprintf("-%02d", i)
+			startSession := cfg.SessionStartFunc
+			if startSession == nil {
+				startSession = sm.StartSession
+			}
+			sess, err = startSession(
+				sessionID,
+				cfg.Feature.ID,
+				feature.PhaseImplement,
+				command,
+				cfg.WorkDir,
+				env,
+				sessOpts,
+			)
+			if err != nil {
+				if errors.Is(err, ports.ErrSessionShuttingDown) {
+					cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "interrupted")
+					return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+				}
+				cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), "error")
+				return nil, fmt.Errorf("starting session for iteration %d: %w", i, err)
+			}
+
+			// Emit session.started
+			implSessionCtx := iterCtx.Child()
+			implProvider := ""
+			if sessOpts != nil {
+				implProvider = sessOpts.ProviderName
+			}
+			cfg.Observer.SessionStarted(implSessionCtx, "implement", sessionID, implProvider, cfg.Model, cfg.RepoName)
+			implTracker := &ContextReadTracker{
+				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
+				SkillsDir:     cfg.SkillsDir,
+				GuidelinesDir: cfg.GuidelinesDir,
+				Observer:      cfg.Observer,
+			}
+			implTracker.Install(sess, implSessionCtx, "implement", sessionID)
+
+			// Set up log file
+			logPath := filepath.Join(iterDir, "response.txt")
+			logFile, err := os.Create(logPath)
+			if err != nil {
+				return nil, fmt.Errorf("creating log file: %w", err)
+			}
+			sess.SetLogFile(logFile)
+
+			// Wait for status marker or session exit. If the SDK reports a
+			// non-truncated success without phase_complete, the iteration below
+			// records a protocol violation instead of waiting for user input.
+			waitResult = waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
+				ReadyCheck: func() bool {
+					if HasPhaseComplete(iterDir) {
+						// Agent completed its work — clear any stale question flag
+						// so we don't block on a question the agent already moved past.
+						sess.SetHasUnansweredQuestion(false)
+						return true
+					}
+					// No phase_complete yet — the agent is likely waiting for user input.
+					return false
+				},
+				EnableContextHandoff: true,
+				OnContextHandoff: func(snap contextSnapshot) {
+					cfg.Observer.ContextHandoffTriggered(
+						implSessionCtx,
+						"implement",
+						sessionID,
+						cfg.RepoName,
+						sess.ProviderName(),
+						i,
+						snap.Pct,
+						snap.ThresholdPct,
+						snap.TotalTokens,
+						snap.WindowTokens,
+						snap.BaselineTokens,
+					)
+				},
+			})
+			agentStatus = waitResult.Status
+
+			// App shutdown should not serialize an in-flight iteration as FAILED.
+			// Leaving the iteration incomplete (no meta.yaml) allows restart to replay
+			// the same iteration number instead of incorrectly advancing to the next.
+			//
+			// Grace period: a bare `sm.IsShuttingDown()` check races against how
+			// shutdown signals reach us. When the user presses Ctrl+C, SIGINT
+			// propagates through the process group, killing the agent CLI
+			// *before* the TUI unwinds and main.go calls sm.Shutdown(). The
+			// session dies, waitForStatus returns FAILED, and this check would
+			// run with IsShuttingDown still false — committing a FAILED meta
+			// that makes the next run advance to iteration N+1 instead of
+			// replaying N. Pausing briefly lets the normal shutdown path land.
+			if agentStatus == agentStatusFailed && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+			}
+
+			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+				return &LoopResult{FinalStatus: "interrupted", Iterations: i}, nil
+			}
+
+			duration = time.Since(iterStart)
+
+			// Read cost from session's ResultMessage
+			cost = ExtractSessionCost(sess)
+			cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(cost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+			emitLargeCodexCommandOutputEvents(cfg.Observer, implSessionCtx, "implement", sessionID, cfg.RepoName, sess.ProviderName(), i, logPath)
+
+			// Read output from message log
+			output := sess.MessageLog().Text()
+
+			// Append iteration output to aggregate log so the TUI log viewer works
+			appendIterationLog(aggregateLogPath, i, output)
+
+			// Check progress
+			madeProgress, _ = pt.Check(progressPath)
+
+			// Build iteration metadata from the logical agent result, not
+			// the process status after Stop(). Multi-turn providers such as
+			// Codex can report SUCCESS and then exit non-zero during
+			// intentional cleanup.
+			exitCode = exitCodeFromAgentStatus(agentStatus)
+		}
+		meta := IterationMeta{
+			Iteration:    i,
+			StartedAt:    iterStart,
+			Duration:     duration,
+			ExitCode:     exitCode,
+			AgentStatus:  agentStatus,
+			MadeProgress: madeProgress,
+			CostUSD:      cost.TotalCostUSD,
+			Context:      iterationContextMeta(sess, waitResult.Handoff),
+		}
+
+		// Accumulate iteration cost into feature.
+		// Read the latest ActiveTimingKey from the store rather than the
+		// initial snapshot (cfg.Feature) to avoid mis-attributing cost when
+		// the key has been updated (e.g., plan → implement transition).
+		if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
+			_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+				costKey := f.ActiveTimingKey
+				if costKey == "" {
+					costKey = "implement"
+				}
+				f.AddPhaseCost(costKey, cost.TotalCostUSD)
+				return nil
+			})
+		}
+
+		// Handle based on agent status
+		if agentStatus == agentStatusMissingMarker {
+			violations := []ProtocolViolation{{
+				Artifact: PhaseCompleteFile,
+				Reason:   "SDK reported success but phase_complete was not present",
+			}}
+			lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
+			if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+				return done, nil
+			}
+			continue
+		}
+
+		if agentStatus == agentStatusSuccess {
+			outcome, violations, validateErr := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+			if validateErr != nil {
+				return nil, fmt.Errorf("validating implementer contract: %w", validateErr)
+			}
+			if !outcome.OK {
+				lastErr := formatProtocolViolationError(RoleImplementer, iterDir, violations)
+				if done := recordProtocolViolationIteration(am, summaryPath, iterDir, &meta, i, cfg, iterCtx, cost, iterStart, violations, lastErr, &consecutiveFailures, &reviewerFeedback); done != nil {
+					return done, nil
+				}
+				continue
+			}
+			parsed := outcome.Progress
+
+			// RETRY: skip the review gate entirely; the agent is telling
+			// us the iteration is intentionally partial. The next loop
+			// iteration starts fresh against the just-emitted progress.md
+			// (no reviewer feedback — RETRY is not a rejection).
+			if parsed.State == StateRetry {
+				meta.ReviewStatus = "skipped_retry"
+				meta.AgentStatus = "RETRY"
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
+				consecutiveFailures = 0
+				reviewerFeedback = ""
+				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "retry")
+					return &LoopResult{
+						FinalStatus: "safety_rail",
+						Iterations:  i,
+						LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
+					}, nil
+				}
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "retry")
+				continue
+			}
+
+			// NEED_USER_INPUT: consume the agent-authored gate artifact and return a
+			// non-terminal loop result. The orchestrator transitions the
+			// feature into StatusNeedUserInput; the iteration's meta.yaml
+			// is committed so LatestIteration() advances past it and a
+			// later resume runs iteration N+1.
+			if parsed.State == StateNeedUserInput {
+				gatePath := NeedUserInputPath(iterDir)
+				rec := outcome.NeedUserInput
+				if rec == nil {
+					return nil, fmt.Errorf("validating implementer contract: need-user-input payload missing after successful validation")
+				}
+				meta.AgentStatus = "NEED_USER_INPUT"
+				meta.ReviewStatus = "skipped_need_user_input"
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
+				consecutiveFailures = 0
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
+				return &LoopResult{
+					FinalStatus:       "need_user_input",
+					Iterations:        i,
+					LastError:         strings.TrimSpace(rec.Summary),
+					NeedUserInputPath: gatePath,
+				}, nil
+			}
+
+			// Fall through: SUCCESS — run the review gate.
+			if cfg.SkipIterationReview {
+				// Medium/Large: skip per-iteration review, rely on Final Review
+				meta.ReviewStatus = "skipped"
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
+				consecutiveFailures = 0
+				return &LoopResult{
+					FinalStatus: "review_passed",
+					Iterations:  i,
+				}, nil
+			}
+
+			// Moonshot: run per-iteration review gate.
+			//
+			// Before starting, re-check interruption state. The implement
+			// session may have finished right as a shutdown was initiated;
+			// starting a review session at that point wastes tokens and
+			// races the shutdown, with the review typically coming back as
+			// FAILED — which used to get serialized into meta.yaml and
+			// advance the restart cursor to N+1. Re-check here and exit
+			// cleanly instead. The phase_complete marker from the implement
+			// phase stays on disk, so restart will route through the
+			// skipImplement branch at line 172 and resume the review for
+			// iteration N — exactly the expected behavior.
+			if sm != nil && sm.IsShuttingDown() {
+				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+			}
+			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+			}
+
+			setReviewingGate(cfg, true)
+			if cfg.OnReviewingChange != nil {
+				cfg.OnReviewingChange(true)
+			}
+
+			// Run review gate with observability context
+			reviewCtx := iterCtx.Child()
+			cfg.Observer.ReviewStarted(reviewCtx, i)
+			reviewStart := time.Now()
+			reviewStatus, feedback, reviewErr := runReviewGate(cfg, sm, i, iterDir, parsed, reviewCtx)
+			cfg.Observer.ReviewCompleted(reviewCtx, i, reviewStatus.String(), time.Since(reviewStart))
+
+			// Clear the reviewing flag
+			setReviewingGate(cfg, false)
+			if cfg.OnReviewingChange != nil {
+				cfg.OnReviewingChange(false)
+			}
+
+			// App shutdown during review must NOT serialize iteration-N's
+			// meta.yaml as FAILED (same rationale as the implement-phase
+			// shutdown check above). Without this, restart would see
+			// iteration-N as "complete with review failed" and advance to
+			// N+1, even though the review never ran to completion. Leaving
+			// meta.yaml unwritten lets LatestIteration stop at N-1 and the
+			// skipImplement check at line 174 find the phase_complete
+			// marker, routing restart back to iteration N for review only.
+			// Uses the same grace-period detection as the implement path.
+			if (reviewErr != nil || reviewStatus == ReviewFailed) && sm != nil && waitForShutdownIntent(sm, shutdownDetectionGrace) {
+				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+			}
+			if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+				return &LoopResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+			}
+
+			if reviewErr != nil {
+				if isProtocolViolationError(reviewErr) {
+					consecutiveFailures++
+					if strings.TrimSpace(feedback) == "" {
+						feedback = fmt.Sprintf("Review helper protocol violation: %v", reviewErr)
+					}
+					reviewerFeedback = feedback
+					meta.AgentStatus = agentStatusProtocolViolation
+					meta.ReviewStatus = ReviewChangesRequested.String()
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "protocol_violation")
+					if consecutiveFailures >= cfg.MaxConsecFails {
+						return &LoopResult{
+							FinalStatus: "protocol_violation",
+							Iterations:  i,
+							LastError:   reviewErr.Error(),
+						}, nil
+					}
+					continue
+				}
+				meta.ReviewStatus = reviewStatus.String()
+				_ = am.WriteMeta(iterDir, meta)
+				_ = am.WriteSummary(summaryPath, meta)
+				consecutiveFailures = 0
+				// Review failed to run, treat as changes requested
+				reviewerFeedback = fmt.Sprintf("Review failed to execute: %v", reviewErr)
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_error")
+				continue
+			}
+
+			meta.ReviewStatus = reviewStatus.String()
+			_ = am.WriteMeta(iterDir, meta)
+			_ = am.WriteSummary(summaryPath, meta)
+
+			switch reviewStatus {
+			case ReviewApproved:
+				consecutiveFailures = 0
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_passed")
+				return &LoopResult{
+					FinalStatus: "review_passed",
+					Iterations:  i,
+				}, nil
+			case ReviewChangesRequested:
+				consecutiveFailures = 0
+				reviewerFeedback = feedback
+				// Check no-progress safety rail
+				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
+					return &LoopResult{
+						FinalStatus: "safety_rail",
+						Iterations:  i,
+						LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
+					}, nil
+				}
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "changes_requested")
+				continue
+			default:
+				consecutiveFailures = 0
+				reviewerFeedback = "Review produced no clear result. Please verify your changes."
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_unclear")
+				continue
+			}
+		} else {
+			// Agent exited with error (API_ERROR or failure).
+			// Preserve reviewerFeedback so the next iteration still sees
+			// unaddressed review findings from the last successful review.
+			consecutiveFailures++
+
+			meta.AgentStatus = "FAILED"
+			_ = am.WriteMeta(iterDir, meta)
+			_ = am.WriteSummary(summaryPath, meta)
+
+			// Check consecutive failure safety rail
+			if consecutiveFailures >= cfg.MaxConsecFails {
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatus)
+				return &LoopResult{
+					FinalStatus: "safety_rail",
+					Iterations:  i,
+					LastError:   fmt.Sprintf("%d consecutive agent failures", consecutiveFailures),
+				}, nil
+			}
+			cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatus)
+		}
+	}
+
+	return &LoopResult{
+		FinalStatus: "max_iterations",
+		Iterations:  cfg.MaxIterations,
+		LastError:   "reached maximum iteration count",
+	}, nil
+}
+
+func formatProtocolViolationError(role Role, iterDir string, violations []ProtocolViolation) string {
+	reason := JoinProtocolViolations(violations)
+	if strings.TrimSpace(reason) == "" {
+		reason = "phase_complete was missing"
+	}
+	return fmt.Sprintf("protocol violation: %s @ %s: %s", role, iterDir, reason)
+}
+
+func formatContractViolationFeedback(role Role, violations []ProtocolViolation) string {
+	var b strings.Builder
+	for _, v := range violations {
+		fmt.Fprintf(&b, "- **Critical**: %s: %s\n", v.Artifact, v.Reason)
+	}
+	return FormatStructuredReviewFeedback(
+		fmt.Sprintf("Implementation Review — %s contract violation", role),
+		strings.TrimSpace(b.String()),
+		"",
+		ReviewChangesRequested,
+	)
+}
+
+func recordProtocolViolationIteration(
+	am *ArtifactManager,
+	summaryPath string,
+	iterDir string,
+	meta *IterationMeta,
+	iteration int,
+	cfg ImplementConfig,
+	iterCtx observe.SpanContext,
+	cost SessionCost,
+	iterStart time.Time,
+	violations []ProtocolViolation,
+	lastErr string,
+	consecutiveFailures *int,
+	reviewerFeedback *string,
+) *LoopResult {
+	*consecutiveFailures = *consecutiveFailures + 1
+	feedback := formatContractViolationFeedback(RoleImplementer, violations)
+	_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
+	meta.AgentStatus = "PROTOCOL_VIOLATION"
+	meta.ReviewStatus = "CHANGES_REQUESTED"
+	_ = am.WriteMeta(iterDir, *meta)
+	_ = am.WriteSummary(summaryPath, *meta)
+	*reviewerFeedback = feedback
+	cfg.Observer.IterationEnded(iterCtx, iteration, toSessionUsage(cost), time.Since(iterStart), "protocol_violation")
+	if *consecutiveFailures >= cfg.MaxConsecFails {
+		return &LoopResult{FinalStatus: "protocol_violation", Iterations: iteration, LastError: lastErr}
+	}
+	return nil
+}
+
+func isFailureBudgetAgentStatus(status string) bool {
+	return status == agentStatusFailed || status == agentStatusProtocolViolation
+}
+
+func exitCodeFromAgentStatus(status string) int {
+	if status == agentStatusSuccess {
+		return 0
+	}
+	return 1
+}
+
+func sessionErrFromLogicalAgentStatus(status string, sess ports.SessionView) error {
+	switch status {
+	case agentStatusSuccess:
+		return nil
+	case agentStatusMissingMarker:
+		return sessionErrFromAgentStatus(status)
+	}
+	if err := sessionErrFromStatus(sess); err != nil {
+		return err
+	}
+	return sessionErrFromAgentStatus(status)
+}
+
+// runReviewGate spawns a review agent to evaluate the implementation.
+// The reviewer inspects the repository and iteration artifacts directly
+// using its own tools rather than receiving the full diff inline.
+//
+// Before invoking the LLM reviewer, a deterministic Report Integrity Gate
+// inspects verification-report.yaml for obvious over-claims (missing
+// required items, empty evidence on pass, pass-claims whose evidence text
+// describes failure). The deferral ledger gate runs against the parsed
+// progress.md (passed in by the caller after harness routing), since
+// deferrals now live in `## Deferrals` rather than the YAML report.
+// When either gate rejects, the LLM is skipped entirely and a structured
+// CHANGES_REQUESTED is returned.
+func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir string, parsed *ParsedProgress, reviewCtx observe.SpanContext) (ReviewStatus, string, error) {
+	// Read plan content only to extract required verification items.
+	planContent := readPlanContent(cfg.PlanPath)
+	requiredVerification := BuildRequiredVerification(planContent)
+
+	progressPath := filepath.Join(cfg.ArtifactDir, "progress.md")
+	verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
+	contractPath := ""
+	var contract *TestingContract
+	if path, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName); ok {
+		contractPath = path
+		if loaded, err := ReadTestingContract(contractPath); err == nil {
+			contract = loaded
+		}
+	}
+
+	// Pull the deferral ledger context up front; both the gate and the
+	// post-gate ingestion need it.
+	var ledger []feature.Deferral
+	currentPhase := 0
+	if cfg.Feature != nil {
+		currentPhase = cfg.Feature.CurrentRoadmapPhase
+		if run := cfg.Feature.Run(); run != nil {
+			ledger = run.Deferrals
+		}
+	}
+	var parsedDeferrals []feature.IncomingDeferral
+	var parsedClosedDeferrals []string
+	if parsed != nil {
+		parsedDeferrals = parsed.Deferrals
+		parsedClosedDeferrals = parsed.ClosedDeferrals
+	}
+
+	// Report Integrity Gate: deterministic pre-review. Malformed or missing
+	// reports degrade to the LLM reviewer (which treats them as Critical
+	// findings via the review-implementation skill). The gate runs two
+	// passes — schema/hedge against verification-report.yaml, and
+	// deferral-ledger against the parsed progress.md — merged into a
+	// single Rejected verdict so the agent sees all failure modes at once.
+	var gateResult ReportGateResult
+	if report, err := ReadVerificationReport(verificationReportPath); err == nil {
+		schemaResult := ValidateVerificationReport(report, requiredVerification, contract, true)
+		deferralResult := ValidateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
+		gateResult = MergeGateResults(schemaResult, deferralResult)
+		if gateResult.Rejected {
+			feedback := FormatGateFeedback(gateResult)
+			_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
+			cfg.Observer.ReviewCompleted(reviewCtx, iteration, "CHANGES_REQUESTED_GATE", 0)
+			return ReviewChangesRequested, feedback, nil
+		}
+	} else {
+		// No verification-report.yaml on disk: still run the deferral
+		// gate so a missing report doesn't accidentally bypass cross-
+		// phase commitment enforcement. The reviewer's own checks
+		// (review-implementation/SKILL.md) flag the missing report as
+		// Critical separately.
+		deferralResult := ValidateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
+		if deferralResult.Rejected {
+			feedback := FormatGateFeedback(deferralResult)
+			_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
+			cfg.Observer.ReviewCompleted(reviewCtx, iteration, "CHANGES_REQUESTED_GATE", 0)
+			return ReviewChangesRequested, feedback, nil
+		}
+	}
+
+	// Ingest the deferrals ledger from the parsed progress.md. New
+	// entries are merged idempotently (stable IDs); closures transition
+	// matching ledger entries to Status==closed. The deferral gate above
+	// has already rejected reason-less entries and unclosed-due-this-phase
+	// commitments, so any deferrals reaching this point are intentional.
+	if cfg.FeatureStore != nil && (len(parsedDeferrals) > 0 || len(parsedClosedDeferrals) > 0) {
+		now := time.Now()
+		_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+			run := f.Run()
+			if run == nil {
+				return nil
+			}
+			run.Deferrals = feature.MergeDeferrals(run.Deferrals, parsedDeferrals, currentPhase, now)
+			feature.CloseDeferrals(run.Deferrals, parsedClosedDeferrals, currentPhase, "implement", now)
+			return nil
+		})
+	}
+
+	reviewDir := filepath.Join(iterDir, "review")
+	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+		return ReviewFailed, "", fmt.Errorf("creating review helper directory: %w", err)
+	}
+	RemovePhaseComplete(reviewDir)
+
+	feedbackPath := filepath.Join(reviewDir, "review-feedback.md")
+	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
+	// The behavioral / visual evidence partials are tag-gated: only frontend
+	// features publish a screenshots / behaviors directory, so only they
+	// should see the matching reviewer-side gates ("no screenshots →
+	// CHANGES_REQUESTED", "no driven journey → CHANGES_REQUESTED"). The
+	// rendering itself is template-side now; this string is what flips
+	// the gate on. The partials live at:
+	//   internal/agent/prompts/partials/behavioral_evidence_review.tmpl
+	//   internal/agent/prompts/partials/visual_evidence_review.tmpl
+	evidenceIterDir := reviewEvidenceIterDir(cfg.Feature, iterDir)
+	reviewPrompt := BuildReviewPrompt(
+		cfg.PlanPath,
+		cfg.ExitCriteria,
+		progressPath,
+		iterDir,
+		contractPath,
+		verificationReportPath,
+		iteration,
+		requiredVerification,
+		cfg.RoadmapPath,
+		cfg.PhaseType,
+		feedbackPath,
+		evidenceIterDir,
+	)
+
+	// Re-inject user-attached visual references so the reviewer can
+	// compare what was built against the pixel-level intent.
+	if cfg.Feature != nil {
+		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {
+			reviewPrompt = block + reviewPrompt
+		}
+	}
+	// Surface due-this-phase deferrals so the reviewer can cross-check
+	// closures against the diff and flag chronic re-deferrals.
+	if cfg.Feature != nil {
+		if run := cfg.Feature.Run(); run != nil {
+			currentPhase := cfg.Feature.CurrentRoadmapPhase
+			if block := deferralsDueThisPhaseSection(run.Deferrals, currentPhase, deferralPromptKindReview, cfg.RepoName); block != "" {
+				reviewPrompt = block + reviewPrompt
+			}
+		}
+	}
+
+	// Surface agent-declared caveats to the LLM reviewer so they get
+	// cross-checked against the phase plan rather than silently accepted.
+	if addendum := KnownCaveatsReviewAddendum(gateResult); addendum != "" {
+		reviewPrompt = addendum + "\n\n" + reviewPrompt
+	}
+
+	reviewPromptPath := filepath.Join(reviewDir, "review-prompt.md")
+	logPath := filepath.Join(reviewDir, "review-output.txt")
+
+	var reviewID string
+	if cfg.Feature.CurrentRoadmapPhase > 0 {
+		reviewID = fmt.Sprintf("%s-phase-%02d-review", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
+	} else {
+		reviewID = cfg.Feature.ID + "-review"
+	}
+	reviewID += fmt.Sprintf("-%02d", iteration)
+	helper := &PhaseRunner{
+		SessionManager: sm,
+		StateDir:       cfg.StateDir,
+		SkillsDir:      cfg.SkillsDir,
+		GuidelinesDir:  cfg.GuidelinesDir,
+		Observer:       cfg.Observer,
+		BuildSessionFn: cfg.BuildSession,
+	}
+	helperResult, err := helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+		SessionID:              reviewID,
+		FeatureID:              cfg.Feature.ID,
+		Phase:                  feature.PhaseReview,
+		ParentSpanCtx:          reviewCtx,
+		Model:                  cfg.ReviewModel,
+		Prompt:                 reviewPrompt,
+		PromptPath:             reviewPromptPath,
+		FeedbackPath:           feedbackPath,
+		HelperIterDir:          reviewDir,
+		Role:                   RoleIterationReviewer,
+		WorkDir:                cfg.WorkDir,
+		RepoName:               cfg.RepoName,
+		LogPath:                logPath,
+		SystemPromptPrefix:     "review",
+		CompletionAskingClause: cfg.AskingClause,
+		EffortLevel:            cfg.EffortLevel,
+	})
+	if err != nil {
+		feedback := ""
+		if helperResult != nil {
+			feedback = helperResult.Feedback
+		}
+		// The helper writes review-feedback.md itself under the new
+		// handoff protocol (and synthesizes a CHANGES_REQUESTED file
+		// when the LLM's output is malformed). When the helper failed
+		// before producing anything, fall back to a deterministic stub
+		// so the next iteration's implement prompt still has a
+		// well-formed feedback document to inject.
+		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
+			stub := FormatStructuredReviewFeedback(
+				"Implementation Review — Helper Failed",
+				fmt.Sprintf("- **Critical**: review helper terminated before writing review-feedback.md: %v", err),
+				"",
+				ReviewChangesRequested,
+			)
+			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
+			feedback = stub
+		}
+		if strings.TrimSpace(feedback) != "" {
+			_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
+		}
+		return ReviewFailed, feedback, fmt.Errorf("running review gate: %w", err)
+	}
+
+	if strings.TrimSpace(helperResult.Feedback) != "" {
+		_ = os.WriteFile(parentFeedbackPath, []byte(helperResult.Feedback), 0o644)
+	}
+	return helperResult.Status, helperResult.Feedback, nil
+}
+
+func resolveImplementationContractPath(stateDir string, f *feature.Feature, repoName string) (string, bool) {
+	if f == nil {
+		return "", false
+	}
+	cycleType := resolveCycleTypeForRepo(f, repoName)
+	if cycleType == "" {
+		if f.CurrentRoadmapPhase > 0 {
+			return PhaseTestingContractPath(stateDir, f, f.CurrentRoadmapPhase), true
+		}
+		return "", false
+	}
+	return CycleTestingContractPath(stateDir, f, repoName, cycleType), true
+}
+
+func compileImplementationTestingContract(cfg ImplementConfig, planContent string) TestingContract {
+	if cfg.Feature != nil && cfg.Feature.CurrentRoadmapPhase > 0 && cfg.RepoName == "" {
+		repos := phaseReposForImplementationContract(cfg.Feature, cfg.PlanPath)
+		return CompileTestingContractMultiRepo(MultiRepoContractInput{
+			Repos:     repos,
+			PlanText:  planContent,
+			PlanPath:  cfg.PlanPath,
+			PhaseType: cfg.PhaseType,
+		})
+	}
+	return CompileTestingContract(planContent, cfg.PlanPath, cfg.PhaseType)
+}
+
+func phaseReposForImplementationContract(f *feature.Feature, planPath string) []string {
+	if scope, err := PhaseScope(f, planPath); err == nil && scope.ScopeOK() && len(scope.Repos) > 0 {
+		return scope.Repos
+	}
+	repos := make([]string, 0, len(f.Repos))
+	for _, r := range f.Repos {
+		repos = append(repos, r.Name)
+	}
+	return repos
+}
+
+// BuildImplementPrompt constructs the per-call prompt for an implementation
+// iteration. Role-internal artifact paths, resource catalogs, and static
+// verification discovery live in the RoleSpec-backed system prompt, the
+// pre-seeded verification report, and skills/implement/SKILL.md.
+func BuildImplementPrompt(planPath, exitCriteria, progressPath, verificationReportPath, testingContractPath, feedback, helpAnswers, priorUserInputAnswers, skillsDir, guidelinesDir string, _ []RequiredVerificationItem, iteration int, kbInfos ...KBInfo) string {
+	_ = progressPath
+	_ = verificationReportPath
+	_ = testingContractPath
+	_ = skillsDir
+	_ = guidelinesDir
+	_ = kbInfos
+
+	return roles.BuildImplementPrompt(roles.ImplementUserInput{
+		PlanPath:              planPath,
+		ExitCriteria:          exitCriteria,
+		Feedback:              feedback,
+		HelpAnswers:           helpAnswers,
+		PriorUserInputAnswers: priorUserInputAnswers,
+		Iteration:             iteration,
+	})
+}
+
+// buildHelpAnswers formats answered help requests into a string for the prompt.
+func buildHelpAnswers(queue []feature.HelpRequest) string {
+	var answers []string
+	for _, h := range queue {
+		if !h.Pending && h.Answer != "" {
+			answers = append(answers, fmt.Sprintf("Q: %s\nA: %s", h.Question, h.Answer))
+		}
+	}
+	return strings.Join(answers, "\n\n")
+}
+
+// maxAutoResumeAttempts caps how many consecutive CLI-truncated results
+// we auto-resume before treating a missing completion marker as a protocol
+// violation.
+const maxAutoResumeAttempts = 3
+
+// autoResumeMessage is the user-facing continuation sent to the session
+// when the CLI truncated an invocation mid-work. It reminds the agent of
+// the completion protocol so a genuinely-finished agent can exit cleanly.
+const autoResumeMessage = "Continue where you left off. If you have already finished the task, write the phase_complete marker file now."
+
+const (
+	agentStatusSuccess           = "SUCCESS"
+	agentStatusFailed            = "FAILED"
+	agentStatusAPIError          = "API_ERROR"
+	agentStatusMissingMarker     = "MISSING_PHASE_COMPLETE"
+	agentStatusProtocolViolation = "PROTOCOL_VIOLATION"
+)
+
+// defaultContextHandoffThresholdPct is the context-window utilization
+// (percent) at which waitForStatus nudges the agent to wrap up cleanly for
+// providers without a provider-specific override. The default is chosen well
+// below the Claude CLI's auto-compact trigger (~85%) so the agent has headroom
+// to write a handoff and the phase_complete marker before the CLI would
+// otherwise compact and lose working memory.
+const defaultContextHandoffThresholdPct = 60
+
+// codexContextHandoffThresholdPct is higher because Codex reports its own
+// effective active context window via tokenUsage.modelContextWindow; 60% is
+// too early for Codex's current ~258K effective window.
+const codexContextHandoffThresholdPct = 80
+
+const largeCommandOutputThresholdChars = 20_000
+
+// contextHandoffPollInterval is how often the implementation waiter samples
+// session.ContextPercentage() to decide whether to send the handoff message.
+// Declared as var (not const) so tests can override it without a flag plumb.
+var contextHandoffPollInterval = 2 * time.Second
+
+// contextHandoffMessageBody is the user-facing instruction injected when the
+// session's context utilization first crosses its provider-specific threshold.
+// A fresh iteration will pick up from the updated progress.md with a clean
+// context, so the agent should stop taking new work and leave a good handoff
+// — and emit `## Iteration State: RETRY` so the harness skips the review
+// gate and routes straight to the next iteration.
+const contextHandoffMessageBody = `Wind this iteration down now so the next iteration can resume with a fresh context; the outer loop will spawn a new session seeded with progress.md.
+
+Do this, in order:
+
+1. Do NOT start new implementation work or new substantial tool calls.
+2. Write progress.md per skills/implement/SKILL.md's section schema:
+   - ` + "`" + `## Iteration Handoff` + "`" + ` (Completed / Remaining / Where I stopped / Gotchas).
+   - ` + "`" + `## Deferrals` + "`" + ` (a fenced YAML block; ` + "`" + `deferrals: []` + "`" + ` and ` + "`" + `closed_deferrals: []` + "`" + ` if you have nothing to declare).
+   - ` + "`" + `## Verification Report` + "`" + ` (cite the runtime path the prompt named).
+   - ` + "`" + `## Iteration State` + "`" + ` set to ` + "`" + `RETRY` + "`" + ` so the harness skips review and starts the next iteration with no reviewer feedback.
+
+   (You are emitting RETRY here, so do NOT include the conditional ` + "`" + `## Questions for User` + "`" + ` section — it is reserved for ` + "`" + `NEED_USER_INPUT` + "`" + ` and must sit between ` + "`" + `## Verification Report` + "`" + ` and ` + "`" + `## Iteration State` + "`" + ` only when used.)
+3. Write verification-report.yaml at the runtime path with whatever results you have run; leave unrun checks as ` + "`" + `not_run` + "`" + `.
+4. Touch the phase_complete marker (per your system prompt) as your very last action and end your turn.`
+
+type contextSnapshot struct {
+	Pct            int
+	ThresholdPct   int
+	TotalTokens    int
+	WindowTokens   int
+	BaselineTokens int
+}
+
+type waitForStatusOptions struct {
+	ReadyCheck func() bool
+	// EnableContextHandoff arms the context-utilization wind-down nudge.
+	// The handoff message references the implement progress.md schema, so
+	// only Implementation-phase sessions should set this true. Plan,
+	// roadmap, final-review, and refactor sessions produce different
+	// artifacts and have heavy required-reading loads that would trip the
+	// threshold before they could write any output.
+	EnableContextHandoff bool
+	OnContextHandoff     func(contextSnapshot)
+	// ContextHandoffPollHook is a test hook for observing ticker progress
+	// without sleeping. Production callers leave it nil.
+	ContextHandoffPollHook func()
+}
+
+type waitForStatusResult struct {
+	Status  string
+	Handoff contextSnapshot
+}
+
+func contextHandoffThresholdForProvider(provider string) int {
+	if strings.EqualFold(provider, "codex") {
+		return codexContextHandoffThresholdPct
+	}
+	return defaultContextHandoffThresholdPct
+}
+
+func contextTotalTokens(usage *llm.Usage) int {
+	if usage == nil {
+		return 0
+	}
+	if usage.ContextTotalTokens > 0 {
+		return usage.ContextTotalTokens
+	}
+	return usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+}
+
+func currentContextSnapshot(sess ports.SessionView, thresholdPct int) contextSnapshot {
+	if sess == nil {
+		return contextSnapshot{Pct: -1, ThresholdPct: thresholdPct}
+	}
+	usage := sess.LatestUsage()
+	snap := contextSnapshot{
+		Pct:          sess.ContextPercentage(),
+		ThresholdPct: thresholdPct,
+	}
+	if usage != nil {
+		snap.TotalTokens = contextTotalTokens(usage)
+		snap.WindowTokens = usage.ContextWindow
+		snap.BaselineTokens = usage.ContextBaseline
+	}
+	return snap
+}
+
+func formatContextHandoffMessage(snap contextSnapshot) string {
+	return fmt.Sprintf("Your context window is ~%d%% full, above Agentic's %d%% handoff threshold.\n\n%s",
+		snap.Pct, snap.ThresholdPct, contextHandoffMessageBody)
+}
+
+func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot) *ContextMeta {
+	if sess == nil {
+		return nil
+	}
+	threshold := contextHandoffThresholdForProvider(sess.ProviderName())
+	final := currentContextSnapshot(sess, threshold)
+	if final.Pct < 0 || final.WindowTokens == 0 {
+		return nil
+	}
+	meta := &ContextMeta{
+		Provider:       sess.ProviderName(),
+		ThresholdPct:   threshold,
+		FinalPct:       final.Pct,
+		TotalTokens:    final.TotalTokens,
+		WindowTokens:   final.WindowTokens,
+		BaselineTokens: final.BaselineTokens,
+	}
+	if handoff.Pct >= threshold {
+		meta.HandoffTriggered = true
+		meta.HandoffPct = handoff.Pct
+		meta.HandoffTotalTokens = handoff.TotalTokens
+	}
+	return meta
+}
+
+// waitForStatus waits for the session to produce a result via StatusCh or exit.
+// Returns the SDK-derived session status: "SUCCESS", "FAILED", or
+// "API_ERROR". The harness's iteration state (SUCCESS / RETRY /
+// NEED_USER_INPUT) is parsed from progress.md by ParseProgressMd
+// AFTER this function returns, not from this string.
+//
+// If readyCheck is non-nil, it is called when SUCCESS is received. If it
+// returns false, the agent ended its turn without completing the work.
+// The termination is classified via llm.ClassifyTermination:
+//   - TermTurnTruncated (CLI ended mid-tool-use / max_tokens / pause_turn)
+//     triggers an automatic continuation message, up to
+//     maxAutoResumeAttempts consecutive times. This covers the common case
+//     where the claude CLI ends an invocation while the agent is still
+//     working, without the agent having asked anything.
+//   - Anything else (EndedAfterText, Refused, Errored), or an exhausted
+//     truncation retry budget, returns MISSING_PHASE_COMPLETE so the caller
+//     can count the turn as a protocol violation.
+func waitForStatus(sess ports.SessionHandle, sm ports.SessionManager, sessionID string, readyCheck ...func() bool) string {
+	opts := waitForStatusOptions{}
+	if len(readyCheck) > 0 {
+		opts.ReadyCheck = readyCheck[0]
+	}
+	return waitForStatusDetailed(sess, sm, sessionID, opts).Status
+}
+
+func waitForImplementationStatus(sess ports.SessionHandle, sm ports.SessionManager, sessionID string, readyCheck ...func() bool) string {
+	opts := waitForStatusOptions{EnableContextHandoff: true}
+	if len(readyCheck) > 0 {
+		opts.ReadyCheck = readyCheck[0]
+	}
+	return waitForStatusDetailed(sess, sm, sessionID, opts).Status
+}
+
+func enableTruncatedTurnAutoResume(sessOpts *ports.SessionOpts) *ports.SessionOpts {
+	if sessOpts == nil {
+		sessOpts = &ports.SessionOpts{}
+	}
+	sessOpts.KeepAliveOnTruncatedResult = true
+	return sessOpts
+}
+
+func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ string, opts waitForStatusOptions) waitForStatusResult {
+	isReady := opts.ReadyCheck
+
+	// Counts consecutive auto-resumes triggered by CLI truncation. Resets
+	// whenever we observe a non-truncated result, so each fresh stall has
+	// its own retry budget.
+	autoResumeAttempts := 0
+
+	// Periodically sample the session's context-window utilization and, on
+	// first crossing of the provider-specific threshold, nudge the agent to
+	// wrap up cleanly. Sending once is enough — the outer loop will restart
+	// a fresh iteration from the updated progress.md.
+	//
+	// Gated on EnableContextHandoff: only Implementation-phase sessions
+	// arm the nudge. When disabled, handoffSent starts true so the ticker
+	// case is a no-op for plan, roadmap, final-review, and refactor.
+	var handoffC <-chan time.Time
+	var handoffTicker *time.Ticker
+	if opts.EnableContextHandoff {
+		handoffTicker = time.NewTicker(contextHandoffPollInterval)
+		handoffC = handoffTicker.C
+		defer handoffTicker.Stop()
+	}
+	handoffSent := false
+	handoff := contextSnapshot{
+		Pct:          -1,
+		ThresholdPct: contextHandoffThresholdForProvider(sess.ProviderName()),
+	}
+
+	handleStatus := func(status string, sessionDone bool) (string, bool) {
+		if status == agentStatusAPIError {
+			if sessionDone {
+				return agentStatusFailed, true
+			}
+			return "", false
+		}
+		// If a readiness check is provided and fails, the agent
+		// ended its turn without completing the work. Classify why
+		// so CLI-truncated invocations are auto-resumed instead of
+		// escalating to the user.
+		if status == agentStatusSuccess && isReady != nil && !isReady() {
+			inputs := llm.TerminationInputs{
+				Result:                 sess.Cost(),
+				PhaseCompleteExists:    false, // isReady just returned false
+				AskUserQuestionPending: sess.HasPendingAskUserQuestion(),
+			}
+			class := llm.ClassifyTermination(inputs)
+
+			if class == llm.TermTurnTruncated && autoResumeAttempts < maxAutoResumeAttempts {
+				autoResumeAttempts++
+				if err := sess.SendUserMessage(autoResumeMessage); err != nil {
+					_ = sess.Stop()
+					return agentStatusMissingMarker, true
+				}
+				return "", false
+			}
+
+			// Either not truncated, or the retry cap was reached.
+			autoResumeAttempts = 0
+			_ = sess.Stop()
+			return agentStatusMissingMarker, true
+		}
+		// Got a real status — stop the session.
+		_ = sess.Stop()
+		return status, true
+	}
+
+	doneCh := sess.Done()
+	for {
+		select {
+		case <-handoffC:
+			if opts.ContextHandoffPollHook != nil {
+				opts.ContextHandoffPollHook()
+			}
+			if handoffSent {
+				continue
+			}
+			threshold := contextHandoffThresholdForProvider(sess.ProviderName())
+			snap := currentContextSnapshot(sess, threshold)
+			if snap.Pct < threshold {
+				continue
+			}
+			if err := sess.SendUserMessage(formatContextHandoffMessage(snap)); err == nil {
+				handoffSent = true
+				handoff = snap
+				if opts.OnContextHandoff != nil {
+					opts.OnContextHandoff(snap)
+				}
+			}
+			// On send error, leave handoffSent=false so a later tick retries.
+
+		case <-doneCh:
+			// Session exited — drain StatusCh for any pending status
+			select {
+			case status := <-sess.StatusCh():
+				if result, done := handleStatus(status, true); done {
+					return waitForStatusResult{Status: result, Handoff: handoff}
+				}
+				// A truncated SUCCESS drained after Done() still gets the
+				// same auto-resume behavior as the StatusCh branch. The
+				// done channel is already closed, so disable this select
+				// case while waiting for the resumed turn's next status.
+				doneCh = nil
+				continue
+			default:
+			}
+			// The session message log and cost are updated before the
+			// status channel is signaled. Under load, Done can still win
+			// this select before the status send is observed. Preserve the
+			// terminal result classification instead of demoting the turn
+			// to a generic failure.
+			if cost := sess.Cost(); cost != nil {
+				if result, done := handleStatus(statusFromResult(cost), true); done {
+					return waitForStatusResult{Status: result, Handoff: handoff}
+				}
+				doneCh = nil
+				continue
+			}
+			// Session exited without any status — treat as failure.
+			// A well-behaved agent emits a result message before exiting;
+			// absence of one means something went wrong.
+			return waitForStatusResult{Status: agentStatusFailed, Handoff: handoff}
+
+		case status := <-sess.StatusCh():
+			if result, done := handleStatus(status, false); done {
+				return waitForStatusResult{Status: result, Handoff: handoff}
+			}
+			// API error — the agent is stuck but still alive, or a
+			// truncated turn was auto-resumed. Keep waiting for the next
+			// terminal result.
+			continue
+		}
+	}
+}
+
+func statusFromResult(result *llm.ResultMessage) string {
+	switch {
+	case result.Subtype == "error":
+		return agentStatusAPIError
+	case result.IsSuccess():
+		return agentStatusSuccess
+	default:
+		return agentStatusFailed
+	}
+}
+
+// appendIterationLog appends a single iteration's output to the aggregate log
+// at the well-known path that the TUI log viewer reads.
+func appendIterationLog(path string, iteration int, output string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+	_, _ = fmt.Fprintf(f, "\n=== Iteration %d ===\n\n", iteration)
+	_, _ = f.WriteString(output)
+}
+
+func emitLargeCodexCommandOutputEvents(obs *observe.Observer, sc observe.SpanContext, phase, sessionID, repoName, provider string, iteration int, responsePath string) {
+	if obs == nil || !strings.EqualFold(provider, "codex") || responsePath == "" {
+		return
+	}
+	f, err := os.Open(responsePath)
+	if err != nil {
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 50*1024*1024)
+	for scanner.Scan() {
+		event, ok := parseLargeCodexCommandOutput(scanner.Bytes(), largeCommandOutputThresholdChars)
+		if !ok {
+			continue
+		}
+		obs.ContextLargeOutput(sc, phase, sessionID, repoName, provider, iteration,
+			event.Command, event.OutputChars, largeCommandOutputThresholdChars, event.ExitCode, event.DurationMs)
+	}
+}
+
+type largeCodexCommandOutput struct {
+	Command     string
+	OutputChars int
+	ExitCode    *int
+	DurationMs  *int64
+}
+
+func parseLargeCodexCommandOutput(line []byte, threshold int) (largeCodexCommandOutput, bool) {
+	var raw struct {
+		Method string `json:"method"`
+		Params struct {
+			Item struct {
+				Type             string `json:"type"`
+				Command          string `json:"command"`
+				AggregatedOutput string `json:"aggregatedOutput"`
+				ExitCode         *int   `json:"exitCode"`
+				DurationMs       *int64 `json:"durationMs"`
+			} `json:"item"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return largeCodexCommandOutput{}, false
+	}
+	if raw.Method != "item/completed" || raw.Params.Item.Type != "commandExecution" {
+		return largeCodexCommandOutput{}, false
+	}
+	outputChars := len([]rune(raw.Params.Item.AggregatedOutput))
+	if outputChars < threshold {
+		return largeCodexCommandOutput{}, false
+	}
+	return largeCodexCommandOutput{
+		Command:     raw.Params.Item.Command,
+		OutputChars: outputChars,
+		ExitCode:    raw.Params.Item.ExitCode,
+		DurationMs:  raw.Params.Item.DurationMs,
+	}, true
+}
+
+func readPlanContent(planPath string) string {
+	if planPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// setReviewingGate persists the ReviewingGate flag on the feature so the
+// TUI dashboard can reflect that the review gate is currently running.
+func setReviewingGate(cfg ImplementConfig, reviewing bool) {
+	if cfg.FeatureStore == nil {
+		return
+	}
+	_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+		f.ReviewingGate = reviewing
+		return nil
+	})
+}
+
+// shutdownDetectionGrace bounds how long waitForShutdownIntent will wait for
+// sm.IsShuttingDown() to flip true after a session died. When the user presses
+// Ctrl+C, SIGINT hits the agent CLI child first (via the process group) and
+// the session's Done() channel fires before bubbletea has unwound and main.go
+// has called sm.Shutdown(). A short wait here absorbs that race; anything
+// longer would delay real agent failures (API errors, auth expiry, etc.).
+// 500ms is empirically enough for tea.Quit → main.go → sm.Shutdown() to land.
+const shutdownDetectionGrace = 500 * time.Millisecond
+
+// shutdownChecker is the narrow interface waitForShutdownIntent needs; any
+// type with an IsShuttingDown() bool method satisfies it, which lets tests
+// exercise the grace-period logic without implementing the full
+// ports.SessionManager surface. Real callers pass a *session.Manager, which
+// satisfies this trivially because ports.SessionManager already requires
+// IsShuttingDown().
+type shutdownChecker interface {
+	IsShuttingDown() bool
+}
+
+// waitForShutdownIntent returns true if sm signals shutdown within grace,
+// polling every 25ms. Returns false immediately when sm is nil, and as soon
+// as the deadline passes without shutdown. This lets callers distinguish
+// "session died because we're shutting down" from "session died for a real
+// reason" without writing a premature FAILED state for the former.
+func waitForShutdownIntent(sm shutdownChecker, grace time.Duration) bool {
+	if sm == nil {
+		return false
+	}
+	if sm.IsShuttingDown() {
+		return true
+	}
+	deadline := time.Now().Add(grace)
+	for time.Now().Before(deadline) {
+		time.Sleep(25 * time.Millisecond)
+		if sm.IsShuttingDown() {
+			return true
+		}
+	}
+	return false
+}
+
+// isFeatureInterrupted checks the feature store to determine if the feature
+// has been stopped by the user. Loops call this before starting new sessions
+// to avoid zombie iterations after the user presses 's' to stop.
+func isFeatureInterrupted(store ports.FeatureStore, featureID string) bool {
+	if store == nil {
+		return false
+	}
+	f, err := store.Load(featureID)
+	if err != nil {
+		return false
+	}
+	return f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed
+}

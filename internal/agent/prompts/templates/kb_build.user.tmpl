@@ -1,0 +1,22 @@
+{{- /*
+  kb_build.user: the KB-build phase user prompt. Two modes — full build
+  (no existing KB) vs. incremental update (existing KB + last commit).
+  No user-prompt skill directive: KB-build invokes its methodology through a
+  methodology skill via tool-use the way phase prompts do; the runner
+  builds its own system prompt.
+*/ -}}
+{{- define "kb_build.user" -}}
+# Repository Context
+
+**Repository**: {{ .RepoName }}
+**Repository Path**: {{ .RepoPath }}
+**KB Root Directory**: {{ .KBRootDir }}
+**KB Index Path**: {{ .KBIndexPath }}
+
+{{ if and .ExistingKBPath .LastCommit }}## Mode: INCREMENTAL UPDATE
+
+Existing KB index: {{ .ExistingKBPath }}
+Last built at commit: `{{ .LastCommit }}`
+{{ else }}## Mode: FULL BUILD
+
+{{ end }}{{- end -}}

@@ -1,0 +1,33 @@
+{{- /*
+  roadmap.user: the Plan/Roadmap-phase user prompt for INITIAL roadmap
+  creation.
+
+  When a brainstorm/design artifact is present, the design doc is the
+  authoritative spec — its contents already cover the feature
+  description and visual references, so we only point at the path and
+  suppress the redundant Feature / Visual References blocks. In Medium
+  mode (no design doc) those blocks ARE the spec, so they render.
+
+  Multi-repo repo-task routing lives in the later phase plan, where
+  `**Repo:** <name>` task tags are the source of truth. The roadmap prompt
+  only signals the feature-wide repo set.
+*/ -}}
+{{- define "roadmap.user" -}}
+# Planning Context
+
+{{ if .BrainstormArtifactPath }}Design Document: {{ .BrainstormArtifactPath }}
+
+{{ else }}## Feature
+
+**Name**: {{ .Name }}
+
+**Description**:
+> {{ blockquote .Description }}
+
+{{ template "visual_references" .VisualReferences }}{{ end }}{{ template "qa_files" .QAFiles }}{{ if and .MultiRepo (gt (len .Repos) 1) }}## Target Repositories
+
+This is a multi-repo feature spanning these repositories:
+{{ range .Repos }}- **{{ .Name }}** ({{ .Path }})
+{{ end }}
+{{ end }}{{ template "grillme_inquireness" .Inquireness }}
+{{ end -}}

@@ -1,0 +1,856 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package codex
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+)
+
+// Compile-time check that *Protocol satisfies llm.Protocol.
+var _ llm.Protocol = (*Protocol)(nil)
+
+func TestCodexProtocol_SessionIDAndTranscriptPath(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+
+	if got := p.SessionID(); got != "" {
+		t.Errorf("SessionID() = %q, want empty", got)
+	}
+	if got := p.TranscriptPath(); got != "" {
+		t.Errorf("TranscriptPath() = %q, want empty", got)
+	}
+}
+
+func TestCodexProtocol_Interrupt_ReturnsNotSupported(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+	err := p.Interrupt()
+	if !errors.Is(err, llm.ErrNotSupported) {
+		t.Errorf("Interrupt() = %v, want llm.ErrNotSupported", err)
+	}
+}
+
+func TestCodexProtocol_TokenUsageUpdated(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+
+	ctxWindow := 200000
+	notification := map[string]interface{}{
+		"method": "thread/tokenUsage/updated",
+		"params": map[string]interface{}{
+			"threadId": "t1",
+			"turnId":   "turn1",
+			"tokenUsage": map[string]interface{}{
+				"total": map[string]interface{}{
+					"inputTokens":  150000,
+					"outputTokens": 5000,
+					"totalTokens":  155000,
+				},
+				"last": map[string]interface{}{
+					"inputTokens":  80000,
+					"outputTokens": 2000,
+					"totalTokens":  82000,
+				},
+				"modelContextWindow": ctxWindow,
+			},
+		},
+	}
+	line, _ := json.Marshal(notification)
+	msgs, err := p.ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(msgs))
+	}
+
+	msg := msgs[0]
+	if msg.Type != "usage_update" {
+		t.Fatalf("type=%q, want usage_update", msg.Type)
+	}
+	if msg.UsageUpdate == nil {
+		t.Fatal("expected UsageUpdate on message")
+	}
+
+	u := msg.UsageUpdate
+	// UsageUpdate carries Total (cumulative) tokens for cost tracking
+	if u.InputTokens != 150000 {
+		t.Errorf("InputTokens = %d, want 150000 (Total.InputTokens)", u.InputTokens)
+	}
+	if u.OutputTokens != 5000 {
+		t.Errorf("OutputTokens = %d, want 5000 (Total.OutputTokens)", u.OutputTokens)
+	}
+	// ContextInputTokens carries Last.InputTokens (informational)
+	if u.ContextInputTokens != 80000 {
+		t.Errorf("ContextInputTokens = %d, want 80000 (Last.InputTokens)", u.ContextInputTokens)
+	}
+	// ContextTotalTokens carries Last.TotalTokens (used by ContextPercentage)
+	if u.ContextTotalTokens != 82000 {
+		t.Errorf("ContextTotalTokens = %d, want 82000 (Last.TotalTokens)", u.ContextTotalTokens)
+	}
+	// ContextBaseline mirrors Codex's TokenUsage::BASELINE_TOKENS = 12000
+	if u.ContextBaseline != codexContextBaselineTokens {
+		t.Errorf("ContextBaseline = %d, want %d", u.ContextBaseline, codexContextBaselineTokens)
+	}
+	if u.ContextWindow != ctxWindow {
+		t.Errorf("ContextWindow = %d, want %d", u.ContextWindow, ctxWindow)
+	}
+
+	// Verify internal state uses Total for cost tracking
+	p.mu.Lock()
+	if p.inputTokens != 150000 {
+		t.Errorf("p.inputTokens = %d, want 150000 (Total.InputTokens)", p.inputTokens)
+	}
+	if p.outputTokens != 5000 {
+		t.Errorf("p.outputTokens = %d, want 5000 (Total.OutputTokens)", p.outputTokens)
+	}
+	if p.modelContextWindow != ctxWindow {
+		t.Errorf("p.modelContextWindow = %d, want %d", p.modelContextWindow, ctxWindow)
+	}
+	p.mu.Unlock()
+}
+
+func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	exitCode := 0
+	params, err := json.Marshal(ItemCompletedParams{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Item: ItemUnion{
+			ID:               "call_read",
+			Type:             "commandExecution",
+			AggregatedOutput: "file contents",
+			ExitCode:         &exitCode,
+			CommandActions: []CommandAction{
+				{Type: "read", Path: "/tmp/state/guidelines/go/index.md"},
+				{Type: "write", Path: "/tmp/state/output.txt"},
+				{Type: "read", Path: ""},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	msg, ok := p.parseNotification("item/completed", params)
+	if !ok {
+		t.Fatal("parseNotification returned false, want true")
+	}
+	if msg.ToolProgress == nil {
+		t.Fatal("msg.ToolProgress is nil, want non-nil")
+	}
+	if len(msg.FileReads) != 1 {
+		t.Fatalf("len(FileReads) = %d, want 1", len(msg.FileReads))
+	}
+	read := msg.FileReads[0]
+	if read.FilePath != "/tmp/state/guidelines/go/index.md" {
+		t.Errorf("FilePath = %q", read.FilePath)
+	}
+	if read.Source != "codex.command_action" {
+		t.Errorf("Source = %q", read.Source)
+	}
+	if read.ProviderItemID != "call_read" {
+		t.Errorf("ProviderItemID = %q", read.ProviderItemID)
+	}
+	if read.ExitCode == nil || *read.ExitCode != 0 {
+		t.Errorf("ExitCode = %v, want 0", read.ExitCode)
+	}
+
+	dup, ok := p.parseNotification("item/completed", params)
+	if !ok {
+		t.Fatal("duplicate parseNotification returned false, want true")
+	}
+	if len(dup.FileReads) != 0 {
+		t.Fatalf("duplicate len(FileReads) = %d, want 0", len(dup.FileReads))
+	}
+}
+
+func TestCodexProtocolStartTurn_DeveloperInstructionsEncoding(t *testing.T) {
+	tests := []struct {
+		name         string
+		systemPrompt string
+		wantField    bool
+	}{
+		{
+			name:      "omits empty developer instructions",
+			wantField: false,
+		},
+		{
+			name:         "includes non-empty developer instructions",
+			systemPrompt: "Follow the system prompt",
+			wantField:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+
+			p := NewProtocol(llm.ProtocolOpts{
+				Model:        "gpt-5.4",
+				WorkDir:      "/tmp/test",
+				SystemPrompt: tt.systemPrompt,
+			})
+			p.SetStdin(&buf)
+			p.SetThreadIDForTest("thread-123")
+
+			if err := p.startTurn("review this plan"); err != nil {
+				t.Fatalf("startTurn() error: %v", err)
+			}
+
+			got := buf.String()
+			hasField := strings.Contains(got, `"developer_instructions"`)
+			if hasField != tt.wantField {
+				t.Fatalf("developer_instructions presence = %v, want %v; payload=%s", hasField, tt.wantField, got)
+			}
+		})
+	}
+}
+
+func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+	p.SetThreadIDForTest("thread-abc")
+
+	// Build the JSON-RPC notification params matching TokenUsageUpdatedParams.
+	payload := TokenUsageUpdatedParams{
+		ThreadID: "thread-abc",
+		TurnID:   "turn-1",
+		TokenUsage: ThreadTokenUsage{
+			Total: TokenUsageBreakdown{
+				InputTokens:  1500,
+				OutputTokens: 750,
+			},
+		},
+	}
+	params, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	msg, ok := p.parseNotification("thread/tokenUsage/updated", params)
+	if !ok {
+		t.Fatal("parseNotification returned false, want true")
+	}
+	if msg.Type != "usage_update" {
+		t.Errorf("msg.Type = %q, want %q", msg.Type, "usage_update")
+	}
+	if msg.UsageUpdate == nil {
+		t.Fatal("msg.UsageUpdate is nil, want non-nil")
+	}
+	if msg.UsageUpdate.InputTokens != 1500 {
+		t.Errorf("UsageUpdate.InputTokens = %d, want 1500", msg.UsageUpdate.InputTokens)
+	}
+	if msg.UsageUpdate.OutputTokens != 750 {
+		t.Errorf("UsageUpdate.OutputTokens = %d, want 750", msg.UsageUpdate.OutputTokens)
+	}
+
+	// Verify the protocol's internal cumulative counters were updated.
+	p.mu.Lock()
+	gotIn := p.inputTokens
+	gotOut := p.outputTokens
+	p.mu.Unlock()
+	if gotIn != 1500 {
+		t.Errorf("protocol.inputTokens = %d, want 1500", gotIn)
+	}
+	if gotOut != 750 {
+		t.Errorf("protocol.outputTokens = %d, want 750", gotOut)
+	}
+}
+
+func TestCodexCommandApproval_NormalizesToBash(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+
+	params, err := json.Marshal(CommandApprovalParams{Command: "ls -la"})
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	msg, ok := p.parseServerRequest("item/commandExecution/requestApproval", 42, params)
+	if !ok {
+		t.Fatal("parseServerRequest() ok = false, want true")
+	}
+	if msg.Type != "control_request" {
+		t.Fatalf("msg.Type = %q, want %q", msg.Type, "control_request")
+	}
+	if msg.ControlRequest == nil {
+		t.Fatal("msg.ControlRequest = nil, want non-nil")
+	}
+	if msg.ControlRequest.Request.ToolName != "Bash" {
+		t.Fatalf("ToolName = %q, want %q", msg.ControlRequest.Request.ToolName, "Bash")
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(input): %v", err)
+	}
+	if payload["command"] != "ls -la" {
+		t.Errorf("payload[command] = %q, want %q", payload["command"], "ls -la")
+	}
+}
+
+func TestCodexProtocol_DefaultApprovalPolicyIsOnRequest(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	if p.approvalPolicy != "on-request" {
+		t.Errorf("default approvalPolicy = %q, want %q", p.approvalPolicy, "on-request")
+	}
+}
+
+func TestCodexProtocol_DSPApprovalPolicyIsNever(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex", DSP: true})
+	if p.approvalPolicy != "never" {
+		t.Errorf("DSP approvalPolicy = %q, want %q", p.approvalPolicy, "never")
+	}
+}
+
+func TestCodexProtocol_StartTurnNetworkAccess(t *testing.T) {
+	var buf bytes.Buffer
+
+	p := NewProtocol(llm.ProtocolOpts{
+		Model:         "gpt-5.4",
+		WorkDir:       "/tmp/test",
+		WritableRoots: []string{"/tmp/state"},
+	})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-123")
+
+	if err := p.startTurn("do something"); err != nil {
+		t.Fatalf("startTurn() error: %v", err)
+	}
+
+	got := buf.String()
+	// workspaceWrite sandbox should include networkAccess: true
+	if !strings.Contains(got, `"networkAccess":true`) {
+		t.Fatalf("startTurn payload missing networkAccess:true; payload=%s", got)
+	}
+	if !strings.Contains(got, `"type":"workspaceWrite"`) {
+		t.Fatalf("startTurn payload missing workspaceWrite type; payload=%s", got)
+	}
+}
+
+func TestParseNumberedOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantOK     bool
+		wantStem   string
+		wantLabels []string
+	}{
+		{
+			name: "three numbered options with descriptions",
+			input: `Who should the rewritten README primarily speak to?
+1. Internal engineers (Recommended): Focus on practical value. [confidence: 0.82]
+2. Existing users: Focus on usage reference. [confidence: 0.41]
+3. External readers: Focus on polished positioning. [confidence: 0.18]`,
+			wantOK:     true,
+			wantStem:   "Who should the rewritten README primarily speak to?",
+			wantLabels: []string{"Internal engineers (Recommended)", "Existing users", "External readers"},
+		},
+		{
+			name:     "free-form sentence with no numbered list",
+			input:    "What level of marketing tone do you want: restrained and factual, moderately persuasive, or fairly bold?",
+			wantOK:   false,
+			wantStem: "",
+		},
+		{
+			name: "only one numbered item is not enough",
+			input: `Pick:
+1. Only option`,
+			wantOK: false,
+		},
+		{
+			name: "bundle of multiple questions as numbered list",
+			input: `Tell me:
+1. Are we going ahead?
+2. Should I include X?
+3. Is Y necessary?`,
+			wantOK: false,
+		},
+		{
+			name: "continuation lines fold into previous option",
+			input: `Question?
+1. Short label: first line of
+   description continues here.
+2. Other label: second option desc.`,
+			wantOK:     true,
+			wantStem:   "Question?",
+			wantLabels: []string{"Short label", "Other label"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stem, opts, ok := parseNumberedOptions(tt.input)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v (stem=%q opts=%+v)", ok, tt.wantOK, stem, opts)
+			}
+			if !tt.wantOK {
+				return
+			}
+			if stem != tt.wantStem {
+				t.Errorf("stem = %q, want %q", stem, tt.wantStem)
+			}
+			if len(opts) != len(tt.wantLabels) {
+				t.Fatalf("opts len = %d, want %d", len(opts), len(tt.wantLabels))
+			}
+			for i, want := range tt.wantLabels {
+				if opts[i].Label != want {
+					t.Errorf("opts[%d].Label = %q, want %q", i, opts[i].Label, want)
+				}
+			}
+			if tt.name == "three numbered options with descriptions" {
+				if opts[0].Confidence == nil || *opts[0].Confidence != 0.82 {
+					t.Fatalf("opts[0].Confidence = %v, want 0.82", opts[0].Confidence)
+				}
+			}
+		})
+	}
+}
+
+func TestTrimFreeFormSentinel(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantOK     bool
+		wantResult string
+	}{
+		{"prefix only", "FREE_FORM: What version?", true, "What version?"},
+		{"with leading whitespace", "  \nFREE_FORM:Name?", true, "Name?"},
+		{"no prefix", "What do you want?", false, ""},
+		{"prefix in middle ignored", "OK FREE_FORM: not at start", false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := trimFreeFormSentinel(tt.input)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if got != tt.wantResult {
+				t.Errorf("got %q, want %q", got, tt.wantResult)
+			}
+		})
+	}
+}
+
+func TestSynthesizeAskUser_IncludesOptions(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+	options := []parsedOption{
+		{Label: "Alpha (Recommended)", Description: "first tradeoff", Confidence: floatPtr(0.83)},
+		{Label: "Beta", Description: "second tradeoff", Confidence: floatPtr(0.41)},
+		{Label: "Gamma", Description: "third tradeoff", Confidence: floatPtr(0.17)},
+	}
+
+	msg := p.synthesizeAskUser("Which one?", options)
+	if msg.ControlRequest == nil {
+		t.Fatal("ControlRequest is nil")
+	}
+	if msg.ControlRequest.Request.ToolName != "AskUserQuestion" {
+		t.Fatalf("ToolName = %q, want AskUserQuestion", msg.ControlRequest.Request.ToolName)
+	}
+
+	var parsed struct {
+		Questions []struct {
+			Question string `json:"question"`
+			Options  []struct {
+				Label       string   `json:"label"`
+				Description string   `json:"description"`
+				Confidence  *float64 `json:"confidence"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if len(parsed.Questions) != 1 {
+		t.Fatalf("questions len = %d, want 1", len(parsed.Questions))
+	}
+	q := parsed.Questions[0]
+	if q.Question != "Which one?" {
+		t.Errorf("question = %q, want %q", q.Question, "Which one?")
+	}
+	if len(q.Options) != 3 {
+		t.Fatalf("options len = %d, want 3", len(q.Options))
+	}
+	if q.Options[0].Label != "Alpha (Recommended)" || q.Options[0].Description != "first tradeoff" {
+		t.Errorf("options[0] = %+v, want Alpha (Recommended)/first tradeoff", q.Options[0])
+	}
+	if q.Options[0].Confidence == nil || *q.Options[0].Confidence != 0.83 {
+		t.Errorf("options[0].Confidence = %v, want 0.83", q.Options[0].Confidence)
+	}
+}
+
+func floatPtr(v float64) *float64 { return &v }
+
+// completedTurnParams is a small helper that builds a turn/completed params
+// JSON for the retry-path tests below.
+func completedTurnParams(t *testing.T, threadID string) json.RawMessage {
+	t.Helper()
+	payload := TurnCompletedParams{
+		ThreadID: threadID,
+		Turn:     CompletedTurn{ID: "turn-1", Status: "completed"},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal turn/completed: %v", err)
+	}
+	return raw
+}
+
+func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "Which audience should the README target?\n" +
+		"1. Internal engineers (Recommended): Focus on practical value.\n" +
+		"2. Existing users: Focus on usage reference.\n" +
+		"3. External readers: Focus on positioning."
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q ControlRequest=%v, want control_request", msg.Type, msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
+	}
+	p.mu.Lock()
+	retry := p.formatRetryCount
+	p.mu.Unlock()
+	if retry != 0 {
+		t.Errorf("formatRetryCount = %d, want 0 after well-formed turn", retry)
+	}
+}
+
+func TestTurnCompleted_IllFormedQuestionTriggersReformatRetry(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "What tone do you want: restrained, persuasive, or bold?"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if ok {
+		t.Fatalf("parseNotification ok = true, want false (got msg=%+v)", msg)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("expected a follow-up turn to be written to stdin")
+	}
+	if !strings.Contains(buf.String(), "not in the required question format") {
+		t.Errorf("reminder missing format-violation language; payload=%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "exactly 3 numbered options") {
+		t.Errorf("reminder missing option-count directive; payload=%s", buf.String())
+	}
+	p.mu.Lock()
+	retry := p.formatRetryCount
+	p.mu.Unlock()
+	if retry != 1 {
+		t.Errorf("formatRetryCount = %d, want 1 after first violation", retry)
+	}
+}
+
+func TestTurnCompleted_IllFormedFallsThroughAfterCap(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.formatRetryCount = maxQuestionFormatRetries
+	p.lastAssistantText = "What is the target version?"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true after cap")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q, want control_request", msg.Type)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("no follow-up should be written after cap; got %s", buf.String())
+	}
+	// Options should be empty in the fall-through path.
+	var parsed struct {
+		Questions []struct {
+			Options []map[string]string `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Questions) != 1 || len(parsed.Questions[0].Options) != 0 {
+		t.Errorf("expected 1 question with 0 options, got %+v", parsed.Questions)
+	}
+	p.mu.Lock()
+	retry := p.formatRetryCount
+	p.mu.Unlock()
+	if retry != 0 {
+		t.Errorf("formatRetryCount = %d, want 0 after fall-through reset", retry)
+	}
+}
+
+func TestTurnCompleted_FreeFormSentinelSkipsRetry(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = "FREE_FORM: What exact version string should we pin?"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("no follow-up should be written for FREE_FORM; got %s", buf.String())
+	}
+	var parsed struct {
+		Questions []struct {
+			Question string              `json:"question"`
+			Options  []map[string]string `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Questions) != 1 {
+		t.Fatalf("questions len = %d, want 1", len(parsed.Questions))
+	}
+	if strings.HasPrefix(parsed.Questions[0].Question, "FREE_FORM:") {
+		t.Errorf("question still contains FREE_FORM sentinel: %q", parsed.Questions[0].Question)
+	}
+	if len(parsed.Questions[0].Options) != 0 {
+		t.Errorf("FREE_FORM question should have 0 options, got %d", len(parsed.Questions[0].Options))
+	}
+}
+
+func TestTextContainsVerdictSentinel(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"verdict approved", "some rationale\n## Verdict\nAPPROVED\n", true},
+		{"verdict changes_requested", "## Verdict\nCHANGES_REQUESTED", true},
+		{"plain narrative with question mark", "Does this look right? I think so.", false},
+		{"empty", "", false},
+		{"verdict heading only without token", "## Verdict\nUNCLEAR", false},
+		{"legacy stdout marker no longer matches", "REVIEW_STATUS: APPROVED", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := textContainsVerdictSentinel(tt.text); got != tt.want {
+				t.Errorf("textContainsVerdictSentinel(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseNumberedOptions_RejectsVerdictSentinels(t *testing.T) {
+	// A critic's structured verdict (## Findings / ## Suggestions / ## Verdict)
+	// must never be parsed as AskUser options, even when some rubric bullets
+	// contain '?' characters. The presence of `## Verdict\nAPPROVED|CHANGES_REQUESTED`
+	// anywhere in the option body is decisive.
+	input := `Evaluating the plan now.
+1. Assessment
+- Right level of detail? PASS
+- Avoids contradictions? PASS
+2. Verdict summary
+APPROVED
+3. Notes
+No structural changes are required.
+## Verdict
+APPROVED`
+
+	stem, opts, ok := parseNumberedOptions(input)
+	if ok {
+		t.Fatalf("parseNumberedOptions ok = true (stem=%q opts=%+v), want false for verdict-tainted numbered list", stem, opts)
+	}
+}
+
+func TestTurnCompleted_ValidatorVerdictNotMisclassified(t *testing.T) {
+	// Reproduces the Structural-validator false positive: a read-only
+	// critic emits a final answer containing rubric bullets phrased as
+	// questions ("Stubs clearly marked?") plus a numbered structure,
+	// terminated by the `## Verdict\nAPPROVED` echo of what was written
+	// to review-feedback.md. This must be treated as a completed success,
+	// not a synthetic AskUser, and must not trigger a reformat follow-up.
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.lastAssistantText = `1. **Assessment**
+
+- **Tracer Bullet: End-to-end wiring defined?** PASS
+- **Tracer Bullet: Stubs clearly marked?** PASS
+- **Structural Soundness: Avoids contradictions?** PASS
+
+2. **Verdict summary**
+
+APPROVED
+
+3. **Specific feedback**
+
+No structural changes are required.
+
+I wrote review-feedback.md with the structured handoff:
+
+## Verdict
+APPROVED`
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true (validator verdict should take the success path)")
+	}
+	if msg.Type != "result" || msg.Subtype != "success" {
+		t.Fatalf("got Type=%q Subtype=%q, want result/success (ControlRequest=%v)", msg.Type, msg.Subtype, msg.ControlRequest)
+	}
+	if msg.ControlRequest != nil {
+		t.Errorf("unexpected ControlRequest on validator verdict: %+v", msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected reformat follow-up written to stdin: %s", buf.String())
+	}
+	p.mu.Lock()
+	retry := p.formatRetryCount
+	p.mu.Unlock()
+	if retry != 0 {
+		t.Errorf("formatRetryCount = %d, want 0 (verdict should not enter the question branch)", retry)
+	}
+}
+
+// TestTurnCompleted_NumberedOptionsAfterToolUseSurfacesQuestion reproduces
+// the roadmap-FAILED case: the agent does extensive tool exploration in a
+// single turn (rg/cat to ground its question in the codebase) and then
+// asks the one remaining ambiguity as a well-formed numbered-options
+// question. Even though turnHadToolUse=true, the question must surface
+// as a control_request rather than emitting a SUCCESS Result that
+// triggers session shutdown without a phase_complete.
+func TestTurnCompleted_NumberedOptionsAfterToolUseSurfacesQuestion(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.turnHadToolUse = true
+	p.lastAssistantText = "Which Napolitan register should the translations use across all three READMEs?\n" +
+		"1. Neutral written Napolitan (Recommended): Documentation-friendly register that reads naturally in writing. [confidence: 0.89]\n" +
+		"2. Colloquial Napolitan: More spoken, expressive tone — risks uneven technical clarity. [confidence: 0.48]\n" +
+		"3. Conservative Italian-leaning Napolitan: Maximum readability but weakens the request for a distinctly Napolitan translation. [confidence: 0.36]"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q ControlRequest=%v, want control_request (tool-use turn ended in well-formed question)", msg.Type, msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
+	}
+
+	var parsed struct {
+		Questions []struct {
+			Options []map[string]any `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(parsed.Questions) != 1 {
+		t.Fatalf("questions len = %d, want 1", len(parsed.Questions))
+	}
+	if len(parsed.Questions[0].Options) != 3 {
+		t.Errorf("options len = %d, want 3 parsed from numbered list", len(parsed.Questions[0].Options))
+	}
+}
+
+// TestTurnCompleted_FreeFormSentinelAfterToolUse covers the FREE_FORM-sentinel
+// path under the same tool-use scenario: an explicit FREE_FORM marker is an
+// unambiguous question signal that should bypass the no-tool-use gate.
+func TestTurnCompleted_FreeFormSentinelAfterToolUse(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.turnHadToolUse = true
+	p.lastAssistantText = "FREE_FORM: What exact version string should we pin?"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q ControlRequest=%v, want control_request", msg.Type, msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
+	}
+}
+
+// TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess pins down the
+// false-positive guard. A tool-heavy turn whose final text merely contains
+// '?' without numbered options or a FREE_FORM sentinel — e.g., narrating
+// intent like "Wrote the file. Is that what you wanted?" — must NOT be
+// reclassified as a question. Without the no-tool-use gate on the loose
+// path, every mid-turn rhetorical '?' would synthesize an AskUser and
+// stall the session.
+func TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.turnHadToolUse = true
+	p.lastAssistantText = "Wrote the README and touched phase_complete. Is that what you wanted?"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "result" || msg.Subtype != "success" {
+		t.Fatalf("got Type=%q Subtype=%q, want result/success (ControlRequest=%v)", msg.Type, msg.Subtype, msg.ControlRequest)
+	}
+	if msg.ControlRequest != nil {
+		t.Errorf("unexpected ControlRequest on loose-question tool-use turn: %+v", msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected reformat follow-up written to stdin: %s", buf.String())
+	}
+}

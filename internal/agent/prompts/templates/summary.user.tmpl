@@ -1,0 +1,13 @@
+{{- /*
+  summary.user: prompt for distilling a feature request into a concise
+  1-2 sentence summary. Used by the bounded-helper utility path
+  (RunSummaryGeneration → haiku model).
+*/ -}}
+{{- define "summary.user" -}}
+Summarize the following feature request in 1-2 concise sentences that capture the core intent and scope. Output ONLY the summary text, nothing else.
+
+Feature name: {{ .Name }}
+
+Description:
+{{ .Description }}
+{{- end -}}

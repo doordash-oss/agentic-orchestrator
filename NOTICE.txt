@@ -1,0 +1,251 @@
+Agentic
+Copyright 2025 DoorDash, Inc.
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE.txt).
+
+This product includes software developed at DoorDash, Inc. (https://www.doordash.com/).
+
+================================================================================
+Third-Party Software Notices and Information
+================================================================================
+
+The compiled `agentic` binaries distributed with this project (e.g. via GitHub
+Releases) statically link the third-party Go modules listed below. Each entry
+identifies the upstream module, its copyright holders, and the license under
+which it is redistributed. The full text of each license is available at the
+referenced URL or in the LICENSE / COPYING file inside the upstream module.
+
+NOTE: When the source code of this project is updated to add, remove, or
+upgrade a bundled dependency, this NOTICE.txt MUST be updated to match (and
+any new dependency license MUST be reviewed by Legal for approval).
+
+--------------------------------------------------------------------------------
+Upstream NOTICE files (reproduced per Apache License 2.0, Section 4(d))
+--------------------------------------------------------------------------------
+
+google.golang.org/grpc (https://github.com/grpc/grpc-go)
+
+    Copyright 2014 gRPC authors.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+gopkg.in/yaml.v3 (https://github.com/go-yaml/yaml)
+
+    Copyright 2011-2016 Canonical Ltd.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+--------------------------------------------------------------------------------
+Apache License, Version 2.0
+http://www.apache.org/licenses/LICENSE-2.0
+--------------------------------------------------------------------------------
+
+  github.com/go-logr/logr
+      https://github.com/go-logr/logr
+  github.com/go-logr/stdr
+      https://github.com/go-logr/stdr
+  github.com/trivago/tgo
+      Copyright 2015-2018 trivago N.V.
+      https://github.com/trivago/tgo
+  go.opentelemetry.io/auto/sdk
+      Copyright The OpenTelemetry Authors
+      https://github.com/open-telemetry/opentelemetry-go-instrumentation
+  go.opentelemetry.io/otel
+  go.opentelemetry.io/otel/exporters/otlp/otlptrace
+  go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
+  go.opentelemetry.io/otel/metric
+  go.opentelemetry.io/otel/sdk
+  go.opentelemetry.io/otel/trace
+      Copyright The OpenTelemetry Authors
+      https://github.com/open-telemetry/opentelemetry-go
+  go.opentelemetry.io/proto/otlp
+      Copyright The OpenTelemetry Authors
+      https://github.com/open-telemetry/opentelemetry-proto-go
+  google.golang.org/genproto/googleapis/api
+  google.golang.org/genproto/googleapis/rpc
+      Copyright Google LLC
+      https://github.com/googleapis/go-genproto
+  google.golang.org/grpc
+      Copyright 2014 gRPC authors. (See upstream NOTICE reproduced above.)
+      https://github.com/grpc/grpc-go
+
+--------------------------------------------------------------------------------
+MIT License
+https://opensource.org/license/mit
+--------------------------------------------------------------------------------
+
+  charm.land/bubbles/v2
+      Copyright (c) 2020-2026 Charmbracelet, Inc.
+      https://github.com/charmbracelet/bubbles
+  charm.land/bubbletea/v2
+      Copyright (c) 2020-2026 Charmbracelet, Inc.
+      https://github.com/charmbracelet/bubbletea
+  charm.land/lipgloss/v2
+      Copyright (c) 2021-2026 Charmbracelet, Inc.
+      https://github.com/charmbracelet/lipgloss
+  github.com/alecthomas/chroma/v2
+      Copyright (C) 2017 Alec Thomas
+      https://github.com/alecthomas/chroma
+  github.com/aymanbagabas/go-osc52/v2
+      Copyright (c) 2022 Ayman Bagabas
+      https://github.com/aymanbagabas/go-osc52
+  github.com/aymerick/douceur
+      Copyright (c) 2015 Aymerick JEHANNE
+      https://github.com/aymerick/douceur
+  github.com/cenkalti/backoff/v5
+      Copyright (c) 2014 Cenk Altı
+      https://github.com/cenkalti/backoff
+  github.com/cespare/xxhash/v2
+      Copyright (c) 2016 Caleb Spare
+      https://github.com/cespare/xxhash
+  github.com/charmbracelet/colorprofile
+      Copyright (c) 2020-2024 Charmbracelet, Inc.
+      https://github.com/charmbracelet/colorprofile
+  github.com/charmbracelet/glamour
+      Copyright (c) 2019-2023 Charmbracelet, Inc.
+      https://github.com/charmbracelet/glamour
+  github.com/charmbracelet/lipgloss
+      Copyright (c) 2021-2023 Charmbracelet, Inc.
+      https://github.com/charmbracelet/lipgloss
+  github.com/charmbracelet/ultraviolet
+      Copyright (c) 2025 Charmbracelet, Inc.
+      https://github.com/charmbracelet/ultraviolet
+  github.com/charmbracelet/x/ansi
+  github.com/charmbracelet/x/cellbuf
+  github.com/charmbracelet/x/exp/slice
+  github.com/charmbracelet/x/term
+  github.com/charmbracelet/x/termios
+  github.com/charmbracelet/x/windows
+      Copyright (c) 2023 Charmbracelet, Inc.
+      https://github.com/charmbracelet/x
+  github.com/clipperhouse/displaywidth
+      Copyright (c) 2025 Matt Sherman
+      https://github.com/clipperhouse/displaywidth
+  github.com/clipperhouse/uax29/v2
+      Copyright (c) 2020 Matt Sherman
+      https://github.com/clipperhouse/uax29
+  github.com/dlclark/regexp2
+      Copyright (c) Doug Clark
+      https://github.com/dlclark/regexp2
+  github.com/fatih/structs
+      Copyright (c) 2014 Fatih Arslan
+      https://github.com/fatih/structs
+  github.com/golang-jwt/jwt/v4
+      Copyright (c) 2012 Dave Grijalva
+      Copyright (c) 2021 golang-jwt maintainers
+      https://github.com/golang-jwt/jwt
+  github.com/lucasb-eyer/go-colorful
+      Copyright (c) 2013 Lucas Beyer
+      https://github.com/lucasb-eyer/go-colorful
+  github.com/mattn/go-isatty
+      Copyright (c) Yasuhiro MATSUMOTO <mattn.jp@gmail.com>
+      https://github.com/mattn/go-isatty
+  github.com/mattn/go-runewidth
+      Copyright (c) 2016 Yasuhiro Matsumoto
+      https://github.com/mattn/go-runewidth
+  github.com/muesli/cancelreader
+      Copyright (c) 2022 Erik Geiser and Christian Muehlhaeuser
+      https://github.com/muesli/cancelreader
+  github.com/muesli/reflow
+      Copyright (c) 2019 Christian Muehlhaeuser
+      https://github.com/muesli/reflow
+  github.com/muesli/termenv
+      Copyright (c) 2019 Christian Muehlhaeuser
+      https://github.com/muesli/termenv
+  github.com/rivo/uniseg
+      Copyright (c) 2019 Oliver Kuederle
+      https://github.com/rivo/uniseg
+  github.com/xo/terminfo
+      Copyright (c) 2016 Anmol Sethi
+      https://github.com/xo/terminfo
+  github.com/yuin/goldmark
+      Copyright (c) 2019 Yusuke Inuzuka
+      https://github.com/yuin/goldmark
+  github.com/yuin/goldmark-emoji
+      Copyright (c) 2020 Yusuke Inuzuka
+      https://github.com/yuin/goldmark-emoji
+  go.uber.org/dig
+      Copyright (c) 2017-2018 Uber Technologies, Inc.
+      https://github.com/uber-go/dig
+  go.uber.org/fx
+      Copyright (c) 2016-2018 Uber Technologies, Inc.
+      https://github.com/uber-go/fx
+  go.uber.org/multierr
+      Copyright (c) 2017-2021 Uber Technologies, Inc.
+      https://github.com/uber-go/multierr
+  go.uber.org/zap
+      Copyright (c) 2016-2017 Uber Technologies, Inc.
+      https://github.com/uber-go/zap
+
+--------------------------------------------------------------------------------
+BSD 3-Clause "New" or "Revised" License
+https://opensource.org/license/BSD-3-clause
+--------------------------------------------------------------------------------
+
+  github.com/atotto/clipboard
+      Copyright (c) 2013 Ato Araki. All rights reserved.
+      https://github.com/atotto/clipboard
+  github.com/google/go-querystring
+      Copyright (c) 2013 Google. All rights reserved.
+      https://github.com/google/go-querystring
+  github.com/google/uuid
+      Copyright (c) 2009,2014 Google Inc. All rights reserved.
+      https://github.com/google/uuid
+  github.com/gorilla/css
+      Copyright (c) 2023 The Gorilla Authors. All rights reserved.
+      https://github.com/gorilla/css
+  github.com/grpc-ecosystem/grpc-gateway/v2
+      Copyright (c) 2015, Gengo, Inc. All rights reserved.
+      https://github.com/grpc-ecosystem/grpc-gateway
+  github.com/microcosm-cc/bluemonday
+      Copyright (c) 2014, David Kitchen <david@buro9.com>. All rights reserved.
+      https://github.com/microcosm-cc/bluemonday
+  github.com/pkg/errors
+      Copyright (c) 2015, Dave Cheney <dave@cheney.net>. All rights reserved.
+      https://github.com/pkg/errors
+  golang.org/x/net
+  golang.org/x/sync
+  golang.org/x/sys
+  golang.org/x/term
+  golang.org/x/text
+      Copyright 2009 The Go Authors. All rights reserved.
+      https://cs.opensource.google/go
+      (Each module is also accompanied by an Additional IP Rights Grant; see
+      the PATENTS file inside each module's source tree.)
+  google.golang.org/protobuf
+      Copyright (c) 2018 The Go Authors. All rights reserved.
+      https://github.com/protocolbuffers/protobuf-go
+      (Also accompanied by an Additional IP Rights Grant; see the PATENTS file
+      in the upstream source tree.)
+
+--------------------------------------------------------------------------------
+Dual License: MIT and Apache License, Version 2.0
+--------------------------------------------------------------------------------
+
+  gopkg.in/yaml.v3
+      Copyright 2011-2016 Canonical Ltd.
+      Portions ported from C files of libyaml are covered by the original
+      libyaml MIT license, with copyright dates beginning in 2011 when the
+      project was ported to Go. Remaining files are covered by the Apache
+      License, Version 2.0. (See upstream NOTICE reproduced above.)
+      https://github.com/go-yaml/yaml

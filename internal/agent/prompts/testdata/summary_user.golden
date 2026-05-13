@@ -1,0 +1,6 @@
+Summarize the following feature request in 1-2 concise sentences that capture the core intent and scope. Output ONLY the summary text, nothing else.
+
+Feature name: Add OAuth login
+
+Description:
+Sign in with Google.

@@ -1,0 +1,29 @@
+# TUI-only launch contract.
+
+exec agentico --help
+stdout '^Agentic Orchestrator$'
+! stdout 'Agentic Workflow Orchestrator'
+stdout 'Usage: agentico \[flags\]'
+stdout 'Launches the Bubble Tea TUI dashboard'
+stdout '--config <path>'
+stdout '--state-dir <path>'
+stdout '--providers <list>'
+stdout '--dangerously-skip-permissions'
+stdout '--version, -v'
+stdout '~/.agentic-orchestrator/config.yaml'
+stdout '~/.agentic-orchestrator/features'
+! stdout 'Commands:'
+! stdout 'feature list'
+! stdout 'feature create'
+! stdout 'run             Launch'
+! stdout 'refresh-models'
+! stderr .
+
+exec agentico --version
+stdout 'agentico v'
+! stderr .
+
+! exec agentico --config $WORK/config.yaml --state-dir $WORK/features --dangerously-skip-permissions --providers not-a-provider
+stderr 'unknown provider "not-a-provider"'
+stderr 'no valid providers specified'
+! stdout .

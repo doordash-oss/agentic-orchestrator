@@ -1,0 +1,19 @@
+{{- /*
+  scout.user: prompt for a single research-scout subprocess. Pre-reads
+  a focused cluster of source files into the prompt body so the scout
+  can answer the research question without exploration sub-agents.
+*/ -}}
+{{- define "scout.user" -}}
+## Research Scout Task
+
+Analyze the following source files to answer this research question:
+> {{ .Query }}
+
+Write concise findings as bullet points. Focus only on the files provided below.
+
+{{ range .Files }}### `{{ .Path }}`{{ if .Purpose }} — {{ .Purpose }}{{ end }}
+```
+{{ .Content }}
+```
+
+{{ end }}{{- end -}}

@@ -1,0 +1,31 @@
+{{- /*
+  inquire.user: the Inquire-phase invocation arguments. The RoleSpec system
+  prompt owns primary skill discovery, Useful Resources, output roots, and
+  completion.
+
+  Whitespace strategy: consecutive control
+  actions sit on a single source line so source-line newlines do not
+  bleed into the rendered output.
+*/ -}}
+{{- define "inquire.user" -}}
+# Feature Context
+
+## Feature Request
+
+**Name**: {{ .Name }}
+
+**Description**:
+
+> {{ blockquote .Description }}
+
+{{ if .Images }}Attached Images:
+{{ range $i, $p := .Images }}- [Image #{{ inc $i }}]: {{ $p }}
+{{ end }}
+{{ end }}{{ if .Attachments }}Attached Files:
+{{ range .Attachments }}- [{{ base . }}]: {{ . }}
+{{ end }}
+{{ end }}Target Repositories:
+{{ range .Repos }}- {{ .Name }} ({{ .Path }})
+{{ end }}
+{{ template "grillme_inquireness" .Inquireness }}
+{{ end -}}

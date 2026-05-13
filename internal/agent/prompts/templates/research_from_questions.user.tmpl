@@ -1,0 +1,21 @@
+{{- /*
+  research_from_questions.user: the Research-phase user prompt body when
+  driven by Inquire-phase questions (instead of the feature description).
+  Bypasses the ticket text entirely so its intent does not leak into
+  research framing. The RoleSpec system prompt owns primary skill discovery,
+  Useful Resources, output roots, and completion.
+*/ -}}
+{{- define "research_from_questions.user" -}}
+# Research Context
+
+## Questions to Answer
+
+Read the questions file at:
+{{ .QuestionsPath }}
+
+Read each question and answer it objectively based on codebase exploration.
+
+Target Repositories:
+{{ range .Repos }}- {{ .Name }} ({{ .Path }})
+{{ end }}
+{{ end -}}

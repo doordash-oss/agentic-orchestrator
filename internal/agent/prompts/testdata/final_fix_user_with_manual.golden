@@ -1,0 +1,26 @@
+## Visual References
+
+IMPORTANT: The user attached the image(s) below when creating this feature. They communicate intent that text alone cannot — mockups, desired-state screenshots, annotated whiteboards, bug repros, or reference designs. Before applying this fix, Read each image via tool-use and treat its visual information as a binding specification for what the output should look like. If an image shows a specific layout, palette, typography, or interaction, match it; do not substitute generic defaults.
+
+- [Image #1]: /tmp/login.png
+
+# Fix Context
+
+This is fix iteration 2.
+
+**Exit criteria**:
+Relevant tests pass.
+
+## Reviewer Feedback
+
+Read the reviewer feedback at: /state/feat-x/run-1/review/iteration-2/review-feedback.md
+
+## Manual Verification Outcomes
+
+The reviewer flagged unattested `### Manual Verification` bullets. Re-running automated commands (`mode: command`) does NOT attest a manual bullet. For each flagged bullet, update the verification report named by the RoleSpec Output Files section with one of these outcomes:
+
+1. **Attested with evidence** — `mode: manual`, `status: passed` (or `failed`), `evidence:` describing what you observed when you executed the bullet (e.g. command run, output snippet, UI state). "Manual check, looks fine" is not evidence.
+2. **Genuinely deferred** — `mode: manual`, `status: pending_human`, `evidence:` documenting any partial in-environment coverage that already exists, plus `blocked_reason:` naming the downstream owner (e.g. "release-time operator smoke", "Publish-phase gate", "integration suite owned by team X"). Use this only when the bullet is genuinely out-of-environment (production-only, requires a physical device, mutates real user state, requires a pushed remote ref this session is not authorized to create).
+
+If you cannot attest and cannot defer with a named owner, the bullet is a real gap — raise it in your fix output rather than re-emitting `mode: command` evidence and looping again.
+

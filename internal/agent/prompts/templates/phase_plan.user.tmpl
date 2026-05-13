@@ -1,0 +1,31 @@
+{{- /*
+  phase_plan.user: the per-phase plan-creation user prompt. Inputs:
+  approved roadmap path, phase metadata (number/name/type/goal), prior
+  phase plans, upstream Q&A files, stubs to retire, deferrals due this
+  phase.
+
+  Visual references live with the brainstorm/roadmap — they are NOT
+  re-injected here. Q&A files (inquire/research/brainstorm/roadmap
+  qa-answers.md) ARE re-injected so the planner reads the user's prior
+  decisions verbatim and does not re-litigate them. The
+  worktree-exploration discipline for prior phases lives in
+  skills/plan-phase/SKILL.md, not the prompt.
+*/ -}}
+{{- define "phase_plan.user" -}}
+# Phase {{ .Phase.Number }}: {{ .Phase.Name }}
+
+{{ if .RoadmapPath }}## Approved Roadmap
+
+Roadmap: {{ .RoadmapPath }} (focus on Phase {{ .Phase.Number }})
+
+{{ end }}{{ if .Phase.Goal }}## Phase Goal (from roadmap)
+
+{{ .Phase.Goal }}
+
+{{ end }}{{ template "qa_files" .QAFiles }}{{ if .Phase.StubsToRetire }}## Roadmap-Assigned Phase Commitments
+
+Include these roadmap-assigned commitments in `## Tasks` acceptance criteria or `## Success Criteria`; do not create a separate stubs section in the plan:
+{{ range .Phase.StubsToRetire }}- {{ . }}
+{{ end }}
+{{ end }}{{ template "grillme_inquireness" .Inquireness }}
+{{ end -}}

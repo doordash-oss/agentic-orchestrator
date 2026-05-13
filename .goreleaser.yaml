@@ -1,0 +1,35 @@
+version: 2
+
+project_name: agentic-orchestrator
+
+builds:
+  - main: ./cmd/agentico
+    binary: agentico
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/doordash-oss/agentic-orchestrator/internal/tui.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  # NOTE: do NOT set disable: true here — it also suppresses --release-notes.
+  # The --release-notes flag naturally skips auto-generation when provided.
+  sort: asc
+
+release:
+  github:
+    owner: doordash-oss
+    name: agentic-orchestrator

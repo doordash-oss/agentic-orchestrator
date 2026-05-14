@@ -53,36 +53,7 @@ func isLivePreviewEligible(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
-	if f.Status == feature.StatusCreated {
-		return true
-	}
-	if f.Status.IsRunning() {
-		return true
-	}
-	if f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady {
-		return f.HasActiveRepoCycles()
-	}
-	return false
-}
-
-func contextualAActionHint(f *feature.Feature) (hint string, lead bool) {
-	if f == nil {
-		return "", false
-	}
-	switch {
-	case f.Status.IsNeedsReview():
-		return "[a] Review", true
-	case f.Status == feature.StatusNeedUserInput || firstRepoNeedingInput(f) != "":
-		return "[a] Answer", true
-	case hasPendingPerms(f) || hasPendingHelp(f):
-		return "[a] Attach (⚠)", false
-	case isLivePreviewEligible(f):
-		return "[a] Watch", false
-	case isRunningFeature(f):
-		return "[a] Attach", false
-	default:
-		return "", false
-	}
+	return computeFeatureAttention(f, nil).HasCTA()
 }
 
 func (m LivePreviewModel) ViewCompact(width int) string {
@@ -94,6 +65,7 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	}
 
 	f := m.feature
+	att := computeFeatureAttention(f, m.session)
 	contentWidth := max(width-4, 20)
 	var b strings.Builder
 	b.WriteString(TitleStyle.Render("Live Preview") + "\n")
@@ -106,15 +78,28 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	}
 
 	activity := livePreviewActivityLine(f, m.session)
+	if att.RequiresUser() {
+		for _, line := range renderLivePreviewAttentionBlock(att, contentWidth) {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+		if m.height == 0 || m.height > livePreviewBaseRows+4 {
+			b.WriteString("\n")
+		}
+		activity = att.ActivityLine()
+	}
 	prefix := m.spinnerView
 	if prefix == "" {
 		prefix = MutedStyle.Render("⟳")
+	}
+	if att.RequiresUser() {
+		prefix = awaitingUserGlyph()
 	}
 	line := "  " + prefix + " " + chatThinkingStyle.Render(activity)
 	b.WriteString(ansi.Truncate(line, contentWidth, "…"))
 	b.WriteString("\n")
 
-	tail := livePreviewTranscriptTail(f, m.session, contentWidth, m.height)
+	tail := livePreviewTranscriptTail(f, m.session, contentWidth, livePreviewTailHeight(m.height, att))
 	if len(tail) > 0 {
 		b.WriteString("\n")
 		b.WriteString(livePreviewTailBannerLine(f, m.session, contentWidth))
@@ -125,6 +110,34 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 		}
 	}
 	return b.String()
+}
+
+func renderLivePreviewAttentionBlock(att featureAttention, width int) []string {
+	if !att.RequiresUser() {
+		return nil
+	}
+	summary := att.Summary
+	if summary == "" {
+		summary = att.TypeLabel
+	}
+	lines := []string{
+		"  " + awaitingUserGlyph() + " " + WarningStyle.Bold(true).Render(att.TypeLabel),
+		"  " + MutedStyle.Render(summary),
+	}
+	if hint := att.FooterHint(); hint != "" {
+		lines = append(lines, "  "+WarningStyle.Bold(true).Render(hint))
+	}
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, width, "…")
+	}
+	return lines
+}
+
+func livePreviewTailHeight(height int, att featureAttention) int {
+	if height <= 0 || !att.RequiresUser() {
+		return height
+	}
+	return max(height-4, 0)
 }
 
 func livePreviewHeaderLine(label, value string, width int) string {

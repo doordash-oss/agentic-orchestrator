@@ -99,6 +99,53 @@ func TestDetailViewFooterActions(t *testing.T) {
 	}
 }
 
+func TestDetailViewFooterUsesContextualAttentionLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		f    *feature.Feature
+		want string
+	}{
+		{
+			name: "permission",
+			f: &feature.Feature{
+				ID: "perm", Slug: "perm", Status: feature.StatusImplementing,
+				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+				Models:           config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+			},
+			want: "[a] Approve",
+		},
+		{
+			name: "ask user",
+			f: &feature.Feature{
+				ID: "ask", Slug: "ask", Status: feature.StatusImplementing,
+				HelpQueue: []feature.HelpRequest{{Question: "Need input?", Pending: true}},
+				Models:    config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+			},
+			want: "[a] Answer",
+		},
+		{
+			name: "watch",
+			f: &feature.Feature{
+				ID: "watch", Slug: "watch", Status: feature.StatusImplementing,
+				Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+			},
+			want: "[a] Watch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewDetailModel(tt.f, "")
+			view := m.View()
+			if !strings.Contains(view, tt.want) {
+				t.Fatalf("DetailModel.View(%s) missing %q in:\n%s", tt.name, tt.want, view)
+			}
+		})
+	}
+}
+
 func TestDetailViewPlanNeedsReview(t *testing.T) {
 	t.Parallel()
 	t.Run("roadmap awaiting review", func(t *testing.T) {

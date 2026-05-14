@@ -55,6 +55,34 @@ func TestLivePreviewEligible(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "pending permission",
+			f: &feature.Feature{
+				Status: feature.StatusFailed,
+				PermissionsQueue: []feature.PermissionRequest{
+					{Tool: "Bash", Pending: true},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "pending ask user",
+			f: &feature.Feature{
+				Status:    feature.StatusInterrupted,
+				HelpQueue: []feature.HelpRequest{{Question: "Need input?", Pending: true}},
+			},
+			want: true,
+		},
+		{
+			name: "needs review",
+			f:    &feature.Feature{Status: feature.StatusPlanNeedsReview},
+			want: true,
+		},
+		{
+			name: "need user input",
+			f:    &feature.Feature{Status: feature.StatusNeedUserInput, PendingNeedUserInputPath: "/tmp/need-user-input.yaml"},
+			want: true,
+		},
+		{
 			name: "done",
 			f:    &feature.Feature{Status: feature.StatusDone},
 			want: false,
@@ -111,14 +139,15 @@ func TestContextualAActionHint(t *testing.T) {
 			wantLead: true,
 		},
 		{
-			name: "waiting permission still attaches",
+			name: "waiting permission advertises approval",
 			f: &feature.Feature{
 				Status: feature.StatusImplementing,
 				PermissionsQueue: []feature.PermissionRequest{
 					{Tool: "Bash", Pending: true},
 				},
 			},
-			wantHint: "[a] Attach (⚠)",
+			wantHint: "[a] Approve",
+			wantLead: true,
 		},
 		{
 			name:     "static published has no a action",
@@ -132,6 +161,90 @@ func TestContextualAActionHint(t *testing.T) {
 			gotHint, gotLead := contextualAActionHint(tt.f)
 			if gotHint != tt.wantHint || gotLead != tt.wantLead {
 				t.Errorf("contextualAActionHint(%s) = (%q, %v), want (%q, %v)", tt.name, gotHint, gotLead, tt.wantHint, tt.wantLead)
+			}
+		})
+	}
+}
+
+func TestLivePreviewRendersAttentionBlock(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		feature *feature.Feature
+		sess    session.SessionView
+		width   int
+		height  int
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "permission",
+			feature: &feature.Feature{
+				Status: feature.StatusImplementing,
+				PermissionsQueue: []feature.PermissionRequest{
+					{Tool: "Bash", Args: `{"command":"go test ./internal/tui"}`, Pending: true},
+				},
+			},
+			width:  96,
+			height: 20,
+			want:   []string{"Permission Request", "Bash: go test ./internal/tui", "[a] Approve", "Waiting for approval"},
+		},
+		{
+			name: "ask user",
+			feature: &feature.Feature{
+				Status:    feature.StatusImplementing,
+				HelpQueue: []feature.HelpRequest{{Question: "Which API should we keep?", Pending: true}},
+			},
+			width:  96,
+			height: 20,
+			want:   []string{"Question", "Which API should we keep?", "[a] Answer", "Waiting for an answer"},
+		},
+		{
+			name:    "review",
+			feature: &feature.Feature{Status: feature.StatusPlanNeedsReview, CurrentRoadmapPhase: 1, TotalRoadmapPhases: 3},
+			width:   96,
+			height:  20,
+			want:    []string{"Review Required", "Phase 1 plan needs review", "[a] Review"},
+		},
+		{
+			name: "need user input",
+			feature: &feature.Feature{
+				Status:                   feature.StatusNeedUserInput,
+				PendingNeedUserInputPath: "/tmp/need-user-input.yaml",
+			},
+			width:  96,
+			height: 20,
+			want:   []string{"Input Required", "Feature-level input gate", "[a] Answer"},
+		},
+		{
+			name: "narrow keeps attention and drops transcript",
+			feature: &feature.Feature{
+				Status:    feature.StatusImplementing,
+				HelpQueue: []feature.HelpRequest{{Question: "Narrow question?", Pending: true}},
+			},
+			sess: newLivePreviewSession("narrow", feature.PhaseImplement,
+				assistantMessage(llm.ContentBlock{Type: "text", Text: "roomy transcript context"})),
+			width:   50,
+			height:  10,
+			want:    []string{"Question", "Narrow question?", "[a] Answer"},
+			notWant: []string{"roomy transcript context"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newLivePreviewModel(tt.feature).withSession(tt.sess).withHeight(tt.height)
+			view := m.ViewCompact(tt.width)
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Errorf("LivePreviewModel.ViewCompact(%s) missing %q in:\n%s", tt.name, want, view)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(view, notWant) {
+					t.Errorf("LivePreviewModel.ViewCompact(%s) contains %q unexpectedly in:\n%s", tt.name, notWant, view)
+				}
 			}
 		})
 	}

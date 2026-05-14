@@ -1934,7 +1934,7 @@ func (m *AppModel) livePreviewSessionForFeature(f *feature.Feature) session.Sess
 		return nil
 	}
 	tabs := m.buildRepoTabs(f)
-	if idx := resolveInitialTab(tabs, f.LastAttachedRepo); idx >= 0 && tabs[idx].sess != nil {
+	if idx := resolveInitialAttentionTab(tabs, f.LastAttachedRepo); idx >= 0 && tabs[idx].sess != nil {
 		return tabs[idx].sess
 	}
 	for _, tab := range tabs {
@@ -1948,6 +1948,44 @@ func (m *AppModel) livePreviewSessionForFeature(f *feature.Feature) session.Sess
 		}
 	}
 	return nil
+}
+
+func resolveInitialAttentionTab(tabs []repoTab, lastAttachedRepo string) int {
+	if idx := firstTabWithPendingPermission(tabs); idx >= 0 {
+		return idx
+	}
+	if idx := firstTabWithPendingAskUser(tabs); idx >= 0 {
+		return idx
+	}
+	return resolveInitialTab(tabs, lastAttachedRepo)
+}
+
+func firstTabWithPendingPermission(tabs []repoTab) int {
+	for i, tab := range tabs {
+		if tab.sess != nil && firstPendingPermissionControlRequest(tab.sess) != nil {
+			return i
+		}
+	}
+	for i, tab := range tabs {
+		if tab.sess != nil && tab.sess.Status() == session.SessionWaitingPermission {
+			return i
+		}
+	}
+	return -1
+}
+
+func firstTabWithPendingAskUser(tabs []repoTab) int {
+	for i, tab := range tabs {
+		if tab.sess != nil && firstPendingAskUserControlRequest(tab.sess) != nil {
+			return i
+		}
+	}
+	for i, tab := range tabs {
+		if tab.sess != nil && (tab.sess.Status() == session.SessionWaitingHelp || tab.sess.HasPendingAskUserQuestion()) {
+			return i
+		}
+	}
+	return -1
 }
 
 // activeSessionContextPct returns the context window usage percentage for the
@@ -3244,6 +3282,48 @@ func firstRepoNeedingInput(f *feature.Feature) string {
 	return ""
 }
 
+func (m AppModel) contextualAttentionForFeature(f *feature.Feature) featureAttention {
+	return computeFeatureAttention(f, m.livePreviewSessionForFeature(f))
+}
+
+func (m AppModel) openContextualFeatureAction(f *feature.Feature) (tea.Model, tea.Cmd) {
+	if f == nil {
+		return m, nil
+	}
+	att := m.contextualAttentionForFeature(f)
+	switch att.Kind {
+	case attentionPermission, attentionAskUser, attentionWatch:
+		return m, m.attachToFeature(f)
+	case attentionNeedUserInput:
+		return m.attachNeedUserInput(f, att.RepoName)
+	case attentionReview:
+		return m.openReviewAttention(f)
+	default:
+		return m, nil
+	}
+}
+
+func (m AppModel) openReviewAttention(f *feature.Feature) (tea.Model, tea.Cmd) {
+	if f == nil || !f.Status.IsNeedsReview() {
+		return m, nil
+	}
+	if m.artifactReview.FeatureID() == f.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
+		cmd := m.artifactReview.Reattach()
+		m.currentView = ViewArtifactReview
+		return m, cmd
+	}
+	if f.PendingReviewPhase != nil && f.IsRewind {
+		return m, m.startRewindReviewSessionCmd(f.ID, *f.PendingReviewPhase, false)
+	}
+	if f.PendingReviewPhase != nil && !f.IsRewind {
+		return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
+	}
+	if f.Status == feature.StatusPlanNeedsReview {
+		return m, m.startPlanReviewSessionCmd(f.ID, false)
+	}
+	return m, nil
+}
+
 // handleNeedUserInputDecision routes the user's gate-menu choice through the
 // orchestrator. On error the questionnaire stays open with the failure
 // surfaced so the user can retry or abort instead of being stranded.
@@ -3342,33 +3422,7 @@ func (m AppModel) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.transitionToChat()
 	case key.Matches(msg, keys.Attach):
 		f := m.dashboard.SelectedFeature()
-		if f != nil {
-			if f.Status == feature.StatusNeedUserInput {
-				return m.attachNeedUserInput(f, "")
-			}
-			if repoName := firstRepoNeedingInput(f); repoName != "" {
-				return m.attachNeedUserInput(f, repoName)
-			}
-			if f.Status.IsNeedsReview() {
-				if m.artifactReview.FeatureID() == f.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
-					cmd := m.artifactReview.Reattach()
-					m.currentView = ViewArtifactReview
-					return m, cmd
-				}
-				if f.PendingReviewPhase != nil && f.IsRewind {
-					return m, m.startRewindReviewSessionCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				if f.PendingReviewPhase != nil && !f.IsRewind {
-					return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				if f.Status == feature.StatusPlanNeedsReview {
-					return m, m.startPlanReviewSessionCmd(f.ID, false)
-				}
-			}
-			if isLivePreviewEligible(f) {
-				return m, m.attachToFeature(f)
-			}
-		}
+		return m.openContextualFeatureAction(f)
 	case key.Matches(msg, keys.Restart):
 		f := m.dashboard.SelectedFeature()
 		if f != nil {
@@ -3498,38 +3552,7 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 		return m, nil
 
 	case key.Matches(msg, keys.Attach):
-		if f != nil {
-			if f.Status == feature.StatusNeedUserInput {
-				return m.attachNeedUserInput(f, "")
-			}
-			if repoName := firstRepoNeedingInput(f); repoName != "" {
-				return m.attachNeedUserInput(f, repoName)
-			}
-			// For NeedsReview states, open the artifact review editor
-			if f.Status.IsNeedsReview() {
-				// Reattach existing detached review if available (but not if a decision was already made)
-				if m.artifactReview.FeatureID() == f.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
-					cmd := m.artifactReview.Reattach()
-					m.currentView = ViewArtifactReview
-					return m, cmd
-				}
-				// Rewind-triggered review
-				if f.PendingReviewPhase != nil && f.IsRewind {
-					return m, m.startRewindReviewSessionCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				// Gate-triggered review
-				if f.PendingReviewPhase != nil && !f.IsRewind {
-					return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				// Plan critic review (StatusPlanNeedsReview without PendingReviewPhase)
-				if f.Status == feature.StatusPlanNeedsReview {
-					return m, m.startPlanReviewSessionCmd(f.ID, false)
-				}
-			}
-			if isLivePreviewEligible(f) {
-				return m, m.attachToFeature(f)
-			}
-		}
+		return m.openContextualFeatureAction(f)
 
 	case key.Matches(msg, keys.Approve):
 		if f != nil {
@@ -3812,39 +3835,7 @@ func (m AppModel) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.transitionTo(ViewDashboard, ""), nil
 
 	case key.Matches(msg, keys.Attach):
-		if m.detail.feature != nil {
-			if m.detail.feature.Status == feature.StatusNeedUserInput {
-				return m.attachNeedUserInput(m.detail.feature, "")
-			}
-			if repoName := firstRepoNeedingInput(m.detail.feature); repoName != "" {
-				return m.attachNeedUserInput(m.detail.feature, repoName)
-			}
-			// For NeedsReview states, open the artifact review editor
-			if m.detail.feature.Status.IsNeedsReview() {
-				// Reattach existing detached review if available (but not if a decision was already made)
-				if m.artifactReview.FeatureID() == m.detail.feature.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
-					cmd := m.artifactReview.Reattach()
-					m.currentView = ViewArtifactReview
-					return m, cmd
-				}
-				// Rewind-triggered review
-				if m.detail.feature.PendingReviewPhase != nil && m.detail.feature.IsRewind {
-					return m, m.startRewindReviewSessionCmd(m.detail.feature.ID, *m.detail.feature.PendingReviewPhase, false)
-				}
-				// Gate-triggered review
-				if m.detail.feature.PendingReviewPhase != nil && !m.detail.feature.IsRewind {
-					return m, m.gateReviewStartCmd(m.detail.feature.ID, *m.detail.feature.PendingReviewPhase, false)
-				}
-				// Plan critic review (StatusPlanNeedsReview without PendingReviewPhase)
-				if m.detail.feature.Status == feature.StatusPlanNeedsReview {
-					return m, m.startPlanReviewSessionCmd(m.detail.feature.ID, false)
-				}
-			}
-			if isRunningFeature(m.detail.feature) {
-				return m, m.attachToFeature(m.detail.feature)
-			}
-		}
-		return m, nil
+		return m.openContextualFeatureAction(m.detail.feature)
 
 	case key.Matches(msg, keys.Approve):
 		// Approve all pending permissions for this feature
@@ -7826,7 +7817,7 @@ func phaseTabLabel(p feature.Phase) string {
 // point and will fall back to a single-session view when only one tab exists.
 func (m *AppModel) attachToMultiRepoFeature(f *feature.Feature) tea.Cmd {
 	tabs := m.buildRepoTabs(f)
-	initialIdx := resolveInitialTab(tabs, f.LastAttachedRepo)
+	initialIdx := resolveInitialAttentionTab(tabs, f.LastAttachedRepo)
 	if initialIdx < 0 || tabs[initialIdx].sess == nil {
 		// Fall back to single-session attach if no managed sessions found
 		// (e.g., session from a previous TUI instance not yet recovered)

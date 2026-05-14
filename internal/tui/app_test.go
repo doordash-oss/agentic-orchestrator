@@ -940,6 +940,63 @@ func TestDashboardWatchAttachPreservesMultiRepoTabs(t *testing.T) {
 	}
 }
 
+func TestDashboardContextualAttachPermissionSelectsWaitingSession(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	fm.Config.Repos["api"] = config.RepoConfig{Path: "/tmp/api"}
+	fm.Config.Repos["web"] = config.RepoConfig{Path: "/tmp/web"}
+
+	f, err := fm.Create("Permission Target", "desc", []string{"api", "web"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	if err := fm.Store.Modify(f.ID, func(f *feature.Feature) error {
+		f.LastAttachedRepo = "web"
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	f, _ = fm.Get(f.ID)
+
+	apiSess := session.NewSession(f.ID+"-impl-api-01", f.ID, feature.PhaseImplement)
+	apiSess.SetKind(ports.KindRepoImpl)
+	apiSess.SetRepoName("api")
+	apiSess.SetStatus(session.SessionWaitingPermission)
+	apiSess.SetLastControlRequest(&llm.ControlRequestMessage{
+		RequestID: "perm-api",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"go test ./internal/tui"}`),
+		},
+	})
+	webSess := session.NewSession(f.ID+"-impl-web-01", f.ID, feature.PhaseImplement)
+	webSess.SetKind(ports.KindRepoImpl)
+	webSess.SetRepoName("web")
+	webSess.SetStatus(session.SessionRunning)
+	app.sessionManager.RegisterTestSession(apiSess)
+	app.sessionManager.RegisterTestSession(webSess)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("expected contextual permission action to return attach command")
+	}
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach", updated.currentView)
+	}
+	if got := updated.attach.ActiveRepoName(); got != "api" {
+		t.Fatalf("active attach repo = %q, want api despite LastAttachedRepo=web", got)
+	}
+	if updated.attach.sess == nil || updated.attach.sess.ID() != apiSess.ID() {
+		t.Fatalf("attached session = %v, want %s", updated.attach.sess, apiSess.ID())
+	}
+}
+
 func advanceTestFeatureToImplementing(t *testing.T, fm *feature.Manager, featureID string) {
 	t.Helper()
 	for _, status := range []feature.Status{

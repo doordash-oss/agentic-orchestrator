@@ -21,6 +21,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -350,18 +351,118 @@ func TestDashboardAttentionOnlyCountsPending(t *testing.T) {
 			ID: "clean", Name: "clean", Slug: "clean",
 			Status: feature.StatusImplementing, Created: time.Now().Add(-2 * time.Hour),
 		},
+		{
+			ID: "review", Name: "review", Slug: "review",
+			Status: feature.StatusPlanNeedsReview, Created: time.Now().Add(-3 * time.Hour),
+		},
+		{
+			ID: "need-input", Name: "need-input", Slug: "need-input",
+			Status: feature.StatusNeedUserInput, Created: time.Now().Add(-4 * time.Hour),
+		},
+		{
+			ID: "cycle-input", Name: "cycle-input", Slug: "cycle-input",
+			Status: feature.StatusPublished, Created: time.Now().Add(-5 * time.Hour),
+			RepoCycles: map[string]*feature.RepoCycleState{
+				"api": {
+					Type:                     feature.CycleTweak,
+					Status:                   feature.RepoCycleNeedUserInput,
+					PendingNeedUserInputPath: "/tmp/api/need-user-input.yaml",
+				},
+			},
+		},
 	}
 	m := NewDashboardModel(features, "")
 
-	// Only the "pending" feature should count as needing attention
 	count := m.countNeedAttention()
-	if count != 1 {
-		t.Errorf("countNeedAttention() = %d, want 1 (only pending items)", count)
+	if count != 4 {
+		t.Errorf("countNeedAttention() = %d, want 4 (pending help, review, feature input, cycle input)", count)
 	}
 
-	// "pending" should sort first (needs attention), then "resolved" (newer), then "clean"
 	if m.features[0].ID != "pending" {
 		t.Errorf("features[0] = %s, want pending (needs attention)", m.features[0].ID)
+	}
+}
+
+func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		f           *feature.Feature
+		wantAwait   bool
+		wantSpinner bool
+	}{
+		{
+			name: "pending permission",
+			f: &feature.Feature{
+				ID: "permission", Name: "permission", Slug: "permission", Status: feature.StatusImplementing,
+				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+			},
+			wantAwait: true,
+		},
+		{
+			name: "ask user",
+			f: &feature.Feature{
+				ID: "ask", Name: "ask", Slug: "ask", Status: feature.StatusImplementing,
+				HelpQueue: []feature.HelpRequest{{Question: "Question?", Pending: true}},
+			},
+			wantAwait: true,
+		},
+		{
+			name:      "needs review",
+			f:         &feature.Feature{ID: "review", Name: "review", Slug: "review", Status: feature.StatusPlanNeedsReview},
+			wantAwait: true,
+		},
+		{
+			name:      "feature need user input",
+			f:         &feature.Feature{ID: "nui", Name: "nui", Slug: "nui", Status: feature.StatusNeedUserInput, PendingNeedUserInputPath: "/tmp/need-user-input.yaml"},
+			wantAwait: true,
+		},
+		{
+			name: "repo cycle need user input",
+			f: &feature.Feature{
+				ID: "cycle", Name: "cycle", Slug: "cycle", Status: feature.StatusPublished,
+				RepoCycles: map[string]*feature.RepoCycleState{
+					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleNeedUserInput, PendingNeedUserInputPath: "/tmp/gate.yaml"},
+				},
+			},
+			wantAwait: true,
+		},
+		{
+			name:        "running",
+			f:           &feature.Feature{ID: "run", Name: "run", Slug: "run", Status: feature.StatusImplementing},
+			wantSpinner: true,
+		},
+		{
+			name: "active cycle",
+			f: &feature.Feature{
+				ID: "active-cycle", Name: "active-cycle", Slug: "active-cycle", Status: feature.StatusPublished,
+				RepoCycles: map[string]*feature.RepoCycleState{
+					"api": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+				},
+			},
+			wantSpinner: true,
+		},
+		{
+			name: "done",
+			f:    &feature.Feature{ID: "done", Name: "done", Slug: "done", Status: feature.StatusDone},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewDashboardModel([]*feature.Feature{tt.f}, "")
+			m.spinnerView = "SPIN"
+			row := m.renderFeatureRowCompact(tt.f, true)
+			hasAwait := strings.Contains(row, ansi.Strip(awaitingUserGlyph()))
+			hasSpinner := strings.Contains(row, "SPIN")
+			if hasAwait != tt.wantAwait {
+				t.Errorf("renderFeatureRowCompact(%s) awaiting glyph = %v, want %v; row=%q", tt.name, hasAwait, tt.wantAwait, row)
+			}
+			if hasSpinner != tt.wantSpinner {
+				t.Errorf("renderFeatureRowCompact(%s) spinner = %v, want %v; row=%q", tt.name, hasSpinner, tt.wantSpinner, row)
+			}
+		})
 	}
 }
 
@@ -430,6 +531,64 @@ func TestDashboardFooterHintsRightPanel(t *testing.T) {
 	}
 	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer when right panel focused")
+	}
+}
+
+func TestDashboardFooterContextualActionLabels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		f    *feature.Feature
+		want string
+	}{
+		{
+			name: "permission",
+			f: &feature.Feature{
+				ID: "permission", Name: "permission", Slug: "permission", Status: feature.StatusImplementing,
+				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+			},
+			want: "[a] Approve",
+		},
+		{
+			name: "ask user",
+			f: &feature.Feature{
+				ID: "ask", Name: "ask", Slug: "ask", Status: feature.StatusImplementing,
+				HelpQueue: []feature.HelpRequest{{Question: "Question?", Pending: true}},
+			},
+			want: "[a] Answer",
+		},
+		{
+			name: "review",
+			f:    &feature.Feature{ID: "review", Name: "review", Slug: "review", Status: feature.StatusPlanNeedsReview},
+			want: "[a] Review",
+		},
+		{
+			name: "watch",
+			f:    &feature.Feature{ID: "watch", Name: "watch", Slug: "watch", Status: feature.StatusImplementing},
+			want: "[a] Watch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewDashboardModel([]*feature.Feature{tt.f}, "")
+			m.width = 120
+			m.cursor = 1
+			m.syncPreview()
+			m.focusPanel = 1
+			footer := ansi.Strip(m.renderFooter())
+			if !strings.Contains(footer, tt.want) {
+				t.Fatalf("renderFooter(%s) = %q, want %q", tt.name, footer, tt.want)
+			}
+			if tt.want == "[a] Approve" {
+				primary := strings.Index(footer, "[a] Approve")
+				quick := strings.Index(footer, "[y] Approve")
+				if primary < 0 || quick < 0 || primary > quick {
+					t.Fatalf("renderFooter(%s) = %q, want contextual approve before quick approve", tt.name, footer)
+				}
+			}
+		})
 	}
 }
 

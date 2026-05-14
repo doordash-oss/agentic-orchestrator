@@ -50,6 +50,7 @@ import (
 // Phase 10 candidates because they are model-layer or source-boundary checks
 // over in-memory state:
 //   - activity_test.go
+//   - attention_test.go
 //   - branding_test.go
 //   - configeditor_test.go
 //   - cycle_dispatch_test.go
@@ -101,6 +102,7 @@ var tuiParallelIneligibleTestFiles = []string{
 
 var tuiParallelCandidateTestFiles = []string{
 	"activity_test.go",
+	"attention_test.go",
 	"branding_test.go",
 	"configeditor_test.go",
 	"cycle_dispatch_test.go",

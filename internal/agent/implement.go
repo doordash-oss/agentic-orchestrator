@@ -913,7 +913,22 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	// single Rejected verdict so the agent sees all failure modes at once.
 	var gateResult ReportGateResult
 	if report, err := ReadVerificationReport(verificationReportPath); err == nil {
-		schemaResult := ValidateVerificationReport(report, requiredVerification, contract, true)
+		boundContract := contract
+		var schemaResult ReportGateResult
+		if loaded, err := readBoundTestingContract(report); err != nil {
+			schemaResult.Findings = append(schemaResult.Findings, ReportGateFinding{
+				Category: GateCategorySchema,
+				Kind:     KindMissingRequired,
+				Detail:   fmt.Sprintf("testing contract referenced by verification-report.yaml is unreadable: %v", err),
+			})
+			schemaResult.Rejected = true
+		} else if loaded != nil {
+			boundContract = loaded
+		}
+		schemaResult = MergeGateResults(schemaResult, ValidateVerificationReportWithContext(report, requiredVerification, true, VerificationReportValidationContext{
+			IterationDir: iterDir,
+			Contract:     boundContract,
+		}))
 		deferralResult := ValidateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
 		gateResult = MergeGateResults(schemaResult, deferralResult)
 		if gateResult.Rejected {

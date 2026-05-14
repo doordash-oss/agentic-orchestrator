@@ -700,6 +700,28 @@ func TestImplementSkillDiscoversTestingContractFromVerificationReport(t *testing
 	}
 }
 
+func TestImplementSkillDocumentsEvidenceFiles(t *testing.T) {
+	path := repoRootPath(t, "skills", "implement", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"`screenshots/`",
+		"`behaviors/`",
+		"`evidence.primary`",
+		"`evidence.attachments[]`",
+		"`passed`, `failed`, and `pending_human`",
+		"`blocked`, `not_run`, and `waived`",
+		"`blocked_reason`",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/implement/SKILL.md missing evidence-file guidance %q", want)
+		}
+	}
+}
+
 func TestImplementSkillReadsPhaseProgressOnResume(t *testing.T) {
 	path := repoRootPath(t, "skills", "implement", "SKILL.md")
 	data, err := os.ReadFile(path)

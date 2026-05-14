@@ -598,6 +598,62 @@ func TestContractRegistryImplementerReportsRejectedVerificationReport(t *testing
 	}
 }
 
+func TestContractRegistryImplementerRejectsMissingEvidenceFile(t *testing.T) {
+	iterDir := t.TempDir()
+	artifactDir := filepath.Dir(iterDir)
+	progressPath := filepath.Join(artifactDir, "progress.md")
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
+	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(artifactDir, "plan.md"), "collapsed")
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatalf("WriteTestingContract() error = %v", err)
+	}
+
+	writeValidProgress(t, progressPath, reportPath, StateSuccess)
+	report := passedArtifactReportForTest(&contract, contractPath)
+	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/missing.png"})
+	if err := WriteVerificationReport(reportPath, report); err != nil {
+		t.Fatalf("WriteVerificationReport() error = %v", err)
+	}
+
+	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "screenshots/missing.png") {
+		t.Fatalf("Validate() = (%+v, %q), want missing evidence file violation", out, got)
+	}
+}
+
+func TestContractRegistryImplementerLoadsSiblingContractWhenReportPathMissing(t *testing.T) {
+	iterDir := t.TempDir()
+	artifactDir := filepath.Dir(iterDir)
+	progressPath := filepath.Join(artifactDir, "progress.md")
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
+	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(artifactDir, "plan.md"), "collapsed")
+	if err := WriteTestingContract(contractPath, contract); err != nil {
+		t.Fatalf("WriteTestingContract() error = %v", err)
+	}
+
+	writeValidProgress(t, progressPath, reportPath, StateSuccess)
+	report := passedArtifactReportForTest(&contract, "")
+	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/missing.png"})
+	if err := WriteVerificationReport(reportPath, report); err != nil {
+		t.Fatalf("WriteVerificationReport() error = %v", err)
+	}
+
+	out, violations, err := Validate(feature.PhaseImplement, RoleImplementer, iterDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "screenshots/missing.png") {
+		t.Fatalf("Validate() = (%+v, %q), want sibling contract evidence-file violation", out, got)
+	}
+}
+
 func TestContractRegistryImplementerAllowsRetryWithNotRunVerification(t *testing.T) {
 	iterDir := t.TempDir()
 	artifactDir := filepath.Dir(iterDir)
@@ -879,6 +935,114 @@ func TestContractRegistryFinalReviewerRejectsApprovedWithMismatchedContractBindi
 	got := JoinProtocolViolations(violations)
 	if out.OK || !strings.Contains(got, expectedContractPath) {
 		t.Fatalf("Validate() = (%+v, %q), want APPROVED final review blocked by stale contract_path", out, got)
+	}
+}
+
+func TestContractRegistryFinalReviewerRejectsApprovedWithMissingImplementationEvidenceFile(t *testing.T) {
+	root := t.TempDir()
+	runDir := filepath.Join(root, "run-001")
+	reviewDir := filepath.Join(runDir, "review")
+	iterDir := filepath.Join(reviewDir, "iteration-01")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration dir: %v", err)
+	}
+
+	finalReviewContractPath := filepath.Join(reviewDir, "testing-contract.yaml")
+	finalReviewContract := writeTestingContractForFinalReview(t, finalReviewContractPath, 1, "baseline-tests", "go test ./...")
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	finalReviewReport := BuildContractVerificationReportStub(finalReviewContract, finalReviewContractPath)
+	exitCode := 0
+	for i := range finalReviewReport.Results {
+		finalReviewReport.Results[i].Status = VerificationStatusPassed
+		finalReviewReport.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "passed"}
+	}
+	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), finalReviewReport); err != nil {
+		t.Fatalf("WriteVerificationReport() final review error = %v", err)
+	}
+
+	implRoot := filepath.Join(runDir, "phase-01", "implement")
+	implIterDir := filepath.Join(implRoot, "iteration-01")
+	if err := os.MkdirAll(implIterDir, 0o755); err != nil {
+		t.Fatalf("mkdir implementation iter dir: %v", err)
+	}
+	if err := NewArtifactManager(implRoot).WriteMeta(implIterDir, IterationMeta{Iteration: 1, AgentStatus: "SUCCESS", ReviewStatus: "skipped"}); err != nil {
+		t.Fatalf("WriteMeta() error = %v", err)
+	}
+	implContractPath := filepath.Join(runDir, "phase-01", "testing-contract.yaml")
+	implContract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(runDir, "phase-01", "plan.md"), "collapsed")
+	if err := WriteTestingContract(implContractPath, implContract); err != nil {
+		t.Fatalf("WriteTestingContract() impl error = %v", err)
+	}
+	implReport := passedArtifactReportForTest(&implContract, implContractPath)
+	setArtifactEvidenceForTest(&implReport, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/missing.png"})
+	if err := WriteVerificationReport(filepath.Join(implIterDir, "verification-report.yaml"), implReport); err != nil {
+		t.Fatalf("WriteVerificationReport() impl error = %v", err)
+	}
+
+	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "screenshots/missing.png") || !strings.Contains(got, "phase-01") {
+		t.Fatalf("Validate() = (%+v, %q), want final review blocked by implementation evidence file", out, got)
+	}
+}
+
+func TestContractRegistryFinalReviewerAuditsLatestCompletedImplementationOnly(t *testing.T) {
+	root := t.TempDir()
+	runDir := filepath.Join(root, "run-001")
+	reviewDir := filepath.Join(runDir, "review")
+	iterDir := filepath.Join(reviewDir, "iteration-01")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration dir: %v", err)
+	}
+
+	finalReviewContractPath := filepath.Join(reviewDir, "testing-contract.yaml")
+	finalReviewContract := writeTestingContractForFinalReview(t, finalReviewContractPath, 1, "baseline-tests", "go test ./...")
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	finalReviewReport := passedArtifactReportForTest(finalReviewContract, finalReviewContractPath)
+	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), finalReviewReport); err != nil {
+		t.Fatalf("WriteVerificationReport() final review error = %v", err)
+	}
+
+	implRoot := filepath.Join(runDir, "phase-01", "implement")
+	implContractPath := filepath.Join(runDir, "phase-01", "testing-contract.yaml")
+	implContract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(runDir, "phase-01", "plan.md"), "collapsed")
+	if err := WriteTestingContract(implContractPath, implContract); err != nil {
+		t.Fatalf("WriteTestingContract() impl error = %v", err)
+	}
+
+	approvedIterDir := filepath.Join(implRoot, "iteration-01")
+	mustWriteEvidenceFile(t, approvedIterDir, "screenshots/dashboard.png")
+	if err := NewArtifactManager(implRoot).WriteMeta(approvedIterDir, IterationMeta{Iteration: 1, AgentStatus: "SUCCESS", ReviewStatus: "skipped"}); err != nil {
+		t.Fatalf("WriteMeta() approved error = %v", err)
+	}
+	approvedReport := passedArtifactReportForTest(&implContract, implContractPath)
+	setArtifactEvidenceForTest(&approvedReport, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/dashboard.png"})
+	if err := WriteVerificationReport(filepath.Join(approvedIterDir, "verification-report.yaml"), approvedReport); err != nil {
+		t.Fatalf("WriteVerificationReport() approved impl error = %v", err)
+	}
+
+	retryIterDir := filepath.Join(implRoot, "iteration-02")
+	if err := os.MkdirAll(retryIterDir, 0o755); err != nil {
+		t.Fatalf("mkdir retry iteration dir: %v", err)
+	}
+	if err := NewArtifactManager(implRoot).WriteMeta(retryIterDir, IterationMeta{Iteration: 2, AgentStatus: "RETRY", ReviewStatus: "skipped_retry"}); err != nil {
+		t.Fatalf("WriteMeta() retry error = %v", err)
+	}
+	retryReport := passedArtifactReportForTest(&implContract, implContractPath)
+	setArtifactEvidenceForTest(&retryReport, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/missing-retry.png"})
+	if err := WriteVerificationReport(filepath.Join(retryIterDir, "verification-report.yaml"), retryReport); err != nil {
+		t.Fatalf("WriteVerificationReport() retry impl error = %v", err)
+	}
+
+	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !out.OK || len(violations) != 0 {
+		t.Fatalf("Validate() = (%+v, %v), want retry iteration ignored during final review evidence re-audit", out, violations)
 	}
 }
 

@@ -282,6 +282,124 @@ func TestValidateVerificationReport_EvidenceModesSchemaOnly(t *testing.T) {
 	}
 }
 
+func TestValidateVerificationReportWithContext_EvidenceFiles(t *testing.T) {
+	iterDir := t.TempDir()
+	contract := CompileTestingContract(strings.Join([]string{
+		"## Success Criteria",
+		"### Visual Evidence",
+		"- [ ] Capture the dashboard screenshot.",
+		"### Behavioral Evidence",
+		"- [ ] Attach the workflow transcript.",
+	}, "\n"), filepath.Join(iterDir, "plan.md"), "collapsed")
+
+	mustWriteEvidenceFile(t, iterDir, "screenshots/dashboard.png")
+	mustWriteEvidenceFile(t, iterDir, "screenshots/dashboard-detail.png")
+	mustWriteEvidenceFile(t, iterDir, "behaviors/workflow.log")
+
+	report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
+	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{
+		Primary:     "screenshots/dashboard.png",
+		Attachments: []string{"screenshots/dashboard-detail.png"},
+	})
+	setArtifactEvidenceForTest(&report, VerificationModeBehavioral, VerificationEvidence{
+		Summary: "workflow completed",
+		Primary: "behaviors/workflow.log",
+	})
+
+	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
+		IterationDir: iterDir,
+		Contract:     &contract,
+	})
+	if result.Rejected {
+		t.Fatalf("ValidateVerificationReportWithContext() rejected valid evidence files: %+v", result.Findings)
+	}
+
+	tests := []struct {
+		name       string
+		mutate     func(*VerificationReport)
+		wantDetail string
+	}{
+		{
+			name: "missing_primary",
+			mutate: func(report *VerificationReport) {
+				setArtifactEvidenceForTest(report, VerificationModeVisual, VerificationEvidence{})
+			},
+			wantDetail: "evidence.primary",
+		},
+		{
+			name: "wrong_root",
+			mutate: func(report *VerificationReport) {
+				setArtifactEvidenceForTest(report, VerificationModeVisual, VerificationEvidence{Primary: "behaviors/dashboard.png"})
+			},
+			wantDetail: "screenshots/",
+		},
+		{
+			name: "traversal",
+			mutate: func(report *VerificationReport) {
+				setArtifactEvidenceForTest(report, VerificationModeBehavioral, VerificationEvidence{Primary: "behaviors/../workflow.log"})
+			},
+			wantDetail: "traversal",
+		},
+		{
+			name: "absolute",
+			mutate: func(report *VerificationReport) {
+				setArtifactEvidenceForTest(report, VerificationModeBehavioral, VerificationEvidence{Primary: filepath.Join(iterDir, "behaviors/workflow.log")})
+			},
+			wantDetail: "absolute",
+		},
+		{
+			name: "missing_attachment",
+			mutate: func(report *VerificationReport) {
+				setArtifactEvidenceForTest(report, VerificationModeVisual, VerificationEvidence{
+					Primary:     "screenshots/dashboard.png",
+					Attachments: []string{"screenshots/missing.png"},
+				})
+			},
+			wantDetail: "screenshots/missing.png",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := report
+			candidate.Results = append([]VerificationCheckResult(nil), report.Results...)
+			tt.mutate(&candidate)
+			result := ValidateVerificationReportWithContext(&candidate, nil, true, VerificationReportValidationContext{
+				IterationDir: iterDir,
+				Contract:     &contract,
+			})
+			if !result.Rejected {
+				t.Fatalf("ValidateVerificationReportWithContext() Rejected = false, want true")
+			}
+			joined := reportGateDetailsForTest(result)
+			if !strings.Contains(joined, tt.wantDetail) {
+				t.Fatalf("ValidateVerificationReportWithContext() details = %q, want %q", joined, tt.wantDetail)
+			}
+		})
+	}
+}
+
+func TestValidateVerificationReportWithContext_EvidenceFilesSkippedForBlockedRows(t *testing.T) {
+	iterDir := t.TempDir()
+	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(iterDir, "plan.md"), "collapsed")
+	report := passedArtifactReportForTest(&contract, filepath.Join(iterDir, "testing-contract.yaml"))
+	for i := range report.Results {
+		if report.Results[i].Mode == VerificationModeVisual {
+			report.Results[i].Status = VerificationStatusBlocked
+			report.Results[i].BlockedReason = "external screenshot runner unavailable"
+			report.Results[i].EvidenceData = VerificationEvidence{}
+		}
+	}
+
+	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
+		IterationDir: iterDir,
+		Contract:     &contract,
+	})
+	if result.Rejected {
+		t.Fatalf("ValidateVerificationReportWithContext() rejected blocked row without files: %+v", result.Findings)
+	}
+}
+
 // TestFormatGateFeedback_ConsolidatesRepetitiveFindings covers the main
 // reason gate feedback used to be unreadable: an iteration that writes
 // SUCCESS + phase_complete without running any verification produces N
@@ -489,6 +607,24 @@ func TestValidateVerificationReport_ContractBackedChecks(t *testing.T) {
 	}
 }
 
+func TestValidateVerificationReport_ContractContextDoesNotRequireReportContractPath(t *testing.T) {
+	contract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", "/tmp/phase-01/plan.md", "collapsed")
+	report := passedArtifactReportForTest(&contract, "")
+	setArtifactEvidenceForTest(&report, VerificationModeVisual, VerificationEvidence{Summary: "screenshot exists"})
+
+	result := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{
+		IterationDir: t.TempDir(),
+		Contract:     &contract,
+	})
+	if !result.Rejected {
+		t.Fatal("ValidateVerificationReportWithContext() Rejected = false, want true for contract-backed report with missing evidence.primary")
+	}
+	got := reportGateDetailsForTest(result)
+	if !strings.Contains(got, "evidence.primary") {
+		t.Fatalf("ValidateVerificationReportWithContext() details = %q, want evidence.primary violation", got)
+	}
+}
+
 func TestValidateVerificationReport_ContractRevisionAndBlockedRules(t *testing.T) {
 	contract := CompileTestingContract("#### Automated Verification:\n- [ ] Agent tests: `go test ./internal/agent/... -count=1`\n", "/tmp/phase-02/plan.md", "tdd-fill-in")
 	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-02/testing-contract.yaml")
@@ -534,4 +670,45 @@ func TestValidateVerificationReport_ContractRevisionAndBlockedRules(t *testing.T
 	if !result.Rejected {
 		t.Fatal("expected missing substitute item row to reject")
 	}
+}
+
+func passedArtifactReportForTest(contract *TestingContract, contractPath string) VerificationReport {
+	report := BuildContractVerificationReportStub(contract, contractPath)
+	exitCode := 0
+	for i := range report.Results {
+		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "passed"}
+	}
+	return report
+}
+
+func setArtifactEvidenceForTest(report *VerificationReport, mode VerificationMode, evidence VerificationEvidence) {
+	for i := range report.Results {
+		if report.Results[i].Mode != mode {
+			continue
+		}
+		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].Evidence = evidence.Summary
+		report.Results[i].EvidenceData = evidence
+	}
+}
+
+func mustWriteEvidenceFile(t *testing.T, iterDir, rel string) {
+	t.Helper()
+	path := filepath.Join(iterDir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(rel), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func reportGateDetailsForTest(result ReportGateResult) string {
+	var b strings.Builder
+	for _, finding := range result.Findings {
+		b.WriteString(finding.Detail)
+		b.WriteByte('\n')
+	}
+	return b.String()
 }

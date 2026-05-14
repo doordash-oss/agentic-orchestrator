@@ -337,9 +337,12 @@ func validateFinalReviewVerificationReportArtifact(_ string, path string, out *O
 		contract = loaded
 	}
 
-	gate := ValidateVerificationReport(report, nil, contract, true)
+	gate := ValidateVerificationReportWithContext(report, nil, true, VerificationReportValidationContext{
+		IterationDir: filepath.Dir(path),
+		Contract:     contract,
+	})
 	if !gate.Rejected {
-		return nil, nil
+		return validateFinalReviewImplementationEvidenceReports(path), nil
 	}
 	return reportGateViolations(gate), nil
 }
@@ -355,6 +358,141 @@ func finalReviewTestingContractPath(reportPath string) string {
 
 func sameCleanPath(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+func validateFinalReviewImplementationEvidenceReports(finalReviewReportPath string) []ProtocolViolation {
+	runDir := finalReviewRunDir(finalReviewReportPath)
+	if runDir == "" {
+		return nil
+	}
+	reports := latestImplementationReportPathsInRun(runDir)
+	var violations []ProtocolViolation
+	for _, reportPath := range reports {
+		report, err := ReadVerificationReport(reportPath)
+		if err != nil {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "implementation verification report " + reportPath,
+				Reason:   fmt.Sprintf("implementation verification report is unreadable: %v", err),
+			})
+			continue
+		}
+		if strings.TrimSpace(report.ContractPath) == "" {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "implementation verification report " + reportPath,
+				Reason:   "implementation verification report is missing contract_path required for final-review evidence re-audit",
+			})
+			continue
+		}
+		contract, err := readBoundTestingContract(report)
+		if err != nil {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "implementation verification report " + reportPath,
+				Reason:   fmt.Sprintf("testing contract referenced by implementation verification report is unreadable: %v", err),
+			})
+			continue
+		}
+		gate := ValidateVerificationReportWithContext(report, nil, true, VerificationReportValidationContext{
+			IterationDir: filepath.Dir(reportPath),
+			Contract:     contract,
+		})
+		if gate.Rejected {
+			violations = append(violations, implementationReportGateViolations(reportPath, gate)...)
+		}
+	}
+	return violations
+}
+
+func finalReviewRunDir(reportPath string) string {
+	iterDir := filepath.Dir(reportPath)
+	reviewDir := filepath.Dir(iterDir)
+	if filepath.Base(reviewDir) != feature.PhaseReview.DirName() {
+		return ""
+	}
+	parent := filepath.Dir(reviewDir)
+	if matched, _ := filepath.Match("run-*", filepath.Base(parent)); matched {
+		return parent
+	}
+	return ""
+}
+
+func latestImplementationReportPathsInRun(runDir string) []string {
+	var reports []string
+	addLatest := func(implementDir string) {
+		if reportPath := latestCompletedImplementationReportPath(implementDir); reportPath != "" {
+			reports = append(reports, reportPath)
+		}
+	}
+	addLatest(filepath.Join(runDir, feature.PhaseImplement.DirName()))
+
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		return reports
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "phase-") {
+			continue
+		}
+		addLatest(filepath.Join(runDir, entry.Name(), feature.PhaseImplement.DirName()))
+	}
+	return reports
+}
+
+func latestCompletedImplementationReportPath(implementDir string) string {
+	entries, err := os.ReadDir(implementDir)
+	if err != nil {
+		return ""
+	}
+	am := NewArtifactManager(implementDir)
+	latest := 0
+	best := ""
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		var iteration int
+		if _, err := fmt.Sscanf(entry.Name(), "iteration-%d", &iteration); err != nil || iteration <= latest {
+			continue
+		}
+		iterDir := filepath.Join(implementDir, entry.Name())
+		meta, err := am.ReadMeta(iterDir)
+		if err != nil || !completedImplementationMeta(meta) {
+			continue
+		}
+		reportPath := filepath.Join(iterDir, "verification-report.yaml")
+		if _, err := os.Stat(reportPath); err != nil {
+			continue
+		}
+		latest = iteration
+		best = reportPath
+	}
+	return best
+}
+
+func completedImplementationMeta(meta IterationMeta) bool {
+	if strings.TrimSpace(meta.AgentStatus) != agentStatusSuccess {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(meta.ReviewStatus)) {
+	case strings.ToLower(ReviewApproved.String()), "skipped":
+		return true
+	default:
+		return false
+	}
+}
+
+func implementationReportGateViolations(reportPath string, gate ReportGateResult) []ProtocolViolation {
+	out := make([]ProtocolViolation, 0, len(gate.Findings))
+	for _, finding := range gate.Findings {
+		reason := finding.Detail
+		if finding.CheckName != "" {
+			reason = finding.CheckName + ": " + reason
+		}
+		out = append(out, ProtocolViolation{
+			Artifact: "implementation verification report " + reportPath,
+			Reason:   "Report Integrity Gate: " + reason,
+		})
+	}
+	return out
 }
 
 func extractOutputFilesSection(content string) (string, bool) {

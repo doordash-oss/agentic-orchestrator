@@ -226,6 +226,89 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 	}
 }
 
+func TestVerificationReportRoundTripFileBackedEvidence(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "verification-report.yaml")
+	exitCode := 0
+	report := VerificationReport{
+		Version:          2,
+		ContractPath:     "/tmp/phase-02/testing-contract.yaml",
+		ContractRevision: 1,
+		Results: []VerificationCheckResult{
+			{
+				ItemID:   "visual_capture",
+				Name:     "Visual capture",
+				Command:  "visual: capture dashboard",
+				Mode:     VerificationModeVisual,
+				Status:   VerificationStatusPassed,
+				Evidence: "dashboard screenshot captured",
+				EvidenceData: VerificationEvidence{
+					Summary:     "dashboard screenshot captured",
+					Primary:     "screenshots/dashboard.png",
+					Attachments: []string{"screenshots/dashboard-detail.png"},
+				},
+			},
+			{
+				ItemID:   "behavioral_capture",
+				Name:     "Behavioral capture",
+				Command:  "behavioral: capture workflow",
+				Mode:     VerificationModeBehavioral,
+				Status:   VerificationStatusPassed,
+				Evidence: "workflow transcript captured",
+				EvidenceData: VerificationEvidence{
+					ExitCode: &exitCode,
+					Summary:  "workflow transcript captured",
+					Primary:  "behaviors/create-feature.log",
+				},
+			},
+			{
+				ItemID:   "visual_noisy_empty_attachments",
+				Name:     "Visual no attachments",
+				Command:  "visual: capture empty state",
+				Mode:     VerificationModeVisual,
+				Status:   VerificationStatusPassed,
+				Evidence: "empty state captured",
+				EvidenceData: VerificationEvidence{
+					Summary:     "empty state captured",
+					Primary:     "screenshots/empty.png",
+					Attachments: []string{},
+				},
+			},
+		},
+	}
+
+	if err := WriteVerificationReport(path, report); err != nil {
+		t.Fatalf("WriteVerificationReport() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile() error = %v", err)
+	}
+	if strings.Contains(string(data), "attachments: []") {
+		t.Fatalf("WriteVerificationReport() emitted noisy empty attachments:\n%s", data)
+	}
+
+	got, err := ReadVerificationReport(path)
+	if err != nil {
+		t.Fatalf("ReadVerificationReport() error = %v", err)
+	}
+	if got.Results[0].EvidenceData.Primary != "screenshots/dashboard.png" {
+		t.Fatalf("ReadVerificationReport() visual primary = %q, want screenshots/dashboard.png", got.Results[0].EvidenceData.Primary)
+	}
+	if len(got.Results[0].EvidenceData.Attachments) != 1 || got.Results[0].EvidenceData.Attachments[0] != "screenshots/dashboard-detail.png" {
+		t.Fatalf("ReadVerificationReport() visual attachments = %+v, want dashboard detail", got.Results[0].EvidenceData.Attachments)
+	}
+	if got.Results[1].EvidenceData.ExitCode == nil || *got.Results[1].EvidenceData.ExitCode != 0 {
+		t.Fatalf("ReadVerificationReport() behavioral exit code = %+v, want 0", got.Results[1].EvidenceData.ExitCode)
+	}
+	if got.Results[1].EvidenceData.Primary != "behaviors/create-feature.log" {
+		t.Fatalf("ReadVerificationReport() behavioral primary = %q, want behaviors/create-feature.log", got.Results[1].EvidenceData.Primary)
+	}
+	if got.Results[2].EvidenceData.Attachments == nil || len(got.Results[2].EvidenceData.Attachments) != 0 {
+		t.Fatalf("ReadVerificationReport() empty attachments = %#v, want non-nil empty slice", got.Results[2].EvidenceData.Attachments)
+	}
+}
+
 func TestReadVerificationReport_V1Compatibility(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verification-report.yaml")
 	content := `version: 1

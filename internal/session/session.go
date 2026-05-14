@@ -236,8 +236,8 @@ type Session struct {
 	// hang.
 	keepAliveOnTruncatedResult bool
 
-	// askUserAutoPick optionally answers high-confidence recommended
-	// AskUserQuestion bundles before they enter pending TUI routing.
+	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
+	// bundles before they enter pending TUI routing.
 	askUserAutoPick *ports.AskUserAutoPickConfig
 }
 
@@ -1144,7 +1144,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 	}
 
 	// AskUserQuestion normally surfaces to the TUI, except for allowlisted
-	// high-confidence creator questions that the session can answer safely.
+	// confidence-qualified creator questions that the session can answer safely.
 	if req.Request.ToolName == "AskUserQuestion" {
 		if s.tryAutoPickAskUser(req) {
 			return true

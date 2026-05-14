@@ -84,7 +84,7 @@ Detailed descriptions of each phase, mapped to agentic's orchestration phases an
 4. Records human decisions as binding constraints for downstream phases
 
 **Inquireness levels** (set at feature creation):
-- **None**: Harness keeps eligible high-confidence planning recommendations hidden unless manual input is required
+- **None**: Harness keeps eligible confidence-qualified planning answers hidden unless manual input is required
 - **Medium**: Harness surfaces key planning questions that significantly affect the outcome
 - **High**: Harness surfaces more planning questions at major decision points before proceeding
 

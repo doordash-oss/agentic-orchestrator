@@ -79,9 +79,9 @@ When a feature is created, these defaults are combined with the pipeline profile
 
 ## Inquireness
 
-`defaults.inquireness` controls how often the harness surfaces planning questions to you. Valid values: `none` (hide eligible high-confidence recommendations unless manual input is required), `medium` (surface key planning questions), `high` (surface more planning questions). Default: `medium`.
+`defaults.inquireness` controls how often the harness surfaces planning questions to you. Valid values: `none` (hide eligible confidence-qualified answers unless manual input is required), `medium` (surface key planning questions), `high` (surface more planning questions). Default: `medium`.
 
-Supported [grill-me] planning phases may include recommended multiple-choice answers with confidence scores. When a recommendation is eligible and the current inquireness setting allows it, the harness accepts the answer for the session and records it in `qa-answers.md` with an auto-picked confidence annotation.
+Supported [grill-me] planning phases may include multiple-choice answers with confidence scores. When an answer meets the current inquireness threshold, the harness accepts it for the session and records it in `qa-answers.md` with an auto-picked confidence annotation.
 
 ## Exit Criteria
 

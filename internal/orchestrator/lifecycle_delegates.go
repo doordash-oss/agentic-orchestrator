@@ -1062,8 +1062,16 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		// fix) — pressing Restart should recover it via plain re-dispatch.
 	case feature.StatusFailed:
 		switch phase {
-		case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch:
+		case feature.PhaseKnowledgeBase:
 			if err := o.TransitionTo(featureID, feature.StatusCreated); err != nil {
+				return RestartOutcome{}, err
+			}
+		case feature.PhaseInquire:
+			if err := o.TransitionTo(featureID, feature.StatusInquiring); err != nil {
+				return RestartOutcome{}, err
+			}
+		case feature.PhaseResearch:
+			if err := o.TransitionTo(featureID, feature.StatusResearching); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhaseBrainstorm:

@@ -1055,6 +1055,8 @@ func TestRestartFromFailedResearchPhase(t *testing.T) {
 	_ = fm.Transition(f.ID, feature.StatusResearching)
 	_ = fm.Transition(f.ID, feature.StatusFailed)
 	f, _ = fm.Get(f.ID)
+	f.CurrentPhase = feature.PhaseResearch
+	_ = fm.Store.Save(f)
 
 	sm := session.NewManager(nil)
 	app.sessionManager = sm
@@ -1063,8 +1065,8 @@ func TestRestartFromFailedResearchPhase(t *testing.T) {
 	_ = cmd()
 
 	f, _ = fm.Get(f.ID)
-	if f.Status != feature.StatusCreated {
-		t.Errorf("feature status = %v, want StatusCreated after restart from Failed+PhaseResearch", f.Status)
+	if f.Status != feature.StatusResearching {
+		t.Errorf("feature status = %v, want StatusResearching after restart from Failed+PhaseResearch", f.Status)
 	}
 }
 

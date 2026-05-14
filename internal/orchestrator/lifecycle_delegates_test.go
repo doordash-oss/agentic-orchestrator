@@ -556,6 +556,56 @@ func TestOrchestrator_RestartPhase_RunningResearch_TransitionsToInterrupted(t *t
 	}
 }
 
+func TestOrchestrator_RestartPhase_FailedSingleShotPhase_TransitionsToSamePhaseStartableStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		phase      feature.Phase
+		wantStatus feature.Status
+	}{
+		{
+			name:       "failed inquire restarts inquire",
+			phase:      feature.PhaseInquire,
+			wantStatus: feature.StatusInquiring,
+		},
+		{
+			name:       "failed research restarts research",
+			phase:      feature.PhaseResearch,
+			wantStatus: feature.StatusResearching,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           "feat-1",
+				Status:       feature.StatusFailed,
+				CurrentPhase: tt.phase,
+			}
+			lc := lifecycleForFeature(f)
+			fs := newFeatureStore(f)
+
+			o := orchestrator.New(orchestrator.Deps{
+				Lifecycle: lc,
+				Store:     fs,
+			}, orchestrator.Hooks{})
+
+			outcome, err := o.RestartPhase("feat-1", 0, 0)
+			if err != nil {
+				t.Fatalf("RestartPhase: %v", err)
+			}
+			if outcome.Action != orchestrator.RestartDispatchPhase {
+				t.Fatalf("Action = %v, want RestartDispatchPhase", outcome.Action)
+			}
+			if outcome.Phase != tt.phase {
+				t.Errorf("Phase = %v, want %v", outcome.Phase, tt.phase)
+			}
+			if f.Status != tt.wantStatus {
+				t.Errorf("Status = %v, want %v", f.Status, tt.wantStatus)
+			}
+		})
+	}
+}
+
 // TestOrchestrator_RestartPhase_InterruptedFeature_KeepsStatus
 // ---------------------------------------------------------------------------
 // A feature already at StatusInterrupted needs no transition — StartFeature

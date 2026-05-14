@@ -283,9 +283,10 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 		t.Errorf("r3 status = %q, want completed (unchanged)", published.RepoCycles["r3"].Status)
 	}
 
-	// Published stays published.
-	if published.Status != feature.StatusPublished {
-		t.Errorf("published status = %v, should not transition", published.Status)
+	// Non-interactive repo cycles represent active agent work; interruption
+	// should move the feature out of the Published bucket.
+	if published.Status != feature.StatusInterrupted {
+		t.Errorf("published status = %v, want Interrupted", published.Status)
 	}
 
 	// KBStatus preserved.

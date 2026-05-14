@@ -208,7 +208,11 @@ func TestFinalReviewPromptBranches(t *testing.T) {
 				"/run/phase-01/implement/iteration-02",
 				"Referenced evidence artifacts",
 				"/run/phase-01/implement/iteration-02/screenshots/setup.png",
+			},
+			wantOmit: []string{
+				"Use these prior implementation artifacts as the coverage source",
 				"final-review testing contract stays PlanLess",
+				"MISSING_EVIDENCE_REQUIREMENT phase <number>",
 			},
 		},
 		{

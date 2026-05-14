@@ -32,11 +32,13 @@ type RequiredVerificationItem struct {
 type VerificationMode string
 
 const (
-	VerificationModeUnknown VerificationMode = "unknown"
-	VerificationModeCommand VerificationMode = "command"
-	VerificationModeSkill   VerificationMode = "skill"
-	VerificationModeManual  VerificationMode = "manual"
-	VerificationModeOther   VerificationMode = "other"
+	VerificationModeUnknown    VerificationMode = "unknown"
+	VerificationModeCommand    VerificationMode = "command"
+	VerificationModeSkill      VerificationMode = "skill"
+	VerificationModeManual     VerificationMode = "manual"
+	VerificationModeVisual     VerificationMode = "visual"
+	VerificationModeBehavioral VerificationMode = "behavioral"
+	VerificationModeOther      VerificationMode = "other"
 )
 
 type VerificationRunStatus string
@@ -316,10 +318,7 @@ func BuildContractVerificationReportStub(contract *TestingContract, contractPath
 		ContractRevision: contract.Revision,
 	}
 	for _, item := range contract.Items {
-		mode := VerificationModeCommand
-		if item.ExpectedEvidence.Kind == testingContractManualKind || item.Source == testingContractManualSource {
-			mode = VerificationModeManual
-		}
+		mode := verificationModeForContractItem(item)
 		report.Results = append(report.Results, VerificationCheckResult{
 			ItemID:      item.ID,
 			Name:        item.Name,
@@ -330,6 +329,19 @@ func BuildContractVerificationReportStub(contract *TestingContract, contractPath
 		})
 	}
 	return report
+}
+
+func verificationModeForContractItem(item TestingContractItem) VerificationMode {
+	switch {
+	case item.ExpectedEvidence.Kind == testingContractManualKind || item.Source == testingContractManualSource:
+		return VerificationModeManual
+	case item.ExpectedEvidence.Kind == testingContractVisualKind || item.Source == testingContractVisualSource:
+		return VerificationModeVisual
+	case item.ExpectedEvidence.Kind == testingContractBehavioralKind || item.Source == testingContractBehavioralSource:
+		return VerificationModeBehavioral
+	default:
+		return VerificationModeCommand
+	}
 }
 
 func WriteVerificationReport(path string, report VerificationReport) error {

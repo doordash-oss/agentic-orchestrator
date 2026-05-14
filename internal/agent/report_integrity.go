@@ -298,9 +298,8 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 		}
 		if _, ok := validIDs[itemID]; ok {
 			item := validIDs[itemID]
-			if item.ExpectedEvidence.Kind == testingContractManualKind &&
-				(checks[i].Mode == "" || checks[i].Mode == VerificationModeUnknown) {
-				checks[i].Mode = VerificationModeManual
+			if checks[i].Mode == "" || checks[i].Mode == VerificationModeUnknown {
+				checks[i].Mode = verificationModeForContractItem(item)
 			}
 			if NormalizeStatus(checks[i].Status) == VerificationStatusBlocked {
 				if strings.TrimSpace(checks[i].BlockedReason) == "" {

@@ -179,6 +179,58 @@ func TestContractRegistryPlanPhasePlannerReportsEmptyPlanMarkdown(t *testing.T) 
 	}
 }
 
+func TestContractRegistryPlanPhasePlannerReportsMissingEvidenceSections(t *testing.T) {
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
+		PlanText: "# Phase 1 Plan\n\n" +
+			"## Overview\nShip the phase.\n\n" +
+			"## Tasks\n\n" +
+			"### Task 1: Build\n\n" +
+			"#### What to build\nDo the work.\n\n" +
+			"#### Acceptance criteria\n- [ ] Done.\n\n" +
+			"#### Blocked by\nNone - can start immediately\n\n" +
+			"## Success Criteria\n\n" +
+			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+			"### Manual Verification\n- [ ] None required: internal-only phase.\n",
+	})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "### Visual Evidence") || !strings.Contains(got, "### Behavioral Evidence") {
+		t.Fatalf("JoinProtocolViolations() = %q, want missing evidence section violations", got)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerReportsTaskScopedEvidenceSections(t *testing.T) {
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
+		PlanText: "# Phase 1 Plan\n\n" +
+			"## Overview\nShip the phase.\n\n" +
+			"## Tasks\n\n" +
+			"### Task 1: Build\n\n" +
+			"#### What to build\nDo the work.\n\n" +
+			"#### Acceptance criteria\n- [ ] Done.\n\n" +
+			"#### Visual Evidence\n- [ ] Capture only inside the task.\n\n" +
+			"#### Behavioral Evidence\n- [ ] Attach only inside the task.\n\n" +
+			"#### Blocked by\nNone - can start immediately\n\n" +
+			"## Success Criteria\n\n" +
+			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
+			"### Visual Evidence\n- [ ] None required: no UI surface.\n\n" +
+			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
+	})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "Task 1") || !strings.Contains(got, "phase-level") {
+		t.Fatalf("JoinProtocolViolations() = %q, want task-scoped evidence violation", got)
+	}
+}
+
 func TestContractRegistryPlanPhasePlannerReportsMissingMeta(t *testing.T) {
 	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
 		PlanText: validPhasePlanText(),
@@ -1162,7 +1214,18 @@ func writePhasePlannerAttempt(t *testing.T, artifacts phasePlannerArtifacts) str
 }
 
 func validPhasePlanText() string {
-	return "# Phase 1 Plan\n\n## Desired End State\nShip the phase.\n\n## Changes Required\n- Edit code.\n\n## Grounding\n_no rows_\n"
+	return "# Phase 1 Plan\n\n" +
+		"## Overview\nShip the phase.\n\n" +
+		"## Tasks\n\n" +
+		"### Task 1: Build the slice\n\n" +
+		"#### What to build\nImplement the phase behavior.\n\n" +
+		"#### Acceptance criteria\n- [ ] Behavior is complete.\n\n" +
+		"#### Blocked by\nNone - can start immediately\n\n" +
+		"## Success Criteria\n\n" +
+		"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+		"### Manual Verification\n- [ ] None required: internal-only test fixture.\n\n" +
+		"### Visual Evidence\n- [ ] None required: no user-facing rendered surface.\n\n" +
+		"### Behavioral Evidence\n- [ ] None required: automated tests provide the artifact.\n"
 }
 
 func validRefactorPlanText() string {

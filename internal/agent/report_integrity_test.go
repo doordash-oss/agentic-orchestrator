@@ -262,6 +262,26 @@ func TestValidateVerificationReport_PendingHumanNonManualRejected(t *testing.T) 
 	}
 }
 
+func TestValidateVerificationReport_EvidenceModesSchemaOnly(t *testing.T) {
+	contract := CompileTestingContract(strings.Join([]string{
+		"## Success Criteria",
+		"### Visual Evidence",
+		"- [ ] Capture the dashboard screenshot.",
+		"### Behavioral Evidence",
+		"- [ ] Attach the workflow transcript.",
+	}, "\n"), "/tmp/phase-01/plan.md", "collapsed")
+	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	for i := range report.Results {
+		report.Results[i].Status = VerificationStatusPassed
+		report.Results[i].EvidenceData = VerificationEvidence{Summary: "artifact path recorded in the implementation log"}
+	}
+
+	result := ValidateVerificationReport(&report, nil, &contract, true)
+	if result.Rejected {
+		t.Fatalf("visual/behavioral evidence modes should only receive schema validation in this phase: %+v", result.Findings)
+	}
+}
+
 // TestFormatGateFeedback_ConsolidatesRepetitiveFindings covers the main
 // reason gate feedback used to be unreadable: an iteration that writes
 // SUCCESS + phase_complete without running any verification produces N

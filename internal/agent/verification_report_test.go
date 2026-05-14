@@ -17,6 +17,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -93,6 +94,34 @@ func TestWriteAndReadContractVerificationReportStub(t *testing.T) {
 	}
 }
 
+func TestBuildContractVerificationReportStub_EvidenceModes(t *testing.T) {
+	contract := CompileTestingContract(strings.Join([]string{
+		"## Success Criteria",
+		"### Visual Evidence",
+		"- [ ] Capture the dashboard.",
+		"### Behavioral Evidence",
+		"- [ ] Attach the workflow transcript.",
+	}, "\n"), "/tmp/phase-01/plan.md", "tdd-fill-in")
+
+	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+
+	var sawVisual, sawBehavioral bool
+	for _, result := range report.Results {
+		switch result.Mode {
+		case VerificationModeVisual:
+			sawVisual = true
+		case VerificationModeBehavioral:
+			sawBehavioral = true
+		}
+	}
+	if !sawVisual {
+		t.Fatalf("BuildContractVerificationReportStub() missing mode visual: %+v", report.Results)
+	}
+	if !sawBehavioral {
+		t.Fatalf("BuildContractVerificationReportStub() missing mode behavioral: %+v", report.Results)
+	}
+}
+
 func TestVerificationReportRoundTripV2(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verification-report.yaml")
 	exitCode := 0
@@ -135,7 +164,24 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 				ItemID:  "manual_signoff",
 				Name:    "Manual signoff",
 				Command: "n/a",
+				Mode:    VerificationModeManual,
 				Status:  VerificationStatusWaived,
+			},
+			{
+				ItemID:   "visual_capture",
+				Name:     "Visual capture",
+				Command:  "visual: capture the dashboard",
+				Mode:     VerificationModeVisual,
+				Status:   VerificationStatusPassed,
+				Evidence: "dashboard.png exists",
+			},
+			{
+				ItemID:   "behavioral_capture",
+				Name:     "Behavioral capture",
+				Command:  "behavioral: capture the workflow",
+				Mode:     VerificationModeBehavioral,
+				Status:   VerificationStatusPassed,
+				Evidence: "workflow.txt exists",
 			},
 		},
 		Mismatches: []VerificationMismatch{
@@ -160,11 +206,17 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 	if got.ContractRevision != 3 {
 		t.Fatalf("ReadVerificationReport() ContractRevision = %d, want 3", got.ContractRevision)
 	}
-	if len(got.Results) != 4 {
-		t.Fatalf("ReadVerificationReport() len(Results) = %d, want 4", len(got.Results))
+	if len(got.Results) != 6 {
+		t.Fatalf("ReadVerificationReport() len(Results) = %d, want 6", len(got.Results))
 	}
 	if got.Results[0].EvidenceData.Summary != report.Results[0].EvidenceData.Summary {
 		t.Fatalf("ReadVerificationReport() first summary = %q, want %q", got.Results[0].EvidenceData.Summary, report.Results[0].EvidenceData.Summary)
+	}
+	if got.Results[4].Mode != VerificationModeVisual {
+		t.Fatalf("ReadVerificationReport() visual mode = %q, want %q", got.Results[4].Mode, VerificationModeVisual)
+	}
+	if got.Results[5].Mode != VerificationModeBehavioral {
+		t.Fatalf("ReadVerificationReport() behavioral mode = %q, want %q", got.Results[5].Mode, VerificationModeBehavioral)
 	}
 	if got.Results[1].BlockedReason != "codesigning is unavailable in the sandbox" {
 		t.Fatalf("ReadVerificationReport() blocked reason = %q", got.Results[1].BlockedReason)

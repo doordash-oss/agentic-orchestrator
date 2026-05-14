@@ -160,7 +160,7 @@ func TestPhasePlanningLoopEmitsEvents(t *testing.T) {
 		os.MkdirAll(d, 0o755)
 	}
 
-	_ = os.WriteFile(filepath.Join(planDir, "plan.md"), []byte("# Phase Plan\n## Overview\nDo stuff.\n\n## Tasks\n### Task 1: Do stuff\n\n#### What to build\nDo stuff.\n\n#### Acceptance criteria\n- [ ] Stuff is done.\n\n#### Blocked by\nNone - can start immediately.\n\n## Success Criteria\n### Automated Verification\n- [ ] Tests: `go test ./...`\n\n### Manual Verification\n- [ ] None required: test plan fixture.\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(planDir, "plan.md"), []byte("# Phase Plan\n## Overview\nDo stuff.\n\n## Tasks\n### Task 1: Do stuff\n\n#### What to build\nDo stuff.\n\n#### Acceptance criteria\n- [ ] Stuff is done.\n\n#### Blocked by\nNone - can start immediately.\n\n## Success Criteria\n### Automated Verification\n- [ ] Tests: `go test ./...`\n\n### Manual Verification\n- [ ] None required: test plan fixture.\n\n### Visual Evidence\n- [ ] None required: no rendered surface.\n\n### Behavioral Evidence\n- [ ] None required: automated tests are the artifact.\n"), 0o644)
 
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\nsleep 0.2\n"+

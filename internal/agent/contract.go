@@ -215,7 +215,108 @@ func validatePhasePlanMarkdownArtifact(iterDir string, path string, _ *Outcome) 
 	if strings.TrimSpace(string(data)) == "" {
 		return []ProtocolViolation{{Artifact: "phase plan markdown", Reason: "phase plan markdown is empty"}}, nil
 	}
-	return nil, nil
+	return validatePhasePlanEvidenceContract(string(data)), nil
+}
+
+func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
+	var violations []ProtocolViolation
+	success := extractMarkdownSection(planText, "## Success Criteria")
+	for _, heading := range []string{"### Visual Evidence", "### Behavioral Evidence"} {
+		if !hasMarkdownHeading(success, heading) {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   fmt.Sprintf("phase plan markdown is missing top-level `%s` under `## Success Criteria`", heading),
+			})
+			continue
+		}
+		if reason := validateEvidenceSectionBody(success, heading); reason != "" {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   reason,
+			})
+		}
+	}
+	violations = append(violations, taskScopedEvidenceViolations(planText)...)
+	return violations
+}
+
+func validateEvidenceSectionBody(successCriteria, heading string) string {
+	body := extractMarkdownSection(successCriteria, heading)
+	requirements, noneMarkers := countEvidenceChecklistItems(body)
+	switch {
+	case noneMarkers == 1 && requirements == 0:
+		return ""
+	case noneMarkers > 0:
+		return fmt.Sprintf("phase plan markdown `%s` must contain checklist requirements or exactly one `None required: <reason>` checklist item, not both", heading)
+	case requirements > 0:
+		return ""
+	default:
+		return fmt.Sprintf("phase plan markdown `%s` must contain checklist evidence requirements or exactly one `None required: <reason>` checklist item", heading)
+	}
+}
+
+func countEvidenceChecklistItems(body string) (requirements int, noneMarkers int) {
+	lines := strings.Split(body, "\n")
+	var fence fenceState
+	for _, line := range lines {
+		if fence.update(line) {
+			continue
+		}
+		if fence.inside() {
+			continue
+		}
+		description, ok := parseChecklistDescription(strings.TrimSpace(line))
+		if !ok {
+			continue
+		}
+		if isNoneRequiredDescription(description) {
+			noneMarkers++
+			continue
+		}
+		requirements++
+	}
+	return requirements, noneMarkers
+}
+
+func taskScopedEvidenceViolations(planText string) []ProtocolViolation {
+	var violations []ProtocolViolation
+	for _, task := range ParsePlanTasks(planText) {
+		var fence fenceState
+		for _, line := range task.Body {
+			if fence.update(line) {
+				continue
+			}
+			if fence.inside() {
+				continue
+			}
+			trimmed := strings.TrimSpace(line)
+			if !isVisualEvidenceHeader(trimmed) && !isBehavioralEvidenceHeader(trimmed) {
+				continue
+			}
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   fmt.Sprintf("phase plan markdown %s contains task-scoped `%s`; evidence requirements are phase-level and must live under `## Success Criteria`", strings.TrimSpace(task.Heading), trimmed),
+			})
+		}
+	}
+	return violations
+}
+
+func hasMarkdownHeading(body, heading string) bool {
+	lines := strings.Split(body, "\n")
+	var fence fenceState
+	for _, line := range lines {
+		if fence.update(line) {
+			continue
+		}
+		if fence.inside() {
+			continue
+		}
+		if strings.TrimRight(line, " \t") == heading {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRefactorPlanMarkdownArtifact(iterDir string, path string, out *Outcome) ([]ProtocolViolation, error) {

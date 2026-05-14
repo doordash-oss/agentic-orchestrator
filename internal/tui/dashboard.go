@@ -348,6 +348,7 @@ func (m DashboardModel) View() string {
 		} else {
 			livePreview := m.livePreview
 			livePreview.spinnerView = m.spinnerView
+			livePreview.height = panelHeight
 			rightContent = livePreview.ViewCompact(rightWidth)
 		}
 		rightTitle = "Detail"

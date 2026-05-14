@@ -15,10 +15,12 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -218,6 +220,215 @@ func TestLivePreviewActivityLine(t *testing.T) {
 	}
 }
 
+func TestLivePreviewTranscriptSummaries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		messages []llm.SDKMessage
+		want     []string
+		notWant  []string
+	}{
+		{
+			name: "assistant text",
+			messages: []llm.SDKMessage{
+				assistantMessage(llm.ContentBlock{Type: "text", Text: "Finished repo scan\nready for implementation."}),
+			},
+			want: []string{"Finished repo scan ready for implementation."},
+		},
+		{
+			name: "tool use with arguments",
+			messages: []llm.SDKMessage{
+				assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui -run LivePreview"}`)}),
+			},
+			want: []string{"Bash: go test ./internal/tui -run LivePreview"},
+		},
+		{
+			name: "successful tool result",
+			messages: []llm.SDKMessage{
+				assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_2", Name: "Read", Input: rawJSON(`{"file_path":"internal/tui/live_preview.go"}`)}),
+				userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_2", Content: rawJSON(`"file loaded"`)}),
+			},
+			want: []string{"Read: internal/tui/live_preview.go", "Read result: file loaded"},
+		},
+		{
+			name: "failed tool result",
+			messages: []llm.SDKMessage{
+				userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_3", Content: rawJSON(`"permission denied"`), IsError: true}),
+			},
+			want: []string{"Tool failed: permission denied"},
+		},
+		{
+			name: "permission request",
+			messages: []llm.SDKMessage{
+				controlRequest("perm_1", "Bash", rawJSON(`{"command":"rm -rf /tmp/nope"}`)),
+			},
+			want: []string{"Permission: Bash: rm -rf /tmp/nope"},
+		},
+		{
+			name: "AskUser control request",
+			messages: []llm.SDKMessage{
+				controlRequest("ask_1", "AskUserQuestion", rawJSON(`{"questions":[{"question":"Which implementation path?"}]}`)),
+			},
+			want: []string{"AskUser: Which implementation path?"},
+		},
+		{
+			name: "task lifecycle",
+			messages: []llm.SDKMessage{
+				{Type: "system", Subtype: "task_started", TaskStarted: &llm.TaskStartedMessage{Description: "reading files", TaskType: "local_agent"}},
+				{Type: "system", Subtype: "task_progress", TaskProgress: &llm.TaskProgressMessage{Description: "reading files", LastToolName: "Read"}},
+				{Type: "system", Subtype: "task_notification", TaskNotification: &llm.TaskNotificationMessage{Status: "completed", Summary: "wrote summary"}},
+			},
+			want: []string{"Task started: reading files", "Task progress: reading files via Read", "Task completed: wrote summary"},
+		},
+		{
+			name: "turn result",
+			messages: []llm.SDKMessage{
+				{Type: "result", Result: &llm.ResultMessage{Subtype: "success", TotalCostUSD: 0.12, Result: "phase_complete created"}},
+				{Type: "result", Result: &llm.ResultMessage{Subtype: "error", Result: "context too large"}},
+			},
+			want: []string{"Turn complete: phase_complete created", "Turn failed: context too large"},
+		},
+		{
+			name: "compaction",
+			messages: []llm.SDKMessage{
+				{Type: "system", Subtype: "compact_boundary", Compact: &llm.CompactBoundaryMessage{}},
+			},
+			want: []string{"Context compacted"},
+		},
+		{
+			name: "noisy messages",
+			messages: []llm.SDKMessage{
+				{Type: "stream_event", StreamDeltaType: "text"},
+				{Type: "system", Subtype: "init", Init: &llm.SystemInitMessage{SessionID: "s1", Model: "opus"}},
+				{Type: "status", Status: &llm.StatusMessage{Message: "routine status"}},
+				{Type: "hook_progress", HookProgress: &llm.HookProgressMessage{HookName: "PreToolUse", Data: "checking"}},
+				{Type: "hook_response", HookResponse: &llm.HookResponseMessage{HookName: "PreToolUse", Result: "ok"}},
+				{Type: "rate_limit", RateLimit: &llm.RateLimitMessage{Message: "slow down"}},
+				{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "download 30%"}},
+				{Type: "control_request", ControlRequest: &llm.ControlRequestMessage{RequestID: "hook_1", Request: llm.ControlRequest{Subtype: "hook_callback", ToolName: "Bash"}}},
+				assistantMessage(llm.ContentBlock{Type: "text", Text: "visible after noise"}),
+			},
+			want:    []string{"visible after noise"},
+			notWant: []string{"routine status", "PreToolUse", "slow down", "download 30%", "hook_callback", "session=s1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := newLivePreviewSession("tail-"+tt.name, feature.PhaseImplement, tt.messages...)
+			got := stripANSI(newLivePreviewModel(&feature.Feature{
+				Status:       feature.StatusImplementing,
+				CurrentPhase: feature.PhaseImplement,
+			}).withSession(sess).ViewCompact(100))
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("LivePreviewModel.ViewCompact(%s) missing %q in:\n%s", tt.name, want, got)
+				}
+			}
+			for _, notWant := range tt.notWant {
+				if strings.Contains(got, notWant) {
+					t.Errorf("LivePreviewModel.ViewCompact(%s) contained noisy %q in:\n%s", tt.name, notWant, got)
+				}
+			}
+		})
+	}
+}
+
+func TestLivePreviewTailBannerLabel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		f    *feature.Feature
+		sess session.SessionView
+		want string
+	}{
+		{
+			name: "active session phase",
+			f:    &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
+			sess: newLivePreviewSession("reviewing", feature.PhaseReview),
+			want: "Current: Review",
+		},
+		{
+			name: "feature phase fallback",
+			f:    &feature.Feature{Status: feature.StatusPlanning, CurrentPhase: feature.PhasePlan},
+			want: "Current: Plan",
+		},
+		{
+			name: "roadmap implementation context",
+			f: &feature.Feature{
+				Status:              feature.StatusImplementing,
+				CurrentPhase:        feature.PhaseImplement,
+				CurrentIteration:    4,
+				CurrentRoadmapPhase: 2,
+				TotalRoadmapPhases:  3,
+			},
+			sess: newLivePreviewSessionWithIteration("implementing", feature.PhaseImplement, 5),
+			want: "Current: Implement · Phase 2/3 · Iteration 5",
+		},
+		{
+			name: "post publish cycle context",
+			f: &feature.Feature{
+				Status:           feature.StatusPublished,
+				CurrentPhase:     feature.PhaseImplement,
+				CurrentIteration: 2,
+				Repos:            []feature.FeatureRepo{{Name: "api"}},
+				RepoCycles: map[string]*feature.RepoCycleState{
+					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+				},
+			},
+			sess: newLivePreviewSession("cycle", feature.PhaseImplement),
+			want: "Current: Rebasing [2]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stripANSI(livePreviewTailBannerLabel(tt.f, tt.sess)); got != tt.want {
+				t.Errorf("livePreviewTailBannerLabel(%s) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLivePreviewTranscriptTailCollapsesWhenConstrained(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	sess := newLivePreviewSession("constrained", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
+		assistantMessage(llm.ContentBlock{Type: "text", Text: "visible transcript row"}),
+	)
+
+	wide := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
+	if !strings.Contains(wide, "Current: Implement") || !strings.Contains(wide, "visible transcript row") {
+		t.Fatalf("wide live preview should show banner and tail, got:\n%s", wide)
+	}
+
+	narrow := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(50))
+	if strings.Contains(narrow, "Current:") || strings.Contains(narrow, "visible transcript row") {
+		t.Fatalf("narrow live preview should collapse banner and tail, got:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, "Live Preview") || !strings.Contains(narrow, "Using Bash...") {
+		t.Fatalf("narrow live preview should keep header and activity line, got:\n%s", narrow)
+	}
+}
+
+func TestLivePreviewTranscriptRowsTruncateToContentWidth(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	sess := newLivePreviewSession("truncate", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{Type: "text", Text: strings.Repeat("longword", 20)}),
+	)
+	view := newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(80)
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if w := lipgloss.Width(line); w > 76 {
+			t.Fatalf("LivePreviewModel.ViewCompact line width = %d, want <= 76; line=%q", w, stripANSI(line))
+		}
+	}
+	if !strings.Contains(stripANSI(view), "…") {
+		t.Fatalf("truncated live preview should contain ellipsis, got:\n%s", stripANSI(view))
+	}
+}
+
 func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
@@ -236,20 +447,63 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 		},
 	}
 	sess := newLivePreviewSession("feat-live-impl", feature.PhaseImplement,
-		assistantMessage(llm.ContentBlock{Type: "tool_use", Name: "Bash"}))
+		llm.SDKMessage{Type: "system", Subtype: "init", Init: &llm.SystemInitMessage{SessionID: "s1", Model: "opus"}},
+		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
+		assistantMessage(llm.ContentBlock{Type: "text", Text: "Ready to patch live preview"}),
+		llm.SDKMessage{Type: "status", Status: &llm.StatusMessage{Message: "routine status"}},
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "download 30%"}},
+		controlRequest("ask_1", "AskUserQuestion", rawJSON(`{"questions":[{"question":"Proceed with patch?"}]}`)),
+	)
 	m := dashboardWithSelectedFeature(f)
 	m.focusPanel = 1
 	m.spinnerView = "spin"
 	m.livePreview.session = sess
 
 	view := m.View()
-	for _, want := range []string{"Live Preview", "Phase", "Implement", "Status", "Implementing", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", "Phase", "Implement", "Status", "Implementing", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard live preview missing %q in:\n%s", want, view)
 		}
 	}
+	for _, notWant := range []string{"routine status", "download 30%", "session=s1"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("dashboard live preview contained noisy %q in:\n%s", notWant, view)
+		}
+	}
 	if strings.Contains(view, "Phase Progress") {
 		t.Fatalf("live preview should replace static detail phase progress, got:\n%s", view)
+	}
+}
+
+func TestDashboardLivePreviewConstrainedCollapseKeepsFooter(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-narrow",
+		Name:         "Narrow Feature",
+		Slug:         "narrow-feature",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Created:      time.Now(),
+	}
+	sess := newLivePreviewSession("feat-narrow-impl", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: rawJSON(`{"command":"go test ./internal/tui"}`)}),
+		assistantMessage(llm.ContentBlock{Type: "text", Text: "this transcript should collapse"}),
+	)
+	m := dashboardWithSelectedFeature(f)
+	m.width = 80
+	m.height = 14
+	m.focusPanel = 1
+	m.spinnerView = "spin"
+	m.livePreview.session = sess
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "Current:") || strings.Contains(view, "this transcript should collapse") {
+		t.Fatalf("constrained dashboard should hide banner and transcript tail, got:\n%s", view)
+	}
+	for _, want := range []string{"Live Preview", "Phase", "Implement", "Status", "Implementing", "Using Bash...", "[a] Watch"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("constrained dashboard missing %q in:\n%s", want, view)
+		}
 	}
 }
 
@@ -362,6 +616,16 @@ func newLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMe
 	return sess
 }
 
+func newLivePreviewSessionWithIteration(id string, phase feature.Phase, iteration int, messages ...llm.SDKMessage) session.SessionView {
+	sess := session.NewSession(id, "feat-live", phase)
+	sess.SetStatus(session.SessionRunning)
+	sess.SetIteration(iteration)
+	for _, msg := range messages {
+		sess.MessageLog().Append(msg)
+	}
+	return sess
+}
+
 func tweakLivePreviewSession(id string, messages ...llm.SDKMessage) session.SessionView {
 	sess := session.NewSession(id, "feat-live", feature.PhaseImplement)
 	sess.SetKind(ports.KindTweak)
@@ -382,6 +646,46 @@ func assistantMessage(blocks ...llm.ContentBlock) llm.SDKMessage {
 			},
 		},
 	}
+}
+
+func userMessage(blocks ...llm.ContentBlock) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "user",
+		User: &llm.UserMessage{
+			Message: llm.ConversationMsg{
+				Role:    "user",
+				Content: blocks,
+			},
+		},
+	}
+}
+
+func controlRequest(requestID, toolName string, input json.RawMessage) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "control_request",
+		ControlRequest: &llm.ControlRequestMessage{
+			RequestID: requestID,
+			Request: llm.ControlRequest{
+				Subtype:  "can_use_tool",
+				ToolName: toolName,
+				Input:    input,
+			},
+		},
+	}
+}
+
+func rawJSON(s string) json.RawMessage {
+	return json.RawMessage(s)
+}
+
+func (m LivePreviewModel) withSession(sess session.SessionView) LivePreviewModel {
+	m.session = sess
+	return m
+}
+
+func (m LivePreviewModel) withHeight(height int) LivePreviewModel {
+	m.height = height
+	return m
 }
 
 func dashboardWithSelectedFeature(f *feature.Feature) DashboardModel {

@@ -15,6 +15,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -23,6 +24,13 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+)
+
+const (
+	livePreviewTranscriptMessageLimit = 80
+	livePreviewTailMinContentWidth    = 56
+	livePreviewBaseRows               = 7
+	livePreviewTailOverheadRows       = 2
 )
 
 // LivePreviewModel renders the normal live dashboard right panel. It is a
@@ -92,7 +100,10 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	b.WriteString(livePreviewHeaderLine("Phase", livePreviewPhaseLabel(f, m.session), contentWidth) + "\n")
 	b.WriteString(livePreviewHeaderLine("Status", livePreviewStatusText(f), contentWidth) + "\n")
 	b.WriteString(livePreviewHeaderLine("Elapsed", livePreviewElapsedText(f), contentWidth) + "\n")
-	b.WriteString(livePreviewHeaderLine("Cost", livePreviewCostText(f), contentWidth) + "\n\n")
+	b.WriteString(livePreviewHeaderLine("Cost", livePreviewCostText(f), contentWidth) + "\n")
+	if m.height == 0 || m.height > livePreviewBaseRows {
+		b.WriteString("\n")
+	}
 
 	activity := livePreviewActivityLine(f, m.session)
 	prefix := m.spinnerView
@@ -102,6 +113,17 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	line := "  " + prefix + " " + chatThinkingStyle.Render(activity)
 	b.WriteString(ansi.Truncate(line, contentWidth, "…"))
 	b.WriteString("\n")
+
+	tail := livePreviewTranscriptTail(f, m.session, contentWidth, m.height)
+	if len(tail) > 0 {
+		b.WriteString("\n")
+		b.WriteString(livePreviewTailBannerLine(f, m.session, contentWidth))
+		b.WriteString("\n")
+		for _, line := range tail {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
 	return b.String()
 }
 
@@ -240,4 +262,419 @@ func isTweakLivePreview(f *feature.Feature, sess session.SessionView) bool {
 		return true
 	}
 	return hasTweakCycle(f)
+}
+
+type livePreviewTranscriptKind int
+
+const (
+	livePreviewTranscriptAssistant livePreviewTranscriptKind = iota
+	livePreviewTranscriptTool
+	livePreviewTranscriptResult
+	livePreviewTranscriptWarning
+	livePreviewTranscriptQuestion
+	livePreviewTranscriptTask
+	livePreviewTranscriptMuted
+)
+
+type livePreviewTranscriptRow struct {
+	kind livePreviewTranscriptKind
+	text string
+}
+
+func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, width, height int) []string {
+	if width < livePreviewTailMinContentWidth {
+		return nil
+	}
+	if sess == nil || sess.MessageLog() == nil {
+		return nil
+	}
+
+	rows := livePreviewTranscriptRows(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit))
+	if len(rows) == 0 {
+		return nil
+	}
+
+	if height > 0 {
+		maxRows := height - livePreviewBaseRows - livePreviewTailOverheadRows
+		if maxRows <= 0 {
+			return nil
+		}
+		if len(rows) > maxRows {
+			rows = rows[len(rows)-maxRows:]
+		}
+	}
+
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		lines = append(lines, renderLivePreviewTranscriptRow(row, width))
+	}
+	return lines
+}
+
+func livePreviewTranscriptRows(msgs []llm.SDKMessage) []livePreviewTranscriptRow {
+	var rows []livePreviewTranscriptRow
+	toolNames := make(map[string]string)
+	lastKey := ""
+
+	appendRow := func(row livePreviewTranscriptRow) {
+		row.text = singleLine(row.text)
+		if row.text == "" {
+			return
+		}
+		key := fmt.Sprintf("%d:%s", row.kind, row.text)
+		if key == lastKey {
+			return
+		}
+		rows = append(rows, row)
+		lastKey = key
+	}
+
+	for _, msg := range msgs {
+		switch {
+		case msg.StreamDeltaType != "" || msg.Type == "stream_event":
+			continue
+		case msg.Init != nil:
+			continue
+		case msg.Assistant != nil:
+			if msg.Subtype == "partial" {
+				continue
+			}
+			for _, block := range msg.Assistant.Message.Content {
+				switch {
+				case block.IsText():
+					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptAssistant, text: block.Text})
+				case block.IsToolUse():
+					if block.ID != "" && block.Name != "" {
+						toolNames[block.ID] = block.Name
+					}
+					appendRow(livePreviewToolUseRow(block))
+				}
+			}
+		case msg.User != nil:
+			for _, block := range msg.User.Message.Content {
+				if !block.IsToolResult() {
+					continue
+				}
+				appendRow(livePreviewToolResultRow(block, toolNames[block.ToolUseID]))
+			}
+		case msg.Result != nil:
+			appendRow(livePreviewResultRow(msg.Result))
+		case msg.ControlRequest != nil:
+			appendRow(livePreviewControlRequestRow(msg.ControlRequest))
+		case msg.TaskStarted != nil:
+			appendRow(livePreviewTaskStartedRow(msg.TaskStarted))
+		case msg.TaskProgress != nil:
+			appendRow(livePreviewTaskProgressRow(msg.TaskProgress))
+		case msg.TaskNotification != nil:
+			appendRow(livePreviewTaskNotificationRow(msg.TaskNotification))
+		case msg.Compact != nil:
+			appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptMuted, text: "Context compacted"})
+		}
+	}
+	return rows
+}
+
+func livePreviewToolUseRow(block llm.ContentBlock) livePreviewTranscriptRow {
+	if block.Name == "AskUserQuestion" {
+		return livePreviewTranscriptRow{kind: livePreviewTranscriptQuestion, text: "AskUser: " + livePreviewAskUserSummary(block.Input)}
+	}
+	text := block.Name
+	if detail := livePreviewToolInputSummary(block.Name, block.Input); detail != "" {
+		text += ": " + detail
+	}
+	return livePreviewTranscriptRow{kind: livePreviewTranscriptTool, text: text}
+}
+
+func livePreviewToolResultRow(block llm.ContentBlock, toolName string) livePreviewTranscriptRow {
+	name := toolName
+	if name == "" {
+		name = "Tool"
+	}
+	detail := livePreviewJSONSummary(block.Content)
+	if block.IsError {
+		return livePreviewTranscriptRow{kind: livePreviewTranscriptWarning, text: name + " failed: " + detail}
+	}
+	return livePreviewTranscriptRow{kind: livePreviewTranscriptResult, text: name + " result: " + detail}
+}
+
+func livePreviewResultRow(result *llm.ResultMessage) livePreviewTranscriptRow {
+	if result == nil {
+		return livePreviewTranscriptRow{}
+	}
+	if result.IsSuccess() {
+		text := "Turn complete"
+		if detail := singleLine(result.Result); detail != "" {
+			text += ": " + detail
+		} else if result.TotalCostUSD > 0 {
+			text += ": " + formatCost(result.TotalCostUSD)
+		}
+		return livePreviewTranscriptRow{kind: livePreviewTranscriptResult, text: text}
+	}
+
+	label := "Turn stopped"
+	kind := livePreviewTranscriptWarning
+	if result.Subtype == "error" || result.IsError {
+		label = "Turn failed"
+		kind = livePreviewTranscriptWarning
+	}
+	detail := singleLine(result.Result)
+	if detail == "" {
+		detail = result.Subtype
+	}
+	return livePreviewTranscriptRow{kind: kind, text: label + ": " + detail}
+}
+
+func livePreviewControlRequestRow(req *llm.ControlRequestMessage) livePreviewTranscriptRow {
+	if req == nil {
+		return livePreviewTranscriptRow{}
+	}
+	if req.Request.Subtype == "hook_callback" {
+		return livePreviewTranscriptRow{}
+	}
+	if req.Request.ToolName == "AskUserQuestion" {
+		return livePreviewTranscriptRow{kind: livePreviewTranscriptQuestion, text: "AskUser: " + livePreviewAskUserSummary(req.Request.Input)}
+	}
+	if req.Request.Subtype == "can_use_tool" && req.Request.ToolName != "" {
+		text := "Permission: " + req.Request.ToolName
+		if detail := livePreviewToolInputSummary(req.Request.ToolName, req.Request.Input); detail != "" {
+			text += ": " + detail
+		}
+		return livePreviewTranscriptRow{kind: livePreviewTranscriptWarning, text: text}
+	}
+	return livePreviewTranscriptRow{}
+}
+
+func livePreviewTaskStartedRow(msg *llm.TaskStartedMessage) livePreviewTranscriptRow {
+	text := "Task started"
+	if detail := firstNonEmpty(msg.Description, msg.TaskType, msg.TaskID); detail != "" {
+		text += ": " + detail
+	}
+	return livePreviewTranscriptRow{kind: livePreviewTranscriptTask, text: text}
+}
+
+func livePreviewTaskProgressRow(msg *llm.TaskProgressMessage) livePreviewTranscriptRow {
+	text := "Task progress"
+	if detail := firstNonEmpty(msg.Description, msg.TaskID); detail != "" {
+		text += ": " + detail
+	}
+	if msg.LastToolName != "" {
+		text += " via " + msg.LastToolName
+	}
+	return livePreviewTranscriptRow{kind: livePreviewTranscriptTask, text: text}
+}
+
+func livePreviewTaskNotificationRow(msg *llm.TaskNotificationMessage) livePreviewTranscriptRow {
+	status := firstNonEmpty(msg.Status, "notification")
+	text := "Task " + status
+	if detail := firstNonEmpty(msg.Summary, msg.OutputFile, msg.TaskID); detail != "" {
+		text += ": " + detail
+	}
+	kind := livePreviewTranscriptTask
+	if status == "failed" || status == "error" {
+		kind = livePreviewTranscriptWarning
+	}
+	return livePreviewTranscriptRow{kind: kind, text: text}
+}
+
+func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) string {
+	glyph := livePreviewTranscriptGlyph(row.kind)
+	style := MutedStyle
+	switch row.kind {
+	case livePreviewTranscriptAssistant:
+		style = SubtitleStyle
+	case livePreviewTranscriptTool:
+		style = WarningStyle
+	case livePreviewTranscriptResult:
+		style = SuccessStyle
+	case livePreviewTranscriptWarning:
+		style = ErrorStyle
+	case livePreviewTranscriptQuestion:
+		style = ReviewStyle
+	case livePreviewTranscriptTask:
+		style = chatThinkingStyle
+	case livePreviewTranscriptMuted:
+		style = MutedStyle
+	}
+	return ansi.Truncate("  "+style.Render(glyph+" "+row.text), width, "…")
+}
+
+func livePreviewTranscriptGlyph(kind livePreviewTranscriptKind) string {
+	switch kind {
+	case livePreviewTranscriptAssistant:
+		return ">"
+	case livePreviewTranscriptTool:
+		return "$"
+	case livePreviewTranscriptResult:
+		return "="
+	case livePreviewTranscriptWarning:
+		return "!"
+	case livePreviewTranscriptQuestion:
+		return "?"
+	case livePreviewTranscriptTask:
+		return "*"
+	default:
+		return "-"
+	}
+}
+
+func livePreviewTailBannerLine(f *feature.Feature, sess session.SessionView, width int) string {
+	return ansi.Truncate("  "+ReviewStyle.Render("- "+livePreviewTailBannerLabel(f, sess)), width, "…")
+}
+
+func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) string {
+	if label, _, ok := activePublishedCycleStatus(f); ok {
+		return "Current: " + label
+	}
+
+	phase := feature.Phase(-1)
+	if sess != nil {
+		phase = sess.Phase()
+	} else if f != nil {
+		phase = f.CurrentPhase
+	}
+	if phase == feature.Phase(-1) {
+		return "Current: Unknown"
+	}
+
+	parts := []string{phase.String()}
+	if f != nil && phase == feature.PhaseImplement {
+		if f.CurrentRoadmapPhase > 0 && f.TotalRoadmapPhases > 0 {
+			parts = append(parts, fmt.Sprintf("Phase %d/%d", f.CurrentRoadmapPhase, f.TotalRoadmapPhases))
+		}
+		iteration := f.CurrentIteration
+		if sess != nil && sess.Iteration() > 0 {
+			iteration = sess.Iteration()
+		}
+		if iteration > 0 {
+			parts = append(parts, fmt.Sprintf("Iteration %d", iteration))
+		}
+	}
+	return "Current: " + strings.Join(parts, " · ")
+}
+
+func livePreviewToolInputSummary(toolName string, input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	if toolName == "AskUserQuestion" {
+		return livePreviewAskUserSummary(input)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(input, &parsed); err != nil {
+		return singleLine(string(input))
+	}
+
+	switch toolName {
+	case "Bash":
+		return stringField(parsed, "command")
+	case "Read", "Write", "Edit", "MultiEdit":
+		return stringField(parsed, "file_path")
+	case "Glob":
+		return joinNonEmpty(stringField(parsed, "pattern"), stringField(parsed, "path"))
+	case "Grep":
+		return joinNonEmpty(stringField(parsed, "pattern"), stringField(parsed, "path"))
+	case "LS":
+		return stringField(parsed, "path")
+	case "WebFetch":
+		return stringField(parsed, "url")
+	case "Task":
+		return firstNonEmpty(stringField(parsed, "description"), stringField(parsed, "prompt"))
+	}
+	return livePreviewJSONSummary(input)
+}
+
+func livePreviewAskUserSummary(input json.RawMessage) string {
+	var parsed map[string]any
+	if err := json.Unmarshal(input, &parsed); err != nil {
+		return livePreviewJSONSummary(input)
+	}
+	if question := stringField(parsed, "question"); question != "" {
+		return question
+	}
+	questions, ok := parsed["questions"].([]any)
+	if !ok || len(questions) == 0 {
+		return livePreviewJSONSummary(input)
+	}
+	first, ok := questions[0].(map[string]any)
+	if !ok {
+		return livePreviewJSONSummary(input)
+	}
+	question := stringField(first, "question")
+	if question == "" {
+		return livePreviewJSONSummary(input)
+	}
+	if len(questions) > 1 {
+		return fmt.Sprintf("%s (+%d more)", question, len(questions)-1)
+	}
+	return question
+}
+
+func livePreviewJSONSummary(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return singleLine(text)
+	}
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		var parts []string
+		for _, block := range blocks {
+			if block.Text != "" {
+				parts = append(parts, block.Text)
+			}
+		}
+		if len(parts) > 0 {
+			return singleLine(strings.Join(parts, " "))
+		}
+	}
+
+	var parsed any
+	if err := json.Unmarshal(raw, &parsed); err == nil {
+		if compact, err := json.Marshal(parsed); err == nil {
+			return singleLine(string(compact))
+		}
+	}
+	return singleLine(string(raw))
+}
+
+func stringField(values map[string]any, key string) string {
+	value, ok := values[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return singleLine(text)
+}
+
+func singleLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if out := singleLine(value); out != "" {
+			return out
+		}
+	}
+	return ""
+}
+
+func joinNonEmpty(values ...string) string {
+	var parts []string
+	for _, value := range values {
+		if value != "" {
+			parts = append(parts, value)
+		}
+	}
+	return strings.Join(parts, " ")
 }

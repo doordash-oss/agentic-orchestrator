@@ -128,6 +128,9 @@ type ImplementConfig struct {
 //
 // FinalStatus values:
 //   - "review_passed":     iteration emitted SUCCESS and the review gate APPROVED.
+//   - "plan_revision_required": review rejected missing visual/behavioral
+//     evidence coverage with structured requirements that must go through
+//     phase-plan revision.
 //   - "max_iterations":    hit cfg.MaxIterations without a passing review.
 //   - "safety_rail":       no-progress / consecutive-failure rail tripped.
 //   - "interrupted":       shutdown / feature stopped while running.
@@ -139,6 +142,10 @@ type LoopResult struct {
 	FinalStatus string
 	Iterations  int
 	LastError   string
+
+	// PlanRevisionFeedback carries reviewer-authored missing-evidence
+	// requirements when FinalStatus == "plan_revision_required".
+	PlanRevisionFeedback string
 
 	// NeedUserInputPath is the absolute path of the persisted gate
 	// artifact written when FinalStatus == "need_user_input". Empty for
@@ -736,6 +743,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Iterations:  i,
 				}, nil
 			case ReviewChangesRequested:
+				if reqs := MissingEvidenceRequirements(feedback); len(reqs) > 0 {
+					consecutiveFailures = 0
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "plan_revision_required")
+					return &LoopResult{
+						FinalStatus:          "plan_revision_required",
+						Iterations:           i,
+						PlanRevisionFeedback: MissingEvidencePlanRevisionFeedback(reqs),
+					}, nil
+				}
 				consecutiveFailures = 0
 				reviewerFeedback = feedback
 				// Check no-progress safety rail

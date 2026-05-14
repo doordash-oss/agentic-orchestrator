@@ -27,6 +27,21 @@
 **Verification report**: {{ .VerificationPath }}
 
 {{ else if .VerificationPath }}**Verification report**: {{ .VerificationPath }}
+{{ end }}{{ if or .PriorImplementationPlanPaths .PriorImplementationContractPaths .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
+
+Use these prior implementation artifacts as the coverage source for visual and behavioral evidence. Existing visual or behavioral rows with valid verification evidence count as coverage; audit them before requesting any new row. Read the referenced evidence artifacts before approving. The final-review testing contract stays PlanLess and must not grow visual or behavioral rows of its own. For missing evidence tied to a roadmap phase, include the target phase in the structured marker as `MISSING_EVIDENCE_REQUIREMENT phase <number> visual: <requirement>` or `MISSING_EVIDENCE_REQUIREMENT phase <number> behavioral: <requirement>`.
+
+{{ if .PriorImplementationPlanPaths }}Phase plans:
+{{ range .PriorImplementationPlanPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationContractPaths }}Implementation testing contracts:
+{{ range .PriorImplementationContractPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationReportPaths }}Latest completed implementation verification reports:
+{{ range .PriorImplementationReportPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceRootDirs }}Evidence artifact roots:
+{{ range .PriorImplementationEvidenceRootDirs }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceArtifacts }}Referenced evidence artifacts:
+{{ range .PriorImplementationEvidenceArtifacts }}- {{ . }}
+{{ end }}{{ end }}
 {{ end }}{{ if not .Publishable }}NOTE: Local-only repository — no remote (origin) available.
 {{ end }}
 {{- end -}}

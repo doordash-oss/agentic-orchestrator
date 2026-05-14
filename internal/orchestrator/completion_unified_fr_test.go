@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -190,6 +192,203 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	events := drainEvents(o)
 	if !hasPhaseCompleted(events, feature.PhaseFinalReview) {
 		t.Fatalf("expected PhaseCompleted(PhaseFinalReview); events: %v", events)
+	}
+}
+
+func TestOrchestrator_OnMultiReposPassed_MissingEvidenceFinalReviewRoutesPhasePlanRevision(t *testing.T) {
+	tests := []struct {
+		name     string
+		pipeline feature.PipelineProfile
+	}{
+		{name: "medium", pipeline: feature.PipelineMedium},
+		{name: "large", pipeline: feature.PipelineLarge},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cpr := newCapturingPhaseRunner(t)
+			cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+				return nil, session.ErrShuttingDown
+			}
+
+			featureID := "feat-fr-missing-evidence-" + tt.name
+			roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
+			writeRoadmap(t, roadmapPath)
+			unpub := false
+			f := &feature.Feature{
+				ID:                  featureID,
+				Status:              feature.StatusImplementing,
+				CurrentPhase:        feature.PhaseImplement,
+				CurrentRoadmapPhase: 1,
+				TotalRoadmapPhases:  1,
+				ActiveRun:           1,
+				Pipeline:            tt.pipeline,
+				Artifacts:           map[string]string{"roadmap": roadmapPath},
+				Repos:               []feature.FeatureRepo{{Name: "r1", Path: cpr.stateDir, Publishable: &unpub}},
+				RepoStates: map[string]*feature.RepoState{
+					"r1": {Touched: true},
+				},
+			}
+			phasePlanDir := agent.PhasePlanDir(cpr.stateDir, f, 1)
+			if err := os.MkdirAll(phasePlanDir, 0o755); err != nil {
+				t.Fatalf("mkdir phase plan dir: %v", err)
+			}
+			if err := agent.WritePlanAttemptMeta(phasePlanDir, agent.PlanAttemptMeta{
+				Attempt:      1,
+				AgentStatus:  "SUCCESS",
+				ReviewStatus: "APPROVED",
+			}); err != nil {
+				t.Fatalf("seed approved phase plan attempt: %v", err)
+			}
+
+			lc := lifecycleForFeature(f)
+			lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
+			lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
+			lc.MarkCodeReadyFn = func(id string) error {
+				t.Fatalf("MarkCodeReady called after final-review missing-evidence rejection")
+				return nil
+			}
+			fs := newFeatureStore(f)
+			cpr.pr.FeatureStore = fs
+			o := orchestrator.New(orchestrator.Deps{
+				Lifecycle:   lc,
+				Store:       fs,
+				Sessions:    cpr.sm,
+				PhaseRunner: cpr.pr,
+				CmdRunner:   cpr.cmd,
+			}, orchestrator.Hooks{})
+			o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+				if ff.EffectivePipeline() != tt.pipeline {
+					t.Errorf("final review feature pipeline = %q, want %q", ff.EffectivePipeline(), tt.pipeline)
+				}
+				ch := make(chan *agent.OrchestratorResult, 1)
+				ch <- &agent.OrchestratorResult{
+					FinalStatus:          "plan_revision_required",
+					PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.",
+				}
+				return ch, nil
+			})
+
+			if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
+				Phase:           feature.PhaseImplement,
+				MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion() error = %v", err)
+			}
+
+			if f.Status != feature.StatusPlanning {
+				t.Fatalf("feature status = %v, want Planning after final-review evidence repair dispatch", f.Status)
+			}
+			if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
+				t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
+			}
+			data, err := os.ReadFile(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md"))
+			if err != nil {
+				t.Fatalf("read validation feedback: %v", err)
+			}
+			if got := string(data); !strings.Contains(got, "MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.") {
+				t.Fatalf("validation feedback missing reviewer-authored requirement:\n%s", got)
+			}
+			if latest := agent.LatestCompletedPlanAttempt(phasePlanDir); latest != 0 {
+				t.Fatalf("LatestCompletedPlanAttempt() = %d, want 0 after invalidating approved phase plan", latest)
+			}
+		})
+	}
+}
+
+func TestOrchestrator_OnMultiReposPassed_FinalReviewMissingEvidenceTargetsEarlierRoadmapPhase(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return nil, session.ErrShuttingDown
+	}
+
+	featureID := "feat-fr-missing-evidence-earlier-phase"
+	roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
+	writeRoadmap(t, roadmapPath)
+	unpub := false
+	f := &feature.Feature{
+		ID:                  featureID,
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+		ActiveRun:           1,
+		RunCount:            1,
+		Pipeline:            feature.PipelineLarge,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos:               []feature.FeatureRepo{{Name: "r1", Path: cpr.stateDir, Publishable: &unpub}},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true},
+		},
+	}
+	phase1PlanDir := agent.PhasePlanDir(cpr.stateDir, f, 1)
+	phase2PlanDir := agent.PhasePlanDir(cpr.stateDir, f, 2)
+	for phase, dir := range map[int]string{1: phase1PlanDir, 2: phase2PlanDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir phase %d plan dir: %v", phase, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte(fmt.Sprintf("# Phase %d plan", phase)), 0o644); err != nil {
+			t.Fatalf("write phase %d plan: %v", phase, err)
+		}
+		if err := agent.WritePlanAttemptMeta(dir, agent.PlanAttemptMeta{
+			Attempt:      1,
+			AgentStatus:  "SUCCESS",
+			ReviewStatus: "APPROVED",
+		}); err != nil {
+			t.Fatalf("seed phase %d approved attempt: %v", phase, err)
+		}
+	}
+
+	lc := lifecycleForFeature(f)
+	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
+	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
+	lc.MarkCodeReadyFn = func(id string) error {
+		t.Fatalf("MarkCodeReady called after final-review missing-evidence rejection")
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error {
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		ch := make(chan *agent.OrchestratorResult, 1)
+		ch <- &agent.OrchestratorResult{
+			FinalStatus:          "plan_revision_required",
+			PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.",
+		}
+		return ch, nil
+	})
+
+	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion() error = %v", err)
+	}
+
+	if f.CurrentRoadmapPhase != 1 {
+		t.Fatalf("CurrentRoadmapPhase = %d, want targeted phase 1", f.CurrentRoadmapPhase)
+	}
+	if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
+		t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
+	}
+	data, err := os.ReadFile(filepath.Join(phase1PlanDir, "attempt-01", "validation-feedback.md"))
+	if err != nil {
+		t.Fatalf("read phase 1 validation feedback: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.") {
+		t.Fatalf("phase 1 validation feedback missing targeted reviewer requirement:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(phase2PlanDir, "attempt-01", "validation-feedback.md")); !os.IsNotExist(err) {
+		t.Fatalf("phase 2 validation feedback should not be overwritten for a phase 1 repair, stat err = %v", err)
 	}
 }
 

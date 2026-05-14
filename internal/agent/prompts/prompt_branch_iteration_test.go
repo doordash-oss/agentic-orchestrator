@@ -284,6 +284,31 @@ func TestFinalReviewPromptBranches(t *testing.T) {
 			wantOmit:     []string{"## Current Cycle Focus", "NOTE: Local-only repository"},
 		},
 		{
+			name: "final_review_lists_prior_implementation_evidence_context",
+			input: FinalReviewUserInput{
+				Iteration:                            1,
+				DiffBase:                             "main",
+				TestingContractPath:                  "/run/review/testing-contract.yaml",
+				VerificationPath:                     "/run/review/iteration-01/verification-report.yaml",
+				PriorImplementationPlanPaths:         []string{"/run/phase-01/plan/phase-plan.md"},
+				PriorImplementationContractPaths:     []string{"/run/phase-01/testing-contract.yaml"},
+				PriorImplementationReportPaths:       []string{"/run/phase-01/implement/iteration-02/verification-report.yaml"},
+				PriorImplementationEvidenceRootDirs:  []string{"/run/phase-01/implement/iteration-02"},
+				PriorImplementationEvidenceArtifacts: []string{"/run/phase-01/implement/iteration-02/screenshots/setup.png"},
+				Publishable:                          true,
+			},
+			wantContains: []string{
+				"## Prior Implementation Evidence",
+				"/run/phase-01/plan/phase-plan.md",
+				"/run/phase-01/testing-contract.yaml",
+				"/run/phase-01/implement/iteration-02/verification-report.yaml",
+				"/run/phase-01/implement/iteration-02",
+				"Referenced evidence artifacts",
+				"/run/phase-01/implement/iteration-02/screenshots/setup.png",
+				"final-review testing contract stays PlanLess",
+			},
+		},
+		{
 			name: "final_review_cycle_variant_includes_cycle_focus_and_legacy_verification_path",
 			input: FinalReviewUserInput{
 				Iteration:        2,

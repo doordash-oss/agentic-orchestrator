@@ -157,6 +157,36 @@ func LatestCompletedPlanAttempt(artifactDir string) int {
 	return latest
 }
 
+func latestPlanRevisionFeedbackAttempt(artifactDir string) (int, string) {
+	entries, err := os.ReadDir(artifactDir)
+	if err != nil {
+		return 0, ""
+	}
+	best := 0
+	bestFeedback := ""
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		var attempt int
+		if _, err := fmt.Sscanf(entry.Name(), "attempt-%d", &attempt); err != nil || attempt <= best {
+			continue
+		}
+		feedbackPath := filepath.Join(artifactDir, entry.Name(), "validation-feedback.md")
+		data, err := os.ReadFile(feedbackPath)
+		if err != nil || strings.TrimSpace(string(data)) == "" {
+			continue
+		}
+		meta, err := readPlanAttemptMeta(artifactDir, attempt)
+		if err != nil || meta.ReviewStatus != "CHANGES_REQUESTED" {
+			continue
+		}
+		best = attempt
+		bestFeedback = strings.TrimSpace(string(data))
+	}
+	return best, bestFeedback
+}
+
 // AxisApproval is a sticky approval recovered from a prior validation attempt.
 // Surfaced in revise prompts so the reviser knows which sections other axes
 // have already cleared and must not rewrite (per the "Sticky Approval Respect"
@@ -1341,7 +1371,11 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 	startAttempt := LatestCompletedPlanAttempt(artifactDir)
 	resumeValidation := false
 	var criticFeedback string
-	if startAttempt > 0 {
+	feedbackAttempt, feedback := latestPlanRevisionFeedbackAttempt(artifactDir)
+	if feedbackAttempt > startAttempt {
+		startAttempt = feedbackAttempt
+		criticFeedback = feedback
+	} else if startAttempt > 0 {
 		meta, err := readPlanAttemptMeta(artifactDir, startAttempt)
 		if err == nil {
 			if meta.ReviewStatus == "APPROVED" {
@@ -1357,6 +1391,9 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				}
 			}
 		}
+	} else if feedbackAttempt > 0 {
+		startAttempt = feedbackAttempt
+		criticFeedback = feedback
 	}
 
 	// When resuming validation, re-enter the loop at the pending attempt
@@ -1703,7 +1740,11 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 	startAttempt := LatestCompletedPlanAttempt(artifactDir)
 	resumeValidation := false
 	var criticFeedback string
-	if startAttempt > 0 {
+	feedbackAttempt, feedback := latestPlanRevisionFeedbackAttempt(artifactDir)
+	if feedbackAttempt > startAttempt {
+		startAttempt = feedbackAttempt
+		criticFeedback = feedback
+	} else if startAttempt > 0 {
 		meta, err := readPlanAttemptMeta(artifactDir, startAttempt)
 		if err == nil {
 			if meta.ReviewStatus == "APPROVED" {
@@ -1719,6 +1760,9 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				}
 			}
 		}
+	} else if feedbackAttempt > 0 {
+		startAttempt = feedbackAttempt
+		criticFeedback = feedback
 	}
 
 	// When resuming validation, re-enter the loop at the pending attempt

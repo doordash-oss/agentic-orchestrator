@@ -863,6 +863,98 @@ func TestAttachDisallowedForNonRunning(t *testing.T) {
 	}
 }
 
+func TestDashboardWatchAttachUsesExistingSingleSessionPath(t *testing.T) {
+	app, fm := newTestAppModel(t)
+
+	f, err := fm.Create("Watch Single", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	f, _ = fm.Get(f.ID)
+
+	sess := session.NewSession(f.ID+"-impl-01", f.ID, feature.PhaseImplement)
+	sess.SetStatus(session.SessionRunning)
+	app.sessionManager.RegisterTestSession(sess)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("expected watch action to return attach command")
+	}
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach", updated.currentView)
+	}
+	if updated.attach.sess == nil || updated.attach.sess.ID() != sess.ID() {
+		t.Fatalf("attached session = %v, want %s", updated.attach.sess, sess.ID())
+	}
+	if len(updated.attach.repoTabs) != 1 {
+		t.Fatalf("single-session watch repoTabs = %d, want 1", len(updated.attach.repoTabs))
+	}
+}
+
+func TestDashboardWatchAttachPreservesMultiRepoTabs(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	fm.Config.Repos["api"] = config.RepoConfig{Path: "/tmp/api"}
+	fm.Config.Repos["web"] = config.RepoConfig{Path: "/tmp/web"}
+
+	f, err := fm.Create("Watch Multi", "desc", []string{"api", "web"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	f, _ = fm.Get(f.ID)
+
+	apiSess := session.NewSession(f.ID+"-impl-api-01", f.ID, feature.PhaseImplement)
+	apiSess.SetKind(ports.KindRepoImpl)
+	apiSess.SetRepoName("api")
+	apiSess.SetStatus(session.SessionRunning)
+	webSess := session.NewSession(f.ID+"-impl-web-01", f.ID, feature.PhaseImplement)
+	webSess.SetKind(ports.KindRepoImpl)
+	webSess.SetRepoName("web")
+	webSess.SetStatus(session.SessionRunning)
+	app.sessionManager.RegisterTestSession(apiSess)
+	app.sessionManager.RegisterTestSession(webSess)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("expected watch action to return attach command")
+	}
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach", updated.currentView)
+	}
+	if len(updated.attach.repoTabs) != 2 {
+		t.Fatalf("multi-repo watch repoTabs = %d, want 2", len(updated.attach.repoTabs))
+	}
+	if updated.attach.repoTabs[0].repoName != "api" || updated.attach.repoTabs[1].repoName != "web" {
+		t.Fatalf("repo tab order = [%s %s], want [api web]", updated.attach.repoTabs[0].repoName, updated.attach.repoTabs[1].repoName)
+	}
+}
+
+func advanceTestFeatureToImplementing(t *testing.T, fm *feature.Manager, featureID string) {
+	t.Helper()
+	for _, status := range []feature.Status{
+		feature.StatusResearching,
+		feature.StatusPlanReady,
+		feature.StatusPlanning,
+		feature.StatusImplementReady,
+		feature.StatusImplementing,
+	} {
+		if err := fm.Transition(featureID, status); err != nil {
+			t.Fatalf("transition to %s: %v", status, err)
+		}
+	}
+}
+
 func TestStartPhaseDispatch(t *testing.T) {
 	app, fm := newTestAppModel(t)
 

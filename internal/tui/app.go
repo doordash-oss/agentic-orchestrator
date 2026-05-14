@@ -1929,6 +1929,27 @@ func featureHasRunningCycle(f *feature.Feature) bool {
 	return false
 }
 
+func (m *AppModel) livePreviewSessionForFeature(f *feature.Feature) session.SessionView {
+	if f == nil || m.sessionManager == nil {
+		return nil
+	}
+	tabs := m.buildRepoTabs(f)
+	if idx := resolveInitialTab(tabs, f.LastAttachedRepo); idx >= 0 && tabs[idx].sess != nil {
+		return tabs[idx].sess
+	}
+	for _, tab := range tabs {
+		if tab.sess != nil {
+			return tab.sess
+		}
+	}
+	for _, s := range m.sessionManager.FeatureSessions(f.ID) {
+		if s.IsActive() {
+			return s
+		}
+	}
+	return nil
+}
+
 // activeSessionContextPct returns the context window usage percentage for the
 // active session of the currently viewed feature. Returns -1 if unavailable.
 func (m AppModel) activeSessionContextPct() int {
@@ -1991,13 +2012,18 @@ func (m *AppModel) refreshKBStaleWarnings(features []*feature.Feature) {
 func (m AppModel) View() tea.View {
 	// Pass the app-level spinner view to detail models
 	sv := m.spinner.View()
+	m.dashboard.spinnerView = sv
 	m.dashboard.preview.spinnerView = sv
+	m.dashboard.livePreview.spinnerView = sv
 	m.detail.spinnerView = sv
 	m.detail.contextPct = m.activeSessionContextPct()
 	m.detail.kbStaleWarning = m.kbStaleWarningFor(m.detail.feature)
 	if sel := m.dashboard.SelectedFeature(); sel != nil {
 		m.dashboard.preview.contextPct = m.contextPctForFeature(sel)
 		m.dashboard.preview.kbStaleWarning = m.kbStaleWarningFor(sel)
+		m.dashboard.livePreview.session = m.livePreviewSessionForFeature(sel)
+	} else {
+		m.dashboard.livePreview.session = nil
 	}
 	m.publish.spinnerView = sv
 
@@ -3339,7 +3365,7 @@ func (m AppModel) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					return m, m.startPlanReviewSessionCmd(f.ID, false)
 				}
 			}
-			if isRunningFeature(f) {
+			if isLivePreviewEligible(f) {
 				return m, m.attachToFeature(f)
 			}
 		}
@@ -3500,7 +3526,7 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 					return m, m.startPlanReviewSessionCmd(f.ID, false)
 				}
 			}
-			if isRunningFeature(f) {
+			if isLivePreviewEligible(f) {
 				return m, m.attachToFeature(f)
 			}
 		}

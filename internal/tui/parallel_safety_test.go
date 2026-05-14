@@ -55,6 +55,7 @@ import (
 //   - cycle_dispatch_test.go
 //   - dashboard_test.go
 //   - detail_test.go
+//   - live_preview_test.go
 //   - logs_test.go
 //   - observer_fake_test.go
 //   - parallel_safety_test.go
@@ -105,6 +106,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"cycle_dispatch_test.go",
 	"dashboard_test.go",
 	"detail_test.go",
+	"live_preview_test.go",
 	"logs_test.go",
 	"observer_fake_test.go",
 	"parallel_safety_test.go",

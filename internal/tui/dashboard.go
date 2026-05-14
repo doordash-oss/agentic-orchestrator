@@ -72,6 +72,8 @@ type DashboardModel struct {
 	cursor               int
 	focusPanel           int // 0=list, 1=detail
 	preview              DetailModel
+	livePreview          LivePreviewModel
+	spinnerView          string // set by parent from app-level spinner
 	width                int
 	height               int
 	stateDir             string
@@ -105,6 +107,7 @@ func NewDashboardModel(features []*feature.Feature, stateDir string) DashboardMo
 		firstFeature = m.visibleItems[0].feature
 	}
 	m.preview = NewDetailModel(firstFeature, stateDir)
+	m.livePreview = newLivePreviewModel(firstFeature)
 	return m
 }
 
@@ -208,12 +211,18 @@ func (m *DashboardModel) syncPreview() {
 		m.preview = NewDetailModel(nil, m.stateDir)
 		m.preview.width = m.width
 		m.preview.height = m.height
+		m.livePreview = newLivePreviewModel(nil)
+		m.livePreview.width = m.width
+		m.livePreview.height = m.height
 		m.focusPanel = 0
 		return
 	}
 	m.preview = NewDetailModel(f, m.stateDir)
 	m.preview.width = m.width
 	m.preview.height = m.height
+	m.livePreview = newLivePreviewModel(f)
+	m.livePreview.width = m.width
+	m.livePreview.height = m.height
 }
 
 type layoutMode int
@@ -334,7 +343,13 @@ func (m DashboardModel) View() string {
 		rightContent = m.renderWelcomePanel(rightWidth)
 		rightTitle = "Welcome"
 	} else {
-		rightContent = m.preview.ViewCompact(rightWidth)
+		if m.preview.refactorActive || m.preview.refactorPipelineActive || !isLivePreviewEligible(m.SelectedFeature()) {
+			rightContent = m.preview.ViewCompact(rightWidth)
+		} else {
+			livePreview := m.livePreview
+			livePreview.spinnerView = m.spinnerView
+			rightContent = livePreview.ViewCompact(rightWidth)
+		}
 		rightTitle = "Detail"
 		if f := m.SelectedFeature(); f != nil {
 			rightTitle = f.Slug
@@ -468,14 +483,11 @@ func (m DashboardModel) renderFooter() string {
 
 		if f != nil {
 			activePublishedCycle := isActivePublishedCycle(f)
-			if f.Status.IsNeedsReview() {
-				leadHint = WarningStyle.Bold(true).Render("[a] Review")
-			} else if isRunningFeature(f) {
-				switch {
-				case hasPendingPerms(f) || hasPendingHelp(f):
-					hints = append(hints, "[a] Attach (\u26a0)")
-				default:
-					hints = append(hints, "[a] Attach")
+			if actionHint, lead := contextualAActionHint(f); actionHint != "" {
+				if lead {
+					leadHint = WarningStyle.Bold(true).Render(actionHint)
+				} else {
+					hints = append(hints, actionHint)
 				}
 			}
 			if hasPendingPerms(f) {
@@ -919,6 +931,9 @@ func (m DashboardModel) scrollFeatureList(panelHeight int) string {
 
 func (m DashboardModel) renderFeatureRowCompact(f *feature.Feature, selected bool) string {
 	icon := statusIcon(f.Status.String())
+	if isLivePreviewEligible(f) && m.spinnerView != "" {
+		icon = m.spinnerView
+	}
 	var status string
 	if m.rewindingFeatureID == f.ID {
 		status = WarningStyle.Render("Stopping…")

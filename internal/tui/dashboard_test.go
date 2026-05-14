@@ -1067,8 +1067,8 @@ func TestDashboardFooterHidesPublishedHintsForActivePublishedCycle(t *testing.T)
 	m.cursor = 1
 
 	footer := m.renderFooter()
-	if !strings.Contains(footer, "[a] Attach") {
-		t.Fatal("expected [a] Attach hint for active published cycle")
+	if !strings.Contains(footer, "[a] Watch") {
+		t.Fatal("expected [a] Watch hint for active published cycle")
 	}
 	for _, unwanted := range []string{"[t] Tweak", "[Shift+F] Refactor", "[b] Rebase", "[g] Reviews", "[Shift+D] Mark done", "[c] Clean worktree"} {
 		if strings.Contains(footer, unwanted) {

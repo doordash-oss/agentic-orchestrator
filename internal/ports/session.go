@@ -122,8 +122,8 @@ type QAPair struct {
 	// AutoPicked marks answers synthesized by the session-layer grill-me
 	// auto-pick policy rather than typed or selected by a human.
 	AutoPicked bool
-	// Confidence is the selected recommended option's self-rated confidence
-	// when AutoPicked is true.
+	// Confidence is the selected option's self-rated confidence when
+	// AutoPicked is true.
 	Confidence float64
 }
 

@@ -230,26 +230,21 @@ func selectAutoPickAnswer(q autoPickQuestion, threshold float64) (askUserAutoPic
 		return selectAutoPickMultiAnswer(q, threshold)
 	}
 
-	recommendedIndex := -1
+	selectedIndex := -1
+	selectedConfidence := -1.0
 	for i, opt := range q.Options {
 		if strings.TrimSpace(opt.Label) == "" || opt.Confidence == nil || *opt.Confidence < 0 || *opt.Confidence > 1 {
 			return askUserAutoPickSelection{}, false
 		}
-		if isAutoPickRecommendedLabel(opt.Label) {
-			if recommendedIndex >= 0 {
-				return askUserAutoPickSelection{}, false
-			}
-			recommendedIndex = i
+		if *opt.Confidence >= threshold && *opt.Confidence > selectedConfidence {
+			selectedIndex = i
+			selectedConfidence = *opt.Confidence
 		}
 	}
-	if recommendedIndex < 0 {
+	if selectedIndex < 0 {
 		return askUserAutoPickSelection{}, false
 	}
-
-	selected := q.Options[recommendedIndex]
-	if *selected.Confidence < threshold {
-		return askUserAutoPickSelection{}, false
-	}
+	selected := q.Options[selectedIndex]
 	return askUserAutoPickSelection{
 		Question:   q.Question,
 		Answer:     selected.Label,
@@ -279,10 +274,6 @@ func selectAutoPickMultiAnswer(q autoPickQuestion, threshold float64) (askUserAu
 		Answer:     strings.Join(selectedLabels, ", "),
 		Confidence: selectedConfidence,
 	}, true
-}
-
-func isAutoPickRecommendedLabel(label string) bool {
-	return strings.Contains(label, "(Recommended)")
 }
 
 func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOption, bool) {

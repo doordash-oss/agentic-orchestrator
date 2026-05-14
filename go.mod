@@ -19,7 +19,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.9.0
 	go.uber.org/fx v1.24.0
 	golang.org/x/sys v0.42.0
-	google.golang.org/grpc v1.79.2
+	google.golang.org/grpc v1.79.3
 )
 
 require (

@@ -1034,9 +1034,17 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		_ = o.ExtendFailedPhaseBudget(featureID, maxIterationsDelta, maxPlanIterationsDelta)
 	}
 
-	// Published features with repo cycles (running or failed): clear and
-	// return the per-cycle restart descriptors for the TUI to dispatch.
-	if f.Status == feature.StatusPublished && len(f.RepoCycles) > 0 {
+	// Published/code-ready features with repo cycles (running, failed, or
+	// interrupted): clear and return per-cycle restart descriptors for the
+	// TUI to dispatch. Interrupted post-publish cycles first restore the
+	// feature to the publishable base state so the relaunched cycle is again
+	// treated as active post-publish work rather than a plain phase restart.
+	if (f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady || f.Status == feature.StatusInterrupted) && len(f.RepoCycles) > 0 {
+		if f.Status == feature.StatusInterrupted {
+			if err := o.restoreStatusForRepoCycleRestart(featureID); err != nil {
+				return RestartOutcome{}, fmt.Errorf("restore status for cycle restart: %w", err)
+			}
+		}
 		restarts, refactor, collectErr := o.CollectAndClearRepoCycleRestarts(featureID)
 		if collectErr != nil {
 			return RestartOutcome{}, fmt.Errorf("collect cycles: %w", collectErr)
@@ -1114,6 +1122,22 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	}
 
 	return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
+}
+
+func (o *Orchestrator) restoreStatusForRepoCycleRestart(featureID string) error {
+	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if len(f.PRURLs()) > 0 {
+			f.Status = feature.StatusPublished
+		} else {
+			f.Status = feature.StatusCodeReady
+		}
+		f.CurrentPhase = feature.PhasePublish
+		f.ActiveCycle = nil
+		f.SetActiveCycleType("")
+		f.LastError = ""
+		f.FailureType = ""
+		return nil
+	})
 }
 
 // lookupRoadmapPhaseName returns the friendly name of the given roadmap phase

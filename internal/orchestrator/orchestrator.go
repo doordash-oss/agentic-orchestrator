@@ -1075,8 +1075,10 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
-// InterruptFeature stops all sessions for a feature, clears pending help and
-// permission queue flags, and transitions the feature to StatusInterrupted.
+// InterruptFeature stops all sessions for a feature and clears pending help
+// and permission queue flags. Normal phase work and non-interactive
+// post-publish repo cycles transition the feature to StatusInterrupted; tweak-
+// only post-publish cycles keep their published/code-ready feature status.
 // Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
 //
 // Ordering matters: the Interrupted transition is committed BEFORE sessions
@@ -1085,11 +1087,23 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 // Otherwise the stopped session's last assistant text would surface
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
 func (o *Orchestrator) InterruptFeature(featureID string) error {
-	// Transition to interrupted FIRST so racing completion handlers
-	// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
-	// state and skip their failure paths.
-	if err := o.deps.Lifecycle.Transition(featureID, feature.StatusInterrupted); err != nil {
-		return fmt.Errorf("transition to interrupted: %w", err)
+	featureInterrupted := false
+	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
+		(f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) &&
+		hasActiveRepoCycles(f) {
+		interruptFeature := hasInterruptibleRepoCycles(f)
+		if err := o.interruptActiveRepoCycles(featureID, interruptFeature); err != nil {
+			return fmt.Errorf("interrupt active repo cycles: %w", err)
+		}
+		featureInterrupted = interruptFeature
+	} else {
+		// Transition to interrupted FIRST so racing completion handlers
+		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
+		// state and skip their failure paths.
+		if err := o.deps.Lifecycle.Transition(featureID, feature.StatusInterrupted); err != nil {
+			return fmt.Errorf("transition to interrupted: %w", err)
+		}
+		featureInterrupted = true
 	}
 
 	// Stop any active sessions for this feature.
@@ -1117,22 +1131,26 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 		return fmt.Errorf("clear pending flags: %w", err)
 	}
 
-	if o.hooks.OnFeatureInterrupted != nil {
+	if featureInterrupted && o.hooks.OnFeatureInterrupted != nil {
 		o.hooks.OnFeatureInterrupted(featureID)
 	}
-	o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
+	if featureInterrupted {
+		o.emitEvent(ports.Event{Type: ports.FeatureInterrupted, FeatureID: featureID})
+	}
 	return nil
 }
 
 // InterruptAllRunning iterates all features; running ones are interrupted
 // (stopping sessions, clearing pending flags, transitioning to interrupted)
 // AND additionally have KBStatus cleared to match the startup sweep.
-// Non-running features (Published, CodeReady) with active repo cycles have
-// running/reviewing cycles marked "failed", their feature-level ActiveCycle
-// failed, and pending help/permission entries cleared, but are NOT
-// transitioned and KBStatus is preserved. CodeReady is the manual_publish=true
-// shape where a tweak/rebase cycle can be in flight while the feature waits
-// for the user to publish.
+// Non-running features (Published, CodeReady) with active non-interactive
+// repo cycles (rebase/review-comments/refactor) are interrupted at the
+// feature level so the dashboard keeps them in the active bucket. Interactive
+// tweak-only cycles keep the pre-existing published/code-ready status and
+// just have their cycle state marked interrupted. KBStatus is preserved for
+// every post-publish cycle shape. CodeReady is the manual_publish=true shape
+// where a tweak/rebase cycle can be in flight while the feature waits for the
+// user to publish.
 func (o *Orchestrator) InterruptAllRunning() error {
 	features, listErr := o.deps.Store.List()
 	if listErr != nil {
@@ -1167,34 +1185,14 @@ func (o *Orchestrator) InterruptAllRunning() error {
 				errs = append(errs, fmt.Errorf("clear KBStatus for %s: %w", f.ID, err))
 			}
 		case (f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) && hasActiveRepoCycles(f):
-			// Mark in-flight cycles interrupted (not failed — user quit, cycle
-			// didn't break) and clear pending help/perm entries so the next
-			// launch doesn't show a stale "Agent has a question" banner.
-			if err := o.deps.Store.Modify(f.ID, func(ff *feature.Feature) error {
-				for _, rc := range ff.RepoCycles {
-					if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
-						rc.Status = feature.RepoCycleInterrupted
-						rc.LastError = ""
-					}
+			if hasInterruptibleRepoCycles(f) {
+				if err := o.InterruptFeature(f.ID); err != nil {
+					errs = append(errs, fmt.Errorf("interrupt repo cycles for %s: %w", f.ID, err))
 				}
-				if ff.ActiveCycle != nil &&
-					(ff.ActiveCycle.Status == feature.RepoCycleRunning || ff.ActiveCycle.Status == feature.RepoCycleReviewing) {
-					ff.ActiveCycle.Status = feature.RepoCycleInterrupted
-					ff.ActiveCycle.LastError = ""
-				}
-				for i := range ff.HelpQueue {
-					if ff.HelpQueue[i].Pending {
-						ff.HelpQueue[i].Pending = false
-					}
-				}
-				for i := range ff.PermissionsQueue {
-					if ff.PermissionsQueue[i].Pending {
-						ff.PermissionsQueue[i].Pending = false
-					}
-				}
-				return nil
-			}); err != nil {
-				errs = append(errs, fmt.Errorf("mark failed cycles for %s: %w", f.ID, err))
+				continue
+			}
+			if err := o.interruptActiveRepoCycles(f.ID, false); err != nil {
+				errs = append(errs, fmt.Errorf("mark interrupted cycles for %s: %w", f.ID, err))
 			}
 		}
 	}
@@ -1209,11 +1207,64 @@ func (o *Orchestrator) InterruptAllRunning() error {
 // per-repo cycles. Mirrors app.go:10383-10391.
 func hasActiveRepoCycles(f *feature.Feature) bool {
 	for _, rc := range f.RepoCycles {
-		if rc.Status == "running" || rc.Status == "reviewing" {
+		if rc != nil && (rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing) {
 			return true
 		}
 	}
 	return false
+}
+
+func hasInterruptibleRepoCycles(f *feature.Feature) bool {
+	for _, rc := range f.RepoCycles {
+		if rc == nil {
+			continue
+		}
+		switch rc.Type {
+		case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+		default:
+			continue
+		}
+		if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
+			return true
+		}
+	}
+	return false
+}
+
+func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeature bool) error {
+	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		for _, rc := range ff.RepoCycles {
+			if rc == nil {
+				continue
+			}
+			if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
+				rc.Status = feature.RepoCycleInterrupted
+				rc.LastError = ""
+			}
+		}
+		if ff.ActiveCycle != nil &&
+			(ff.ActiveCycle.Status == feature.RepoCycleRunning || ff.ActiveCycle.Status == feature.RepoCycleReviewing) {
+			ff.ActiveCycle.Status = feature.RepoCycleInterrupted
+			ff.ActiveCycle.LastError = ""
+		}
+		if interruptFeature {
+			ff.Status = feature.StatusInterrupted
+			ff.CurrentPhase = feature.PhasePublish
+			ff.LastError = ""
+			ff.FailureType = ""
+		}
+		for i := range ff.HelpQueue {
+			if ff.HelpQueue[i].Pending {
+				ff.HelpQueue[i].Pending = false
+			}
+		}
+		for i := range ff.PermissionsQueue {
+			if ff.PermissionsQueue[i].Pending {
+				ff.PermissionsQueue[i].Pending = false
+			}
+		}
+		return nil
+	})
 }
 
 // HandlePhaseCompletion dispatches a phase-completion result to the

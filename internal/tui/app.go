@@ -4487,10 +4487,15 @@ func (m AppModel) confirmStop(featureID, featureName string) AppModel {
 
 func (m AppModel) stopFeatureCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		// Published features with active repo cycles: clear cycles but keep
-		// status — Orchestrator.InterruptFeature always transitions to
-		// Interrupted, which would break the Published-with-cycles contract.
-		if f, err := m.featureManager.Get(featureID); err == nil && f.Status == feature.StatusPublished && hasActiveRepoCycles(f) {
+		// Published features with interactive tweak-only cycles cannot be
+		// resumed autonomously, so Stop clears the cycle and returns to the
+		// published baseline. Non-interactive cycles such as rebase go through
+		// InterruptFeature so the feature lands in Interrupted and [r] can
+		// relaunch the saved cycle plan.
+		if f, err := m.featureManager.Get(featureID); err == nil &&
+			f.Status == feature.StatusPublished &&
+			hasActiveRepoCycles(f) &&
+			!hasInterruptibleRepoCycles(f) {
 			if m.orchestrator != nil {
 				m.orchestrator.StopFeatureSessions(featureID)
 				_ = m.orchestrator.ClearRepoCycles(featureID)
@@ -4498,9 +4503,9 @@ func (m AppModel) stopFeatureCmd(featureID string) tea.Cmd {
 			return RefreshFeaturesMsg{}
 		}
 
-		// Normal path: delegate to the orchestrator. It stops sessions,
-		// clears pending help/permission flags, transitions to Interrupted
-		// and fires the OnFeatureInterrupted hook.
+		// Normal path: delegate to the orchestrator. It owns session stop,
+		// pending help/permission cleanup, and whether the feature-level
+		// status should become Interrupted for this kind of work.
 		if m.orchestrator != nil {
 			_ = m.orchestrator.InterruptFeature(featureID)
 		}
@@ -7400,6 +7405,26 @@ func hasRunningRefactorCycle(f *feature.Feature) bool {
 // hasActiveRepoCycles returns true if the feature has any running per-repo cycles.
 func hasActiveRepoCycles(f *feature.Feature) bool {
 	return f.HasActiveRepoCycles()
+}
+
+func hasInterruptibleRepoCycles(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	for _, rc := range f.RepoCycles {
+		if rc == nil {
+			continue
+		}
+		switch rc.Type {
+		case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+		default:
+			continue
+		}
+		if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
+			return true
+		}
+	}
+	return false
 }
 
 // isFeatureQuiescent reports whether the `e` key should offer the edit-

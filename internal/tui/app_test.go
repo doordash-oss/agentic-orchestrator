@@ -2890,6 +2890,36 @@ func TestStopFeatureCmdTransitionsToInterrupted(t *testing.T) {
 	}
 }
 
+func TestStopFeatureCmdPublishedRebaseCycleTransitionsToInterrupted(t *testing.T) {
+	app, fm := newTestAppModel(t)
+
+	f, err := fm.Create("Stop Rebase Test", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	walkFeatureToPublished(t, fm, f.ID)
+	if err := fm.StartRepoCycle(f.ID, "test-repo", feature.CycleRebase); err != nil {
+		t.Fatalf("StartRepoCycle: %v", err)
+	}
+
+	msg := app.stopFeatureCmd(f.ID)()
+	if _, ok := msg.(RefreshFeaturesMsg); !ok {
+		t.Fatalf("expected RefreshFeaturesMsg, got %T", msg)
+	}
+
+	f, _ = fm.Get(f.ID)
+	if f.Status != feature.StatusInterrupted {
+		t.Errorf("feature status = %v, want StatusInterrupted after stopping active rebase", f.Status)
+	}
+	rc, ok := f.RepoCycles["test-repo"]
+	if !ok {
+		t.Fatal("RepoCycles[test-repo] missing")
+	}
+	if rc.Status != feature.RepoCycleInterrupted {
+		t.Errorf("RepoCycles[test-repo].Status = %q, want interrupted", rc.Status)
+	}
+}
+
 func TestStopConfirmCancelIsNoOp(t *testing.T) {
 	app, fm := newTestAppModel(t)
 

@@ -200,6 +200,10 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		if strings.Contains(got.prompt, "## Behavioral Evidence") {
 			t.Errorf("%s prompt unexpectedly contains behavioral evidence guidance:\n%s", got.name, got.prompt)
 		}
+		requiredSkillsHeading := "Required Skills" + " For This Feature"
+		if strings.Contains(got.prompt, requiredSkillsHeading) {
+			t.Errorf("%s prompt unexpectedly contains required skills guidance:\n%s", got.name, got.prompt)
+		}
 	}
 }
 

@@ -227,9 +227,6 @@ type ReviewUserInput struct {
 	ProgressPath string
 	PhaseType    string
 
-	BehavioralEvidence BehavioralEvidenceReviewInput
-	VisualEvidence     VisualEvidenceReviewInput
-
 	FeedbackPath string
 }
 
@@ -324,107 +321,6 @@ func TestGoldenSnapshots(t *testing.T) {
 					Inquireness: GrillMeInquirenessInput{Level: "high"},
 				}
 				return InquireUserPrompt(in)
-			},
-		},
-		{
-			// Pin the behavioral_evidence_implement partial output for a
-			// realistic iteration directory. The rendered block is what
-			// implement.go prepends to the implement prompt for
-			// frontend-tagged features (see behavioralEvidenceImplementSection)
-			// — pinning it here ensures call-site composition stays in
-			// lockstep with the template's literal prose.
-			name: "behavioral_evidence_implement",
-			render: func() string {
-				return BehavioralEvidenceImplement(BehavioralEvidenceImplementInput{
-					IterDir: "/state/feat-x/run-1/phase-1/iter-2",
-				})
-			},
-		},
-		{
-			// Companion to behavioral_evidence_implement: the reviewer-side
-			// block prepended to the review prompt for frontend-tagged
-			// features. Encodes the "no driven journey on a user-mutation
-			// diff → CHANGES_REQUESTED" approval gate.
-			name: "behavioral_evidence_review",
-			render: func() string {
-				return BehavioralEvidenceReview(BehavioralEvidenceReviewInput{
-					IterDir: "/state/feat-x/run-1/phase-1/iter-2",
-				})
-			},
-		},
-		{
-			// Pin the visual_evidence_implement partial output. The block
-			// is what implement.go prepends for frontend-tagged features
-			// (see visualEvidenceImplementSection). It publishes the
-			// screenshots directory the methodology in
-			// skills/frontend-design/SKILL.md expects.
-			name: "visual_evidence_implement",
-			render: func() string {
-				return VisualEvidenceImplement(VisualEvidenceImplementInput{
-					IterDir: "/state/feat-x/run-1/phase-1/iter-2",
-				})
-			},
-		},
-		{
-			// Reviewer-side companion to visual_evidence_implement.
-			// Encodes the "no screenshots on a UI-touching diff →
-			// CHANGES_REQUESTED" approval gate.
-			name: "visual_evidence_review",
-			render: func() string {
-				return VisualEvidenceReview(VisualEvidenceReviewInput{
-					IterDir: "/state/feat-x/run-1/phase-1/iter-2",
-				})
-			},
-		},
-		{
-			// End-to-end injection: what the agent actually sees when
-			// implement.go composes the implement prompt for a
-			// frontend-tagged iteration. Mirrors the runtime ordering in
-			// implement.go (behavioral evidence prepended last, so it
-			// renders first), so the golden catches accidental drift in
-			// either the partial prose, the implement.user template, or
-			// the prepend order.
-			name: "implement_user_iter2_with_evidence_injected",
-			render: func() string {
-				iterDir := "/state/feat-x/run-1/phase-1/iter-2"
-				prompt := ImplementUserPrompt(ImplementUserInput{
-					PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
-					ExitCriteria: "Relevant tests pass.",
-					Iteration:    2,
-				})
-				if block := VisualEvidenceImplement(VisualEvidenceImplementInput{IterDir: iterDir}); block != "" {
-					prompt = block + prompt
-				}
-				if block := BehavioralEvidenceImplement(BehavioralEvidenceImplementInput{IterDir: iterDir}); block != "" {
-					prompt = block + prompt
-				}
-				return prompt
-			},
-		},
-		{
-			// End-to-end injection on the review side: what the reviewer
-			// actually sees for a frontend-tagged iteration. The behavioral
-			// and visual evidence partials render inline inside
-			// review.user.tmpl right after the Progress section — pinning
-			// the placement here catches accidental drift in the template,
-			// the partial prose, or the BehavioralEvidence/VisualEvidence
-			// gating fields.
-			name: "review_user_with_evidence_injected",
-			render: func() string {
-				iterDir := "/state/feat-x/run-1/phase-1/iter-2"
-				return ReviewUserPrompt(ReviewUserInput{
-					Iteration:              2,
-					IterDir:                iterDir,
-					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
-					PlanPath:               "/state/feat-x/run-1/phase-1/plan.md",
-					ExitCriteria:           "Relevant tests pass.",
-					VerificationReportPath: iterDir + "/verification-report.yaml",
-					ContractPath:           "/state/feat-x/run-1/phase-1/contract.yaml",
-					ProgressPath:           iterDir + "/progress.md",
-					PhaseType:              "tdd-fill-in",
-					BehavioralEvidence:     BehavioralEvidenceReviewInput{IterDir: iterDir},
-					VisualEvidence:         VisualEvidenceReviewInput{IterDir: iterDir},
-				})
 			},
 		},
 		{

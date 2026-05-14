@@ -23,7 +23,7 @@ import (
 )
 
 func TestBuildReviewPrompt(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "all tests pass", "/tmp/progress.md", "/tmp/artifacts/iteration-03", "", "/tmp/artifacts/iteration-03/verification-report.yaml", 3, nil, "", "", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "all tests pass", "/tmp/progress.md", "/tmp/artifacts/iteration-03", "", "/tmp/artifacts/iteration-03/verification-report.yaml", 3, nil, "", "", "")
 
 	checks := []string{
 		"/tmp/plan.md",
@@ -44,7 +44,7 @@ func TestBuildReviewPrompt(t *testing.T) {
 }
 
 func TestBuildReviewPromptWithoutOptionalFields(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "", "", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "", "", "")
 
 	if strings.Contains(prompt, "Exit Criteria") {
 		t.Error("expected no exit criteria section when empty")
@@ -67,7 +67,6 @@ func TestBuildReviewPromptWithTestingContract(t *testing.T) {
 		"/tmp/iter-01/verification-report.yaml",
 		1,
 		nil,
-		"",
 		"",
 		"",
 		"",
@@ -99,7 +98,6 @@ func TestBuildReviewPromptLeavesOutputContractToRoleSpec(t *testing.T) {
 		"",
 		"",
 		feedbackPath,
-		"",
 	)
 
 	if strings.Contains(prompt, feedbackPath) {
@@ -128,7 +126,6 @@ func TestBuildReviewPromptWithLegacyVerificationRequirements(t *testing.T) {
 		"",
 		"",
 		"",
-		"",
 	)
 
 	checks := []string{
@@ -148,7 +145,7 @@ func TestBuildReviewPromptWithLegacyVerificationRequirements(t *testing.T) {
 }
 
 func TestBuildReviewPromptWithoutVerificationSteps(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "", "", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "", "", "")
 
 	if strings.Contains(prompt, "Testing Contract") {
 		t.Error("expected no testing contract section when path empty")
@@ -159,7 +156,7 @@ func TestBuildReviewPromptWithoutVerificationSteps(t *testing.T) {
 }
 
 func TestBuildReviewPromptTracerBullet(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "tracer-bullet", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "tracer-bullet", "")
 	if !strings.Contains(prompt, "tracer-bullet") {
 		t.Error("expected tracer-bullet phase type in prompt")
 	}
@@ -169,28 +166,28 @@ func TestBuildReviewPromptTracerBullet(t *testing.T) {
 }
 
 func TestBuildReviewPromptTDDFillIn(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "tdd-fill-in", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "tdd-fill-in", "")
 	if !strings.Contains(prompt, "tdd-fill-in") {
 		t.Error("expected tdd-fill-in phase type in prompt")
 	}
 }
 
 func TestBuildReviewPromptCollapsed(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "collapsed", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "collapsed", "")
 	if !strings.Contains(prompt, "collapsed") {
 		t.Error("expected collapsed phase type in prompt")
 	}
 }
 
 func TestBuildReviewPromptEmptyPhaseType(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "tests pass", "", "/tmp/iter", "", "", 1, nil, "", "", "")
 	if strings.Contains(prompt, "Phase Type") {
 		t.Error("expected no phase type section for empty phase type")
 	}
 }
 
 func TestBuildReviewPromptRoadmapLinked(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "/tmp/roadmap.md", "", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "/tmp/roadmap.md", "", "")
 	if !strings.Contains(prompt, "Read the approved roadmap at: /tmp/roadmap.md") {
 		t.Error("expected roadmap path reference")
 	}
@@ -200,7 +197,7 @@ func TestBuildReviewPromptRoadmapLinked(t *testing.T) {
 }
 
 func TestBuildReviewPromptNoRoadmap(t *testing.T) {
-	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "", "", "", "")
+	prompt := BuildReviewPrompt("/tmp/plan.md", "", "", "/tmp/iter", "", "", 1, nil, "", "", "")
 	if strings.Contains(prompt, "Approved Roadmap") {
 		t.Error("expected no roadmap section when path empty")
 	}

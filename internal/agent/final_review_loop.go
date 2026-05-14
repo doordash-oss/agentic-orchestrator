@@ -555,7 +555,6 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		WorkDir:                        s.workspace.Cwd,
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          feature.PhaseReview,
-		FeatureTags:                    featureTags(cfg.Feature),
 		SystemPromptHasUsefulResources: true,
 	})
 	if buildErr != nil {
@@ -673,7 +672,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		WorkDir:                        s.workspace.Cwd,
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          feature.PhaseReview,
-		FeatureTags:                    featureTags(cfg.Feature),
 		SystemPromptHasUsefulResources: true,
 	})
 	if buildErr != nil {

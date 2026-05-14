@@ -72,9 +72,6 @@ type ReviewUserInput struct {
 	ProgressPath string
 	PhaseType    string
 
-	BehavioralEvidence prompts.BehavioralEvidenceReviewInput
-	VisualEvidence     prompts.VisualEvidenceReviewInput
-
 	FeedbackPath string
 }
 

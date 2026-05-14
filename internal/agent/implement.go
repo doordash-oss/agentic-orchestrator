@@ -328,21 +328,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					prompt = block + prompt
 				}
 			}
-			// For frontend-tagged features, publish the screenshots path
-			// so the implementer knows where to deposit visual evidence.
-			// Methodology lives in skills/frontend-design/SKILL.md (loaded
-			// as a mandatory read via utilskill for frontend features).
-			if block := visualEvidenceImplementSection(cfg.Feature, iterDir); block != "" {
-				prompt = block + prompt
-			}
-			// And the behaviors path for driven user-journey artifacts.
-			// Visual evidence answers "does it look right"; behavioral
-			// evidence answers "does it actually work for the user" — the
-			// gap that lets compile + screenshots + unit tests approve a
-			// binary whose primary mutation flow is broken. Same SKILL.md.
-			if block := behavioralEvidenceImplementSection(cfg.Feature, iterDir); block != "" {
-				prompt = block + prompt
-			}
 			// Surface cross-phase deferrals owed by the current phase so
 			// the agent cannot silently drop prior-phase commitments.
 			// Closing or re-deferring is enforced by the Report Integrity
@@ -391,7 +376,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhaseImplement,
-				FeatureTags:                    featureTags(cfg.Feature),
 				SystemPromptHasUsefulResources: true,
 			})
 			if buildErr != nil {
@@ -994,15 +978,6 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 
 	feedbackPath := filepath.Join(reviewDir, "review-feedback.md")
 	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
-	// The behavioral / visual evidence partials are tag-gated: only frontend
-	// features publish a screenshots / behaviors directory, so only they
-	// should see the matching reviewer-side gates ("no screenshots →
-	// CHANGES_REQUESTED", "no driven journey → CHANGES_REQUESTED"). The
-	// rendering itself is template-side now; this string is what flips
-	// the gate on. The partials live at:
-	//   internal/agent/prompts/partials/behavioral_evidence_review.tmpl
-	//   internal/agent/prompts/partials/visual_evidence_review.tmpl
-	evidenceIterDir := reviewEvidenceIterDir(cfg.Feature, iterDir)
 	reviewPrompt := BuildReviewPrompt(
 		cfg.PlanPath,
 		cfg.ExitCriteria,
@@ -1015,7 +990,6 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 		cfg.RoadmapPath,
 		cfg.PhaseType,
 		feedbackPath,
-		evidenceIterDir,
 	)
 
 	// Re-inject user-attached visual references so the reviewer can

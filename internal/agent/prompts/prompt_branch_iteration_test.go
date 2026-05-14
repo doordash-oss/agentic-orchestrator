@@ -22,19 +22,6 @@ import (
 )
 
 func TestImplementPromptBranchBehavior(t *testing.T) {
-	t.Run("evidence_injection_orders_behavioral_before_visual_before_prompt", func(t *testing.T) {
-		iterDir := "/state/feat-x/run-1/phase-1/iter-2"
-		prompt := ImplementUserPrompt(ImplementUserInput{
-			PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
-			ExitCriteria: "Relevant tests pass.",
-			Iteration:    2,
-		})
-		prompt = VisualEvidenceImplement(VisualEvidenceImplementInput{IterDir: iterDir}) + prompt
-		prompt = BehavioralEvidenceImplement(BehavioralEvidenceImplementInput{IterDir: iterDir}) + prompt
-
-		requireOrder(t, prompt, "## Behavioral Evidence", "## Visual Evidence", "# Implementation Context")
-	})
-
 	tests := []struct {
 		name         string
 		input        ImplementUserInput
@@ -92,71 +79,7 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 	}
 }
 
-func TestEvidencePartialBranches(t *testing.T) {
-	iterDir := "/state/feat-x/run-1/phase-1/iter-2"
-	tests := []struct {
-		name      string
-		got       string
-		want      string
-		wantEmpty bool
-	}{
-		{
-			name: "behavioral_evidence_implement_emitted_when_iter_dir_set",
-			got:  BehavioralEvidenceImplement(BehavioralEvidenceImplementInput{IterDir: iterDir}),
-			want: "## Behavioral Evidence",
-		},
-		{
-			name:      "behavioral_evidence_implement_omitted_when_iter_dir_empty",
-			got:       BehavioralEvidenceImplement(BehavioralEvidenceImplementInput{}),
-			wantEmpty: true,
-		},
-		{
-			name: "visual_evidence_implement_emitted_when_iter_dir_set",
-			got:  VisualEvidenceImplement(VisualEvidenceImplementInput{IterDir: iterDir}),
-			want: "## Visual Evidence",
-		},
-		{
-			name:      "visual_evidence_implement_omitted_when_iter_dir_empty",
-			got:       VisualEvidenceImplement(VisualEvidenceImplementInput{}),
-			wantEmpty: true,
-		},
-		{
-			name: "behavioral_evidence_review_emitted_when_iter_dir_set",
-			got:  BehavioralEvidenceReview(BehavioralEvidenceReviewInput{IterDir: iterDir}),
-			want: "## Behavioral Evidence From This Iteration",
-		},
-		{
-			name:      "behavioral_evidence_review_omitted_when_iter_dir_empty",
-			got:       BehavioralEvidenceReview(BehavioralEvidenceReviewInput{}),
-			wantEmpty: true,
-		},
-		{
-			name: "visual_evidence_review_emitted_when_iter_dir_set",
-			got:  VisualEvidenceReview(VisualEvidenceReviewInput{IterDir: iterDir}),
-			want: "## Visual Evidence From This Iteration",
-		},
-		{
-			name:      "visual_evidence_review_omitted_when_iter_dir_empty",
-			got:       VisualEvidenceReview(VisualEvidenceReviewInput{}),
-			wantEmpty: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantEmpty {
-				if tt.got != "" {
-					t.Errorf("evidence partial = %q, want empty", tt.got)
-				}
-				return
-			}
-			requireContains(t, tt.got, tt.want)
-			requireContains(t, tt.got, iterDir)
-		})
-	}
-}
-
-func TestReviewPromptEvidenceBranches(t *testing.T) {
+func TestReviewPromptBranchBehavior(t *testing.T) {
 	base := ReviewUserInput{
 		Iteration:              2,
 		IterDir:                "/iter",
@@ -176,27 +99,10 @@ func TestReviewPromptEvidenceBranches(t *testing.T) {
 		wantOmit     []string
 	}{
 		{
-			name:         "review_evidence_sections_omitted_when_inputs_empty",
+			name:         "review_prompt_omits_removed_evidence_sections",
 			input:        base,
 			wantContains: []string{"## Progress", "## Phase Type"},
 			wantOmit:     []string{"## Behavioral Evidence From This Iteration", "## Visual Evidence From This Iteration"},
-		},
-		{
-			name: "review_evidence_sections_render_after_progress_before_phase_type",
-			input: ReviewUserInput{
-				Iteration:              base.Iteration,
-				IterDir:                base.IterDir,
-				RoadmapPath:            base.RoadmapPath,
-				PlanPath:               base.PlanPath,
-				ExitCriteria:           base.ExitCriteria,
-				VerificationReportPath: base.VerificationReportPath,
-				ContractPath:           base.ContractPath,
-				ProgressPath:           base.ProgressPath,
-				PhaseType:              base.PhaseType,
-				BehavioralEvidence:     BehavioralEvidenceReviewInput{IterDir: "/iter"},
-				VisualEvidence:         VisualEvidenceReviewInput{IterDir: "/iter"},
-			},
-			wantContains: []string{"## Behavioral Evidence From This Iteration", "## Visual Evidence From This Iteration"},
 		},
 	}
 
@@ -208,9 +114,6 @@ func TestReviewPromptEvidenceBranches(t *testing.T) {
 			}
 			for _, unwanted := range tt.wantOmit {
 				requireNotContains(t, got, unwanted)
-			}
-			if strings.Contains(tt.name, "render_after_progress") {
-				requireOrder(t, got, "## Progress", "## Behavioral Evidence From This Iteration", "## Visual Evidence From This Iteration", "## Phase Type")
 			}
 		})
 	}
@@ -431,30 +334,24 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
-		"behavioral_evidence_implement":               true,
-		"behavioral_evidence_review":                  true,
-		"brainstorm_system_rolespec":                  true,
-		"brainstorm_user_multi_repo":                  true,
-		"final_fix_user_with_manual":                  true,
-		"final_review_user_phase":                     true,
-		"implement_system_rolespec":                   true,
-		"implement_user_iter2_with_evidence_injected": true,
-		"inquire_user_high_with_kb":                   true,
-		"kb_build_full":                               true,
-		"phase_plan_revision_user":                    true,
-		"phase_plan_user_autonomous":                  true,
-		"pr_description_user_full":                    true,
-		"refactor_plan_user":                          true,
-		"research_from_questions_user":                true,
-		"review_user_with_evidence_injected":          true,
-		"roadmap_revision_user":                       true,
-		"roadmap_user_multi_repo":                     true,
-		"scout_user":                                  true,
-		"summary_user":                                true,
-		"tweak_user":                                  true,
-		"validate_specialized_grounding":              true,
-		"visual_evidence_implement":                   true,
-		"visual_evidence_review":                      true,
+		"brainstorm_system_rolespec":     true,
+		"brainstorm_user_multi_repo":     true,
+		"final_fix_user_with_manual":     true,
+		"final_review_user_phase":        true,
+		"implement_system_rolespec":      true,
+		"inquire_user_high_with_kb":      true,
+		"kb_build_full":                  true,
+		"phase_plan_revision_user":       true,
+		"phase_plan_user_autonomous":     true,
+		"pr_description_user_full":       true,
+		"refactor_plan_user":             true,
+		"research_from_questions_user":   true,
+		"roadmap_revision_user":          true,
+		"roadmap_user_multi_repo":        true,
+		"scout_user":                     true,
+		"summary_user":                   true,
+		"tweak_user":                     true,
+		"validate_specialized_grounding": true,
 	}
 
 	files, err := filepath.Glob(filepath.Join("testdata", "*.golden"))

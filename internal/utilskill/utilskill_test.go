@@ -21,66 +21,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 )
 
-func TestRegistryEntriesHaveAtLeastOnePhase(t *testing.T) {
+func TestRegistryRowsHaveAtLeastOnePhase(t *testing.T) {
 	for name, phases := range Registry() {
 		if len(phases) == 0 {
 			t.Errorf("utility skill %q has no phases mapped", name)
-		}
-	}
-}
-
-// TestRequiredForPhase_FrontendTagPromotesFrontendDesign encodes the core
-// guarantee: a frontend-tagged feature receives frontend-design as a
-// mandatory read on every phase where it is registered. This is the
-// regression guard against the Native App feature scenario (zero loads of
-// frontend-design across 227 tracked file-reads).
-func TestRequiredForPhase_FrontendTagPromotesFrontendDesign(t *testing.T) {
-	phases := []feature.Phase{
-		feature.PhaseBrainstorm,
-		feature.PhasePlan,
-		feature.PhaseImplement,
-		feature.PhaseReview,
-	}
-	for _, p := range phases {
-		got := RequiredForPhase(p, []string{feature.TagFrontend})
-		if len(got) == 0 || got[0] != "frontend-design" {
-			t.Errorf("RequiredForPhase(%v, [frontend]) = %v, want [frontend-design, ...]", p, got)
-		}
-	}
-}
-
-// TestRequiredForPhase_NoTagsNoRequirements ensures features without tags
-// never receive mandatory skill instructions (avoiding noise on backend-only
-// features that happen to match a phase).
-func TestRequiredForPhase_NoTagsNoRequirements(t *testing.T) {
-	got := RequiredForPhase(feature.PhaseImplement, nil)
-	if len(got) != 0 {
-		t.Errorf("RequiredForPhase(Implement, nil) = %v, want empty", got)
-	}
-	got = RequiredForPhase(feature.PhaseImplement, []string{})
-	if len(got) != 0 {
-		t.Errorf("RequiredForPhase(Implement, []) = %v, want empty", got)
-	}
-}
-
-// TestRequiredForPhase_UnrelatedTagSkipsFrontendDesign ensures a
-// backend-only feature doesn't pull in frontend-design.
-func TestRequiredForPhase_UnrelatedTagSkipsFrontendDesign(t *testing.T) {
-	got := RequiredForPhase(feature.PhaseImplement, []string{feature.TagBackend})
-	for _, name := range got {
-		if name == "frontend-design" {
-			t.Errorf("RequiredForPhase(Implement, [backend]) unexpectedly includes frontend-design")
-		}
-	}
-}
-
-// TestRequiredForPhase_OffPhaseNoRequirement ensures frontend-design is not
-// forced on phases where it isn't registered (e.g. Inquire, KB).
-func TestRequiredForPhase_OffPhaseNoRequirement(t *testing.T) {
-	got := RequiredForPhase(feature.PhaseInquire, []string{feature.TagFrontend})
-	for _, name := range got {
-		if name == "frontend-design" {
-			t.Errorf("RequiredForPhase(Inquire, [frontend]) unexpectedly includes frontend-design")
 		}
 	}
 }

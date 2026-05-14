@@ -114,41 +114,6 @@ type VisualReferencesInput struct {
 	Label  string
 }
 
-// VisualEvidenceImplementInput is the data passed to the
-// visual_evidence_implement partial. The partial publishes the
-// per-iteration screenshots directory so the implementer knows where
-// to deposit rendered-state captures for any UI screen this iteration
-// touches. Tag-gating (frontend-only) is enforced at the call site;
-// the partial just emits "" when IterDir is empty.
-type VisualEvidenceImplementInput struct {
-	IterDir string
-}
-
-// VisualEvidenceReviewInput is the data passed to the
-// visual_evidence_review partial. Points the reviewer at the
-// iteration's screenshots directory and encodes the "no screenshots
-// on a UI-touching diff → CHANGES_REQUESTED" approval gate.
-type VisualEvidenceReviewInput struct {
-	IterDir string
-}
-
-// BehavioralEvidenceImplementInput is the data passed to the
-// behavioral_evidence_implement partial. Tells the implementer where
-// to deposit driven user-journey captures (Playwright traces,
-// AppleScript logs, HTTP smoke transcripts, …). Tag-gating is
-// enforced at the call site.
-type BehavioralEvidenceImplementInput struct {
-	IterDir string
-}
-
-// BehavioralEvidenceReviewInput is the data passed to the
-// behavioral_evidence_review partial. Points the reviewer at the
-// iteration's behaviors directory and encodes the "no driven journey
-// on a user-mutation diff → CHANGES_REQUESTED" approval gate.
-type BehavioralEvidenceReviewInput struct {
-	IterDir string
-}
-
 // QAFilesInput is the data passed to the qa_files partial. Lead is the
 // per-phase trailing sentence (e.g. "Read these Q&A files for important
 // context..."). TrailingBlank controls whether a final blank line is

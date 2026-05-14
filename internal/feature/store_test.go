@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,7 @@ func TestStoreSaveAndLoad(t *testing.T) {
 		Name:         "Test Feature",
 		Slug:         "test-feature",
 		Description:  "A test feature",
+		Tags:         []string{"frontend", "backend"},
 		Created:      time.Now().Truncate(time.Second),
 		Status:       StatusCreated,
 		CurrentPhase: PhaseResearch,
@@ -73,6 +75,9 @@ func TestStoreSaveAndLoad(t *testing.T) {
 	}
 	if loaded.Status != f.Status {
 		t.Errorf("Status mismatch: got %v, want %v", loaded.Status, f.Status)
+	}
+	if !slices.Equal(loaded.Tags, f.Tags) {
+		t.Errorf("Tags mismatch: got %v, want %v", loaded.Tags, f.Tags)
 	}
 	if len(loaded.Repos) != 1 {
 		t.Fatalf("expected 1 repo, got %d", len(loaded.Repos))

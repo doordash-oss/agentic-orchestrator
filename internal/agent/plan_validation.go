@@ -1467,7 +1467,6 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,
-				FeatureTags:                    featureTags(cfg.Feature),
 				SystemPromptHasUsefulResources: true,
 			})
 			if err != nil {
@@ -1842,7 +1841,6 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,
-				FeatureTags:                    featureTags(cfg.Feature),
 				SystemPromptHasUsefulResources: true,
 			})
 			if err != nil {

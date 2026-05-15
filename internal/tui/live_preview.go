@@ -821,9 +821,9 @@ func livePreviewTranscriptStyle(kind livePreviewTranscriptKind) lipgloss.Style {
 	case livePreviewTranscriptAssistant:
 		return lipgloss.NewStyle().Foreground(colorText)
 	case livePreviewTranscriptTool:
-		return MutedStyle
+		return WarningStyle.Faint(true)
 	case livePreviewTranscriptResult:
-		return MutedStyle
+		return SuccessStyle.Faint(true)
 	case livePreviewTranscriptWarning:
 		return ErrorStyle
 	case livePreviewTranscriptQuestion:

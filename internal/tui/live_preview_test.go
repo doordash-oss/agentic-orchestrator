@@ -454,11 +454,12 @@ func TestLivePreviewTranscriptEmphasis(t *testing.T) {
 	t.Parallel()
 
 	assertForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptAssistant), colorText)
-	assertForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptTool), colorOverlay)
-	assertForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptResult), colorOverlay)
+	assertFaintForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptTool), colorWarning)
+	assertFaintForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptResult), colorSuccess)
 
-	assertNotForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptTool), colorWarning)
-	assertNotForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptResult), colorSuccess)
+	if livePreviewTranscriptStyle(livePreviewTranscriptAssistant).GetFaint() {
+		t.Fatal("assistant transcript rows should remain high contrast")
+	}
 }
 
 func assertForeground(t *testing.T, style lipgloss.Style, want color.Color) {
@@ -468,10 +469,11 @@ func assertForeground(t *testing.T, style lipgloss.Style, want color.Color) {
 	}
 }
 
-func assertNotForeground(t *testing.T, style lipgloss.Style, notWant color.Color) {
+func assertFaintForeground(t *testing.T, style lipgloss.Style, want color.Color) {
 	t.Helper()
-	if sameColor(style.GetForeground(), notWant) {
-		t.Fatalf("foreground = %v, did not want %v", style.GetForeground(), notWant)
+	assertForeground(t, style, want)
+	if !style.GetFaint() {
+		t.Fatalf("foreground = %v, want faint style", style.GetForeground())
 	}
 }
 

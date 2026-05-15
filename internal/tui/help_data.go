@@ -39,6 +39,7 @@ var DetailSection = HelpSection{
 	Title: "Feature Detail",
 	Bindings: []HelpBinding{
 		{"a", "Watch active work; Answer, Approve, or Review when prompted"},
+		{"o", "Show overview"},
 		{"y", "Approve pending permissions"},
 		{"Shift+A", "Approve & remember permissions"},
 		{"h", "Answer agent's help question"},
@@ -46,7 +47,7 @@ var DetailSection = HelpSection{
 		{"r", "Restart current phase"},
 		{"s", "Stop running feature"},
 		{"ctrl+r", "Rewind to phase"},
-		{"l", "View logs"},
+		{"l", "Live Preview / View logs"},
 		{"v", "View diff"},
 		{"p", "Publish (when code ready)"},
 		{"m", "Manual publish"},

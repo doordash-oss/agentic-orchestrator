@@ -1,6 +1,6 @@
 # Agentic Orchestrator Keybinding Reference
 
-_Auto-generated on 2026-05-14. Do not edit manually._
+_Auto-generated on 2026-05-15. Do not edit manually._
 
 _Run `go generate ./internal/tui/...` to regenerate._
 
@@ -27,6 +27,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | Key | Action |
 |-----|--------|
 | `a` | Watch active work; Answer, Approve, or Review when prompted |
+| `o` | Show overview |
 | `y` | Approve pending permissions |
 | `Shift+A` | Approve & remember permissions |
 | `h` | Answer agent's help question |
@@ -34,7 +35,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `r` | Restart current phase |
 | `s` | Stop running feature |
 | `ctrl+r` | Rewind to phase |
-| `l` | View logs |
+| `l` | Live Preview / View logs |
 | `v` | View diff |
 | `p` | Publish (when code ready) |
 | `m` | Manual publish |

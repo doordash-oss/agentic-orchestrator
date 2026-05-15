@@ -126,6 +126,7 @@ func dashboardRightHelp() ViewHelpContext {
 			{
 				Title: "ACTIONS",
 				Bindings: []HelpBinding{
+					{"o", "Show overview"},
 					{"y", "Approve permissions"},
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
@@ -133,7 +134,7 @@ func dashboardRightHelp() ViewHelpContext {
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},
 					{"ctrl+r", "Rewind"},
-					{"l", "View logs"},
+					{"l", "Live Preview / View logs"},
 					{"v", "View diff"},
 					{"d", "Delete feature"},
 				},

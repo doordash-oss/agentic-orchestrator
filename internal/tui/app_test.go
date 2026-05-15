@@ -879,6 +879,7 @@ func TestDashboardWatchAttachUsesExistingSingleSessionPath(t *testing.T) {
 
 	app.dashboard.SetFeatures([]*feature.Feature{f})
 	app.dashboard.cursor = 1
+	app.dashboard.syncPreview()
 	app.dashboard.focusPanel = 1
 
 	result, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
@@ -937,6 +938,51 @@ func TestDashboardWatchAttachPreservesMultiRepoTabs(t *testing.T) {
 	}
 	if updated.attach.repoTabs[0].repoName != "api" || updated.attach.repoTabs[1].repoName != "web" {
 		t.Fatalf("repo tab order = [%s %s], want [api web]", updated.attach.repoTabs[0].repoName, updated.attach.repoTabs[1].repoName)
+	}
+}
+
+func TestDashboardRightPanelOverviewReturnsToLivePreview(t *testing.T) {
+	app, fm := newTestAppModel(t)
+
+	f, err := fm.Create("Overview Toggle", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	f, _ = fm.Get(f.ID)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.syncPreview()
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if cmd != nil {
+		t.Fatalf("overview key returned command, want nil")
+	}
+	updated := result.(AppModel)
+	if updated.dashboard.rightPanelMode != dashboardRightPanelOverview {
+		t.Fatalf("rightPanelMode = %v, want overview", updated.dashboard.rightPanelMode)
+	}
+	overview := stripANSI(updated.dashboard.View())
+	if !strings.Contains(overview, "Phase Progress") || !strings.Contains(overview, "[l] Live Preview") {
+		t.Fatalf("overview view missing old detail content or live-preview return hint:\n%s", overview)
+	}
+
+	result, cmd = updated.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if cmd != nil {
+		t.Fatalf("live-preview return key returned command, want nil")
+	}
+	updated = result.(AppModel)
+	if updated.dashboard.rightPanelMode != dashboardRightPanelLivePreview {
+		t.Fatalf("rightPanelMode = %v, want live preview", updated.dashboard.rightPanelMode)
+	}
+	live := stripANSI(updated.dashboard.View())
+	if !strings.Contains(live, "Live Preview") || !strings.Contains(live, "[o] Overview") {
+		t.Fatalf("live preview view missing live content or overview hint:\n%s", live)
+	}
+	if strings.Contains(live, "Phase Progress") {
+		t.Fatalf("live preview should not render old overview phase progress:\n%s", live)
 	}
 }
 
@@ -3473,6 +3519,15 @@ func TestDashboardPreviewContextPct(t *testing.T) {
 	compact := dm.ViewCompact(80)
 	if !strings.Contains(compact, "25%") {
 		t.Errorf("expected 25%% in compact view for running feature (contextPct=%d)", pct)
+	}
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.syncPreview()
+	app.dashboard.focusPanel = 1
+	view := stripANSI(app.View().Content)
+	if !strings.Contains(view, "Context") || !strings.Contains(view, "25%") {
+		t.Errorf("expected live preview top box to include context 25%%, got:\n%s", view)
 	}
 }
 

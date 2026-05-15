@@ -112,6 +112,7 @@ type keyMap struct {
 	Refactor          key.Binding
 	EditConfig        key.Binding
 	ViewLogs          key.Binding
+	Overview          key.Binding
 	Chat              key.Binding
 	HelpOverlay       key.Binding
 	ToggleInputNotify key.Binding
@@ -177,6 +178,7 @@ var keys = keyMap{
 	Refactor:          key.NewBinding(key.WithKeys("F"), key.WithHelp("Shift+F", "refactor")),
 	EditConfig:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
 	ViewLogs:          key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "view logs")),
+	Overview:          key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview")),
 	Chat:              key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "ask anything")),
 	HelpOverlay:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	ToggleInputNotify: key.NewBinding(key.WithKeys("N"), key.WithHelp("Shift+N", "toggle input alerts")),

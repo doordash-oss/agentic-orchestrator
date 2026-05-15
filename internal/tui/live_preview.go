@@ -41,12 +41,13 @@ type LivePreviewModel struct {
 	feature     *feature.Feature
 	session     session.SessionView
 	spinnerView string
+	contextPct  int
 	width       int
 	height      int
 }
 
 func newLivePreviewModel(f *feature.Feature) LivePreviewModel {
-	return LivePreviewModel{feature: f}
+	return LivePreviewModel{feature: f, contextPct: -1}
 }
 
 // isLivePreviewEligible reports whether the dashboard should render the live
@@ -70,7 +71,7 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	att := computeFeatureAttention(f, m.session)
 	boxWidth := max(width-4, 20)
 	contentWidth := max(boxWidth-4, 1)
-	upperLines := livePreviewMetadataGrid(livePreviewMetadataItems(f, m.session), contentWidth)
+	upperLines := livePreviewMetadataGrid(livePreviewMetadataItems(f, m.session, m.contextPct), contentWidth)
 
 	activity := livePreviewActivityLine(f, m.session)
 	phaseActivity := activity
@@ -117,7 +118,7 @@ type livePreviewMetadataItem struct {
 	value string
 }
 
-func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView) []livePreviewMetadataItem {
+func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, contextPct int) []livePreviewMetadataItem {
 	items := []livePreviewMetadataItem{
 		{label: "Feature ID", value: livePreviewFeatureID(f)},
 		{label: "Repos", value: livePreviewReposSummary(f)},
@@ -132,12 +133,40 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView) []li
 	if validators := livePreviewValidatorStatusesValue(f); validators != "" {
 		items = append(items, livePreviewMetadataItem{label: "Validators", value: validators})
 	}
+	if livePreviewShouldShowContext(f, sess) {
+		items = append(items, livePreviewMetadataItem{label: "Context", value: livePreviewContextText(contextPct)})
+	}
 	items = append(items,
 		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
 		livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
 		livePreviewMetadataItem{label: "Cost", value: livePreviewCostText(f)},
 	)
 	return items
+}
+
+func livePreviewShouldShowContext(f *feature.Feature, sess session.SessionView) bool {
+	if sess != nil {
+		return true
+	}
+	if f == nil {
+		return false
+	}
+	return f.Status == feature.StatusCreated || f.Status.IsRunning() || featureHasRunningCycle(f)
+}
+
+func livePreviewContextText(contextPct int) string {
+	if contextPct < 0 {
+		return MutedStyle.Render("Calculating...")
+	}
+	text := fmt.Sprintf("%d%%", contextPct)
+	switch {
+	case contextPct >= 80:
+		return ErrorStyle.Render(text)
+	case contextPct >= 60:
+		return WarningStyle.Render(text)
+	default:
+		return SuccessStyle.Render(text)
+	}
 }
 
 func livePreviewMetadataGrid(items []livePreviewMetadataItem, width int) []string {

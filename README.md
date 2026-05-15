@@ -142,6 +142,8 @@ Press `n` from the dashboard to open the wizard:
 
 **Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input. Filter the output (`Ctrl+F`) between All, No Tools, or Text Only views.
 
+**Overview** (`o`) — Switch the dashboard right panel from Live Preview to the detailed overview. Press `l` from Overview to return to Live Preview; outside Overview, `l` still opens logs.
+
 **Stop watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
 
 ### Post-Implementation Actions

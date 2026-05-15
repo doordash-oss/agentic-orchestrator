@@ -67,10 +67,18 @@ type listItem struct {
 	section string           // "inProgress", "published", "completed"
 }
 
+type dashboardRightPanelMode int
+
+const (
+	dashboardRightPanelLivePreview dashboardRightPanelMode = iota
+	dashboardRightPanelOverview
+)
+
 type DashboardModel struct {
 	features             []*feature.Feature
 	cursor               int
 	focusPanel           int // 0=list, 1=detail
+	rightPanelMode       dashboardRightPanelMode
 	preview              DetailModel
 	livePreview          LivePreviewModel
 	spinnerView          string // set by parent from app-level spinner
@@ -225,6 +233,34 @@ func (m *DashboardModel) syncPreview() {
 	m.livePreview.height = m.height
 }
 
+func (m DashboardModel) shouldRenderLivePreview(f *feature.Feature) bool {
+	return f != nil &&
+		m.rightPanelMode != dashboardRightPanelOverview &&
+		!m.preview.refactorActive &&
+		!m.preview.refactorPipelineActive &&
+		isLivePreviewEligible(f)
+}
+
+func (m *DashboardModel) ShowOverview() bool {
+	if !isLivePreviewEligible(m.SelectedFeature()) {
+		return false
+	}
+	m.rightPanelMode = dashboardRightPanelOverview
+	return true
+}
+
+func (m *DashboardModel) ShowLivePreview() bool {
+	if !isLivePreviewEligible(m.SelectedFeature()) {
+		return false
+	}
+	m.rightPanelMode = dashboardRightPanelLivePreview
+	return true
+}
+
+func (m DashboardModel) showingOverviewForLiveFeature() bool {
+	return m.rightPanelMode == dashboardRightPanelOverview && isLivePreviewEligible(m.SelectedFeature())
+}
+
 type layoutMode int
 
 const (
@@ -343,7 +379,8 @@ func (m DashboardModel) View() string {
 		rightContent = m.renderWelcomePanel(rightWidth)
 		rightTitle = "Welcome"
 	} else {
-		if m.preview.refactorActive || m.preview.refactorPipelineActive || !isLivePreviewEligible(m.SelectedFeature()) {
+		selected := m.SelectedFeature()
+		if !m.shouldRenderLivePreview(selected) {
 			rightContent = m.preview.ViewCompact(rightWidth)
 		} else {
 			livePreview := m.livePreview
@@ -352,7 +389,7 @@ func (m DashboardModel) View() string {
 			rightContent = livePreview.ViewCompact(rightWidth)
 		}
 		rightTitle = "Detail"
-		if f := m.SelectedFeature(); f != nil {
+		if f := selected; f != nil {
 			rightTitle = f.Slug
 		}
 	}
@@ -491,6 +528,13 @@ func (m DashboardModel) renderFooter() string {
 			}
 		}
 		if f != nil {
+			if isLivePreviewEligible(f) {
+				if m.showingOverviewForLiveFeature() {
+					hints = append(hints, "[l] Live Preview")
+				} else {
+					hints = append(hints, "[o] Overview")
+				}
+			}
 			activePublishedCycle := isActivePublishedCycle(f)
 			if hasPendingPerms(f) {
 				hints = append(hints, "[y] Approve", "[Shift+A] Approve & Remember")
@@ -501,7 +545,7 @@ func (m DashboardModel) renderFooter() string {
 				hints = append(hints, "[r] Restart")
 			}
 			hints = append(hints, "[ctrl+r] Rewind")
-			if f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted {
+			if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) && !m.showingOverviewForLiveFeature() {
 				hints = append(hints, "[l] Logs")
 			}
 

@@ -54,6 +54,7 @@ Keys available in the right panel depend on the feature's current status:
 | Key | Action |
 |-----|--------|
 | `a` | Watch active work; Answer, Approve, or Review when prompted |
+| `o` | Show dashboard overview |
 | `y` | Approve pending permission |
 | `Shift+A` | Approve and remember permission |
 | `h` | Answer agent's question |
@@ -61,7 +62,7 @@ Keys available in the right panel depend on the feature's current status:
 | `r` | Restart current phase |
 | `Ctrl+R` | Rewind to earlier phase |
 | `Shift+R` | Retry failed repo |
-| `l` | View logs |
+| `l` | Live Preview from Overview, otherwise view logs |
 
 ### CodeReady Features
 

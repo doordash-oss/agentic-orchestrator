@@ -822,10 +822,11 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	m := dashboardWithSelectedFeature(f)
 	m.focusPanel = 1
 	m.spinnerView = "spin"
+	m.livePreview.contextPct = 42
 	m.livePreview.session = sess
 
 	view := m.View()
-	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Context", "42%", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard live preview missing %q in:\n%s", want, view)
 		}
@@ -837,6 +838,78 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	}
 	if strings.Contains(view, "Phase Progress") {
 		t.Fatalf("live preview should replace static detail phase progress, got:\n%s", view)
+	}
+}
+
+func TestLivePreviewContextMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		f          *feature.Feature
+		contextPct int
+		want       string
+		notWant    string
+	}{
+		{
+			name:       "active session shows percentage",
+			f:          &feature.Feature{ID: "feat-context", Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
+			contextPct: 73,
+			want:       "73%",
+			notWant:    "Calculating",
+		},
+		{
+			name:       "active session without usage shows calculating",
+			f:          &feature.Feature{ID: "feat-context", Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
+			contextPct: -1,
+			want:       "Calculating",
+		},
+		{
+			name:       "review gate without session omits context",
+			f:          &feature.Feature{ID: "feat-review", Status: feature.StatusPlanNeedsReview, CurrentPhase: feature.PhasePlan},
+			contextPct: 44,
+			notWant:    "Context",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := stripANSI(newLivePreviewModel(tt.f).withContextPct(tt.contextPct).withHeight(24).ViewCompact(100))
+			if tt.want != "" && !strings.Contains(view, tt.want) {
+				t.Fatalf("live preview context metadata missing %q in:\n%s", tt.want, view)
+			}
+			if tt.notWant != "" && strings.Contains(view, tt.notWant) {
+				t.Fatalf("live preview context metadata contained %q in:\n%s", tt.notWant, view)
+			}
+		})
+	}
+}
+
+func TestDashboardOverviewModeUsesCompactDetailForEligibleFeature(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-overview",
+		Name:         "Overview Feature",
+		Slug:         "overview-feature",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Created:      time.Now(),
+		Repos:        []feature.FeatureRepo{{Name: "api"}},
+	}
+	m := dashboardWithSelectedFeature(f)
+	m.focusPanel = 1
+	m.rightPanelMode = dashboardRightPanelOverview
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Info", "Phase Progress", "[l] Live Preview"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("overview mode missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Feature ID", "Current: Implement", "[o] Overview"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("overview mode contained live-preview copy %q in:\n%s", notWant, view)
+		}
 	}
 }
 
@@ -1066,6 +1139,11 @@ func rawJSON(s string) json.RawMessage {
 
 func (m LivePreviewModel) withSession(sess session.SessionView) LivePreviewModel {
 	m.session = sess
+	return m
+}
+
+func (m LivePreviewModel) withContextPct(contextPct int) LivePreviewModel {
+	m.contextPct = contextPct
 	return m
 }
 

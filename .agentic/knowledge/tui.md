@@ -78,6 +78,7 @@ Defined in `internal/tui/keys.go`. Generated reference at `docs/keybindings.md` 
 |-----|--------|
 | `n` | New feature |
 | `a` | Watch active work; Answer, Approve, or Review when prompted |
+| `o` | Show overview in the dashboard right panel |
 | `y` | Approve permission |
 | `h` | Answer help request |
 | `d` | Delete feature |
@@ -88,7 +89,7 @@ Defined in `internal/tui/keys.go`. Generated reference at `docs/keybindings.md` 
 |-----|--------|
 | `r` | Restart current phase |
 | `ctrl+r` | Restart from beginning (start over) |
-| `l` | View logs |
+| `l` | Live Preview from Overview, otherwise view logs |
 | `v` | View diff |
 | `t` | Tweak implementation |
 | `Enter` | Advance phase |

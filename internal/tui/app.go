@@ -2057,10 +2057,13 @@ func (m AppModel) View() tea.View {
 	m.detail.contextPct = m.activeSessionContextPct()
 	m.detail.kbStaleWarning = m.kbStaleWarningFor(m.detail.feature)
 	if sel := m.dashboard.SelectedFeature(); sel != nil {
-		m.dashboard.preview.contextPct = m.contextPctForFeature(sel)
+		contextPct := m.contextPctForFeature(sel)
+		m.dashboard.preview.contextPct = contextPct
 		m.dashboard.preview.kbStaleWarning = m.kbStaleWarningFor(sel)
+		m.dashboard.livePreview.contextPct = contextPct
 		m.dashboard.livePreview.session = m.livePreviewSessionForFeature(sel)
 	} else {
+		m.dashboard.livePreview.contextPct = -1
 		m.dashboard.livePreview.session = nil
 	}
 	m.publish.spinnerView = sv
@@ -3554,6 +3557,11 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 	case key.Matches(msg, keys.Attach):
 		return m.openContextualFeatureAction(f)
 
+	case key.Matches(msg, keys.Overview):
+		if m.dashboard.ShowOverview() {
+			return m, nil
+		}
+
 	case key.Matches(msg, keys.Approve):
 		if f != nil {
 			return m, m.approvePermissionsCmd(f.ID)
@@ -3630,6 +3638,10 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 		}
 
 	case key.Matches(msg, keys.ViewLogs):
+		if m.dashboard.showingOverviewForLiveFeature() {
+			m.dashboard.ShowLivePreview()
+			return m, nil
+		}
 		if f != nil {
 			return m, m.viewLogsCmd(f.ID, f.CurrentPhase, f.CurrentRoadmapPhase)
 		}

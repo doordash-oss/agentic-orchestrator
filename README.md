@@ -4,7 +4,7 @@
 
 Agentic Orchestrator is an AI development workflow orchestrator that turns any engineer into a force multiplier. Describe your features, make the high-level decisions, and AI handles the rest — research, planning, implementation, code review, pull request — all running concurrently from a single terminal.
 
-> The local CLI is `agentico`. The Go module and GitHub repository are both `github.com/doordash-oss/agentic-orchestrator`.
+> The local CLI is `agentico`
 
 <img width="1727" height="1049" alt="image" src="https://github.com/user-attachments/assets/1d0704a4-621f-4482-8f89-5424290b7ea5" />
 
@@ -145,9 +145,9 @@ Press `n` from the dashboard to open the wizard:
 
 ### Interacting with Agents
 
-**Attach** (`a`) — Connect to a running agent session. Watch it work in real time. Filter the output (`Ctrl+F`) between All, No Tools, or Text Only views.
+**Watch** (`a`) — Connect to a running agent session. Watch it work in real time.
 
-**Detach** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
+**Stop Watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
 
 ### Post-Implementation Actions
 

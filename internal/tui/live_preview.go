@@ -17,8 +17,10 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -29,8 +31,8 @@ import (
 const (
 	livePreviewTranscriptMessageLimit = 80
 	livePreviewTailMinContentWidth    = 56
-	livePreviewBaseRows               = 7
-	livePreviewTailOverheadRows       = 2
+	livePreviewToolResultMaxChars     = 100
+	livePreviewToolResultSuffix       = "[...]"
 )
 
 // LivePreviewModel renders the normal live dashboard right panel. It is a
@@ -66,25 +68,29 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 
 	f := m.feature
 	att := computeFeatureAttention(f, m.session)
-	contentWidth := max(width-4, 20)
-	var b strings.Builder
-	b.WriteString(TitleStyle.Render("Live Preview") + "\n")
-	b.WriteString(livePreviewHeaderLine("Phase", livePreviewPhaseLabel(f, m.session), contentWidth) + "\n")
-	b.WriteString(livePreviewHeaderLine("Status", livePreviewStatusText(f), contentWidth) + "\n")
-	b.WriteString(livePreviewHeaderLine("Elapsed", livePreviewElapsedText(f), contentWidth) + "\n")
-	b.WriteString(livePreviewHeaderLine("Cost", livePreviewCostText(f), contentWidth) + "\n")
-	if m.height == 0 || m.height > livePreviewBaseRows {
-		b.WriteString("\n")
+	boxWidth := max(width-4, 20)
+	contentWidth := max(boxWidth-4, 1)
+	upperLines := []string{}
+	upperLines = append(upperLines, livePreviewHeaderLines("Feature ID", livePreviewFeatureID(f), contentWidth)...)
+	upperLines = append(upperLines, livePreviewHeaderLines("Repos", livePreviewReposSummary(f), contentWidth)...)
+	if prLinks := livePreviewPRLinks(f); prLinks != "" {
+		upperLines = append(upperLines, livePreviewHeaderLines("PRs", prLinks, contentWidth)...)
+	}
+	upperLines = append(upperLines, livePreviewHeaderLines("Phase", livePreviewPhaseLabel(f, m.session), contentWidth)...)
+	upperLines = append(upperLines, livePreviewHeaderLines("Status", livePreviewStatusText(f), contentWidth)...)
+	upperLines = append(upperLines, livePreviewHeaderLines("Elapsed", livePreviewElapsedText(f), contentWidth)...)
+	upperLines = append(upperLines, livePreviewHeaderLines("Cost", livePreviewCostText(f), contentWidth)...)
+	if livePreviewHasSpareLine(m.height, len(upperLines)+2, 2) {
+		upperLines = append(upperLines, "")
 	}
 
 	activity := livePreviewActivityLine(f, m.session)
+	protectedStart := -1
 	if att.RequiresUser() {
-		for _, line := range renderLivePreviewAttentionBlock(att, contentWidth) {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
-		if m.height == 0 || m.height > livePreviewBaseRows+4 {
-			b.WriteString("\n")
+		protectedStart = len(upperLines)
+		upperLines = append(upperLines, renderLivePreviewAttentionBlock(att, contentWidth)...)
+		if livePreviewHasSpareLine(m.height, len(upperLines)+2, 2) {
+			upperLines = append(upperLines, "")
 		}
 		activity = att.ActivityLine()
 	}
@@ -95,19 +101,27 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	if att.RequiresUser() {
 		prefix = awaitingUserGlyph()
 	}
-	line := "  " + prefix + " " + chatThinkingStyle.Render(activity)
-	b.WriteString(ansi.Truncate(line, contentWidth, "…"))
-	b.WriteString("\n")
+	activityLines := livePreviewWrapRenderedBody("  "+prefix+" ", activity, chatThinkingStyle.Render, contentWidth, "    ")
+	upperLines = append(upperLines, activityLines...)
+	protectedTailLines := len(activityLines)
+	if protectedStart >= 0 {
+		protectedTailLines = len(upperLines) - protectedStart
+	}
+	upperLines = livePreviewFitUpperLines(upperLines, protectedTailLines, m.height)
 
-	tail := livePreviewTranscriptTail(f, m.session, contentWidth, livePreviewTailHeight(m.height, att))
+	upperBox := livePreviewSectionBox("Live Preview", TitleStyle, upperLines, boxWidth)
+	tailLineLimit := -1
+	if m.height > 0 {
+		tailLineLimit = max(m.height-lipgloss.Height(upperBox)-2, 0)
+	}
+	tail := livePreviewTranscriptTail(f, m.session, contentWidth, tailLineLimit)
+	var b strings.Builder
+	b.WriteString(upperBox)
+	b.WriteString("\n")
 	if len(tail) > 0 {
+		lowerBox := livePreviewSectionBox(livePreviewTailBannerLabel(f, m.session), ReviewStyle, tail, boxWidth)
+		b.WriteString(lowerBox)
 		b.WriteString("\n")
-		b.WriteString(livePreviewTailBannerLine(f, m.session, contentWidth))
-		b.WriteString("\n")
-		for _, line := range tail {
-			b.WriteString(line)
-			b.WriteString("\n")
-		}
 	}
 	return b.String()
 }
@@ -120,32 +134,161 @@ func renderLivePreviewAttentionBlock(att featureAttention, width int) []string {
 	if summary == "" {
 		summary = att.TypeLabel
 	}
-	lines := []string{
-		"  " + awaitingUserGlyph() + " " + WarningStyle.Bold(true).Render(att.TypeLabel),
-		"  " + MutedStyle.Render(summary),
-	}
+	lines := livePreviewWrapRenderedBody("  "+awaitingUserGlyph()+" ", att.TypeLabel, WarningStyle.Bold(true).Render, width, "    ")
+	lines = append(lines, livePreviewWrapRenderedBody("  ", summary, MutedStyle.Render, width, "    ")...)
 	if hint := att.FooterHint(); hint != "" {
-		lines = append(lines, "  "+WarningStyle.Bold(true).Render(hint))
-	}
-	for i, line := range lines {
-		lines[i] = ansi.Truncate(line, width, "…")
+		lines = append(lines, livePreviewWrapRenderedBody("  ", hint, WarningStyle.Bold(true).Render, width, "    ")...)
 	}
 	return lines
 }
 
-func livePreviewTailHeight(height int, att featureAttention) int {
-	if height <= 0 || !att.RequiresUser() {
-		return height
-	}
-	return max(height-4, 0)
+func livePreviewHeaderLines(label, value string, width int) []string {
+	return livePreviewWrapRenderedBody(LabelStyle.Render(label)+"  ", value, nil, width, "  ")
 }
 
-func livePreviewHeaderLine(label, value string, width int) string {
-	line := fmt.Sprintf("%s  %s", LabelStyle.Render(label), value)
-	if width > 0 {
-		return ansi.Truncate(line, width, "…")
+func livePreviewFeatureID(f *feature.Feature) string {
+	if f == nil {
+		return "—"
 	}
-	return line
+	return firstNonEmpty(f.ID, f.Slug, f.Name, "—")
+}
+
+func livePreviewReposSummary(f *feature.Feature) string {
+	if f == nil || len(f.Repos) == 0 {
+		return "—"
+	}
+	names := make([]string, 0, len(f.Repos))
+	for _, repo := range f.Repos {
+		if repo.Name != "" {
+			names = append(names, repo.Name)
+		}
+	}
+	if len(names) == 0 {
+		return "—"
+	}
+	return strings.Join(names, ", ")
+}
+
+func livePreviewPRLinks(f *feature.Feature) string {
+	links := livePreviewPRLinkValues(f)
+	if len(links) == 0 {
+		return ""
+	}
+	rendered := make([]string, 0, len(links))
+	for _, link := range links {
+		number := livePreviewPRNumber(link)
+		if number != "" {
+			number = "#" + number
+		} else {
+			number = "PR"
+		}
+		rendered = append(rendered, lipgloss.NewStyle().
+			Foreground(colorInfo).
+			Underline(true).
+			Hyperlink(link).
+			Render(number))
+	}
+	return strings.Join(rendered, "  ")
+}
+
+func livePreviewPRLinkValues(f *feature.Feature) []string {
+	if f == nil {
+		return nil
+	}
+	var links []string
+	seenURLs := make(map[string]struct{})
+	appendURL := func(url string) {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			return
+		}
+		if _, seen := seenURLs[url]; seen {
+			return
+		}
+		seenURLs[url] = struct{}{}
+		links = append(links, url)
+	}
+	seenRepos := make(map[string]struct{})
+	for _, repo := range f.Repos {
+		seenRepos[repo.Name] = struct{}{}
+		if state, ok := f.RepoStates[repo.Name]; ok && state != nil {
+			appendURL(state.PRURL)
+		}
+	}
+	if len(links) == 0 {
+		appendURL(f.PRURL())
+	}
+	extraRepos := make([]string, 0, len(f.RepoStates))
+	for repoName := range f.RepoStates {
+		if _, seen := seenRepos[repoName]; !seen {
+			extraRepos = append(extraRepos, repoName)
+		}
+	}
+	sort.Strings(extraRepos)
+	for _, repoName := range extraRepos {
+		if state := f.RepoStates[repoName]; state != nil {
+			appendURL(state.PRURL)
+		}
+	}
+	return links
+}
+
+func livePreviewPRNumber(prURL string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(prURL), "/")
+	if trimmed == "" {
+		return ""
+	}
+	parts := strings.Split(trimmed, "/")
+	return parts[len(parts)-1]
+}
+
+func livePreviewHasSpareLine(height, currentLines, requiredAfterBlank int) bool {
+	return height == 0 || currentLines+requiredAfterBlank < height
+}
+
+func livePreviewSectionBox(title string, titleStyle lipgloss.Style, lines []string, width int) string {
+	box := panelStyle(false).Width(width).Render(strings.Join(lines, "\n"))
+	return renderBorderTitle(box, title, titleStyle)
+}
+
+func livePreviewFitUpperLines(lines []string, protectedTailLines, height int) []string {
+	if height <= 0 {
+		return lines
+	}
+	maxContentLines := max(height-2, 1)
+	if len(lines) <= maxContentLines {
+		return lines
+	}
+	protectedTailLines = min(max(protectedTailLines, 0), len(lines), maxContentLines)
+	headLines := maxContentLines - protectedTailLines
+	fitted := make([]string, 0, maxContentLines)
+	fitted = append(fitted, lines[:headLines]...)
+	fitted = append(fitted, lines[len(lines)-protectedTailLines:]...)
+	return fitted
+}
+
+func livePreviewWrapRenderedBody(prefix, body string, render func(...string) string, width int, continuationPrefix string) []string {
+	if render == nil {
+		render = func(strs ...string) string { return strings.Join(strs, "") }
+	}
+	if width <= 0 {
+		return []string{prefix + render(body)}
+	}
+	bodyWidth := min(width-lipgloss.Width(prefix), width-lipgloss.Width(continuationPrefix))
+	bodyWidth = max(bodyWidth, 1)
+	bodyLines := strings.Split(ansi.Wrap(body, bodyWidth, ""), "\n")
+	if len(bodyLines) > 1 && bodyLines[0] == "" {
+		bodyLines = bodyLines[1:]
+	}
+	lines := make([]string, 0, len(bodyLines))
+	for i, bodyLine := range bodyLines {
+		linePrefix := prefix
+		if i > 0 {
+			linePrefix = continuationPrefix
+		}
+		lines = append(lines, linePrefix+render(bodyLine))
+	}
+	return lines
 }
 
 func livePreviewPhaseLabel(f *feature.Feature, sess session.SessionView) string {
@@ -290,8 +433,9 @@ const (
 )
 
 type livePreviewTranscriptRow struct {
-	kind livePreviewTranscriptKind
-	text string
+	kind     livePreviewTranscriptKind
+	text     string
+	truncate bool
 }
 
 func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, width, height int) []string {
@@ -307,19 +451,30 @@ func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, wid
 		return nil
 	}
 
-	if height > 0 {
-		maxRows := height - livePreviewBaseRows - livePreviewTailOverheadRows
-		if maxRows <= 0 {
-			return nil
+	if height == 0 {
+		return nil
+	}
+	if height < 0 {
+		lines := make([]string, 0, len(rows))
+		for _, row := range rows {
+			lines = append(lines, renderLivePreviewTranscriptRow(row, width)...)
 		}
-		if len(rows) > maxRows {
-			rows = rows[len(rows)-maxRows:]
-		}
+		return lines
 	}
 
-	lines := make([]string, 0, len(rows))
-	for _, row := range rows {
-		lines = append(lines, renderLivePreviewTranscriptRow(row, width))
+	lines := make([]string, 0, height)
+	for i := len(rows) - 1; i >= 0; i-- {
+		rowLines := renderLivePreviewTranscriptRow(rows[i], width)
+		if len(rowLines) == 0 {
+			continue
+		}
+		if len(lines)+len(rowLines) > height {
+			if len(lines) == 0 {
+				return rowLines[:min(len(rowLines), height)]
+			}
+			break
+		}
+		lines = append(rowLines, lines...)
 	}
 	return lines
 }
@@ -405,9 +560,32 @@ func livePreviewToolResultRow(block llm.ContentBlock, toolName string) livePrevi
 	}
 	detail := livePreviewJSONSummary(block.Content)
 	if block.IsError {
-		return livePreviewTranscriptRow{kind: livePreviewTranscriptWarning, text: name + " failed: " + detail}
+		return livePreviewTranscriptRow{
+			kind:     livePreviewTranscriptWarning,
+			text:     livePreviewFixedCharTruncate(name+" failed: "+detail, livePreviewToolResultMaxChars),
+			truncate: true,
+		}
 	}
-	return livePreviewTranscriptRow{kind: livePreviewTranscriptResult, text: name + " result: " + detail}
+	return livePreviewTranscriptRow{
+		kind:     livePreviewTranscriptResult,
+		text:     livePreviewFixedCharTruncate(name+" result: "+detail, livePreviewToolResultMaxChars),
+		truncate: true,
+	}
+}
+
+func livePreviewFixedCharTruncate(s string, maxChars int) string {
+	if maxChars <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxChars {
+		return s
+	}
+	suffixRunes := []rune(livePreviewToolResultSuffix)
+	if maxChars <= len(suffixRunes) {
+		return string(suffixRunes[:maxChars])
+	}
+	return string(runes[:maxChars-len(suffixRunes)]) + livePreviewToolResultSuffix
 }
 
 func livePreviewResultRow(result *llm.ResultMessage) livePreviewTranscriptRow {
@@ -489,7 +667,7 @@ func livePreviewTaskNotificationRow(msg *llm.TaskNotificationMessage) livePrevie
 	return livePreviewTranscriptRow{kind: kind, text: text}
 }
 
-func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) string {
+func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) []string {
 	glyph := livePreviewTranscriptGlyph(row.kind)
 	style := MutedStyle
 	switch row.kind {
@@ -508,7 +686,14 @@ func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) str
 	case livePreviewTranscriptMuted:
 		style = MutedStyle
 	}
-	return ansi.Truncate("  "+style.Render(glyph+" "+row.text), width, "…")
+	if row.truncate {
+		line := "  " + style.Render(glyph+" "+row.text)
+		if width > 0 && lipgloss.Width(line) > width {
+			line = ansi.Truncate(line, width, livePreviewToolResultSuffix)
+		}
+		return []string{line}
+	}
+	return livePreviewWrapRenderedBody("  ", glyph+" "+row.text, style.Render, width, "    ")
 }
 
 func livePreviewTranscriptGlyph(kind livePreviewTranscriptKind) string {
@@ -528,10 +713,6 @@ func livePreviewTranscriptGlyph(kind livePreviewTranscriptKind) string {
 	default:
 		return "-"
 	}
-}
-
-func livePreviewTailBannerLine(f *feature.Feature, sess session.SessionView, width int) string {
-	return ansi.Truncate("  "+ReviewStyle.Render("- "+livePreviewTailBannerLabel(f, sess)), width, "…")
 }
 
 func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) string {

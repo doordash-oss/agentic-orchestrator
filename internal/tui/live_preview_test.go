@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -525,11 +526,66 @@ func TestLivePreviewTranscriptTailCollapsesWhenConstrained(t *testing.T) {
 	}
 }
 
-func TestLivePreviewTranscriptRowsTruncateToContentWidth(t *testing.T) {
+func TestLivePreviewRendersTitledSectionBoxes(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	sess := newLivePreviewSession("boxed", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{Type: "text", Text: "visible transcript row"}),
+	)
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
+
+	for _, want := range []string{"╭─ Live Preview", "╭─ Current: Implement", "visible transcript row"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("boxed live preview missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "\n  - Current:") {
+		t.Fatalf("current label should be rendered in the lower box title, got:\n%s", view)
+	}
+}
+
+func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-meta",
+		Status:       feature.StatusPublished,
+		CurrentPhase: feature.PhaseImplement,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo-a"},
+			{Name: "repo-b"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"repo-a": {Touched: true, PRURL: "https://github.com/org/repo-a/pull/42"},
+			"repo-b": {Touched: true, PRURL: "https://github.com/org/repo-b/pull/43"},
+		},
+		RepoCycles: map[string]*feature.RepoCycleState{
+			"repo-a": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+		},
+	}
+	raw := newLivePreviewModel(f).withHeight(24).ViewCompact(100)
+	view := stripANSI(raw)
+
+	for _, want := range []string{"Feature ID", "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Tweaking", "Elapsed", "Cost"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("live preview metadata missing %q in:\n%s", want, view)
+		}
+	}
+	for _, url := range []string{"https://github.com/org/repo-a/pull/42", "https://github.com/org/repo-b/pull/43"} {
+		if !strings.Contains(raw, url) {
+			t.Fatalf("raw live preview should include hyperlink target %q in:\n%q", url, raw)
+		}
+		if strings.Contains(view, url) {
+			t.Fatalf("plain live preview should show compact PR numbers, not full URL %q in:\n%s", url, view)
+		}
+	}
+}
+
+func TestLivePreviewTranscriptRowsWrapToContentWidth(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	longText := strings.Repeat("longword", 20)
 	sess := newLivePreviewSession("truncate", feature.PhaseImplement,
-		assistantMessage(llm.ContentBlock{Type: "text", Text: strings.Repeat("longword", 20)}),
+		assistantMessage(llm.ContentBlock{Type: "text", Text: longText}),
 	)
 	view := newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(80)
 	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
@@ -537,8 +593,73 @@ func TestLivePreviewTranscriptRowsTruncateToContentWidth(t *testing.T) {
 			t.Fatalf("LivePreviewModel.ViewCompact line width = %d, want <= 76; line=%q", w, stripANSI(line))
 		}
 	}
-	if !strings.Contains(stripANSI(view), "…") {
-		t.Fatalf("truncated live preview should contain ellipsis, got:\n%s", stripANSI(view))
+	if strings.Contains(stripANSI(view), "…") {
+		t.Fatalf("wrapped live preview should not ellipsize rows, got:\n%s", stripANSI(view))
+	}
+	letters := strings.Builder{}
+	for _, r := range stripANSI(view) {
+		if unicode.IsLetter(r) {
+			letters.WriteRune(r)
+		}
+	}
+	if !strings.Contains(letters.String(), longText) {
+		t.Fatalf("wrapped live preview lost transcript text, got:\n%s", stripANSI(view))
+	}
+}
+
+func TestLivePreviewToolResultsTruncateToSingleLine(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	longResult := strings.Repeat("tool-result-body-", 20)
+	sess := newLivePreviewSession("truncate-tool-result", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_trunc", Name: "WebFetch", Input: rawJSON(`{"url":"https://example.com/really/long/path"}`)}),
+		userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_trunc", Content: rawJSON(`"` + longResult + `"`)}),
+	)
+	view := newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(80)
+	plain := stripANSI(view)
+
+	if strings.Count(plain, "WebFetch result:") != 1 {
+		t.Fatalf("tool result should render as one row, got:\n%s", plain)
+	}
+	if !strings.Contains(plain, "[...]") {
+		t.Fatalf("truncated tool result should contain fixed truncation marker, got:\n%s", plain)
+	}
+	if strings.Contains(plain, longResult) {
+		t.Fatalf("tool result should be truncated, got:\n%s", plain)
+	}
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if w := lipgloss.Width(line); w > 76 {
+			t.Fatalf("LivePreviewModel.ViewCompact line width = %d, want <= 76; line=%q", w, stripANSI(line))
+		}
+	}
+}
+
+func TestLivePreviewToolResultsUseFixedCharacterCap(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	longResult := strings.Repeat("tool-result-body-", 20)
+	sess := newLivePreviewSession("fixed-tool-result", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_fixed", Name: "WebFetch", Input: rawJSON(`{"url":"https://example.com/really/long/path"}`)}),
+		userMessage(llm.ContentBlock{Type: "tool_result", ToolUseID: "toolu_fixed", Content: rawJSON(`"` + longResult + `"`)}),
+	)
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(180))
+
+	var resultLine string
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "WebFetch result:") {
+			resultLine = strings.TrimSpace(strings.Trim(line, "│ "))
+			break
+		}
+	}
+	if resultLine == "" {
+		t.Fatalf("tool result row missing in:\n%s", view)
+	}
+	if !strings.HasSuffix(resultLine, "[...]") {
+		t.Fatalf("tool result row should end with fixed truncation marker, got %q", resultLine)
+	}
+	text := strings.TrimPrefix(resultLine, "= ")
+	if got := len([]rune(text)); got != livePreviewToolResultMaxChars {
+		t.Fatalf("tool result text length = %d, want %d; row=%q", got, livePreviewToolResultMaxChars, resultLine)
 	}
 }
 
@@ -552,6 +673,7 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 		CurrentPhase:     feature.PhaseImplement,
 		CurrentIteration: 2,
 		Created:          time.Now(),
+		Repos:            []feature.FeatureRepo{{Name: "api"}},
 		PhaseTimings: map[string]time.Duration{
 			"implement": 12 * time.Minute,
 		},
@@ -573,7 +695,7 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	m.livePreview.session = sess
 
 	view := m.View()
-	for _, want := range []string{"Live Preview", "Phase", "Implement", "Status", "Implementing", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard live preview missing %q in:\n%s", want, view)
 		}
@@ -613,7 +735,7 @@ func TestDashboardLivePreviewConstrainedCollapseKeepsFooter(t *testing.T) {
 	if strings.Contains(view, "Current:") || strings.Contains(view, "this transcript should collapse") {
 		t.Fatalf("constrained dashboard should hide banner and transcript tail, got:\n%s", view)
 	}
-	for _, want := range []string{"Live Preview", "Phase", "Implement", "Status", "Implementing", "Using Bash...", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", "Feature ID", "feat-narrow", "Repos", "—", "Phase", "Implement", "Using Bash...", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("constrained dashboard missing %q in:\n%s", want, view)
 		}

@@ -70,63 +70,127 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	att := computeFeatureAttention(f, m.session)
 	boxWidth := max(width-4, 20)
 	contentWidth := max(boxWidth-4, 1)
-	upperLines := []string{}
-	upperLines = append(upperLines, livePreviewHeaderLines("Feature ID", livePreviewFeatureID(f), contentWidth)...)
-	upperLines = append(upperLines, livePreviewHeaderLines("Repos", livePreviewReposSummary(f), contentWidth)...)
-	if prLinks := livePreviewPRLinks(f); prLinks != "" {
-		upperLines = append(upperLines, livePreviewHeaderLines("PRs", prLinks, contentWidth)...)
-	}
-	upperLines = append(upperLines, livePreviewHeaderLines("Phase", livePreviewPhaseLabel(f, m.session), contentWidth)...)
-	upperLines = append(upperLines, livePreviewHeaderLines("Status", livePreviewStatusText(f), contentWidth)...)
-	upperLines = append(upperLines, livePreviewHeaderLines("Elapsed", livePreviewElapsedText(f), contentWidth)...)
-	upperLines = append(upperLines, livePreviewHeaderLines("Cost", livePreviewCostText(f), contentWidth)...)
-	if livePreviewHasSpareLine(m.height, len(upperLines)+2, 2) {
-		upperLines = append(upperLines, "")
-	}
+	upperLines := livePreviewMetadataGrid(livePreviewMetadataItems(f, m.session), contentWidth)
 
 	activity := livePreviewActivityLine(f, m.session)
-	protectedStart := -1
+	phaseActivity := activity
+	var attentionBox string
 	if att.RequiresUser() {
-		protectedStart = len(upperLines)
-		upperLines = append(upperLines, renderLivePreviewAttentionBlock(att, contentWidth)...)
-		if livePreviewHasSpareLine(m.height, len(upperLines)+2, 2) {
-			upperLines = append(upperLines, "")
-		}
 		activity = att.ActivityLine()
+		phaseActivity = ""
+		attentionBox = livePreviewAttentionSectionBox(att, activity, boxWidth, contentWidth)
 	}
-	prefix := m.spinnerView
-	if prefix == "" {
-		prefix = MutedStyle.Render("⟳")
+	upperHeight := m.height
+	if attentionBox == "" && livePreviewShouldRenderPhasePreviewTitle(phaseActivity, contentWidth) && upperHeight > 0 {
+		upperHeight = max(upperHeight-3, 3)
 	}
-	if att.RequiresUser() {
-		prefix = awaitingUserGlyph()
-	}
-	activityLines := livePreviewWrapRenderedBody("  "+prefix+" ", activity, chatThinkingStyle.Render, contentWidth, "    ")
-	upperLines = append(upperLines, activityLines...)
-	protectedTailLines := len(activityLines)
-	if protectedStart >= 0 {
-		protectedTailLines = len(upperLines) - protectedStart
-	}
-	upperLines = livePreviewFitUpperLines(upperLines, protectedTailLines, m.height)
+	upperLines = livePreviewFitUpperLines(upperLines, 0, upperHeight)
 
 	upperBox := livePreviewSectionBox("Live Preview", TitleStyle, upperLines, boxWidth)
 	tailLineLimit := -1
 	if m.height > 0 {
-		tailLineLimit = max(m.height-lipgloss.Height(upperBox)-2, 0)
+		usedLines := lipgloss.Height(upperBox)
+		if attentionBox != "" {
+			usedLines += lipgloss.Height(attentionBox)
+		}
+		tailLineLimit = max(m.height-usedLines-2, 0)
 	}
 	tail := livePreviewTranscriptTail(f, m.session, contentWidth, tailLineLimit)
+	phasePreviewTitle := livePreviewTailBannerLabelWithActivity(f, m.session, phaseActivity, m.spinnerView)
 	var b strings.Builder
 	b.WriteString(upperBox)
 	b.WriteString("\n")
-	if len(tail) > 0 {
-		lowerBox := livePreviewSectionBox(livePreviewTailBannerLabel(f, m.session), ReviewStyle, tail, boxWidth)
+	if attentionBox != "" {
+		b.WriteString(attentionBox)
+		b.WriteString("\n")
+	}
+	if len(tail) > 0 || livePreviewShouldRenderPhasePreviewTitle(phaseActivity, contentWidth) {
+		lowerBox := livePreviewSectionBox(phasePreviewTitle, ReviewStyle, tail, boxWidth)
 		b.WriteString(lowerBox)
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-func renderLivePreviewAttentionBlock(att featureAttention, width int) []string {
+type livePreviewMetadataItem struct {
+	label string
+	value string
+}
+
+func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView) []livePreviewMetadataItem {
+	items := []livePreviewMetadataItem{
+		{label: "Feature ID", value: livePreviewFeatureID(f)},
+		{label: "Repos", value: livePreviewReposSummary(f)},
+	}
+	if prLinks := livePreviewPRLinks(f); prLinks != "" {
+		items = append(items, livePreviewMetadataItem{label: "PRs", value: prLinks})
+	}
+	items = append(items,
+		livePreviewMetadataItem{label: "Phase", value: livePreviewPhaseLabel(f, sess)},
+		livePreviewMetadataItem{label: "Status", value: livePreviewStatusText(f)},
+		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
+		livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
+		livePreviewMetadataItem{label: "Cost", value: livePreviewCostText(f)},
+	)
+	return items
+}
+
+func livePreviewMetadataGrid(items []livePreviewMetadataItem, width int) []string {
+	if width <= 0 || len(items) == 0 {
+		return nil
+	}
+	cols := 1
+	switch {
+	case width >= 90:
+		cols = 3
+	case width >= 54:
+		cols = 2
+	}
+	gap := 2
+	cellWidth := max((width-gap*(cols-1))/cols, 1)
+	rows := (len(items) + cols - 1) / cols
+	lines := make([]string, 0, rows)
+	for row := 0; row < rows; row++ {
+		cells := make([]string, 0, cols)
+		for col := 0; col < cols; col++ {
+			idx := row*cols + col
+			if idx >= len(items) {
+				break
+			}
+			cells = append(cells, livePreviewMetadataCell(items[idx], cellWidth))
+		}
+		lines = append(lines, strings.Join(cells, strings.Repeat(" ", gap)))
+	}
+	return lines
+}
+
+func livePreviewMetadataCell(item livePreviewMetadataItem, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	labelWidth := 12
+	if width < 28 {
+		labelWidth = min(11, max(6, width/2))
+	}
+	label := lipgloss.NewStyle().
+		Foreground(colorSubtext).
+		Width(labelWidth).
+		Render(item.label)
+	line := label + " " + item.value
+	return lipgloss.NewStyle().Width(width).Render(ansi.Truncate(line, width, "…"))
+}
+
+func livePreviewAttentionSectionBox(att featureAttention, activity string, boxWidth, contentWidth int) string {
+	lines := renderLivePreviewAttentionBlock(att, activity, contentWidth)
+	title := firstNonEmpty(att.TypeLabel, "Attention")
+	box := panelStyle(false).
+		BorderForeground(colorWarning).
+		Width(boxWidth).
+		Render(strings.Join(lines, "\n"))
+	return renderBorderTitle(box, livePreviewBorderTitle("! "+title, boxWidth), WarningStyle.Bold(true))
+}
+
+func renderLivePreviewAttentionBlock(att featureAttention, activity string, width int) []string {
 	if !att.RequiresUser() {
 		return nil
 	}
@@ -134,16 +198,15 @@ func renderLivePreviewAttentionBlock(att featureAttention, width int) []string {
 	if summary == "" {
 		summary = att.TypeLabel
 	}
-	lines := livePreviewWrapRenderedBody("  "+awaitingUserGlyph()+" ", att.TypeLabel, WarningStyle.Bold(true).Render, width, "    ")
-	lines = append(lines, livePreviewWrapRenderedBody("  ", summary, MutedStyle.Render, width, "    ")...)
+	lines := livePreviewWrapRenderedBody("  ", summary, WarningStyle.Render, width, "    ")
 	if hint := att.FooterHint(); hint != "" {
 		lines = append(lines, livePreviewWrapRenderedBody("  ", hint, WarningStyle.Bold(true).Render, width, "    ")...)
 	}
+	if activity != "" {
+		lines = append(lines, "")
+		lines = append(lines, livePreviewWrapRenderedBody("  "+awaitingUserGlyph()+" ", activity, chatThinkingStyle.Render, width, "    ")...)
+	}
 	return lines
-}
-
-func livePreviewHeaderLines(label, value string, width int) []string {
-	return livePreviewWrapRenderedBody(LabelStyle.Render(label)+"  ", value, nil, width, "  ")
 }
 
 func livePreviewFeatureID(f *feature.Feature) string {
@@ -242,13 +305,16 @@ func livePreviewPRNumber(prURL string) string {
 	return parts[len(parts)-1]
 }
 
-func livePreviewHasSpareLine(height, currentLines, requiredAfterBlank int) bool {
-	return height == 0 || currentLines+requiredAfterBlank < height
-}
-
 func livePreviewSectionBox(title string, titleStyle lipgloss.Style, lines []string, width int) string {
 	box := panelStyle(false).Width(width).Render(strings.Join(lines, "\n"))
-	return renderBorderTitle(box, title, titleStyle)
+	return renderBorderTitle(box, livePreviewBorderTitle(title, width), titleStyle)
+}
+
+func livePreviewBorderTitle(title string, width int) string {
+	if width <= 0 {
+		return title
+	}
+	return ansi.Truncate(title, max(width-8, 1), "…")
 }
 
 func livePreviewFitUpperLines(lines []string, protectedTailLines, height int) []string {
@@ -299,6 +365,35 @@ func livePreviewPhaseLabel(f *feature.Feature, sess session.SessionView) string 
 		return "Unknown"
 	}
 	return f.CurrentPhase.String()
+}
+
+func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string {
+	if sess != nil {
+		if model := firstNonEmpty(sess.Model()); model != "" {
+			return model
+		}
+	}
+	if f == nil {
+		return "—"
+	}
+	phase := f.CurrentPhase
+	if sess != nil {
+		phase = sess.Phase()
+	}
+	switch phase {
+	case feature.PhaseKnowledgeBase:
+		return firstNonEmpty(f.Models.KBBuild, "—")
+	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm:
+		return firstNonEmpty(f.Models.Research, "—")
+	case feature.PhasePlan, feature.PhasePublish:
+		return firstNonEmpty(f.Models.Planning, "—")
+	case feature.PhaseImplement:
+		return firstNonEmpty(f.Models.Implementation, "—")
+	case feature.PhaseReview, feature.PhaseFinalReview:
+		return firstNonEmpty(f.Models.Review, "—")
+	default:
+		return "—"
+	}
 }
 
 func livePreviewStatusText(f *feature.Feature) string {
@@ -744,6 +839,30 @@ func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) st
 		}
 	}
 	return "Current: " + strings.Join(parts, " · ")
+}
+
+func livePreviewTailBannerLabelWithActivity(f *feature.Feature, sess session.SessionView, activity, spinnerView string) string {
+	label := livePreviewTailBannerLabel(f, sess)
+	if activity = livePreviewPhaseActivityLabel(activity, spinnerView); activity != "" {
+		label += " · " + activity
+	}
+	return label
+}
+
+func livePreviewPhaseActivityLabel(activity, spinnerView string) string {
+	activity = singleLine(activity)
+	if activity == "" {
+		return ""
+	}
+	prefix := spinnerView
+	if prefix == "" {
+		prefix = MutedStyle.Render("⟳")
+	}
+	return prefix + " " + activity
+}
+
+func livePreviewShouldRenderPhasePreviewTitle(activity string, contentWidth int) bool {
+	return singleLine(activity) != "" && contentWidth >= 20
 }
 
 func livePreviewToolInputSummary(toolName string, input json.RawMessage) string {

@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"charm.land/lipgloss/v2"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -518,11 +519,13 @@ func TestLivePreviewTranscriptTailCollapsesWhenConstrained(t *testing.T) {
 	}
 
 	narrow := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(50))
-	if strings.Contains(narrow, "Current:") || strings.Contains(narrow, "visible transcript row") {
-		t.Fatalf("narrow live preview should collapse banner and tail, got:\n%s", narrow)
+	if strings.Contains(narrow, "visible transcript row") {
+		t.Fatalf("narrow live preview should collapse transcript tail, got:\n%s", narrow)
 	}
-	if !strings.Contains(narrow, "Live Preview") || !strings.Contains(narrow, "Using Bash...") {
-		t.Fatalf("narrow live preview should keep header and activity line, got:\n%s", narrow)
+	for _, want := range []string{"Live Preview", "Current: Implement · ⟳ Using Bash..."} {
+		if !strings.Contains(narrow, want) {
+			t.Fatalf("narrow live preview missing %q in:\n%s", want, narrow)
+		}
 	}
 }
 
@@ -544,12 +547,44 @@ func TestLivePreviewRendersTitledSectionBoxes(t *testing.T) {
 	}
 }
 
+func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseBrainstorm}
+	sess := newLivePreviewSession("activity-title", feature.PhaseBrainstorm,
+		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_read", Name: "Read", Input: rawJSON(`{"file_path":"README.md"}`)}),
+	)
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
+
+	if !strings.Contains(view, "Current: Brainstorm · ⟳ Using Read...") {
+		t.Fatalf("activity should render in phase preview title, got:\n%s", view)
+	}
+	if strings.Count(view, "Using Read...") != 1 {
+		t.Fatalf("activity should not also render inside the upper metadata box, got:\n%s", view)
+	}
+}
+
+func TestLivePreviewAttentionRendersWarningBox(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status:    feature.StatusImplementing,
+		HelpQueue: []feature.HelpRequest{{Question: "Which API should we keep?", Pending: true}},
+	}
+	view := stripANSI(newLivePreviewModel(f).withHeight(20).ViewCompact(100))
+
+	for _, want := range []string{"╭─ ! Question", "Which API should we keep?", "[a] Answer", "Waiting for an answer"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("attention warning box missing %q in:\n%s", want, view)
+		}
+	}
+}
+
 func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		ID:           "feat-meta",
 		Status:       feature.StatusPublished,
 		CurrentPhase: feature.PhaseImplement,
+		Models:       config.ModelConfig{Implementation: "agent-model"},
 		Repos: []feature.FeatureRepo{
 			{Name: "repo-a"},
 			{Name: "repo-b"},
@@ -565,7 +600,7 @@ func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 	raw := newLivePreviewModel(f).withHeight(24).ViewCompact(100)
 	view := stripANSI(raw)
 
-	for _, want := range []string{"Feature ID", "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Tweaking", "Elapsed", "Cost"} {
+	for _, want := range []string{"Feature ID", "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Tweaking", "Phase Model", "agent-model", "Elapsed", "Cost"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("live preview metadata missing %q in:\n%s", want, view)
 		}
@@ -732,10 +767,10 @@ func TestDashboardLivePreviewConstrainedCollapseKeepsFooter(t *testing.T) {
 	m.livePreview.session = sess
 
 	view := stripANSI(m.View())
-	if strings.Contains(view, "Current:") || strings.Contains(view, "this transcript should collapse") {
-		t.Fatalf("constrained dashboard should hide banner and transcript tail, got:\n%s", view)
+	if strings.Contains(view, "this transcript should collapse") {
+		t.Fatalf("constrained dashboard should hide transcript tail, got:\n%s", view)
 	}
-	for _, want := range []string{"Live Preview", "Feature ID", "feat-narrow", "Repos", "—", "Phase", "Implement", "Using Bash...", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", "Feature ID", "feat-narrow", "Current: Implement · spin Using Bash...", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("constrained dashboard missing %q in:\n%s", want, view)
 		}

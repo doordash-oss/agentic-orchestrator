@@ -6,7 +6,7 @@ Agentic Orchestrator is an AI development workflow orchestrator that turns any e
 
 > The local CLI is `agentico`. The Go module and GitHub repository are both `github.com/doordash-oss/agentic-orchestrator`.
 
-<img width="1728" height="1048" alt="image" src="https://github.com/user-attachments/assets/ef33f3eb-1cec-489d-a21e-7e6da850aa81" />
+<img width="1727" height="1049" alt="image" src="https://github.com/user-attachments/assets/1d0704a4-621f-4482-8f89-5424290b7ea5" />
 
 
 ## Why Agentic Orchestrator?

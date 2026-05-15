@@ -16,6 +16,7 @@ package tui
 
 import (
 	"encoding/json"
+	"image/color"
 	"strings"
 	"testing"
 	"time"
@@ -447,6 +448,37 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLivePreviewTranscriptEmphasis(t *testing.T) {
+	t.Parallel()
+
+	assertForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptAssistant), colorText)
+	assertForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptTool), colorOverlay)
+	assertForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptResult), colorOverlay)
+
+	assertNotForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptTool), colorWarning)
+	assertNotForeground(t, livePreviewTranscriptStyle(livePreviewTranscriptResult), colorSuccess)
+}
+
+func assertForeground(t *testing.T, style lipgloss.Style, want color.Color) {
+	t.Helper()
+	if !sameColor(style.GetForeground(), want) {
+		t.Fatalf("foreground = %v, want %v", style.GetForeground(), want)
+	}
+}
+
+func assertNotForeground(t *testing.T, style lipgloss.Style, notWant color.Color) {
+	t.Helper()
+	if sameColor(style.GetForeground(), notWant) {
+		t.Fatalf("foreground = %v, did not want %v", style.GetForeground(), notWant)
+	}
+}
+
+func sameColor(a, b color.Color) bool {
+	ar, ag, ab, aa := a.RGBA()
+	br, bg, bb, ba := b.RGBA()
+	return ar == br && ag == bg && ab == bb && aa == ba
 }
 
 func TestLivePreviewTailBannerLabel(t *testing.T) {

@@ -805,23 +805,7 @@ func livePreviewTaskNotificationRow(msg *llm.TaskNotificationMessage) livePrevie
 
 func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) []string {
 	glyph := livePreviewTranscriptGlyph(row.kind)
-	style := MutedStyle
-	switch row.kind {
-	case livePreviewTranscriptAssistant:
-		style = SubtitleStyle
-	case livePreviewTranscriptTool:
-		style = WarningStyle
-	case livePreviewTranscriptResult:
-		style = SuccessStyle
-	case livePreviewTranscriptWarning:
-		style = ErrorStyle
-	case livePreviewTranscriptQuestion:
-		style = ReviewStyle
-	case livePreviewTranscriptTask:
-		style = chatThinkingStyle
-	case livePreviewTranscriptMuted:
-		style = MutedStyle
-	}
+	style := livePreviewTranscriptStyle(row.kind)
 	if row.truncate {
 		line := "  " + style.Render(glyph+" "+row.text)
 		if width > 0 && lipgloss.Width(line) > width {
@@ -830,6 +814,25 @@ func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) []s
 		return []string{line}
 	}
 	return livePreviewWrapRenderedBody("  ", glyph+" "+row.text, style.Render, width, "    ")
+}
+
+func livePreviewTranscriptStyle(kind livePreviewTranscriptKind) lipgloss.Style {
+	switch kind {
+	case livePreviewTranscriptAssistant:
+		return lipgloss.NewStyle().Foreground(colorText)
+	case livePreviewTranscriptTool:
+		return MutedStyle
+	case livePreviewTranscriptResult:
+		return MutedStyle
+	case livePreviewTranscriptWarning:
+		return ErrorStyle
+	case livePreviewTranscriptQuestion:
+		return ReviewStyle
+	case livePreviewTranscriptTask:
+		return chatThinkingStyle
+	default:
+		return MutedStyle
+	}
 }
 
 func livePreviewTranscriptGlyph(kind livePreviewTranscriptKind) string {

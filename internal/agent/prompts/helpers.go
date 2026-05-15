@@ -54,44 +54,6 @@ func VisualReferences(in VisualReferencesInput) string {
 	return MustRender("visual_references", in)
 }
 
-// VisualEvidenceImplement renders the visual_evidence_implement partial.
-// Returns "" when IterDir is empty so callers can drop the result into a
-// prompt unconditionally. Tag-gating (frontend-only) is the caller's
-// responsibility.
-func VisualEvidenceImplement(in VisualEvidenceImplementInput) string {
-	if in.IterDir == "" {
-		return ""
-	}
-	return MustRender("visual_evidence_implement", in)
-}
-
-// VisualEvidenceReview renders the visual_evidence_review partial.
-// Returns "" when IterDir is empty.
-func VisualEvidenceReview(in VisualEvidenceReviewInput) string {
-	if in.IterDir == "" {
-		return ""
-	}
-	return MustRender("visual_evidence_review", in)
-}
-
-// BehavioralEvidenceImplement renders the behavioral_evidence_implement
-// partial. Returns "" when IterDir is empty.
-func BehavioralEvidenceImplement(in BehavioralEvidenceImplementInput) string {
-	if in.IterDir == "" {
-		return ""
-	}
-	return MustRender("behavioral_evidence_implement", in)
-}
-
-// BehavioralEvidenceReview renders the behavioral_evidence_review partial.
-// Returns "" when IterDir is empty.
-func BehavioralEvidenceReview(in BehavioralEvidenceReviewInput) string {
-	if in.IterDir == "" {
-		return ""
-	}
-	return MustRender("behavioral_evidence_review", in)
-}
-
 // QAFiles renders the qa_files partial. Returns "" when Paths is empty.
 func QAFiles(in QAFilesInput) string {
 	if len(in.Paths) == 0 {

@@ -32,11 +32,13 @@ type RequiredVerificationItem struct {
 type VerificationMode string
 
 const (
-	VerificationModeUnknown VerificationMode = "unknown"
-	VerificationModeCommand VerificationMode = "command"
-	VerificationModeSkill   VerificationMode = "skill"
-	VerificationModeManual  VerificationMode = "manual"
-	VerificationModeOther   VerificationMode = "other"
+	VerificationModeUnknown    VerificationMode = "unknown"
+	VerificationModeCommand    VerificationMode = "command"
+	VerificationModeSkill      VerificationMode = "skill"
+	VerificationModeManual     VerificationMode = "manual"
+	VerificationModeVisual     VerificationMode = "visual"
+	VerificationModeBehavioral VerificationMode = "behavioral"
+	VerificationModeOther      VerificationMode = "other"
 )
 
 type VerificationRunStatus string
@@ -51,8 +53,10 @@ const (
 )
 
 type VerificationEvidence struct {
-	ExitCode *int   `yaml:"exit_code,omitempty"`
-	Summary  string `yaml:"summary,omitempty"`
+	ExitCode    *int     `yaml:"exit_code,omitempty"`
+	Summary     string   `yaml:"summary,omitempty"`
+	Primary     string   `yaml:"primary,omitempty"`
+	Attachments []string `yaml:"attachments,omitempty"`
 }
 
 type VerificationMismatch struct {
@@ -155,6 +159,12 @@ func (r *VerificationCheckResult) UnmarshalYAML(node *yaml.Node) error {
 				r.EvidenceData.ExitCode = &exitCode
 			}
 		}
+		if primary, ok := evidence["primary"].(string); ok {
+			r.EvidenceData.Primary = strings.TrimSpace(primary)
+		}
+		if attachments, ok := evidence["attachments"]; ok {
+			r.EvidenceData.Attachments = toStringSlice(attachments)
+		}
 		return nil
 	default:
 		var structured VerificationEvidence
@@ -180,7 +190,10 @@ func nodeDecodeEvidence(node *yaml.Node, out *VerificationEvidence) error {
 }
 
 func hasStructuredEvidence(e VerificationEvidence) bool {
-	return e.ExitCode != nil || strings.TrimSpace(e.Summary) != ""
+	return e.ExitCode != nil ||
+		strings.TrimSpace(e.Summary) != "" ||
+		strings.TrimSpace(e.Primary) != "" ||
+		len(e.Attachments) > 0
 }
 
 func toInt(v any) (int, bool) {
@@ -195,6 +208,27 @@ func toInt(v any) (int, bool) {
 		return int(n), true
 	default:
 		return 0, false
+	}
+}
+
+func toStringSlice(v any) []string {
+	switch values := v.(type) {
+	case []string:
+		out := make([]string, len(values))
+		for i, value := range values {
+			out[i] = strings.TrimSpace(value)
+		}
+		return out
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if s, ok := value.(string); ok {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	default:
+		return nil
 	}
 }
 
@@ -316,10 +350,7 @@ func BuildContractVerificationReportStub(contract *TestingContract, contractPath
 		ContractRevision: contract.Revision,
 	}
 	for _, item := range contract.Items {
-		mode := VerificationModeCommand
-		if item.ExpectedEvidence.Kind == testingContractManualKind || item.Source == testingContractManualSource {
-			mode = VerificationModeManual
-		}
+		mode := verificationModeForContractItem(item)
 		report.Results = append(report.Results, VerificationCheckResult{
 			ItemID:      item.ID,
 			Name:        item.Name,
@@ -330,6 +361,19 @@ func BuildContractVerificationReportStub(contract *TestingContract, contractPath
 		})
 	}
 	return report
+}
+
+func verificationModeForContractItem(item TestingContractItem) VerificationMode {
+	switch {
+	case item.ExpectedEvidence.Kind == testingContractManualKind || item.Source == testingContractManualSource:
+		return VerificationModeManual
+	case item.ExpectedEvidence.Kind == testingContractVisualKind || item.Source == testingContractVisualSource:
+		return VerificationModeVisual
+	case item.ExpectedEvidence.Kind == testingContractBehavioralKind || item.Source == testingContractBehavioralSource:
+		return VerificationModeBehavioral
+	default:
+		return VerificationModeCommand
+	}
 }
 
 func WriteVerificationReport(path string, report VerificationReport) error {
@@ -388,6 +432,14 @@ func normalizeChecks(checks []VerificationCheckResult) {
 		}
 		if checks[i].EvidenceData.Summary == "" {
 			checks[i].EvidenceData.Summary = strings.TrimSpace(checks[i].Evidence)
+		}
+		checks[i].EvidenceData.Summary = strings.TrimSpace(checks[i].EvidenceData.Summary)
+		checks[i].EvidenceData.Primary = strings.TrimSpace(checks[i].EvidenceData.Primary)
+		if checks[i].EvidenceData.Attachments == nil {
+			checks[i].EvidenceData.Attachments = []string{}
+		}
+		for j := range checks[i].EvidenceData.Attachments {
+			checks[i].EvidenceData.Attachments[j] = strings.TrimSpace(checks[i].EvidenceData.Attachments[j])
 		}
 	}
 }

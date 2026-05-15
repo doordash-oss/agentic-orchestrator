@@ -181,6 +181,80 @@ func runFinalReviewWithReviewScript(t *testing.T, reviewBody func(artDir string)
 	return result
 }
 
+func TestPriorImplementationEvidenceContextForRunListsReferencedEvidenceArtifacts(t *testing.T) {
+	runDir := t.TempDir()
+	phaseDir := filepath.Join(runDir, "phase-01")
+	if err := os.MkdirAll(filepath.Join(phaseDir, "plan"), 0o755); err != nil {
+		t.Fatalf("mkdir plan dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(phaseDir, "plan", "phase-plan.md"), []byte("# Phase plan\n"), 0o644); err != nil {
+		t.Fatalf("write phase plan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(phaseDir, "testing-contract.yaml"), []byte("version: 1\n"), 0o644); err != nil {
+		t.Fatalf("write testing contract: %v", err)
+	}
+	implementDir := filepath.Join(phaseDir, feature.PhaseImplement.DirName())
+	am := NewArtifactManager(implementDir)
+	iterDir, err := am.CreateIterationDir(2)
+	if err != nil {
+		t.Fatalf("CreateIterationDir() error = %v", err)
+	}
+	if err := am.WriteMeta(iterDir, IterationMeta{
+		Iteration:    2,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: ReviewApproved.String(),
+	}); err != nil {
+		t.Fatalf("WriteMeta() error = %v", err)
+	}
+	report := strings.Join([]string{
+		"version: 2",
+		"results:",
+		"  - item_id: visual_1",
+		"    name: Setup wizard",
+		"    mode: visual",
+		"    status: passed",
+		"    evidence:",
+		"      summary: Captured setup wizard",
+		"      primary: screenshots/setup.png",
+		"      attachments:",
+		"        - screenshots/setup-detail.png",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(report), 0o644); err != nil {
+		t.Fatalf("write verification report: %v", err)
+	}
+
+	ctx := priorImplementationEvidenceContextForRun(runDir)
+	for _, want := range []string{
+		filepath.Join(phaseDir, "plan", "phase-plan.md"),
+		filepath.Join(phaseDir, "testing-contract.yaml"),
+		filepath.Join(iterDir, "verification-report.yaml"),
+		iterDir,
+		filepath.Join(iterDir, "screenshots", "setup.png"),
+		filepath.Join(iterDir, "screenshots", "setup-detail.png"),
+	} {
+		if !containsPriorEvidencePath(ctx, want) {
+			t.Errorf("priorImplementationEvidenceContextForRun() missing %s: %+v", want, ctx)
+		}
+	}
+}
+
+func containsPriorEvidencePath(ctx priorImplementationEvidenceContext, want string) bool {
+	for _, paths := range [][]string{
+		ctx.PlanPaths,
+		ctx.ContractPaths,
+		ctx.ReportPaths,
+		ctx.EvidenceRootDirs,
+		ctx.EvidenceArtifactPaths,
+	} {
+		for _, path := range paths {
+			if path == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos covers
 // the SUCCESS path: one feature-level reviewer session approves on iter-1;
 // every repo at "awaiting_final_review" transitions atomically to
@@ -584,6 +658,28 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
+		}
+	}
+}
+
+func TestRunFeatureFinalReviewLoop_MissingEvidenceRoutesPlanRevision(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	result := runFinalReviewWithReviewScript(t, func(artDir string) string {
+		return testutil.WriteFinalReviewChangesRequested(artDir, "- **Critical**: MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.")
+	})
+
+	if result.FinalStatus != "plan_revision_required" {
+		t.Fatalf("FinalStatus = %q, want plan_revision_required", result.FinalStatus)
+	}
+	for _, want := range []string{
+		"MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.",
+		"### Behavioral Evidence",
+		"Do not add verification-report.yaml rows directly",
+	} {
+		if !strings.Contains(result.PlanRevisionFeedback, want) {
+			t.Errorf("PlanRevisionFeedback missing %q:\n%s", want, result.PlanRevisionFeedback)
 		}
 	}
 }

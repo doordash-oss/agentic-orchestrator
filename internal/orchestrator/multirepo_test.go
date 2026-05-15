@@ -496,6 +496,58 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 	}
 }
 
+func TestDispatchMultiRepoResults_PlanRevisionRequiredRoutesPhasePlanRevision(t *testing.T) {
+	planPath := writeTempFile(t, "phase-plan.md", "# Phase plan\n")
+	roadmapPath := writeTempFile(t, "roadmap.md", "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nBootstrap\n\n## Phase 2: Hot-seat controls\n### Goal\nControls\n")
+	f := &feature.Feature{
+		ID:                  "feat-mr-plan-revision-dispatch",
+		Status:              feature.StatusImplementing,
+		ActiveRun:           1,
+		RunCount:            1,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+		Repos:               []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Artifacts: map[string]string{
+			"plan":    planPath,
+			"roadmap": roadmapPath,
+		},
+	}
+	writeExecOrderNextToPlan(t, planPath, f.Repos)
+	lc := lifecycleForFeature(f)
+	store := newFeatureStore(f)
+
+	spy := &fakeRunMultiRepoImpl{
+		TerminalResult: &agent.OrchestratorResult{
+			FinalStatus:          "plan_revision_required",
+			RepoStatuses:         map[string]string{"repo-a": "plan_revision_required"},
+			PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT behavioral: Exercise Flip board without mutating turn or history.",
+		},
+	}
+
+	o := orchestrator.New(
+		orchestrator.Deps{
+			Lifecycle: lc,
+			Store:     store,
+		},
+		orchestrator.Hooks{},
+	)
+	o.SetRunMultiRepoImplFn(spy.Fn())
+
+	if err := o.StartMultiRepoImplementation(f.ID); err != nil {
+		t.Fatalf("StartMultiRepoImplementation: %v", err)
+	}
+
+	ev := waitForEvent(o.Events(), func(ev ports.Event) bool {
+		return ev.Type == ports.PhaseStarted && ev.Phase == feature.PhasePlan
+	}, 1*time.Second)
+	if ev == nil {
+		t.Fatal("no PhaseStarted(Plan) event observed; plan_revision_required was not routed")
+	}
+	if f.Status != feature.StatusPlanning {
+		t.Fatalf("feature.Status = %q, want %q", f.Status, feature.StatusPlanning)
+	}
+}
+
 // TestOnMultiRepoImplementDoneNeedUserInputDefaultSummary verifies that when
 // LastError is empty but PausedRepos is set, the emitted NeedUserInputRequired
 // event still carries a non-empty, repo-derived summary.

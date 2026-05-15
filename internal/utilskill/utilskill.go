@@ -16,25 +16,9 @@
 // in which they should appear in the discovery preamble. Utility skills are
 // secondary skills (like frontend-design) that complement a phase's primary
 // skill when their domain is relevant to the task.
-//
-// Two strengths of loading are supported:
-//
-//   - Discovery (ForPhase): the skill appears as a row in the preamble table
-//     with soft instructions ("scan the table… read SKILL.md for matching
-//     topics"). The agent self-triggers on topic match. Adequate for
-//     generically useful skills like knowledge-reader and guideline-reader
-//     that every feature benefits from.
-//
-//   - Mandatory (RequiredForPhase): the skill's SKILL.md is emitted as a
-//     strong skill-read block — the same "read this file now" treatment given
-//     to phase-primary skills (implement, plan-phase, etc.).
-//     Triggered when the feature carries a tag in the skill's requiredTags
-//     list. This is the enforcement spine that makes a no-brainer skill
-//     actually get loaded.
 package utilskill
 
 import (
-	"slices"
 	"sort"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -44,15 +28,13 @@ import (
 // phase's preamble.
 const PhaseAll feature.Phase = -1
 
-// entry records the phases in which a utility skill should be advertised and
-// (optionally) the feature tags that promote it to a mandatory read.
+// entry records the phases in which a utility skill should be advertised.
 type entry struct {
-	phases       []feature.Phase
-	requiredTags []string // when non-empty, skill is mandatory for features with any of these tags
+	phases []feature.Phase
 }
 
-// registry maps utility skill names to their advertisement + requirement
-// policy. Add new utility skills here.
+// registry maps utility skill names to their advertisement policy. Add new
+// utility skills here.
 var registry = map[string]entry{
 	"frontend-design": {
 		phases: []feature.Phase{
@@ -61,7 +43,6 @@ var registry = map[string]entry{
 			feature.PhaseImplement,
 			feature.PhaseReview,
 		},
-		requiredTags: []string{feature.TagFrontend},
 	},
 	"knowledge-reader": {
 		phases: []feature.Phase{
@@ -94,9 +75,6 @@ var registry = map[string]entry{
 // preamble table for the given phase. Skills mapped to PhaseAll are always
 // included. Passing PhaseAll as the phase returns all registered utility
 // skills.
-//
-// This is the "discovery" surface — soft advertisement. Use RequiredForPhase
-// to compute the mandatory subset for a specific feature's tags.
 func ForPhase(phase feature.Phase) []string {
 	if phase == PhaseAll {
 		return All()
@@ -114,54 +92,6 @@ func ForPhase(phase feature.Phase) []string {
 	return names
 }
 
-// RequiredForPhase returns the names of utility skills that MUST be read
-// during the given phase because the feature carries a matching tag. A skill
-// is mandatory when (1) it is registered for this phase and (2) its
-// requiredTags list intersects the feature's tags. Returns nil when no skill
-// applies.
-//
-// Callers should emit a mandatory skill-read instruction for each returned
-// skill so the agent receives the same strong treatment as the phase's primary
-// skill.
-func RequiredForPhase(phase feature.Phase, featureTags []string) []string {
-	if len(featureTags) == 0 {
-		return nil
-	}
-	var names []string
-	for name, e := range registry {
-		if len(e.requiredTags) == 0 {
-			continue
-		}
-		if !phaseMatches(e.phases, phase) {
-			continue
-		}
-		if !anyTagMatches(e.requiredTags, featureTags) {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-func phaseMatches(phases []feature.Phase, phase feature.Phase) bool {
-	for _, p := range phases {
-		if p == PhaseAll || p == phase {
-			return true
-		}
-	}
-	return false
-}
-
-func anyTagMatches(required, featureTags []string) bool {
-	for _, r := range required {
-		if slices.Contains(featureTags, r) {
-			return true
-		}
-	}
-	return false
-}
-
 // All returns every registered utility skill name, sorted alphabetically.
 func All() []string {
 	names := make([]string, 0, len(registry))
@@ -172,38 +102,13 @@ func All() []string {
 	return names
 }
 
-// Registry returns a snapshot of the registry in the legacy
-// skill -> []phases form. Retained for existing tests and callers that only
-// care about advertisement. For mandatory-read policy use RegistryEntries.
+// Registry returns a snapshot of the registry in the skill -> []phases form.
 func Registry() map[string][]feature.Phase {
 	cp := make(map[string][]feature.Phase, len(registry))
 	for k, e := range registry {
 		phases := make([]feature.Phase, len(e.phases))
 		copy(phases, e.phases)
 		cp[k] = phases
-	}
-	return cp
-}
-
-// RegistryEntry is a read-only view of a single registry row.
-type RegistryEntry struct {
-	Phases       []feature.Phase
-	RequiredTags []string
-}
-
-// RegistryEntries returns a snapshot of the full registry including both
-// phase membership and requiredTags.
-func RegistryEntries() map[string]RegistryEntry {
-	cp := make(map[string]RegistryEntry, len(registry))
-	for k, e := range registry {
-		phases := make([]feature.Phase, len(e.phases))
-		copy(phases, e.phases)
-		var tags []string
-		if len(e.requiredTags) > 0 {
-			tags = make([]string, len(e.requiredTags))
-			copy(tags, e.requiredTags)
-		}
-		cp[k] = RegistryEntry{Phases: phases, RequiredTags: tags}
 	}
 	return cp
 }

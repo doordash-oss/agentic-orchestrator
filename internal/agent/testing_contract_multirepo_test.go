@@ -242,3 +242,69 @@ func TestCompileTestingContractMultiRepo_ManualVerificationIsCrossRepo(t *testin
 		t.Fatalf("manual evidence kind = %q", got.ExpectedEvidence.Kind)
 	}
 }
+
+func TestCompileTestingContractMultiRepo_EvidenceRowsSingleRepo(t *testing.T) {
+	plan := strings.Join([]string{
+		"## Success Criteria",
+		"### Visual Evidence",
+		"- [ ] Capture the settings panel after saving.",
+		"### Behavioral Evidence",
+		"- [ ] Attach the successful save transcript.",
+	}, "\n")
+
+	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
+		Repos:    []string{"app"},
+		PlanText: plan,
+	})
+
+	if got := countItems(c.Items, testingContractVisualSource, "app"); got != 1 {
+		t.Fatalf("single-repo visual rows = %d, want 1", got)
+	}
+	if got := countItems(c.Items, testingContractBehavioralSource, "app"); got != 1 {
+		t.Fatalf("single-repo behavioral rows = %d, want 1", got)
+	}
+}
+
+func TestCompileTestingContractMultiRepo_EvidenceRowsMultiRepoAreCrossRepo(t *testing.T) {
+	plan := strings.Join([]string{
+		"## Success Criteria",
+		"### Visual Evidence",
+		"- [ ] Capture the web and API status surfaces together.",
+		"### Behavioral Evidence",
+		"- [ ] Attach the end-to-end workflow recording.",
+	}, "\n")
+
+	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
+		Repos:    []string{"api", "web"},
+		PlanText: plan,
+	})
+
+	if got := countItems(c.Items, testingContractVisualSource, TestingContractCrossRepoTag); got != 1 {
+		t.Fatalf("multi-repo visual rows = %d, want 1", got)
+	}
+	if got := countItems(c.Items, testingContractBehavioralSource, TestingContractCrossRepoTag); got != 1 {
+		t.Fatalf("multi-repo behavioral rows = %d, want 1", got)
+	}
+}
+
+func TestCompileTestingContractMultiRepo_PlanLessNoEvidenceRows(t *testing.T) {
+	plan := strings.Join([]string{
+		"## Success Criteria",
+		"### Visual Evidence",
+		"- [ ] Capture the screen.",
+		"### Behavioral Evidence",
+		"- [ ] Attach the transcript.",
+	}, "\n")
+
+	c := CompileTestingContractMultiRepo(MultiRepoContractInput{
+		Repos:    []string{"api", "web"},
+		PlanText: plan,
+		PlanLess: true,
+	})
+
+	for _, it := range c.Items {
+		if it.Source == testingContractVisualSource || it.Source == testingContractBehavioralSource {
+			t.Fatalf("plan-less contract emitted evidence row: %+v", it)
+		}
+	}
+}

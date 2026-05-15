@@ -2068,7 +2068,7 @@ fi
 		testutil.WriteSpecificAxisApproved(tmpDir, "scope", []string{"## Tasks"}),
 		testutil.JSONLSuccess))
 
-	_ = os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte("# Phase 1 Plan\n## Overview\nX.\n## Tasks\n### Task 1: Y\n#### What to build\nY.\n#### Acceptance criteria\n- [ ] Done.\n#### Blocked by\nNone - can start immediately.\n## Success Criteria\n### Automated Verification\n- [ ] Tests: `go test ./...`\n### Manual Verification\n- [ ] None required: internal-only change.\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte("# Phase 1 Plan\n## Overview\nX.\n## Tasks\n### Task 1: Y\n#### What to build\nY.\n#### Acceptance criteria\n- [ ] Done.\n#### Blocked by\nNone - can start immediately.\n## Success Criteria\n### Automated Verification\n- [ ] Tests: `go test ./...`\n### Manual Verification\n- [ ] None required: internal-only change.\n### Visual Evidence\n- [ ] None required: no rendered surface.\n### Behavioral Evidence\n- [ ] None required: automated tests are the artifact.\n"), 0o644)
 
 	buildSession := mockBuildSessionPerDomain(planScript, map[string]string{
 		"structural": structuralScript,

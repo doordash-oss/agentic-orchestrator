@@ -26,9 +26,10 @@ You are read-only on repository worktrees. The only writes allowed for this role
 
 1. **Read the roadmap** (if provided) to understand what the feature delivered and what is deferred.
 2. **Review the verification report** — read the iteration-local `verification-report.yaml` and confirm each `repo:`-tagged contract item has a passed entry with honest evidence. Do not re-run the full test/build/lint suite; only spot-check a specific item if its report entry is missing, ambiguous, or implausible given the diff.
-3. **Review the diff per repo** using `git diff <base-branch>` (not `git diff <base>...HEAD`) inside each worktree. Note any cross-repo coupling that needs to land coherently.
-4. **Explore each codebase** to understand changes in context. Use the `--add-dir` mounts; you do not need to spawn a sub-agent for read-only exploration.
-5. **Check exit criteria** are met across the cumulative diff.
+3. **Audit prior implementation evidence** — read the prior implementation phase plans, testing contracts, latest completed implementation verification reports, and referenced evidence artifacts listed in the prompt. These prior implementation artifacts are the visual/behavioral coverage source; the final-review testing contract stays PlanLess and baseline-only.
+4. **Review the diff per repo** using `git diff <base-branch>` (not `git diff <base>...HEAD`) inside each worktree. Note any cross-repo coupling that needs to land coherently.
+5. **Explore each codebase** to understand changes in context. Use the `--add-dir` mounts; you do not need to spawn a sub-agent for read-only exploration.
+6. **Check exit criteria** are met across the cumulative diff.
 
 ## Iteration Order
 
@@ -42,6 +43,30 @@ Final Review runs **review first, then fix** in the same iterDir (inverted vs ph
 - Do NOT request changes for incomplete features scheduled for later work.
 - DO flag issues where the feature's exit criteria are not met across the cumulative diff.
 - DO flag cross-repo incoherence (e.g. an API contract change in one repo without the consumer update in another).
+
+## Missing Visual / Behavioral Evidence Safety Net
+
+Before approving, compare the cumulative diff against prior implementation visual and behavioral contract rows. When a diff touches a user-facing surface and prior implementation contracts/reports lack matching visual or behavioral coverage, request changes. User-facing surfaces include rendered UI, TUI screens, web/mobile/native views, CLI output that a user reads, human-rendered paths such as generated reports or docs, and primary state-mutating user journeys such as create/update/delete flows, setup wizards, submit handlers, top-level commands, and IPC bridge methods that front a mutation.
+
+Existing prior implementation visual or behavioral rows with valid verification evidence files count as coverage. Audit those rows and evidence artifacts before requesting a new row. Do not add visual or behavioral rows to the final-review PlanLess testing contract.
+
+When coverage is missing, add a blocking finding that includes exactly one structured marker per absent requirement:
+
+`MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>`
+
+or
+
+`MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>`
+
+For roadmap features, include the target roadmap phase when the missing evidence belongs to a prior implementation phase:
+
+`MISSING_EVIDENCE_REQUIREMENT phase <number> visual: <reviewer-authored requirement>`
+
+or
+
+`MISSING_EVIDENCE_REQUIREMENT phase <number> behavioral: <reviewer-authored requirement>`
+
+The requirement text must describe the evidence the phase plan should add. Do not tell the fix agent to add rows directly to `verification-report.yaml`, and do not ask for ad hoc `testing-contract.yaml` Changes entries to create new rows. Missing evidence is repaired by phase-plan revision so the next implementation attempt receives normal compiled contract rows.
 
 ## Severity Classification
 

@@ -93,6 +93,35 @@ For each contract row:
 - Use `blocked` only for genuine environment blocks, with `blocked_reason`.
 - Use `pending_human` only for manual items that require a named downstream owner or environment outside this session.
 
+For visual and behavioral artifact rows, evidence is file-backed:
+
+- Put visual artifacts under `screenshots/` relative to `{iteration_dir}`.
+- Put behavioral artifacts under `behaviors/` relative to `{iteration_dir}`.
+- For `passed`, `failed`, and `pending_human` visual or behavioral rows, write real files and set `evidence.primary` to the required artifact path. Use `evidence.attachments[]` for optional supporting files. Paths must be relative and stay under the matching directory.
+- `blocked`, `not_run`, and `waived` visual or behavioral rows do not require artifact files. A genuine `blocked` row still needs `blocked_reason`; do not use `blocked` to hide missing artifacts.
+- Command and manual rows may keep using `evidence.summary` and `evidence.exit_code`; artifact rows may combine file fields with summary or exit code when useful.
+
+Compact examples:
+
+```yaml
+- item_id: visual_abc123
+  mode: visual
+  status: passed
+  evidence:
+    summary: dashboard after import
+    primary: screenshots/dashboard-import.png
+    attachments:
+      - screenshots/dashboard-empty-state.png
+
+- item_id: behavioral_def456
+  mode: behavioral
+  status: failed
+  evidence:
+    summary: create flow still returns validation error
+    exit_code: 1
+    primary: behaviors/create-flow.log
+```
+
 ## Handoff
 
 At iteration end, write artifacts in this exact order:

@@ -65,6 +65,11 @@ Single-repo features may omit `**Repo:**`; multi-repo features must include it i
 - Every automated verification bullet contains a complete executable command in backticks, in `description: command` order.
 - Top-level `### Manual Verification` exists under `## Success Criteria`.
 - Manual verification bullets are checklist items without executable backtick commands, or exactly one `None required: <reason>` checklist item when manual verification is not meaningful.
+- Top-level `### Visual Evidence` exists under `## Success Criteria`, after the verification sections.
+- Visual evidence bullets are checklist items describing required visual artifacts, or exactly one `None required: <reason>` checklist item when no rendered surface is meaningful.
+- Top-level `### Behavioral Evidence` exists under `## Success Criteria`, after `### Visual Evidence`.
+- Behavioral evidence bullets are checklist items describing required behavioral artifacts, or exactly one `None required: <reason>` checklist item when no primary user journey artifact is meaningful.
+- Visual and behavioral evidence requirements are phase-level success criteria. Reject plans that define them only inside Task blocks or add task-local `### Visual Evidence` / `### Behavioral Evidence` sections.
 
 ## Per-Task Repo Tagging
 
@@ -111,6 +116,7 @@ APPROVE if the plan:
 - Has task-level `What to build`, acceptance criteria, and blockers
 - Has valid repo tags for the feature shape
 - Defines executable automated verification and meaningful manual verification
+- Defines visual and behavioral evidence sections, including explicit `None required: <reason>` markers when no evidence artifact is meaningful
 
 Do NOT request changes for:
 - Missing exact file paths or function signatures

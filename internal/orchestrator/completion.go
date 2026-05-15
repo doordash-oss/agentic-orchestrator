@@ -50,6 +50,8 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 // to give that caller an unambiguous short-circuit signal.
 var errFinalReviewInterrupted = errors.New("final review interrupted")
 
+var errPlanRevisionDispatched = errors.New("missing evidence routed to phase-plan revision")
+
 var finalReviewRootOrchestrationArtifacts = []string{
 	agent.PhaseCompleteFile,
 	"progress.md",
@@ -749,6 +751,8 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 			Message:   summary,
 		})
 		return nil
+	case "plan_revision_required":
+		return o.routeMissingEvidencePlanRevision(featureID, f, result.PlanRevisionFeedback)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -784,6 +788,117 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		o.emitPhaseCompleted(featureID, feature.PhaseImplement, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
+}
+
+func (o *Orchestrator) routeMissingEvidencePlanRevision(featureID string, f *feature.Feature, feedback string) error {
+	if f == nil {
+		var err error
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return fmt.Errorf("load feature for missing-evidence plan revision: %w", err)
+		}
+	}
+	if strings.TrimSpace(feedback) == "" {
+		feedback = agent.MissingEvidencePlanRevisionFeedback(nil)
+	}
+	targetRoadmapPhase := agent.MissingEvidenceTargetPhase(feedback, f.CurrentRoadmapPhase)
+	if f.TotalRoadmapPhases > 0 && targetRoadmapPhase > f.TotalRoadmapPhases {
+		targetRoadmapPhase = f.CurrentRoadmapPhase
+	}
+	if err := o.writeMissingEvidencePlanRevisionFeedback(f, feedback, targetRoadmapPhase); err != nil {
+		return err
+	}
+	if err := o.moveFeatureToPlanningForEvidenceRevision(featureID, targetRoadmapPhase); err != nil {
+		return err
+	}
+	startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
+	if err != nil {
+		return err
+	}
+	if started {
+		o.emitEvent(ports.Event{Type: ports.FeatureAdvanced, FeatureID: featureID, Phase: startedPhase})
+	}
+	return nil
+}
+
+func (o *Orchestrator) writeMissingEvidencePlanRevisionFeedback(f *feature.Feature, feedback string, roadmapPhase int) error {
+	baseDir := o.stateDir()
+	if baseDir == "" || f == nil {
+		return nil
+	}
+	planDir := ""
+	if roadmapPhase > 0 {
+		planDir = o.phasePlanDirForFeature(f, roadmapPhase)
+	} else {
+		planDir = filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), "plan")
+	}
+	latestAttempt := agent.LatestCompletedPlanAttempt(planDir)
+	if latestAttempt <= 0 {
+		latestAttempt = 1
+	}
+	attemptDir := filepath.Join(planDir, fmt.Sprintf("attempt-%02d", latestAttempt))
+	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
+		return fmt.Errorf("create missing-evidence plan feedback dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(feedback), 0o644); err != nil {
+		return fmt.Errorf("write missing-evidence plan feedback: %w", err)
+	}
+	if err := agent.WritePlanAttemptMeta(planDir, agent.PlanAttemptMeta{
+		Attempt:      latestAttempt,
+		ReviewStatus: "CHANGES_REQUESTED",
+	}); err != nil {
+		return fmt.Errorf("write missing-evidence plan attempt meta: %w", err)
+	}
+	return nil
+}
+
+func (o *Orchestrator) moveFeatureToPlanningForEvidenceRevision(featureID string, roadmapPhase int) error {
+	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		switch ff.Status {
+		case feature.StatusPlanning:
+		case feature.StatusPlanNeedsReview:
+			if err := ff.Transition(feature.StatusPlanning); err != nil {
+				return err
+			}
+		case feature.StatusImplementing:
+			if err := ff.Transition(feature.StatusReviewPassed); err != nil {
+				return err
+			}
+			if err := ff.Transition(feature.StatusPlanning); err != nil {
+				return err
+			}
+		case feature.StatusFinalReviewing:
+			if err := ff.Transition(feature.StatusReviewPassed); err != nil {
+				return err
+			}
+			if err := ff.Transition(feature.StatusPlanning); err != nil {
+				return err
+			}
+		case feature.StatusReviewPassed:
+			if err := ff.Transition(feature.StatusPlanning); err != nil {
+				return err
+			}
+		default:
+			if err := ff.Transition(feature.StatusPlanning); err != nil {
+				return err
+			}
+		}
+		ff.CurrentPhase = feature.PhasePlan
+		if roadmapPhase > 0 {
+			ff.CurrentRoadmapPhase = roadmapPhase
+		}
+		ff.CurrentPhaseStatus = ""
+		ff.CurrentIteration = 0
+		ff.PlanIteration = 0
+		ff.ValidatingPlan = false
+		ff.ValidatorStatuses = nil
+		ff.PendingReviewPhase = nil
+		ff.PendingRewindReviewRoadmapPhase = nil
+		if ff.Artifacts != nil {
+			delete(ff.Artifacts, "plan")
+		}
+		return nil
+	})
 }
 
 // onMultiReposPassed handles the success branch of multi-repo implement.
@@ -841,6 +956,9 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 				// owns the terminal StatusInterrupted transition; do not
 				// proceed to MarkCodeReady / auto-publish on a feature that
 				// the user explicitly stopped.
+				return nil
+			}
+			if errors.Is(frErr, errPlanRevisionDispatched) {
 				return nil
 			}
 			return frErr
@@ -1135,6 +1253,12 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
+	case "plan_revision_required":
+		if err := o.routeMissingEvidencePlanRevision(featureID, f, res.PlanRevisionFeedback); err != nil {
+			return err
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New("missing evidence requires phase-plan revision"))
+		return errPlanRevisionDispatched
 	case "failed":
 		errMsg := res.LastError
 		if errMsg == "" {

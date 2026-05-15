@@ -290,17 +290,6 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		}
 	}
 
-	// Tag classification is disabled: the keyword-based Classify()
-	// over-promotes generic words like "design" or "screens" to a frontend
-	// tag, which then forces frontend-design as a MANDATORY read on every
-	// phase via utilskill.RequiredForPhase. That blew up a Go-backend plan
-	// phase by exhausting the context budget on irrelevant playbook reads.
-	// Leave tags empty until a more accurate signal exists.
-	f.Tags = nil
-	if err := m.Store.Save(f); err != nil {
-		return nil, fmt.Errorf("saving feature with tags: %w", err)
-	}
-
 	// Copy attachments from temp paths to feature directory
 	if len(opt.Attachments) > 0 {
 		attachDir := filepath.Join(m.Store.BaseDir, f.ID, "attachments")

@@ -27,6 +27,19 @@
 **Verification report**: {{ .VerificationPath }}
 
 {{ else if .VerificationPath }}**Verification report**: {{ .VerificationPath }}
+{{ end }}{{ if or .PriorImplementationPlanPaths .PriorImplementationContractPaths .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
+
+{{ if .PriorImplementationPlanPaths }}Phase plans:
+{{ range .PriorImplementationPlanPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationContractPaths }}Implementation testing contracts:
+{{ range .PriorImplementationContractPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationReportPaths }}Latest completed implementation verification reports:
+{{ range .PriorImplementationReportPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceRootDirs }}Evidence artifact roots:
+{{ range .PriorImplementationEvidenceRootDirs }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceArtifacts }}Referenced evidence artifacts:
+{{ range .PriorImplementationEvidenceArtifacts }}- {{ . }}
+{{ end }}{{ end }}
 {{ end }}{{ if not .Publishable }}NOTE: Local-only repository — no remote (origin) available.
 {{ end }}
 {{- end -}}

@@ -215,7 +215,108 @@ func validatePhasePlanMarkdownArtifact(iterDir string, path string, _ *Outcome) 
 	if strings.TrimSpace(string(data)) == "" {
 		return []ProtocolViolation{{Artifact: "phase plan markdown", Reason: "phase plan markdown is empty"}}, nil
 	}
-	return nil, nil
+	return validatePhasePlanEvidenceContract(string(data)), nil
+}
+
+func validatePhasePlanEvidenceContract(planText string) []ProtocolViolation {
+	var violations []ProtocolViolation
+	success := extractMarkdownSection(planText, "## Success Criteria")
+	for _, heading := range []string{"### Visual Evidence", "### Behavioral Evidence"} {
+		if !hasMarkdownHeading(success, heading) {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   fmt.Sprintf("phase plan markdown is missing top-level `%s` under `## Success Criteria`", heading),
+			})
+			continue
+		}
+		if reason := validateEvidenceSectionBody(success, heading); reason != "" {
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   reason,
+			})
+		}
+	}
+	violations = append(violations, taskScopedEvidenceViolations(planText)...)
+	return violations
+}
+
+func validateEvidenceSectionBody(successCriteria, heading string) string {
+	body := extractMarkdownSection(successCriteria, heading)
+	requirements, noneMarkers := countEvidenceChecklistItems(body)
+	switch {
+	case noneMarkers == 1 && requirements == 0:
+		return ""
+	case noneMarkers > 0:
+		return fmt.Sprintf("phase plan markdown `%s` must contain checklist requirements or exactly one `None required: <reason>` checklist item, not both", heading)
+	case requirements > 0:
+		return ""
+	default:
+		return fmt.Sprintf("phase plan markdown `%s` must contain checklist evidence requirements or exactly one `None required: <reason>` checklist item", heading)
+	}
+}
+
+func countEvidenceChecklistItems(body string) (requirements int, noneMarkers int) {
+	lines := strings.Split(body, "\n")
+	var fence fenceState
+	for _, line := range lines {
+		if fence.update(line) {
+			continue
+		}
+		if fence.inside() {
+			continue
+		}
+		description, ok := parseChecklistDescription(strings.TrimSpace(line))
+		if !ok {
+			continue
+		}
+		if isNoneRequiredDescription(description) {
+			noneMarkers++
+			continue
+		}
+		requirements++
+	}
+	return requirements, noneMarkers
+}
+
+func taskScopedEvidenceViolations(planText string) []ProtocolViolation {
+	var violations []ProtocolViolation
+	for _, task := range ParsePlanTasks(planText) {
+		var fence fenceState
+		for _, line := range task.Body {
+			if fence.update(line) {
+				continue
+			}
+			if fence.inside() {
+				continue
+			}
+			trimmed := strings.TrimSpace(line)
+			if !isVisualEvidenceHeader(trimmed) && !isBehavioralEvidenceHeader(trimmed) {
+				continue
+			}
+			violations = append(violations, ProtocolViolation{
+				Artifact: "phase plan markdown",
+				Reason:   fmt.Sprintf("phase plan markdown %s contains task-scoped `%s`; evidence requirements are phase-level and must live under `## Success Criteria`", strings.TrimSpace(task.Heading), trimmed),
+			})
+		}
+	}
+	return violations
+}
+
+func hasMarkdownHeading(body, heading string) bool {
+	lines := strings.Split(body, "\n")
+	var fence fenceState
+	for _, line := range lines {
+		if fence.update(line) {
+			continue
+		}
+		if fence.inside() {
+			continue
+		}
+		if strings.TrimRight(line, " \t") == heading {
+			return true
+		}
+	}
+	return false
 }
 
 func validateRefactorPlanMarkdownArtifact(iterDir string, path string, out *Outcome) ([]ProtocolViolation, error) {
@@ -292,11 +393,51 @@ func validateVerificationReportArtifact(_ string, path string, out *Outcome) ([]
 		return []ProtocolViolation{{Artifact: "verification-report.yaml", Reason: fmt.Sprintf("verification-report.yaml is unparseable: %v", err)}}, nil
 	}
 	out.VerificationReport = report
-	gate := ValidateVerificationReport(report, nil, nil, verificationReportComplete(out))
+	contract, contractErr := readVerificationReportTestingContract(report, filepath.Dir(path))
+	if contractErr != nil {
+		return []ProtocolViolation{{Artifact: "verification-report.yaml", Reason: fmt.Sprintf("testing contract referenced by verification-report.yaml is unreadable: %v", contractErr)}}, nil
+	}
+	gate := ValidateVerificationReportWithContext(report, nil, verificationReportComplete(out), VerificationReportValidationContext{
+		IterationDir: filepath.Dir(path),
+		Contract:     contract,
+	})
 	if !gate.Rejected {
 		return nil, nil
 	}
 	return reportGateViolations(gate), nil
+}
+
+func readVerificationReportTestingContract(report *VerificationReport, iterDir string) (*TestingContract, error) {
+	expectedPath := verificationReportSiblingTestingContractPath(iterDir)
+	reportPath := strings.TrimSpace(report.ContractPath)
+	if expectedPath != "" {
+		if reportPath != "" && !sameCleanPath(reportPath, expectedPath) {
+			return nil, fmt.Errorf("contract_path %q does not match expected testing contract %q", reportPath, expectedPath)
+		}
+		contract, err := ReadTestingContract(expectedPath)
+		if err != nil {
+			return nil, fmt.Errorf("reading testing contract %s: %w", expectedPath, err)
+		}
+		return contract, nil
+	}
+	return readBoundTestingContract(report)
+}
+
+func verificationReportSiblingTestingContractPath(iterDir string) string {
+	if strings.TrimSpace(iterDir) == "" {
+		return ""
+	}
+	phaseDir := filepath.Dir(iterDir)
+	candidates := []string{filepath.Join(phaseDir, "testing-contract.yaml")}
+	if filepath.Base(phaseDir) == feature.PhaseImplement.DirName() {
+		candidates = append([]string{filepath.Join(filepath.Dir(phaseDir), "testing-contract.yaml")}, candidates...)
+	}
+	for _, path := range candidates {
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func validateReviewFeedbackArtifactWithDisplay(_ string, path, displayPath string, out *Outcome) ([]ProtocolViolation, error) {

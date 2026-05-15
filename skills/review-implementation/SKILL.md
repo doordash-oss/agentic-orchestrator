@@ -37,6 +37,22 @@ Iteration 1 has no concept of "out-of-plan touches" because the plan-declared su
 - Use the implementation plan, exit criteria, and current progress as primary context.
 - Inspect the repository and relevant iteration artifacts by reading code and files as needed.
 
+## Missing Visual / Behavioral Evidence Safety Net
+
+Before approving, compare the iteration diff against the bound testing contract and verification report. When a diff touches a user-facing surface and the contract lacks matching visual or behavioral coverage, request changes. User-facing surfaces include rendered UI, TUI screens, web/mobile/native views, CLI output that a user reads, human-rendered paths such as generated reports or docs, and primary state-mutating user journeys such as create/update/delete flows, setup wizards, submit handlers, top-level commands, and IPC bridge methods that front a mutation.
+
+Existing visual or behavioral contract rows with valid verification evidence count as coverage. Audit those rows and their evidence before requesting a new row.
+
+When coverage is missing, add a blocking finding that includes exactly one structured marker per absent requirement:
+
+`MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>`
+
+or
+
+`MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>`
+
+The requirement text must describe the evidence the phase plan should add, for example "Capture the updated setup wizard empty state" or "Record the create-project CLI journey through persisted config." Do not tell the implementer to add rows directly to `verification-report.yaml`, and do not ask for ad hoc `testing-contract.yaml` Changes entries to create new rows. Missing evidence is repaired by phase-plan revision so the next implementation attempt receives normal compiled contract rows.
+
 ## Execution Constraint
 
 - You MUST NOT run any commands, tests, builds, linters, or scripts. You are a code reviewer, not a test runner.

@@ -241,6 +241,61 @@ func TestParsePlanManualVerification_NoneRequiredIgnored(t *testing.T) {
 	}
 }
 
+func TestParsePlanEvidenceRequirements(t *testing.T) {
+	plan := "## Success Criteria\n\n" +
+		"### Manual Verification\n" +
+		"- [ ] Click through the release flow.\n" +
+		"### Visual Evidence\n" +
+		"- [ ] Capture the dashboard after import.\n" +
+		"- [x] Capture the empty state.\n" +
+		"### Behavioral Evidence\n" +
+		"- [ ] Record the import command output.\n" +
+		"- [ ] None required: this marker should be ignored.\n" +
+		"\n" +
+		"```markdown\n" +
+		"### Visual Evidence\n" +
+		"- [ ] Fake screenshot inside a fence.\n" +
+		"### Behavioral Evidence\n" +
+		"- [ ] Fake behavior inside a fence.\n" +
+		"```\n"
+
+	visual := ParsePlanVisualEvidence(plan)
+	if len(visual) != 2 {
+		t.Fatalf("ParsePlanVisualEvidence() got %d requirements, want 2: %+v", len(visual), visual)
+	}
+	if visual[0].Description != "Capture the dashboard after import." {
+		t.Fatalf("visual[0] = %q", visual[0].Description)
+	}
+	if visual[1].Description != "Capture the empty state." {
+		t.Fatalf("visual[1] = %q", visual[1].Description)
+	}
+
+	behavioral := ParsePlanBehavioralEvidence(plan)
+	if len(behavioral) != 1 {
+		t.Fatalf("ParsePlanBehavioralEvidence() got %d requirements, want 1: %+v", len(behavioral), behavioral)
+	}
+	if behavioral[0].Description != "Record the import command output." {
+		t.Fatalf("behavioral[0] = %q", behavioral[0].Description)
+	}
+
+	manual := ParsePlanManualVerification(plan)
+	if len(manual) != 1 || manual[0].Description != "Click through the release flow." {
+		t.Fatalf("ParsePlanManualVerification() = %+v, want only manual check", manual)
+	}
+}
+
+func TestParsePlanEvidence_NoneRequiredIgnored(t *testing.T) {
+	plan := "### Visual Evidence\n- [ ] None required: no UI surface.\n" +
+		"### Behavioral Evidence\n- [ ] None required: automated tests are the artifact.\n"
+
+	if got := ParsePlanVisualEvidence(plan); len(got) != 0 {
+		t.Fatalf("ParsePlanVisualEvidence() None required marker produced rows: %+v", got)
+	}
+	if got := ParsePlanBehavioralEvidence(plan); len(got) != 0 {
+		t.Fatalf("ParsePlanBehavioralEvidence() None required marker produced rows: %+v", got)
+	}
+}
+
 func TestParseChecklistItem(t *testing.T) {
 	tests := []struct {
 		line    string

@@ -64,4 +64,16 @@ Each bullet must contain the **complete executable command** in backticks, in `d
 - [ ] [Manual check description, no backticks.]
 
 Use `- [ ] None required: <reason>` only when the phase has no meaningful manual verification surface.
+
+### Visual Evidence
+
+- [ ] [Visual artifact requirement, such as a screenshot path or capture description.]
+
+Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
+
+### Behavioral Evidence
+
+- [ ] [Behavioral artifact requirement, such as a transcript, command log, or recording description.]
+
+Use `- [ ] None required: <reason>` only when the phase has no meaningful primary user journey artifact beyond automated verification. Keep behavioral evidence requirements here at the phase level; do not add per-task behavioral evidence sections.
 ````

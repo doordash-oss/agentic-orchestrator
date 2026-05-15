@@ -622,7 +622,6 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		WorkDir:                        in.Workspace.Cwd,
 		EffortLevel:                    in.EffortLevel,
 		Phase:                          feature.PhasePlan,
-		FeatureTags:                    featureTags(in.Feature),
 		SystemPromptHasUsefulResources: true,
 	})
 	if err != nil {

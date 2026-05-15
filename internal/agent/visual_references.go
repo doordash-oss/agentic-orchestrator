@@ -16,7 +16,6 @@ package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 // visualReferencesSection renders user-attached images (mockups, design
@@ -42,101 +41,4 @@ func visualReferencesSection(images []string, label string) string {
 		Images: images,
 		Label:  label,
 	})
-}
-
-// visualEvidenceImplementSection instructs the agent to capture screenshots
-// of UI changes into the given iteration directory. Scoped to frontend-tagged
-// features via the caller (the runtime path is pure noise for backend work).
-// The methodology — why, how, which harnesses — lives in
-// skills/frontend-design/SKILL.md and is loaded for frontend-tagged features
-// by utilskill's mandatory-skill wiring.
-//
-// Returns "" when the feature is not frontend-tagged, or when iterDir is
-// empty (some test setups and early scaffolding).
-//
-// The literal prose lives in
-// internal/agent/prompts/partials/visual_evidence_implement.tmpl.
-func visualEvidenceImplementSection(f *feature.Feature, iterDir string) string {
-	if f == nil || !f.HasTag(feature.TagFrontend) || iterDir == "" {
-		return ""
-	}
-	return prompts.VisualEvidenceImplement(prompts.VisualEvidenceImplementInput{
-		IterDir: iterDir,
-	})
-}
-
-// visualEvidenceReviewSection points the reviewer at the iteration's
-// screenshots directory and encodes the approval gate ("CHANGES_REQUESTED
-// when UI diff has no screenshots"). Tag-gated to frontend features via the
-// caller so backend reviews don't carry irrelevant screenshot instructions.
-//
-// The literal prose lives in
-// internal/agent/prompts/partials/visual_evidence_review.tmpl.
-func visualEvidenceReviewSection(f *feature.Feature, iterDir string) string {
-	if f == nil || !f.HasTag(feature.TagFrontend) || iterDir == "" {
-		return ""
-	}
-	return prompts.VisualEvidenceReview(prompts.VisualEvidenceReviewInput{
-		IterDir: iterDir,
-	})
-}
-
-// behavioralEvidenceImplementSection instructs the implementer to capture
-// driven user-journey executions into the iteration's behaviors directory.
-//
-// Where visualEvidenceImplementSection answers "does it look right",
-// this answers "does it actually work for the user". A binary that
-// compiles, has unit tests, and has screenshots can still ship an incomplete
-// primary mutation — a Create button whose handler is unwired, a service
-// surface missing the very method users invoke, a form that submits to
-// /dev/null. The behaviors artifact closes that gap by capturing one driven
-// execution per primary user journey: Playwright trace, AppleScript log,
-// headless-driver output, an HTTP-driven smoke transcript, a Wails event
-// capture — whatever the repo's tooling already supports.
-//
-// Tag-gated to TagFrontend today, where the documented failure mode lives;
-// the same shape applies to any binary with a primary user-mutation flow,
-// and the gate can broaden as the corresponding tag taxonomy stabilizes.
-//
-// Returns "" when the feature is not gate-eligible or iterDir is empty.
-//
-// The literal prose lives in
-// internal/agent/prompts/partials/behavioral_evidence_implement.tmpl.
-func behavioralEvidenceImplementSection(f *feature.Feature, iterDir string) string {
-	if f == nil || !f.HasTag(feature.TagFrontend) || iterDir == "" {
-		return ""
-	}
-	return prompts.BehavioralEvidenceImplement(prompts.BehavioralEvidenceImplementInput{
-		IterDir: iterDir,
-	})
-}
-
-// behavioralEvidenceReviewSection points the reviewer at the iteration's
-// behaviors directory and encodes the approval gate ("CHANGES_REQUESTED
-// when the diff touches a user-mutation surface but the directory is empty
-// or absent"). Tag-gated to frontend features via the caller.
-//
-// The literal prose lives in
-// internal/agent/prompts/partials/behavioral_evidence_review.tmpl.
-func behavioralEvidenceReviewSection(f *feature.Feature, iterDir string) string {
-	if f == nil || !f.HasTag(feature.TagFrontend) || iterDir == "" {
-		return ""
-	}
-	return prompts.BehavioralEvidenceReview(prompts.BehavioralEvidenceReviewInput{
-		IterDir: iterDir,
-	})
-}
-
-// reviewEvidenceIterDir gates the reviewer-side evidence partials
-// (behavioral_evidence_review, visual_evidence_review) which now render
-// inline inside review.user.tmpl right after the Progress section. Returns
-// iterDir for frontend-tagged features (so the partials publish the
-// matching directories and encode their CHANGES_REQUESTED gates), and ""
-// for everything else — backend / untagged features see no evidence prose,
-// matching the prior call-site prepend behavior.
-func reviewEvidenceIterDir(f *feature.Feature, iterDir string) string {
-	if f == nil || !f.HasTag(feature.TagFrontend) || iterDir == "" {
-		return ""
-	}
-	return iterDir
 }

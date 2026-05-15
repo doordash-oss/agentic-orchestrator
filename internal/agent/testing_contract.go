@@ -27,16 +27,21 @@ import (
 )
 
 const (
-	testingContractVersion         = 1
-	testingContractInitialRev      = 1
-	testingContractBaselineSource  = "baseline"
-	testingContractPlanSource      = "plan"
-	testingContractManualSource    = "manual"
-	testingContractCrossRepoSource = "cross-repo"
-	testingContractEvidenceKind    = "command_result"
-	testingContractEvidenceMatcher = "exit_code_zero"
-	testingContractManualKind      = "manual_observation"
-	testingContractManualMatcher   = "non_empty_summary"
+	testingContractVersion                   = 1
+	testingContractInitialRev                = 1
+	testingContractBaselineSource            = "baseline"
+	testingContractPlanSource                = "plan"
+	testingContractManualSource              = "manual"
+	testingContractVisualSource              = "visual"
+	testingContractBehavioralSource          = "behavioral"
+	testingContractCrossRepoSource           = "cross-repo"
+	testingContractEvidenceKind              = "command_result"
+	testingContractEvidenceMatcher           = "exit_code_zero"
+	testingContractManualKind                = "manual_observation"
+	testingContractManualMatcher             = "non_empty_summary"
+	testingContractVisualKind                = "visual_artifact"
+	testingContractBehavioralKind            = "behavioral_artifact"
+	testingContractEvidenceFileExistsMatcher = "file_exists"
 	// TestingContractCrossRepoTag is the value put on `repo:` for items
 	// that exercise more than one repo. The unified-flow implementer
 	// dispatches such items to the main session (no per-repo Task
@@ -157,6 +162,29 @@ func CompileTestingContractWithBaseline(planText, planPath, phaseType, baselineP
 			Policy: defaultTestingContractPolicy(testingContractManualSource),
 		})
 	}
+	addEvidence := func(source, kind string, step EvidenceRequirement) {
+		description := strings.TrimSpace(step.Description)
+		if description == "" {
+			return
+		}
+		key := source + "\x00" + normalizeVerificationCommand(description)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		command := evidenceRequirementCommand(source, description)
+		contract.Items = append(contract.Items, TestingContractItem{
+			ID:      testingContractItemID(source, command),
+			Source:  source,
+			Name:    description,
+			Command: command,
+			ExpectedEvidence: TestingContractExpectedEvidence{
+				Kind:    kind,
+				Matcher: testingContractEvidenceFileExistsMatcher,
+			},
+			Policy: defaultTestingContractPolicy(source),
+		})
+	}
 
 	for _, step := range baselineSteps {
 		add(testingContractBaselineSource, step)
@@ -166,6 +194,12 @@ func CompileTestingContractWithBaseline(planText, planPath, phaseType, baselineP
 	}
 	for _, step := range ParsePlanManualVerification(planText) {
 		addManual(step)
+	}
+	for _, step := range ParsePlanVisualEvidence(planText) {
+		addEvidence(testingContractVisualSource, testingContractVisualKind, step)
+	}
+	for _, step := range ParsePlanBehavioralEvidence(planText) {
+		addEvidence(testingContractBehavioralSource, testingContractBehavioralKind, step)
 	}
 
 	return contract
@@ -245,11 +279,22 @@ func ReadTestingContract(path string) (*TestingContract, error) {
 		if contract.Items[i].ExpectedEvidence.Kind == "" && contract.Items[i].Source == testingContractManualSource {
 			contract.Items[i].ExpectedEvidence.Kind = testingContractManualKind
 		}
+		if contract.Items[i].ExpectedEvidence.Kind == "" && contract.Items[i].Source == testingContractVisualSource {
+			contract.Items[i].ExpectedEvidence.Kind = testingContractVisualKind
+		}
+		if contract.Items[i].ExpectedEvidence.Kind == "" && contract.Items[i].Source == testingContractBehavioralSource {
+			contract.Items[i].ExpectedEvidence.Kind = testingContractBehavioralKind
+		}
 		if contract.Items[i].ExpectedEvidence.Kind == "" {
 			contract.Items[i].ExpectedEvidence.Kind = testingContractEvidenceKind
 		}
 		if contract.Items[i].ExpectedEvidence.Matcher == "" && contract.Items[i].ExpectedEvidence.Kind == testingContractManualKind {
 			contract.Items[i].ExpectedEvidence.Matcher = testingContractManualMatcher
+		}
+		if contract.Items[i].ExpectedEvidence.Matcher == "" &&
+			(contract.Items[i].ExpectedEvidence.Kind == testingContractVisualKind ||
+				contract.Items[i].ExpectedEvidence.Kind == testingContractBehavioralKind) {
+			contract.Items[i].ExpectedEvidence.Matcher = testingContractEvidenceFileExistsMatcher
 		}
 		if contract.Items[i].ExpectedEvidence.Matcher == "" {
 			contract.Items[i].ExpectedEvidence.Matcher = testingContractEvidenceMatcher
@@ -268,6 +313,8 @@ func defaultTestingContractPolicy(source string) TestingContractItemPolicy {
 	case testingContractPlanSource:
 		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true}
 	case testingContractManualSource:
+		return TestingContractItemPolicy{Required: true, AllowBlocked: true}
+	case testingContractVisualSource, testingContractBehavioralSource:
 		return TestingContractItemPolicy{Required: true, AllowBlocked: true}
 	case testingContractCrossRepoSource:
 		return TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true}
@@ -392,6 +439,30 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 			Policy: defaultTestingContractPolicy(testingContractManualSource),
 		})
 	}
+	addEvidenceItem := func(source, repo, kind string, step EvidenceRequirement) {
+		description := strings.TrimSpace(step.Description)
+		if description == "" {
+			return
+		}
+		key := source + "\x00" + repo + "\x00" + normalizeVerificationCommand(description)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		command := evidenceRequirementCommand(source, description)
+		contract.Items = append(contract.Items, TestingContractItem{
+			ID:      testingContractItemIDWithRepo(source, repo, command),
+			Source:  source,
+			Repo:    repo,
+			Name:    description,
+			Command: command,
+			ExpectedEvidence: TestingContractExpectedEvidence{
+				Kind:    kind,
+				Matcher: testingContractEvidenceFileExistsMatcher,
+			},
+			Policy: defaultTestingContractPolicy(source),
+		})
+	}
 
 	baseline := in.BaselineSteps
 	if baseline == nil {
@@ -451,19 +522,25 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		addItem(testingContractCrossRepoSource, TestingContractCrossRepoTag, step)
 	}
 
-	// 4) Manual rows. Manual checks describe phase-level user observations,
-	// so multi-repo phases carry them as cross-repo items instead of
-	// duplicating the same human task for every repo.
+	// 4) Manual, visual, and behavioral rows. These describe phase-level
+	// observations/artifacts, so multi-repo phases carry them as cross-repo
+	// items instead of duplicating the same requirement for every repo.
 	if !in.PlanLess {
-		manualRepo := ""
+		phaseRepo := ""
 		switch {
 		case len(repos) > 1:
-			manualRepo = TestingContractCrossRepoTag
+			phaseRepo = TestingContractCrossRepoTag
 		case len(repos) == 1:
-			manualRepo = repos[0]
+			phaseRepo = repos[0]
 		}
 		for _, step := range ParsePlanManualVerification(in.PlanText) {
-			addManualItem(manualRepo, step)
+			addManualItem(phaseRepo, step)
+		}
+		for _, step := range ParsePlanVisualEvidence(in.PlanText) {
+			addEvidenceItem(testingContractVisualSource, phaseRepo, testingContractVisualKind, step)
+		}
+		for _, step := range ParsePlanBehavioralEvidence(in.PlanText) {
+			addEvidenceItem(testingContractBehavioralSource, phaseRepo, testingContractBehavioralKind, step)
 		}
 	}
 
@@ -543,6 +620,10 @@ func testingContractItemID(source, command string) string {
 
 func manualVerificationCommand(description string) string {
 	return "manual: " + strings.TrimSpace(description)
+}
+
+func evidenceRequirementCommand(source, description string) string {
+	return strings.TrimSpace(source) + ": " + strings.TrimSpace(description)
 }
 
 func normalizeVerificationCommand(command string) string {

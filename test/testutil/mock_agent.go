@@ -83,6 +83,39 @@ func TouchPhaseComplete(artifactDir string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done; touch "$_d/phase_complete"`, artifactDir)
 }
 
+func rewriteExistingReportRowsPassed(dirExpr, summary string) string {
+	return fmt.Sprintf(`awk -v dir="%s" -v summary=%q '
+    /^[[:space:]]*-[[:space:]]*item_id:/ { mode = "" }
+    /^[[:space:]]*mode:[[:space:]]*/ { mode = tolower($2) }
+    function write_artifact(indent, root, file, body, path) {
+      system("mkdir -p \"" dir "/" root "\"")
+      path = dir "/" root "/" file
+      print body > path
+      close(path)
+      print indent "evidence:"
+      print indent "    summary: " summary
+      print indent "    primary: " root "/" file
+    }
+    /^[[:space:]]*status:[[:space:]]*not_run[[:space:]]*$/ {
+      indent = substr($0, 1, index($0, "status") - 1)
+      print indent "status: passed"
+      if (mode == "visual") {
+        write_artifact(indent, "screenshots", "mock-visual-artifact.txt", "mock visual artifact")
+        next
+      }
+      if (mode == "behavioral") {
+        write_artifact(indent, "behaviors", "mock-behavioral-artifact.txt", "mock behavioral artifact")
+        next
+      }
+      print indent "evidence:"
+      print indent "    exit_code: 0"
+      print indent "    summary: " summary
+      next
+    }
+    { print }
+  ' "%s/verification-report.yaml" > "%s/verification-report.yaml.tmp" && mv "%s/verification-report.yaml.tmp" "%s/verification-report.yaml"`, dirExpr, summary, dirExpr, dirExpr, dirExpr, dirExpr)
+}
+
 // WriteFinalReviewFixSuccessArtifacts returns a shell snippet that writes the
 // Final Review fix-leg completion artifacts for the latest iteration-* dir
 // under artifactDir. It preserves the seeded verification-report.yaml, marks
@@ -92,21 +125,11 @@ func WriteFinalReviewFixSuccessArtifacts(artifactDir string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
 mkdir -p "$_d"
 if [ -f "$_d/verification-report.yaml" ]; then
-  awk '
-    /^[[:space:]]*status:[[:space:]]*not_run[[:space:]]*$/ {
-      indent = substr($0, 1, index($0, "status") - 1)
-      print indent "status: passed"
-      print indent "evidence:"
-      print indent "    exit_code: 0"
-      print indent "    summary: mock final review fix reported success for this contract check"
-      next
-    }
-    { print }
-  ' "$_d/verification-report.yaml" > "$_d/verification-report.yaml.tmp" && mv "$_d/verification-report.yaml.tmp" "$_d/verification-report.yaml"
+  %s
 else
   printf 'version: 1\nrequired_checks: []\n' > "$_d/verification-report.yaml"
 fi
-touch "$_d/phase_complete"`, artifactDir)
+touch "$_d/phase_complete"`, artifactDir, rewriteExistingReportRowsPassed("$_d", "mock final review fix reported success for this contract check"))
 }
 
 // WriteImplementSuccessArtifacts returns a shell snippet that writes the three
@@ -249,22 +272,12 @@ closed_deferrals: []
 SUCCESS
 PROGRESS_EOF
   if [ -f "$d/verification-report.yaml" ]; then
-    awk '
-      /^[[:space:]]*status:[[:space:]]*not_run[[:space:]]*$/ {
-        indent = substr($0, 1, index($0, "status") - 1)
-        print indent "status: passed"
-        print indent "evidence:"
-        print indent "    exit_code: 0"
-        print indent "    summary: mock agent reported success for this contract check"
-        next
-      }
-      { print }
-    ' "$d/verification-report.yaml" > "$d/verification-report.yaml.tmp" && mv "$d/verification-report.yaml.tmp" "$d/verification-report.yaml"
+    %s
   else
     printf 'version: 1\nrequired_checks: []\n' > "$d/verification-report.yaml"
   fi
   touch "$d/phase_complete"
-done`, artifactBase, "~~~", "~~~")
+done`, artifactBase, "~~~", "~~~", rewriteExistingReportRowsPassed("$d", "mock agent reported success for this contract check"))
 }
 
 // WriteImplementHandoffFiles writes the minimal valid progress.md +
@@ -414,24 +427,14 @@ closed_deferrals: []
 %s
 PROGRESS_EOF
 if [ -f "$_d/verification-report.yaml" ]; then
-  awk '
-    /^[[:space:]]*status:[[:space:]]*not_run[[:space:]]*$/ {
-      indent = substr($0, 1, index($0, "status") - 1)
-      print indent "status: passed"
-      print indent "evidence:"
-      print indent "    exit_code: 0"
-      print indent "    summary: mock agent reported success for this contract check"
-      next
-    }
-    { print }
-  ' "$_d/verification-report.yaml" > "$_d/verification-report.yaml.tmp" && mv "$_d/verification-report.yaml.tmp" "$_d/verification-report.yaml"
+  %s
 else
 cat > "$_d/verification-report.yaml" <<'VR_EOF'
 %s
 VR_EOF
 fi
 %s
-touch "$_d/phase_complete"`, artifactDir, artifactDir, "~~~", "~~~", qSection, state, stateNote, verifBody, gateBlock)
+touch "$_d/phase_complete"`, artifactDir, artifactDir, "~~~", "~~~", qSection, state, stateNote, rewriteExistingReportRowsPassed("$_d", "mock agent reported success for this contract check"), verifBody, gateBlock)
 }
 
 func writeNeedUserInputGateBlock(gateBody *string) string {
@@ -504,23 +507,13 @@ closed_deferrals: []
 %s
 PROGRESS_EOF
 if [ -f "$_d/verification-report.yaml" ]; then
-  awk '
-    /^[[:space:]]*status:[[:space:]]*not_run[[:space:]]*$/ {
-      indent = substr($0, 1, index($0, "status") - 1)
-      print indent "status: passed"
-      print indent "evidence:"
-      print indent "    exit_code: 0"
-      print indent "    summary: mock agent reported success for this contract check"
-      next
-    }
-    { print }
-  ' "$_d/verification-report.yaml" > "$_d/verification-report.yaml.tmp" && mv "$_d/verification-report.yaml.tmp" "$_d/verification-report.yaml"
+  %s
 else
 cat > "$_d/verification-report.yaml" <<'VR_EOF'
 %s
 VR_EOF
 fi
-touch "$_d/phase_complete"`, artifactDir, artifactDir, "~~~", "~~~", state, stateNote, verifBody)
+touch "$_d/phase_complete"`, artifactDir, artifactDir, "~~~", "~~~", state, stateNote, rewriteExistingReportRowsPassed("$_d", "mock agent reported success for this contract check"), verifBody)
 }
 
 // TouchPhaseCompleteInDir returns a shell command that writes phase_complete
@@ -619,18 +612,8 @@ func WriteFinalReviewChangesRequested(artifactDir, findings string) string {
 func MarkLatestVerificationReportPassed(artifactDir string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
 if [ -f "$_d/verification-report.yaml" ]; then
-  awk '
-    /^[[:space:]]*status:[[:space:]]*not_run[[:space:]]*$/ {
-      indent = substr($0, 1, index($0, "status") - 1)
-      print indent "status: passed"
-      print indent "evidence:"
-      print indent "    exit_code: 0"
-      print indent "    summary: mock final reviewer reported success for this contract check"
-      next
-    }
-    { print }
-  ' "$_d/verification-report.yaml" > "$_d/verification-report.yaml.tmp" && mv "$_d/verification-report.yaml.tmp" "$_d/verification-report.yaml"
-fi`, artifactDir)
+  %s
+fi`, artifactDir, rewriteExistingReportRowsPassed("$_d", "mock final reviewer reported success for this contract check"))
 }
 
 // WriteReviewFeedback writes the supplied structured body verbatim into the

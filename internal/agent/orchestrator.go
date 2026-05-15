@@ -103,7 +103,7 @@ type OrchestratorConfig struct {
 
 // OrchestratorResult is the aggregate outcome of multi-repo implementation.
 type OrchestratorResult struct {
-	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "need_user_input" | "interrupted"
+	FinalStatus  string            // "all_passed" | "awaiting_final_review" | "failed" | "need_user_input" | "plan_revision_required" | "interrupted"
 	RepoStatuses map[string]string // per-repo inner loop FinalStatus (e.g., "max_iterations")
 	FailedRepos  []string
 	// PausedRepos lists repos that ended this cycle paused on a need-user-input
@@ -116,6 +116,9 @@ type OrchestratorResult struct {
 	// can read the questionnaire and answers.
 	NeedUserInputPath string
 	LastError         string
+	// PlanRevisionFeedback carries reviewer-authored missing-evidence
+	// requirements when FinalStatus == "plan_revision_required".
+	PlanRevisionFeedback string
 }
 
 // RunMultiRepoOrchestrator drives the unified phase-implement loop. Under
@@ -160,18 +163,28 @@ func phaseLoopResultToOrchestratorResult(_ OrchestratorConfig, r *PhaseImplement
 			NeedUserInputPath: r.NeedUserInputPath,
 			LastError:         r.LastError,
 		}
-	default:
-		statuses := make(map[string]string, len(r.PhaseRepos))
-		for _, repo := range r.PhaseRepos {
-			statuses[repo] = r.FinalStatus
+	case "plan_revision_required":
+		return &OrchestratorResult{
+			FinalStatus:          "plan_revision_required",
+			RepoStatuses:         phaseRepoStatuses(r.PhaseRepos, r.FinalStatus),
+			PlanRevisionFeedback: r.PlanRevisionFeedback,
 		}
+	default:
 		return &OrchestratorResult{
 			FinalStatus:  "failed",
-			RepoStatuses: statuses,
+			RepoStatuses: phaseRepoStatuses(r.PhaseRepos, r.FinalStatus),
 			FailedRepos:  append([]string(nil), r.PhaseRepos...),
 			LastError:    r.LastError,
 		}
 	}
+}
+
+func phaseRepoStatuses(repos []string, status string) map[string]string {
+	statuses := make(map[string]string, len(repos))
+	for _, repo := range repos {
+		statuses[repo] = status
+	}
+	return statuses
 }
 
 // RunMultiRepoFinalReview runs the unified feature-level Final Review pass.
@@ -205,6 +218,12 @@ func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*
 		return &OrchestratorResult{FinalStatus: "all_passed"}, nil
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}, nil
+	case "plan_revision_required":
+		return &OrchestratorResult{
+			FinalStatus:          "plan_revision_required",
+			RepoStatuses:         finalReviewRepoStatuses(frResult),
+			PlanRevisionFeedback: frResult.PlanRevisionFeedback,
+		}, nil
 	default:
 		return &OrchestratorResult{
 			FinalStatus:  "failed",

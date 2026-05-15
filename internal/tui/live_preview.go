@@ -128,6 +128,11 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView) []li
 	items = append(items,
 		livePreviewMetadataItem{label: "Phase", value: livePreviewPhaseLabel(f, sess)},
 		livePreviewMetadataItem{label: "Status", value: livePreviewStatusText(f)},
+	)
+	if validators := livePreviewValidatorStatusesValue(f); validators != "" {
+		items = append(items, livePreviewMetadataItem{label: "Validators", value: validators})
+	}
+	items = append(items,
 		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
 		livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
 		livePreviewMetadataItem{label: "Cost", value: livePreviewCostText(f)},
@@ -443,6 +448,9 @@ func livePreviewStatusText(f *feature.Feature) string {
 	}
 	if label, _, ok := activePublishedCycleStatus(f); ok {
 		return label
+	}
+	if livePreviewHasValidationContext(f, nil) {
+		return livePreviewValidationTarget(f)
 	}
 	if f.Status == feature.StatusCreated {
 		return "Starting"
@@ -858,6 +866,9 @@ func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) st
 	if label, _, ok := activePublishedCycleStatus(f); ok {
 		return "Current: " + label
 	}
+	if validation := livePreviewValidationTitle(f, sess); validation != "" {
+		return "Current: " + validation
+	}
 
 	phase := feature.Phase(-1)
 	if sess != nil {
@@ -883,6 +894,168 @@ func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) st
 		}
 	}
 	return "Current: " + strings.Join(parts, " · ")
+}
+
+func livePreviewValidationTitle(f *feature.Feature, sess session.SessionView) string {
+	if !livePreviewHasValidationContext(f, sess) {
+		return ""
+	}
+	parts := []string{livePreviewValidationTarget(f)}
+	if summary := livePreviewValidatorCountSummary(f); summary != "" {
+		parts = append(parts, summary)
+	}
+	if label := livePreviewSelectedValidatorLabel(sess); label != "" {
+		parts = append(parts, "Showing "+label)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func livePreviewHasValidationContext(f *feature.Feature, sess session.SessionView) bool {
+	if f != nil && (f.ValidatingPlan || len(f.ValidatorStatuses) > 0) {
+		return true
+	}
+	return sess != nil && sess.Kind() == ports.KindValidator
+}
+
+func livePreviewValidationTarget(f *feature.Feature) string {
+	if f != nil && f.CurrentRoadmapPhase > 0 {
+		return fmt.Sprintf("Validating Phase %d plan", f.CurrentRoadmapPhase)
+	}
+	return "Validating plan"
+}
+
+func livePreviewSelectedValidatorLabel(sess session.SessionView) string {
+	if sess == nil || sess.Kind() != ports.KindValidator {
+		return ""
+	}
+	return firstNonEmpty(sess.Label(), "validator")
+}
+
+func livePreviewValidatorCountSummary(f *feature.Feature) string {
+	if f == nil || len(f.ValidatorStatuses) == 0 {
+		return ""
+	}
+	approved, failed, running := 0, 0, 0
+	for _, status := range f.ValidatorStatuses {
+		switch livePreviewValidatorStatusKind(status) {
+		case "approved":
+			approved++
+		case "failed":
+			failed++
+		default:
+			running++
+		}
+	}
+	total := approved + failed + running
+	if approved == 0 && failed == 0 {
+		if total == 1 {
+			return "1 validator running"
+		}
+		return fmt.Sprintf("%d validators running", total)
+	}
+
+	var parts []string
+	if approved > 0 {
+		parts = append(parts, SuccessStyle.Render(fmt.Sprintf("%d ✓", approved)))
+	}
+	if failed > 0 {
+		parts = append(parts, ErrorStyle.Render(fmt.Sprintf("%d ✗", failed)))
+	}
+	if running > 0 {
+		parts = append(parts, MutedStyle.Render(fmt.Sprintf("%d running", running)))
+	}
+	return strings.Join(parts, " ")
+}
+
+func livePreviewValidatorStatusesValue(f *feature.Feature) string {
+	if f == nil || len(f.ValidatorStatuses) == 0 {
+		return ""
+	}
+	names := livePreviewOrderedValidatorNames(f.ValidatorStatuses)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		status := f.ValidatorStatuses[name]
+		short := livePreviewValidatorShortName(name)
+		glyph := livePreviewValidatorStatusGlyph(status)
+		style := livePreviewValidatorStatusStyle(status)
+		parts = append(parts, style.Render(short+" "+glyph))
+	}
+	return strings.Join(parts, "  ")
+}
+
+func livePreviewOrderedValidatorNames(statuses map[string]string) []string {
+	order := []string{"Architecture", "Structural", "Grounding", "Security", "Performance", "Testing", "Scope"}
+	seen := make(map[string]struct{}, len(statuses))
+	names := make([]string, 0, len(statuses))
+	for _, name := range order {
+		if _, ok := statuses[name]; ok {
+			names = append(names, name)
+			seen[name] = struct{}{}
+		}
+	}
+	var extras []string
+	for name := range statuses {
+		if _, ok := seen[name]; !ok {
+			extras = append(extras, name)
+		}
+	}
+	sort.Strings(extras)
+	names = append(names, extras...)
+	return names
+}
+
+func livePreviewValidatorShortName(name string) string {
+	switch name {
+	case "Architecture":
+		return "Arch"
+	case "Structural":
+		return "Struct"
+	case "Grounding":
+		return "Ground"
+	case "Security":
+		return "Sec"
+	case "Performance":
+		return "Perf"
+	case "Testing":
+		return "Test"
+	case "Scope":
+		return "Scope"
+	default:
+		return name
+	}
+}
+
+func livePreviewValidatorStatusGlyph(status string) string {
+	switch livePreviewValidatorStatusKind(status) {
+	case "approved":
+		return "✓"
+	case "failed":
+		return "✗"
+	default:
+		return "⟳"
+	}
+}
+
+func livePreviewValidatorStatusStyle(status string) lipgloss.Style {
+	switch livePreviewValidatorStatusKind(status) {
+	case "approved":
+		return SuccessStyle
+	case "failed":
+		return ErrorStyle
+	default:
+		return MutedStyle
+	}
+}
+
+func livePreviewValidatorStatusKind(status string) string {
+	switch strings.ToUpper(status) {
+	case "APPROVED":
+		return "approved"
+	case "CHANGES_REQUESTED", "FAILED", "ERROR":
+		return "failed"
+	default:
+		return "running"
+	}
 }
 
 func livePreviewTailBannerLabelWithActivity(f *feature.Feature, sess session.SessionView, activity, spinnerView string) string {

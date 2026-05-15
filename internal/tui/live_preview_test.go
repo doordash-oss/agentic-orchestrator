@@ -539,6 +539,45 @@ func TestLivePreviewTailBannerLabel(t *testing.T) {
 	}
 }
 
+func TestLivePreviewValidationContextShowsAggregateAndSelectedValidator(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		ValidatingPlan:      true,
+		CurrentRoadmapPhase: 1,
+		ValidatorStatuses: map[string]string{
+			"Architecture": "APPROVED",
+			"Scope":        "CHANGES_REQUESTED",
+			"Testing":      "running",
+		},
+	}
+	sess := validatorLivePreviewSession("scope-validator", "Scope",
+		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_read", Name: "Bash", Input: rawJSON(`{"command":"go test ./..."}`)}),
+	)
+
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	for _, want := range []string{
+		"Status", "Validating Phase 1 plan",
+		"Validators", "Arch ✓", "Test ⟳", "Scope ✗",
+		"Current: Validating Phase 1 plan", "1 ✓", "1 ✗", "1 running", "Showing Scope", "Using Bash...",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("validation live preview missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestLivePreviewValidatorStatusStyles(t *testing.T) {
+	t.Parallel()
+
+	assertForeground(t, livePreviewValidatorStatusStyle("APPROVED"), colorSuccess)
+	assertForeground(t, livePreviewValidatorStatusStyle("CHANGES_REQUESTED"), colorError)
+	assertForeground(t, livePreviewValidatorStatusStyle("FAILED"), colorError)
+	assertForeground(t, livePreviewValidatorStatusStyle("error"), colorError)
+	assertForeground(t, livePreviewValidatorStatusStyle("running"), colorOverlay)
+}
+
 func TestLivePreviewTranscriptTailCollapsesWhenConstrained(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
@@ -933,6 +972,17 @@ func newLivePreviewSessionWithIteration(id string, phase feature.Phase, iteratio
 func tweakLivePreviewSession(id string, messages ...llm.SDKMessage) session.SessionView {
 	sess := session.NewSession(id, "feat-live", feature.PhaseImplement)
 	sess.SetKind(ports.KindTweak)
+	sess.SetStatus(session.SessionRunning)
+	for _, msg := range messages {
+		sess.MessageLog().Append(msg)
+	}
+	return sess
+}
+
+func validatorLivePreviewSession(id, label string, messages ...llm.SDKMessage) session.SessionView {
+	sess := session.NewSession(id, "feat-live", feature.PhasePlan)
+	sess.SetKind(ports.KindValidator)
+	sess.SetLabel(label)
 	sess.SetStatus(session.SessionRunning)
 	for _, msg := range messages {
 		sess.MessageLog().Append(msg)

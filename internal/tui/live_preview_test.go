@@ -450,6 +450,28 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 	}
 }
 
+func TestLivePreviewCodexToolProgressRendersCompactToolRows(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	longResult := strings.Repeat("codex-output-", 20)
+	sess := codexLivePreviewSession("codex-tools", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{Type: "text", Text: "checking files"}),
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "PASS\nok ./..."}},
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: longResult}},
+		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Write", Data: "A README.scn.md"}},
+	)
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+
+	for _, want := range []string{"$ Bash", "Bash result: PASS ok ./...", "Bash result: codex-output-", "[...]", "$ Write", "Write result: A README.scn.md"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("codex live preview missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Count(view, "$ Bash") != 1 {
+		t.Fatalf("codex live preview should render one Bash tool-use row, got:\n%s", view)
+	}
+}
+
 func TestLivePreviewTranscriptEmphasis(t *testing.T) {
 	t.Parallel()
 
@@ -963,6 +985,16 @@ func newLivePreviewSessionWithIteration(id string, phase feature.Phase, iteratio
 	sess := session.NewSession(id, "feat-live", phase)
 	sess.SetStatus(session.SessionRunning)
 	sess.SetIteration(iteration)
+	for _, msg := range messages {
+		sess.MessageLog().Append(msg)
+	}
+	return sess
+}
+
+func codexLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
+	sess := session.NewSession(id, "feat-live", phase)
+	sess.SetProviderName("codex")
+	sess.SetStatus(session.SessionRunning)
 	for _, msg := range messages {
 		sess.MessageLog().Append(msg)
 	}

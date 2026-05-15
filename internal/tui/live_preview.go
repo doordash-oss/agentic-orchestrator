@@ -590,7 +590,7 @@ func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, wid
 		return nil
 	}
 
-	rows := livePreviewTranscriptRows(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit))
+	rows := livePreviewTranscriptRows(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), livePreviewShouldIncludeToolProgress(sess))
 	if len(rows) == 0 {
 		return nil
 	}
@@ -623,9 +623,14 @@ func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, wid
 	return lines
 }
 
-func livePreviewTranscriptRows(msgs []llm.SDKMessage) []livePreviewTranscriptRow {
+func livePreviewShouldIncludeToolProgress(sess session.SessionView) bool {
+	return sess != nil && strings.EqualFold(sess.ProviderName(), "codex")
+}
+
+func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeToolProgress bool) []livePreviewTranscriptRow {
 	var rows []livePreviewTranscriptRow
 	toolNames := make(map[string]string)
+	toolProgressStarted := make(map[string]struct{})
 	lastKey := ""
 
 	appendRow := func(row livePreviewTranscriptRow) {
@@ -681,6 +686,10 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage) []livePreviewTranscriptRow
 			appendRow(livePreviewTaskNotificationRow(msg.TaskNotification))
 		case msg.Compact != nil:
 			appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptMuted, text: "Context compacted"})
+		case includeToolProgress && msg.ToolProgress != nil:
+			for _, row := range livePreviewToolProgressRows(msg.ToolProgress, toolProgressStarted) {
+				appendRow(row)
+			}
 		}
 	}
 	return rows
@@ -715,6 +724,30 @@ func livePreviewToolResultRow(block llm.ContentBlock, toolName string) livePrevi
 		text:     livePreviewFixedCharTruncate(name+" result: "+detail, livePreviewToolResultMaxChars),
 		truncate: true,
 	}
+}
+
+func livePreviewToolProgressRows(progress *llm.ToolProgressMessage, started map[string]struct{}) []livePreviewTranscriptRow {
+	if progress == nil || progress.ToolName == "" {
+		return nil
+	}
+	key := progress.ToolUseID
+	if key == "" {
+		key = progress.ToolName
+	}
+
+	var rows []livePreviewTranscriptRow
+	if _, ok := started[key]; !ok {
+		started[key] = struct{}{}
+		rows = append(rows, livePreviewTranscriptRow{kind: livePreviewTranscriptTool, text: progress.ToolName})
+	}
+	if detail := singleLine(progress.Data); detail != "" {
+		rows = append(rows, livePreviewTranscriptRow{
+			kind:     livePreviewTranscriptResult,
+			text:     livePreviewFixedCharTruncate(progress.ToolName+" result: "+detail, livePreviewToolResultMaxChars),
+			truncate: true,
+		})
+	}
+	return rows
 }
 
 func livePreviewFixedCharTruncate(s string, maxChars int) string {

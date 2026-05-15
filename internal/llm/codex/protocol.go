@@ -931,9 +931,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		return llm.SDKMessage{
 			Type: "tool_progress",
 			ToolProgress: &llm.ToolProgressMessage{
-				Type:     "tool_progress",
-				ToolName: "Bash",
-				Data:     delta.Delta,
+				Type:      "tool_progress",
+				ToolUseID: delta.ItemID,
+				ToolName:  "Bash",
+				Data:      delta.Delta,
 			},
 		}, true
 
@@ -948,9 +949,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		return llm.SDKMessage{
 			Type: "tool_progress",
 			ToolProgress: &llm.ToolProgressMessage{
-				Type:     "tool_progress",
-				ToolName: "Write",
-				Data:     delta.Delta,
+				Type:      "tool_progress",
+				ToolUseID: delta.ItemID,
+				ToolName:  "Write",
+				Data:      delta.Delta,
 			},
 		}, true
 
@@ -1043,9 +1045,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
-					Type:     "tool_progress",
-					ToolName: "Bash",
-					Data:     completed.Item.AggregatedOutput,
+					Type:      "tool_progress",
+					ToolUseID: completed.Item.ID,
+					ToolName:  "Bash",
+					Data:      completed.Item.AggregatedOutput,
 				},
 				FileReads: p.fileReadEventsForCommand(completed.Item),
 			}, true
@@ -1054,7 +1057,41 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 
 	case "item/started":
-		return llm.SDKMessage{}, false
+		var started ItemStartedParams
+		if err := json.Unmarshal(params, &started); err != nil {
+			return llm.SDKMessage{}, false
+		}
+		p.mu.Lock()
+		isMainItem := p.isMainThread(started.ThreadID)
+		if isMainItem && (started.Item.Type == "commandExecution" || started.Item.Type == "fileChange") {
+			p.turnHadToolUse = true
+		}
+		p.mu.Unlock()
+		if !isMainItem {
+			return llm.SDKMessage{}, false
+		}
+		switch started.Item.Type {
+		case "commandExecution":
+			return llm.SDKMessage{
+				Type: "tool_progress",
+				ToolProgress: &llm.ToolProgressMessage{
+					Type:      "tool_progress",
+					ToolUseID: started.Item.ID,
+					ToolName:  "Bash",
+				},
+			}, true
+		case "fileChange":
+			return llm.SDKMessage{
+				Type: "tool_progress",
+				ToolProgress: &llm.ToolProgressMessage{
+					Type:      "tool_progress",
+					ToolUseID: started.Item.ID,
+					ToolName:  "Write",
+				},
+			}, true
+		default:
+			return llm.SDKMessage{}, false
+		}
 
 	case "turn/started":
 		var turnStarted struct {

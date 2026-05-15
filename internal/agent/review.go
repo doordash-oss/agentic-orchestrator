@@ -19,7 +19,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 )
 
@@ -60,14 +59,8 @@ func (s ReviewStatus) String() string {
 // reviewer must write under the Handoff Contract. Pass "" when the caller is
 // only exercising the prompt body (e.g. unit tests for optional sections).
 //
-// evidenceIterDir, when non-empty, drives the inline rendering of the
-// behavioral / visual evidence partials right after the Progress section.
-// The caller is responsible for the frontend-tag gate — pass "" for
-// non-frontend features (or for prompt-body unit tests) to suppress both
-// partials.
-//
 // The prose lives in internal/agent/prompts/templates/review.user.tmpl.
-func BuildReviewPrompt(planPath, exitCriteria, progressPath, iterDir, contractPath, verificationReportPath string, iteration int, requiredVerification []RequiredVerificationItem, roadmapPath, phaseType, feedbackPath, evidenceIterDir string) string {
+func BuildReviewPrompt(planPath, exitCriteria, progressPath, iterDir, contractPath, verificationReportPath string, iteration int, requiredVerification []RequiredVerificationItem, roadmapPath, phaseType, feedbackPath string) string {
 	required := make([]roles.VerificationItemView, 0, len(requiredVerification))
 	for _, item := range requiredVerification {
 		required = append(required, roles.VerificationItemView{
@@ -87,8 +80,6 @@ func BuildReviewPrompt(planPath, exitCriteria, progressPath, iterDir, contractPa
 		RequiredVerification:   required,
 		ProgressPath:           progressPath,
 		PhaseType:              phaseType,
-		BehavioralEvidence:     prompts.BehavioralEvidenceReviewInput{IterDir: evidenceIterDir},
-		VisualEvidence:         prompts.VisualEvidenceReviewInput{IterDir: evidenceIterDir},
 		FeedbackPath:           feedbackPath,
 	})
 }

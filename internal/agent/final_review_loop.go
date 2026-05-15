@@ -52,6 +52,9 @@ import (
 //     repo's RepoState records the failure.
 //   - "protocol_violation": the fix agent ended its turn without satisfying
 //     the completion contract. Every staged repo's RepoState records the failure.
+//   - "plan_revision_required": reviewer found missing visual or behavioral
+//     implementation evidence coverage that must be repaired by revising the
+//     relevant phase plan. No failure stamp is written.
 //   - "interrupted":     graceful shutdown / feature stopped while
 //     running. No atomic stamp written; persisted state preserved.
 //   - "failed":          dispatch error before iteration began.
@@ -59,10 +62,11 @@ import (
 // Repos is the deduplicated, sorted list of touched repos at loop entry —
 // the canonical "FR-staged subset" the AtomicPhaseStamp wrote to.
 type FeatureFinalReviewResult struct {
-	FinalStatus string
-	Iterations  int
-	LastError   string
-	Repos       []string
+	FinalStatus          string
+	Iterations           int
+	LastError            string
+	Repos                []string
+	PlanRevisionFeedback string
 }
 
 // RunFeatureFinalReviewLoop runs one feature-level Final Review session per
@@ -179,6 +183,13 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 	case "interrupted":
 		// No atomic stamp on interrupt; persisted state is left
 		// untouched so the next start picks up the loop.
+		result.Repos = stagedRepos
+		return result, nil
+
+	case "plan_revision_required":
+		// Missing evidence is a plan-repair path, not a failed final review.
+		// The orchestrator will invalidate the relevant phase-plan attempt
+		// and dispatch planning again.
 		result.Repos = stagedRepos
 		return result, nil
 
@@ -397,6 +408,14 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{FinalStatus: "review_passed", Iterations: i}, nil
 
 		case ReviewChangesRequested:
+			if reqs := MissingEvidenceRequirements(feedback); len(reqs) > 0 {
+				s.writeIterationMeta(iterDir, i, "changes_requested")
+				return &FeatureFinalReviewResult{
+					FinalStatus:          "plan_revision_required",
+					Iterations:           i,
+					PlanRevisionFeedback: MissingEvidencePlanRevisionFeedback(reqs),
+				}, nil
+			}
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
 
@@ -485,22 +504,28 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	// more sophisticated rule later, but consolidating to one base
 	// matches the "one verdict over the cumulative diff" semantics.
 	diffBase := featureDefaultDiffBase(cfg.Feature)
+	priorEvidence := priorImplementationEvidenceContextForRun(filepath.Dir(s.artifactDir))
 
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
-		FeatureDescription:     cfg.Feature.Description,
-		ExitCriteria:           cfg.Feature.ExitCriteria,
-		DiffBase:               diffBase,
-		WorkDir:                s.workspace.Cwd,
-		VerificationPath:       verificationPath,
-		TestingContractPath:    s.contractPath,
-		PreviousFeedback:       previousFeedback,
-		Iteration:              iteration,
-		RoadmapPath:            cfg.Feature.Artifacts["roadmap"],
-		BrainstormArtifactPath: cfg.Feature.Artifacts["brainstorm"],
-		Images:                 cfg.Feature.Images,
-		PhaseType:              cfg.Feature.RoadmapPhaseType,
-		FeedbackPath:           feedbackPath,
-		Publishable:            cfg.Feature.IsPublishable(),
+		FeatureDescription:                   cfg.Feature.Description,
+		ExitCriteria:                         cfg.Feature.ExitCriteria,
+		DiffBase:                             diffBase,
+		WorkDir:                              s.workspace.Cwd,
+		VerificationPath:                     verificationPath,
+		TestingContractPath:                  s.contractPath,
+		PreviousFeedback:                     previousFeedback,
+		Iteration:                            iteration,
+		RoadmapPath:                          cfg.Feature.Artifacts["roadmap"],
+		BrainstormArtifactPath:               cfg.Feature.Artifacts["brainstorm"],
+		Images:                               cfg.Feature.Images,
+		PhaseType:                            cfg.Feature.RoadmapPhaseType,
+		FeedbackPath:                         feedbackPath,
+		Publishable:                          cfg.Feature.IsPublishable(),
+		PriorImplementationPlanPaths:         priorEvidence.PlanPaths,
+		PriorImplementationContractPaths:     priorEvidence.ContractPaths,
+		PriorImplementationReportPaths:       priorEvidence.ReportPaths,
+		PriorImplementationEvidenceRootDirs:  priorEvidence.EvidenceRootDirs,
+		PriorImplementationEvidenceArtifacts: priorEvidence.EvidenceArtifactPaths,
 	})
 
 	_ = os.WriteFile(filepath.Join(iterDir, "review-prompt.md"), []byte(prompt), 0o644)
@@ -530,7 +555,6 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		WorkDir:                        s.workspace.Cwd,
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          feature.PhaseReview,
-		FeatureTags:                    featureTags(cfg.Feature),
 		SystemPromptHasUsefulResources: true,
 	})
 	if buildErr != nil {
@@ -648,7 +672,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		WorkDir:                        s.workspace.Cwd,
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          feature.PhaseReview,
-		FeatureTags:                    featureTags(cfg.Feature),
 		SystemPromptHasUsefulResources: true,
 	})
 	if buildErr != nil {

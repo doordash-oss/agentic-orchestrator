@@ -128,6 +128,9 @@ type ImplementConfig struct {
 //
 // FinalStatus values:
 //   - "review_passed":     iteration emitted SUCCESS and the review gate APPROVED.
+//   - "plan_revision_required": review rejected missing visual/behavioral
+//     evidence coverage with structured requirements that must go through
+//     phase-plan revision.
 //   - "max_iterations":    hit cfg.MaxIterations without a passing review.
 //   - "safety_rail":       no-progress / consecutive-failure rail tripped.
 //   - "interrupted":       shutdown / feature stopped while running.
@@ -139,6 +142,10 @@ type LoopResult struct {
 	FinalStatus string
 	Iterations  int
 	LastError   string
+
+	// PlanRevisionFeedback carries reviewer-authored missing-evidence
+	// requirements when FinalStatus == "plan_revision_required".
+	PlanRevisionFeedback string
 
 	// NeedUserInputPath is the absolute path of the persisted gate
 	// artifact written when FinalStatus == "need_user_input". Empty for
@@ -321,21 +328,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					prompt = block + prompt
 				}
 			}
-			// For frontend-tagged features, publish the screenshots path
-			// so the implementer knows where to deposit visual evidence.
-			// Methodology lives in skills/frontend-design/SKILL.md (loaded
-			// as a mandatory read via utilskill for frontend features).
-			if block := visualEvidenceImplementSection(cfg.Feature, iterDir); block != "" {
-				prompt = block + prompt
-			}
-			// And the behaviors path for driven user-journey artifacts.
-			// Visual evidence answers "does it look right"; behavioral
-			// evidence answers "does it actually work for the user" — the
-			// gap that lets compile + screenshots + unit tests approve a
-			// binary whose primary mutation flow is broken. Same SKILL.md.
-			if block := behavioralEvidenceImplementSection(cfg.Feature, iterDir); block != "" {
-				prompt = block + prompt
-			}
 			// Surface cross-phase deferrals owed by the current phase so
 			// the agent cannot silently drop prior-phase commitments.
 			// Closing or re-deferring is enforced by the Report Integrity
@@ -384,7 +376,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhaseImplement,
-				FeatureTags:                    featureTags(cfg.Feature),
 				SystemPromptHasUsefulResources: true,
 			})
 			if buildErr != nil {
@@ -736,6 +727,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Iterations:  i,
 				}, nil
 			case ReviewChangesRequested:
+				if reqs := MissingEvidenceRequirements(feedback); len(reqs) > 0 {
+					consecutiveFailures = 0
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "plan_revision_required")
+					return &LoopResult{
+						FinalStatus:          "plan_revision_required",
+						Iterations:           i,
+						PlanRevisionFeedback: MissingEvidencePlanRevisionFeedback(reqs),
+					}, nil
+				}
 				consecutiveFailures = 0
 				reviewerFeedback = feedback
 				// Check no-progress safety rail
@@ -913,7 +913,22 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	// single Rejected verdict so the agent sees all failure modes at once.
 	var gateResult ReportGateResult
 	if report, err := ReadVerificationReport(verificationReportPath); err == nil {
-		schemaResult := ValidateVerificationReport(report, requiredVerification, contract, true)
+		boundContract := contract
+		var schemaResult ReportGateResult
+		if loaded, err := readBoundTestingContract(report); err != nil {
+			schemaResult.Findings = append(schemaResult.Findings, ReportGateFinding{
+				Category: GateCategorySchema,
+				Kind:     KindMissingRequired,
+				Detail:   fmt.Sprintf("testing contract referenced by verification-report.yaml is unreadable: %v", err),
+			})
+			schemaResult.Rejected = true
+		} else if loaded != nil {
+			boundContract = loaded
+		}
+		schemaResult = MergeGateResults(schemaResult, ValidateVerificationReportWithContext(report, requiredVerification, true, VerificationReportValidationContext{
+			IterationDir: iterDir,
+			Contract:     boundContract,
+		}))
 		deferralResult := ValidateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
 		gateResult = MergeGateResults(schemaResult, deferralResult)
 		if gateResult.Rejected {
@@ -963,15 +978,6 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 
 	feedbackPath := filepath.Join(reviewDir, "review-feedback.md")
 	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
-	// The behavioral / visual evidence partials are tag-gated: only frontend
-	// features publish a screenshots / behaviors directory, so only they
-	// should see the matching reviewer-side gates ("no screenshots →
-	// CHANGES_REQUESTED", "no driven journey → CHANGES_REQUESTED"). The
-	// rendering itself is template-side now; this string is what flips
-	// the gate on. The partials live at:
-	//   internal/agent/prompts/partials/behavioral_evidence_review.tmpl
-	//   internal/agent/prompts/partials/visual_evidence_review.tmpl
-	evidenceIterDir := reviewEvidenceIterDir(cfg.Feature, iterDir)
 	reviewPrompt := BuildReviewPrompt(
 		cfg.PlanPath,
 		cfg.ExitCriteria,
@@ -984,7 +990,6 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 		cfg.RoadmapPath,
 		cfg.PhaseType,
 		feedbackPath,
-		evidenceIterDir,
 	)
 
 	// Re-inject user-attached visual references so the reviewer can

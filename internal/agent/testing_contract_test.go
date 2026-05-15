@@ -150,6 +150,56 @@ func TestCompileTestingContract_ManualVerificationItems(t *testing.T) {
 	}
 }
 
+func TestCompileTestingContract_EvidenceItems(t *testing.T) {
+	plan := strings.Join([]string{
+		"## Success Criteria",
+		"### Visual Evidence",
+		"- [ ] Capture the import confirmation screen.",
+		"- [ ] Capture the import confirmation screen.",
+		"### Behavioral Evidence",
+		"- [ ] Save the CLI transcript for a successful import.",
+	}, "\n")
+
+	contract := CompileTestingContract(plan, "/tmp/phase-01/plan.md", "collapsed")
+
+	var visual, behavioral *TestingContractItem
+	for i := range contract.Items {
+		switch contract.Items[i].Source {
+		case testingContractVisualSource:
+			visual = &contract.Items[i]
+		case testingContractBehavioralSource:
+			behavioral = &contract.Items[i]
+		}
+	}
+	if visual == nil {
+		t.Fatalf("missing visual contract item: %+v", contract.Items)
+	}
+	if behavioral == nil {
+		t.Fatalf("missing behavioral contract item: %+v", contract.Items)
+	}
+	if visual.ExpectedEvidence.Kind != testingContractVisualKind {
+		t.Fatalf("visual evidence kind = %q, want %q", visual.ExpectedEvidence.Kind, testingContractVisualKind)
+	}
+	if visual.ExpectedEvidence.Matcher != testingContractEvidenceFileExistsMatcher {
+		t.Fatalf("visual evidence matcher = %q, want %q", visual.ExpectedEvidence.Matcher, testingContractEvidenceFileExistsMatcher)
+	}
+	if visual.Policy != defaultTestingContractPolicy(testingContractVisualSource) {
+		t.Fatalf("visual policy = %+v", visual.Policy)
+	}
+	if behavioral.ExpectedEvidence.Kind != testingContractBehavioralKind {
+		t.Fatalf("behavioral evidence kind = %q, want %q", behavioral.ExpectedEvidence.Kind, testingContractBehavioralKind)
+	}
+	if behavioral.ExpectedEvidence.Matcher != testingContractEvidenceFileExistsMatcher {
+		t.Fatalf("behavioral evidence matcher = %q, want %q", behavioral.ExpectedEvidence.Matcher, testingContractEvidenceFileExistsMatcher)
+	}
+	if behavioral.Policy != defaultTestingContractPolicy(testingContractBehavioralSource) {
+		t.Fatalf("behavioral policy = %+v", behavioral.Policy)
+	}
+	if got := countItems(contract.Items, testingContractVisualSource, ""); got != 1 {
+		t.Fatalf("visual item count = %d, want 1", got)
+	}
+}
+
 func TestBuildContractVerificationReportStub_ManualMode(t *testing.T) {
 	contract := CompileTestingContract("### Manual Verification\n- [ ] Exercise the primary workflow.\n", "/tmp/phase-01/plan.md", "collapsed")
 	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")

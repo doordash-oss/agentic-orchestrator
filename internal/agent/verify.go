@@ -32,6 +32,12 @@ type ManualVerificationStep struct {
 	Description string
 }
 
+// EvidenceRequirement represents one visual or behavioral artifact requirement
+// extracted from a phase plan.
+type EvidenceRequirement struct {
+	Description string
+}
+
 // ParsePlanVerification extracts automated verification commands from a plan's
 // markdown text. It looks for "#### Automated Verification:" sections and
 // parses checklist items that contain backtick-delimited commands.
@@ -130,6 +136,59 @@ func ParsePlanManualVerification(planText string) []ManualVerificationStep {
 	return steps
 }
 
+// ParsePlanVisualEvidence extracts visual evidence checklist bullets from
+// "Visual Evidence" sections. A checklist item beginning with
+// "None required:" is treated as an explicit absence marker and is not
+// returned as a required evidence artifact.
+func ParsePlanVisualEvidence(planText string) []EvidenceRequirement {
+	return parsePlanEvidenceRequirements(planText, isVisualEvidenceHeader)
+}
+
+// ParsePlanBehavioralEvidence extracts behavioral evidence checklist bullets
+// from "Behavioral Evidence" sections. A checklist item beginning with
+// "None required:" is treated as an explicit absence marker and is not
+// returned as a required evidence artifact.
+func ParsePlanBehavioralEvidence(planText string) []EvidenceRequirement {
+	return parsePlanEvidenceRequirements(planText, isBehavioralEvidenceHeader)
+}
+
+func parsePlanEvidenceRequirements(planText string, isSectionHeader func(string) bool) []EvidenceRequirement {
+	var requirements []EvidenceRequirement
+	lines := strings.Split(planText, "\n")
+	inSection := false
+	inCodeFence := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "```") {
+			inCodeFence = !inCodeFence
+			continue
+		}
+		if inCodeFence {
+			continue
+		}
+
+		if isSectionHeader(trimmed) {
+			inSection = true
+			continue
+		}
+		if inSection && isHeaderLine(trimmed) {
+			inSection = false
+			continue
+		}
+		if !inSection {
+			continue
+		}
+
+		if requirement, ok := parseEvidenceChecklistItem(trimmed); ok {
+			requirements = append(requirements, requirement)
+		}
+	}
+
+	return requirements
+}
+
 // isAutomatedVerificationHeader returns true for headers like:
 //
 //	"#### Automated Verification:", "### Automated Verification:"
@@ -143,6 +202,18 @@ var manualVerificationRe = regexp.MustCompile(`^#{2,5}\s+Manual Verification`)
 
 func isManualVerificationHeader(line string) bool {
 	return manualVerificationRe.MatchString(line)
+}
+
+var visualEvidenceRe = regexp.MustCompile(`^#{2,5}\s+Visual Evidence`)
+
+func isVisualEvidenceHeader(line string) bool {
+	return visualEvidenceRe.MatchString(line)
+}
+
+var behavioralEvidenceRe = regexp.MustCompile(`^#{2,5}\s+Behavioral Evidence`)
+
+func isBehavioralEvidenceHeader(line string) bool {
+	return behavioralEvidenceRe.MatchString(line)
 }
 
 // isHeaderLine returns true for any markdown header.
@@ -202,26 +273,49 @@ func parseChecklistItem(line string) (VerificationStep, bool) {
 }
 
 func parseManualChecklistItem(line string) (ManualVerificationStep, bool) {
-	if !strings.HasPrefix(line, "- [") {
+	description, ok := parseChecklistDescription(line)
+	if !ok {
 		return ManualVerificationStep{}, false
 	}
-	closeIdx := strings.Index(line, "]")
-	if closeIdx < 0 || closeIdx+1 >= len(line) {
-		return ManualVerificationStep{}, false
-	}
-	description := strings.TrimSpace(line[closeIdx+1:])
-	description = strings.TrimPrefix(description, "-")
-	description = strings.TrimSpace(description)
-	if description == "" {
-		return ManualVerificationStep{}, false
-	}
-	if isManualNoneRequired(description) {
+	if isNoneRequiredDescription(description) {
 		return ManualVerificationStep{}, false
 	}
 	return ManualVerificationStep{Description: description}, true
 }
 
+func parseEvidenceChecklistItem(line string) (EvidenceRequirement, bool) {
+	description, ok := parseChecklistDescription(line)
+	if !ok {
+		return EvidenceRequirement{}, false
+	}
+	if isNoneRequiredDescription(description) {
+		return EvidenceRequirement{}, false
+	}
+	return EvidenceRequirement{Description: description}, true
+}
+
+func parseChecklistDescription(line string) (string, bool) {
+	if !strings.HasPrefix(line, "- [") {
+		return "", false
+	}
+	closeIdx := strings.Index(line, "]")
+	if closeIdx < 0 || closeIdx+1 >= len(line) {
+		return "", false
+	}
+	description := strings.TrimSpace(line[closeIdx+1:])
+	description = strings.TrimPrefix(description, "-")
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return "", false
+	}
+	return description, true
+}
+
 func isManualNoneRequired(description string) bool {
+	return isNoneRequiredDescription(description)
+}
+
+func isNoneRequiredDescription(description string) bool {
 	normalized := strings.TrimSpace(description)
 	normalized = strings.Trim(normalized, "`*_ ")
 	return strings.HasPrefix(strings.ToLower(normalized), "none required:")

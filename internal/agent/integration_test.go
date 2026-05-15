@@ -962,7 +962,6 @@ func TestImplementLoopReviewPromptIncludesVerificationCommands(t *testing.T) {
 		"",
 		"",
 		"",
-		"",
 	)
 
 	checks := []string{

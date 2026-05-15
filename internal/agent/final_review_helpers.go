@@ -50,6 +50,12 @@ type FinalReviewPromptOpts struct {
 	CycleFocus             string // short description of the active cycle's review scope
 	FeedbackPath           string // path where the reviewer must write its feedback file
 	Publishable            bool   // whether the repo has a remote / is publishable
+
+	PriorImplementationPlanPaths         []string
+	PriorImplementationContractPaths     []string
+	PriorImplementationReportPaths       []string
+	PriorImplementationEvidenceRootDirs  []string
+	PriorImplementationEvidenceArtifacts []string
 }
 
 // FinalFixPromptOpts contains the parameters for building the fix agent prompt.
@@ -77,19 +83,24 @@ func BuildFinalReviewPrompt(opts FinalReviewPromptOpts) string {
 			Images: opts.Images,
 			Label:  "conducting this final review",
 		},
-		Iteration:           opts.Iteration,
-		IsCycleReview:       opts.CycleFocus != "",
-		PhaseType:           opts.PhaseType,
-		DiffBase:            opts.DiffBase,
-		RoadmapPath:         opts.RoadmapPath,
-		FeatureDescription:  opts.FeatureDescription,
-		ExitCriteria:        opts.ExitCriteria,
-		CycleFocus:          opts.CycleFocus,
-		TestingContractPath: opts.TestingContractPath,
-		VerificationPath:    opts.VerificationPath,
-		FeedbackPath:        opts.FeedbackPath,
-		Publishable:         opts.Publishable,
-		PreviousFeedback:    opts.PreviousFeedback,
+		Iteration:                            opts.Iteration,
+		IsCycleReview:                        opts.CycleFocus != "",
+		PhaseType:                            opts.PhaseType,
+		DiffBase:                             opts.DiffBase,
+		RoadmapPath:                          opts.RoadmapPath,
+		FeatureDescription:                   opts.FeatureDescription,
+		ExitCriteria:                         opts.ExitCriteria,
+		CycleFocus:                           opts.CycleFocus,
+		TestingContractPath:                  opts.TestingContractPath,
+		VerificationPath:                     opts.VerificationPath,
+		PriorImplementationPlanPaths:         opts.PriorImplementationPlanPaths,
+		PriorImplementationContractPaths:     opts.PriorImplementationContractPaths,
+		PriorImplementationReportPaths:       opts.PriorImplementationReportPaths,
+		PriorImplementationEvidenceRootDirs:  opts.PriorImplementationEvidenceRootDirs,
+		PriorImplementationEvidenceArtifacts: opts.PriorImplementationEvidenceArtifacts,
+		FeedbackPath:                         opts.FeedbackPath,
+		Publishable:                          opts.Publishable,
+		PreviousFeedback:                     opts.PreviousFeedback,
 	})
 }
 
@@ -241,4 +252,91 @@ func latestImplementationVerificationReportPath(stateDir string, f *feature.Feat
 		return ""
 	}
 	return filepath.Join(implementDir, fmt.Sprintf("iteration-%02d", iteration), "verification-report.yaml")
+}
+
+type priorImplementationEvidenceContext struct {
+	PlanPaths             []string
+	ContractPaths         []string
+	ReportPaths           []string
+	EvidenceRootDirs      []string
+	EvidenceArtifactPaths []string
+}
+
+func priorImplementationEvidenceContextForRun(runDir string) priorImplementationEvidenceContext {
+	var ctx priorImplementationEvidenceContext
+	addIfExists := func(dst *[]string, path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		if _, err := os.Stat(path); err == nil {
+			*dst = append(*dst, path)
+		}
+	}
+	addImplementationDir := func(scopeDir string) {
+		addIfExists(&ctx.PlanPaths, filepath.Join(scopeDir, "plan", "phase-plan.md"))
+		addIfExists(&ctx.ContractPaths, filepath.Join(scopeDir, "testing-contract.yaml"))
+		if reportPath := latestCompletedImplementationReportPath(filepath.Join(scopeDir, feature.PhaseImplement.DirName())); reportPath != "" {
+			ctx.ReportPaths = append(ctx.ReportPaths, reportPath)
+			ctx.EvidenceRootDirs = append(ctx.EvidenceRootDirs, filepath.Dir(reportPath))
+			ctx.EvidenceArtifactPaths = appendEvidenceArtifactPaths(ctx.EvidenceArtifactPaths, reportPath)
+		}
+	}
+
+	addImplementationDir(runDir)
+	entries, err := os.ReadDir(runDir)
+	if err != nil {
+		return ctx
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "phase-") {
+			continue
+		}
+		addImplementationDir(filepath.Join(runDir, entry.Name()))
+	}
+	return ctx
+}
+
+func appendEvidenceArtifactPaths(out []string, reportPath string) []string {
+	report, err := ReadVerificationReport(reportPath)
+	if err != nil {
+		return out
+	}
+	seen := make(map[string]bool, len(out))
+	for _, path := range out {
+		seen[path] = true
+	}
+	add := func(raw string) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return
+		}
+		path := raw
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(reportPath), path)
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	for _, check := range allVerificationChecks(report) {
+		add(check.EvidenceData.Primary)
+		for _, attachment := range check.EvidenceData.Attachments {
+			add(attachment)
+		}
+	}
+	return out
+}
+
+func allVerificationChecks(report *VerificationReport) []VerificationCheckResult {
+	if report == nil {
+		return nil
+	}
+	checks := make([]VerificationCheckResult, 0, len(report.Results)+len(report.RequiredChecks)+len(report.AdditionalChecks))
+	checks = append(checks, report.Results...)
+	checks = append(checks, report.RequiredChecks...)
+	checks = append(checks, report.AdditionalChecks...)
+	return checks
 }

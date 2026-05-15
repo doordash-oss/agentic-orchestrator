@@ -36,17 +36,21 @@ import (
 //   - "need_user_input":  iteration emitted NEED_USER_INPUT — feature-scoped
 //     pause gate; NeedUserInputPath points to the persisted gate
 //     artifact at the phase-iteration dir.
+//   - "plan_revision_required": implementation review found missing visual or
+//     behavioral evidence coverage that must be repaired by revising the
+//     phase plan before another implementation attempt.
 //
 // PhaseRepos is the deduplicated, sorted list of repo names declared by the
 // phase plan's `**Repo:** <name>` Task tags (single-repo phases get
 // `[repo[0].Name]`). It is the canonical "phase-declared subset" the
 // AtomicPhaseStamp wrote to.
 type PhaseImplementLoopResult struct {
-	FinalStatus       string
-	Iterations        int
-	LastError         string
-	PhaseRepos        []string
-	NeedUserInputPath string
+	FinalStatus          string
+	Iterations           int
+	LastError            string
+	PhaseRepos           []string
+	NeedUserInputPath    string
+	PlanRevisionFeedback string
 }
 
 // RunPhaseImplementLoop runs the unified phase-implement loop for the feature.
@@ -214,6 +218,14 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 			LastError:         loopResult.LastError,
 			NeedUserInputPath: loopResult.NeedUserInputPath,
 			PhaseRepos:        phaseRepos,
+		}, nil
+
+	case "plan_revision_required":
+		return &PhaseImplementLoopResult{
+			FinalStatus:          "plan_revision_required",
+			Iterations:           loopResult.Iterations,
+			PhaseRepos:           phaseRepos,
+			PlanRevisionFeedback: loopResult.PlanRevisionFeedback,
 		}, nil
 
 	case "interrupted":

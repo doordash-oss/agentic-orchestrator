@@ -104,6 +104,109 @@ func TestBuildImplementPrompt_TestingContractPath(t *testing.T) {
 	t.Error("testing contract path should not be inlined into the lean implement user prompt")
 }
 
+func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-001")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Working...")+"\n"+
+			testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	planPath := filepath.Join(artifactDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\nImplement something"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:            "test-feat-001",
+		Name:          "Test Feature",
+		Slug:          "test-feature",
+		Description:   "Legacy tagged feature",
+		Images:        []string{"/tmp/mockup.png"},
+		Tags:          []string{"frontend"},
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: "test-repo", Path: workDir},
+		},
+	}
+
+	store := feature.NewStore(filepath.Join(tmpDir, "state"))
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+
+	result, err := RunImplementationLoop(ImplementConfig{
+		Feature:                    f,
+		FeatureStore:               store,
+		WorkDir:                    workDir,
+		PlanPath:                   planPath,
+		MaxIterations:              1,
+		MaxConsecFails:             3,
+		MaxConsecNoProgress:        3,
+		ExitCriteria:               "Relevant tests pass",
+		Model:                      "implementer",
+		ReviewModel:                "reviewer",
+		ArtifactDir:                artifactDir,
+		StateDir:                   stateDir,
+		DangerouslySkipPermissions: true,
+		BuildSession:               buildSession,
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error: %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("RunImplementationLoop() FinalStatus = %s, want review_passed", result.FinalStatus)
+	}
+	if len(*captured) < 2 {
+		t.Fatalf("captured %d BuildSession calls, want implement and review", len(*captured))
+	}
+
+	t.Logf("legacy tagged implement prompt:\n%s", (*captured)[0].Prompt)
+	t.Logf("legacy tagged review prompt:\n%s", (*captured)[1].Prompt)
+
+	for _, got := range []struct {
+		name   string
+		prompt string
+	}{
+		{name: "implement", prompt: (*captured)[0].Prompt},
+		{name: "review", prompt: (*captured)[1].Prompt},
+	} {
+		if !strings.Contains(got.prompt, "## Visual References") {
+			t.Errorf("%s prompt missing visual references:\n%s", got.name, got.prompt)
+		}
+		if !strings.Contains(got.prompt, "/tmp/mockup.png") {
+			t.Errorf("%s prompt missing attached image path:\n%s", got.name, got.prompt)
+		}
+		if strings.Contains(got.prompt, "## Visual Evidence") {
+			t.Errorf("%s prompt unexpectedly contains visual evidence guidance:\n%s", got.name, got.prompt)
+		}
+		if strings.Contains(got.prompt, "## Behavioral Evidence") {
+			t.Errorf("%s prompt unexpectedly contains behavioral evidence guidance:\n%s", got.name, got.prompt)
+		}
+		requiredSkillsHeading := "Required Skills" + " For This Feature"
+		if strings.Contains(got.prompt, requiredSkillsHeading) {
+			t.Errorf("%s prompt unexpectedly contains required skills guidance:\n%s", got.name, got.prompt)
+		}
+	}
+}
+
 func TestLoopResultTypes(t *testing.T) {
 	result := &LoopResult{
 		FinalStatus: "review_passed",

@@ -31,8 +31,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
-	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 )
 
 // PhaseRunner handles launching agent sessions for each feature phase.
@@ -142,18 +140,6 @@ type interactivePhaseConfig struct {
 	KBInfos       []KBInfo
 }
 
-// featureTags returns a shallow copy of the feature's Tags slice, or nil if
-// the feature pointer is nil. Used by phase runners to populate
-// BuildSessionOpts.FeatureTags without NPE risk.
-func featureTags(f *feature.Feature) []string {
-	if f == nil || len(f.Tags) == 0 {
-		return nil
-	}
-	out := make([]string, len(f.Tags))
-	copy(out, f.Tags)
-	return out
-}
-
 // runInteractivePhase contains the shared boilerplate for launching an async
 // interactive agent session. Each public Run* method builds its prompt, then
 // delegates here.
@@ -191,7 +177,6 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		WorkDir:                        workDir,
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
 		Phase:                          cfg.Phase,
-		FeatureTags:                    f.Tags,
 		SystemPromptHasUsefulResources: true,
 	})
 	if err != nil {
@@ -348,7 +333,6 @@ func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionC
 		EffortLevel:    f.EffectivePipeline().EffortLevel(),
 		TurnMode:       ports.TurnModeInteractive,
 		Phase:          feature.PhaseImplement,
-		FeatureTags:    f.Tags,
 	})
 	if err != nil {
 		return "", fmt.Errorf("building tweak session: %w", err)
@@ -595,7 +579,6 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		WorkDir:                        workDir,
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
 		Phase:                          feature.PhaseKnowledgeBase,
-		FeatureTags:                    f.Tags,
 		SystemPromptHasUsefulResources: true,
 	})
 	if err != nil {
@@ -1165,11 +1148,6 @@ type BuildSessionOpts struct {
 	AgentNames    []string
 	TurnMode      ports.SessionTurnMode
 	Phase         feature.Phase // current phase, used to filter utility skill preamble
-	// FeatureTags carries the feature's classification tags (e.g. "frontend",
-	// "backend"). When non-empty, utility skills registered with matching
-	// requiredTags are promoted from preamble-only advertisement to mandatory
-	// reads via a BuildRequiredInstruction block prepended to SystemPrompt.
-	FeatureTags []string
 	// SystemPromptHasUsefulResources indicates the system prompt already
 	// includes the soft KB/guideline/skill discovery catalog. Bounded helpers
 	// that still pass ad-hoc prompts leave this false so BuildSession can
@@ -1214,22 +1192,6 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		return nil, nil, nil, fmt.Errorf("resolving provider for model %q: %w", opts.Model, err)
 	}
 
-	// Required-skills injection: for utility skills whose requiredTags
-	// intersect the feature's tags, emit a strong "MUST read" block so
-	// the agent gets the same imperative treatment as phase-primary
-	// skills. This is the enforcement spine that closes the gap between
-	// topic-match advertisement and actual skill loading.
-	//
-	// The soft utility-skill discovery table is rendered by RoleSpec-backed
-	// system prompts. This BuildSession-level block only carries the mandatory
-	// subset selected by feature tags.
-	if pr.SkillsDir != "" && opts.SystemPrompt != "" {
-		if required := utilskill.RequiredForPhase(opts.Phase, opts.FeatureTags); len(required) > 0 {
-			if block := skilldef.BuildRequiredInstruction(pr.SkillsDir, required); block != "" {
-				opts.SystemPrompt = opts.SystemPrompt + "\n\n" + block
-			}
-		}
-	}
 	// Skills injection: grant agents filesystem access to reconciled skill files.
 	if pr.SkillsDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.SkillsDir)

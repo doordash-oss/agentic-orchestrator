@@ -16,6 +16,9 @@ package agent
 
 import (
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -61,6 +64,7 @@ const (
 	KindBlockedReason         ReportGateKind = "missing_blocked_reason"
 	KindSubstituteItem        ReportGateKind = "invalid_substitute_item"
 	KindPolicyViolation       ReportGateKind = "policy_violation"
+	KindEvidenceFile          ReportGateKind = "invalid_evidence_file"
 	KindDeferralProseHedge    ReportGateKind = "deferral_prose_hedge"
 	KindDeferralUnclosed      ReportGateKind = "deferral_unclosed_due_this_phase"
 	KindDeferralMissingReason ReportGateKind = "deferral_missing_reason"
@@ -83,6 +87,14 @@ type ReportGateResult struct {
 	Rejected     bool
 	Findings     []ReportGateFinding
 	KnownCaveats map[string]string
+}
+
+// VerificationReportValidationContext carries optional filesystem context for
+// contract-backed evidence-file validation. IterationDir is the trust root for
+// evidence.primary and evidence.attachments paths.
+type VerificationReportValidationContext struct {
+	IterationDir string
+	Contract     *TestingContract
 }
 
 // hedgePhrases are case-insensitive needles we refuse to see in the
@@ -118,10 +130,20 @@ var hedgePhrases = []string{
 // wrote the phase_complete marker). When true, any not_run required check
 // is a contradiction and blocks the gate.
 func ValidateVerificationReport(report *VerificationReport, required []RequiredVerificationItem, contract *TestingContract, phaseComplete bool) ReportGateResult {
+	return ValidateVerificationReportWithContext(report, required, phaseComplete, VerificationReportValidationContext{
+		Contract: contract,
+	})
+}
+
+// ValidateVerificationReportWithContext runs the deterministic integrity gate
+// and, when supplied with an iteration directory, validates file-backed visual
+// and behavioral evidence under that iteration root.
+func ValidateVerificationReportWithContext(report *VerificationReport, required []RequiredVerificationItem, phaseComplete bool, ctx VerificationReportValidationContext) ReportGateResult {
 	result := ReportGateResult{KnownCaveats: report.KnownCaveats}
 
 	checks := reportChecks(report)
-	contractBacked := contract != nil && report.ContractPath != ""
+	contract := ctx.Contract
+	contractBacked := contract != nil
 	if contractBacked {
 		validateContractBackedChecks(&result, report, checks, contract)
 	} else {
@@ -147,7 +169,7 @@ func ValidateVerificationReport(report *VerificationReport, required []RequiredV
 				continue
 			}
 			// Empty evidence on pass is a schema lie.
-			if strings.TrimSpace(evidenceText) == "" {
+			if strings.TrimSpace(evidenceText) == "" && !artifactEvidenceHasPrimary(c) {
 				result.Findings = append(result.Findings, ReportGateFinding{
 					CheckName: name,
 					Category:  GateCategorySchema,
@@ -157,32 +179,24 @@ func ValidateVerificationReport(report *VerificationReport, required []RequiredV
 				continue
 			}
 			// Prose lie: hedge phrases inside evidence for a pass claim.
-			if hits := findHedgePhrases(evidenceText); len(hits) > 0 {
-				result.Findings = append(result.Findings, ReportGateFinding{
-					CheckName: name,
-					Category:  GateCategoryHedge,
-					Kind:      KindHedgePhrase,
-					Detail:    fmt.Sprintf("status is passed but evidence text contains hedge phrases that describe failure: %s — if the check actually failed, mark status as failed and say so plainly", strings.Join(quoted(hits), ", ")),
-				})
-			}
-
-		case VerificationStatusNotRun:
-			if phaseComplete {
-				result.Findings = append(result.Findings, ReportGateFinding{
-					CheckName: name,
-					Category:  GateCategorySchema,
-					Kind:      KindNotRunAtEnd,
-					Detail:    "status is not_run but the phase is marked complete — either run the check and record the result, or explain why this check cannot run (mark as pending_human if blocked on a human)",
-				})
+			if evidenceText != "" {
+				if hits := findHedgePhrases(evidenceText); len(hits) > 0 {
+					result.Findings = append(result.Findings, ReportGateFinding{
+						CheckName: name,
+						Category:  GateCategoryHedge,
+						Kind:      KindHedgePhrase,
+						Detail:    fmt.Sprintf("status is passed but evidence text contains hedge phrases that describe failure: %s — if the check actually failed, mark status as failed and say so plainly", strings.Join(quoted(hits), ", ")),
+					})
+				}
 			}
 
 		case VerificationStatusPendingHuman:
-			if contractBacked && c.Mode != VerificationModeManual {
+			if contractBacked && c.Mode != VerificationModeManual && !isArtifactEvidenceMode(c.Mode) {
 				result.Findings = append(result.Findings, ReportGateFinding{
 					CheckName: name,
 					Category:  GateCategorySchema,
 					Kind:      KindPolicyViolation,
-					Detail:    "status is pending_human but the contract item is not mode: manual",
+					Detail:    "status is pending_human but the contract item is not mode: manual, visual, or behavioral",
 				})
 				continue
 			}
@@ -195,6 +209,16 @@ func ValidateVerificationReport(report *VerificationReport, required []RequiredV
 					Category:  GateCategorySchema,
 					Kind:      KindBlockedReason,
 					Detail:    "status is pending_human for a manual item but no blocked_reason, notes, or evidence names the downstream owner",
+				})
+			}
+
+		case VerificationStatusNotRun:
+			if phaseComplete {
+				result.Findings = append(result.Findings, ReportGateFinding{
+					CheckName: name,
+					Category:  GateCategorySchema,
+					Kind:      KindNotRunAtEnd,
+					Detail:    "status is not_run but the phase is marked complete — either run the check and record the result, or explain why this check cannot run (mark as pending_human if blocked on a human)",
 				})
 			}
 
@@ -213,6 +237,10 @@ func ValidateVerificationReport(report *VerificationReport, required []RequiredV
 		}
 	}
 
+	if contractBacked && strings.TrimSpace(ctx.IterationDir) != "" {
+		validateEvidenceFiles(&result, checks, contract, ctx.IterationDir)
+	}
+
 	result.Rejected = len(result.Findings) > 0
 	return result
 }
@@ -222,6 +250,149 @@ func reportChecks(report *VerificationReport) []VerificationCheckResult {
 		return report.Results
 	}
 	return report.RequiredChecks
+}
+
+func validateEvidenceFiles(result *ReportGateResult, checks []VerificationCheckResult, contract *TestingContract, iterDir string) {
+	items := make(map[string]TestingContractItem, len(contract.Items))
+	for _, item := range contract.Items {
+		items[item.ID] = item
+	}
+	for i := range checks {
+		c := &checks[i]
+		item, ok := items[strings.TrimSpace(c.ItemID)]
+		if !ok {
+			continue
+		}
+		root, ok := evidenceFileRootForContractItem(item)
+		if !ok {
+			continue
+		}
+		status := NormalizeStatus(c.Status)
+		switch status {
+		case VerificationStatusPassed, VerificationStatusFailed, VerificationStatusPendingHuman:
+		default:
+			continue
+		}
+
+		name := checkDisplayName(c)
+		if strings.TrimSpace(c.EvidenceData.Primary) == "" {
+			result.Findings = append(result.Findings, ReportGateFinding{
+				CheckName: name,
+				Category:  GateCategorySchema,
+				Kind:      KindEvidenceFile,
+				Detail:    fmt.Sprintf("status is %s but evidence.primary is empty — file-backed evidence for this row must name a file under %s/", status, root),
+			})
+			continue
+		}
+		validateEvidencePath(result, name, iterDir, root, "primary", c.EvidenceData.Primary)
+		for idx, attachment := range c.EvidenceData.Attachments {
+			field := fmt.Sprintf("attachments[%d]", idx)
+			validateEvidencePath(result, name, iterDir, root, field, attachment)
+		}
+	}
+}
+
+func evidenceFileRootForContractItem(item TestingContractItem) (string, bool) {
+	source := strings.TrimSpace(item.Source)
+	kind := strings.TrimSpace(item.ExpectedEvidence.Kind)
+	switch {
+	case source == testingContractVisualSource || kind == testingContractVisualKind:
+		return "screenshots", true
+	case source == testingContractBehavioralSource || kind == testingContractBehavioralKind:
+		return "behaviors", true
+	default:
+		return "", false
+	}
+}
+
+func validateEvidencePath(result *ReportGateResult, checkName, iterDir, root, field, raw string) {
+	clean, detail := cleanEvidencePath(raw, root)
+	if detail != "" {
+		result.Findings = append(result.Findings, ReportGateFinding{
+			CheckName: checkName,
+			Category:  GateCategorySchema,
+			Kind:      KindEvidenceFile,
+			Detail:    fmt.Sprintf("evidence.%s path %q is invalid: %s", field, raw, detail),
+		})
+		return
+	}
+	fullPath := filepath.Join(iterDir, filepath.FromSlash(clean))
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			result.Findings = append(result.Findings, ReportGateFinding{
+				CheckName: checkName,
+				Category:  GateCategorySchema,
+				Kind:      KindEvidenceFile,
+				Detail:    fmt.Sprintf("evidence.%s path %q is missing under iteration directory", field, clean),
+			})
+			return
+		}
+		result.Findings = append(result.Findings, ReportGateFinding{
+			CheckName: checkName,
+			Category:  GateCategorySchema,
+			Kind:      KindEvidenceFile,
+			Detail:    fmt.Sprintf("evidence.%s path %q could not be statted: %v", field, clean, err),
+		})
+		return
+	}
+	if info.IsDir() {
+		result.Findings = append(result.Findings, ReportGateFinding{
+			CheckName: checkName,
+			Category:  GateCategorySchema,
+			Kind:      KindEvidenceFile,
+			Detail:    fmt.Sprintf("evidence.%s path %q is a directory, not a file", field, clean),
+		})
+	}
+}
+
+func cleanEvidencePath(raw, root string) (string, string) {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return "", "path is empty"
+	}
+	slashPath := strings.ReplaceAll(p, "\\", "/")
+	if path.IsAbs(slashPath) || filepath.IsAbs(p) || strings.HasPrefix(slashPath, "//") || isWindowsAbsolutePath(slashPath) {
+		return "", "absolute paths are not allowed"
+	}
+	parts := strings.Split(slashPath, "/")
+	for _, part := range parts {
+		switch part {
+		case "", ".":
+			return "", "empty or current-directory path segments are not allowed"
+		case "..":
+			return "", "traversal segments are not allowed"
+		}
+	}
+	clean := path.Clean(slashPath)
+	if clean == "." {
+		return "", "path is empty"
+	}
+	first, _, _ := strings.Cut(clean, "/")
+	if first != root {
+		return "", fmt.Sprintf("path must be under %s/", root)
+	}
+	return clean, ""
+}
+
+func isWindowsAbsolutePath(p string) bool {
+	if len(p) >= 3 && p[1] == ':' && p[2] == '/' {
+		c := p[0]
+		return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+	}
+	return false
+}
+
+func readBoundTestingContract(report *VerificationReport) (*TestingContract, error) {
+	path := strings.TrimSpace(report.ContractPath)
+	if path == "" {
+		return nil, nil
+	}
+	contract, err := ReadTestingContract(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading testing contract %s: %w", path, err)
+	}
+	return contract, nil
 }
 
 func validateLegacyRequiredChecks(result *ReportGateResult, checks []VerificationCheckResult, required []RequiredVerificationItem) {
@@ -298,9 +469,8 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 		}
 		if _, ok := validIDs[itemID]; ok {
 			item := validIDs[itemID]
-			if item.ExpectedEvidence.Kind == testingContractManualKind &&
-				(checks[i].Mode == "" || checks[i].Mode == VerificationModeUnknown) {
-				checks[i].Mode = VerificationModeManual
+			if checks[i].Mode == "" || checks[i].Mode == VerificationModeUnknown {
+				checks[i].Mode = verificationModeForContractItem(item)
 			}
 			if NormalizeStatus(checks[i].Status) == VerificationStatusBlocked {
 				if strings.TrimSpace(checks[i].BlockedReason) == "" {
@@ -786,6 +956,14 @@ func verificationEvidenceText(c *VerificationCheckResult) string {
 		return text
 	}
 	return strings.TrimSpace(c.Evidence)
+}
+
+func artifactEvidenceHasPrimary(c *VerificationCheckResult) bool {
+	return isArtifactEvidenceMode(c.Mode) && strings.TrimSpace(c.EvidenceData.Primary) != ""
+}
+
+func isArtifactEvidenceMode(mode VerificationMode) bool {
+	return mode == VerificationModeVisual || mode == VerificationModeBehavioral
 }
 
 func findHedgePhrases(evidence string) []string {

@@ -70,6 +70,12 @@ type FinalReviewUserInput struct {
 
 	VerificationPath string
 
+	PriorImplementationPlanPaths         []string
+	PriorImplementationContractPaths     []string
+	PriorImplementationReportPaths       []string
+	PriorImplementationEvidenceRootDirs  []string
+	PriorImplementationEvidenceArtifacts []string
+
 	FeedbackPath     string
 	Publishable      bool
 	PreviousFeedback string

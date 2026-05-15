@@ -80,17 +80,17 @@ func (o *Orchestrator) StartMultiRepoImplementation(featureID string) error {
 }
 
 // dispatchMultiRepoResults reads the engine's result channel and routes
-// cycle-terminal values ("all_passed" / "failed" / "need_user_input") to
-// HandlePhaseCompletion. Intermediate observations are ignored. The loop
-// exits after the first terminal value because the production engine sends
-// exactly one value on a buffered-1 channel and never closes it.
+// terminal values to HandlePhaseCompletion. Intermediate observations are
+// ignored. The loop exits after the first terminal value because the
+// production engine sends exactly one value on a buffered-1 channel and never
+// closes it.
 func (o *Orchestrator) dispatchMultiRepoResults(featureID string, resultCh <-chan *agent.OrchestratorResult) {
 	for res := range resultCh {
 		if res == nil {
 			continue
 		}
 		switch res.FinalStatus {
-		case "all_passed", "awaiting_final_review", "failed", "need_user_input":
+		case "all_passed", "awaiting_final_review", "failed", "need_user_input", "plan_revision_required", "interrupted":
 			if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
 				Phase:           feature.PhaseImplement,
 				MultiRepoResult: res,

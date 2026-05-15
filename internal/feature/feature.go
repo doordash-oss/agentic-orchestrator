@@ -532,10 +532,8 @@ type Feature struct {
 	Summary     string   `yaml:"summary,omitempty"`
 	Images      []string `yaml:"images,omitempty"`
 	Attachments []string `yaml:"attachments,omitempty"`
-	// Tags describe the feature's nature (e.g. "frontend", "backend", "cli",
-	// "infra", "docs"). Populated at creation time by Classify(). Downstream
-	// phase prompt builders use tags to promote matching utility skills from
-	// preamble-only advertisement to mandatory reads.
+	// Tags is legacy inert metadata retained for feature.yaml load/save
+	// compatibility. Runtime prompt construction and skill discovery ignore it.
 	Tags         []string  `yaml:"tags,omitempty"`
 	Created      time.Time `yaml:"created"`
 	Status       Status    `yaml:"status"`

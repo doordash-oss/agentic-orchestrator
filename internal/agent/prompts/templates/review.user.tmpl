@@ -48,7 +48,7 @@ Apply the "Review Rules (With Verification Items)" section from the methodology.
 
 Read the current progress at: {{ .ProgressPath }}
 
-{{ end }}{{ template "behavioral_evidence_review" .BehavioralEvidence }}{{ template "visual_evidence_review" .VisualEvidence }}{{ if .PhaseType }}## Phase Type
+{{ end }}{{ if .PhaseType }}## Phase Type
 
 This is a **{{ .PhaseType }}** phase. Apply the corresponding phase-aware review criteria from the methodology.
 {{ end }}{{- end -}}

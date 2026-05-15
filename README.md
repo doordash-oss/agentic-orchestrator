@@ -61,7 +61,7 @@ After installing provider CLIs, run `claude --version`, `codex --version`, and `
 
 The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first build context, clarify intent, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
 
-<img width="993" height="581" alt="image" src="https://github.com/user-attachments/assets/9b818b3d-600b-4768-b06b-ce8a4ee513b8" />
+<img width="1051" height="570" alt="image" src="https://github.com/user-attachments/assets/00eb8559-0b0c-4000-a029-2210aa50f920" />
 
 **Knowledge Base Build** — Builds or refreshes a per-repo knowledge base covering architecture, conventions, API surface, dependencies, and verification. Fresh KBs are reused and the phase is skipped.
 

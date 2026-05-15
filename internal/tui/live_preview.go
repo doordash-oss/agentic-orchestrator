@@ -183,11 +183,21 @@ func livePreviewMetadataCell(item livePreviewMetadataItem, width int) string {
 func livePreviewAttentionSectionBox(att featureAttention, activity string, boxWidth, contentWidth int) string {
 	lines := renderLivePreviewAttentionBlock(att, activity, contentWidth)
 	title := firstNonEmpty(att.TypeLabel, "Attention")
+
+	borderColor := colorWarning
+	titleStyle := WarningStyle.Bold(true)
+	titleGlyph := "!"
+	if att.IsQuestionTone() {
+		borderColor = colorInfo
+		titleStyle = lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
+		titleGlyph = "?"
+	}
+
 	box := panelStyle(false).
-		BorderForeground(colorWarning).
+		BorderForeground(borderColor).
 		Width(boxWidth).
 		Render(strings.Join(lines, "\n"))
-	return renderBorderTitle(box, livePreviewBorderTitle("! "+title, boxWidth), WarningStyle.Bold(true))
+	return renderBorderTitle(box, livePreviewBorderTitle(titleGlyph+" "+title, boxWidth), titleStyle)
 }
 
 func renderLivePreviewAttentionBlock(att featureAttention, activity string, width int) []string {
@@ -198,6 +208,9 @@ func renderLivePreviewAttentionBlock(att featureAttention, activity string, widt
 	if summary == "" {
 		summary = att.TypeLabel
 	}
+	if att.IsQuestionTone() {
+		return renderQuestionToneAttentionBlock(att, summary, activity, width)
+	}
 	lines := livePreviewWrapRenderedBody("  ", summary, WarningStyle.Render, width, "    ")
 	if hint := att.FooterHint(); hint != "" {
 		lines = append(lines, livePreviewWrapRenderedBody("  ", hint, WarningStyle.Bold(true).Render, width, "    ")...)
@@ -205,6 +218,34 @@ func renderLivePreviewAttentionBlock(att featureAttention, activity string, widt
 	if activity != "" {
 		lines = append(lines, "")
 		lines = append(lines, livePreviewWrapRenderedBody("  "+awaitingUserGlyph()+" ", activity, chatThinkingStyle.Render, width, "    ")...)
+	}
+	return lines
+}
+
+// renderQuestionToneAttentionBlock renders an attention box for user-input
+// requests (questions and input gates) with an inviting, info-blue tone:
+// neutral body text, a structured "press [a] to <Action>" CTA where the key
+// pops in bold info-blue, and a soft italic waiting line. This avoids the
+// alarmist mono-yellow look reserved for permissions/reviews.
+func renderQuestionToneAttentionBlock(att featureAttention, summary, activity string, width int) []string {
+	bodyStyle := lipgloss.NewStyle().Foreground(colorText)
+	keyStyle := lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
+	pressStyle := lipgloss.NewStyle().Foreground(colorSubtext).Italic(true)
+	ctaTailStyle := lipgloss.NewStyle().Foreground(colorText).Bold(true)
+
+	lines := livePreviewWrapRenderedBody("  ", summary, bodyStyle.Render, width, "    ")
+
+	if att.CTALabel != "" {
+		lines = append(lines, "")
+		cta := pressStyle.Render("press ") +
+			keyStyle.Render("[a]") +
+			ctaTailStyle.Render(" to "+att.CTALabel)
+		lines = append(lines, "  "+cta)
+	}
+
+	if activity != "" {
+		lines = append(lines, "")
+		lines = append(lines, livePreviewWrapRenderedBody("  ", activity, chatThinkingStyle.Render, width, "    ")...)
 	}
 	return lines
 }

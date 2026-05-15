@@ -200,7 +200,7 @@ func TestLivePreviewRendersAttentionBlock(t *testing.T) {
 			},
 			width:  96,
 			height: 20,
-			want:   []string{"Question", "Which API should we keep?", "[a] Answer", "Waiting for an answer"},
+			want:   []string{"Question", "Which API should we keep?", "press ", "[a]", " to Answer", "Waiting for an answer"},
 		},
 		{
 			name:    "review",
@@ -217,7 +217,7 @@ func TestLivePreviewRendersAttentionBlock(t *testing.T) {
 			},
 			width:  96,
 			height: 20,
-			want:   []string{"Input Required", "Feature-level input gate", "[a] Answer"},
+			want:   []string{"Input Required", "Feature-level input gate", "press ", "[a]", " to Answer"},
 		},
 		{
 			name: "narrow keeps attention and drops transcript",
@@ -229,7 +229,7 @@ func TestLivePreviewRendersAttentionBlock(t *testing.T) {
 				assistantMessage(llm.ContentBlock{Type: "text", Text: "roomy transcript context"})),
 			width:   50,
 			height:  10,
-			want:    []string{"Question", "Narrow question?", "[a] Answer"},
+			want:    []string{"Question", "Narrow question?", "press ", "[a]", " to Answer"},
 			notWant: []string{"roomy transcript context"},
 		},
 	}
@@ -563,7 +563,7 @@ func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
 	}
 }
 
-func TestLivePreviewAttentionRendersWarningBox(t *testing.T) {
+func TestLivePreviewAttentionRendersQuestionBox(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		Status:    feature.StatusImplementing,
@@ -571,9 +571,9 @@ func TestLivePreviewAttentionRendersWarningBox(t *testing.T) {
 	}
 	view := stripANSI(newLivePreviewModel(f).withHeight(20).ViewCompact(100))
 
-	for _, want := range []string{"╭─ ! Question", "Which API should we keep?", "[a] Answer", "Waiting for an answer"} {
+	for _, want := range []string{"╭─ ? Question", "Which API should we keep?", "press [a] to Answer", "Waiting for an answer"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("attention warning box missing %q in:\n%s", want, view)
+			t.Fatalf("attention question box missing %q in:\n%s", want, view)
 		}
 	}
 }

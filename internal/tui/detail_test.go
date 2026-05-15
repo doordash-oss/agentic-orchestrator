@@ -83,7 +83,7 @@ func TestDetailViewFooterActions(t *testing.T) {
 	m := NewDetailModel(f, "")
 	view := m.View()
 
-	// [a] Attach, [N] Input alerts, [s] Stop, [d] Delete, [esc] Back are expected for Implementing.
+	// [a] Watch, [N] Input alerts, [s] Stop, [d] Delete, [esc] Back are expected for Implementing.
 	// [r] Restart is hidden while running — [s] Stop takes its slot.
 	// [p] Publish is only shown for PRReady status.
 	for _, action := range []string{"[a]", "[Shift+N]", "[s] Stop", "[d]", "[esc]"} {
@@ -228,17 +228,15 @@ func TestDetailViewPlanNeedsReview(t *testing.T) {
 		m := NewDetailModel(f, "")
 		view := m.View()
 
-		// Find the line that contains "[a] Review" and confirm neighbouring hints
-		// (at minimum [r] Restart) are on the SAME line, not stranded below.
+		// Find the footer line that contains "[a] Review" and confirm
+		// neighbouring hints (at minimum [r] Restart) are on the SAME line, not
+		// stranded below.
 		for _, line := range strings.Split(view, "\n") {
-			if strings.Contains(line, "[a] Review") {
-				if !strings.Contains(line, "[r] Restart") {
-					t.Errorf("expected [r] Restart on same line as [a] Review, got: %q", line)
-				}
+			if strings.Contains(line, "[a] Review") && strings.Contains(line, "[r] Restart") {
 				return
 			}
 		}
-		t.Error("[a] Review not found in any footer line")
+		t.Error("[a] Review not found on the same footer line as [r] Restart")
 	})
 
 	t.Run("compact view shows banner and [a] Review affordance", func(t *testing.T) {
@@ -462,6 +460,31 @@ func TestDetailHelpQueue(t *testing.T) {
 	}
 	if !strings.Contains(view, "How do I fix this?") {
 		t.Error("expected help question text")
+	}
+}
+
+func TestDetailHelpQueueNormalizesLegacyAPIErrorCopy(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-api-help",
+		Slug:         "api-help-test",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+		HelpQueue: []feature.HelpRequest{
+			{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true},
+		},
+	}
+
+	m := NewDetailModel(f, "")
+	view := m.View()
+
+	const want = "API error: rate limit exceeded (429) — press 'a' to answer"
+	if !strings.Contains(view, want) {
+		t.Errorf("DetailModel.View() missing normalized API error %q", want)
+	}
+	if strings.Contains(strings.ToLower(view), "attach with") {
+		t.Errorf("DetailModel.View() contains retired API error copy:\n%s", view)
 	}
 }
 
@@ -1066,7 +1089,7 @@ func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	}
 }
 
-func TestDetailFormatStatus_ShowsAttachHintForActivePublishedCycle(t *testing.T) {
+func TestDetailFormatStatus_ShowsWatchHintForActivePublishedCycle(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		Status:           feature.StatusPublished,
@@ -1081,8 +1104,8 @@ func TestDetailFormatStatus_ShowsAttachHintForActivePublishedCycle(t *testing.T)
 	if !strings.Contains(got, "Addressing Review Comments [1]") {
 		t.Fatalf("formatDetailStatus() = %q, want active review-comments cycle label", got)
 	}
-	if !strings.Contains(got, "[a] attach") {
-		t.Errorf("formatDetailStatus() = %q, want attach hint while cycle is active", got)
+	if !strings.Contains(got, "[a] Watch") {
+		t.Errorf("formatDetailStatus() = %q, want watch hint while cycle is active", got)
 	}
 }
 

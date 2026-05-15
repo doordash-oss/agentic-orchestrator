@@ -201,7 +201,7 @@ func pendingAskUserSummary(f *feature.Feature, sess session.SessionView) (string
 	if f != nil {
 		for _, h := range f.HelpQueue {
 			if h.Pending {
-				return singleLine(h.Question), true
+				return singleLine(normalizeManagedHelpQuestion(h.Question)), true
 			}
 		}
 	}

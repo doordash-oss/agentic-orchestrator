@@ -20,6 +20,7 @@ var DashboardLeftSection = HelpSection{
 	Bindings: []HelpBinding{
 		{"n", "New feature (launch wizard)"},
 		{"enter", "Focus right panel / expand"},
+		{"a", "Watch active work; Answer, Approve, or Review when prompted"},
 		{"Shift+R", "Resume all interrupted features"},
 		{"tab", "Switch panel"},
 		{"↑/k", "Move up"},
@@ -37,7 +38,7 @@ var DashboardLeftSection = HelpSection{
 var DetailSection = HelpSection{
 	Title: "Feature Detail",
 	Bindings: []HelpBinding{
-		{"a", "Attach to agent session"},
+		{"a", "Watch active work; Answer, Approve, or Review when prompted"},
 		{"y", "Approve pending permissions"},
 		{"Shift+A", "Approve & remember permissions"},
 		{"h", "Answer agent's help question"},
@@ -74,9 +75,9 @@ var GeneralSection = HelpSection{
 
 // AttachSection defines keybindings available in the attach (PTY) view.
 var AttachSection = HelpSection{
-	Title: "Attach View",
+	Title: "Watch View",
 	Bindings: []HelpBinding{
-		{"ctrl+]/ctrl+x/esc", "Detach from session"},
+		{"ctrl+]/ctrl+x/esc", "Stop watching and return to dashboard"},
 	},
 }
 

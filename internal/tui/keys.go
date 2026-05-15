@@ -154,7 +154,7 @@ var keys = keyMap{
 	Enter:             key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 	Back:              key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Publish:           key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "publish")),
-	Attach:            key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "attach")),
+	Attach:            key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "watch")),
 	Approve:           key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "approve permissions")),
 	Help:              key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "answer help")),
 	Restart:           key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart phase")),
@@ -210,5 +210,5 @@ var keys = keyMap{
 	ApproveAndRemember: key.NewBinding(key.WithKeys("A"), key.WithHelp("Shift+A", "approve & remember")),
 
 	// Attach-specific
-	Detach: key.NewBinding(key.WithKeys("ctrl+]", "esc"), key.WithHelp("ctrl+]/esc", "detach")),
+	Detach: key.NewBinding(key.WithKeys("ctrl+]", "esc"), key.WithHelp("ctrl+]/esc", "stop watching")),
 }

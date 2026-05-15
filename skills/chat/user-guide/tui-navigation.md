@@ -53,7 +53,7 @@ Keys available in the right panel depend on the feature's current status:
 
 | Key | Action |
 |-----|--------|
-| `a` | Attach to live session |
+| `a` | Watch active work; Answer, Approve, or Review when prompted |
 | `y` | Approve pending permission |
 | `Shift+A` | Approve and remember permission |
 | `h` | Answer agent's question |
@@ -89,17 +89,17 @@ Keys available in the right panel depend on the feature's current status:
 
 Inside the review comments view (opened with `g`), press `Shift+A` to auto-address all comments with an autonomous agent session.
 
-Other keys available in all states: `d` (delete feature), `Shift+N` (toggle input notifications), `a` on NeedsReview features (open artifact review editor).
+Other keys available in all states: `d` (delete feature), `Shift+N` (toggle input notifications), `a` on NeedsReview features (review artifacts).
 
-## Attach View
+## Watch View
 
-Attach to a running feature's session with `a` to watch and interact with the AI agent in real time.
+Press `a` on a running feature to watch its live agent session and interact with the AI agent in real time.
 
 ### Basic Controls
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+]` / `Esc` | Detach from session |
+| `Ctrl+]` / `Esc` | Stop watching and return to dashboard |
 | `Ctrl+F` | Cycle message filter: All → No Tools → Text Only |
 | `Enter` | Send message |
 | `Ctrl+S` | Send message (alternative) |
@@ -112,7 +112,7 @@ Attach to a running feature's session with `a` to watch and interact with the AI
 
 ### Repo Tabs
 
-When a feature spans multiple repos, the attach view shows one tab per active repo. `Tab` switches to next repo tab, `Shift+Tab` to previous.
+When a feature spans multiple repos, the watch view shows one tab per active repo. `Tab` switches to next repo tab, `Shift+Tab` to previous.
 
 ### Permission Prompts
 
@@ -122,7 +122,7 @@ When prompted: `y` = allow, `r` = allow and remember, `n` = deny. Navigate with 
 
 - **Agent questions**: Options appear as a selectable list (`j`/`k` to navigate, `Enter` to select). Freeform input available when offered.
 - **Plan review**: Press `Ctrl+D` to choose **Iterate more** or **Proceed**.
-- **Tweak sessions**: Press `Ctrl+D` to finish immediately. Press `Esc` to choose: `f` = finish and push, `d` = detach without finishing.
+- **Tweak sessions**: Press `Ctrl+D` to finish immediately. Press `Esc` to choose: `f` = finish and push, `d` = stop watching without finishing.
 
 ## Wizard View
 
@@ -201,4 +201,4 @@ Press `?` from any view to open a context-sensitive help overlay showing keybind
 
 ## Nordic Keyboard Layout
 
-Set `ui.keyboard_layout: "nordic"` in `config.yaml` to add alternative bindings: `-` for `/` (chat) and `Ctrl+X` for `Ctrl+]` (detach), since `/` and `]` require AltGr on Nordic keyboards. The footer shows the active layout.
+Set `ui.keyboard_layout: "nordic"` in `config.yaml` to add alternative bindings: `-` for `/` (chat) and `Ctrl+X` for `Ctrl+]` (stop watching), since `/` and `]` require AltGr on Nordic keyboards. The footer shows the active layout.

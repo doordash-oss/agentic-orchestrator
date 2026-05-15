@@ -1276,9 +1276,9 @@ func TestRemoveResolvedHelpByMessage(t *testing.T) {
 func TestClearPendingHelpByPrefix(t *testing.T) {
 	f := &feature.Feature{
 		HelpQueue: []feature.HelpRequest{
-			{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true},
-			{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true},
-			{Question: "API error: API overloaded (529) — attach with 'a' to respond", Pending: true},
+			{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: true},
+			{Question: "Agent is waiting for input — press 'a' to answer", Pending: true},
+			{Question: "API error: API overloaded (529) — press 'a' to answer", Pending: true},
 		},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
@@ -1304,9 +1304,9 @@ func TestClearPendingHelpByPrefix(t *testing.T) {
 func TestRemoveResolvedHelpByPrefix(t *testing.T) {
 	f := &feature.Feature{
 		HelpQueue: []feature.HelpRequest{
-			{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: false},
+			{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: false},
 			{Question: "other question", Pending: true},
-			{Question: "API error: API overloaded (529) — attach with 'a' to respond", Pending: false},
+			{Question: "API error: API overloaded (529) — press 'a' to answer", Pending: false},
 		},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
@@ -1326,14 +1326,14 @@ func TestAttachClearsAPIErrorHelp(t *testing.T) {
 	f.Status = feature.StatusImplementing
 	f.CurrentPhase = feature.PhaseImplement
 	f.HelpQueue = []feature.HelpRequest{
-		{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true, Time: time.Now()},
-		{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true, Time: time.Now()},
+		{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: true, Time: time.Now()},
+		{Question: "Agent is waiting for input — press 'a' to answer", Pending: true, Time: time.Now()},
 	}
 	_ = fm.Store.Save(f)
 
 	// Simulate what attachCmd does: clear both generic and API error help
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+		const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 		clearPendingHelpByMessage(feat, inputMsg)
 		clearPendingHelpByPrefix(feat, apiErrorHelpPrefix)
 		return nil
@@ -1355,14 +1355,14 @@ func TestSessionDoneClearsAPIErrorHelp(t *testing.T) {
 	f.Status = feature.StatusImplementing
 	f.CurrentPhase = feature.PhaseImplement
 	f.HelpQueue = []feature.HelpRequest{
-		{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true, Time: time.Now()},
-		{Question: "API error: API overloaded (529) — attach with 'a' to respond", Pending: false, Time: time.Now()},
+		{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: true, Time: time.Now()},
+		{Question: "API error: API overloaded (529) — press 'a' to answer", Pending: false, Time: time.Now()},
 	}
 	_ = fm.Store.Save(f)
 
 	// Simulate what handleSessionDone does: clear and remove both generic and API error help
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+		const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 		clearPendingHelpByMessage(feat, inputMsg)
 		removeResolvedHelpByMessage(feat, inputMsg)
 		clearPendingHelpByPrefix(feat, apiErrorHelpPrefix)
@@ -1782,7 +1782,7 @@ func TestFeatureSummaryMsgIgnoresEmpty(t *testing.T) {
 // TestDedupAllowsRedetectionAfterResolution verifies that after a help request is resolved,
 // the same message can be added again (hasPendingHelpRequestMessage is used, not hasHelpRequestMessage).
 func TestDedupAllowsRedetectionAfterResolution(t *testing.T) {
-	const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+	const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 
 	f := &feature.Feature{
 		HelpQueue: []feature.HelpRequest{
@@ -1816,6 +1816,99 @@ func TestDedupAllowsRedetectionAfterResolution(t *testing.T) {
 	}
 	if !f.HelpQueue[1].Pending {
 		t.Error("newly added entry should be pending")
+	}
+}
+
+func TestEnsurePendingWaitingInputHelpNormalizesLegacyCopy(t *testing.T) {
+	f := &feature.Feature{
+		HelpQueue: []feature.HelpRequest{
+			{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true},
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+
+	changed := ensurePendingWaitingInputHelp(f)
+	if changed {
+		t.Error("ensurePendingWaitingInputHelp() changed = true, want false for existing legacy pending entry")
+	}
+	if len(f.HelpQueue) != 1 {
+		t.Fatalf("len(HelpQueue) = %d, want 1", len(f.HelpQueue))
+	}
+	if got := f.HelpQueue[0].Question; got != waitingInputHelpMessage {
+		t.Errorf("HelpQueue[0].Question = %q, want %q", got, waitingInputHelpMessage)
+	}
+	if !f.HelpQueue[0].Pending {
+		t.Error("HelpQueue[0].Pending = false, want true")
+	}
+}
+
+func TestNormalizeManagedHelpQueueUpdatesLegacyAPIErrorCopy(t *testing.T) {
+	const legacy = "API error: rate limit exceeded (429) — attach with 'a' to respond"
+	const current = "API error: rate limit exceeded (429) — press 'a' to answer"
+	f := &feature.Feature{
+		HelpQueue: []feature.HelpRequest{
+			{Question: legacy, Pending: true},
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+
+	if !normalizeManagedHelpQueue(f) {
+		t.Fatal("normalizeManagedHelpQueue() changed = false, want true")
+	}
+	if got := f.HelpQueue[0].Question; got != current {
+		t.Errorf("HelpQueue[0].Question = %q, want %q", got, current)
+	}
+	if !hasPendingHelpRequestMessage(f, current) {
+		t.Error("hasPendingHelpRequestMessage() = false, want true for normalized API error")
+	}
+}
+
+func TestHasPendingHelpRequestMessageMatchesLegacyAPIErrorCopy(t *testing.T) {
+	const legacy = "API error: rate limit exceeded (429) — attach with 'a' to respond"
+	const current = "API error: rate limit exceeded (429) — press 'a' to answer"
+	f := &feature.Feature{
+		HelpQueue: []feature.HelpRequest{
+			{Question: legacy, Pending: true},
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+
+	if !hasPendingHelpRequestMessage(f, current) {
+		t.Error("hasPendingHelpRequestMessage() = false, want true for legacy API error copy")
+	}
+}
+
+func TestReconcileHelpQueueClearsLegacyManagedHelpCopy(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	f, err := fm.Create("reconcile-legacy-help", "legacy help reconciliation", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fm.Transition(f.ID, feature.StatusResearching)
+	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
+		feat.HelpQueue = append(feat.HelpQueue,
+			feature.HelpRequest{Question: "Agent has a question — attach with 'a' to respond", Pending: true},
+			feature.HelpRequest{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true},
+		)
+		return nil
+	})
+
+	sm := session.NewManager(nil)
+	sess := session.NewSession(f.ID+"-impl-repo-01", f.ID, feature.PhaseImplement)
+	sess.SetStatus(session.SessionRunning)
+	sm.RegisterTestSession(sess)
+	app.sessionManager = sm
+
+	app.reconcileHelpQueue(f.ID)
+
+	updated, _ := fm.Get(f.ID)
+	for _, h := range updated.HelpQueue {
+		if h.Pending {
+			t.Errorf("help entry %q still pending; want cleared when no session is waiting", h.Question)
+		}
+		if strings.Contains(h.Question, "attach with") {
+			t.Errorf("help entry kept retired copy after reconcile: %q", h.Question)
+		}
 	}
 }
 
@@ -2202,7 +2295,7 @@ func TestHelpRequestTimePopulated(t *testing.T) {
 	_ = fm.Transition(f.ID, feature.StatusResearching)
 
 	// Simulate handleSessionEvent adding a help request (with Time populated)
-	const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+	const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 	now := time.Now()
 	_ = fm.Store.Modify(f.ID, func(f *feature.Feature) error {
 		if !hasPendingHelpRequestMessage(f, inputMsg) {
@@ -5794,7 +5887,7 @@ func TestApproveAndRememberCmd_HelpQueuePreservedWhenHelpSessionRemains(t *testi
 	_ = fm.Transition(f.ID, feature.StatusResearching)
 
 	// Populate both PermissionsQueue and HelpQueue
-	const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+	const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.PermissionsQueue = append(feat.PermissionsQueue, feature.PermissionRequest{
 			Tool:    "Bash",

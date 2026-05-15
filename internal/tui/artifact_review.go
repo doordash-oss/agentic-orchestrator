@@ -842,7 +842,7 @@ func (m ArtifactReviewModel) menuItems() []menuItem {
 		items := []menuItem{
 			{label: "Iterate more (+3 rounds)", decision: "iterate"},
 			{label: "Proceed with current plan", decision: "proceed"},
-			{label: "Just detach", decision: "detach"},
+			{label: "Return to dashboard", decision: "detach"},
 		}
 		if m.criticApproved {
 			// Drop the iterate option when the critic already approved:
@@ -854,7 +854,7 @@ func (m ArtifactReviewModel) menuItems() []menuItem {
 	case "gate":
 		return []menuItem{
 			{label: "Proceed to next phase", decision: "proceed"},
-			{label: "Just detach", decision: "detach"},
+			{label: "Return to dashboard", decision: "detach"},
 		}
 	case reviewModeNeedUserInput:
 		// Surface the gating reason directly in the label so the user
@@ -867,12 +867,12 @@ func (m ArtifactReviewModel) menuItems() []menuItem {
 		return []menuItem{
 			{label: resumeLabel, decision: "resume"},
 			{label: "Abort", decision: "abort"},
-			{label: "Just detach", decision: "detach"},
+			{label: "Return to dashboard", decision: "detach"},
 		}
 	default: // "rewind"
 		return []menuItem{
 			{label: "Proceed with rewind", decision: "proceed"},
-			{label: "Just detach", decision: "detach"},
+			{label: "Return to dashboard", decision: "detach"},
 		}
 	}
 }

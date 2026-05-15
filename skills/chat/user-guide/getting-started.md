@@ -86,13 +86,13 @@ Press `Shift+G` to create the feature. It enters the pipeline and progresses thr
 
 The dashboard shows all features organized into three sections: **In Progress**, **Published**, and **Completed**. Navigate with `j`/`k` or arrow keys. Press `Tab` to switch between the feature list (left panel) and the detail view (right panel).
 
-### Attaching to a Session
+### Watching Live Work
 
-Press `a` on a running feature to attach to its live agent session. You can watch the AI work in real time and interact with it. Detach with `Ctrl+]` or `Esc` (on Nordic keyboards: `Ctrl+X` or `Esc`).
+Press `a` on a running feature to watch its live agent session. You can follow the AI work in real time and interact with it. Stop watching with `Ctrl+]` or `Esc` (on Nordic keyboards: `Ctrl+X` or `Esc`).
 
 ### Message Filtering
 
-While attached, press `Ctrl+F` to cycle through message filter modes: **All** (everything), **No Tools** (hides tool use and thinking), **Text Only** (only assistant text and user messages).
+While watching, press `Ctrl+F` to cycle through message filter modes: **All** (everything), **No Tools** (hides tool use and thinking), **Text Only** (only assistant text and user messages).
 
 ### Handling Permission Prompts
 

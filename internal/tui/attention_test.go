@@ -16,6 +16,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -170,6 +171,52 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 				t.Errorf("computeFeatureAttention(%s).RepoName = %q, want %q", tt.name, got.RepoName, tt.wantRepo)
 			}
 		})
+	}
+}
+
+func TestComputeFeatureAttentionNormalizesLegacyPendingHelpCopy(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		Status: feature.StatusImplementing,
+		HelpQueue: []feature.HelpRequest{
+			{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true},
+			{Question: waitingInputHelpMessage, Pending: true},
+		},
+	}
+
+	got := computeFeatureAttention(f, nil)
+	if got.Kind != attentionAskUser {
+		t.Fatalf("computeFeatureAttention().Kind = %v, want %v", got.Kind, attentionAskUser)
+	}
+	if got.Summary != waitingInputHelpMessage {
+		t.Errorf("computeFeatureAttention().Summary = %q, want %q", got.Summary, waitingInputHelpMessage)
+	}
+	if strings.Contains(strings.ToLower(got.Summary), "attach") {
+		t.Errorf("computeFeatureAttention().Summary contains retired copy: %q", got.Summary)
+	}
+}
+
+func TestComputeFeatureAttentionNormalizesLegacyAPIErrorHelpCopy(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		Status: feature.StatusImplementing,
+		HelpQueue: []feature.HelpRequest{
+			{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true},
+		},
+	}
+
+	got := computeFeatureAttention(f, nil)
+	const want = "API error: rate limit exceeded (429) — press 'a' to answer"
+	if got.Kind != attentionAskUser {
+		t.Fatalf("computeFeatureAttention().Kind = %v, want %v", got.Kind, attentionAskUser)
+	}
+	if got.Summary != want {
+		t.Errorf("computeFeatureAttention().Summary = %q, want %q", got.Summary, want)
+	}
+	if strings.Contains(strings.ToLower(got.Summary), "attach") {
+		t.Errorf("computeFeatureAttention().Summary contains retired copy: %q", got.Summary)
 	}
 }
 

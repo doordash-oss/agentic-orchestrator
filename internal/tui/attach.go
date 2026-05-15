@@ -2656,7 +2656,7 @@ func (m AttachModel) View() string {
 	if titleName == "" {
 		titleName = m.sess.ID()
 	}
-	panelTitle := fmt.Sprintf("%s · %s (%s)", titleName, m.sess.Phase(), statusText)
+	panelTitle := fmt.Sprintf("Watch · %s · %s (%s)", titleName, m.sess.Phase(), statusText)
 	msgBox = renderBorderTitle(msgBox, panelTitle, lipgloss.NewStyle().Foreground(colorBrand))
 
 	var result strings.Builder
@@ -2725,25 +2725,25 @@ func (m AttachModel) View() string {
 		tabHint = " [Tab/S-Tab] Switch repo  "
 	}
 	var hints string
-	detachHint := "[" + DetachKeyHint() + "] Detach"
+	stopWatchingHint := "[" + DetachKeyHint() + "] Stop watching"
 	if m.done && !m.readOnly {
-		hints = tabHint + " Session ended — " + detachHint + " to return   [Ctrl+f] Filter: " + m.filter.String()
+		hints = tabHint + " Session ended — " + stopWatchingHint + " to return   [Ctrl+f] Filter: " + m.filter.String()
 	} else if m.readOnly {
-		hints = tabHint + " " + detachHint + "   [Ctrl+f] Filter: " + m.filter.String()
+		hints = tabHint + " " + stopWatchingHint + "   [Ctrl+f] Filter: " + m.filter.String()
 	} else if m.planReviewMode && m.showPlanReviewMenu {
 		hints = tabHint + " [↑↓] Navigate   [Enter] Select   [Esc] Cancel"
 	} else if m.planReviewMode {
-		hints = tabHint + " " + detachHint + "   [Ctrl+D] Done reviewing   [Ctrl+S] Send   [Ctrl+f] Filter: " + m.filter.String()
+		hints = tabHint + " " + stopWatchingHint + "   [Ctrl+D] Done reviewing   [Ctrl+S] Send   [Ctrl+f] Filter: " + m.filter.String()
 	} else if m.rewindReviewMode && m.showRewindReviewMenu {
 		hints = tabHint + " [Enter] Proceed   [Esc] Cancel"
 	} else if m.rewindReviewMode {
-		hints = tabHint + " " + detachHint + "   [Ctrl+D] Done reviewing   [Ctrl+S] Send   [Ctrl+f] Filter: " + m.filter.String()
+		hints = tabHint + " " + stopWatchingHint + "   [Ctrl+D] Done reviewing   [Ctrl+S] Send   [Ctrl+f] Filter: " + m.filter.String()
 	} else if m.isTweakSession && m.showFinishPrompt {
-		hints = tabHint + " [f/Enter] Finish   [s] Stop   [d] Detach   [Esc] Cancel"
+		hints = tabHint + " [f/Enter] Finish   [s] Stop   [d] Stop watching   [Esc] Cancel"
 	} else if m.isTweakSession {
-		hints = tabHint + " [Esc] Finish/Stop/Detach   [Ctrl+D] Finish   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
+		hints = tabHint + " [Esc] Finish/Stop/Stop watching   [Ctrl+D] Finish   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
 	} else {
-		hints = tabHint + " " + detachHint + "   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
+		hints = tabHint + " " + stopWatchingHint + "   [Enter] Send   [Shift+Enter] Newline   [Ctrl+f] Filter: " + m.filter.String()
 	}
 	// While the interrupt toast is active, it replaces the key-hints in the
 	// footer so the confirmation is visible without changing layout height
@@ -3165,13 +3165,13 @@ func (m AttachModel) renderFinishPromptInline() string {
 	hintStyle := MutedStyle
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Finish, Stop, or Detach?"))
+	b.WriteString(titleStyle.Render("Finish, Stop, or Stop watching?"))
 	b.WriteString("\n\n")
 	b.WriteString(normalStyle.Render("  [f/Enter] Finish — commit changes and complete"))
 	b.WriteByte('\n')
 	b.WriteString(normalStyle.Render("  [s]       Stop   — interrupt the agent's current task"))
 	b.WriteByte('\n')
-	b.WriteString(normalStyle.Render("  [d]       Detach — leave session running"))
+	b.WriteString(normalStyle.Render("  [d]       Stop watching — leave session running"))
 	b.WriteByte('\n')
 	b.WriteByte('\n')
 	b.WriteString(hintStyle.Render("Esc to cancel"))

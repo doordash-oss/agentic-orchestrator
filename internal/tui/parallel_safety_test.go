@@ -66,6 +66,7 @@ import (
 //   - styles_test.go
 //   - tui_boundary_test.go
 //   - tweak_removal_test.go
+//   - vocabulary_test.go
 
 var tuiParallelIneligibleTestFiles = []string{
 	"app_test.go",
@@ -118,6 +119,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"styles_test.go",
 	"tui_boundary_test.go",
 	"tweak_removal_test.go",
+	"vocabulary_test.go",
 }
 
 func TestTUIParallelSafetyInventoryCoversAllTestFiles(t *testing.T) {

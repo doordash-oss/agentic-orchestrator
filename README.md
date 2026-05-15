@@ -16,7 +16,7 @@ Most AI coding tools are single-threaded: one conversation, one task, one contex
 - **Parallel execution** — Run 5, 10, 20 features simultaneously. Each gets its own git worktree, its own agent session, its own branch. No conflicts, no waiting.
 - **Structured pipeline** — Features flow through Research → Plan → Implement → Review → Publish with human approval gates between phases. You stay in control of *what* gets built; AI handles *how*.
 - **Multi-model orchestration** — Claude handles research, planning, and implementation. Codex handles code review. Each model is used where it excels.
-- **Multiplexed sessions** — Agent sessions run in background pseudo-terminals. Attach to watch them work in real time, detach to let them run, come back whenever you want.
+- **Multiplexed sessions** — Agent sessions run in background pseudo-terminals. Watch live work in real time, stop watching to let it continue, and come back whenever you want.
 - **Plan validation** — Specialized AI critics (architecture, security, performance, testing) review plans *before* implementation begins, catching structural issues early.
 
 ## Quick Start
@@ -35,7 +35,7 @@ agentico
 
 On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
 
-**Three keys to remember**: `n` (new feature), `?` (help), `a` (attach to session). Everything else is discoverable from the help overlay.
+**Three keys to remember**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Everything else is discoverable from the help overlay.
 
 ## Prerequisites
 
@@ -140,9 +140,9 @@ Press `n` from the dashboard to open the wizard:
 
 ### Interacting with Agents
 
-**Attach** (`a`) — Connect to a running agent session. Watch it work in real time. Filter the output (`Ctrl+F`) between All, No Tools, or Text Only views.
+**Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input. Filter the output (`Ctrl+F`) between All, No Tools, or Text Only views.
 
-**Detach** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
+**Stop watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
 
 ### Post-Implementation Actions
 

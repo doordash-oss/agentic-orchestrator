@@ -50,8 +50,8 @@ type TickMsg time.Time
 
 const (
 	tickInterval            = 3 * time.Second
-	waitingInputHelpMessage = "Agent is waiting for input — attach with 'a' to respond"
-	questionHelpMessage     = "Agent has a question — attach with 'a' to respond"
+	waitingInputHelpMessage = "Agent is waiting for input — press 'a' to answer"
+	questionHelpMessage     = "Agent has a question — press 'a' to answer"
 )
 
 type View int
@@ -2400,7 +2400,6 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 		// Tool permission request (Bash, Edit, etc.) or AskUserQuestion.
 		// AskUserQuestion also arrives as a control_request; we add it to
 		// HelpQueue but NOT PermissionsQueue (it is not a tool permission).
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		fid := eventFID(evt.SessionID, evt.FeatureID)
 		cr := sdkMsg.ControlRequest
 		var slug string
@@ -2430,10 +2429,11 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 	case sdkMsg.Result != nil:
 		if sdkMsg.Result.Subtype == "error" {
 			// API error — include actual error details
-			errorMsg := fmt.Sprintf("API error: %s — attach with 'a' to respond", sdkMsg.Result.Result)
+			errorMsg := fmt.Sprintf("%s %s%s", apiErrorHelpPrefix, sdkMsg.Result.Result, apiErrorHelpSuffix)
 			fid := eventFID(evt.SessionID, evt.FeatureID)
 			var slug string
 			_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
+				normalizeManagedHelpQueue(f)
 				if !hasPendingHelpRequestMessage(f, errorMsg) {
 					f.HelpQueue = append(f.HelpQueue, feature.HelpRequest{
 						Question: errorMsg,
@@ -2615,8 +2615,8 @@ func (m AppModel) handleTick() (tea.Model, tea.Cmd) {
 				// cleared when the agent starts processing the next message
 				// (see handleSDKEvent). Still clear stale permissions below.
 				if !isTweak {
-					clearPendingHelpByMessage(f, "Agent is waiting for input \u2014 attach with 'a' to respond")
-					clearPendingHelpByMessage(f, "Agent has a question \u2014 attach with 'a' to respond")
+					clearPendingHelpByMessage(f, waitingInputHelpMessage)
+					clearPendingHelpByMessage(f, questionHelpMessage)
 				}
 				// Clear stale PermissionsQueue entries when session returns to running
 				for i := range f.PermissionsQueue {
@@ -3570,7 +3570,7 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 				if h.Pending {
 					m.helpInputActive = true
 					m.helpFeatureID = f.ID
-					m.helpQuestion = h.Question
+					m.helpQuestion = normalizeManagedHelpQuestion(h.Question)
 					m.helpInput = textinput.New()
 					m.helpInput.Placeholder = "Type your answer..."
 					m.helpInput.Focus()
@@ -3857,7 +3857,7 @@ func (m AppModel) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if h.Pending {
 					m.helpInputActive = true
 					m.helpFeatureID = m.detail.feature.ID
-					m.helpQuestion = h.Question
+					m.helpQuestion = normalizeManagedHelpQuestion(h.Question)
 					m.helpInput = textinput.New()
 					m.helpInput.Placeholder = "Type your answer..."
 					m.helpInput.Focus()
@@ -5164,7 +5164,6 @@ func (m AppModel) markDoneCmd(featureID string) tea.Cmd {
 
 func (m AppModel) approvePermissionsCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		sessions := m.sessionManager.ActiveSessions()
 		for _, s := range sessions {
 			if s.FeatureID() == featureID &&
@@ -5178,7 +5177,7 @@ func (m AppModel) approvePermissionsCmd(featureID string) tea.Cmd {
 		}
 
 		_ = m.featureManager.Store.Modify(featureID, func(f *feature.Feature) error {
-			clearPendingHelpByMessage(f, inputMsg)
+			clearPendingHelpByMessage(f, waitingInputHelpMessage)
 			for i := range f.PermissionsQueue {
 				if f.PermissionsQueue[i].Pending {
 					f.PermissionsQueue[i].Pending = false
@@ -5192,7 +5191,6 @@ func (m AppModel) approvePermissionsCmd(featureID string) tea.Cmd {
 
 func (m AppModel) approveAndRememberCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		sessions := m.sessionManager.ActiveSessions()
 		for _, s := range sessions {
 			if s.FeatureID() == featureID && s.Status() == session.SessionWaitingPermission {
@@ -5224,7 +5222,7 @@ func (m AppModel) approveAndRememberCmd(featureID string) tea.Cmd {
 
 		_ = m.featureManager.Store.Modify(featureID, func(f *feature.Feature) error {
 			if !hasRemainingHelp {
-				clearPendingHelpByMessage(f, inputMsg)
+				clearPendingHelpByMessage(f, waitingInputHelpMessage)
 			}
 			for i := range f.PermissionsQueue {
 				if f.PermissionsQueue[i].Pending {
@@ -5239,7 +5237,6 @@ func (m AppModel) approveAndRememberCmd(featureID string) tea.Cmd {
 
 func (m AppModel) answerHelpCmd(featureID, answer string) tea.Cmd {
 	return func() tea.Msg {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		sessions := m.sessionManager.ActiveSessions()
 		for _, s := range sessions {
 			if s.FeatureID() == featureID &&
@@ -5258,7 +5255,7 @@ func (m AppModel) answerHelpCmd(featureID, answer string) tea.Cmd {
 					break
 				}
 			}
-			clearPendingHelpByMessage(f, inputMsg)
+			clearPendingHelpByMessage(f, waitingInputHelpMessage)
 			return nil
 		})
 		return RefreshFeaturesMsg{}
@@ -7219,7 +7216,7 @@ func phaseNeedsUserInput(baseDir string, f *feature.Feature, phase feature.Phase
 // with the given message. Not used for dedup (see hasPendingHelpRequestMessage).
 func hasHelpRequestMessage(f *feature.Feature, question string) bool {
 	for _, h := range f.HelpQueue {
-		if h.Question == question {
+		if sameManagedHelpMessage(h.Question, question) {
 			return true
 		}
 	}
@@ -7231,7 +7228,7 @@ func hasHelpRequestMessage(f *feature.Feature, question string) bool {
 // which is appropriate for signal-file-based detection that doesn't oscillate.
 func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
 	for _, h := range f.HelpQueue {
-		if h.Question == question && h.Pending {
+		if sameManagedHelpMessage(h.Question, question) && h.Pending {
 			return true
 		}
 	}
@@ -7239,6 +7236,7 @@ func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
 }
 
 func ensurePendingQuestionHelp(f *feature.Feature) bool {
+	normalizeManagedHelpQueue(f)
 	clearPendingHelpByMessage(f, waitingInputHelpMessage)
 	removeResolvedHelpByMessage(f, waitingInputHelpMessage)
 	if hasPendingHelpRequestMessage(f, questionHelpMessage) {
@@ -7253,6 +7251,7 @@ func ensurePendingQuestionHelp(f *feature.Feature) bool {
 }
 
 func ensurePendingWaitingInputHelp(f *feature.Feature) bool {
+	normalizeManagedHelpQueue(f)
 	if hasPendingHelpRequestMessage(f, questionHelpMessage) {
 		clearPendingHelpByMessage(f, waitingInputHelpMessage)
 		removeResolvedHelpByMessage(f, waitingInputHelpMessage)
@@ -7276,7 +7275,7 @@ func ensurePendingWaitingInputHelp(f *feature.Feature) bool {
 func clearPendingHelpByMessage(f *feature.Feature, message string) bool {
 	cleared := false
 	for i := range f.HelpQueue {
-		if f.HelpQueue[i].Question == message && f.HelpQueue[i].Pending {
+		if sameManagedHelpMessage(f.HelpQueue[i].Question, message) && f.HelpQueue[i].Pending {
 			f.HelpQueue[i].Pending = false
 			cleared = true
 		}
@@ -7307,6 +7306,7 @@ func (m *AppModel) reconcileHelpQueue(featureID string) {
 		}
 	}
 	_ = m.featureManager.Store.Modify(featureID, func(f *feature.Feature) error {
+		normalizeManagedHelpQueue(f)
 		if !hasWaitingHelp {
 			clearPendingHelpByMessage(f, questionHelpMessage)
 		}
@@ -7484,16 +7484,13 @@ func (m AppModel) saveConfigCmd(featureID string, input orchestrator.UpdateFeatu
 func removeResolvedHelpByMessage(f *feature.Feature, message string) {
 	filtered := f.HelpQueue[:0]
 	for _, h := range f.HelpQueue {
-		if h.Question == message && !h.Pending {
+		if sameManagedHelpMessage(h.Question, message) && !h.Pending {
 			continue
 		}
 		filtered = append(filtered, h)
 	}
 	f.HelpQueue = filtered
 }
-
-// apiErrorHelpPrefix is the prefix used for API error help requests.
-const apiErrorHelpPrefix = "API error:"
 
 // clearPendingHelpByPrefix marks all pending help requests whose Question
 // starts with the given prefix as resolved (Pending = false).
@@ -7894,9 +7891,9 @@ func (m *AppModel) attachToFeature(f *feature.Feature) tea.Cmd {
 	// — the [a] hint stays visible during BuildingKB but a feature waiting on
 	// another feature's kb.lock has zero live sessions.
 	if f.Status == feature.StatusBuildingKB && f.KBWaitMessage != "" {
-		m.statusMessage = "Attach unavailable: " + f.KBWaitMessage
+		m.statusMessage = "Watch unavailable: " + f.KBWaitMessage
 	} else {
-		m.statusMessage = "No active sessions to attach to."
+		m.statusMessage = "No active sessions to watch."
 	}
 	return nil
 }

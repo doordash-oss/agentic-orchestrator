@@ -144,8 +144,8 @@ func TestArtifactReview_GateMenuHasProceedAndDetach(t *testing.T) {
 	if items[0].decision != "proceed" {
 		t.Errorf("expected decision 'proceed', got %q", items[0].decision)
 	}
-	if items[1].label != "Just detach" {
-		t.Errorf("expected label 'Just detach', got %q", items[1].label)
+	if items[1].label != "Return to dashboard" {
+		t.Errorf("expected label 'Return to dashboard', got %q", items[1].label)
 	}
 	if items[1].decision != "detach" {
 		t.Errorf("expected decision 'detach', got %q", items[1].decision)
@@ -191,14 +191,14 @@ func TestArtifactReview_GateDetachMenuOption(t *testing.T) {
 	// Esc to show menu
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 
-	// Select "Just detach" (second item)
+	// Select "Return to dashboard" (second item)
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.Detached() {
-		t.Fatal("selecting 'Just detach' should detach")
+		t.Fatal("selecting 'Return to dashboard' should detach")
 	}
 	if m.Decided() {
-		t.Fatal("'Just detach' should not set decided flag")
+		t.Fatal("'Return to dashboard' should not set decided flag")
 	}
 }
 

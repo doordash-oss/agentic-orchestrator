@@ -14,7 +14,7 @@ If the worktree was previously cleaned, Agentic Orchestrator recreates it automa
 
 ### Interacting
 
-The attach view opens with the tweak session active. You can:
+The watch view opens with the tweak session active. You can:
 - Type messages and press `Enter` to send them to the agent
 - Watch the agent's responses and tool use in real time
 - Use message filtering (`Ctrl+F`) to reduce noise
@@ -26,7 +26,7 @@ Two ways to finish a tweak session:
 - **`Ctrl+D`** — finishes immediately (commits and completes)
 - **`Esc`** — opens an inline prompt with two options:
   - `f` or `Enter` — **Finish**: commit changes and complete
-  - `d` — **Detach**: leave the session running without finishing
+  - `d` — **Stop watching**: leave the session running without finishing
 
 ### After Finishing
 

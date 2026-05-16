@@ -50,11 +50,13 @@ import (
 // Phase 10 candidates because they are model-layer or source-boundary checks
 // over in-memory state:
 //   - activity_test.go
+//   - attention_test.go
 //   - branding_test.go
 //   - configeditor_test.go
 //   - cycle_dispatch_test.go
 //   - dashboard_test.go
 //   - detail_test.go
+//   - live_preview_test.go
 //   - logs_test.go
 //   - observer_fake_test.go
 //   - parallel_safety_test.go
@@ -64,6 +66,7 @@ import (
 //   - styles_test.go
 //   - tui_boundary_test.go
 //   - tweak_removal_test.go
+//   - vocabulary_test.go
 
 var tuiParallelIneligibleTestFiles = []string{
 	"app_test.go",
@@ -100,11 +103,13 @@ var tuiParallelIneligibleTestFiles = []string{
 
 var tuiParallelCandidateTestFiles = []string{
 	"activity_test.go",
+	"attention_test.go",
 	"branding_test.go",
 	"configeditor_test.go",
 	"cycle_dispatch_test.go",
 	"dashboard_test.go",
 	"detail_test.go",
+	"live_preview_test.go",
 	"logs_test.go",
 	"observer_fake_test.go",
 	"parallel_safety_test.go",
@@ -114,6 +119,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"styles_test.go",
 	"tui_boundary_test.go",
 	"tweak_removal_test.go",
+	"vocabulary_test.go",
 }
 
 func TestTUIParallelSafetyInventoryCoversAllTestFiles(t *testing.T) {

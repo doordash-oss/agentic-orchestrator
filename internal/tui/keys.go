@@ -112,6 +112,7 @@ type keyMap struct {
 	Refactor          key.Binding
 	EditConfig        key.Binding
 	ViewLogs          key.Binding
+	Overview          key.Binding
 	Chat              key.Binding
 	HelpOverlay       key.Binding
 	ToggleInputNotify key.Binding
@@ -154,7 +155,7 @@ var keys = keyMap{
 	Enter:             key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select")),
 	Back:              key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
 	Publish:           key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "publish")),
-	Attach:            key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "attach")),
+	Attach:            key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "watch")),
 	Approve:           key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "approve permissions")),
 	Help:              key.NewBinding(key.WithKeys("h"), key.WithHelp("h", "answer help")),
 	Restart:           key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "restart phase")),
@@ -177,6 +178,7 @@ var keys = keyMap{
 	Refactor:          key.NewBinding(key.WithKeys("F"), key.WithHelp("Shift+F", "refactor")),
 	EditConfig:        key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit config")),
 	ViewLogs:          key.NewBinding(key.WithKeys("l"), key.WithHelp("l", "view logs")),
+	Overview:          key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "overview")),
 	Chat:              key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "ask anything")),
 	HelpOverlay:       key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	ToggleInputNotify: key.NewBinding(key.WithKeys("N"), key.WithHelp("Shift+N", "toggle input alerts")),
@@ -210,5 +212,5 @@ var keys = keyMap{
 	ApproveAndRemember: key.NewBinding(key.WithKeys("A"), key.WithHelp("Shift+A", "approve & remember")),
 
 	// Attach-specific
-	Detach: key.NewBinding(key.WithKeys("ctrl+]", "esc"), key.WithHelp("ctrl+]/esc", "detach")),
+	Detach: key.NewBinding(key.WithKeys("ctrl+]", "esc"), key.WithHelp("ctrl+]/esc", "stop watching")),
 }

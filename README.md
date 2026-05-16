@@ -40,7 +40,7 @@ agentico
 
 On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
 
-**Three keys to remember**: `n` (new feature), `?` (help), `a` (attach to session). Everything else is discoverable from the help overlay.
+**Three keys to remember**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Everything else is discoverable from the help overlay.
 
 ## Prerequisites
 
@@ -145,9 +145,11 @@ Press `n` from the dashboard to open the wizard:
 
 ### Interacting with Agents
 
-**Watch** (`a`) — Connect to a running agent session. Watch it work in real time.
+**Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input.
 
-**Stop Watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
+**Overview** (`o`) — Switch the dashboard right panel from Live Preview to the detailed overview. Press `l` from Overview to return to Live Preview; outside Overview, `l` still opens logs.
+
+**Stop watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
 
 ### Post-Implementation Actions
 

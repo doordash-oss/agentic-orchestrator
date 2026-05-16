@@ -50,8 +50,8 @@ type TickMsg time.Time
 
 const (
 	tickInterval            = 3 * time.Second
-	waitingInputHelpMessage = "Agent is waiting for input — attach with 'a' to respond"
-	questionHelpMessage     = "Agent has a question — attach with 'a' to respond"
+	waitingInputHelpMessage = "Agent is waiting for input — press 'a' to answer"
+	questionHelpMessage     = "Agent has a question — press 'a' to answer"
 )
 
 type View int
@@ -1929,6 +1929,65 @@ func featureHasRunningCycle(f *feature.Feature) bool {
 	return false
 }
 
+func (m *AppModel) livePreviewSessionForFeature(f *feature.Feature) session.SessionView {
+	if f == nil || m.sessionManager == nil {
+		return nil
+	}
+	tabs := m.buildRepoTabs(f)
+	if idx := resolveInitialAttentionTab(tabs, f.LastAttachedRepo); idx >= 0 && tabs[idx].sess != nil {
+		return tabs[idx].sess
+	}
+	for _, tab := range tabs {
+		if tab.sess != nil {
+			return tab.sess
+		}
+	}
+	for _, s := range m.sessionManager.FeatureSessions(f.ID) {
+		if s.IsActive() {
+			return s
+		}
+	}
+	return nil
+}
+
+func resolveInitialAttentionTab(tabs []repoTab, lastAttachedRepo string) int {
+	if idx := firstTabWithPendingPermission(tabs); idx >= 0 {
+		return idx
+	}
+	if idx := firstTabWithPendingAskUser(tabs); idx >= 0 {
+		return idx
+	}
+	return resolveInitialTab(tabs, lastAttachedRepo)
+}
+
+func firstTabWithPendingPermission(tabs []repoTab) int {
+	for i, tab := range tabs {
+		if tab.sess != nil && firstPendingPermissionControlRequest(tab.sess) != nil {
+			return i
+		}
+	}
+	for i, tab := range tabs {
+		if tab.sess != nil && tab.sess.Status() == session.SessionWaitingPermission {
+			return i
+		}
+	}
+	return -1
+}
+
+func firstTabWithPendingAskUser(tabs []repoTab) int {
+	for i, tab := range tabs {
+		if tab.sess != nil && firstPendingAskUserControlRequest(tab.sess) != nil {
+			return i
+		}
+	}
+	for i, tab := range tabs {
+		if tab.sess != nil && (tab.sess.Status() == session.SessionWaitingHelp || tab.sess.HasPendingAskUserQuestion()) {
+			return i
+		}
+	}
+	return -1
+}
+
 // activeSessionContextPct returns the context window usage percentage for the
 // active session of the currently viewed feature. Returns -1 if unavailable.
 func (m AppModel) activeSessionContextPct() int {
@@ -1991,13 +2050,21 @@ func (m *AppModel) refreshKBStaleWarnings(features []*feature.Feature) {
 func (m AppModel) View() tea.View {
 	// Pass the app-level spinner view to detail models
 	sv := m.spinner.View()
+	m.dashboard.spinnerView = sv
 	m.dashboard.preview.spinnerView = sv
+	m.dashboard.livePreview.spinnerView = sv
 	m.detail.spinnerView = sv
 	m.detail.contextPct = m.activeSessionContextPct()
 	m.detail.kbStaleWarning = m.kbStaleWarningFor(m.detail.feature)
 	if sel := m.dashboard.SelectedFeature(); sel != nil {
-		m.dashboard.preview.contextPct = m.contextPctForFeature(sel)
+		contextPct := m.contextPctForFeature(sel)
+		m.dashboard.preview.contextPct = contextPct
 		m.dashboard.preview.kbStaleWarning = m.kbStaleWarningFor(sel)
+		m.dashboard.livePreview.contextPct = contextPct
+		m.dashboard.livePreview.session = m.livePreviewSessionForFeature(sel)
+	} else {
+		m.dashboard.livePreview.contextPct = -1
+		m.dashboard.livePreview.session = nil
 	}
 	m.publish.spinnerView = sv
 
@@ -2336,7 +2403,6 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 		// Tool permission request (Bash, Edit, etc.) or AskUserQuestion.
 		// AskUserQuestion also arrives as a control_request; we add it to
 		// HelpQueue but NOT PermissionsQueue (it is not a tool permission).
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		fid := eventFID(evt.SessionID, evt.FeatureID)
 		cr := sdkMsg.ControlRequest
 		var slug string
@@ -2366,10 +2432,11 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 	case sdkMsg.Result != nil:
 		if sdkMsg.Result.Subtype == "error" {
 			// API error — include actual error details
-			errorMsg := fmt.Sprintf("API error: %s — attach with 'a' to respond", sdkMsg.Result.Result)
+			errorMsg := fmt.Sprintf("%s %s%s", apiErrorHelpPrefix, sdkMsg.Result.Result, apiErrorHelpSuffix)
 			fid := eventFID(evt.SessionID, evt.FeatureID)
 			var slug string
 			_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
+				normalizeManagedHelpQueue(f)
 				if !hasPendingHelpRequestMessage(f, errorMsg) {
 					f.HelpQueue = append(f.HelpQueue, feature.HelpRequest{
 						Question: errorMsg,
@@ -2551,8 +2618,8 @@ func (m AppModel) handleTick() (tea.Model, tea.Cmd) {
 				// cleared when the agent starts processing the next message
 				// (see handleSDKEvent). Still clear stale permissions below.
 				if !isTweak {
-					clearPendingHelpByMessage(f, "Agent is waiting for input \u2014 attach with 'a' to respond")
-					clearPendingHelpByMessage(f, "Agent has a question \u2014 attach with 'a' to respond")
+					clearPendingHelpByMessage(f, waitingInputHelpMessage)
+					clearPendingHelpByMessage(f, questionHelpMessage)
 				}
 				// Clear stale PermissionsQueue entries when session returns to running
 				for i := range f.PermissionsQueue {
@@ -3218,6 +3285,48 @@ func firstRepoNeedingInput(f *feature.Feature) string {
 	return ""
 }
 
+func (m AppModel) contextualAttentionForFeature(f *feature.Feature) featureAttention {
+	return computeFeatureAttention(f, m.livePreviewSessionForFeature(f))
+}
+
+func (m AppModel) openContextualFeatureAction(f *feature.Feature) (tea.Model, tea.Cmd) {
+	if f == nil {
+		return m, nil
+	}
+	att := m.contextualAttentionForFeature(f)
+	switch att.Kind {
+	case attentionPermission, attentionAskUser, attentionWatch:
+		return m, m.attachToFeature(f)
+	case attentionNeedUserInput:
+		return m.attachNeedUserInput(f, att.RepoName)
+	case attentionReview:
+		return m.openReviewAttention(f)
+	default:
+		return m, nil
+	}
+}
+
+func (m AppModel) openReviewAttention(f *feature.Feature) (tea.Model, tea.Cmd) {
+	if f == nil || !f.Status.IsNeedsReview() {
+		return m, nil
+	}
+	if m.artifactReview.FeatureID() == f.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
+		cmd := m.artifactReview.Reattach()
+		m.currentView = ViewArtifactReview
+		return m, cmd
+	}
+	if f.PendingReviewPhase != nil && f.IsRewind {
+		return m, m.startRewindReviewSessionCmd(f.ID, *f.PendingReviewPhase, false)
+	}
+	if f.PendingReviewPhase != nil && !f.IsRewind {
+		return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
+	}
+	if f.Status == feature.StatusPlanNeedsReview {
+		return m, m.startPlanReviewSessionCmd(f.ID, false)
+	}
+	return m, nil
+}
+
 // handleNeedUserInputDecision routes the user's gate-menu choice through the
 // orchestrator. On error the questionnaire stays open with the failure
 // surfaced so the user can retry or abort instead of being stranded.
@@ -3316,33 +3425,7 @@ func (m AppModel) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.transitionToChat()
 	case key.Matches(msg, keys.Attach):
 		f := m.dashboard.SelectedFeature()
-		if f != nil {
-			if f.Status == feature.StatusNeedUserInput {
-				return m.attachNeedUserInput(f, "")
-			}
-			if repoName := firstRepoNeedingInput(f); repoName != "" {
-				return m.attachNeedUserInput(f, repoName)
-			}
-			if f.Status.IsNeedsReview() {
-				if m.artifactReview.FeatureID() == f.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
-					cmd := m.artifactReview.Reattach()
-					m.currentView = ViewArtifactReview
-					return m, cmd
-				}
-				if f.PendingReviewPhase != nil && f.IsRewind {
-					return m, m.startRewindReviewSessionCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				if f.PendingReviewPhase != nil && !f.IsRewind {
-					return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				if f.Status == feature.StatusPlanNeedsReview {
-					return m, m.startPlanReviewSessionCmd(f.ID, false)
-				}
-			}
-			if isRunningFeature(f) {
-				return m, m.attachToFeature(f)
-			}
-		}
+		return m.openContextualFeatureAction(f)
 	case key.Matches(msg, keys.Restart):
 		f := m.dashboard.SelectedFeature()
 		if f != nil {
@@ -3472,37 +3555,11 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 		return m, nil
 
 	case key.Matches(msg, keys.Attach):
-		if f != nil {
-			if f.Status == feature.StatusNeedUserInput {
-				return m.attachNeedUserInput(f, "")
-			}
-			if repoName := firstRepoNeedingInput(f); repoName != "" {
-				return m.attachNeedUserInput(f, repoName)
-			}
-			// For NeedsReview states, open the artifact review editor
-			if f.Status.IsNeedsReview() {
-				// Reattach existing detached review if available (but not if a decision was already made)
-				if m.artifactReview.FeatureID() == f.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
-					cmd := m.artifactReview.Reattach()
-					m.currentView = ViewArtifactReview
-					return m, cmd
-				}
-				// Rewind-triggered review
-				if f.PendingReviewPhase != nil && f.IsRewind {
-					return m, m.startRewindReviewSessionCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				// Gate-triggered review
-				if f.PendingReviewPhase != nil && !f.IsRewind {
-					return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
-				}
-				// Plan critic review (StatusPlanNeedsReview without PendingReviewPhase)
-				if f.Status == feature.StatusPlanNeedsReview {
-					return m, m.startPlanReviewSessionCmd(f.ID, false)
-				}
-			}
-			if isRunningFeature(f) {
-				return m, m.attachToFeature(f)
-			}
+		return m.openContextualFeatureAction(f)
+
+	case key.Matches(msg, keys.Overview):
+		if m.dashboard.ShowOverview() {
+			return m, nil
 		}
 
 	case key.Matches(msg, keys.Approve):
@@ -3521,7 +3578,7 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 				if h.Pending {
 					m.helpInputActive = true
 					m.helpFeatureID = f.ID
-					m.helpQuestion = h.Question
+					m.helpQuestion = normalizeManagedHelpQuestion(h.Question)
 					m.helpInput = textinput.New()
 					m.helpInput.Placeholder = "Type your answer..."
 					m.helpInput.Focus()
@@ -3581,6 +3638,10 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 		}
 
 	case key.Matches(msg, keys.ViewLogs):
+		if m.dashboard.showingOverviewForLiveFeature() {
+			m.dashboard.ShowLivePreview()
+			return m, nil
+		}
 		if f != nil {
 			return m, m.viewLogsCmd(f.ID, f.CurrentPhase, f.CurrentRoadmapPhase)
 		}
@@ -3786,39 +3847,7 @@ func (m AppModel) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.transitionTo(ViewDashboard, ""), nil
 
 	case key.Matches(msg, keys.Attach):
-		if m.detail.feature != nil {
-			if m.detail.feature.Status == feature.StatusNeedUserInput {
-				return m.attachNeedUserInput(m.detail.feature, "")
-			}
-			if repoName := firstRepoNeedingInput(m.detail.feature); repoName != "" {
-				return m.attachNeedUserInput(m.detail.feature, repoName)
-			}
-			// For NeedsReview states, open the artifact review editor
-			if m.detail.feature.Status.IsNeedsReview() {
-				// Reattach existing detached review if available (but not if a decision was already made)
-				if m.artifactReview.FeatureID() == m.detail.feature.ID && m.artifactReview.Detached() && !m.artifactReview.Decided() {
-					cmd := m.artifactReview.Reattach()
-					m.currentView = ViewArtifactReview
-					return m, cmd
-				}
-				// Rewind-triggered review
-				if m.detail.feature.PendingReviewPhase != nil && m.detail.feature.IsRewind {
-					return m, m.startRewindReviewSessionCmd(m.detail.feature.ID, *m.detail.feature.PendingReviewPhase, false)
-				}
-				// Gate-triggered review
-				if m.detail.feature.PendingReviewPhase != nil && !m.detail.feature.IsRewind {
-					return m, m.gateReviewStartCmd(m.detail.feature.ID, *m.detail.feature.PendingReviewPhase, false)
-				}
-				// Plan critic review (StatusPlanNeedsReview without PendingReviewPhase)
-				if m.detail.feature.Status == feature.StatusPlanNeedsReview {
-					return m, m.startPlanReviewSessionCmd(m.detail.feature.ID, false)
-				}
-			}
-			if isRunningFeature(m.detail.feature) {
-				return m, m.attachToFeature(m.detail.feature)
-			}
-		}
-		return m, nil
+		return m.openContextualFeatureAction(m.detail.feature)
 
 	case key.Matches(msg, keys.Approve):
 		// Approve all pending permissions for this feature
@@ -3840,7 +3869,7 @@ func (m AppModel) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if h.Pending {
 					m.helpInputActive = true
 					m.helpFeatureID = m.detail.feature.ID
-					m.helpQuestion = h.Question
+					m.helpQuestion = normalizeManagedHelpQuestion(h.Question)
 					m.helpInput = textinput.New()
 					m.helpInput.Placeholder = "Type your answer..."
 					m.helpInput.Focus()
@@ -5147,7 +5176,6 @@ func (m AppModel) markDoneCmd(featureID string) tea.Cmd {
 
 func (m AppModel) approvePermissionsCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		sessions := m.sessionManager.ActiveSessions()
 		for _, s := range sessions {
 			if s.FeatureID() == featureID &&
@@ -5161,7 +5189,7 @@ func (m AppModel) approvePermissionsCmd(featureID string) tea.Cmd {
 		}
 
 		_ = m.featureManager.Store.Modify(featureID, func(f *feature.Feature) error {
-			clearPendingHelpByMessage(f, inputMsg)
+			clearPendingHelpByMessage(f, waitingInputHelpMessage)
 			for i := range f.PermissionsQueue {
 				if f.PermissionsQueue[i].Pending {
 					f.PermissionsQueue[i].Pending = false
@@ -5175,7 +5203,6 @@ func (m AppModel) approvePermissionsCmd(featureID string) tea.Cmd {
 
 func (m AppModel) approveAndRememberCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		sessions := m.sessionManager.ActiveSessions()
 		for _, s := range sessions {
 			if s.FeatureID() == featureID && s.Status() == session.SessionWaitingPermission {
@@ -5207,7 +5234,7 @@ func (m AppModel) approveAndRememberCmd(featureID string) tea.Cmd {
 
 		_ = m.featureManager.Store.Modify(featureID, func(f *feature.Feature) error {
 			if !hasRemainingHelp {
-				clearPendingHelpByMessage(f, inputMsg)
+				clearPendingHelpByMessage(f, waitingInputHelpMessage)
 			}
 			for i := range f.PermissionsQueue {
 				if f.PermissionsQueue[i].Pending {
@@ -5222,7 +5249,6 @@ func (m AppModel) approveAndRememberCmd(featureID string) tea.Cmd {
 
 func (m AppModel) answerHelpCmd(featureID, answer string) tea.Cmd {
 	return func() tea.Msg {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
 		sessions := m.sessionManager.ActiveSessions()
 		for _, s := range sessions {
 			if s.FeatureID() == featureID &&
@@ -5241,7 +5267,7 @@ func (m AppModel) answerHelpCmd(featureID, answer string) tea.Cmd {
 					break
 				}
 			}
-			clearPendingHelpByMessage(f, inputMsg)
+			clearPendingHelpByMessage(f, waitingInputHelpMessage)
 			return nil
 		})
 		return RefreshFeaturesMsg{}
@@ -7202,7 +7228,7 @@ func phaseNeedsUserInput(baseDir string, f *feature.Feature, phase feature.Phase
 // with the given message. Not used for dedup (see hasPendingHelpRequestMessage).
 func hasHelpRequestMessage(f *feature.Feature, question string) bool {
 	for _, h := range f.HelpQueue {
-		if h.Question == question {
+		if sameManagedHelpMessage(h.Question, question) {
 			return true
 		}
 	}
@@ -7214,7 +7240,7 @@ func hasHelpRequestMessage(f *feature.Feature, question string) bool {
 // which is appropriate for signal-file-based detection that doesn't oscillate.
 func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
 	for _, h := range f.HelpQueue {
-		if h.Question == question && h.Pending {
+		if sameManagedHelpMessage(h.Question, question) && h.Pending {
 			return true
 		}
 	}
@@ -7222,6 +7248,7 @@ func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
 }
 
 func ensurePendingQuestionHelp(f *feature.Feature) bool {
+	normalizeManagedHelpQueue(f)
 	clearPendingHelpByMessage(f, waitingInputHelpMessage)
 	removeResolvedHelpByMessage(f, waitingInputHelpMessage)
 	if hasPendingHelpRequestMessage(f, questionHelpMessage) {
@@ -7236,6 +7263,7 @@ func ensurePendingQuestionHelp(f *feature.Feature) bool {
 }
 
 func ensurePendingWaitingInputHelp(f *feature.Feature) bool {
+	normalizeManagedHelpQueue(f)
 	if hasPendingHelpRequestMessage(f, questionHelpMessage) {
 		clearPendingHelpByMessage(f, waitingInputHelpMessage)
 		removeResolvedHelpByMessage(f, waitingInputHelpMessage)
@@ -7259,7 +7287,7 @@ func ensurePendingWaitingInputHelp(f *feature.Feature) bool {
 func clearPendingHelpByMessage(f *feature.Feature, message string) bool {
 	cleared := false
 	for i := range f.HelpQueue {
-		if f.HelpQueue[i].Question == message && f.HelpQueue[i].Pending {
+		if sameManagedHelpMessage(f.HelpQueue[i].Question, message) && f.HelpQueue[i].Pending {
 			f.HelpQueue[i].Pending = false
 			cleared = true
 		}
@@ -7290,6 +7318,7 @@ func (m *AppModel) reconcileHelpQueue(featureID string) {
 		}
 	}
 	_ = m.featureManager.Store.Modify(featureID, func(f *feature.Feature) error {
+		normalizeManagedHelpQueue(f)
 		if !hasWaitingHelp {
 			clearPendingHelpByMessage(f, questionHelpMessage)
 		}
@@ -7467,16 +7496,13 @@ func (m AppModel) saveConfigCmd(featureID string, input orchestrator.UpdateFeatu
 func removeResolvedHelpByMessage(f *feature.Feature, message string) {
 	filtered := f.HelpQueue[:0]
 	for _, h := range f.HelpQueue {
-		if h.Question == message && !h.Pending {
+		if sameManagedHelpMessage(h.Question, message) && !h.Pending {
 			continue
 		}
 		filtered = append(filtered, h)
 	}
 	f.HelpQueue = filtered
 }
-
-// apiErrorHelpPrefix is the prefix used for API error help requests.
-const apiErrorHelpPrefix = "API error:"
 
 // clearPendingHelpByPrefix marks all pending help requests whose Question
 // starts with the given prefix as resolved (Pending = false).
@@ -7800,7 +7826,7 @@ func phaseTabLabel(p feature.Phase) string {
 // point and will fall back to a single-session view when only one tab exists.
 func (m *AppModel) attachToMultiRepoFeature(f *feature.Feature) tea.Cmd {
 	tabs := m.buildRepoTabs(f)
-	initialIdx := resolveInitialTab(tabs, f.LastAttachedRepo)
+	initialIdx := resolveInitialAttentionTab(tabs, f.LastAttachedRepo)
 	if initialIdx < 0 || tabs[initialIdx].sess == nil {
 		// Fall back to single-session attach if no managed sessions found
 		// (e.g., session from a previous TUI instance not yet recovered)
@@ -7877,9 +7903,9 @@ func (m *AppModel) attachToFeature(f *feature.Feature) tea.Cmd {
 	// — the [a] hint stays visible during BuildingKB but a feature waiting on
 	// another feature's kb.lock has zero live sessions.
 	if f.Status == feature.StatusBuildingKB && f.KBWaitMessage != "" {
-		m.statusMessage = "Attach unavailable: " + f.KBWaitMessage
+		m.statusMessage = "Watch unavailable: " + f.KBWaitMessage
 	} else {
-		m.statusMessage = "No active sessions to attach to."
+		m.statusMessage = "No active sessions to watch."
 	}
 	return nil
 }

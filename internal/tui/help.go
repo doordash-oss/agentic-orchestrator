@@ -45,6 +45,18 @@ type ViewHelpContext struct {
 	Sections []HelpSection
 }
 
+func contextualAHelpSection() HelpSection {
+	return HelpSection{
+		Title: "CONTEXTUAL A",
+		Bindings: []HelpBinding{
+			{"a", "Watch active work"},
+			{"a", "Answer questions and input gates"},
+			{"a", "Approve pending permissions"},
+			{"a", "Review pending gates"},
+		},
+	}
+}
+
 // AllHelpContexts returns the registry of help contexts keyed by name.
 func AllHelpContexts() map[string]ViewHelpContext {
 	return map[string]ViewHelpContext{
@@ -73,10 +85,10 @@ func dashboardLeftHelp() ViewHelpContext {
 					{"enter", "Toggle section / Focus feature"},
 				},
 			},
+			contextualAHelpSection(),
 			{
 				Title: "FEATURES",
 				Bindings: []HelpBinding{
-					{"a", "Attach to session"},
 					{"n", "New feature"},
 					{"Shift+N", "Toggle input notifications"},
 					{"d", "Delete feature"},
@@ -110,10 +122,11 @@ func dashboardRightHelp() ViewHelpContext {
 					{"tab", "Switch panel"},
 				},
 			},
+			contextualAHelpSection(),
 			{
 				Title: "ACTIONS",
 				Bindings: []HelpBinding{
-					{"a", "Attach to session"},
+					{"o", "Show overview"},
 					{"y", "Approve permissions"},
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
@@ -121,7 +134,7 @@ func dashboardRightHelp() ViewHelpContext {
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},
 					{"ctrl+r", "Rewind"},
-					{"l", "View logs"},
+					{"l", "Live Preview / View logs"},
 					{"v", "View diff"},
 					{"d", "Delete feature"},
 				},
@@ -159,10 +172,10 @@ func detailHelp() ViewHelpContext {
 					{"esc", "Back to dashboard"},
 				},
 			},
+			contextualAHelpSection(),
 			{
 				Title: "ACTIONS",
 				Bindings: []HelpBinding{
-					{"a", "Attach to session"},
 					{"y", "Approve permissions"},
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},

@@ -67,11 +67,21 @@ type listItem struct {
 	section string           // "inProgress", "published", "completed"
 }
 
+type dashboardRightPanelMode int
+
+const (
+	dashboardRightPanelLivePreview dashboardRightPanelMode = iota
+	dashboardRightPanelOverview
+)
+
 type DashboardModel struct {
 	features             []*feature.Feature
 	cursor               int
 	focusPanel           int // 0=list, 1=detail
+	rightPanelMode       dashboardRightPanelMode
 	preview              DetailModel
+	livePreview          LivePreviewModel
+	spinnerView          string // set by parent from app-level spinner
 	width                int
 	height               int
 	stateDir             string
@@ -105,6 +115,7 @@ func NewDashboardModel(features []*feature.Feature, stateDir string) DashboardMo
 		firstFeature = m.visibleItems[0].feature
 	}
 	m.preview = NewDetailModel(firstFeature, stateDir)
+	m.livePreview = newLivePreviewModel(firstFeature)
 	return m
 }
 
@@ -208,12 +219,46 @@ func (m *DashboardModel) syncPreview() {
 		m.preview = NewDetailModel(nil, m.stateDir)
 		m.preview.width = m.width
 		m.preview.height = m.height
+		m.livePreview = newLivePreviewModel(nil)
+		m.livePreview.width = m.width
+		m.livePreview.height = m.height
 		m.focusPanel = 0
 		return
 	}
 	m.preview = NewDetailModel(f, m.stateDir)
 	m.preview.width = m.width
 	m.preview.height = m.height
+	m.livePreview = newLivePreviewModel(f)
+	m.livePreview.width = m.width
+	m.livePreview.height = m.height
+}
+
+func (m DashboardModel) shouldRenderLivePreview(f *feature.Feature) bool {
+	return f != nil &&
+		m.rightPanelMode != dashboardRightPanelOverview &&
+		!m.preview.refactorActive &&
+		!m.preview.refactorPipelineActive &&
+		isLivePreviewEligible(f)
+}
+
+func (m *DashboardModel) ShowOverview() bool {
+	if !isLivePreviewEligible(m.SelectedFeature()) {
+		return false
+	}
+	m.rightPanelMode = dashboardRightPanelOverview
+	return true
+}
+
+func (m *DashboardModel) ShowLivePreview() bool {
+	if !isLivePreviewEligible(m.SelectedFeature()) {
+		return false
+	}
+	m.rightPanelMode = dashboardRightPanelLivePreview
+	return true
+}
+
+func (m DashboardModel) showingOverviewForLiveFeature() bool {
+	return m.rightPanelMode == dashboardRightPanelOverview && isLivePreviewEligible(m.SelectedFeature())
 }
 
 type layoutMode int
@@ -334,9 +379,17 @@ func (m DashboardModel) View() string {
 		rightContent = m.renderWelcomePanel(rightWidth)
 		rightTitle = "Welcome"
 	} else {
-		rightContent = m.preview.ViewCompact(rightWidth)
+		selected := m.SelectedFeature()
+		if !m.shouldRenderLivePreview(selected) {
+			rightContent = m.preview.ViewCompact(rightWidth)
+		} else {
+			livePreview := m.livePreview
+			livePreview.spinnerView = m.spinnerView
+			livePreview.height = panelHeight
+			rightContent = livePreview.ViewCompact(rightWidth)
+		}
 		rightTitle = "Detail"
-		if f := m.SelectedFeature(); f != nil {
+		if f := selected; f != nil {
 			rightTitle = f.Slug
 		}
 	}
@@ -464,20 +517,25 @@ func (m DashboardModel) renderFooter() string {
 	if m.focusPanel == 1 {
 		// Right panel focused — show detail actions
 		f := m.SelectedFeature()
-		hints = append(hints, "[←/esc] Back")
 
 		if f != nil {
-			activePublishedCycle := isActivePublishedCycle(f)
-			if f.Status.IsNeedsReview() {
-				leadHint = WarningStyle.Bold(true).Render("[a] Review")
-			} else if isRunningFeature(f) {
-				switch {
-				case hasPendingPerms(f) || hasPendingHelp(f):
-					hints = append(hints, "[a] Attach (\u26a0)")
-				default:
-					hints = append(hints, "[a] Attach")
+			if actionHint, lead := contextualAActionHintFor(f, m.livePreview.session); actionHint != "" {
+				if lead {
+					leadHint = WarningStyle.Bold(true).Render(actionHint)
+				} else {
+					hints = append(hints, actionHint)
 				}
 			}
+		}
+		if f != nil {
+			if isLivePreviewEligible(f) {
+				if m.showingOverviewForLiveFeature() {
+					hints = append(hints, "[l] Live Preview")
+				} else {
+					hints = append(hints, "[o] Overview")
+				}
+			}
+			activePublishedCycle := isActivePublishedCycle(f)
 			if hasPendingPerms(f) {
 				hints = append(hints, "[y] Approve", "[Shift+A] Approve & Remember")
 			}
@@ -487,7 +545,7 @@ func (m DashboardModel) renderFooter() string {
 				hints = append(hints, "[r] Restart")
 			}
 			hints = append(hints, "[ctrl+r] Rewind")
-			if f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted {
+			if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) && !m.showingOverviewForLiveFeature() {
 				hints = append(hints, "[l] Logs")
 			}
 
@@ -522,6 +580,7 @@ func (m DashboardModel) renderFooter() string {
 			hints = append(hints, "[Shift+N] Input alerts")
 			hints = append(hints, "[d] Delete")
 		}
+		hints = append(hints, "[←/esc] Back")
 	} else {
 		// Left panel focused — show list actions
 		hints = append(hints, "[n] New")
@@ -919,6 +978,12 @@ func (m DashboardModel) scrollFeatureList(panelHeight int) string {
 
 func (m DashboardModel) renderFeatureRowCompact(f *feature.Feature, selected bool) string {
 	icon := statusIcon(f.Status.String())
+	att := computeFeatureAttention(f, nil)
+	if att.RequiresUser() {
+		icon = awaitingUserGlyph()
+	} else if att.Kind == attentionWatch && m.spinnerView != "" {
+		icon = m.spinnerView
+	}
 	var status string
 	if m.rewindingFeatureID == f.ID {
 		status = WarningStyle.Render("Stopping…")
@@ -1029,7 +1094,7 @@ func (m DashboardModel) CollapsedSectionsList() []string {
 func (m DashboardModel) countNeedAttention() int {
 	count := 0
 	for _, f := range m.features {
-		if hasPendingPerms(f) || hasPendingHelp(f) {
+		if featureNeedsUserAttention(f) {
 			count++
 		}
 	}
@@ -1081,8 +1146,8 @@ func sortFeatures(features []*feature.Feature) {
 			return iOrder < jOrder
 		}
 		// Within same group: needs attention first
-		iNeeds := hasPendingPerms(fi) || hasPendingHelp(fi)
-		jNeeds := hasPendingPerms(fj) || hasPendingHelp(fj)
+		iNeeds := featureNeedsUserAttention(fi)
+		jNeeds := featureNeedsUserAttention(fj)
 		if iNeeds != jNeeds {
 			return iNeeds
 		}

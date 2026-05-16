@@ -13,7 +13,7 @@ The TUI uses the Bubbletea framework (Elm architecture: Init/Update/View). `AppM
 | `ViewDashboard` | `DashboardModel` | Main feature list with split-panel layout |
 | `ViewDetail` | `DetailModel` | Full-screen feature detail |
 | `ViewWizard` | `WizardModel` | New feature creation wizard |
-| `ViewAttach` | `AttachModel` | Live session output viewer |
+| `ViewAttach` | `AttachModel` | Live watch session output viewer |
 | `ViewPublish` | `PublishModel` | PR publishing workflow |
 | `ViewRecovery` | `RecoveryModel` | Session recovery after crashes |
 | `ViewLogs` | `LogsModel` | Phase output log viewer |
@@ -77,7 +77,8 @@ Defined in `internal/tui/keys.go`. Generated reference at `docs/keybindings.md` 
 | Key | Action |
 |-----|--------|
 | `n` | New feature |
-| `a` | Attach to session |
+| `a` | Watch active work; Answer, Approve, or Review when prompted |
+| `o` | Show overview in the dashboard right panel |
 | `y` | Approve permission |
 | `h` | Answer help request |
 | `d` | Delete feature |
@@ -88,7 +89,7 @@ Defined in `internal/tui/keys.go`. Generated reference at `docs/keybindings.md` 
 |-----|--------|
 | `r` | Restart current phase |
 | `ctrl+r` | Restart from beginning (start over) |
-| `l` | View logs |
+| `l` | Live Preview from Overview, otherwise view logs |
 | `v` | View diff |
 | `t` | Tweak implementation |
 | `Enter` | Advance phase |

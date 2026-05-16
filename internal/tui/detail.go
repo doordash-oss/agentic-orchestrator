@@ -236,12 +236,12 @@ func (m DetailModel) View() string {
 	// Footer (pinned to bottom)
 	var actionParts []string
 	var leadHint string
-	if f.Status.IsNeedsReview() {
-		leadHint = WarningStyle.Bold(true).Render("[a] Review")
-	} else if f.Status == feature.StatusNeedUserInput {
-		leadHint = WarningStyle.Bold(true).Render("[a] Answer")
-	} else if isRunningStatus(f.Status) {
-		actionParts = append(actionParts, "[a] Attach")
+	if actionHint, lead := contextualAActionHint(f); actionHint != "" {
+		if lead {
+			leadHint = WarningStyle.Bold(true).Render(actionHint)
+		} else {
+			actionParts = append(actionParts, actionHint)
+		}
 	}
 	// Phase retry action — only when the feature is quiescent (Failed/Interrupted)
 	// so we don't kill unrelated in-flight repo sessions.
@@ -1112,7 +1112,7 @@ func (m DetailModel) renderAttention(f *feature.Feature) string {
 	for _, h := range f.HelpQueue {
 		if h.Pending {
 			b.WriteString(WarningStyle.Render("  \u25b8 "))
-			b.WriteString(h.Question)
+			b.WriteString(normalizeManagedHelpQuestion(h.Question))
 			b.WriteString("\n")
 		}
 	}
@@ -1250,7 +1250,7 @@ func formatDetailStatus(f *feature.Feature) string {
 		return lipgloss.NewStyle().Foreground(colorInfo).Render(label)
 	case feature.StatusPublished:
 		if label, reviewing, ok := activePublishedCycleStatus(f); ok {
-			label += " — [a] attach"
+			label += " — [a] Watch"
 			if hasPendingPerms(f) || hasPendingHelp(f) {
 				label += " | waiting input"
 			}
@@ -1284,17 +1284,17 @@ func formatDetailStatus(f *feature.Feature) string {
 		}
 		return SuccessStyle.Render(hints)
 	case feature.StatusPlanNeedsReview:
-		return WarningStyle.Render("Plan needs review \u2014 [a] attach to review")
+		return WarningStyle.Render("Plan needs review \u2014 [a] Review")
 	case feature.StatusPromptNeedsReview:
-		return WarningStyle.Render("Prompt needs review \u2014 [a] attach to review")
+		return WarningStyle.Render("Prompt needs review \u2014 [a] Review")
 	case feature.StatusInquiryNeedsReview:
-		return WarningStyle.Render("Inquiry needs review \u2014 [a] attach to review")
+		return WarningStyle.Render("Inquiry needs review \u2014 [a] Review")
 	case feature.StatusResearchNeedsReview:
-		return WarningStyle.Render("Research needs review \u2014 [a] attach to review")
+		return WarningStyle.Render("Research needs review \u2014 [a] Review")
 	case feature.StatusDesignNeedsReview:
-		return WarningStyle.Render("Design needs review \u2014 [a] attach to review")
+		return WarningStyle.Render("Design needs review \u2014 [a] Review")
 	case feature.StatusNeedUserInput:
-		return WarningStyle.Render("Implementation needs user input \u2014 press [a]")
+		return WarningStyle.Render("Implementation needs user input \u2014 [a] Answer")
 	case feature.StatusFinalReviewing:
 		return ReviewStyle.Render(finalReviewStatusText(f))
 	case feature.StatusInterrupted:

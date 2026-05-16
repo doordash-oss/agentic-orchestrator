@@ -40,9 +40,9 @@ On every launch, Agentic Orchestrator ensures each default rule exists in `~/.ag
 
 ## Permission Prompting
 
-### In the Attach View
+### In the Watch View
 
-When an agent requests a tool that requires approval, a **permission menu** appears as an overlay in the attach view:
+When an agent requests a tool that requires approval, a **permission menu** appears as an overlay in the watch view:
 
 | Option | Key | Behavior |
 |--------|-----|----------|
@@ -100,7 +100,7 @@ Cached permissions are stored as JSON files with deny-wins precedence.
 
 (Legacy installs keep using `~/.agentic-workflow/permissions/...` in place.)
 
-"Allow & Remember" from the attach view caches to the per-repo scope. "Approve and remember" (`Shift+A`) from the dashboard also caches per-repo.
+"Allow & Remember" from the watch view caches to the per-repo scope. "Approve and remember" (`Shift+A`) from the dashboard also caches per-repo.
 
 ### File Format
 
@@ -167,4 +167,4 @@ When an agent requests a tool, the permission system evaluates in this order:
 
 1. **Session handler** — checks if the tool is in the always-approved category (read-only tools, file edits during implementation)
 2. **Cache check** — looks up the tool pattern in cached rules (global + per-repo), deny-wins
-3. **TUI prompt** — if no cached rule matches, surfaces the permission request to the user in the attach view or dashboard
+3. **TUI prompt** — if no cached rule matches, surfaces the permission request to the user in the watch view or dashboard

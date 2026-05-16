@@ -1,6 +1,6 @@
 # Agentic Orchestrator Keybinding Reference
 
-_Auto-generated on 2026-05-08. Do not edit manually._
+_Auto-generated on 2026-05-15. Do not edit manually._
 
 _Run `go generate ./internal/tui/...` to regenerate._
 
@@ -10,6 +10,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 |-----|--------|
 | `n` | New feature (launch wizard) |
 | `enter` | Focus right panel / expand |
+| `a` | Watch active work; Answer, Approve, or Review when prompted |
 | `Shift+R` | Resume all interrupted features |
 | `tab` | Switch panel |
 | `↑/k` | Move up |
@@ -25,7 +26,8 @@ _Run `go generate ./internal/tui/...` to regenerate._
 
 | Key | Action |
 |-----|--------|
-| `a` | Attach to agent session |
+| `a` | Watch active work; Answer, Approve, or Review when prompted |
+| `o` | Show overview |
 | `y` | Approve pending permissions |
 | `Shift+A` | Approve & remember permissions |
 | `h` | Answer agent's help question |
@@ -33,7 +35,7 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `r` | Restart current phase |
 | `s` | Stop running feature |
 | `ctrl+r` | Rewind to phase |
-| `l` | View logs |
+| `l` | Live Preview / View logs |
 | `v` | View diff |
 | `p` | Publish (when code ready) |
 | `m` | Manual publish |
@@ -56,11 +58,11 @@ _Run `go generate ./internal/tui/...` to regenerate._
 | `q` | Quit |
 | `ctrl+c` | Force quit |
 
-## Attach View
+## Watch View
 
 | Key | Action |
 |-----|--------|
-| `ctrl+]/ctrl+x/esc` | Detach from session |
+| `ctrl+]/ctrl+x/esc` | Stop watching and return to dashboard |
 
 ## Wizard
 

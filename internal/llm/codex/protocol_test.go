@@ -154,6 +154,9 @@ func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T)
 	if msg.ToolProgress == nil {
 		t.Fatal("msg.ToolProgress is nil, want non-nil")
 	}
+	if msg.ToolProgress.ToolUseID != "call_read" {
+		t.Fatalf("ToolUseID = %q, want %q", msg.ToolProgress.ToolUseID, "call_read")
+	}
 	if len(msg.FileReads) != 1 {
 		t.Fatalf("len(FileReads) = %d, want 1", len(msg.FileReads))
 	}
@@ -177,6 +180,52 @@ func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T)
 	}
 	if len(dup.FileReads) != 0 {
 		t.Fatalf("duplicate len(FileReads) = %d, want 0", len(dup.FileReads))
+	}
+}
+
+func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+
+	startedParams, err := json.Marshal(ItemStartedParams{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		Item: ItemUnion{
+			ID:   "call_1",
+			Type: "commandExecution",
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal started: %v", err)
+	}
+	started, ok := p.parseNotification("item/started", startedParams)
+	if !ok {
+		t.Fatal("parseNotification(item/started) returned false, want true")
+	}
+	if started.ToolProgress == nil {
+		t.Fatal("started.ToolProgress is nil, want non-nil")
+	}
+	if started.ToolProgress.ToolUseID != "call_1" || started.ToolProgress.ToolName != "Bash" {
+		t.Fatalf("started ToolProgress = %+v, want ToolUseID call_1 and Bash", started.ToolProgress)
+	}
+
+	deltaParams, err := json.Marshal(CommandOutputDelta{
+		ThreadID: "thread-1",
+		TurnID:   "turn-1",
+		ItemID:   "call_1",
+		Delta:    "PASS",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal delta: %v", err)
+	}
+	delta, ok := p.parseNotification("item/commandExecution/outputDelta", deltaParams)
+	if !ok {
+		t.Fatal("parseNotification(outputDelta) returned false, want true")
+	}
+	if delta.ToolProgress == nil {
+		t.Fatal("delta.ToolProgress is nil, want non-nil")
+	}
+	if delta.ToolProgress.ToolUseID != "call_1" || delta.ToolProgress.ToolName != "Bash" {
+		t.Fatalf("delta ToolProgress = %+v, want ToolUseID call_1 and Bash", delta.ToolProgress)
 	}
 }
 

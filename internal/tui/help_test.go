@@ -70,7 +70,7 @@ func TestNewHelpOverlayModel(t *testing.T) {
 
 func TestHelpOverlayView(t *testing.T) {
 	ctx := dashboardLeftHelp()
-	m := NewHelpOverlayModel(ctx, 80, 24)
+	m := NewHelpOverlayModel(ctx, 80, 40)
 	view := m.View()
 
 	// Should contain the title
@@ -92,6 +92,53 @@ func TestHelpOverlayView(t *testing.T) {
 	// Should contain close hint
 	if !strings.Contains(view, "Close") {
 		t.Error("View() missing close hint")
+	}
+}
+
+func TestHelpContextsDescribeContextualAKey(t *testing.T) {
+	contexts := AllHelpContexts()
+	tests := []struct {
+		name    string
+		context string
+	}{
+		{name: "dashboard_list", context: "Dashboard"},
+		{name: "detail_panel", context: "Detail Panel"},
+		{name: "detail_view", context: "Detail"},
+	}
+
+	wantDescriptions := []string{
+		"Watch active work",
+		"Answer questions and input gates",
+		"Approve pending permissions",
+		"Review pending gates",
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, ok := contexts[tt.context]
+			if !ok {
+				t.Fatalf("AllHelpContexts() missing %q context", tt.context)
+			}
+
+			section := findSectionByTitle(&ctx, "CONTEXTUAL A")
+			if section == nil {
+				t.Fatalf("%s help missing CONTEXTUAL A section", tt.context)
+			}
+			for _, want := range wantDescriptions {
+				found := false
+				for _, binding := range section.Bindings {
+					if binding.Key == "a" && binding.Desc == want {
+						found = true
+					}
+					if strings.Contains(binding.Desc, "Attach") || strings.Contains(binding.Desc, "attach") {
+						t.Errorf("%s contextual binding uses retired attach copy: %q", tt.context, binding.Desc)
+					}
+				}
+				if !found {
+					t.Errorf("%s contextual section missing %q", tt.context, want)
+				}
+			}
+		})
 	}
 }
 

@@ -863,6 +863,201 @@ func TestAttachDisallowedForNonRunning(t *testing.T) {
 	}
 }
 
+func TestDashboardWatchAttachUsesExistingSingleSessionPath(t *testing.T) {
+	app, fm := newTestAppModel(t)
+
+	f, err := fm.Create("Watch Single", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	f, _ = fm.Get(f.ID)
+
+	sess := session.NewSession(f.ID+"-impl-01", f.ID, feature.PhaseImplement)
+	sess.SetStatus(session.SessionRunning)
+	app.sessionManager.RegisterTestSession(sess)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.syncPreview()
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("expected watch action to return attach command")
+	}
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach", updated.currentView)
+	}
+	if updated.attach.sess == nil || updated.attach.sess.ID() != sess.ID() {
+		t.Fatalf("attached session = %v, want %s", updated.attach.sess, sess.ID())
+	}
+	if len(updated.attach.repoTabs) != 1 {
+		t.Fatalf("single-session watch repoTabs = %d, want 1", len(updated.attach.repoTabs))
+	}
+}
+
+func TestDashboardWatchAttachPreservesMultiRepoTabs(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	fm.Config.Repos["api"] = config.RepoConfig{Path: "/tmp/api"}
+	fm.Config.Repos["web"] = config.RepoConfig{Path: "/tmp/web"}
+
+	f, err := fm.Create("Watch Multi", "desc", []string{"api", "web"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	f, _ = fm.Get(f.ID)
+
+	apiSess := session.NewSession(f.ID+"-impl-api-01", f.ID, feature.PhaseImplement)
+	apiSess.SetKind(ports.KindRepoImpl)
+	apiSess.SetRepoName("api")
+	apiSess.SetStatus(session.SessionRunning)
+	webSess := session.NewSession(f.ID+"-impl-web-01", f.ID, feature.PhaseImplement)
+	webSess.SetKind(ports.KindRepoImpl)
+	webSess.SetRepoName("web")
+	webSess.SetStatus(session.SessionRunning)
+	app.sessionManager.RegisterTestSession(apiSess)
+	app.sessionManager.RegisterTestSession(webSess)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("expected watch action to return attach command")
+	}
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach", updated.currentView)
+	}
+	if len(updated.attach.repoTabs) != 2 {
+		t.Fatalf("multi-repo watch repoTabs = %d, want 2", len(updated.attach.repoTabs))
+	}
+	if updated.attach.repoTabs[0].repoName != "api" || updated.attach.repoTabs[1].repoName != "web" {
+		t.Fatalf("repo tab order = [%s %s], want [api web]", updated.attach.repoTabs[0].repoName, updated.attach.repoTabs[1].repoName)
+	}
+}
+
+func TestDashboardRightPanelOverviewReturnsToLivePreview(t *testing.T) {
+	app, fm := newTestAppModel(t)
+
+	f, err := fm.Create("Overview Toggle", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	f, _ = fm.Get(f.ID)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.syncPreview()
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if cmd != nil {
+		t.Fatalf("overview key returned command, want nil")
+	}
+	updated := result.(AppModel)
+	if updated.dashboard.rightPanelMode != dashboardRightPanelOverview {
+		t.Fatalf("rightPanelMode = %v, want overview", updated.dashboard.rightPanelMode)
+	}
+	overview := stripANSI(updated.dashboard.View())
+	if !strings.Contains(overview, "Phase Progress") || !strings.Contains(overview, "[l] Live Preview") {
+		t.Fatalf("overview view missing old detail content or live-preview return hint:\n%s", overview)
+	}
+
+	result, cmd = updated.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if cmd != nil {
+		t.Fatalf("live-preview return key returned command, want nil")
+	}
+	updated = result.(AppModel)
+	if updated.dashboard.rightPanelMode != dashboardRightPanelLivePreview {
+		t.Fatalf("rightPanelMode = %v, want live preview", updated.dashboard.rightPanelMode)
+	}
+	live := stripANSI(updated.dashboard.View())
+	if !strings.Contains(live, "Live Preview") || !strings.Contains(live, "[o] Overview") {
+		t.Fatalf("live preview view missing live content or overview hint:\n%s", live)
+	}
+	if strings.Contains(live, "Phase Progress") {
+		t.Fatalf("live preview should not render old overview phase progress:\n%s", live)
+	}
+}
+
+func TestDashboardContextualAttachPermissionSelectsWaitingSession(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	fm.Config.Repos["api"] = config.RepoConfig{Path: "/tmp/api"}
+	fm.Config.Repos["web"] = config.RepoConfig{Path: "/tmp/web"}
+
+	f, err := fm.Create("Permission Target", "desc", []string{"api", "web"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	advanceTestFeatureToImplementing(t, fm, f.ID)
+	if err := fm.Store.Modify(f.ID, func(f *feature.Feature) error {
+		f.LastAttachedRepo = "web"
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	f, _ = fm.Get(f.ID)
+
+	apiSess := session.NewSession(f.ID+"-impl-api-01", f.ID, feature.PhaseImplement)
+	apiSess.SetKind(ports.KindRepoImpl)
+	apiSess.SetRepoName("api")
+	apiSess.SetStatus(session.SessionWaitingPermission)
+	apiSess.SetLastControlRequest(&llm.ControlRequestMessage{
+		RequestID: "perm-api",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"go test ./internal/tui"}`),
+		},
+	})
+	webSess := session.NewSession(f.ID+"-impl-web-01", f.ID, feature.PhaseImplement)
+	webSess.SetKind(ports.KindRepoImpl)
+	webSess.SetRepoName("web")
+	webSess.SetStatus(session.SessionRunning)
+	app.sessionManager.RegisterTestSession(apiSess)
+	app.sessionManager.RegisterTestSession(webSess)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.focusPanel = 1
+
+	result, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("expected contextual permission action to return attach command")
+	}
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach", updated.currentView)
+	}
+	if got := updated.attach.ActiveRepoName(); got != "api" {
+		t.Fatalf("active attach repo = %q, want api despite LastAttachedRepo=web", got)
+	}
+	if updated.attach.sess == nil || updated.attach.sess.ID() != apiSess.ID() {
+		t.Fatalf("attached session = %v, want %s", updated.attach.sess, apiSess.ID())
+	}
+}
+
+func advanceTestFeatureToImplementing(t *testing.T, fm *feature.Manager, featureID string) {
+	t.Helper()
+	for _, status := range []feature.Status{
+		feature.StatusResearching,
+		feature.StatusPlanReady,
+		feature.StatusPlanning,
+		feature.StatusImplementReady,
+		feature.StatusImplementing,
+	} {
+		if err := fm.Transition(featureID, status); err != nil {
+			t.Fatalf("transition to %s: %v", status, err)
+		}
+	}
+}
+
 func TestStartPhaseDispatch(t *testing.T) {
 	app, fm := newTestAppModel(t)
 
@@ -1127,9 +1322,9 @@ func TestRemoveResolvedHelpByMessage(t *testing.T) {
 func TestClearPendingHelpByPrefix(t *testing.T) {
 	f := &feature.Feature{
 		HelpQueue: []feature.HelpRequest{
-			{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true},
-			{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true},
-			{Question: "API error: API overloaded (529) — attach with 'a' to respond", Pending: true},
+			{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: true},
+			{Question: "Agent is waiting for input — press 'a' to answer", Pending: true},
+			{Question: "API error: API overloaded (529) — press 'a' to answer", Pending: true},
 		},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
@@ -1155,9 +1350,9 @@ func TestClearPendingHelpByPrefix(t *testing.T) {
 func TestRemoveResolvedHelpByPrefix(t *testing.T) {
 	f := &feature.Feature{
 		HelpQueue: []feature.HelpRequest{
-			{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: false},
+			{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: false},
 			{Question: "other question", Pending: true},
-			{Question: "API error: API overloaded (529) — attach with 'a' to respond", Pending: false},
+			{Question: "API error: API overloaded (529) — press 'a' to answer", Pending: false},
 		},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
@@ -1177,14 +1372,14 @@ func TestAttachClearsAPIErrorHelp(t *testing.T) {
 	f.Status = feature.StatusImplementing
 	f.CurrentPhase = feature.PhaseImplement
 	f.HelpQueue = []feature.HelpRequest{
-		{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true, Time: time.Now()},
-		{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true, Time: time.Now()},
+		{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: true, Time: time.Now()},
+		{Question: "Agent is waiting for input — press 'a' to answer", Pending: true, Time: time.Now()},
 	}
 	_ = fm.Store.Save(f)
 
 	// Simulate what attachCmd does: clear both generic and API error help
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+		const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 		clearPendingHelpByMessage(feat, inputMsg)
 		clearPendingHelpByPrefix(feat, apiErrorHelpPrefix)
 		return nil
@@ -1206,14 +1401,14 @@ func TestSessionDoneClearsAPIErrorHelp(t *testing.T) {
 	f.Status = feature.StatusImplementing
 	f.CurrentPhase = feature.PhaseImplement
 	f.HelpQueue = []feature.HelpRequest{
-		{Question: "API error: rate limit exceeded (429) — attach with 'a' to respond", Pending: true, Time: time.Now()},
-		{Question: "API error: API overloaded (529) — attach with 'a' to respond", Pending: false, Time: time.Now()},
+		{Question: "API error: rate limit exceeded (429) — press 'a' to answer", Pending: true, Time: time.Now()},
+		{Question: "API error: API overloaded (529) — press 'a' to answer", Pending: false, Time: time.Now()},
 	}
 	_ = fm.Store.Save(f)
 
 	// Simulate what handleSessionDone does: clear and remove both generic and API error help
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+		const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 		clearPendingHelpByMessage(feat, inputMsg)
 		removeResolvedHelpByMessage(feat, inputMsg)
 		clearPendingHelpByPrefix(feat, apiErrorHelpPrefix)
@@ -1633,7 +1828,7 @@ func TestFeatureSummaryMsgIgnoresEmpty(t *testing.T) {
 // TestDedupAllowsRedetectionAfterResolution verifies that after a help request is resolved,
 // the same message can be added again (hasPendingHelpRequestMessage is used, not hasHelpRequestMessage).
 func TestDedupAllowsRedetectionAfterResolution(t *testing.T) {
-	const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+	const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 
 	f := &feature.Feature{
 		HelpQueue: []feature.HelpRequest{
@@ -1667,6 +1862,99 @@ func TestDedupAllowsRedetectionAfterResolution(t *testing.T) {
 	}
 	if !f.HelpQueue[1].Pending {
 		t.Error("newly added entry should be pending")
+	}
+}
+
+func TestEnsurePendingWaitingInputHelpNormalizesLegacyCopy(t *testing.T) {
+	f := &feature.Feature{
+		HelpQueue: []feature.HelpRequest{
+			{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true},
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+
+	changed := ensurePendingWaitingInputHelp(f)
+	if changed {
+		t.Error("ensurePendingWaitingInputHelp() changed = true, want false for existing legacy pending entry")
+	}
+	if len(f.HelpQueue) != 1 {
+		t.Fatalf("len(HelpQueue) = %d, want 1", len(f.HelpQueue))
+	}
+	if got := f.HelpQueue[0].Question; got != waitingInputHelpMessage {
+		t.Errorf("HelpQueue[0].Question = %q, want %q", got, waitingInputHelpMessage)
+	}
+	if !f.HelpQueue[0].Pending {
+		t.Error("HelpQueue[0].Pending = false, want true")
+	}
+}
+
+func TestNormalizeManagedHelpQueueUpdatesLegacyAPIErrorCopy(t *testing.T) {
+	const legacy = "API error: rate limit exceeded (429) — attach with 'a' to respond"
+	const current = "API error: rate limit exceeded (429) — press 'a' to answer"
+	f := &feature.Feature{
+		HelpQueue: []feature.HelpRequest{
+			{Question: legacy, Pending: true},
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+
+	if !normalizeManagedHelpQueue(f) {
+		t.Fatal("normalizeManagedHelpQueue() changed = false, want true")
+	}
+	if got := f.HelpQueue[0].Question; got != current {
+		t.Errorf("HelpQueue[0].Question = %q, want %q", got, current)
+	}
+	if !hasPendingHelpRequestMessage(f, current) {
+		t.Error("hasPendingHelpRequestMessage() = false, want true for normalized API error")
+	}
+}
+
+func TestHasPendingHelpRequestMessageMatchesLegacyAPIErrorCopy(t *testing.T) {
+	const legacy = "API error: rate limit exceeded (429) — attach with 'a' to respond"
+	const current = "API error: rate limit exceeded (429) — press 'a' to answer"
+	f := &feature.Feature{
+		HelpQueue: []feature.HelpRequest{
+			{Question: legacy, Pending: true},
+		},
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+
+	if !hasPendingHelpRequestMessage(f, current) {
+		t.Error("hasPendingHelpRequestMessage() = false, want true for legacy API error copy")
+	}
+}
+
+func TestReconcileHelpQueueClearsLegacyManagedHelpCopy(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	f, err := fm.Create("reconcile-legacy-help", "legacy help reconciliation", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fm.Transition(f.ID, feature.StatusResearching)
+	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
+		feat.HelpQueue = append(feat.HelpQueue,
+			feature.HelpRequest{Question: "Agent has a question — attach with 'a' to respond", Pending: true},
+			feature.HelpRequest{Question: "Agent is waiting for input — attach with 'a' to respond", Pending: true},
+		)
+		return nil
+	})
+
+	sm := session.NewManager(nil)
+	sess := session.NewSession(f.ID+"-impl-repo-01", f.ID, feature.PhaseImplement)
+	sess.SetStatus(session.SessionRunning)
+	sm.RegisterTestSession(sess)
+	app.sessionManager = sm
+
+	app.reconcileHelpQueue(f.ID)
+
+	updated, _ := fm.Get(f.ID)
+	for _, h := range updated.HelpQueue {
+		if h.Pending {
+			t.Errorf("help entry %q still pending; want cleared when no session is waiting", h.Question)
+		}
+		if strings.Contains(h.Question, "attach with") {
+			t.Errorf("help entry kept retired copy after reconcile: %q", h.Question)
+		}
 	}
 }
 
@@ -2053,7 +2341,7 @@ func TestHelpRequestTimePopulated(t *testing.T) {
 	_ = fm.Transition(f.ID, feature.StatusResearching)
 
 	// Simulate handleSessionEvent adding a help request (with Time populated)
-	const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+	const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 	now := time.Now()
 	_ = fm.Store.Modify(f.ID, func(f *feature.Feature) error {
 		if !hasPendingHelpRequestMessage(f, inputMsg) {
@@ -3231,6 +3519,15 @@ func TestDashboardPreviewContextPct(t *testing.T) {
 	compact := dm.ViewCompact(80)
 	if !strings.Contains(compact, "25%") {
 		t.Errorf("expected 25%% in compact view for running feature (contextPct=%d)", pct)
+	}
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.syncPreview()
+	app.dashboard.focusPanel = 1
+	view := stripANSI(app.View().Content)
+	if !strings.Contains(view, "Context") || !strings.Contains(view, "25%") {
+		t.Errorf("expected live preview top box to include context 25%%, got:\n%s", view)
 	}
 }
 
@@ -5645,7 +5942,7 @@ func TestApproveAndRememberCmd_HelpQueuePreservedWhenHelpSessionRemains(t *testi
 	_ = fm.Transition(f.ID, feature.StatusResearching)
 
 	// Populate both PermissionsQueue and HelpQueue
-	const inputMsg = "Agent is waiting for input \u2014 attach with 'a' to respond"
+	const inputMsg = "Agent is waiting for input \u2014 press 'a' to answer"
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.PermissionsQueue = append(feat.PermissionsQueue, feature.PermissionRequest{
 			Tool:    "Bash",

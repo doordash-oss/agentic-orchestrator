@@ -24,7 +24,7 @@ import (
 )
 
 // ansiRegex matches ANSI escape sequences for stripping from rendered text.
-var ansiRegex = regexp.MustCompile(`\x1b[\[\]()][^\x1b]*?[a-zA-Z~\\]|\x1b[=>]|\x1b\[\?[0-9;]*[a-zA-Z]`)
+var ansiRegex = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[\[\]()][^\x1b]*?[a-zA-Z~\\]|\x1b[=>]|\x1b\[\?[0-9;]*[a-zA-Z]`)
 
 // Color palette — Catppuccin-inspired with adaptive light/dark support.
 var (

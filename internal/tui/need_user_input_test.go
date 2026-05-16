@@ -190,17 +190,17 @@ func TestNeedUserInputOverlayReattachAfterDetach(t *testing.T) {
 	m := newTestNeedUserInputReview(t, "feat-reattach", gatePath)
 	m = m.SetAnswer(0, "first attempt")
 
-	// Open menu and pick "Just detach" (last item).
+	// Open menu and pick "Return to dashboard" (last item).
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 	// Move down twice (Resume → Abort → Detach).
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.Detached() {
-		t.Fatalf("Just detach must mark the questionnaire detached")
+		t.Fatalf("Return to dashboard must mark the questionnaire detached")
 	}
 	if m.Decided() {
-		t.Fatalf("Just detach must not flag the questionnaire as Decided()")
+		t.Fatalf("Return to dashboard must not flag the questionnaire as Decided()")
 	}
 
 	// Reattach should clear detached and refocus the form.

@@ -120,6 +120,23 @@ func TestAttachModelView(t *testing.T) {
 	}
 }
 
+func TestAttachModelViewUsesWatchVocabulary(t *testing.T) {
+	sess := session.NewSession("test-view-watch", "feat-1", feature.PhaseImplement)
+	m := attachModelFromSession(sess, 80, 24)
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Watch", "Stop watching"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("AttachModel.View() missing %q in:\n%s", want, view)
+		}
+	}
+	for _, retired := range []string{"Detach", "Attach View"} {
+		if strings.Contains(view, retired) {
+			t.Errorf("AttachModel.View() contains retired copy %q in:\n%s", retired, view)
+		}
+	}
+}
+
 func TestAttachModelRenderViewportContent_ExcludesSpinnerLine(t *testing.T) {
 	sess := session.NewSession("test-spinner", "feat-1", 0)
 	m := attachModelFromSession(sess, 80, 24)

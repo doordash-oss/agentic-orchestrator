@@ -4,25 +4,30 @@
 
 Agentic Orchestrator is an AI development workflow orchestrator that turns any engineer into a force multiplier. Describe your features, make the high-level decisions, and AI handles the rest — research, planning, implementation, code review, pull request — all running concurrently from a single terminal.
 
-> The local CLI is `agentico`. The Go module and GitHub repository are both `github.com/doordash-oss/agentic-orchestrator`.
+> The local CLI is `agentico`
 
 <img width="1727" height="1049" alt="image" src="https://github.com/user-attachments/assets/1d0704a4-621f-4482-8f89-5424290b7ea5" />
 
 
 ## Why Agentic Orchestrator?
 
-Most AI coding tools are single-threaded: one conversation, one task, one context window. Agentic Orchestrator breaks that model:
+The hard part of agentic coding is not asking a model to edit files. The hard part is getting from a vague, high-level feature request to a reviewable PR without losing context, skipping design work, or letting a bad plan produce a huge diff. Left unmanaged, this is how teams get AI slop: plausible-looking code produced faster than the context, tests, and review process needed to make it trustworthy. Agentic Orchestrator is built around that problem: it turns one feature prompt into a durable engineering workflow that gathers context, asks questions, designs the approach, decomposes the work, implements it, verifies it, reviews it, and publishes it.
 
-- **Parallel execution** — Run 5, 10, 20 features simultaneously. Each gets its own git worktree, its own agent session, its own branch. No conflicts, no waiting.
-- **Structured pipeline** — Features flow through Research → Plan → Implement → Review → Publish with human approval gates between phases. You stay in control of *what* gets built; AI handles *how*.
-- **Multi-model orchestration** — Claude handles research, planning, and implementation. Codex handles code review. Each model is used where it excels.
-- **Multiplexed sessions** — Agent sessions run in background pseudo-terminals. Watch live work in real time, stop watching to let it continue, and come back whenever you want.
-- **Plan validation** — Specialized AI critics (architecture, security, performance, testing) review plans *before* implementation begins, catching structural issues early.
+That is the real "oneshot" value: an engineer can describe a large feature once, then supervise the checkpoints where judgment matters instead of manually shepherding every prompt, terminal session, worktree, test run, review pass, and PR step.
+
+- **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and brainstorm phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
+- **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
+- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
+- **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
+- **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
+- **Provider orchestration is explicit** — Claude can be used for context gathering, planning, and implementation; Codex for independent review. Models can be overridden per phase and swapped at runtime.
+
+The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
 ## Quick Start
 
 ```bash
-# Install (requires Go 1.24+)
+# Install (requires Go 1.25+)
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 
 # Or clone and build
@@ -41,35 +46,34 @@ On first launch, Agentic Orchestrator walks you through a welcome flow to select
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| **Go 1.24+** | Build Agentic Orchestrator | [go.dev](https://go.dev/dl/) |
-| **Claude Code** (`claude` CLI) | AI backend for research, planning, and implementation | [docs.anthropic.com](https://docs.anthropic.com/en/docs/claude-code) or `devbox ai` |
-| **Codex** (`codex` CLI) | AI backend for code review | `npm install -g @openai/codex` |
-| **`gh` CLI** | PR creation during publish | [cli.github.com](https://cli.github.com/) |
-| **`git`** | Worktree and branch management | Pre-installed on most systems |
+| **Go 1.25+** | Build or install `agentico` from source | [go.dev](https://go.dev/dl/) |
+| **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, brainstorm, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
+| **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
+
+After installing provider CLIs, run `claude --version`, `codex --version`, and `gh auth status` before launching `agentico`.
 
 ## How It Works
 
 ### The Feature Lifecycle
 
-Every feature progresses through a structured pipeline:
+The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first build context, clarify intent, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
 
-```
-┌─────────┐    ┌────────────┐    ┌──────────┐    ┌──────────────┐    ┌──────────┐
-│ Created │───▸│ Researching│───▸│ Planning │───▸│Implementing │───▸│ Published│
-└─────────┘    └────────────┘    └──────────┘    └──────────────┘    └──────────┘
-                    │                 │                  │
-                    ▾                 ▾                  ▾
-              Human review      Human review       AI code review
-               (optional)        (optional)         (automatic)
-```
+<img width="1051" height="570" alt="image" src="https://github.com/user-attachments/assets/00eb8559-0b0c-4000-a029-2210aa50f920" />
 
-**Researching** — The agent explores your codebase, reads documentation, builds a knowledge base, and produces a research document answering questions about how to approach the feature.
+**Knowledge Base Build** — Builds or refreshes a per-repo knowledge base covering architecture, conventions, API surface, dependencies, and verification. Fresh KBs are reused and the phase is skipped.
 
-**Planning** — Using research findings, the agent creates a phased implementation roadmap (Tracer Bullet + TDD methodology), then detailed per-phase plans. Specialized critics validate each plan for architectural soundness, security, performance, and test coverage.
+**Inquire, Research, Brainstorm** — Turns a high-level request into explicit answers, research findings, and a design direction. Q&A artifacts are persisted and fed forward so later phases do not depend on memory alone.
 
-**Implementing** — The agent follows the approved plan, delegating to sub-agents for parallel work. It tracks progress, runs verification (tests, linting, builds), and iterates until the review gate passes.
+**Roadmap and Phase Planning** — Creates the top-level roadmap, then a detailed plan for each roadmap phase. Large and Moonshot run plan validators; Medium skips plan critics for lower overhead.
 
-**Publishing** — Review the diff, edit the PR description, and publish — all from the TUI. When a feature spans multiple repositories, cross-reference links are automatically injected into all related PRs.
+**Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. Medium and Large rely on Final Review; Moonshot also keeps per-iteration review during implementation.
+
+**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop. Passing Final Review moves the feature to `CodeReady`; exhausting the loop or violating the phase contract fails the feature.
+
+**Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, rebases, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the TUI pauses at `CodeReady` so you can review the diff and PR description first.
 
 ### Pipeline Profiles
 
@@ -77,9 +81,9 @@ When creating a feature, choose a pipeline depth:
 
 | Profile | Phases | Best for |
 |---------|--------|----------|
-| **Medium** | Plan → Implement → Final Review → Publish | Small, well-understood changes |
-| **Large** | KB → Inquire → Research → Brainstorm → Plan → Implement → Final Review → Publish | Most features (default) |
-| **Moonshot** | Same as Large, with additional review gates | High-risk or complex changes |
+| **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
+| **Large** | KB → Inquire → Research → Brainstorm → roadmap loop → Final Review → Publish | Most complex features (default) |
+| **Moonshot** | Same phase sequence as Large, with max effort, plan-review defaults, and per-iteration implementation review | High-risk or highly ambiguous changes |
 
 ### Worktree Isolation
 
@@ -109,13 +113,14 @@ Plans are reviewed by specialized AI critics before implementation begins:
 
 | Critic | Focus | When Active |
 |--------|-------|-------------|
-| **Architecture** | Pattern consistency, module boundaries, dependency direction | All risk levels |
-| **Security** | Auth, injection, data protection (calibrated to project context) | Medium + High risk |
-| **Performance** | Scalability, query efficiency, resource management | Medium + High risk |
-| **Testing** | Coverage adequacy, edge cases, regression protection | Medium + High risk |
-| **Scope** | Requirement coverage, phase sizing, over-engineering detection | All risk levels |
+| **Architecture** | Roadmap-level pattern consistency, module boundaries, dependency direction | Large/Moonshot, all risk levels |
+| **Structural** | Phase-plan completeness, required sections, executable task shape | Large/Moonshot, all risk levels |
+| **Scope** | Requirement coverage, phase sizing, over-engineering detection | Large/Moonshot, all risk levels |
+| **Security** | Auth, injection, data protection calibrated to project context | Large/Moonshot, high risk |
+| **Performance** | Scalability, query efficiency, resource management | Large/Moonshot, high risk |
+| **Testing** | Coverage adequacy, edge cases, regression protection | Large/Moonshot phase plans, high risk |
 
-Critics run in parallel and produce independent verdicts. If any critic requests changes, the plan is revised and re-validated automatically.
+Critics run in parallel and produce independent verdicts. If any critic requests changes, the plan is revised and re-validated automatically. Medium skips plan critics but still runs Final Review before publish.
 
 ## Usage
 
@@ -140,7 +145,7 @@ Press `n` from the dashboard to open the wizard:
 
 ### Interacting with Agents
 
-**Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input. Filter the output (`Ctrl+F`) between All, No Tools, or Text Only views.
+**Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input.
 
 **Overview** (`o`) — Switch the dashboard right panel from Live Preview to the detailed overview. Press `l` from Overview to return to Live Preview; outside Overview, `l` still opens logs.
 
@@ -174,9 +179,9 @@ Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first lau
 ```yaml
 defaults:
   models:
-    research: opus           # Model for research phase
-    planning: opus           # Model for planning phase
-    implementation: opus     # Model for implementation phase
+    research: "opus[1m]"     # Model for research phase
+    planning: "opus[1m]"     # Model for planning phase
+    implementation: "opus[1m]" # Model for implementation phase
     review: gpt-5.4          # Model for review phase (Codex)
     utilities: sonnet        # Model for chat and utility tasks
     kb_build: "opus[1m]"     # Model for knowledge base builds
@@ -190,6 +195,7 @@ defaults:
   max_iterations: 10
   max_consecutive_failures: 3
   max_consecutive_no_progress: 3
+  inquireness: high          # How often planning questions are surfaced
   pipeline: large            # Default pipeline (medium, large, moonshot)
 
 repos:

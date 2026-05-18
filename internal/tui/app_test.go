@@ -1531,7 +1531,41 @@ func TestHandleSDKEvent_AskUserQuestionControlRequestAddsQuestionHelp(t *testing
 	}
 }
 
-func TestHandleSDKEvent_ResearchSuccessWithoutArtifactMarksProtocolViolation(t *testing.T) {
+func assertTUIArtifactPhaseRetry(t *testing.T, fm *feature.Manager, f *feature.Feature, phase feature.Phase, wantViolation string) {
+	t.Helper()
+	updated, err := fm.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get feature: %v", err)
+	}
+	if updated.Status != statusForPhase(phase) {
+		t.Fatalf("status = %v, want %v", updated.Status, statusForPhase(phase))
+	}
+	if updated.FailureType != "" {
+		t.Fatalf("FailureType = %q, want empty", updated.FailureType)
+	}
+	if updated.LastError != "" {
+		t.Fatalf("LastError = %q, want empty", updated.LastError)
+	}
+	phaseDir := filepath.Join(agent.ActiveRunDir(fm.Store.BaseDir, updated), phase.DirName())
+	sidecar, err := agent.ReadProtocolRetrySidecar(phaseDir)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
+	}
+	if sidecar == nil {
+		t.Fatal("retry sidecar = nil, want sidecar")
+	}
+	if sidecar.Consecutive != 1 {
+		t.Fatalf("sidecar.Consecutive = %d, want 1", sidecar.Consecutive)
+	}
+	if !strings.Contains(sidecar.LastViolation, wantViolation) {
+		t.Fatalf("sidecar.LastViolation = %q, want %q", sidecar.LastViolation, wantViolation)
+	}
+	if _, err := os.Stat(filepath.Join(phaseDir, agent.PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("phase_complete stat err = %v, want removed", err)
+	}
+}
+
+func TestHandleSDKEvent_ResearchSuccessWithoutArtifactRetriesProtocolViolation(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.eventCh = make(chan interface{}, 1)
@@ -1578,16 +1612,7 @@ func TestHandleSDKEvent_ResearchSuccessWithoutArtifactMarksProtocolViolation(t *
 
 	_, _ = app.handleSDKEvent(msg)
 
-	f, _ = fm.Get(f.ID)
-	if f.Status != feature.StatusFailed {
-		t.Fatalf("feature status = %v, want Failed", f.Status)
-	}
-	if f.FailureType != feature.FailureProtocolViolation {
-		t.Fatalf("FailureType = %q, want %q", f.FailureType, feature.FailureProtocolViolation)
-	}
-	if !strings.Contains(f.LastError, agent.PhaseCompleteFile) || !strings.Contains(f.LastError, "markdown artifact") {
-		t.Fatalf("LastError = %q, want protocol violation with phase_complete and markdown artifact details", f.LastError)
-	}
+	assertTUIArtifactPhaseRetry(t, fm, f, feature.PhaseResearch, agent.PhaseCompleteFile)
 }
 
 func TestPhaseOutputSuggestsQuestion_MultilineAssistantQuestionStillDetected(t *testing.T) {
@@ -1780,16 +1805,14 @@ func TestHandleSessionDone_RegistryOwnedSuccessDoesNotCreateQuestionHelp(t *test
 	_, _ = app.handleSessionDone(doneMsg)
 
 	f, _ = fm.Get(f.ID)
-	if f.Status != feature.StatusFailed {
-		t.Errorf("status = %v, want Failed", f.Status)
+	if f.Status != feature.StatusInquiring {
+		t.Errorf("status = %v, want Inquiring", f.Status)
 	}
-	if f.FailureType != feature.FailureProtocolViolation {
-		t.Fatalf("FailureType = %q, want %q", f.FailureType, feature.FailureProtocolViolation)
-	}
+	assertTUIArtifactPhaseRetry(t, fm, f, feature.PhaseInquire, agent.PhaseCompleteFile)
 	assertNoPendingQuestionHelp(t, f)
 }
 
-func TestHandleSessionDone_SuccessWithoutArtifactMarksProtocolViolation(t *testing.T) {
+func TestHandleSessionDone_SuccessWithoutArtifactRetriesProtocolViolation(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.eventCh = make(chan interface{}, 1)
@@ -1830,16 +1853,7 @@ func TestHandleSessionDone_SuccessWithoutArtifactMarksProtocolViolation(t *testi
 
 	_, _ = app.handleSessionDone(doneMsg)
 
-	f, _ = fm.Get(f.ID)
-	if f.Status != feature.StatusFailed {
-		t.Fatalf("feature status = %v, want Failed", f.Status)
-	}
-	if f.FailureType != feature.FailureProtocolViolation {
-		t.Fatalf("FailureType = %q, want %q", f.FailureType, feature.FailureProtocolViolation)
-	}
-	if !strings.Contains(f.LastError, agent.PhaseCompleteFile) || !strings.Contains(f.LastError, "markdown artifact") {
-		t.Fatalf("LastError = %q, want protocol violation with phase_complete and markdown artifact details", f.LastError)
-	}
+	assertTUIArtifactPhaseRetry(t, fm, f, feature.PhaseResearch, agent.PhaseCompleteFile)
 }
 
 func TestPublishDescGeneratedForwarded(t *testing.T) {
@@ -4570,12 +4584,7 @@ func TestHandleSDKEvent_ArtifactPhaseResultSuccessRoutesThroughProtocolValidatio
 			if err != nil {
 				t.Fatalf("get feature: %v", err)
 			}
-			if updated.FailureType != feature.FailureProtocolViolation {
-				t.Fatalf("FailureType = %s, want %s", updated.FailureType, feature.FailureProtocolViolation)
-			}
-			if !strings.Contains(updated.LastError, agent.PhaseCompleteFile) {
-				t.Fatalf("LastError = %q, want phase_complete protocol violation", updated.LastError)
-			}
+			assertTUIArtifactPhaseRetry(t, fm, updated, tc.phase, agent.PhaseCompleteFile)
 			assertNoPendingQuestionHelp(t, updated)
 		})
 	}
@@ -4610,12 +4619,7 @@ func TestHandleSessionDone_ArtifactPhaseSuccessRoutesThroughProtocolValidation(t
 			if err != nil {
 				t.Fatalf("get feature: %v", err)
 			}
-			if updated.FailureType != feature.FailureProtocolViolation {
-				t.Fatalf("FailureType = %s, want %s", updated.FailureType, feature.FailureProtocolViolation)
-			}
-			if !strings.Contains(updated.LastError, agent.PhaseCompleteFile) {
-				t.Fatalf("LastError = %q, want phase_complete protocol violation", updated.LastError)
-			}
+			assertTUIArtifactPhaseRetry(t, fm, updated, tc.phase, agent.PhaseCompleteFile)
 			assertNoPendingQuestionHelp(t, updated)
 		})
 	}

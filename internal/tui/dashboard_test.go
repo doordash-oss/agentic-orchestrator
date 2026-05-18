@@ -1471,6 +1471,42 @@ func TestFormatStatus_PublishedActiveReviewCommentsCycle(t *testing.T) {
 	}
 }
 
+func TestDashboardStatusShowsActiveArtifactPhaseDuringProtocolRetry(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		status      feature.Status
+		current     feature.Phase
+		consecutive int
+		want        string
+	}{
+		{"inquire_first_retry", feature.StatusInquiring, feature.PhaseInquire, 1, "Inquiring"},
+		{"research_second_retry", feature.StatusResearching, feature.PhaseResearch, 2, "Researching"},
+		{"design_second_retry", feature.StatusDesigning, feature.PhaseDesign, 2, "Designing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           tt.name,
+				Name:         tt.name,
+				Slug:         tt.name,
+				Status:       tt.status,
+				CurrentPhase: tt.current,
+				FailureType:  "",
+				LastError:    "",
+			}
+			got := formatStatus(f)
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("formatStatus() = %q, want active label %q for retry streak %d", got, tt.want, tt.consecutive)
+			}
+			if strings.Contains(got, "Failed") || strings.Contains(got, "protocol violation") {
+				t.Fatalf("formatStatus() = %q, want active phase during retry streak %d", got, tt.consecutive)
+			}
+		})
+	}
+}
+
 func TestFormatStatus_RepoPausedOnInput_StylesAsWaitingInput(t *testing.T) {
 	t.Parallel()
 	// Schema v3 always routes implement completion through the multi-repo

@@ -510,27 +510,211 @@ func loadStoredFeature(t *testing.T, store *feature.Store, featureID string) *fe
 	return f
 }
 
+type artifactPhaseRetryFixture struct {
+	orchestrator *orchestrator.Orchestrator
+	feature      *feature.Feature
+	store        *feature.Store
+	runner       *capturingPhaseRunner
+	phaseDir     string
+	lifecycle    *mocks.MockFeatureLifecycle
+}
+
+func newArtifactPhaseRetryFixture(t *testing.T, tc artifactPhaseCase, checkpoints feature.Checkpoints) artifactPhaseRetryFixture {
+	t.Helper()
+
+	cpr := newCapturingPhaseRunner(t)
+	stateDir := cpr.stateDir
+	f := &feature.Feature{
+		ID:            "feat-retry-" + tc.phaseKey,
+		Status:        tc.status,
+		CurrentPhase:  tc.phase,
+		Pipeline:      feature.PipelineLarge,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Checkpoints:   checkpoints,
+		Artifacts:     make(map[string]string),
+	}
+	seedPriorInteractiveArtifacts(t, stateDir, f, tc)
+
+	store := feature.NewStore(stateDir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	lc := lifecycleForFeature(f)
+	lc.GetFn = func(id string) (*feature.Feature, error) {
+		return store.Load(id)
+	}
+	lc.MarkFailedFn = func(id, ft, msg string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusFailed
+			ff.FailureType = ft
+			ff.LastError = msg
+			return nil
+		})
+	}
+	lc.CompleteInquireFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusInquireReady
+			return nil
+		})
+	}
+	lc.CompleteResearchFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusDesignReady
+			return nil
+		})
+	}
+	lc.CompleteDesignFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusPlanReady
+			return nil
+		})
+	}
+	lc.StartInquireFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusInquiring
+			return nil
+		})
+	}
+	lc.StartResearchFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusResearching
+			return nil
+		})
+	}
+	lc.StartDesignFn = func(id string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusDesigning
+			return nil
+		})
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       store,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	return artifactPhaseRetryFixture{
+		orchestrator: o,
+		feature:      f,
+		store:        store,
+		runner:       cpr,
+		phaseDir:     filepath.Join(agent.ActiveRunDir(stateDir, f), tc.phaseKey),
+		lifecycle:    lc,
+	}
+}
+
+func seedPriorInteractiveArtifacts(t *testing.T, stateDir string, f *feature.Feature, tc artifactPhaseCase) {
+	t.Helper()
+	switch tc.phase {
+	case feature.PhaseResearch:
+		f.Artifacts["inquire"] = writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
+	case feature.PhaseDesign:
+		f.Artifacts["inquire"] = writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
+		f.Artifacts["research"] = writePhaseMarkdown(t, stateDir, f, "research", "research.md")
+	}
+}
+
+func artifactPhaseRoleForTest(t *testing.T, phase feature.Phase) agent.Role {
+	t.Helper()
+	switch phase {
+	case feature.PhaseInquire:
+		return agent.RoleInquirer
+	case feature.PhaseResearch:
+		return agent.RoleResearcher
+	case feature.PhaseDesign:
+		return agent.RoleDesigner
+	default:
+		t.Fatalf("unknown artifact phase %s", phase)
+		return ""
+	}
+}
+
+func retrySuccessCheckpointForTest(phase feature.Phase) feature.Checkpoints {
+	switch phase {
+	case feature.PhaseInquire:
+		return feature.Checkpoints{InquiryReview: true}
+	case feature.PhaseResearch:
+		return feature.Checkpoints{ResearchReview: true}
+	case feature.PhaseDesign:
+		return feature.Checkpoints{DesignReview: true}
+	default:
+		return feature.Checkpoints{}
+	}
+}
+
+func countPhaseCompletedEvents(events []ports.Event, phase feature.Phase) int {
+	count := 0
+	for _, ev := range events {
+		if ev.Type == ports.PhaseCompleted && ev.Phase == phase {
+			count++
+		}
+	}
+	return count
+}
+
+func assertFirstArtifactRetry(t *testing.T, fix artifactPhaseRetryFixture, tc artifactPhaseCase, wantViolation string) {
+	t.Helper()
+	reloaded := loadStoredFeature(t, fix.store, fix.feature.ID)
+	if reloaded.Status != tc.status {
+		t.Fatalf("Status = %s, want %s", reloaded.Status, tc.status)
+	}
+	if reloaded.FailureType != "" {
+		t.Fatalf("FailureType = %q, want empty", reloaded.FailureType)
+	}
+	if reloaded.LastError != "" {
+		t.Fatalf("LastError = %q, want empty", reloaded.LastError)
+	}
+
+	sidecar, err := agent.ReadProtocolRetrySidecar(fix.phaseDir)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
+	}
+	if sidecar == nil {
+		t.Fatal("sidecar = nil, want retry state")
+	}
+	if sidecar.Consecutive != 1 {
+		t.Fatalf("sidecar.Consecutive = %d, want 1", sidecar.Consecutive)
+	}
+	if sidecar.ActiveRun != reloaded.ActiveRun {
+		t.Fatalf("sidecar.ActiveRun = %d, want %d", sidecar.ActiveRun, reloaded.ActiveRun)
+	}
+	if sidecar.Role != artifactPhaseRoleForTest(t, tc.phase) {
+		t.Fatalf("sidecar.Role = %q, want %q", sidecar.Role, artifactPhaseRoleForTest(t, tc.phase))
+	}
+	if !strings.Contains(sidecar.LastViolation, wantViolation) {
+		t.Fatalf("sidecar.LastViolation = %q, want %q", sidecar.LastViolation, wantViolation)
+	}
+	if _, err := os.Stat(filepath.Join(fix.phaseDir, agent.PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("phase_complete stat err = %v, want removed", err)
+	}
+	if got := len(fix.runner.capturedByPhase(tc.phase)); got != 1 {
+		t.Fatalf("starter captures for %s = %d, want 1", tc.phase, got)
+	}
+	if events := drainEvents(fix.orchestrator); hasEventType(events, ports.PhaseCompleted) {
+		t.Fatalf("PhaseCompleted emitted on retry: %#v", events)
+	}
+}
+
 func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseMissingPhaseCompleteProtocolViolation(t *testing.T) {
 	for _, tc := range artifactPhaseCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			o, f, store := newArtifactPhaseOrchestratorFixture(t, tc)
-			stateDir := store.BaseDir
-			writePhaseMarkdown(t, stateDir, f, tc.phaseKey, "artifact.md")
+			fix := newArtifactPhaseRetryFixture(t, tc, feature.Checkpoints{})
+			writePhaseMarkdown(t, fix.store.BaseDir, fix.feature, tc.phaseKey, "artifact.md")
 
-			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
 				Phase:   tc.phase,
 				Success: true,
 			}); err != nil {
 				t.Fatalf("HandlePhaseCompletion() error = %v", err)
 			}
 
-			reloaded := loadStoredFeature(t, store, f.ID)
-			if reloaded.FailureType != feature.FailureProtocolViolation {
-				t.Fatalf("FailureType = %s, want %s", reloaded.FailureType, feature.FailureProtocolViolation)
-			}
-			if !strings.Contains(reloaded.LastError, agent.PhaseCompleteFile) {
-				t.Fatalf("LastError = %q, want phase_complete violation", reloaded.LastError)
-			}
+			assertFirstArtifactRetry(t, fix, tc, agent.PhaseCompleteFile)
 		})
 	}
 }
@@ -538,23 +722,204 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseMissingPhaseCompletePro
 func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseMissingMarkdownProtocolViolation(t *testing.T) {
 	for _, tc := range artifactPhaseCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			o, f, store := newArtifactPhaseOrchestratorFixture(t, tc)
-			stateDir := store.BaseDir
-			writePhaseComplete(t, stateDir, f, tc.phaseKey)
+			fix := newArtifactPhaseRetryFixture(t, tc, feature.Checkpoints{})
+			writePhaseComplete(t, fix.store.BaseDir, fix.feature, tc.phaseKey)
 
-			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
 				Phase:   tc.phase,
 				Success: true,
 			}); err != nil {
 				t.Fatalf("HandlePhaseCompletion() error = %v", err)
 			}
 
-			reloaded := loadStoredFeature(t, store, f.ID)
-			if reloaded.FailureType != feature.FailureProtocolViolation {
-				t.Fatalf("FailureType = %s, want %s", reloaded.FailureType, feature.FailureProtocolViolation)
+			assertFirstArtifactRetry(t, fix, tc, "markdown")
+		})
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseRetryThenSuccessAdvances(t *testing.T) {
+	for _, tc := range artifactPhaseCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			fix := newArtifactPhaseRetryFixture(t, tc, retrySuccessCheckpointForTest(tc.phase))
+			writePhaseComplete(t, fix.store.BaseDir, fix.feature, tc.phaseKey)
+
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+				Phase:   tc.phase,
+				Success: true,
+			}); err != nil {
+				t.Fatalf("first HandlePhaseCompletion() error = %v", err)
 			}
-			if !strings.Contains(reloaded.LastError, "markdown") {
-				t.Fatalf("LastError = %q, want markdown violation", reloaded.LastError)
+			drainEvents(fix.orchestrator)
+
+			writePhaseComplete(t, fix.store.BaseDir, fix.feature, tc.phaseKey)
+			artifactPath := writePhaseMarkdown(t, fix.store.BaseDir, fix.feature, tc.phaseKey, tc.phaseKey+".md")
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+				Phase:   tc.phase,
+				Success: true,
+			}); err != nil {
+				t.Fatalf("second HandlePhaseCompletion() error = %v", err)
+			}
+
+			if _, err := agent.ReadProtocolRetrySidecar(fix.phaseDir); err != nil {
+				t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(fix.phaseDir, agent.ProtocolRetrySidecarFile)); !os.IsNotExist(err) {
+				t.Fatalf("sidecar stat err = %v, want removed", err)
+			}
+
+			reloaded := loadStoredFeature(t, fix.store, fix.feature.ID)
+			if got := reloaded.Artifacts[tc.phaseKey]; got != artifactPath {
+				t.Fatalf("Artifacts[%q] = %q, want %q", tc.phaseKey, got, artifactPath)
+			}
+			assertLifecycleCall(t, fix.lifecycle, "Complete"+strings.Title(tc.phaseKey))
+
+			events := drainEvents(fix.orchestrator)
+			if got := countPhaseCompletedEvents(events, tc.phase); got != 1 {
+				t.Fatalf("PhaseCompleted events = %d, want 1; events=%#v", got, events)
+			}
+			if !hasEventType(events, ports.ReviewRequired) {
+				t.Fatalf("ReviewRequired event missing after successful retry; events=%#v", events)
+			}
+		})
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseThirdViolationTerminates(t *testing.T) {
+	for _, tc := range artifactPhaseCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			fix := newArtifactPhaseRetryFixture(t, tc, feature.Checkpoints{})
+			for attempt := 1; attempt <= agent.DefaultMaxConsecutiveProtocolViolations; attempt++ {
+				if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+					Phase:   tc.phase,
+					Success: true,
+				}); err != nil {
+					t.Fatalf("HandlePhaseCompletion(attempt %d) error = %v", attempt, err)
+				}
+			}
+
+			reloaded := loadStoredFeature(t, fix.store, fix.feature.ID)
+			if reloaded.FailureType != feature.FailureProtocolViolation {
+				t.Fatalf("FailureType = %q, want %q", reloaded.FailureType, feature.FailureProtocolViolation)
+			}
+			role := artifactPhaseRoleForTest(t, tc.phase)
+			_, contractViolations, err := agent.Validate(tc.phase, role, fix.phaseDir)
+			if err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+			violations := []agent.ProtocolViolation{{
+				Artifact: agent.PhaseCompleteFile,
+				Reason:   "SDK reported success but phase_complete was not present",
+			}}
+			violations = append(violations, contractViolations...)
+			wantErr := agent.FormatSingleShotProtocolViolationError(role, fix.phaseDir, violations)
+			if reloaded.LastError != wantErr {
+				t.Fatalf("LastError = %q, want %q", reloaded.LastError, wantErr)
+			}
+
+			sidecar, err := agent.ReadProtocolRetrySidecar(fix.phaseDir)
+			if err != nil {
+				t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
+			}
+			if sidecar == nil || sidecar.Consecutive != agent.DefaultMaxConsecutiveProtocolViolations {
+				t.Fatalf("sidecar = %#v, want consecutive %d", sidecar, agent.DefaultMaxConsecutiveProtocolViolations)
+			}
+			if got := len(fix.runner.capturedByPhase(tc.phase)); got != agent.DefaultMaxConsecutiveProtocolViolations-1 {
+				t.Fatalf("starter captures for %s = %d, want %d", tc.phase, got, agent.DefaultMaxConsecutiveProtocolViolations-1)
+			}
+			events := drainEvents(fix.orchestrator)
+			if got := countPhaseCompletedEvents(events, tc.phase); got != 1 {
+				t.Fatalf("PhaseCompleted events = %d, want 1; events=%#v", got, events)
+			}
+		})
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseSidecarRestartRegression(t *testing.T) {
+	for _, tc := range artifactPhaseCases() {
+		t.Run(tc.name+"_survives_restart", func(t *testing.T) {
+			fix := newArtifactPhaseRetryFixture(t, tc, feature.Checkpoints{})
+			if err := agent.WriteProtocolRetrySidecar(fix.phaseDir, agent.ProtocolRetrySidecar{
+				Role:          artifactPhaseRoleForTest(t, tc.phase),
+				ActiveRun:     fix.feature.ActiveRun,
+				Consecutive:   2,
+				LastViolation: "prior violation",
+				UpdatedAt:     time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("WriteProtocolRetrySidecar() error = %v", err)
+			}
+
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+				Phase:   tc.phase,
+				Success: true,
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion() error = %v", err)
+			}
+
+			reloaded := loadStoredFeature(t, fix.store, fix.feature.ID)
+			if reloaded.FailureType != feature.FailureProtocolViolation {
+				t.Fatalf("FailureType = %q, want %q", reloaded.FailureType, feature.FailureProtocolViolation)
+			}
+		})
+
+		t.Run(tc.name+"_stale_active_run_resets", func(t *testing.T) {
+			fix := newArtifactPhaseRetryFixture(t, tc, feature.Checkpoints{})
+			if err := agent.WriteProtocolRetrySidecar(fix.phaseDir, agent.ProtocolRetrySidecar{
+				Role:          artifactPhaseRoleForTest(t, tc.phase),
+				ActiveRun:     fix.feature.ActiveRun + 1,
+				Consecutive:   2,
+				LastViolation: "prior violation",
+				UpdatedAt:     time.Now().UTC(),
+			}); err != nil {
+				t.Fatalf("WriteProtocolRetrySidecar() error = %v", err)
+			}
+
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+				Phase:   tc.phase,
+				Success: true,
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion() error = %v", err)
+			}
+
+			reloaded := loadStoredFeature(t, fix.store, fix.feature.ID)
+			if reloaded.Status != tc.status {
+				t.Fatalf("Status = %s, want %s", reloaded.Status, tc.status)
+			}
+			sidecar, err := agent.ReadProtocolRetrySidecar(fix.phaseDir)
+			if err != nil {
+				t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
+			}
+			if sidecar == nil || sidecar.Consecutive != 1 || sidecar.ActiveRun != fix.feature.ActiveRun {
+				t.Fatalf("sidecar = %#v, want fresh active_run=%d consecutive=1", sidecar, fix.feature.ActiveRun)
+			}
+		})
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseSessionCrashDoesNotReadSidecar(t *testing.T) {
+	for _, tc := range artifactPhaseCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			fix := newArtifactPhaseRetryFixture(t, tc, feature.Checkpoints{})
+			if err := os.MkdirAll(fix.phaseDir, 0o755); err != nil {
+				t.Fatalf("mkdir phase dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(fix.phaseDir, agent.ProtocolRetrySidecarFile), []byte("role: ["), 0o644); err != nil {
+				t.Fatalf("write malformed sidecar: %v", err)
+			}
+
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+				Phase:       tc.phase,
+				Success:     false,
+				ErrorDetail: "session crashed",
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion() error = %v", err)
+			}
+
+			reloaded := loadStoredFeature(t, fix.store, fix.feature.ID)
+			if reloaded.FailureType != feature.FailureSessionCrash {
+				t.Fatalf("FailureType = %q, want %q", reloaded.FailureType, feature.FailureSessionCrash)
+			}
+			if got := len(fix.runner.capturedByPhase(tc.phase)); got != 0 {
+				t.Fatalf("starter captures for %s = %d, want 0", tc.phase, got)
 			}
 		})
 	}

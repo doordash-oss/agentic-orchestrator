@@ -326,6 +326,41 @@ func TestProtocolViolationFailureRendering(t *testing.T) {
 	}
 }
 
+func TestDetailStatusShowsActiveArtifactPhaseDuringProtocolRetry(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		status      feature.Status
+		current     feature.Phase
+		consecutive int
+		want        string
+	}{
+		{"inquire_first_retry", feature.StatusInquiring, feature.PhaseInquire, 1, "Inquiring"},
+		{"research_second_retry", feature.StatusResearching, feature.PhaseResearch, 2, "Researching"},
+		{"design_second_retry", feature.StatusDesigning, feature.PhaseDesign, 2, "Designing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           tt.name,
+				Slug:         tt.name,
+				Status:       tt.status,
+				CurrentPhase: tt.current,
+				FailureType:  "",
+				LastError:    "",
+			}
+			view := NewDetailModel(f, "").View()
+			if !strings.Contains(view, tt.want) {
+				t.Fatalf("DetailModel.View() missing active label %q for retry streak %d:\n%s", tt.want, tt.consecutive, view)
+			}
+			if strings.Contains(view, "Failure Info") || strings.Contains(view, "protocol violation") {
+				t.Fatalf("DetailModel.View() rendered failure during retry streak %d:\n%s", tt.consecutive, view)
+			}
+		})
+	}
+}
+
 func TestDetailViewFailedNoContext(t *testing.T) {
 	t.Parallel()
 	// Legacy features with no failure context still render correctly

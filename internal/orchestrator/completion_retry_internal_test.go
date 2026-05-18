@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -115,5 +116,186 @@ func TestArtifactPhaseCompletionValidationInfraErrorBubbles(t *testing.T) {
 			t.Fatalf("PhaseCompleted emitted on infra validation error: %#v", ev)
 		}
 	default:
+	}
+}
+
+func TestKBCompletionValidationInfraErrorBubbles(t *testing.T) {
+	oldValidate := validateAgentContract
+	validateAgentContract = func(feature.Phase, agent.Role, string) (agent.Outcome, []agent.ProtocolViolation, error) {
+		return agent.Outcome{}, nil, errors.New("kb parser exploded")
+	}
+	t.Cleanup(func() {
+		validateAgentContract = oldValidate
+	})
+
+	stateDir := t.TempDir()
+	kbDir := agent.KBStateDir(stateDir, "repo-a")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("mkdir kb dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write phase_complete: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:            "feat-infra",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		Pipeline:      feature.PipelineLarge,
+		ActiveRun:     1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+	}
+	store := feature.NewStore(stateDir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	lc := mocks.NewMockFeatureLifecycle()
+	lc.GetFn = store.Load
+	lc.MarkFailedFn = func(id, ft, msg string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusFailed
+			ff.FailureType = ft
+			ff.LastError = msg
+			return nil
+		})
+	}
+	sm := mocks.NewMockSessionManager()
+	o := New(Deps{
+		Lifecycle: lc,
+		Store:     store,
+		Sessions:  sm,
+	}, Hooks{})
+
+	err := o.onKBCompleted(f.ID, PhaseCompletionInput{
+		Phase:     feature.PhaseKnowledgeBase,
+		SessionID: f.ID + "-kb-repo-a",
+		Success:   true,
+	})
+	if err == nil {
+		t.Fatal("onKBCompleted() error = nil, want validation error")
+	}
+	if !strings.Contains(err.Error(), "validating knowledge base contract") || !strings.Contains(err.Error(), "kb parser exploded") {
+		t.Fatalf("onKBCompleted() error = %v, want wrapped validation error", err)
+	}
+	reloaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if reloaded.FailureType != "" || reloaded.LastError != "" {
+		t.Fatalf("FailureType/LastError = %q/%q, want empty", reloaded.FailureType, reloaded.LastError)
+	}
+	if _, err := os.Stat(filepath.Join(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))); !os.IsNotExist(err) {
+		t.Fatalf("sidecar stat err = %v, want not exist", err)
+	}
+	for _, call := range lc.Calls {
+		switch call.Method {
+		case "MarkRepoKBFailed", "MarkFailed":
+			t.Fatalf("%s called on infra validation error; calls=%#v", call.Method, lc.Calls)
+		}
+	}
+	if got := len(sm.StopCalls); got != 0 {
+		t.Fatalf("StopSession calls = %d, want 0", got)
+	}
+	select {
+	case ev := <-o.Events():
+		if ev.Type == ports.PhaseCompleted {
+			t.Fatalf("PhaseCompleted emitted on infra validation error: %#v", ev)
+		}
+	default:
+	}
+}
+
+func TestKBCompletionRetryPreservesIndexAndState(t *testing.T) {
+	oldValidate := validateAgentContract
+	validateAgentContract = func(feature.Phase, agent.Role, string) (agent.Outcome, []agent.ProtocolViolation, error) {
+		return agent.Outcome{}, []agent.ProtocolViolation{{
+			Artifact: "index.md",
+			Reason:   "synthetic validator violation",
+		}}, nil
+	}
+	t.Cleanup(func() {
+		validateAgentContract = oldValidate
+	})
+
+	stateDir := t.TempDir()
+	kbDir := agent.KBStateDir(stateDir, "repo-a")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("mkdir kb dir: %v", err)
+	}
+	indexPath := agent.KBPath(kbDir)
+	indexBytes := []byte("# existing KB\n\ncontent\n")
+	if err := os.WriteFile(indexPath, indexBytes, 0o644); err != nil {
+		t.Fatalf("write index.md: %v", err)
+	}
+	if err := agent.SaveKBState(kbDir, &agent.KBState{
+		HeadCommit:  "old-head",
+		LastUpdated: time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC),
+		Version:     1,
+	}); err != nil {
+		t.Fatalf("SaveKBState() error = %v", err)
+	}
+	statePath := filepath.Join(kbDir, "state.json")
+	stateBytes, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write phase_complete: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:            "feat-preserve",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		Pipeline:      feature.PipelineLarge,
+		ActiveRun:     1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+	}
+	store := feature.NewStore(stateDir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	lc := mocks.NewMockFeatureLifecycle()
+	lc.GetFn = store.Load
+	lc.ListFn = func() ([]*feature.Feature, error) { return []*feature.Feature{f}, nil }
+	o := New(Deps{
+		Lifecycle: lc,
+		Store:     store,
+		CmdRunner: mocks.NewMockCommandRunner(),
+	}, Hooks{})
+
+	if err := o.onKBCompleted(f.ID, PhaseCompletionInput{
+		Phase:     feature.PhaseKnowledgeBase,
+		SessionID: f.ID + "-kb-repo-a",
+		Success:   true,
+	}); err != nil {
+		t.Fatalf("onKBCompleted() error = %v", err)
+	}
+
+	gotIndex, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("read index.md after retry: %v", err)
+	}
+	if string(gotIndex) != string(indexBytes) {
+		t.Fatalf("index.md changed: got %q, want %q", gotIndex, indexBytes)
+	}
+	gotState, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state.json after retry: %v", err)
+	}
+	if string(gotState) != string(stateBytes) {
+		t.Fatalf("state.json changed: got %q, want %q", gotState, stateBytes)
+	}
+	if _, err := os.Stat(filepath.Join(kbDir, agent.PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("phase_complete stat err = %v, want removed", err)
+	}
+	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
+	}
+	if sidecar == nil || sidecar.Consecutive != 1 {
+		t.Fatalf("sidecar = %#v, want consecutive=1", sidecar)
 	}
 }

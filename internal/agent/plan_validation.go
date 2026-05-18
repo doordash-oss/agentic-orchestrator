@@ -2215,6 +2215,8 @@ func IsArtifactExcluded(name string) bool {
 		return true
 	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile:
 		return true
+	case strings.HasPrefix(lower, ".protocol-retry-") && strings.HasSuffix(lower, ".yaml"):
+		return true
 	default:
 		return false
 	}

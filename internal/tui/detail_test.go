@@ -15,6 +15,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -358,6 +359,52 @@ func TestDetailStatusShowsActiveArtifactPhaseDuringProtocolRetry(t *testing.T) {
 				t.Fatalf("DetailModel.View() rendered failure during retry streak %d:\n%s", tt.consecutive, view)
 			}
 		})
+	}
+}
+
+func TestDetailStatusShowsBuildingKBDuringProtocolRetry(t *testing.T) {
+	t.Parallel()
+	for _, consecutive := range []int{1, 2} {
+		t.Run(fmt.Sprintf("kb_retry_%d", consecutive), func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           fmt.Sprintf("feat-kb-retry-%d", consecutive),
+				Slug:         "kb-retry",
+				Status:       feature.StatusBuildingKB,
+				CurrentPhase: feature.PhaseKnowledgeBase,
+				Repos:        []feature.FeatureRepo{{Name: "repo-a"}},
+				KBStatus:     map[string]string{"repo-a": "building"},
+				FailureType:  "",
+				LastError:    "",
+			}
+			view := NewDetailModel(f, "").View()
+			if !strings.Contains(view, "Building Knowledge Base") && !strings.Contains(view, "BuildingKB") {
+				t.Fatalf("DetailModel.View() missing active KB label for retry streak %d:\n%s", consecutive, view)
+			}
+			if strings.Contains(view, "Failure Info") || strings.Contains(view, "protocol violation") {
+				t.Fatalf("DetailModel.View() rendered failure during KB retry streak %d:\n%s", consecutive, view)
+			}
+		})
+	}
+}
+
+func TestDetailStatusShowsTerminalKBProtocolViolation(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-kb-terminal",
+		Slug:         "kb-terminal",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		FailureType:  feature.FailureProtocolViolation,
+		LastError:    "protocol violation: knowledge_base_builder @ /tmp/kb: index.md: missing",
+	}
+	view := NewDetailModel(f, "").View()
+	for _, want := range []string{"Failed (protocol violation)", "Failure Info", "knowledge_base_builder", "index.md"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("DetailModel.View() missing %q for terminal KB protocol violation:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Building KB") {
+		t.Fatalf("DetailModel.View() rendered active KB after terminal failure:\n%s", view)
 	}
 }
 

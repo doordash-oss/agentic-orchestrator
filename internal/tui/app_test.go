@@ -4400,17 +4400,21 @@ func TestHandleSDKEvent_KBResultSuccessRoutesThroughProtocolValidation(t *testin
 	if err != nil {
 		t.Fatalf("get feature: %v", err)
 	}
-	if updated.Status != feature.StatusFailed {
-		t.Fatalf("status = %v, want Failed", updated.Status)
+	if updated.Status != feature.StatusBuildingKB {
+		t.Fatalf("status = %v, want BuildingKB first retry", updated.Status)
 	}
-	if updated.FailureType != feature.FailureProtocolViolation {
-		t.Fatalf("failure type = %q, want %q", updated.FailureType, feature.FailureProtocolViolation)
+	if updated.FailureType != "" {
+		t.Fatalf("failure type = %q, want empty on first retry", updated.FailureType)
 	}
-	if updated.FailureType == feature.FailureMissingArtifact || strings.Contains(updated.LastError, "missing_artifact") {
-		t.Fatalf("KB must not use missing-artifact failure path: type=%q error=%q", updated.FailureType, updated.LastError)
+	if updated.LastError != "" {
+		t.Fatalf("LastError = %q, want empty on first retry", updated.LastError)
 	}
-	if !strings.Contains(updated.LastError, agent.PhaseCompleteFile) {
-		t.Fatalf("LastError = %q, want phase_complete protocol violation", updated.LastError)
+	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
+	}
+	if sidecar == nil || sidecar.Consecutive != 1 || !strings.Contains(sidecar.LastViolation, agent.PhaseCompleteFile) {
+		t.Fatalf("sidecar = %#v, want first phase_complete retry", sidecar)
 	}
 }
 
@@ -4458,14 +4462,21 @@ func TestHandleSessionDone_KBSuccessRoutesThroughProtocolValidation(t *testing.T
 	if err != nil {
 		t.Fatalf("get feature: %v", err)
 	}
-	if updated.Status != feature.StatusFailed {
-		t.Fatalf("status = %v, want Failed", updated.Status)
+	if updated.Status != feature.StatusBuildingKB {
+		t.Fatalf("status = %v, want BuildingKB first retry", updated.Status)
 	}
-	if updated.FailureType != feature.FailureProtocolViolation {
-		t.Fatalf("failure type = %q, want %q", updated.FailureType, feature.FailureProtocolViolation)
+	if updated.FailureType != "" {
+		t.Fatalf("failure type = %q, want empty on first retry", updated.FailureType)
 	}
-	if !strings.Contains(updated.LastError, agent.PhaseCompleteFile) {
-		t.Fatalf("LastError = %q, want phase_complete protocol violation", updated.LastError)
+	if updated.LastError != "" {
+		t.Fatalf("LastError = %q, want empty on first retry", updated.LastError)
+	}
+	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
+	}
+	if sidecar == nil || sidecar.Consecutive != 1 || !strings.Contains(sidecar.LastViolation, agent.PhaseCompleteFile) {
+		t.Fatalf("sidecar = %#v, want first phase_complete retry", sidecar)
 	}
 }
 

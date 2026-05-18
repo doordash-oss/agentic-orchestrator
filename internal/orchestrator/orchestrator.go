@@ -567,9 +567,15 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 
 	// Check freshness for all repos.
 	freshness := make(map[string]bool, len(f.Repos))
+	activeKBRepos := o.activeKBSessionRepos(featureID)
 	allFresh := true
 	baseDir := o.stateDir()
 	for _, repo := range f.Repos {
+		if activeKBRepos[repo.Name] {
+			freshness[repo.Name] = false
+			allFresh = false
+			continue
+		}
 		isFresh := false
 		// Without a resolved base dir, agent.KBStateDir would read from CWD;
 		// treat that as "not fresh" rather than consulting stray files.
@@ -609,6 +615,9 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 
 	if o.deps.PhaseRunner != nil {
 		for _, repo := range f.Repos {
+			if activeKBRepos[repo.Name] {
+				continue
+			}
 			if freshness[repo.Name] {
 				// Fresh repo in the mixed case: refresh codebase index,
 				// immediately mark completed in per-repo tracking.
@@ -630,6 +639,26 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	// from a prior locked attempt.
 	o.clearKBWaitMessage(featureID)
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
+}
+
+func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]bool {
+	active := make(map[string]bool)
+	if o.deps.Sessions == nil {
+		return active
+	}
+	for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
+		if s == nil || !s.IsActive() || s.Phase() != feature.PhaseKnowledgeBase {
+			continue
+		}
+		repoName := s.RepoName()
+		if repoName == "" {
+			repoName = agent.RepoNameFromKBSession(s.ID())
+		}
+		if repoName != "" {
+			active[repoName] = true
+		}
+	}
+	return active
 }
 
 // markKBWaiting records that the feature couldn't acquire the KB lock for the

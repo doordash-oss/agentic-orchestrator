@@ -29,6 +29,11 @@ const (
 	DefaultMaxConsecutiveProtocolViolations = 3
 )
 
+// KBProtocolRetrySidecarFilename returns the feature-scoped KB retry sidecar filename.
+func KBProtocolRetrySidecarFilename(featureID string) string {
+	return ".protocol-retry-" + featureID + ".yaml"
+}
+
 // ProtocolRetryAction is the bounded retry decision returned after contract validation.
 type ProtocolRetryAction int
 
@@ -57,7 +62,12 @@ type ProtocolRetryDecision struct {
 
 // ReadProtocolRetrySidecar reads a retry sidecar from dir. Missing files are not errors.
 func ReadProtocolRetrySidecar(dir string) (*ProtocolRetrySidecar, error) {
-	path := filepath.Join(dir, ProtocolRetrySidecarFile)
+	return ReadProtocolRetrySidecarAt(dir, ProtocolRetrySidecarFile)
+}
+
+// ReadProtocolRetrySidecarAt reads a retry sidecar with the supplied filename from dir.
+func ReadProtocolRetrySidecarAt(dir, filename string) (*ProtocolRetrySidecar, error) {
+	path := filepath.Join(dir, protocolRetrySidecarFilename(filename))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -75,6 +85,11 @@ func ReadProtocolRetrySidecar(dir string) (*ProtocolRetrySidecar, error) {
 
 // WriteProtocolRetrySidecar writes a retry sidecar atomically under dir.
 func WriteProtocolRetrySidecar(dir string, sidecar ProtocolRetrySidecar) error {
+	return WriteProtocolRetrySidecarAt(dir, ProtocolRetrySidecarFile, sidecar)
+}
+
+// WriteProtocolRetrySidecarAt writes a retry sidecar atomically under dir with the supplied filename.
+func WriteProtocolRetrySidecarAt(dir, filename string, sidecar ProtocolRetrySidecar) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("creating protocol retry sidecar dir: %w", err)
 	}
@@ -103,7 +118,7 @@ func WriteProtocolRetrySidecar(dir string, sidecar ProtocolRetrySidecar) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing protocol retry sidecar temp file: %w", err)
 	}
-	if err := os.Rename(tmpName, filepath.Join(dir, ProtocolRetrySidecarFile)); err != nil {
+	if err := os.Rename(tmpName, filepath.Join(dir, protocolRetrySidecarFilename(filename))); err != nil {
 		return fmt.Errorf("renaming protocol retry sidecar temp file: %w", err)
 	}
 	cleanup = false
@@ -112,11 +127,23 @@ func WriteProtocolRetrySidecar(dir string, sidecar ProtocolRetrySidecar) error {
 
 // DeleteProtocolRetrySidecar removes the retry sidecar. Missing files are not errors.
 func DeleteProtocolRetrySidecar(dir string) error {
-	err := os.Remove(filepath.Join(dir, ProtocolRetrySidecarFile))
+	return DeleteProtocolRetrySidecarAt(dir, ProtocolRetrySidecarFile)
+}
+
+// DeleteProtocolRetrySidecarAt removes the retry sidecar with the supplied filename.
+func DeleteProtocolRetrySidecarAt(dir, filename string) error {
+	err := os.Remove(filepath.Join(dir, protocolRetrySidecarFilename(filename)))
 	if err == nil || os.IsNotExist(err) {
 		return nil
 	}
 	return fmt.Errorf("removing protocol retry sidecar: %w", err)
+}
+
+func protocolRetrySidecarFilename(filename string) string {
+	if filename == "" {
+		return ProtocolRetrySidecarFile
+	}
+	return filename
 }
 
 // RemovePhaseCompleteMarker removes only the phase_complete marker. Missing files are not errors.

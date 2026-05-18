@@ -207,12 +207,78 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		return nil
 	}
 
-	ok, err := o.validateKBCompletionContract(featureID, repoName)
+	_, kbDir, violations, err := o.validateKBCompletionContract(repoName)
 	if err != nil {
 		return err
 	}
-	if !ok {
+
+	if kbDir == "" && len(violations) > 0 {
+		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
+		if repoName != "" {
+			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
+		}
+		if o.deps.Sessions != nil {
+			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
+				_ = o.deps.Sessions.StopSession(s.ID())
+			}
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
+		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+		o.wakeKBWaiters(featureID)
+		return err
+	}
+
+	sidecarFilename := agent.KBProtocolRetrySidecarFilename(featureID)
+	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, sidecarFilename)
+	if err != nil {
+		return fmt.Errorf("read knowledge base retry sidecar: %w", err)
+	}
+	decision := agent.DecideProtocolRetry(
+		agent.RoleKnowledgeBaseBuilder,
+		kbDir,
+		f.ActiveRun,
+		sidecar,
+		violations,
+		agent.DefaultMaxConsecutiveProtocolViolations,
+	)
+	switch decision.Action {
+	case agent.ProtocolRetryActionSucceed:
+		if err := agent.DeleteProtocolRetrySidecarAt(kbDir, sidecarFilename); err != nil {
+			return fmt.Errorf("delete knowledge base retry sidecar: %w", err)
+		}
+	case agent.ProtocolRetryActionRetry:
+		if decision.NewSidecar != nil {
+			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
+				return fmt.Errorf("write knowledge base retry sidecar: %w", err)
+			}
+		}
+		if err := agent.RemovePhaseCompleteMarker(kbDir); err != nil {
+			return fmt.Errorf("remove knowledge base phase_complete marker: %w", err)
+		}
+		if _, err := o.startKB(featureID); err != nil {
+			return fmt.Errorf("retry knowledge base: %w", err)
+		}
 		return nil
+	case agent.ProtocolRetryActionTerminal:
+		if decision.NewSidecar != nil {
+			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
+				return fmt.Errorf("write terminal knowledge base retry sidecar: %w", err)
+			}
+		}
+		if repoName != "" {
+			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, decision.FormattedError)
+		}
+		if o.deps.Sessions != nil {
+			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
+				_ = o.deps.Sessions.StopSession(s.ID())
+			}
+		}
+		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(decision.FormattedError))
+		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, decision.FormattedError)
+		o.wakeKBWaiters(featureID)
+		return err
+	default:
+		return fmt.Errorf("unknown knowledge base protocol retry action %d", decision.Action)
 	}
 
 	// Mark KB fresh on disk — best-effort, failures don't block the phase.
@@ -256,8 +322,9 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	return o.advanceToNextPhase(featureID, feature.PhaseKnowledgeBase)
 }
 
-func (o *Orchestrator) validateKBCompletionContract(featureID, repoName string) (bool, error) {
+func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
 	var violations []agent.ProtocolViolation
+	var outcome agent.Outcome
 	kbDir := ""
 
 	baseDir := o.stateDir()
@@ -281,34 +348,20 @@ func (o *Orchestrator) validateKBCompletionContract(featureID, repoName string) 
 			})
 		}
 
-		_, contractViolations, err := validateAgentContract(
+		var contractViolations []agent.ProtocolViolation
+		var err error
+		outcome, contractViolations, err = validateAgentContract(
 			feature.PhaseKnowledgeBase,
 			agent.RoleKnowledgeBaseBuilder,
 			kbDir,
 		)
 		if err != nil {
-			return false, fmt.Errorf("validating knowledge base contract: %w", err)
+			return agent.Outcome{}, kbDir, nil, fmt.Errorf("validating knowledge base contract: %w", err)
 		}
 		violations = append(violations, contractViolations...)
 	}
 
-	if len(violations) == 0 {
-		return true, nil
-	}
-
-	errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
-	if repoName != "" {
-		_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
-	}
-	if o.deps.Sessions != nil {
-		for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-			_ = o.deps.Sessions.StopSession(s.ID())
-		}
-	}
-	o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-	err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
-	o.wakeKBWaiters(featureID)
-	return false, err
+	return outcome, kbDir, violations, nil
 }
 
 // findRepo returns the FeatureRepo with the given name.

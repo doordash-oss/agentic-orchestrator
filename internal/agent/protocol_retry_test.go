@@ -60,6 +60,105 @@ func TestProtocolRetrySidecarRoundTrip(t *testing.T) {
 	}
 }
 
+func TestKBProtocolRetrySidecarFilename(t *testing.T) {
+	got := KBProtocolRetrySidecarFilename("feat-abc123")
+	want := ".protocol-retry-feat-abc123.yaml"
+	if got != want {
+		t.Fatalf("KBProtocolRetrySidecarFilename() = %q, want %q", got, want)
+	}
+	if got2 := KBProtocolRetrySidecarFilename("feat-abc123"); got2 != got {
+		t.Fatalf("KBProtocolRetrySidecarFilename() second call = %q, want deterministic %q", got2, got)
+	}
+}
+
+func TestProtocolRetrySidecarRoundTripAtKBFilename(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "knowledge-base", "repo-a")
+	filename := KBProtocolRetrySidecarFilename("feat-kb")
+	want := ProtocolRetrySidecar{
+		Role:          RoleKnowledgeBaseBuilder,
+		ActiveRun:     3,
+		Consecutive:   2,
+		LastViolation: "index.md: required artifact missing",
+		UpdatedAt:     time.Date(2026, 5, 18, 12, 34, 56, 0, time.UTC),
+	}
+
+	if err := WriteProtocolRetrySidecarAt(dir, filename, want); err != nil {
+		t.Fatalf("WriteProtocolRetrySidecarAt() error = %v", err)
+	}
+
+	got, err := ReadProtocolRetrySidecarAt(dir, filename)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("ReadProtocolRetrySidecarAt() = nil, want sidecar")
+	}
+	if got.Role != want.Role || got.ActiveRun != want.ActiveRun || got.Consecutive != want.Consecutive ||
+		got.LastViolation != want.LastViolation || !got.UpdatedAt.Equal(want.UpdatedAt) {
+		t.Fatalf("sidecar = %#v, want %#v", got, want)
+	}
+}
+
+func TestProtocolRetrySidecarAtFeatureIsolation(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "knowledge-base", "repo-a")
+	current := KBProtocolRetrySidecarFilename("feat-current")
+	other := KBProtocolRetrySidecarFilename("feat-other")
+
+	otherSidecar := ProtocolRetrySidecar{
+		Role:          RoleKnowledgeBaseBuilder,
+		ActiveRun:     1,
+		Consecutive:   3,
+		LastViolation: "prior feature",
+		UpdatedAt:     time.Date(2026, 5, 18, 1, 0, 0, 0, time.UTC),
+	}
+	currentSidecar := ProtocolRetrySidecar{
+		Role:          RoleKnowledgeBaseBuilder,
+		ActiveRun:     2,
+		Consecutive:   1,
+		LastViolation: "current feature",
+		UpdatedAt:     time.Date(2026, 5, 18, 2, 0, 0, 0, time.UTC),
+	}
+
+	if err := WriteProtocolRetrySidecarAt(dir, other, otherSidecar); err != nil {
+		t.Fatalf("WriteProtocolRetrySidecarAt(other) error = %v", err)
+	}
+	gotMissing, err := ReadProtocolRetrySidecarAt(dir, current)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt(current missing) error = %v", err)
+	}
+	if gotMissing != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt(current missing) = %#v, want nil", gotMissing)
+	}
+
+	if err := WriteProtocolRetrySidecarAt(dir, current, currentSidecar); err != nil {
+		t.Fatalf("WriteProtocolRetrySidecarAt(current) error = %v", err)
+	}
+	gotCurrent, err := ReadProtocolRetrySidecarAt(dir, current)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt(current) error = %v", err)
+	}
+	gotOther, err := ReadProtocolRetrySidecarAt(dir, other)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt(other) error = %v", err)
+	}
+	if gotCurrent == nil || gotCurrent.LastViolation != currentSidecar.LastViolation || gotCurrent.Consecutive != 1 {
+		t.Fatalf("current sidecar = %#v, want %#v", gotCurrent, currentSidecar)
+	}
+	if gotOther == nil || gotOther.LastViolation != otherSidecar.LastViolation || gotOther.Consecutive != 3 {
+		t.Fatalf("other sidecar = %#v, want %#v", gotOther, otherSidecar)
+	}
+
+	if err := DeleteProtocolRetrySidecarAt(dir, current); err != nil {
+		t.Fatalf("DeleteProtocolRetrySidecarAt(current) error = %v", err)
+	}
+	if got, err := ReadProtocolRetrySidecarAt(dir, current); err != nil || got != nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt(current after delete) = %#v, %v; want nil, nil", got, err)
+	}
+	if got, err := ReadProtocolRetrySidecarAt(dir, other); err != nil || got == nil {
+		t.Fatalf("ReadProtocolRetrySidecarAt(other after current delete) = %#v, %v; want preserved", got, err)
+	}
+}
+
 func TestReadProtocolRetrySidecarMissingAndMalformed(t *testing.T) {
 	dir := t.TempDir()
 

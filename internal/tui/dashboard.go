@@ -94,9 +94,6 @@ type DashboardModel struct {
 	panelHeight          int             // last known panel height for scroll computation
 	statusMessage        string          // transient status message displayed in footer
 	rewindingFeatureID   string          // feature ID currently being rewound (shows "Stopping..." label)
-	indexingInProgress   bool            // true while classifier is initializing
-	indexingDone         int             // repos indexed so far
-	indexingTotal        int             // total repos to index
 	wantNewFeature       bool            // set when ghost CTA Enter is pressed
 	welcomeSkipped       bool            // true when user skipped the welcome flow
 }
@@ -446,10 +443,6 @@ func (m DashboardModel) renderHeader(w int) string {
 
 	info := make([]string, len(artLines))
 	info[0] = lipgloss.NewStyle().Foreground(infoColor).Render("Orchestrator v" + GetVersion())
-	if m.indexingInProgress {
-		indexStyle := lipgloss.NewStyle().Foreground(colorPeach)
-		info[0] += "  " + indexStyle.Render(fmt.Sprintf("Indexing repos (%d/%d)...", m.indexingDone, m.indexingTotal))
-	}
 
 	var contextParts []string
 	if len(m.features) > 0 {
@@ -683,6 +676,9 @@ func (m *DashboardModel) buildVisibleItems() {
 // This must be called whenever cursor or visibleItems change.
 func (m *DashboardModel) computeCursorLine() {
 	lineIndex := 0
+	if m.creatingName != "" {
+		lineIndex++
+	}
 	prevSection := ""
 	for i, item := range m.visibleItems {
 		switch item.kind {
@@ -827,6 +823,11 @@ func (m DashboardModel) renderFeatureList() string {
 	var content strings.Builder
 	lineIndex := 0
 
+	if m.creatingName != "" {
+		content.WriteString(m.renderCreatingFeatureRow() + "\n")
+		lineIndex++
+	}
+
 	prevSection := ""
 	for i, item := range m.visibleItems {
 		switch item.kind {
@@ -876,20 +877,19 @@ func (m DashboardModel) renderFeatureList() string {
 		}
 	}
 
-	// Show placeholder row for a feature being created (worktree setup in progress)
-	if m.creatingName != "" {
-		creatingStyle := lipgloss.NewStyle().Foreground(colorPeach)
-		icon := creatingStyle.Render(icons.Created)
-		slug := m.creatingName
-		if len(slug) > 20 {
-			slug = slug[:19] + "\u2026"
-		}
-		status := creatingStyle.Render("setting up worktrees")
-		row := fmt.Sprintf("%s %-20s %s", icon, slug, status)
-		content.WriteString("  " + row + "\n")
-	}
-
 	return content.String()
+}
+
+func (m DashboardModel) renderCreatingFeatureRow() string {
+	creatingStyle := lipgloss.NewStyle().Foreground(colorPeach)
+	icon := creatingStyle.Render(icons.Created)
+	slug := m.creatingName
+	if len(slug) > 20 {
+		slug = slug[:19] + "\u2026"
+	}
+	status := creatingStyle.Render("setting up worktrees")
+	row := fmt.Sprintf("%s %-20s %s", icon, slug, status)
+	return "  " + row
 }
 
 // renderWelcomePanel builds the right-panel welcome/explainer shown when no features exist.

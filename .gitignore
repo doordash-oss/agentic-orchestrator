@@ -27,7 +27,19 @@ go.work.sum
 .DS_Store
 Thumbs.db
 
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*.log
+
 # Claude
 .claude/
 /agentic
 /bin/agentic
+
+# Agentic generated repo knowledge
+.agentic/knowledge/

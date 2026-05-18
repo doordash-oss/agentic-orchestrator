@@ -132,7 +132,6 @@ Not available while post-publish cycles (tweak, rebase, review comments, refacto
 
 1. Transitions the feature to **Done** status
 2. Writes a feature summary artifact (`observe-summary.yaml`) with timing data, cost data, and per-repo states
-3. If a classifier is configured, feeds the completed feature to it for future feature matching
 
 ## Clean Worktree (`c`)
 

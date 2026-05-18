@@ -313,7 +313,7 @@ func TestSlugify(t *testing.T) {
 		name string
 		want string
 	}{
-		{"Fix DBAccess Query", "fix-dbaccess-query"},
+		{"Fix Database Query", "fix-database-query"},
 		{"add-auth-middleware", "add-auth-middleware"},
 		{"Hello World!", "hello-world"},
 		{"  spaces  everywhere  ", "spaces-everywhere"},

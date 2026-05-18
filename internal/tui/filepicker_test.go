@@ -394,7 +394,7 @@ func TestFilePickerRepoNameListing(t *testing.T) {
 func TestFilePickerRepoNameFilter(t *testing.T) {
 	repos := map[string]string{
 		"agentic": t.TempDir(),
-		"aurora":  t.TempDir(),
+		"auth":    t.TempDir(),
 		"bravo":   t.TempDir(),
 	}
 

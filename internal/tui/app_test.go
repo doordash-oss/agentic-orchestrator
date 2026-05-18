@@ -87,7 +87,7 @@ func TestFeatureIDFromSession(t *testing.T) {
 		// orphan artifact dirs at features/<featureID>-fix-<repo>-<NN>/.
 		{"abc123-fix-01", "abc123"},
 		{"abc123-fix-agentic-01", "abc123"},
-		{"abc123-fix-dev-console-04", "abc123"},
+		{"abc123-fix-auth-service-04", "abc123"},
 		{"abc123-fix-code-review-tool-02", "abc123"},
 		{"unknown-session", "unknown-session"},
 	}
@@ -111,7 +111,7 @@ func TestFeatureIDFromSession(t *testing.T) {
 // tests in this file; this one pins the fast path.
 func TestEventFIDAndPhase_PreferEventFields(t *testing.T) {
 	// A fix-agent session ID the legacy parser would mis-classify.
-	const sessionID = "c278a827d83dc2e2-fix-dev-console-04"
+	const sessionID = "c278a827d83dc2e2-fix-auth-service-04"
 	const realFID = "c278a827d83dc2e2"
 
 	if got := eventFID(sessionID, realFID); got != realFID {
@@ -189,7 +189,7 @@ func TestPhaseFromSessionID(t *testing.T) {
 		// substrings, so the "-fix-" anchor wins before the suffix scan.
 		{"abc123-fix-01", feature.PhaseReview},
 		{"abc123-fix-agentic-01", feature.PhaseReview},
-		{"abc123-fix-dev-console-04", feature.PhaseReview},
+		{"abc123-fix-auth-service-04", feature.PhaseReview},
 		{"abc123-fix-code-review-tool-02", feature.PhaseReview},
 	}
 	for _, tt := range tests {
@@ -4554,24 +4554,24 @@ func TestBuildRepoTabsFindsReviewSession(t *testing.T) {
 	sm := session.NewManager(nil)
 	app := AppModel{sessionManager: sm}
 
-	// Create a multi-repo feature with repos "taulu" and "graph"
+	// Create a multi-repo feature with repos "payments" and "graph"
 	f := &feature.Feature{
 		ID:     "f1",
 		Status: feature.StatusImplementing,
 		Repos: []feature.FeatureRepo{
-			{Name: "taulu"},
+			{Name: "payments"},
 			{Name: "graph"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"taulu": repoStatePending(),
-			"graph": repoStatePending(),
+			"payments": repoStatePending(),
+			"graph":    repoStatePending(),
 		},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 
-	// Register an impl session for "taulu" and a review session for "graph"
-	implSess := session.NewSession("f1-impl-taulu-01", "f1", feature.PhaseImplement)
-	implSess.SetRepoName("taulu")
+	// Register an impl session for "payments" and a review session for "graph"
+	implSess := session.NewSession("f1-impl-payments-01", "f1", feature.PhaseImplement)
+	implSess.SetRepoName("payments")
 	sm.RegisterTestSession(implSess)
 
 	reviewSess := session.NewSession("f1-review-graph-01", "f1", feature.PhaseReview)
@@ -4588,9 +4588,9 @@ func TestBuildRepoTabsFindsReviewSession(t *testing.T) {
 	foundReview := false
 	for _, tab := range tabs {
 		switch tab.repoName {
-		case "taulu":
+		case "payments":
 			if tab.sess != implSess {
-				t.Error("expected taulu tab to have impl session")
+				t.Error("expected payments tab to have impl session")
 			}
 			foundImpl = true
 		case "graph":

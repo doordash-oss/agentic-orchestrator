@@ -32,7 +32,7 @@ func TestDetailView(t *testing.T) {
 		Status:           feature.StatusImplementing,
 		CurrentPhase:     feature.PhaseImplement,
 		CurrentIteration: 4,
-		Repos:            []feature.FeatureRepo{{Name: "taulu", Path: "/tmp/taulu"}},
+		Repos:            []feature.FeatureRepo{{Name: "payments", Path: "/tmp/payments"}},
 		Models: config.ModelConfig{
 			Research:       "opus",
 			Planning:       "opus",
@@ -1202,7 +1202,7 @@ func TestRenderMetadataFull_WorkDir_FullPathForSingleRepo(t *testing.T) {
 		ID:     "feat-1",
 		Slug:   "test",
 		Status: feature.StatusImplementing,
-		Repos:  []feature.FeatureRepo{{Name: "taulu", WorktreePath: "/tmp/wt/feat/repo-a"}},
+		Repos:  []feature.FeatureRepo{{Name: "payments", WorktreePath: "/tmp/wt/feat/repo-a"}},
 		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
@@ -1219,8 +1219,8 @@ func TestRenderMetadataFull_WorkDir_ParentDirForMultiRepo(t *testing.T) {
 		Slug:   "test",
 		Status: feature.StatusImplementing,
 		Repos: []feature.FeatureRepo{
-			{Name: "taulu", WorktreePath: "/tmp/wt/feat/repo-a"},
-			{Name: "graph-runner", WorktreePath: "/tmp/wt/feat/repo-b"},
+			{Name: "payments", WorktreePath: "/tmp/wt/feat/repo-a"},
+			{Name: "worker", WorktreePath: "/tmp/wt/feat/repo-b"},
 		},
 		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
@@ -1240,7 +1240,7 @@ func TestRenderMetadataCompact_WorkDir_FullPathForSingleRepo(t *testing.T) {
 		ID:     "feat-1",
 		Slug:   "test",
 		Status: feature.StatusImplementing,
-		Repos:  []feature.FeatureRepo{{Name: "taulu", WorktreePath: "/tmp/wt/feat/repo-a"}},
+		Repos:  []feature.FeatureRepo{{Name: "payments", WorktreePath: "/tmp/wt/feat/repo-a"}},
 		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
@@ -1257,8 +1257,8 @@ func TestRenderMetadataCompact_WorkDir_ParentDirForMultiRepo(t *testing.T) {
 		Slug:   "test",
 		Status: feature.StatusImplementing,
 		Repos: []feature.FeatureRepo{
-			{Name: "taulu", WorktreePath: "/tmp/wt/feat/repo-a"},
-			{Name: "graph-runner", WorktreePath: "/tmp/wt/feat/repo-b"},
+			{Name: "payments", WorktreePath: "/tmp/wt/feat/repo-a"},
+			{Name: "worker", WorktreePath: "/tmp/wt/feat/repo-b"},
 		},
 		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
@@ -1279,8 +1279,8 @@ func TestRenderPhaseProgressFull_KBSubRows_HiddenForSingleRepo(t *testing.T) {
 		Slug:         "test",
 		Status:       feature.StatusBuildingKB,
 		CurrentPhase: feature.PhaseKnowledgeBase,
-		Repos:        []feature.FeatureRepo{{Name: "taulu"}},
-		KBStatus:     map[string]string{"taulu": "completed"},
+		Repos:        []feature.FeatureRepo{{Name: "payments"}},
+		KBStatus:     map[string]string{"payments": "completed"},
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
@@ -1297,8 +1297,8 @@ func TestRenderPhaseProgressFull_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 		Slug:         "test",
 		Status:       feature.StatusBuildingKB,
 		CurrentPhase: feature.PhaseKnowledgeBase,
-		Repos:        []feature.FeatureRepo{{Name: "taulu"}, {Name: "graph-runner"}},
-		KBStatus:     map[string]string{"taulu": "completed", "graph-runner": "pending"},
+		Repos:        []feature.FeatureRepo{{Name: "payments"}, {Name: "worker"}},
+		KBStatus:     map[string]string{"payments": "completed", "worker": "pending"},
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
@@ -1306,11 +1306,11 @@ func TestRenderPhaseProgressFull_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 	if !strings.Contains(got, "↳") {
 		t.Fatalf("renderPhaseProgressFull() = %q, want KB sub-row marker in multi-repo", got)
 	}
-	if !strings.Contains(got, "taulu") {
-		t.Errorf("renderPhaseProgressFull() = %q, want taulu name in KB sub-rows", got)
+	if !strings.Contains(got, "payments") {
+		t.Errorf("renderPhaseProgressFull() = %q, want payments name in KB sub-rows", got)
 	}
-	if !strings.Contains(got, "graph-runner") {
-		t.Errorf("renderPhaseProgressFull() = %q, want graph-runner name in KB sub-rows", got)
+	if !strings.Contains(got, "worker") {
+		t.Errorf("renderPhaseProgressFull() = %q, want worker name in KB sub-rows", got)
 	}
 }
 
@@ -1321,8 +1321,8 @@ func TestRenderPhaseProgress_KBSubRows_HiddenForSingleRepo(t *testing.T) {
 		Slug:         "test",
 		Status:       feature.StatusBuildingKB,
 		CurrentPhase: feature.PhaseKnowledgeBase,
-		Repos:        []feature.FeatureRepo{{Name: "taulu"}},
-		KBStatus:     map[string]string{"taulu": "completed"},
+		Repos:        []feature.FeatureRepo{{Name: "payments"}},
+		KBStatus:     map[string]string{"payments": "completed"},
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
@@ -1339,8 +1339,8 @@ func TestRenderPhaseProgress_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 		Slug:         "test",
 		Status:       feature.StatusBuildingKB,
 		CurrentPhase: feature.PhaseKnowledgeBase,
-		Repos:        []feature.FeatureRepo{{Name: "taulu"}, {Name: "graph-runner"}},
-		KBStatus:     map[string]string{"taulu": "completed", "graph-runner": "pending"},
+		Repos:        []feature.FeatureRepo{{Name: "payments"}, {Name: "worker"}},
+		KBStatus:     map[string]string{"payments": "completed", "worker": "pending"},
 		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
@@ -1348,10 +1348,10 @@ func TestRenderPhaseProgress_KBSubRows_RenderedForMultiRepo(t *testing.T) {
 	if !strings.Contains(got, "↳") {
 		t.Fatalf("renderPhaseProgress() = %q, want KB sub-row marker in multi-repo", got)
 	}
-	if !strings.Contains(got, "taulu") {
-		t.Errorf("renderPhaseProgress() = %q, want taulu name in KB sub-rows", got)
+	if !strings.Contains(got, "payments") {
+		t.Errorf("renderPhaseProgress() = %q, want payments name in KB sub-rows", got)
 	}
-	if !strings.Contains(got, "graph-runner") {
-		t.Errorf("renderPhaseProgress() = %q, want graph-runner name in KB sub-rows", got)
+	if !strings.Contains(got, "worker") {
+		t.Errorf("renderPhaseProgress() = %q, want worker name in KB sub-rows", got)
 	}
 }

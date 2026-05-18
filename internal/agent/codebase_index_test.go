@@ -714,6 +714,3 @@ func runTestGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v failed: %v\n%s", args, err, out)
 	}
 }
-
-// itoa is provided by features_test.go; redeclare here for standalone test compilation.
-// Since both files are in the same package, the one in features_test.go will be used.

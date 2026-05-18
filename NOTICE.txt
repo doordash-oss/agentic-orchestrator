@@ -64,9 +64,6 @@ http://www.apache.org/licenses/LICENSE-2.0
       https://github.com/go-logr/logr
   github.com/go-logr/stdr
       https://github.com/go-logr/stdr
-  github.com/trivago/tgo
-      Copyright 2015-2018 trivago N.V.
-      https://github.com/trivago/tgo
   go.opentelemetry.io/auto/sdk
       Copyright The OpenTelemetry Authors
       https://github.com/open-telemetry/opentelemetry-go-instrumentation
@@ -147,13 +144,6 @@ https://opensource.org/license/mit
   github.com/dlclark/regexp2
       Copyright (c) Doug Clark
       https://github.com/dlclark/regexp2
-  github.com/fatih/structs
-      Copyright (c) 2014 Fatih Arslan
-      https://github.com/fatih/structs
-  github.com/golang-jwt/jwt/v4
-      Copyright (c) 2012 Dave Grijalva
-      Copyright (c) 2021 golang-jwt maintainers
-      https://github.com/golang-jwt/jwt
   github.com/lucasb-eyer/go-colorful
       Copyright (c) 2013 Lucas Beyer
       https://github.com/lucasb-eyer/go-colorful
@@ -205,9 +195,6 @@ https://opensource.org/license/BSD-3-clause
   github.com/atotto/clipboard
       Copyright (c) 2013 Ato Araki. All rights reserved.
       https://github.com/atotto/clipboard
-  github.com/google/go-querystring
-      Copyright (c) 2013 Google. All rights reserved.
-      https://github.com/google/go-querystring
   github.com/google/uuid
       Copyright (c) 2009,2014 Google Inc. All rights reserved.
       https://github.com/google/uuid
@@ -220,9 +207,9 @@ https://opensource.org/license/BSD-3-clause
   github.com/microcosm-cc/bluemonday
       Copyright (c) 2014, David Kitchen <david@buro9.com>. All rights reserved.
       https://github.com/microcosm-cc/bluemonday
-  github.com/pkg/errors
-      Copyright (c) 2015, Dave Cheney <dave@cheney.net>. All rights reserved.
-      https://github.com/pkg/errors
+  github.com/rogpeppe/go-internal
+      Copyright (c) 2018 The Go Authors. All rights reserved.
+      https://github.com/rogpeppe/go-internal
   golang.org/x/net
   golang.org/x/sync
   golang.org/x/sys

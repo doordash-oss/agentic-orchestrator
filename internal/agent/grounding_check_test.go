@@ -220,32 +220,32 @@ func TestFormatGroundingPreCheckFeedback_MissingSection(t *testing.T) {
 
 // TestCheckGroundingTableRepos_RepoPrefixRoutesContradiction locks in that
 // the multi-repo prefix routing still works for the WBC contradiction
-// check — `taulu:internal/foo.go` declared WILL-BE-CREATED must trip the
-// contradiction when foo.go exists in taulu's worktree (not agentic's).
+// check — `payments:internal/foo.go` declared WILL-BE-CREATED must trip the
+// contradiction when foo.go exists in payments's worktree (not agentic's).
 func TestCheckGroundingTableRepos_RepoPrefixRoutesContradiction(t *testing.T) {
 	parent := t.TempDir()
 	agentic := filepath.Join(parent, "agentic")
-	taulu := filepath.Join(parent, "taulu")
-	for _, d := range []string{agentic, taulu} {
+	payments := filepath.Join(parent, "payments")
+	for _, d := range []string{agentic, payments} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
 	}
-	touchFile(t, taulu, "internal/foo.go")
+	touchFile(t, payments, "internal/foo.go")
 
 	body := `| Reference | Classification | Evidence |
 |-----------|----------------|----------|
-| ` + "`taulu:internal/foo.go`" + ` | WILL-BE-CREATED | new file |
+| ` + "`payments:internal/foo.go`" + ` | WILL-BE-CREATED | new file |
 | ` + "`agentic:internal/foo.go`" + ` | WILL-BE-CREATED | new file |
 `
 	plan := writePlan(t, parent, body)
 
 	res := CheckGroundingTableRepos(plan, []GroundingRoot{
 		{Name: "agentic", Worktree: agentic},
-		{Name: "taulu", Worktree: taulu},
+		{Name: "payments", Worktree: payments},
 	})
 	if len(res.Findings) != 1 || res.Findings[0].RowNumber != 1 {
-		t.Fatalf("expected 1 contradiction on row 1 (taulu), got: %+v", res.Findings)
+		t.Fatalf("expected 1 contradiction on row 1 (payments), got: %+v", res.Findings)
 	}
 	if !strings.Contains(res.Findings[0].Reason, "already exists") {
 		t.Errorf("reason = %q, want already-exists contradiction", res.Findings[0].Reason)

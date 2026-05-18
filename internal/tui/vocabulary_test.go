@@ -67,7 +67,6 @@ func TestUserVisibleLiveSessionVocabulary(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join("..", "..", "README.md"),
 		filepath.Join("..", "..", "docs", "keybindings.md"),
-		filepath.Join("..", "..", ".agentic", "knowledge", "tui.md"),
 		filepath.Join("..", "..", "skills", "chat", "user-guide", "getting-started.md"),
 		filepath.Join("..", "..", "skills", "chat", "user-guide", "permissions.md"),
 		filepath.Join("..", "..", "skills", "chat", "user-guide", "post-publish.md"),
@@ -90,10 +89,10 @@ func TestLiveSessionVocabularyGuardrailAllowsInternalAttachTerms(t *testing.T) {
 		filepath.Join("..", "..", "README.md"): {
 			"attaching files",
 		},
-		filepath.Join("..", "..", ".agentic", "knowledge", "session-protocol.md"): {
-			"`AttachCh()`",
-			"`Attach(sessionID)`",
-			"`Detach()`",
+		filepath.Join("..", "ports", "session.go"): {
+			"AttachCh()",
+			"Attach(sessionID string)",
+			"Detach()",
 		},
 	}
 

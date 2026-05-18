@@ -286,6 +286,25 @@ func TestGhostCTASuppressedDuringCreation(t *testing.T) {
 	}
 }
 
+func TestCreatingFeatureRowRendersAtTop(t *testing.T) {
+	t.Parallel()
+	m := NewDashboardModel([]*feature.Feature{
+		{ID: "feat-1", Name: "older", Slug: "older-feature", Status: feature.StatusImplementing, Created: time.Now()},
+	}, "")
+	m.creatingName = "creating-feature"
+
+	lines := strings.Split(strings.TrimRight(ansi.Strip(m.renderFeatureList()), "\n"), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected creating row plus feature section, got lines=%q", lines)
+	}
+	if !strings.Contains(lines[0], "creating-feature") {
+		t.Fatalf("first line = %q, want creating feature row", lines[0])
+	}
+	if !strings.Contains(lines[1], "IN PROGRESS") {
+		t.Fatalf("second line = %q, want in-progress section header after creating row", lines[1])
+	}
+}
+
 func TestGhostCTAReappearsAfterDeletion(t *testing.T) {
 	t.Parallel()
 	m := NewDashboardModel([]*feature.Feature{
@@ -1502,9 +1521,9 @@ func TestActivePublishedCycleStatus_NoSuffixForSingleRepo(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		Status: feature.StatusPublished,
-		Repos:  []feature.FeatureRepo{{Name: "taulu"}},
+		Repos:  []feature.FeatureRepo{{Name: "payments"}},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"taulu": {Type: feature.CycleRebase, Status: "running"},
+			"payments": {Type: feature.CycleRebase, Status: "running"},
 		},
 	}
 	label, _, ok := activePublishedCycleStatus(f)
@@ -1520,16 +1539,16 @@ func TestActivePublishedCycleStatus_SuffixForMultiRepo(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		Status: feature.StatusPublished,
-		Repos:  []feature.FeatureRepo{{Name: "taulu"}, {Name: "graph-runner"}},
+		Repos:  []feature.FeatureRepo{{Name: "payments"}, {Name: "worker"}},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"taulu": {Type: feature.CycleRebase, Status: "running"},
+			"payments": {Type: feature.CycleRebase, Status: "running"},
 		},
 	}
 	label, _, ok := activePublishedCycleStatus(f)
 	if !ok {
 		t.Fatal("activePublishedCycleStatus() should report active cycle")
 	}
-	if !strings.Contains(label, "· taulu") {
-		t.Errorf("activePublishedCycleStatus() = %q, want `· taulu` suffix for multi-repo", label)
+	if !strings.Contains(label, "· payments") {
+		t.Errorf("activePublishedCycleStatus() = %q, want `· payments` suffix for multi-repo", label)
 	}
 }

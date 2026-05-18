@@ -48,7 +48,7 @@ func TestWizardSteps(t *testing.T) {
 		ExitCriteria: "tests pass",
 	}
 
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Step 1 (What): Enter name, then advance
 	m = advanceWizardToWhereViaUI(m, "test-feat")
@@ -90,7 +90,7 @@ func TestWizardSteps(t *testing.T) {
 }
 
 func TestWizardPanelWidthReviewScalesBeyondLegacyCap(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.width = 220
 	m.step = wizardStepReview
 
@@ -106,7 +106,7 @@ func TestWizardPanelWidthReviewScalesBeyondLegacyCap(t *testing.T) {
 func TestWizardZeroConfigDefaultsToManualPublish(t *testing.T) {
 	// Zero-config: use NewDefault() defaults, which should have ManualPublish=true.
 	cfg := config.NewDefault()
-	m := NewWizardModel(nil, nil, nil, cfg.Defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, cfg.Defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -131,7 +131,7 @@ func TestWizardPipelineDefaultsApplyCheckpoints(t *testing.T) {
 			ManualPublish: false,
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -154,7 +154,7 @@ func TestWizardPipelineDefaultsApplyCheckpoints(t *testing.T) {
 }
 
 func TestWizardCancel(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if !m.IsCancelled() {
 		t.Error("expected wizard to be cancelled")
@@ -162,7 +162,7 @@ func TestWizardCancel(t *testing.T) {
 }
 
 func TestWizardViewRenders(t *testing.T) {
-	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	view := m.View()
 	if view == "" {
 		t.Error("expected non-empty view")
@@ -174,7 +174,7 @@ func TestWizardViewRenders(t *testing.T) {
 
 func TestWizardKeyNotEatenInTextInput(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// We're on the What step (name text input)
 	// Type "jk" — these should NOT be eaten by navigation
@@ -188,7 +188,7 @@ func TestWizardKeyNotEatenInTextInput(t *testing.T) {
 
 func TestWizardImagePasteMsg(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// We're on What step. Switch focus to description.
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // whatFocus 0 -> 1
@@ -227,7 +227,7 @@ func TestWizardImagePasteMsg(t *testing.T) {
 
 func TestWizardImagesInResult(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Add images via messages
 	m.nameInput.SetValue("image test")
@@ -258,7 +258,7 @@ func TestWizardImagesInResult(t *testing.T) {
 
 func TestWizardImageNumberingAfterFailedPaste(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Simulate a failed paste followed by a successful paste.
 	// The successful paste should still be numbered [Image #1] since
@@ -289,7 +289,7 @@ func TestWizardImageNumberingAfterFailedPaste(t *testing.T) {
 }
 
 func TestWizardBackFromWhere(t *testing.T) {
-	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("my-feature")
 	m, _ = m.advance() // What -> Where
@@ -310,7 +310,7 @@ func TestWizardBackFromWhere(t *testing.T) {
 
 func TestWizardBackFromReview(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -330,7 +330,7 @@ func TestWizardBackFromReview(t *testing.T) {
 }
 
 func TestWizardBackDoesNothingOnFirstStep(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 
@@ -349,7 +349,7 @@ func TestWizardBackAndForwardPreservesState(t *testing.T) {
 			Implementation: "sonnet", Review: "sonnet",
 		},
 	}
-	m := NewWizardModel([]string{"repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m.descInput.SetValue("my description")
@@ -377,7 +377,7 @@ func TestWizardBackAndForwardPreservesState(t *testing.T) {
 }
 
 func TestWizardBackFooterHint(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.width = 80
 	m.height = 24
 
@@ -400,7 +400,7 @@ func TestWizardBackFooterHint(t *testing.T) {
 
 func TestWizardCtrlVNoOpWithoutPasteSupport(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.canPasteImages = false // simulate paste not available
 
 	// Type some text first
@@ -423,7 +423,7 @@ func TestWizardCtrlVNoOpWithoutPasteSupport(t *testing.T) {
 }
 
 func TestWizardTotalSteps(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	got := m.totalStepCount()
 	// 4-step wizard: What, Where, Pipeline, Review
 	if got != 4 {
@@ -440,7 +440,7 @@ func TestWizardMultiRepoResult(t *testing.T) {
 			Review:         "sonnet",
 		},
 	}
-	m := NewWizardModel([]string{"repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("multi-repo feature")
 	m, _ = m.advance() // What -> Where
@@ -469,7 +469,7 @@ func TestWizardRepoOrderDeterministic(t *testing.T) {
 		},
 	}
 	// availRepos defines the deterministic order
-	m := NewWizardModel([]string{"repo-c", "repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-c", "repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("order test")
 	m, _ = m.advance() // What -> Where
@@ -503,7 +503,7 @@ func TestWizardRepoOrderDeterministic(t *testing.T) {
 // --- Tab focus toggle on What step ---
 
 func TestWizardWhatStepTabTogglesFocus(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	// Initially whatFocus=0 (name)
 	if m.whatFocus != 0 {
@@ -524,7 +524,7 @@ func TestWizardWhatStepTabTogglesFocus(t *testing.T) {
 }
 
 func TestWizardWhatStepShiftTabFromDesc(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	// Switch to description
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -545,7 +545,7 @@ func TestWizardWhatStepShiftTabFromDesc(t *testing.T) {
 // --- Review step only responds to G ---
 
 func TestWizardReviewEnterIsNoOp(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -571,7 +571,7 @@ func TestWizardReviewEnterIsNoOp(t *testing.T) {
 }
 
 func TestWizardReviewGCreates(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -587,7 +587,7 @@ func TestWizardReviewGCreates(t *testing.T) {
 }
 
 func TestWizardReviewEscGoesBack(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -611,7 +611,7 @@ func TestWizardReviewEscGoesBack(t *testing.T) {
 
 func TestWizardFilePasteMsg(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Simulate successful file paste
 	m, _ = m.Update(FilesPastedMsg{
@@ -643,7 +643,7 @@ func TestWizardFilePasteMsg(t *testing.T) {
 
 func TestWizardAttachmentsInResult(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("attach test")
 	m, _ = m.Update(FilesPastedMsg{
@@ -672,7 +672,7 @@ func TestWizardAttachmentsInResult(t *testing.T) {
 
 func TestWizardMixedImagesAndAttachments(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("mixed test")
 
@@ -709,7 +709,7 @@ func TestWizardRepoFilter(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// filteredRepos should start as all repos
 	if len(m.filteredRepos) != 5 {
@@ -774,7 +774,7 @@ func TestWizardCtrlNCtrlPNavigation(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, []string{"/tmp/roots"})
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, []string{"/tmp/roots"})
 
 	// Navigate to Where step
 	m = advanceWizardToWhereViaUI(m, "test")
@@ -858,7 +858,7 @@ func TestWizardRepoFilterNoMatches(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Navigate to Where step
 	m = advanceWizardToWhereViaUI(m, "test")
@@ -883,12 +883,12 @@ func TestWizardUnifiedModelList(t *testing.T) {
 	defaults := config.DefaultsConfig{}
 	m := NewWizardModel(
 		nil, nil, nil, defaults, "",
-		map[string][]string{"test": {"opus", "gpt-5.4", "codex"}}, // providerModels
-		[]string{"test"}, // providerOrder
-		nil,              // phaseDefaults
-		nil,              // phaseModels
-		nil, nil, nil,
-	)
+		map[string][]string{"test": {"opus", "gpt-5.4", "codex"}},
+		[]string{"test"},
+		nil,
+		nil,
+		nil, nil)
+
 	_ = m // constructor accepts unified model list
 }
 
@@ -897,7 +897,7 @@ func TestWizardUnifiedModelList(t *testing.T) {
 func TestWizardAtInDescriptionActivatesPicker(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Tab to description (whatFocus=1)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -916,7 +916,7 @@ func TestWizardAtInDescriptionActivatesPicker(t *testing.T) {
 func TestWizardAtInNameIsLiteral(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Stay on name (whatFocus=0)
 	if m.whatFocus != 0 {
@@ -937,7 +937,7 @@ func TestWizardAtInNameIsLiteral(t *testing.T) {
 func TestWizardFilePickerViewShown(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Tab to description, type "@"
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -956,7 +956,7 @@ func TestWizardFilePickerViewShown(t *testing.T) {
 
 func TestWizardCtrlVInDescriptionTriggersPaste(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Tab to description (whatFocus=1)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -977,7 +977,7 @@ func TestWizardCtrlVInDescriptionTriggersPaste(t *testing.T) {
 
 func TestWizardCtrlVInNameIsNoOp(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Stay on name (whatFocus=0)
 	if m.whatFocus != 0 {
@@ -999,7 +999,7 @@ func TestWizardCtrlVInNameIsNoOp(t *testing.T) {
 
 func TestWizardDescriptionHintWithPaste(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Tab to description
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -1022,7 +1022,7 @@ func TestWizardDescriptionHintWithPaste(t *testing.T) {
 
 func TestWizardDescriptionHintWithoutPaste(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	// Tab to description
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -1113,7 +1113,7 @@ func setupGitRepoOnDefault(t *testing.T) string {
 func TestWizardBranchWarningShownOnOffDefault(t *testing.T) {
 	repos := []string{"repo-a"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.detectBranchesFn = wizardBranchInfoStub(RepoBranchInfo{
 		Name:          "repo-a",
 		CurrentBranch: "feature/xyz",
@@ -1146,7 +1146,7 @@ func TestWizardBranchWarningShownOnOffDefault(t *testing.T) {
 func TestWizardNoBranchWarningOnDefault(t *testing.T) {
 	repos := []string{"repo-a"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.detectBranchesFn = wizardBranchInfoStub(RepoBranchInfo{
 		Name:          "repo-a",
 		CurrentBranch: "main",
@@ -1170,7 +1170,7 @@ func TestWizardNoBranchWarningOnDefault(t *testing.T) {
 func TestWizardNoBranchWarningNoRepoPaths(t *testing.T) {
 	repos := []string{"repo-a"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test-feature")
 	m.descInput.SetValue("test description")
 	m, _ = m.advance() // What -> Where
@@ -1189,7 +1189,7 @@ func TestWizardNoBranchWarningNoRepoPaths(t *testing.T) {
 
 func TestWizardBranchWarningUpDown(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1220,7 +1220,7 @@ func TestWizardBranchWarningUpDown(t *testing.T) {
 
 func TestWizardBranchWarningTab(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1241,7 +1241,7 @@ func TestWizardBranchWarningTab(t *testing.T) {
 func TestWizardBranchWarningSecondEnterAdvances(t *testing.T) {
 	defaults := config.DefaultsConfig{}
 	repos := []string{"repo-a"}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1259,7 +1259,7 @@ func TestWizardBranchWarningSecondEnterAdvances(t *testing.T) {
 
 func TestWizardBranchWarningBlocksRepoKeys(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1277,7 +1277,7 @@ func TestWizardBranchWarningBlocksRepoKeys(t *testing.T) {
 
 func TestWizardBranchWarningShiftTabDismisses(t *testing.T) {
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1294,7 +1294,7 @@ func TestWizardBranchWarningShiftTabDismisses(t *testing.T) {
 func TestWizardBackFromReviewClearsBranchState(t *testing.T) {
 	defaults := config.DefaultsConfig{}
 	repos := []string{"repo-a"}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepReview
 	m.showBranchWarning = true // was set during advance
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1318,7 +1318,7 @@ func TestWizardBackFromReviewClearsBranchState(t *testing.T) {
 func TestWizardUseCurrentBranchTrue(t *testing.T) {
 	repos := []string{"repo-a"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.detectBranchesFn = wizardBranchInfoStub(RepoBranchInfo{
 		Name:          "repo-a",
 		CurrentBranch: "feature/xyz",
@@ -1359,7 +1359,7 @@ func TestWizardUseCurrentBranchTrue(t *testing.T) {
 func TestWizardUseCurrentBranchFalseDefault(t *testing.T) {
 	repos := []string{"repo-a"}
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.detectBranchesFn = wizardBranchInfoStub(RepoBranchInfo{
 		Name:          "repo-a",
 		CurrentBranch: "feature/xyz",
@@ -1392,7 +1392,7 @@ func TestWizardUseCurrentBranchFalseDefault(t *testing.T) {
 func TestWizardBranchWarningView(t *testing.T) {
 	defaults := config.DefaultsConfig{}
 	repos := []string{"repo-a"}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1418,7 +1418,7 @@ func TestWizardBranchWarningView(t *testing.T) {
 func TestWizardBranchWarningFooter(t *testing.T) {
 	defaults := config.DefaultsConfig{}
 	repos := []string{"repo-a"}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
@@ -1434,7 +1434,7 @@ func TestWizardBranchWarningFooter(t *testing.T) {
 func TestWizardReviewShowsBranchChoice(t *testing.T) {
 	defaults := config.DefaultsConfig{}
 	repos := []string{"repo-a"}
-	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test-feature")
 	m.descInput.SetValue("test description")
 	m.selectedRepos["repo-a"] = true
@@ -1460,7 +1460,7 @@ func TestWizardReviewShowsBranchChoice(t *testing.T) {
 // --- Test Group: Summary Navigation & Display (Phase 4) ---
 
 func TestWizardSummaryFieldsOrder(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	fields := m.summaryFields()
 	expected := []summaryField{
@@ -1483,7 +1483,7 @@ func TestWizardSummaryFieldsOrder(t *testing.T) {
 }
 
 func TestWizardSummaryFieldsCount(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	fields := m.summaryFields()
 	if len(fields) != 7 {
@@ -1492,7 +1492,7 @@ func TestWizardSummaryFieldsCount(t *testing.T) {
 }
 
 func TestWizardSummaryCursorDown(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1532,7 +1532,7 @@ func TestWizardSummaryCursorDown(t *testing.T) {
 }
 
 func TestWizardSummaryCursorUp(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1580,7 +1580,7 @@ func TestWizardSummaryCursorUp(t *testing.T) {
 }
 
 func TestWizardSummaryCursorJK(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1606,7 +1606,7 @@ func TestWizardSummaryCursorJK(t *testing.T) {
 }
 
 func TestWizardSummaryCursorStopsAtExitCriteria(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1624,7 +1624,7 @@ func TestWizardSummaryCursorStopsAtExitCriteria(t *testing.T) {
 }
 
 func TestWizardSummaryEnterOnName(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1647,7 +1647,7 @@ func TestWizardSummaryEnterOnName(t *testing.T) {
 }
 
 func TestWizardSummaryEnterOnRepos(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1667,7 +1667,7 @@ func TestWizardSummaryEnterOnRepos(t *testing.T) {
 }
 
 func TestWizardSummaryEnterOnRiskStartsEditing(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1696,7 +1696,7 @@ func TestWizardSummaryEnterOnRiskStartsEditing(t *testing.T) {
 }
 
 func TestWizardSummaryGCreatesFromAnyCursor(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1713,7 +1713,7 @@ func TestWizardSummaryGCreatesFromAnyCursor(t *testing.T) {
 }
 
 func TestWizardSummaryEscGoesBack(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1741,7 +1741,7 @@ func TestWizardSummaryCursorIndicatorInView(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel([]string{"repo-a"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1769,7 +1769,7 @@ func TestWizardSummaryAutoDetectedLabelInView(t *testing.T) {
 		},
 	}
 	// "auth" is a high-risk keyword that triggers auto-detection
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("auth-refactor")
 	m, _ = m.advance() // What -> Where
@@ -1803,7 +1803,7 @@ func TestWizardSummaryRiskNoAutoDetectedWhenDefault(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1833,7 +1833,7 @@ func TestWizardSummaryDividerInView(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1851,7 +1851,7 @@ func TestWizardSummaryDividerInView(t *testing.T) {
 }
 
 func TestWizardSummaryBackToStepOnePreservesState(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("my-feature")
 	m.descInput.SetValue("my description")
@@ -1895,7 +1895,7 @@ func TestWizardSummaryBackToStepTwoPreservesState(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel([]string{"repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a", "repo-b"}, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1940,7 +1940,7 @@ func TestWizardSummaryFooterShowsNavigation(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
@@ -1960,7 +1960,7 @@ func TestWizardSummaryFooterShowsNavigation(t *testing.T) {
 // --- Test Group: Simple Inline Editing (Phase 5) ---
 
 func TestWizardSummaryRiskPillNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2022,7 +2022,7 @@ func TestWizardSummaryRiskPillNavigation(t *testing.T) {
 }
 
 func TestWizardSummaryRiskLeftRightRequireEditMode(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2043,7 +2043,7 @@ func TestWizardSummaryRiskLeftRightRequireEditMode(t *testing.T) {
 }
 
 func TestWizardSummaryInquirenessPillNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2092,7 +2092,7 @@ func TestWizardSeedsRememberedPreferencesForCurrentPipeline(t *testing.T) {
 		},
 	}
 
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	if got := m.models.Implementation; got != "claude:sonnet" {
 		t.Errorf("implementation model = %q, want %q", got, "claude:sonnet")
@@ -2124,7 +2124,7 @@ func TestWizardPipelineSwitchRestoresPerProfilePreferences(t *testing.T) {
 		},
 	}
 
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepPipeline
 
 	m.models.Implementation = "large-impl-edited"
@@ -2185,7 +2185,7 @@ func TestWizardClampsUnavailableRememberedModelsToEligibleOptions(t *testing.T) 
 		},
 	}
 
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, phaseModels, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, phaseModels, nil, nil)
 
 	if got := m.models.Research; got != "opus" {
 		t.Errorf("research model = %q, want %q", got, "opus")
@@ -2205,7 +2205,7 @@ func TestWizardClampsUnavailableRememberedModelsToEligibleOptions(t *testing.T) 
 }
 
 func TestWizardSummaryEditingBlocksNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2227,7 +2227,7 @@ func TestWizardSummaryEditingBlocksNavigation(t *testing.T) {
 }
 
 func TestWizardSummaryEditingBlocksG(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2246,7 +2246,7 @@ func TestWizardSummaryEditingBlocksG(t *testing.T) {
 }
 
 func TestWizardSummaryEditedValuesInResult(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2288,7 +2288,7 @@ func TestWizardSummaryRiskProvenanceClearedAfterEdit(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("auth migration")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2323,7 +2323,7 @@ func TestWizardSummaryInquirenessProvenanceClearedAfterEdit(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2345,7 +2345,7 @@ func TestWizardSummaryInquirenessProvenanceClearedAfterEdit(t *testing.T) {
 }
 
 func TestWizardSummaryGAfterEditing(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2373,7 +2373,7 @@ func TestWizardSummaryRiskFocusShowsChangeHint(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2406,7 +2406,7 @@ func TestWizardSummaryEditingFooter(t *testing.T) {
 			Review:         "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2448,7 +2448,7 @@ func TestWizardSummaryEditingFooter(t *testing.T) {
 // --- Test Group: Complex Inline Editing (Phase 6) ---
 
 func TestWizardSummaryModelsEnterExpands(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What → Where
 	m.selectedRepos["test-repo"] = true
@@ -2473,7 +2473,7 @@ func TestWizardSummaryModelsEnterExpands(t *testing.T) {
 }
 
 func TestWizardSummaryModelsUpDownNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2531,7 +2531,7 @@ func TestWizardSummaryModelsUpDownNavigation(t *testing.T) {
 
 func TestWizardSummaryModelsTabCycles(t *testing.T) {
 	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"}}
-	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2554,7 +2554,7 @@ func TestWizardSummaryModelsTabCycles(t *testing.T) {
 
 func TestWizardSummaryModelsRightLeftCycles(t *testing.T) {
 	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"}}
-	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2578,7 +2578,7 @@ func TestWizardSummaryModelsRightLeftCycles(t *testing.T) {
 }
 
 func TestWizardSummaryModelsEnterCollapses(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2601,7 +2601,7 @@ func TestWizardSummaryModelsEnterCollapses(t *testing.T) {
 }
 
 func TestWizardSummaryModelsEscCollapses(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2626,7 +2626,7 @@ func TestWizardSummaryModelsEscCollapses(t *testing.T) {
 
 func TestWizardSummaryModelsSubRowNavAndCycle(t *testing.T) {
 	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"}}
-	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2654,7 +2654,7 @@ func TestWizardSummaryModelsSubRowNavAndCycle(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsEnterExpands(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2676,7 +2676,7 @@ func TestWizardSummaryCheckpointsEnterExpands(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsUpDownNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2735,7 +2735,7 @@ func TestWizardSummaryCheckpointsUpDownNavigation(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsSpaceToggles(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2764,7 +2764,7 @@ func TestWizardSummaryCheckpointsSpaceToggles(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsTabToggles(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2787,7 +2787,7 @@ func TestWizardSummaryCheckpointsTabToggles(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsEnterCollapses(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2814,7 +2814,7 @@ func TestWizardSummaryCheckpointsEnterCollapses(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsEscCollapses(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2838,7 +2838,7 @@ func TestWizardSummaryCheckpointsEscCollapses(t *testing.T) {
 }
 
 func TestWizardSummaryExitCriteriaEnterOpensTextarea(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2863,7 +2863,7 @@ func TestWizardSummaryExitCriteriaEnterOpensTextarea(t *testing.T) {
 }
 
 func TestWizardSummaryExitCriteriaTypingWorks(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2883,7 +2883,7 @@ func TestWizardSummaryExitCriteriaTypingWorks(t *testing.T) {
 }
 
 func TestWizardSummaryExitCriteriaEnterConfirms(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2914,7 +2914,7 @@ func TestWizardSummaryExitCriteriaEnterConfirms(t *testing.T) {
 }
 
 func TestWizardSummaryExitCriteriaEscCancels(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2945,7 +2945,7 @@ func TestWizardSummaryExitCriteriaEscCancels(t *testing.T) {
 }
 
 func TestWizardSummaryModelsEditingBlocksG(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2965,7 +2965,7 @@ func TestWizardSummaryModelsEditingBlocksG(t *testing.T) {
 }
 
 func TestWizardSummaryModelsProvenanceClearedAfterEdit(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2987,7 +2987,7 @@ func TestWizardSummaryModelsProvenanceClearedAfterEdit(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsProvenanceClearedAfterEdit(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3005,7 +3005,7 @@ func TestWizardSummaryCheckpointsProvenanceClearedAfterEdit(t *testing.T) {
 }
 
 func TestWizardSummaryExitCriteriaProvenanceClearedAfterEdit(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3023,7 +3023,7 @@ func TestWizardSummaryExitCriteriaProvenanceClearedAfterEdit(t *testing.T) {
 }
 
 func TestWizardSummaryModelsExpandedViewShowsSubRows(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3087,7 +3087,7 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 }
 
 func TestWizardSummaryRiskAndInquiryUseEditorBoxes(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3118,7 +3118,7 @@ func TestWizardSummaryRiskAndInquiryUseEditorBoxes(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsExpandedViewShowsToggleRows(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3140,7 +3140,7 @@ func TestWizardSummaryCheckpointsExpandedViewShowsToggleRows(t *testing.T) {
 }
 
 func TestWizardSummaryExitCriteriaExpandedViewShowsTextarea(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3160,7 +3160,7 @@ func TestWizardSummaryExitCriteriaExpandedViewShowsTextarea(t *testing.T) {
 }
 
 func TestWizardSummaryEditedModelsInResult(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", map[string][]string{"test": {"opus", "sonnet", "haiku"}}, []string{"test"}, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", map[string][]string{"test": {"opus", "sonnet", "haiku"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3199,7 +3199,7 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 
 func TestWizardSummaryEditedCheckpointsInResult(t *testing.T) {
 	// applyPipelineDefaults seeds the selected moonshot profile before review.
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3240,7 +3240,7 @@ func TestWizardSummaryEditedCheckpointsInResult(t *testing.T) {
 }
 
 func TestWizardSummaryEditedExitCriteriaInResult(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3268,7 +3268,7 @@ func TestWizardSummaryEditedExitCriteriaInResult(t *testing.T) {
 }
 
 func TestWizardSummaryFullIntegration(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3314,7 +3314,7 @@ func TestWizardSummaryFullIntegration(t *testing.T) {
 }
 
 func TestWizardSummaryModelsFooterShowsHint(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3331,7 +3331,7 @@ func TestWizardSummaryModelsFooterShowsHint(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsFooterShowsHint(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3348,7 +3348,7 @@ func TestWizardSummaryCheckpointsFooterShowsHint(t *testing.T) {
 }
 
 func TestWizardSummaryExitCriteriaFooterShowsHint(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3369,7 +3369,7 @@ func TestWizardSummaryExitCriteriaFooterShowsHint(t *testing.T) {
 
 func TestWizardBrowseForMoreAppearsInRepoList(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	// Advance to repos step: name -> desc -> repos
 	m = advanceWizardToWhereViaUI(m, "test")
 
@@ -3380,7 +3380,7 @@ func TestWizardBrowseForMoreAppearsInRepoList(t *testing.T) {
 }
 
 func TestWizardBrowseForMoreAppearsWhenNoRepos(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	view := m.View()
@@ -3394,7 +3394,7 @@ func TestWizardBrowseForMoreAppearsWhenNoRepos(t *testing.T) {
 
 func TestWizardBrowseForMoreAppearsWithFilter(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Type a filter that matches nothing
@@ -3411,7 +3411,7 @@ func TestWizardBrowseForMoreAppearsWithFilter(t *testing.T) {
 
 func TestWizardCursorCanReachBrowseItem(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, []string{"/tmp/roots"})
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, []string{"/tmp/roots"})
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Move down twice to reach browse item (index 2, after repos 0 and 1)
@@ -3443,7 +3443,7 @@ func TestWizardCursorCanReachBrowseItem(t *testing.T) {
 
 func TestWizardTabOnBrowseOpensPicker(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Move cursor to browse item
@@ -3463,7 +3463,7 @@ func TestWizardTabOnBrowseOpensPicker(t *testing.T) {
 
 func TestWizardPickerCancelReturnToRepos(t *testing.T) {
 	repos := []string{"repo-a"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Move to browse and open
@@ -3484,7 +3484,7 @@ func TestWizardPickerCancelReturnToRepos(t *testing.T) {
 }
 
 func TestWizardConsumeBrowseRootIdempotent(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.browseRoot = "/tmp/test-root"
 
 	got := m.ConsumeBrowseRoot()
@@ -3503,7 +3503,7 @@ func TestWizardRefreshReposPreservesSelections(t *testing.T) {
 		"repo-a": {Path: "/a"},
 		"repo-b": {Path: "/b"},
 	}
-	m := NewWizardModel(repos, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Select repo-a (Space toggles repos on Where step)
@@ -3547,7 +3547,7 @@ func TestWizardRefreshReposPreservesSelectionsOnCollision(t *testing.T) {
 	repoConfigs := map[string]config.RepoConfig{
 		"myrepo": {Path: "/rootA/myrepo"},
 	}
-	m := NewWizardModel(repos, repoPaths, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, repoPaths, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Select "myrepo" (Space toggles repos on Where step)
@@ -3583,7 +3583,7 @@ func TestWizardRefreshReposPreservesSelectionsOnCollision(t *testing.T) {
 
 func TestWizardDirPickerDelegatesAllMessages(t *testing.T) {
 	repos := []string{"repo-a"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Open picker (Space activates Browse item on Where step)
@@ -3602,7 +3602,7 @@ func TestWizardDirPickerDelegatesAllMessages(t *testing.T) {
 }
 
 func TestWizardMultipleBrowseRounds(t *testing.T) {
-	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Round 1: open picker, set root manually, consume
@@ -3628,7 +3628,7 @@ func TestWizardMultipleBrowseRounds(t *testing.T) {
 }
 
 func TestWizardPipelineDefaultsStandard(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	if m.pipelineCursor != 1 {
 		t.Errorf("pipelineCursor = %d, want 1", m.pipelineCursor)
 	}
@@ -3647,7 +3647,7 @@ func TestWizardPipelineDefaultsStandard(t *testing.T) {
 }
 
 func TestWizardPipelineStepNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m.descInput.SetValue("test description")
 
@@ -3681,7 +3681,7 @@ func TestWizardPipelineStepNavigation(t *testing.T) {
 }
 
 func TestWizardResultIncludesPipeline(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m.descInput.SetValue("test description")
 
@@ -3711,7 +3711,7 @@ func TestWizardResultIncludesPipeline(t *testing.T) {
 // Review step, and enters model editing mode (summaryEditing on the Models field).
 func navigateToModelEditing(t *testing.T, defaults config.DefaultsConfig, providerModels map[string][]string, providerOrder []string, phaseDefaults map[string]string) WizardModel {
 	t.Helper()
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, phaseDefaults, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, phaseDefaults, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance() // What -> Where
 	m.selectedRepos["test-repo"] = true
@@ -3910,7 +3910,7 @@ func TestWizardSummaryModelsReviewShowsKBBuild(t *testing.T) {
 	}
 	providerModels := map[string][]string{"test": {"opus", "sonnet", "codex", "gpt-5.4", "opus[1m]"}}
 	providerOrder := []string{"test"}
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
 	m.width = 80
 	m.height = 24
 
@@ -3940,7 +3940,7 @@ func TestWizardModelPickerMultiProvider(t *testing.T) {
 		"codex":  {"gpt-5.4"},
 	}
 	providerOrder := []string{"claude", "codex"}
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", providerModels, providerOrder, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	// allModels should be flattened in provider order
 	wantAll := []string{"opus", "sonnet", "gpt-5.4"}
@@ -3961,7 +3961,7 @@ func TestWizardModelPickerSingleProvider(t *testing.T) {
 		"claude": {"opus", "sonnet"},
 	}
 	providerOrder := []string{"claude"}
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", providerModels, providerOrder, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	wantAll := []string{"opus", "sonnet"}
 	if !reflect.DeepEqual(m.allModels, wantAll) {
@@ -3970,7 +3970,7 @@ func TestWizardModelPickerSingleProvider(t *testing.T) {
 }
 
 func TestWizardModelPickerEmptyProviders(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	if len(m.allModels) != 0 {
 		t.Errorf("expected empty allModels, got %v", m.allModels)
@@ -4002,7 +4002,7 @@ func TestWizardPhaseDefaultsClamping(t *testing.T) {
 		"Implementation": "opus",
 		"Review":         "gpt-5.4",
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, phaseDefaults, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, phaseDefaults, nil, nil, nil)
 
 	// "opus" exists → stays
 	if m.models.Research != "opus" {
@@ -4032,7 +4032,7 @@ func TestWizardModelCyclingForwardAndWrap(t *testing.T) {
 	}
 	providerModels := map[string][]string{"test": {"opus", "sonnet", "gpt-5.4"}}
 	providerOrder := []string{"test"}
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	// Forward: opus → sonnet
 	m.modelCursor = 0
@@ -4058,7 +4058,7 @@ func TestWizardModelCyclingReverseAndWrap(t *testing.T) {
 	}
 	providerModels := map[string][]string{"test": {"opus", "sonnet", "gpt-5.4"}}
 	providerOrder := []string{"test"}
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	// Reverse from opus → wraps to gpt-5.4
 	m.modelCursor = 0
@@ -4075,7 +4075,7 @@ func TestWizardModelCyclingReverseAndWrap(t *testing.T) {
 
 func TestWizardCreateNewRepoOptionRendered(t *testing.T) {
 	// Create wizard with some repos and workspace roots (needed for "Create new repo..." to appear)
-	m := NewWizardModel([]string{"repo-a"}, map[string]string{"repo-a": "/tmp/a"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, []string{"/tmp/roots"})
+	m := NewWizardModel([]string{"repo-a"}, map[string]string{"repo-a": "/tmp/a"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, []string{"/tmp/roots"})
 	m = advanceWizardToWhereViaUI(m, "test")
 	m.width = 200
 	m.height = 40
@@ -4092,7 +4092,7 @@ func TestWizardCreateNewRepoOptionRendered(t *testing.T) {
 
 func TestWizardCreateNewRepoHiddenWithoutRoots(t *testing.T) {
 	// No workspace roots → "Create new repo..." should not render
-	m := NewWizardModel([]string{"repo-a"}, map[string]string{"repo-a": "/tmp/a"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a"}, map[string]string{"repo-a": "/tmp/a"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 	m.width = 200
 	m.height = 40
@@ -4109,7 +4109,7 @@ func TestWizardCreateNewRepoHiddenWithoutRoots(t *testing.T) {
 func TestWizardCursorClampsAtBrowseWithoutRoots(t *testing.T) {
 	repos := []string{"repo-a"}
 	// No workspace roots → cursor max should be len(repos) (browse item only)
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Move down past repo to browse item
@@ -4128,7 +4128,7 @@ func TestWizardCursorClampsAtBrowseWithoutRoots(t *testing.T) {
 func TestWizardCreateNewRepoRootPicker(t *testing.T) {
 	repos := []string{"repo-a"}
 	roots := []string{"/tmp/root-one", "/tmp/root-two"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, roots)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, roots)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Navigate to "Create new repo..." (index len(repos)+1 = 2)
@@ -4186,7 +4186,7 @@ func TestWizardCreateNewRepoRootPicker(t *testing.T) {
 func TestWizardRootPickerEscCancels(t *testing.T) {
 	repos := []string{"repo-a"}
 	roots := []string{"/tmp/root-one"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, roots)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, roots)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Navigate to create item and open root picker (Space activates items on Where step)
@@ -4211,7 +4211,7 @@ func TestWizardRootPickerEscCancels(t *testing.T) {
 func TestWizardRootPickerEscFromNameGoesBack(t *testing.T) {
 	repos := []string{"repo-a"}
 	roots := []string{"/tmp/root-one"}
-	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, roots)
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, roots)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Open root picker and select a root (Space activates items on Where step)
@@ -4239,7 +4239,7 @@ func TestWizardRootPickerEscFromNameGoesBack(t *testing.T) {
 
 func TestWizardRootPickerOverlayView(t *testing.T) {
 	roots := []string{"/tmp/root-one", "/tmp/root-two"}
-	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, roots)
+	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, roots)
 	m.width = 80
 	m.height = 40
 	m.rootPickerActive = true
@@ -4259,7 +4259,7 @@ func TestWizardRootPickerOverlayView(t *testing.T) {
 }
 
 func TestWizardCreateNewRepoNameValidation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Simulate: parent selected, active
@@ -4315,7 +4315,7 @@ func TestWizardCreateNewRepoCreatesGitRepo(t *testing.T) {
 		t.Skip("skipping real-git create-repo regression in short mode")
 	}
 
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	parentDir := t.TempDir()
@@ -4355,7 +4355,7 @@ func TestWizardCreateNewRepoCreatesGitRepo(t *testing.T) {
 }
 
 func TestWizardCreateNewRepoDeselectsExistingRepos(t *testing.T) {
-	m := NewWizardModel([]string{"repo-a", "repo-b"}, map[string]string{"repo-a": "/tmp/a", "repo-b": "/tmp/b"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a", "repo-b"}, map[string]string{"repo-a": "/tmp/a", "repo-b": "/tmp/b"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 	m.selectedRepos["repo-a"] = true
 	m.selectedRepos["repo-b"] = true
@@ -4380,7 +4380,7 @@ func TestWizardCreateNewRepoDeselectsExistingRepos(t *testing.T) {
 }
 
 func TestWizardSelectExistingRepoClearsCreateRepoState(t *testing.T) {
-	m := NewWizardModel([]string{"repo-a"}, map[string]string{"repo-a": "/tmp/a"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"repo-a"}, map[string]string{"repo-a": "/tmp/a"}, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	// Simulate post-creation state: repo was created (active=false) but path lingers
@@ -4418,7 +4418,7 @@ func TestWizardProvisionalPublishabilityFromRemote(t *testing.T) {
 		"published":   publishedRepo,
 		"unpublished": unpublishedRepo,
 	}
-	m := NewWizardModel([]string{"published", "unpublished"}, repoPaths, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"published", "unpublished"}, repoPaths, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	t.Run("published only", func(t *testing.T) {
@@ -4451,7 +4451,7 @@ func TestWizardProvisionalPublishabilityFromRemote(t *testing.T) {
 }
 
 func TestWizardProvisionalPublishabilityNewRepo(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
 	m.createRepoActive = true
@@ -4462,7 +4462,7 @@ func TestWizardProvisionalPublishabilityNewRepo(t *testing.T) {
 }
 
 func TestWizardCheckpointHidingReviewEditor(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.provisionalPublishable = false
 	m.pipelineCursor = 2
 	m.applyPipelineDefaults()
@@ -4479,7 +4479,7 @@ func TestWizardCheckpointHidingReviewEditor(t *testing.T) {
 }
 
 func TestWizardCheckpointVisibleWhenPublishable(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.provisionalPublishable = true
 	m.width = 200
 	m.height = 40
@@ -4491,7 +4491,7 @@ func TestWizardCheckpointVisibleWhenPublishable(t *testing.T) {
 }
 
 func TestWizardCheckpointHidingManualPublishForcedTrue(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 	m.provisionalPublishable = false
 
@@ -4503,7 +4503,7 @@ func TestWizardCheckpointHidingManualPublishForcedTrue(t *testing.T) {
 }
 
 func TestWizardCheckpointHidingCursorBound(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.provisionalPublishable = false
 	m.pipelineCursor = 2
 	m.applyPipelineDefaults()
@@ -4520,7 +4520,7 @@ func TestWizardCheckpointHidingCursorBound(t *testing.T) {
 }
 
 func TestWizardAutoSelectCreatedRepo(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 
 	repoPaths := map[string]string{
 		"repo-a":   "/tmp/a",
@@ -4619,7 +4619,7 @@ func TestWizardMergedPipelineCheckpointsNormalizeToSelectedProfile(t *testing.T)
 				selected[repoName] = true
 			}
 
-			m := NewWizardModel(repos, nil, tt.repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+			m := NewWizardModel(repos, nil, tt.repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 			m.selectedRepos = selected
 			m.provisionalPublishable = true
 
@@ -4644,7 +4644,7 @@ func TestWizardPipelineCardAndReviewGatesTrackSelectedProfile(t *testing.T) {
 			},
 		},
 	}
-	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("profile-switch")
 	m.descInput.SetValue("desc")
 	m.step = wizardStepPipeline
@@ -4694,7 +4694,7 @@ func TestWizardExpressProjectionFiltersNonApplicableConfigGates(t *testing.T) {
 		},
 	}
 
-	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.selectedRepos = map[string]bool{"alpha": true}
 	m.provisionalPublishable = true
 
@@ -4724,7 +4724,7 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 		},
 	}
 
-	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("medium-projection")
 	m.descInput.SetValue("projection smoke")
 	m.selectedRepos = map[string]bool{"alpha": true}
@@ -4777,7 +4777,7 @@ func TestWizardReviewCheckpointEditorUsesProjectedGateRows(t *testing.T) {
 		},
 	}
 
-	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel([]string{"alpha"}, nil, repoConfigs, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("medium-review")
 	m.descInput.SetValue("projection review")
 	m.selectedRepos = map[string]bool{"alpha": true}

@@ -80,11 +80,6 @@ type RefreshFeaturesMsg struct{}
 // state accurately instead of being cleared en masse on detach.
 type HelpResolvedMsg struct{ FeatureID string }
 
-// ReindexCompleteMsg is sent when background re-indexing completes.
-type ReindexCompleteMsg struct {
-	Changed bool
-}
-
 // ViewTransitionMsg switches to a new view.
 type ViewTransitionMsg struct {
 	View      View
@@ -322,18 +317,6 @@ type featureSummaryMsg struct {
 	summary   string
 }
 
-// IndexingProgressMsg carries per-repo indexing progress from the background classifier init.
-type IndexingProgressMsg struct {
-	Done, Total int
-	ch          <-chan IndexingProgressMsg // carries channel for re-subscription
-}
-
-// ClassifierReadyMsg signals that the async classifier initialization is complete.
-type ClassifierReadyMsg struct {
-	Classifier *agent.ClassifierIndex
-	Err        error
-}
-
 // ProgramRef holds a reference to the tea.Program that survives BubbleTea's value copying.
 type ProgramRef struct {
 	P *tea.Program
@@ -551,13 +534,6 @@ type AppModel struct {
 	statusMessage string
 	statusTime    time.Time
 
-	// ML classifier for repo suggestions
-	classifier         *agent.ClassifierIndex
-	lastReindexTime    time.Time
-	indexingInProgress bool
-	indexingDone       int
-	indexingTotal      int
-
 	// Cached KB stale warnings per feature ID.
 	// Computed lazily; cleared when KB phase completes.
 	kbStaleWarnings map[string]string
@@ -708,10 +684,6 @@ func NewAppModel(fm *feature.Manager, sm *session.Manager, orch orchestratorAPI,
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.kbStaleWarnings = make(map[string]string)
 
-	// Classifier init is deferred to Init() for async loading with progress.
-	app.indexingInProgress = true
-	app.indexingTotal = len(fm.Config.Repos)
-
 	// If there are recovery items, show recovery view first
 	if len(recoveryItems) > 0 {
 		app.currentView = ViewRecovery
@@ -798,8 +770,6 @@ func (m AppModel) Init() tea.Cmd {
 	}))
 	// Start the app-level spinner
 	cmds = append(cmds, m.spinner.Tick)
-	// Start async classifier initialization with progress
-	cmds = append(cmds, m.initClassifierCmd())
 
 	// Resume auto-publish for any CodeReady features that were pending before a crash.
 	// One publishCmd per feature — orchestrator.Publish handles per-repo fan-out,
@@ -814,53 +784,6 @@ func (m AppModel) Init() tea.Cmd {
 	}
 
 	return tea.Batch(cmds...)
-}
-
-// initClassifierCmd launches the classifier build in a goroutine and returns
-// commands that listen for progress updates and the final result.
-func (m AppModel) initClassifierCmd() tea.Cmd {
-	progressCh := make(chan IndexingProgressMsg, 64)
-	doneCh := make(chan ClassifierReadyMsg, 1)
-
-	stateDir := filepath.Dir(m.featureManager.Store.BaseDir)
-	repos := m.featureManager.Config.Repos
-	store := m.featureManager.Store
-
-	go func() {
-		defer close(progressCh)
-		classifier, err := agent.LoadOrBuildClassifier(stateDir, repos, store,
-			agent.WithProgressCallback(func(done, total int) {
-				progressCh <- IndexingProgressMsg{Done: done, Total: total}
-			}),
-			agent.WithCommandRunner(m.phaseRunner.CommandRunner),
-		)
-		doneCh <- ClassifierReadyMsg{Classifier: classifier, Err: err}
-	}()
-
-	return tea.Batch(
-		listenForIndexingProgress(progressCh),
-		listenForClassifierReady(doneCh),
-	)
-}
-
-// listenForIndexingProgress reads one progress message from the channel.
-// It embeds the channel in the message so Update() can re-subscribe.
-func listenForIndexingProgress(ch <-chan IndexingProgressMsg) tea.Cmd {
-	return func() tea.Msg {
-		msg, ok := <-ch
-		if !ok {
-			return IndexingProgressMsg{Done: -1, Total: 0}
-		}
-		msg.ch = ch
-		return msg
-	}
-}
-
-// listenForClassifierReady reads the final classifier result.
-func listenForClassifierReady(ch <-chan ClassifierReadyMsg) tea.Cmd {
-	return func() tea.Msg {
-		return <-ch
-	}
 }
 
 func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -924,29 +847,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.currentView == ViewWelcome {
 			m.welcome, _ = m.welcome.Update(msg)
 		}
-		return m, nil
-
-	case ReindexCompleteMsg:
-		// Re-indexing complete, no action needed (model already updated in-place)
-		return m, nil
-
-	case IndexingProgressMsg:
-		if msg.Done >= 0 {
-			m.indexingDone = msg.Done
-			m.indexingTotal = msg.Total
-		}
-		if msg.ch != nil {
-			return m, listenForIndexingProgress(msg.ch)
-		}
-		return m, nil
-
-	case ClassifierReadyMsg:
-		m.indexingInProgress = false
-		if msg.Err != nil {
-			log.Printf("classifier init warning: %v", msg.Err)
-		}
-		m.classifier = msg.Classifier
-		m.lastReindexTime = time.Now()
 		return m, nil
 
 	case RefreshFeaturesMsg:
@@ -1133,11 +1033,6 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					HasConflict:  true,
 					RebaseTarget: conflict.RebaseTarget,
 				})
-			}
-		}
-		if msg.Error == nil && m.classifier != nil {
-			if f, err := m.featureManager.Get(msg.FeatureID); err == nil {
-				m.classifier.LearnFromFeature(f)
 			}
 		}
 		return m, tea.Batch(
@@ -1364,21 +1259,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.repoName != "" {
 				_ = m.orchestrator.SetRepoPublished(m.publish.featureID, msg.repoName, msg.prURL)
 				// Try to complete the feature-level publish
-				published, _ := m.orchestrator.TryCompletePublish(m.publish.featureID)
-				if published {
-					if m.classifier != nil {
-						if f, err := m.featureManager.Get(m.publish.featureID); err == nil {
-							m.classifier.LearnFromFeature(f)
-						}
-					}
-				}
+				_, _ = m.orchestrator.TryCompletePublish(m.publish.featureID)
 			} else {
 				_ = m.orchestrator.MarkPublished(m.publish.featureID, msg.prURL)
-				if m.classifier != nil {
-					if f, err := m.featureManager.Get(m.publish.featureID); err == nil {
-						m.classifier.LearnFromFeature(f)
-					}
-				}
 			}
 		}
 		return m, func() tea.Msg { return RefreshFeaturesMsg{} }
@@ -2072,11 +1955,6 @@ func (m AppModel) View() tea.View {
 	m.dashboard.statusMessage = m.statusMessage
 	m.dashboard.rewindingFeatureID = m.rewindingFeatureID
 
-	// Sync indexing progress to dashboard
-	m.dashboard.indexingInProgress = m.indexingInProgress
-	m.dashboard.indexingDone = m.indexingDone
-	m.dashboard.indexingTotal = m.indexingTotal
-
 	var view string
 	switch m.currentView {
 	case ViewDashboard:
@@ -2680,20 +2558,6 @@ func (m AppModel) handleTick() (tea.Model, tea.Cmd) {
 	// Plan review no longer needs a background session — the ArtifactReviewModel
 	// provides direct editing. The dashboard badge is sufficient; the user
 	// attaches when ready.
-
-	// Periodic classifier re-index (every 30 minutes)
-	const reindexInterval = 30 * time.Minute
-	if m.classifier != nil && time.Since(m.lastReindexTime) > reindexInterval {
-		m.lastReindexTime = time.Now()
-		classifier := m.classifier
-		// Snapshot repos map to avoid concurrent map read/write with DiscoverRepos
-		repos := copyRepoConfigs(m.featureManager.Config.Repos)
-		store := m.featureManager.Store
-		cmds = append(cmds, func() tea.Msg {
-			changed, _ := classifier.CheckAndReindex(repos, store)
-			return ReindexCompleteMsg{Changed: changed}
-		})
-	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -4169,7 +4033,7 @@ func (m AppModel) transitionToWizard() AppModel {
 			existingSlugs[f.Slug] = f.Name
 		}
 	}
-	m.wizard = NewWizardModel(availRepos, repoPaths, allRepos, m.featureManager.Config.Defaults, m.workspaceDir, cat.ProviderModels, cat.ProviderOrder, cat.PhaseDefaults, cat.PhaseProviderModels, m.classifier, existingSlugs, m.featureManager.Config.WorkspaceRoots)
+	m.wizard = NewWizardModel(availRepos, repoPaths, allRepos, m.featureManager.Config.Defaults, m.workspaceDir, cat.ProviderModels, cat.ProviderOrder, cat.PhaseDefaults, cat.PhaseProviderModels, existingSlugs, m.featureManager.Config.WorkspaceRoots)
 	if m.width > 0 {
 		m.wizard.SetWidth(m.width)
 	}
@@ -4178,16 +4042,6 @@ func (m AppModel) transitionToWizard() AppModel {
 	}
 	m.currentView = ViewWizard
 	return m
-}
-
-// copyRepoConfigs returns a shallow copy of a RepoConfig map, safe for
-// concurrent use even if the original map is mutated (e.g. by DiscoverRepos).
-func copyRepoConfigs(src map[string]config.RepoConfig) map[string]config.RepoConfig {
-	dst := make(map[string]config.RepoConfig, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }
 
 func (m AppModel) transitionToPublish(featureID string) (AppModel, tea.Cmd) {
@@ -4484,11 +4338,6 @@ func (m AppModel) startFeatureCmd(featureID string) tea.Cmd {
 func (m AppModel) manualPublishCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = m.orchestrator.MarkDone(featureID)
-		if m.classifier != nil {
-			if f, err := m.featureManager.Get(featureID); err == nil {
-				m.classifier.LearnFromFeature(f)
-			}
-		}
 		return RefreshFeaturesMsg{}
 	}
 }
@@ -5163,11 +5012,6 @@ func (m AppModel) renderRefactorPipelineSelector() string {
 func (m AppModel) markDoneCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = m.orchestrator.MarkDone(featureID)
-		if m.classifier != nil {
-			if f, err := m.featureManager.Get(featureID); err == nil {
-				m.classifier.LearnFromFeature(f)
-			}
-		}
 		return RefreshFeaturesMsg{}
 	}
 }
@@ -7552,7 +7396,7 @@ func extractRepoNameFromSessionID(sessionID, featureID string) string {
 		if rest == sessionID {
 			continue
 		}
-		// rest is "<repoName>-<iteration>" e.g. "graph-runner-01"
+		// rest is "<repoName>-<iteration>" e.g. "auth-service-01"
 		lastDash := strings.LastIndex(rest, "-")
 		if lastDash <= 0 {
 			return "" // no iteration suffix found

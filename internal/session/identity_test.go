@@ -84,7 +84,7 @@ func TestEmittedEventsCarryIdentity_TableDriven(t *testing.T) {
 		{"plan", "feat-abc-plan", feature.PhasePlan},
 		{"research", "feat-abc-research", feature.PhaseResearch},
 		{"review", "feat-abc-review-01", feature.PhaseReview},
-		{"fix-with-repo", "feat-abc-fix-dev-console-04", feature.PhaseReview},
+		{"fix-with-repo", "feat-abc-fix-auth-service-04", feature.PhaseReview},
 		{"rebase", "feat-abc-rebase-01", feature.PhaseImplement},
 		{"kb", "feat-abc-kb", feature.PhaseKnowledgeBase},
 		{"inquire", "feat-abc-inquire", feature.PhaseInquire},

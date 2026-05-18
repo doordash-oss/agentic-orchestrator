@@ -843,15 +843,15 @@ func TestSummarizeToolInput(t *testing.T) {
 
 func TestRenderTabBar(t *testing.T) {
 	t.Run("two repos with first selected", func(t *testing.T) {
-		sess1 := session.NewSession("f1-impl-taulu-01", "f1", feature.PhaseImplement)
-		sess2 := session.NewSession("f1-impl-graph-runner-01", "f1", feature.PhaseImplement)
+		sess1 := session.NewSession("f1-impl-payments-01", "f1", feature.PhaseImplement)
+		sess2 := session.NewSession("f1-impl-task-runner-01", "f1", feature.PhaseImplement)
 		m := AttachModel{
 			sess:   sess1,
 			width:  80,
 			height: 24,
 			repoTabs: []repoTab{
-				{repoName: "taulu", sess: sess1, status: statusImplementing},
-				{repoName: "graph-runner", sess: sess2, status: statusPending},
+				{repoName: "payments", sess: sess1, status: statusImplementing},
+				{repoName: "task-runner", sess: sess2, status: statusPending},
 			},
 			activeTabIdx: 0,
 		}
@@ -859,29 +859,29 @@ func TestRenderTabBar(t *testing.T) {
 		if bar == "" {
 			t.Error("expected non-empty tab bar")
 		}
-		if !strings.Contains(bar, "taulu") {
-			t.Error("expected taulu in tab bar")
+		if !strings.Contains(bar, "payme") {
+			t.Error("expected payme (abbreviated payments) in tab bar")
 		}
-		if !strings.Contains(bar, "graph") {
-			t.Error("expected graph (abbreviated) in tab bar")
+		if !strings.Contains(bar, "task") {
+			t.Error("expected task (abbreviated task-runner) in tab bar")
 		}
 	})
 
 	t.Run("repo without session shown muted", func(t *testing.T) {
-		sess := session.NewSession("f1-impl-taulu-01", "f1", feature.PhaseImplement)
+		sess := session.NewSession("f1-impl-payments-01", "f1", feature.PhaseImplement)
 		m := AttachModel{
 			sess:   sess,
 			width:  80,
 			height: 24,
 			repoTabs: []repoTab{
-				{repoName: "taulu", sess: sess, status: statusImplementing},
-				{repoName: "graph-runner", sess: nil, status: statusPending},
+				{repoName: "payments", sess: sess, status: statusImplementing},
+				{repoName: "task-runner", sess: nil, status: statusPending},
 			},
 			activeTabIdx: 0,
 		}
 		bar := m.renderTabBar(80)
-		if !strings.Contains(bar, "graph") {
-			t.Error("expected graph in tab bar even without session")
+		if !strings.Contains(bar, "task") {
+			t.Error("expected task in tab bar even without session")
 		}
 	})
 }
@@ -954,10 +954,10 @@ func TestFindNextActiveTab(t *testing.T) {
 }
 
 func TestTabSwitchUpdatesSession(t *testing.T) {
-	sess1 := session.NewSession("f1-impl-taulu-01", "f1", feature.PhaseImplement)
+	sess1 := session.NewSession("f1-impl-payments-01", "f1", feature.PhaseImplement)
 	sess2 := session.NewSession("f1-impl-graph-01", "f1", feature.PhaseImplement)
 	tabs := []repoTab{
-		{repoName: "taulu", sess: sess1, status: statusImplementing},
+		{repoName: "payments", sess: sess1, status: statusImplementing},
 		{repoName: "graph", sess: sess2, status: statusImplementing},
 	}
 	m := testAttachModel(sess1, 80, 24, tabs, 0)
@@ -1025,7 +1025,7 @@ func TestUpdateTabStatus(t *testing.T) {
 		sess:  sess,
 		width: 80, height: 24,
 		repoTabs: []repoTab{
-			{repoName: "taulu", sess: sess, status: statusImplementing},
+			{repoName: "payments", sess: sess, status: statusImplementing},
 			{repoName: "graph", sess: nil, status: statusPending},
 		},
 		activeTabIdx: 0,
@@ -1075,10 +1075,10 @@ func TestResolveInitialTab(t *testing.T) {
 
 func TestTabSwitchKeepsInteractiveControls(t *testing.T) {
 	t.Run("implement to review", func(t *testing.T) {
-		implSess := session.NewSession("f1-impl-taulu-01", "f1", feature.PhaseImplement)
+		implSess := session.NewSession("f1-impl-payments-01", "f1", feature.PhaseImplement)
 		reviewSess := session.NewSession("f1-review-graph-01", "f1", feature.PhaseReview)
 		tabs := []repoTab{
-			{repoName: "taulu", sess: implSess, status: statusImplementing},
+			{repoName: "payments", sess: implSess, status: statusImplementing},
 			{repoName: "graph", sess: reviewSess, status: statusReviewing},
 		}
 		m := testAttachModel(implSess, 80, 24, tabs, 0)
@@ -1095,10 +1095,10 @@ func TestTabSwitchKeepsInteractiveControls(t *testing.T) {
 	})
 
 	t.Run("review to implement", func(t *testing.T) {
-		reviewSess := session.NewSession("f1-review-taulu-01", "f1", feature.PhaseReview)
+		reviewSess := session.NewSession("f1-review-payments-01", "f1", feature.PhaseReview)
 		implSess := session.NewSession("f1-impl-graph-01", "f1", feature.PhaseImplement)
 		tabs := []repoTab{
-			{repoName: "taulu", sess: reviewSess, status: statusReviewing},
+			{repoName: "payments", sess: reviewSess, status: statusReviewing},
 			{repoName: "graph", sess: implSess, status: statusImplementing},
 		}
 		m := testAttachModel(reviewSess, 80, 24, tabs, 0)
@@ -1114,7 +1114,7 @@ func TestActiveRepoName(t *testing.T) {
 	t.Run("returns repo name for multi-repo", func(t *testing.T) {
 		m := AttachModel{
 			repoTabs: []repoTab{
-				{repoName: "taulu"},
+				{repoName: "payments"},
 				{repoName: "graph"},
 			},
 			activeTabIdx: 1,
@@ -4144,12 +4144,12 @@ func TestAbbreviateRepoName(t *testing.T) {
 		name string
 		want string
 	}{
-		{"services-protobuf", "proto"},
-		{"graph-runner", "graph"},
-		{"taulu", "taulu"},
+		{"services-payments", "payme"},
+		{"task-runner", "task"},
+		{"queue", "queue"},
 		{"my-long-repo-name", "my-lo"},
 		{"a", "a"},
-		{"identity-service", "ident"},
+		{"auth-service", "auth"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

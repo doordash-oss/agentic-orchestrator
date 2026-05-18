@@ -497,10 +497,10 @@ func TestValidateVerificationReport_KnownCaveatsSurfacedNotRejected(t *testing.T
 	}
 }
 
-// TestValidateVerificationReport_RealWorldTauluIter01 feeds a trimmed
+// TestValidateVerificationReport_RealWorldPaymentsIter01 feeds a trimmed
 // regression fixture for an invalid passing verification report. The gate must
 // reject it.
-func TestValidateVerificationReport_RealWorldTauluIter01(t *testing.T) {
+func TestValidateVerificationReport_RealWorldPaymentsIter01(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verification-report.yaml")
 	// Trimmed verbatim excerpt: the "task lint" check shows `status: pass`
 	// with evidence text that admits the lint command actually fails on
@@ -520,7 +520,7 @@ required_checks:
       mode: partial
       status: pass
       evidence: |
-        ./taulu-golangci-lint run at repo root reports "0 issues" (exit 0).
+        ./project-golangci-lint run at repo root reports "0 issues" (exit 0).
         task proto:lint passes.
 
         CAVEAT: task lint chains a final subtask lint-go-version that runs

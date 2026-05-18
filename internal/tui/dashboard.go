@@ -94,9 +94,6 @@ type DashboardModel struct {
 	panelHeight          int             // last known panel height for scroll computation
 	statusMessage        string          // transient status message displayed in footer
 	rewindingFeatureID   string          // feature ID currently being rewound (shows "Stopping..." label)
-	indexingInProgress   bool            // true while classifier is initializing
-	indexingDone         int             // repos indexed so far
-	indexingTotal        int             // total repos to index
 	wantNewFeature       bool            // set when ghost CTA Enter is pressed
 	welcomeSkipped       bool            // true when user skipped the welcome flow
 }
@@ -446,10 +443,6 @@ func (m DashboardModel) renderHeader(w int) string {
 
 	info := make([]string, len(artLines))
 	info[0] = lipgloss.NewStyle().Foreground(infoColor).Render("Orchestrator v" + GetVersion())
-	if m.indexingInProgress {
-		indexStyle := lipgloss.NewStyle().Foreground(colorPeach)
-		info[0] += "  " + indexStyle.Render(fmt.Sprintf("Indexing repos (%d/%d)...", m.indexingDone, m.indexingTotal))
-	}
 
 	var contextParts []string
 	if len(m.features) > 0 {
@@ -656,7 +649,7 @@ func (m *DashboardModel) buildVisibleItems() {
 
 	var items []listItem
 	for _, sec := range sections {
-		if len(sec.features) == 0 {
+		if len(sec.features) == 0 && !(sec.key == "inProgress" && m.creatingName != "") {
 			continue
 		}
 		items = append(items, listItem{kind: listItemSectionHeader, section: sec.key})
@@ -697,6 +690,9 @@ func (m *DashboardModel) computeCursorLine() {
 			}
 			lineIndex++ // header line
 			lineIndex++ // blank after header
+			if item.section == "inProgress" && m.creatingName != "" {
+				lineIndex++ // creating feature row
+			}
 		case listItemFeature:
 			if i == m.cursor {
 				m.cursorLine = lineIndex
@@ -727,6 +723,9 @@ func (m *DashboardModel) updateScrollState(panelHeight int) {
 			}
 			prevSection = item.section
 			totalLines += 2 // header + blank after
+			if item.section == "inProgress" && m.creatingName != "" {
+				totalLines++ // creating feature row
+			}
 		} else {
 			totalLines++ // feature row
 		}
@@ -805,6 +804,9 @@ func (m DashboardModel) sectionFeatureCount(sectionKey string) int {
 			}
 		}
 	}
+	if sectionKey == "inProgress" && m.creatingName != "" {
+		count++
+	}
 	return count
 }
 
@@ -856,6 +858,10 @@ func (m DashboardModel) renderFeatureList() string {
 			// Blank line after header
 			content.WriteString("\n")
 			lineIndex++
+			if item.section == "inProgress" && m.creatingName != "" {
+				content.WriteString(m.renderCreatingFeatureRow() + "\n")
+				lineIndex++
+			}
 
 		case listItemFeature:
 			f := item.feature
@@ -876,20 +882,19 @@ func (m DashboardModel) renderFeatureList() string {
 		}
 	}
 
-	// Show placeholder row for a feature being created (worktree setup in progress)
-	if m.creatingName != "" {
-		creatingStyle := lipgloss.NewStyle().Foreground(colorPeach)
-		icon := creatingStyle.Render(icons.Created)
-		slug := m.creatingName
-		if len(slug) > 20 {
-			slug = slug[:19] + "\u2026"
-		}
-		status := creatingStyle.Render("setting up worktrees")
-		row := fmt.Sprintf("%s %-20s %s", icon, slug, status)
-		content.WriteString("  " + row + "\n")
-	}
-
 	return content.String()
+}
+
+func (m DashboardModel) renderCreatingFeatureRow() string {
+	creatingStyle := lipgloss.NewStyle().Foreground(colorPeach)
+	icon := creatingStyle.Render(icons.Created)
+	slug := m.creatingName
+	if len(slug) > 20 {
+		slug = slug[:19] + "\u2026"
+	}
+	status := creatingStyle.Render("setting up worktrees")
+	row := fmt.Sprintf("%s %-20s %s", icon, slug, status)
+	return "  " + row
 }
 
 // renderWelcomePanel builds the right-panel welcome/explainer shown when no features exist.

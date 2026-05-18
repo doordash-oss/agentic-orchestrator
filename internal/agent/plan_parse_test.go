@@ -163,16 +163,16 @@ func TestParsePlanTasks_FencedHeadingsDoNotTruncate(t *testing.T) {
 		"More translated content.\n" +
 		"````\n" +
 		"\n" +
-		"### Task 3: Rename taulu README\n" +
+		"### Task 3: Rename payments README\n" +
 		"\n" +
-		"**Repo:** `taulu`\n" +
+		"**Repo:** `payments`\n" +
 		"\n" +
-		"### Task 4: Replace taulu README with translation\n" +
+		"### Task 4: Replace payments README with translation\n" +
 		"\n" +
-		"**Repo:** `taulu`\n" +
+		"**Repo:** `payments`\n" +
 		"\n" +
 		"````markdown\n" +
-		"# Taulu\n" +
+		"# Payments\n" +
 		"\n" +
 		"## Architettura\n" +
 		"````\n" +
@@ -185,13 +185,13 @@ func TestParsePlanTasks_FencedHeadingsDoNotTruncate(t *testing.T) {
 		t.Fatalf("expected 4 tasks (fenced headings should not truncate), got %d", len(tasks))
 	}
 	got := []string{tasks[0].Repo, tasks[1].Repo, tasks[2].Repo, tasks[3].Repo}
-	want := []string{"agentic", "agentic", "taulu", "taulu"}
+	want := []string{"agentic", "agentic", "payments", "payments"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("repos = %v, want %v", got, want)
 	}
 	repos := PlanTaskRepos(plan)
-	if !reflect.DeepEqual(repos, []string{"agentic", "taulu"}) {
-		t.Errorf("PlanTaskRepos = %v, want [agentic taulu]", repos)
+	if !reflect.DeepEqual(repos, []string{"agentic", "payments"}) {
+		t.Errorf("PlanTaskRepos = %v, want [agentic payments]", repos)
 	}
 }
 

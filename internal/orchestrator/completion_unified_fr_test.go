@@ -868,10 +868,10 @@ func TestOrchestrator_FeatureFinalReview_Interrupted_DoesNotMarkFailed(t *testin
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "taulu", Path: "/tmp/taulu", Publishable: &pub},
+			{Name: "payments", Path: "/tmp/payments", Publishable: &pub},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"taulu": {Touched: true},
+			"payments": {Touched: true},
 		},
 		Pipeline: feature.PipelineLarge,
 	}

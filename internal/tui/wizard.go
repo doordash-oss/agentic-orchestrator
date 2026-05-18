@@ -27,7 +27,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -210,7 +209,7 @@ func pipelineConfigKeys(profile feature.PipelineProfile) []string {
 	return []string{profile.ConfigKey()}
 }
 
-func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfigs map[string]config.RepoConfig, defaults config.DefaultsConfig, workspaceDir string, providerModels map[string][]string, providerOrder []string, phaseDefaults map[string]string, phaseModels map[string]map[string][]string, classifier *agent.ClassifierIndex, existingSlugs map[string]string, workspaceRoots []string) WizardModel {
+func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfigs map[string]config.RepoConfig, defaults config.DefaultsConfig, workspaceDir string, providerModels map[string][]string, providerOrder []string, phaseDefaults map[string]string, phaseModels map[string]map[string][]string, existingSlugs map[string]string, workspaceRoots []string) WizardModel {
 	ni := textinput.New()
 	ni.Placeholder = "Feature name"
 

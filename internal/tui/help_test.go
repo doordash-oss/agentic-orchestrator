@@ -289,7 +289,7 @@ func TestHelpOverlayOpensInAllViews(t *testing.T) {
 			app.detail.height = 24
 		}},
 		{"Wizard (non-text step)", ViewWizard, "Wizard", func(app *AppModel) {
-			app.wizard = NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+			app.wizard = NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 			app.wizard.step = wizardStepReview
 		}},
 		{"Publish", ViewPublish, "Publish", nil},
@@ -393,7 +393,7 @@ func TestHelpOverlaySuppressedDuringTextInput(t *testing.T) {
 		}},
 		{"wizard text step", func(app *AppModel) {
 			app.currentView = ViewWizard
-			app.wizard = NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil, nil)
+			app.wizard = NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 			app.wizard.step = wizardStepWhat // text input step
 		}},
 		{"publish PR description title", func(app *AppModel) {

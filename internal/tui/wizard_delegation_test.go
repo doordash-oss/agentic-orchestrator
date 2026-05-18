@@ -41,7 +41,7 @@ func newWizardAtReviewForDelegation(t *testing.T, providerModels map[string][]st
 			KBBuild:        "opus",
 		},
 	}
-	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, phaseModels, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, phaseModels, nil, nil)
 	m.nameInput.SetValue("feat")
 	m, _ = m.advance() // What → Where
 	m.selectedRepos["r"] = true
@@ -342,7 +342,7 @@ func TestWizardConfigEditorCatalogParity(t *testing.T) {
 
 	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "",
 		cat.ProviderModels, cat.ProviderOrder, cat.PhaseDefaults, cat.PhaseProviderModels,
-		nil, nil, nil)
+		nil, nil)
 
 	if !reflect.DeepEqual(m.configCatalog.ProviderModels, cat.ProviderModels) {
 		t.Errorf("configCatalog.ProviderModels diverged from BuildPhaseModelCatalog output")
@@ -367,7 +367,7 @@ func TestWizardAndOverlayShareCatalogStructure(t *testing.T) {
 	catOverlay := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
 	mw := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "",
 		catOverlay.ProviderModels, catOverlay.ProviderOrder, catOverlay.PhaseDefaults, catOverlay.PhaseProviderModels,
-		nil, nil, nil)
+		nil, nil)
 
 	if !reflect.DeepEqual(mw.configCatalog.Fields, catOverlay.Fields) {
 		t.Errorf("wizard and overlay Fields differ: %v vs %v",
@@ -395,7 +395,8 @@ func TestWizardReviewDelegation_ModelsEditorRendersAssignmentsAndChoices(t *test
 		},
 	}
 	m := NewWizardModel(nil, nil, nil, defaults, "",
-		providerModels, []string{"claude", "codex"}, nil, nil, nil, nil, nil)
+		providerModels, []string{"claude", "codex"}, nil, nil, nil, nil)
+
 	m.nameInput.SetValue("feat")
 	m, _ = m.advance()
 	m.selectedRepos["r"] = true

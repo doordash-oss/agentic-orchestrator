@@ -105,7 +105,7 @@ After submitting the prompt, a **pipeline selector** overlay appears so you can 
 The refactor transitions the feature back to an earlier pipeline phase based on the selected profile:
 
 - **Medium** — transitions to **PlanReady** and starts with planning
-- **Large / Moonshot** — transitions to **Inquiring** and runs the full inquiry → research → brainstorm → plan → implement cycle
+- **Large / Moonshot** — transitions to **Inquiring** and runs the full inquiry → research → design → plan → implement cycle
 
 After implementation completes:
 1. Commits changes with "Apply refactor changes"

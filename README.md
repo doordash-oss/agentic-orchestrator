@@ -15,7 +15,7 @@ The hard part of agentic coding is not asking a model to edit files. The hard pa
 
 That is the real "oneshot" value: an engineer can describe a large feature once, then supervise the checkpoints where judgment matters instead of manually shepherding every prompt, terminal session, worktree, test run, review pass, and PR step.
 
-- **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and brainstorm phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
+- **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
 - **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
 - **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
 - **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
@@ -48,7 +48,7 @@ On first launch, Agentic Orchestrator walks you through a welcome flow to select
 |------|---------|---------|
 | **Go 1.25+** | Build or install `agentico` from source | [go.dev](https://go.dev/dl/) |
 | **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
-| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, brainstorm, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
 | **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
 | **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
 | **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
@@ -65,7 +65,7 @@ The lifecycle is profile-dependent and checkpoint-driven. Medium starts at plann
 
 **Knowledge Base Build** — Builds or refreshes a per-repo knowledge base covering architecture, conventions, API surface, dependencies, and verification. Fresh KBs are reused and the phase is skipped.
 
-**Inquire, Research, Brainstorm** — Turns a high-level request into explicit answers, research findings, and a design direction. Q&A artifacts are persisted and fed forward so later phases do not depend on memory alone.
+**Inquire, Research, Design** — Turns a high-level request into explicit answers, research findings, and a design direction. Q&A artifacts are persisted and fed forward so later phases do not depend on memory alone.
 
 **Roadmap and Phase Planning** — Creates the top-level roadmap, then a detailed plan for each roadmap phase. Large and Moonshot run plan validators; Medium skips plan critics for lower overhead.
 
@@ -82,7 +82,7 @@ When creating a feature, choose a pipeline depth:
 | Profile | Phases | Best for |
 |---------|--------|----------|
 | **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
-| **Large** | KB → Inquire → Research → Brainstorm → roadmap loop → Final Review → Publish | Most complex features (default) |
+| **Large** | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features (default) |
 | **Moonshot** | Same phase sequence as Large, with max effort, plan-review defaults, and per-iteration implementation review | High-risk or highly ambiguous changes |
 
 ### Worktree Isolation

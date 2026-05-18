@@ -70,8 +70,8 @@ type checkpointField struct {
 
 var checkpointFields = []checkpointField{
 	{Gate: feature.GateInquiryReview, Label: "Inquiry Review", Desc: "Pause after inquiry before research"},
-	{Gate: feature.GateResearchReview, Label: "Research Review", Desc: "Pause after research before brainstorm"},
-	{Gate: feature.GateDesignReview, Label: "Design Review", Desc: "Pause after brainstorm before planning"},
+	{Gate: feature.GateResearchReview, Label: "Research Review", Desc: "Pause after research before design"},
+	{Gate: feature.GateDesignReview, Label: "Design Review", Desc: "Pause after design before planning"},
 	{Gate: feature.GatePlanReview, Label: "Plan Review", Desc: "Pause after planning before implementation"},
 	{Gate: feature.GateManualPublish, Label: "Manual Publish", Desc: "Review diff and PR before publishing"},
 }

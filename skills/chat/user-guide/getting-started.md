@@ -1,6 +1,6 @@
 # Getting Started with Agentic Orchestrator
 
-Agentic Orchestrator is a Go TUI (binary name: `agentico`) that drives the **KB Build → Inquire → Research → Brainstorm → Plan → Implement → Review → Publish** lifecycle for AI-assisted development. It runs AI agent sessions in isolated git worktrees so you can work on multiple features concurrently without branch conflicts.
+Agentic Orchestrator is a Go TUI (binary name: `agentico`) that drives the **KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish** lifecycle for AI-assisted development. It runs AI agent sessions in isolated git worktrees so you can work on multiple features concurrently without branch conflicts.
 
 ## Prerequisites
 
@@ -65,7 +65,7 @@ Choose a **pipeline profile** that controls how many phases your feature runs th
 | Profile | Phases | Effort |
 |---------|--------|--------|
 | **Medium** | Plan → Implement → Review → Publish | Medium |
-| **Large** | KB Build → Inquire → Research → Brainstorm → Plan → Implement → Review → Publish | High |
+| **Large** | KB Build → Inquire → Research → Design → Plan → Implement → Review → Publish | High |
 | **Moonshot** | Same as Large, with maximum rigor | Max |
 
 ### Step 4 — Review
@@ -117,7 +117,7 @@ runs automatically:
     knowledgebase/         # KB Build phase outputs
     inquire/               # Inquiry phase outputs
     research/              # Research phase outputs
-    brainstorm/            # Brainstorm phase outputs
+    brainstorm/            # Design phase outputs (directory name retained for legacy state compatibility)
     plan/                  # Plan artifacts (roadmap, phase plans)
     implement/             # Implementation logs and reports
     review/                # Review feedback

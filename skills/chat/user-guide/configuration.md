@@ -31,7 +31,7 @@ defaults:
 
 | Role | Default | Used For |
 |------|---------|----------|
-| `research` | `opus` | Research, inquiry, brainstorm phases |
+| `research` | `opus` | Research, inquiry, design phases |
 | `planning` | `opus` | Plan creation and roadmap generation |
 | `implementation` | `opus` | Code implementation |
 | `review` | `gpt-5.4` | Final Review loop |
@@ -61,7 +61,7 @@ defaults:
 | Checkpoint | Gates Before | Default |
 |------------|-------------|---------|
 | `inquiry_review` | Research phase | `false` |
-| `research_review` | Brainstorm phase | `false` |
+| `research_review` | Design phase | `false` |
 | `design_review` | Plan phase | `false` |
 | `plan_review` | Implementation phase | `false` |
 | `manual_publish` | Publish step | `true` |

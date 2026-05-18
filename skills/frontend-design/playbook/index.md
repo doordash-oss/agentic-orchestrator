@@ -24,7 +24,7 @@ usability/accessibility research, not framework-specific taste.
 
 | Phase | Minimum reads |
 |-------|---------------|
-| Brainstorm / Research | `foundations.md`, `interaction-and-trust.md`, `platforms-and-adaptation.md`, `accessibility-and-inclusion.md` |
+| Design / Research | `foundations.md`, `interaction-and-trust.md`, `platforms-and-adaptation.md`, `accessibility-and-inclusion.md` |
 | Plan | `foundations.md`, `accessibility-and-inclusion.md`, plus the surface-specific file |
 | Implement | `foundations.md`, `accessibility-and-inclusion.md`, plus `interaction-and-trust.md` or `terminal-and-tui.md` as needed |
 | Review | `review-rubric.md` plus every file relevant to the implemented surface |

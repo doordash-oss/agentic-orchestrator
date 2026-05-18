@@ -1,10 +1,26 @@
 ---
-description: Collaborative design document creation from research findings
+description: Legacy compatibility wrapper for the Design phase (formerly Brainstorm)
 ---
 
-# Brainstorm — Design Document Creation
+# Brainstorm — Legacy Compatibility Wrapper for Design
 
-You are a design collaborator who turns research findings into a design document. You work with the user to explore approaches, make trade-offs, and produce a clear, actionable design.
+This skill is the legacy compatibility path for what is now called the **Design**
+phase. The product surface, agent contracts, and documentation use Design
+language; this file exists only so legacy persisted state, session identifiers,
+and role lookups that still resolve to the "brainstorm" name continue to load
+without migration.
+
+If you reached this skill, treat it as identical in behavior to the Design
+skill at [skills/design/SKILL.md](../design/SKILL.md):
+
+- **What you produce**: a design document at the artifact path declared below.
+- **How you behave**: follow the Design skill's process and document structure
+  exactly. Do not introduce a separate "brainstorm" artifact concept — the
+  artifact is a design document and should read like one.
+- **Why this file exists**: phase directories on disk are still named
+  `brainstorm/`, and a few historical role and session identifiers retain the
+  `brainstorm` suffix. The orchestrator routes both names to the same Design
+  behavior.
 
 ## Output Files
 
@@ -12,78 +28,8 @@ You are a design collaborator who turns research findings into a design document
 |----------|------|-------------|---------|
 | `brainstorm markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
 
-## Your Process
+## Canonical Guidance
 
-1. **Read the research output completely.** These are objective answers to questions about the codebase — they tell you what exists and how things work.
-
-2. **Read the original feature description** to understand the user's intent.
-
-3. **Read User Answers** (if provided in the user prompt). These are answers the user gave to clarifying questions in earlier phases. Take them into consideration during the brainstorming.
-
-4. **Read the KB index** (if provided) for architectural context.
-
-5. **Read relevant Guidelines** depending on the user's intent, rely on topic-specific or language-specific guidelines to perfect the final design.
-
-6. **Apply these design principles regardless of interaction level:**
-   - **YAGNI ruthlessly** — Remove anything not clearly needed for this feature. If you're unsure whether something is needed, it isn't.
-   - **Design for isolation** — Break the design into units with clear boundaries and testable independence.
-   - **Follow existing patterns** — The research told you how the codebase works. Your design should fit naturally.
-   - **Minimize blast radius** — Prefer changes that touch fewer files and have smaller scope.
-
-## Design Document Structure
-
-<prd-template>
-## Problem Statement
-
-The problem that the user is facing, from the user's perspective.
-
-## Solution
-
-The solution to the problem, from the user's perspective.
-
-## User Stories
-
-A LONG, numbered list of user stories. Each user story should be in the format of:
-
-1. As an <actor>, I want a <feature>, so that <benefit>
-
-<user-story-example>
-1. As a mobile bank customer, I want to see balance on my accounts, so that I can make better informed decisions about my spending
-</user-story-example>
-
-This list of user stories should be extremely extensive and cover all aspects of the feature.
-
-## Implementation Decisions
-
-A list of implementation decisions that were made. This can include:
-
-- The modules that will be built/modified
-- The interfaces of those modules that will be modified
-- Technical clarifications from the developer
-- Architectural decisions
-- Schema changes
-- API contracts
-- Specific interactions
-
-Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
-
-## Testing Decisions
-
-A list of testing decisions that were made. Include:
-
-- A description of what makes a good test (only test external behavior, not implementation details)
-- Which modules will be tested
-- Prior art for the tests (i.e. similar types of tests in the codebase)
-
-## Out of Scope
-
-A description of the things that are out of scope for this PRD.
-
-## Further Notes
-
-Any further notes about the feature.
-</prd-template>
-
-## Output
-
-Write a design document (markdown) to the output directory. Name it with a descriptive slug (e.g., `2026-03-18-feature-name-design.md`).
+For the canonical process, principles, and design-document structure, see
+[skills/design/SKILL.md](../design/SKILL.md). This wrapper exists only to keep
+legacy routing working; the behavior it describes is the Design behavior.

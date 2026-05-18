@@ -6,7 +6,7 @@ Agentic Orchestrator is an AI development workflow orchestrator that turns any e
 
 > The local CLI is `agentico`
 
-<img width="1727" height="1049" alt="image" src="https://github.com/user-attachments/assets/1d0704a4-621f-4482-8f89-5424290b7ea5" />
+<img width="1500" height="900" alt="Agentic Orchestrator basic flow" src="docs/assets/agentico-basic-flow.gif" />
 
 
 ## Why Agentic Orchestrator?

@@ -818,7 +818,7 @@ func (o *Orchestrator) startBrainstorm(featureID string) (PhaseStartResult, erro
 	}
 	researchPath := o.resolveArtifactPath(f, "research")
 	if researchPath == "" {
-		return PhaseStartResult{}, errors.New("research phase did not produce an artifact; cannot proceed to brainstorm")
+		return PhaseStartResult{}, errors.New("research phase did not produce an artifact; cannot proceed to design")
 	}
 	// QA file paths from inquire/research specifically (brainstorm's own qa
 	// doesn't exist yet — matches app.go:5577-5582).
@@ -837,7 +837,7 @@ func (o *Orchestrator) startBrainstorm(featureID string) (PhaseStartResult, erro
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
 		if _, err := o.deps.PhaseRunner.RunBrainstorm(f, researchPath, qaFilePaths, kbInfos...); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run brainstorm: %w", err)
+			return PhaseStartResult{}, fmt.Errorf("run design: %w", err)
 		}
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil

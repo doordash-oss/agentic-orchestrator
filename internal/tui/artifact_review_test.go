@@ -24,6 +24,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
@@ -237,6 +238,116 @@ func TestArtifactReview_CtrlPTogglesPreviewAndRawEditor(t *testing.T) {
 	}
 }
 
+func TestArtifactReview_RenderedPreviewUsesUnsavedEditorBuffer(t *testing.T) {
+	previous := renderMarkdown
+	SetMarkdownRenderer(func(text string, width int) string {
+		return "rendered-buffer\n" + text
+	})
+	t.Cleanup(func() { renderMarkdown = previous })
+
+	m, f := newTestArtifactReview(t, "# Plan\noriginal", "plan")
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '!', Text: "!"})
+
+	if !m.editor.Dirty() {
+		t.Fatal("editor should be dirty after raw edit")
+	}
+	data, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "# Plan\noriginal" {
+		t.Fatalf("raw edit should not save before a save point; disk = %q", string(data))
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	view := stripANSI(m.View())
+	for _, want := range []string{"rendered-buffer", "!# Plan"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("preview should render unsaved editor buffer with %q, got:\n%s", want, view)
+		}
+	}
+	if !m.editor.Dirty() {
+		t.Fatal("toggling to preview should preserve dirty state")
+	}
+	data, err = os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "# Plan\noriginal" {
+		t.Fatalf("preview toggle should not save; disk = %q", string(data))
+	}
+}
+
+func TestArtifactReview_DirtyStateVisibleInPreviewAndRawFooter(t *testing.T) {
+	m, _ := newTestArtifactReview(t, "# Plan", "plan")
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: '*', Text: "*"})
+
+	rawView := stripANSI(m.View())
+	for _, want := range []string{"[Source INSERT] [+]", "Raw", "Unsaved"} {
+		if !strings.Contains(rawView, want) {
+			t.Fatalf("raw dirty view missing %q:\n%s", want, rawView)
+		}
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	previewView := stripANSI(m.View())
+	for _, want := range []string{"[Rendered preview] [+]", "Preview", "Unsaved"} {
+		if !strings.Contains(previewView, want) {
+			t.Fatalf("preview dirty view missing %q:\n%s", want, previewView)
+		}
+	}
+}
+
+func TestArtifactReview_SavePointsPersistPreviewBuffer(t *testing.T) {
+	t.Run("focus_chat_from_preview", func(t *testing.T) {
+		m, f := newTestArtifactReview(t, "original", "plan")
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'X', Text: "X"})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+
+		if !m.editor.Dirty() {
+			t.Fatal("editor should be dirty before save point")
+		}
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "Xoriginal" {
+			t.Fatalf("focus-chat save point persisted %q, want Xoriginal", string(data))
+		}
+		if m.editor.Dirty() {
+			t.Fatal("focus-chat save point should mark editor clean")
+		}
+	})
+
+	t.Run("action_menu_from_preview", func(t *testing.T) {
+		m, f := newTestArtifactReview(t, "original", "plan")
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'Y', Text: "Y"})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "Yoriginal" {
+			t.Fatalf("action-menu save point persisted %q, want Yoriginal", string(data))
+		}
+		if m.editor.Dirty() {
+			t.Fatal("action-menu save point should mark editor clean")
+		}
+	})
+}
+
 func TestArtifactReview_PreviewScrollResizeAndChrome(t *testing.T) {
 	var lines []string
 	for i := 0; i < 80; i++ {
@@ -276,7 +387,7 @@ func TestArtifactReview_NeedUserInputExcludesPreviewControls(t *testing.T) {
 	m := newTestNeedUserInputReview(t, "feat-preview-exclusion", gatePath)
 
 	view := m.View()
-	for _, unwanted := range []string{"Rendered preview", "Source", "Ctrl+P"} {
+	for _, unwanted := range []string{"Rendered preview", "Source", "Ctrl+P", "Unsaved"} {
 		if strings.Contains(view, unwanted) {
 			t.Errorf("need-user-input view should not include %q:\n%s", unwanted, view)
 		}
@@ -516,6 +627,125 @@ func TestArtifactReview_RejectAgentEdit(t *testing.T) {
 	data, _ := os.ReadFile(f)
 	if string(data) != "line1\nline2\nline3" {
 		t.Errorf("file on disk should be reverted, got %q", string(data))
+	}
+}
+
+func TestArtifactReview_AgentEditSavesDirtyBufferAndRefreshesPreview(t *testing.T) {
+	previous := renderMarkdown
+	SetMarkdownRenderer(func(text string, width int) string {
+		return "preview-after-agent\n" + text
+	})
+	t.Cleanup(func() { renderMarkdown = previous })
+
+	m, f := newTestArtifactReview(t, "# Plan\noriginal", "plan")
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'U', Text: "U"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+
+	m, _ = m.Update(artifactReviewMsgsMsg{messages: []llm.SDKMessage{
+		assistantMessage(llm.ContentBlock{
+			Type:  "tool_use",
+			Name:  "Edit",
+			Input: rawJSON(fmt.Sprintf(`{"file_path":%q,"old_string":"U# Plan","new_string":"# Agent Plan"}`, f)),
+		}),
+	}})
+
+	if m.preEditContent != "U# Plan\noriginal" {
+		t.Fatalf("preEditContent = %q, want dirty editor buffer", m.preEditContent)
+	}
+	if m.editor.Dirty() {
+		t.Fatal("dirty editor buffer should be saved before agent edit proceeds")
+	}
+	data, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "U# Plan\noriginal" {
+		t.Fatalf("agent edit detection saved %q, want dirty buffer", string(data))
+	}
+
+	if err := os.WriteFile(f, []byte("# Agent Plan\nupdated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = m.Update(artifactReviewMsgsMsg{messages: []llm.SDKMessage{
+		{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}},
+	}})
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"preview-after-agent", "# Agent Plan", "agent edits pending", "Ctrl+Y: accept edits", "Ctrl+Z: reject edits"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("preview after agent edit missing %q:\n%s", want, view)
+		}
+	}
+	if m.editor.Dirty() {
+		t.Fatal("reloaded agent content should be clean until accepted or rejected")
+	}
+}
+
+func TestArtifactReview_AcceptAndRejectAgentEditFromPreview(t *testing.T) {
+	t.Run("accept", func(t *testing.T) {
+		m, _ := newTestArtifactReview(t, "line1\nline2\nline3", "plan")
+		m.preEditContent = "line1\nline2\nline3"
+		m.editor.SetContent("line1\nMODIFIED\nline3", true)
+		m.editor.MarkClean()
+
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+
+		if len(m.editor.highlightedLines) != 0 {
+			t.Fatal("accept from preview should clear highlights")
+		}
+		if m.preEditContent != "" {
+			t.Fatal("accept from preview should clear preEditContent")
+		}
+		if m.editor.Content() != "line1\nMODIFIED\nline3" {
+			t.Fatalf("accept from preview changed content to %q", m.editor.Content())
+		}
+	})
+
+	t.Run("reject", func(t *testing.T) {
+		m, f := newTestArtifactReview(t, "line1\nline2\nline3", "plan")
+		m.preEditContent = "line1\nline2\nline3"
+		m.editor.SetContent("line1\nMODIFIED\nline3", true)
+		m.editor.MarkClean()
+
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+
+		if len(m.editor.highlightedLines) != 0 {
+			t.Fatal("reject from preview should clear highlights")
+		}
+		if m.editor.Content() != "line1\nline2\nline3" {
+			t.Fatalf("reject from preview restored %q, want pre-edit content", m.editor.Content())
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "line1\nline2\nline3" {
+			t.Fatalf("reject from preview saved %q, want pre-edit content", string(data))
+		}
+	})
+}
+
+func TestArtifactReview_PreviewDirtyPendingSnapshot(t *testing.T) {
+	m, _ := newTestArtifactReview(t, "# Plan\nupdated", "plan")
+	m.preEditContent = "# Plan\noriginal"
+	m.editor.SetContent("# Plan\nagent update\nlocal draft", true)
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Rendered preview", "[+]", "agent edits pending", "Preview", "Unsaved", "Ctrl+Y: accept edits", "Ctrl+Z: reject edits"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("preview dirty pending view missing %q:\n%s", want, view)
+		}
+	}
+
+	if out := os.Getenv("AGENTIC_ARTIFACT_REVIEW_SNAPSHOT_PATH"); out != "" {
+		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+			t.Fatalf("create snapshot dir: %v", err)
+		}
+		if err := os.WriteFile(out, []byte(view), 0o644); err != nil {
+			t.Fatalf("write snapshot: %v", err)
+		}
 	}
 }
 

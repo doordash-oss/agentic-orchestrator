@@ -1378,6 +1378,9 @@ func (m ArtifactReviewModel) renderFooter() string {
 		}
 		hints = append(hints, "Tab: chat", "Ctrl+D: done", "Esc: back")
 	}
+	if m.editor.Dirty() {
+		hints = append(hints, "Unsaved")
+	}
 	if len(m.editor.highlightedLines) > 0 {
 		hints = append(hints, "Ctrl+Y: accept edits", "Ctrl+Z: reject edits")
 	}

@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"gopkg.in/yaml.v3"
@@ -29,8 +28,6 @@ import (
 // PIDFile aliases the canonical port type; the session package keeps the
 // alias for source compatibility with existing callers.
 type PIDFile = ports.PIDFile
-
-var _ = time.Second // keep time import used elsewhere
 
 // PIDFileName returns the PID file name for a given repo name.
 // Always returns "session-<repoName>.pid".

@@ -215,26 +215,25 @@ type TokenUsageBreakdown struct {
 
 // TurnError contains error details for a failed turn.
 type TurnError struct {
-	Message   string         `json:"message"`
-	ErrorInfo *ErrorInfoType `json:"codexErrorInfo,omitempty"`
+	Message   string          `json:"message"`
+	ErrorInfo *codexErrorInfo `json:"codexErrorInfo,omitempty"`
 }
 
-// ErrorInfoType contains the structured error classification.
-type ErrorInfoType struct {
+type codexErrorInfo struct {
 	Type           string `json:"type"`
 	HttpStatusCode *int   `json:"httpStatusCode,omitempty"`
 	RawKind        string `json:"-"`
 }
 
 // UnmarshalJSON handles the polymorphic codexErrorInfo field.
-func (e *ErrorInfoType) UnmarshalJSON(data []byte) error {
+func (e *codexErrorInfo) UnmarshalJSON(data []byte) error {
 	var s string
 	if json.Unmarshal(data, &s) == nil {
 		e.RawKind = s
 		e.Type = s
 		return nil
 	}
-	type plain ErrorInfoType
+	type plain codexErrorInfo
 	return json.Unmarshal(data, (*plain)(e))
 }
 

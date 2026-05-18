@@ -15,7 +15,6 @@
 package integration
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -351,5 +350,4 @@ func advanceMaster(t *testing.T, tmp, bareRepo, file, content, _ string) {
 	// Push the clone's default branch ref back to bare via direct
 	// fetch (avoids any global pre-push hook).
 	runGit(t, bareRepo, "fetch", clone, defaultBranch+":refs/heads/"+defaultBranch)
-	_ = fmt.Sprintf // keep import live for diagnostic strings
 }

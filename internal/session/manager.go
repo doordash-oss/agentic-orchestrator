@@ -192,7 +192,9 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 			return nil, fmt.Errorf("protocol handshake: %w", err)
 		}
 	} else {
-		// Legacy path (no protocol set): Claude interactive
+		// Legacy no-protocol path is still reached by callers that start a
+		// provider without attaching llm.Protocol; keep the SDK initialize
+		// handshake and initial prompt writes together for that fallback.
 		if err := s.SendInitialize(); err != nil {
 			_ = s.Stop()
 			return nil, fmt.Errorf("sending initialize handshake: %w", err)

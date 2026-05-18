@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -433,7 +432,3 @@ func assertAttr(t *testing.T, s sdktrace.ReadOnlySpan, key, wantVal string) {
 	}
 	t.Errorf("attribute %s not found on span %s", key, s.Name())
 }
-
-// Ensure trace and attribute packages are used (prevent unused import).
-var _ trace.Tracer
-var _ = attribute.Key("test")

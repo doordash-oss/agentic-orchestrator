@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -226,6 +227,80 @@ func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	}
 	if delta.ToolProgress.ToolUseID != "call_1" || delta.ToolProgress.ToolName != "Bash" {
 		t.Fatalf("delta ToolProgress = %+v, want ToolUseID call_1 and Bash", delta.ToolProgress)
+	}
+}
+
+func TestCodexErrorInfoTaxonomyIsPrivate(t *testing.T) {
+	data, err := os.ReadFile("types.go")
+	if err != nil {
+		t.Fatalf("read types.go: %v", err)
+	}
+	if strings.Contains(string(data), "type ErrorInfoType") {
+		t.Fatal("types.go still exports ErrorInfoType; codex error info should be private to TurnError")
+	}
+}
+
+func TestCodexTurnFailedMapsStructuredErrorInfo(t *testing.T) {
+	tests := []struct {
+		name     string
+		infoType string
+		want     string
+	}{
+		{name: "context window", infoType: "ContextWindowExceeded", want: "Context window exceeded"},
+		{name: "usage limit", infoType: "UsageLimitExceeded", want: "Usage limit exceeded"},
+		{name: "server overloaded", infoType: "ServerOverloaded", want: "Server overloaded"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+			params := json.RawMessage(`{
+				"threadId": "thread-1",
+				"turn": {
+					"id": "turn-1",
+					"status": "failed",
+					"error": {
+						"message": "raw failure",
+						"codexErrorInfo": {"type": "` + tt.infoType + `", "httpStatusCode": 429}
+					}
+				}
+			}`)
+
+			msg, ok := p.parseNotification("turn/completed", params)
+			if !ok {
+				t.Fatal("parseNotification returned false, want true")
+			}
+			if msg.Result == nil {
+				t.Fatal("msg.Result is nil, want result message")
+			}
+			if msg.Result.Result != tt.want {
+				t.Errorf("Result.Result = %q, want %q", msg.Result.Result, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexErrorNotificationStringErrorInfoRetainsRawKind(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	params := json.RawMessage(`{
+		"error": {
+			"message": "codex request failed",
+			"codexErrorInfo": "custom_rate_limited"
+		},
+		"willRetry": false
+	}`)
+
+	msg, ok := p.parseNotification("error", params)
+	if !ok {
+		t.Fatal("parseNotification returned false, want true")
+	}
+	if msg.Assistant == nil || len(msg.Assistant.Message.Content) != 1 {
+		t.Fatalf("Assistant content = %+v, want one text block", msg.Assistant)
+	}
+	got := msg.Assistant.Message.Content[0].Text
+	want := "[codex error] codex request failed (custom_rate_limited)"
+	if got != want {
+		t.Errorf("assistant text = %q, want %q", got, want)
 	}
 }
 

@@ -28,9 +28,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// ErrNotImplemented is a legacy sentinel retained for migration-guard tests.
-var ErrNotImplemented = errors.New("not implemented")
-
 const eventChBuffer = 256
 
 // Hooks contains optional callbacks fired at lifecycle points.

@@ -22,8 +22,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-var _ = time.Second // anchor time import; ports.PIDFile exposes time.Time fields
-
 // RecoveryAction and RecoveryItem alias the canonical port types so the
 // session package exposes the same names existing callers use, but the
 // definitions live in ports.

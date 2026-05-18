@@ -206,36 +206,34 @@ func TestOrchestrator_CreateFeature_NilHook(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestOrchestrator_StubMethods
+// TestOrchestrator_NoPlaceholderSentinel
 // ---------------------------------------------------------------------------
 
-// TestOrchestrator_StubMethods asserts the orchestrator has no remaining
-// ErrNotImplemented-returning stubs. This test intentionally exercises an
-// empty list and passes; if a new stub is introduced, wire it into the slice to
-// get a regression guard for free.
-func TestOrchestrator_StubMethods(t *testing.T) {
-	o := orchestrator.New(orchestrator.Deps{}, orchestrator.Hooks{})
-
-	tests := []struct {
-		name string
-		call func(o *orchestrator.Orchestrator) error
-	}{}
-
-	if len(tests) == 0 {
-		t.Log("no remaining ErrNotImplemented stubs on *orchestrator.Orchestrator")
+// TestOrchestrator_NoPlaceholderSentinel asserts the migration-only placeholder
+// sentinel and any direct placeholder returns stay gone.
+func TestOrchestrator_NoPlaceholderSentinel(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "orchestrator", "*.go"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.call(o)
-			if !errors.Is(err, orchestrator.ErrNotImplemented) {
-				t.Errorf("%s returned %v, want ErrNotImplemented", tt.name, err)
-			}
-		})
+	legacyName := strings.Join([]string{"Err", "Not", "Implemented"}, "")
+	var offenders []string
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if strings.Contains(string(data), legacyName) {
+			offenders = append(offenders, path)
+		}
 	}
-
-	// Touch o so Go does not consider the variable unused when the slice is empty.
-	_ = o
+	if len(offenders) > 0 {
+		t.Fatalf("%q sentinel references remain in production files: %v", legacyName, offenders)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -370,15 +368,15 @@ func TestOrchestrator_NoTUIImport(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// T24. TestNoErrNotImplementedMethods
+// T24. TestNoPlaceholderMethods
 //
 // No method on *orchestrator.Orchestrator should have a body that simply
-// returns ErrNotImplemented. Walks each production .go file and parses it with
+// returns a placeholder sentinel. Walks each production .go file and parses it with
 // go/ast to find function declarations whose body is a single return statement
-// returning an identifier named "ErrNotImplemented".
+// returning the legacy placeholder identifier.
 // ---------------------------------------------------------------------------
 
-func TestPhase7_NoErrNotImplementedMethods(t *testing.T) {
+func TestPhase7_NoPlaceholderMethods(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("..", "orchestrator", "*.go"))
 	if err != nil {
 		t.Fatalf("glob: %v", err)
@@ -386,6 +384,7 @@ func TestPhase7_NoErrNotImplementedMethods(t *testing.T) {
 
 	fset := token.NewFileSet()
 	var offenders []string
+	legacyName := strings.Join([]string{"Err", "Not", "Implemented"}, "")
 
 	for _, path := range files {
 		if strings.HasSuffix(path, "_test.go") {
@@ -411,13 +410,13 @@ func TestPhase7_NoErrNotImplementedMethods(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if ident.Name == "ErrNotImplemented" {
+			if ident.Name == legacyName {
 				offenders = append(offenders, fn.Name.Name+" in "+path)
 			}
 		}
 	}
 
 	if len(offenders) > 0 {
-		t.Errorf("found %d ErrNotImplemented-returning methods after Phase 7: %v", len(offenders), offenders)
+		t.Errorf("found %d placeholder-returning methods after Phase 7: %v", len(offenders), offenders)
 	}
 }

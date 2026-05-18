@@ -327,8 +327,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 	if planPath == "" {
 		return "", fmt.Errorf("no plan path on paused cycle for repo %q", repoName)
 	}
-	planContent, err := os.ReadFile(planPath)
-	if err != nil {
+	if _, err := os.ReadFile(planPath); err != nil {
 		return "", fmt.Errorf("read paused cycle plan: %w", err)
 	}
 
@@ -390,7 +389,6 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		Observer:                   pr.Observer,
 	}
 
-	_ = planContent // included in cfg.PlanPath; explicit silencer to keep imports tidy.
 	sm := o.deps.Sessions
 	go func() {
 		result, loopErr := agent.RunImplementationLoop(cfg, sm)

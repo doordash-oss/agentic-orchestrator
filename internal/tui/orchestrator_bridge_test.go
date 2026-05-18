@@ -799,9 +799,6 @@ func TestTUI_ListenForOrchestratorEvents_ReceivesEvent(t *testing.T) {
 	}
 }
 
-// Silence unused-field warnings on fakeOrch fields touched only in later tests.
-var _ = feature.Phase(0)
-
 // ---------------------------------------------------------------------------
 // T1. createFeatureCmd delegates to orchestrator.CreateFeature.
 // ---------------------------------------------------------------------------

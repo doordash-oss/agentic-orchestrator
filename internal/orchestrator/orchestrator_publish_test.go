@@ -123,9 +123,9 @@ func TestOrchestrator_StartPublish_AutoPublishDisabled(t *testing.T) {
 // TestOrchestrator_StartPublish_AutoPublishEnabled
 // ---------------------------------------------------------------------------
 //
-// When publishable + auto-publish, startPublish delegates to publishFn
-// (defaults to o.Publish, which in Phase 4 returns ErrNotImplemented).
-// We use SetPublishFn to confirm the dispatch happens.
+// When publishable + auto-publish, startPublish delegates to publishFn.
+// We use SetPublishFn to confirm the dispatch happens without invoking the
+// full publish path.
 func TestOrchestrator_StartPublish_AutoPublishEnabled(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-auto",

@@ -16,7 +16,6 @@ package session
 
 import (
 	"bytes"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -173,6 +172,3 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 		})
 	}
 }
-
-// sanity-check — keeps fmt used if additional role cases are added.
-var _ = fmt.Sprintf

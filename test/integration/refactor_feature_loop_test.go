@@ -15,7 +15,6 @@
 package integration
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -317,7 +316,6 @@ func TestRefactorFeatureLoop_Integration_3RepoCrossRepoEdit(t *testing.T) {
 			t.Errorf("bare %s missing feature commit history:\n%s", bare, out)
 		}
 	}
-	_ = fmt.Sprintf // keep imports referenced in any error path
 }
 
 // sliceContains returns true if needle is in haystack.

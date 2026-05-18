@@ -49,8 +49,6 @@ const (
 	SessionFailed            = ports.SessionFailed
 )
 
-var _ = fmt.Sprintf // keep fmt import used elsewhere in the package
-
 // criticalAttachSendTimeout is the default bound for blocking forward of Result
 // messages onto attachCh. Without it, a stuck consumer would deadlock
 // readMessages indefinitely; with it, the CLI continues reading after

@@ -15,7 +15,6 @@
 package session
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,7 +114,6 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 		t.Errorf("SessionDoneMsg.Phase = %v, want %v", phase, feature.PhaseImplement)
 	}
 	t.Logf("received %d SDK events from rapid-fire script", count)
-	_ = fmt.Sprintf("%v", sess)
 }
 
 func TestSessionStatusTransitions(t *testing.T) {
@@ -267,12 +265,11 @@ func TestStartSessionWithInitialPrompt(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	scriptPath := filepath.Join(tmpDir, "initial-prompt.sh")
-	// Script reads a JSON line from stdin. If it receives input, it outputs
-	// "prompt_received". If stdin is empty/closed, it outputs "no_input".
-	// This verifies that InitialPrompt is delivered via stdin.
+	// Script reads the legacy no-protocol initialize handshake and then the
+	// initial user prompt from stdin.
 	os.WriteFile(scriptPath, []byte(`#!/bin/bash
 echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
-if read -t 2 line; then
+if read -t 2 init_line && read -t 2 prompt_line && [[ "$init_line" == *'"subtype":"initialize"'* ]] && [[ "$prompt_line" == *'"content":"Hello from initial prompt"'* ]]; then
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"prompt_received"}]}}'
 else
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"no_input"}]}}'

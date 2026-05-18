@@ -15,8 +15,6 @@
 package feature
 
 import (
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -619,16 +617,3 @@ func TestStore_CleanupOrphanRuns_EdgeCases(t *testing.T) {
 
 // ptrTime returns a pointer to a time.Time value, for use in struct literals.
 func ptrTime(t time.Time) *time.Time { return &t }
-
-// assertErrorsIs is a tiny wrapper to keep the cleanup tests concise when
-// asserting against wrapped errors.
-func assertErrorsIs(t *testing.T, got, target error) {
-	t.Helper()
-	if !errors.Is(got, target) {
-		t.Errorf("errors.Is(%v, %v) = false", got, target)
-	}
-}
-
-// Unused symbols suppress unused-import hints when tests add/remove assertions.
-var _ = assertErrorsIs
-var _ = fmt.Errorf

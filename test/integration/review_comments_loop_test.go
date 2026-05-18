@@ -16,7 +16,6 @@ package integration
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -397,6 +396,4 @@ func TestReviewCommentsLoop_Integration_3RepoTwoWithComments(t *testing.T) {
 			t.Errorf("bare %s missing the address-comments commit on %s:\n%s", bare, branch, out)
 		}
 	}
-
-	_ = fmt.Sprintf // keep import live
 }

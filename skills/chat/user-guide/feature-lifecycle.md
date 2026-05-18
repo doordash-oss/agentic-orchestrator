@@ -113,6 +113,8 @@ Checkpoints pause the pipeline between phases so you can review artifacts before
 
 You can toggle any applicable checkpoint in the feature creation wizard (Step 4) or in `config.yaml`.
 
+Medium only shows Plan Review and Manual Publish because it starts at planning and does not run Inquiry, Research, or Brainstorm. Large and Moonshot run those early phases, so Inquiry Review, Research Review, and Design Review are live gates in those profiles and pause before their target phases when enabled.
+
 ## Rewind and Retry
 
 Press `Ctrl+R` on a feature to rewind it to a previous phase. This resets the feature's state and re-runs from the selected phase. Useful when you want to change the plan or re-run research after new context.

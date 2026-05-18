@@ -1847,12 +1847,12 @@ func TestObserver_ConfigChanged_WritesEventsJSONL(t *testing.T) {
 	before := feature.ConfigSnapshot{
 		Models:      config.ModelConfig{Research: "old-research", Planning: "old-planning"},
 		Inquireness: feature.InquirenessMedium,
-		Checkpoints: feature.Checkpoints{PlanReview: true},
+		Checkpoints: feature.Checkpoints{ResearchReview: true, PlanReview: true},
 	}
 	after := feature.ConfigSnapshot{
 		Models:      config.ModelConfig{Research: "new-research", Planning: "new-planning"},
 		Inquireness: feature.InquirenessHigh,
-		Checkpoints: feature.Checkpoints{InquiryReview: true, ManualPublish: true},
+		Checkpoints: feature.Checkpoints{InquiryReview: true, DesignReview: true, ManualPublish: true},
 	}
 
 	obs.ConfigChanged(sc, before, after)
@@ -1897,15 +1897,30 @@ func TestObserver_ConfigChanged_WritesEventsJSONL(t *testing.T) {
 	}
 
 	beforeCheckpoints := beforeMap["checkpoints"].(map[string]any)
-	if beforeCheckpoints["plan_review"] != true {
-		t.Errorf("before.checkpoints.plan_review = %v, want true", beforeCheckpoints["plan_review"])
+	wantBeforeCheckpoints := map[string]bool{
+		"inquiry_review":  false,
+		"research_review": true,
+		"design_review":   false,
+		"plan_review":     true,
+		"manual_publish":  false,
+	}
+	for key, want := range wantBeforeCheckpoints {
+		if beforeCheckpoints[key] != want {
+			t.Errorf("before.checkpoints.%s = %v, want %v", key, beforeCheckpoints[key], want)
+		}
 	}
 	afterCheckpoints := afterMap["checkpoints"].(map[string]any)
-	if afterCheckpoints["inquiry_review"] != true {
-		t.Errorf("after.checkpoints.inquiry_review = %v, want true", afterCheckpoints["inquiry_review"])
+	wantAfterCheckpoints := map[string]bool{
+		"inquiry_review":  true,
+		"research_review": false,
+		"design_review":   true,
+		"plan_review":     false,
+		"manual_publish":  true,
 	}
-	if afterCheckpoints["manual_publish"] != true {
-		t.Errorf("after.checkpoints.manual_publish = %v, want true", afterCheckpoints["manual_publish"])
+	for key, want := range wantAfterCheckpoints {
+		if afterCheckpoints[key] != want {
+			t.Errorf("after.checkpoints.%s = %v, want %v", key, afterCheckpoints[key], want)
+		}
 	}
 }
 

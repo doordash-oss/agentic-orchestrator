@@ -551,9 +551,8 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 			return fmt.Errorf("reload feature: %w", getErr)
 		}
 		if ff.Checkpoints.PlanReview {
-			// Route through review gate.
-			if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
-				return fmt.Errorf("mark needs plan review: %w", err)
+			if err := o.enterPlanReviewGate(featureID); err != nil {
+				return err
 			}
 			o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 			phase := feature.PhasePlan
@@ -595,8 +594,8 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 	// StartRoadmapPhaseImplementation → populate execution plan → start
 	// implementation.
 	if f.Checkpoints.PlanReview {
-		if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
-			return fmt.Errorf("mark needs plan review: %w", err)
+		if err := o.enterPlanReviewGate(featureID); err != nil {
+			return err
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 		phase := feature.PhasePlan
@@ -641,8 +640,8 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 //
 // f is unused but retained for symmetry with the other completion handlers.
 func (o *Orchestrator) onPlanNeedsReview(featureID string, _ *feature.Feature) error {
-	if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
-		return fmt.Errorf("mark needs plan review: %w", err)
+	if err := o.enterPlanReviewGate(featureID); err != nil {
+		return err
 	}
 	o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 	phase := feature.PhasePlan
@@ -653,6 +652,21 @@ func (o *Orchestrator) onPlanNeedsReview(featureID string, _ *feature.Feature) e
 	})
 	if o.hooks.OnReviewRequired != nil {
 		o.hooks.OnReviewRequired(featureID, phase)
+	}
+	return nil
+}
+
+func (o *Orchestrator) enterPlanReviewGate(featureID string) error {
+	if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
+		return fmt.Errorf("mark needs plan review: %w", err)
+	}
+	target := feature.PhaseImplement
+	if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		f.PendingReviewPhase = &target
+		f.IsRewind = false
+		return nil
+	}); err != nil {
+		return fmt.Errorf("record pending plan review target: %w", err)
 	}
 	return nil
 }

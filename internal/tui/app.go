@@ -3182,11 +3182,11 @@ func (m AppModel) openReviewAttention(f *feature.Feature) (tea.Model, tea.Cmd) {
 	if f.PendingReviewPhase != nil && f.IsRewind {
 		return m, m.startRewindReviewSessionCmd(f.ID, *f.PendingReviewPhase, false)
 	}
-	if f.PendingReviewPhase != nil && !f.IsRewind {
-		return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
-	}
 	if f.Status == feature.StatusPlanNeedsReview {
 		return m, m.startPlanReviewSessionCmd(f.ID, false)
+	}
+	if f.PendingReviewPhase != nil && !f.IsRewind {
+		return m, m.gateReviewStartCmd(f.ID, *f.PendingReviewPhase, false)
 	}
 	return m, nil
 }

@@ -771,6 +771,9 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Approved_Gate(t *testing.T) {
 	if reviewPhase != feature.PhasePlan {
 		t.Errorf("OnReviewRequired phase = %v, want PhasePlan", reviewPhase)
 	}
+	if f.PendingReviewPhase == nil || *f.PendingReviewPhase != feature.PhaseImplement {
+		t.Errorf("PendingReviewPhase = %v, want PhaseImplement", f.PendingReviewPhase)
+	}
 	events := drainEvents(o)
 	if !hasEventType(events, ports.ReviewRequired) {
 		t.Error("expected ReviewRequired event")
@@ -1644,6 +1647,81 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_PhaseDirCreated(t *testing.T
 	// Artifact recorded on feature.
 	if path := f.Artifacts["inquire"]; path == "" {
 		t.Errorf("f.Artifacts[inquire] not recorded after inquire completion")
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_EarlyReviewGates_RecordPendingTarget(t *testing.T) {
+	tests := []struct {
+		name        string
+		phaseCase   artifactPhaseCase
+		checkpoints feature.Checkpoints
+		wantTarget  feature.Phase
+		wantStatus  feature.Status
+	}{
+		{
+			name:        "inquiry_review_blocks_research",
+			phaseCase:   artifactPhaseCase{"inquire", feature.PhaseInquire, "inquire", feature.StatusInquiring},
+			checkpoints: feature.Checkpoints{InquiryReview: true},
+			wantTarget:  feature.PhaseResearch,
+			wantStatus:  feature.StatusInquiryNeedsReview,
+		},
+		{
+			name:        "research_review_blocks_brainstorm",
+			phaseCase:   artifactPhaseCase{"research", feature.PhaseResearch, "research", feature.StatusResearching},
+			checkpoints: feature.Checkpoints{ResearchReview: true},
+			wantTarget:  feature.PhaseBrainstorm,
+			wantStatus:  feature.StatusResearchNeedsReview,
+		},
+		{
+			name:        "design_review_blocks_plan",
+			phaseCase:   artifactPhaseCase{"brainstorm", feature.PhaseBrainstorm, "brainstorm", feature.StatusBrainstorming},
+			checkpoints: feature.Checkpoints{DesignReview: true},
+			wantTarget:  feature.PhasePlan,
+			wantStatus:  feature.StatusDesignNeedsReview,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o, f, store := newArtifactPhaseOrchestratorFixture(t, tt.phaseCase)
+			if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+				ff.Pipeline = feature.PipelineLarge
+				ff.Checkpoints = tt.checkpoints
+				return nil
+			}); err != nil {
+				t.Fatalf("set checkpoints: %v", err)
+			}
+			writePhaseComplete(t, store.BaseDir, f, tt.phaseCase.phaseKey)
+			writePhaseMarkdown(t, store.BaseDir, f, tt.phaseCase.phaseKey, tt.phaseCase.phaseKey+".md")
+
+			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+				Phase:   tt.phaseCase.phase,
+				Success: true,
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion: %v", err)
+			}
+
+			reloaded := loadStoredFeature(t, store, f.ID)
+			if reloaded.Status != tt.wantStatus {
+				t.Errorf("Status = %v, want %v", reloaded.Status, tt.wantStatus)
+			}
+			if reloaded.PendingReviewPhase == nil || *reloaded.PendingReviewPhase != tt.wantTarget {
+				t.Errorf("PendingReviewPhase = %v, want %v", reloaded.PendingReviewPhase, tt.wantTarget)
+			}
+
+			var sawReviewRequired bool
+			for _, ev := range drainEvents(o) {
+				if ev.Type == ports.ReviewRequired && ev.Phase == tt.wantTarget {
+					sawReviewRequired = true
+				}
+				if ev.Type == ports.PhaseStarted && ev.Phase == tt.wantTarget {
+					t.Errorf("target phase %s started despite enabled review gate", tt.wantTarget)
+				}
+			}
+			if !sawReviewRequired {
+				t.Errorf("missing ReviewRequired event for %s", tt.wantTarget)
+			}
+		})
 	}
 }
 

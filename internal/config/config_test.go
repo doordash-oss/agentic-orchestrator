@@ -287,6 +287,42 @@ func TestLoadConfigWithExplicitManualPublishFalse(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesAllCheckpointKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte(`defaults:
+  checkpoints:
+    inquiry_review: true
+    research_review: true
+    design_review: true
+    plan_review: true
+    manual_publish: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	want := Checkpoints{
+		InquiryReview:  true,
+		ResearchReview: true,
+		DesignReview:   true,
+		PlanReview:     true,
+		ManualPublish:  false,
+	}
+	if got := cfg.Defaults.Checkpoints; got.InquiryReview != want.InquiryReview ||
+		got.ResearchReview != want.ResearchReview ||
+		got.DesignReview != want.DesignReview ||
+		got.PlanReview != want.PlanReview ||
+		got.ManualPublish != want.ManualPublish {
+		t.Errorf("Defaults.Checkpoints = %+v, want %+v", got, want)
+	}
+}
+
 func TestLoadConfigWithoutCheckpointsSectionDefaultsToManualPublish(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -1263,7 +1299,13 @@ func TestRepoConfigPipelineGatesRoundTrip(t *testing.T) {
 	original.Repos["my-repo"] = RepoConfig{
 		Path: "/tmp/my-repo",
 		PipelineGates: map[string]Checkpoints{
-			"medium": {ManualPublish: false},
+			"medium": {
+				InquiryReview:  true,
+				ResearchReview: true,
+				DesignReview:   true,
+				PlanReview:     true,
+				ManualPublish:  false,
+			},
 		},
 	}
 
@@ -1286,6 +1328,18 @@ func TestRepoConfigPipelineGatesRoundTrip(t *testing.T) {
 	medium, ok := rc.PipelineGates["medium"]
 	if !ok {
 		t.Fatal("expected 'medium' key in PipelineGates")
+	}
+	if !medium.InquiryReview {
+		t.Error("expected InquiryReview=true for medium pipeline gate")
+	}
+	if !medium.ResearchReview {
+		t.Error("expected ResearchReview=true for medium pipeline gate")
+	}
+	if !medium.DesignReview {
+		t.Error("expected DesignReview=true for medium pipeline gate")
+	}
+	if !medium.PlanReview {
+		t.Error("expected PlanReview=true for medium pipeline gate")
 	}
 	if medium.ManualPublish {
 		t.Error("expected ManualPublish=false for medium pipeline gate")

@@ -303,7 +303,9 @@ func reviewAttentionSummary(f *feature.Feature) string {
 		if f.IsRewind {
 			return fmt.Sprintf("Rewind to %s needs review", f.PendingReviewPhase.String())
 		}
-		return fmt.Sprintf("%s gate needs review", f.PendingReviewPhase.String())
+		if f.Status != feature.StatusPlanNeedsReview {
+			return fmt.Sprintf("%s gate needs review", f.PendingReviewPhase.String())
+		}
 	}
 	switch f.Status {
 	case feature.StatusPlanNeedsReview:
@@ -335,10 +337,12 @@ func reviewAttentionMode(f *feature.Feature) string {
 		if f.IsRewind {
 			return "rewind"
 		}
-		return "gate"
 	}
 	if f.Status == feature.StatusPlanNeedsReview {
 		return "plan"
+	}
+	if f.PendingReviewPhase != nil {
+		return "gate"
 	}
 	return "artifact"
 }

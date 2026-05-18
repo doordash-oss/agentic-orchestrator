@@ -28,6 +28,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 	t.Parallel()
 
 	reviewPhase := feature.PhaseImplement
+	researchPhase := feature.PhaseResearch
 	tests := []struct {
 		name        string
 		f           *feature.Feature
@@ -100,6 +101,28 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 			wantKind:    attentionReview,
 			wantCTA:     "Review",
 			wantSummary: "Phase 2 plan needs review",
+		},
+		{
+			name: "plan review keeps plan attention even with pending target",
+			f: &feature.Feature{
+				Status:              feature.StatusPlanNeedsReview,
+				CurrentRoadmapPhase: 1,
+				TotalRoadmapPhases:  1,
+				PendingReviewPhase:  &reviewPhase,
+			},
+			wantKind:    attentionReview,
+			wantCTA:     "Review",
+			wantSummary: "Plan needs review",
+		},
+		{
+			name: "early review gate names pending target",
+			f: &feature.Feature{
+				Status:             feature.StatusInquiryNeedsReview,
+				PendingReviewPhase: &researchPhase,
+			},
+			wantKind:    attentionReview,
+			wantCTA:     "Review",
+			wantSummary: "Research gate needs review",
 		},
 		{
 			name:     "created feature watches",

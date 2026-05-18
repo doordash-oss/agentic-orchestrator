@@ -66,7 +66,15 @@ defaults:
 | `plan_review` | Implementation phase | `false` |
 | `manual_publish` | Publish step | `true` |
 
-When a feature is created, these defaults are combined with the pipeline profile's defaults (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints-review-gates)). Individual checkpoints can be toggled per-feature in the creation wizard.
+When a feature is created, these defaults are combined with the pipeline profile's defaults (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints-review-gates)). Individual checkpoints can be toggled per-feature in the creation wizard when they apply to the selected pipeline.
+
+| Checkpoint | Medium | Large | Moonshot | Why |
+|------------|--------|-------|----------|-----|
+| `inquiry_review` | Not shown | Available | Available | Medium skips the Inquiry phase. |
+| `research_review` | Not shown | Available | Available | Medium skips the Research phase. |
+| `design_review` | Not shown | Available | Available | Medium skips the Brainstorm/Design step. |
+| `plan_review` | Available | Available | Available | Every profile runs planning before implementation. |
+| `manual_publish` | Available | Available | Available | Every profile can pause before publishing. |
 
 ## Iteration Limits
 
@@ -116,6 +124,8 @@ repos:
     path: /Users/you/Projects/my-project
     pipeline_gates:
       moonshot:
+        inquiry_review: true
+        research_review: true
         design_review: true
         plan_review: true
         manual_publish: true
@@ -123,7 +133,7 @@ repos:
 
 Named repositories with optional per-pipeline checkpoint overrides. Repos are auto-registered when selected in the feature creation wizard.
 
-The `pipeline_gates` map is keyed by pipeline profile name and overrides the default checkpoints for that profile when creating features in this repo.
+The `pipeline_gates` map is keyed by pipeline profile name and overrides the default checkpoints for that profile when creating features in this repo. Large and Moonshot keep all early review gate keys; Medium filters them from the wizard and saved feature state because that profile does not run the early phases.
 
 ## Pipeline Preferences
 

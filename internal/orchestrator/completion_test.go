@@ -379,21 +379,24 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Category B — Artifact phase completion (Inquire / Research / Brainstorm)
+// Category B — Artifact phase completion (Inquire / Research / Design)
 // ---------------------------------------------------------------------------
 
 type artifactPhaseCase struct {
-	name     string
-	phase    feature.Phase
-	phaseKey string
-	status   feature.Status
+	name        string
+	phase       feature.Phase
+	phaseKey    string
+	artifactKey string
+	status      feature.Status
 }
 
 func artifactPhaseCases() []artifactPhaseCase {
 	return []artifactPhaseCase{
-		{"inquire", feature.PhaseInquire, "inquire", feature.StatusInquiring},
-		{"research", feature.PhaseResearch, "research", feature.StatusResearching},
-		{"brainstorm", feature.PhaseBrainstorm, "brainstorm", feature.StatusBrainstorming},
+		{"inquire", feature.PhaseInquire, "inquire", "inquire", feature.StatusInquiring},
+		{"research", feature.PhaseResearch, "research", "research", feature.StatusResearching},
+		// The Design phase keeps the legacy "design" on-disk subdir for
+		// compat but persists under the canonical Design artifact key.
+		{"design", feature.PhaseDesign, "design", feature.DesignArtifactKey, feature.StatusDesigning},
 	}
 }
 
@@ -438,9 +441,9 @@ func newArtifactPhaseOrchestratorFixture(t *testing.T, tc artifactPhaseCase) (*o
 			return nil
 		})
 	}
-	lc.CompleteBrainstormFn = func(id string) error {
+	lc.CompleteDesignFn = func(id string) error {
 		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusBrainstormReady
+			ff.Status = feature.StatusDesignReady
 			return nil
 		})
 	}
@@ -575,16 +578,16 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseSuccessRecordsRegistryA
 			}
 
 			reloaded := loadStoredFeature(t, store, f.ID)
-			if got := reloaded.Artifacts[tc.phaseKey]; got != newPath {
-				t.Fatalf("Artifacts[%q] = %q, want %q", tc.phaseKey, got, newPath)
+			if got := reloaded.Artifacts[tc.artifactKey]; got != newPath {
+				t.Fatalf("Artifacts[%q] = %q, want %q", tc.artifactKey, got, newPath)
 			}
 		})
 	}
 }
 
-// Inquire success: advances to next phase. Brainstorm would be the next
-// phase for PipelineMoonshot (KB→Inquire→Research→Brainstorm), but on
-// PipelineLarge (no brainstorm) it is Research.
+// Inquire success: advances to next phase. Design would be the next
+// phase for PipelineMoonshot (KB→Inquire→Research→Design), but on
+// PipelineLarge (no design) it is Research.
 func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.T) {
 	stateDir := t.TempDir()
 	f := &feature.Feature{

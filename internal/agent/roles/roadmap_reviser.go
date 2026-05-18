@@ -27,7 +27,7 @@ var roadmapReviserRoleSpec = RoleSpec{
 	Role:         RolePlanRoadmapReviser,
 	SkillName:    "revise-roadmap",
 	UserTemplate: "roadmap_revision.user",
-	Required:     []feature.Phase{feature.PhaseBrainstorm},
+	Required:     []feature.Phase{feature.PhaseDesign},
 	OutputRoots: []OutputRootSpec{
 		artifactDirOutputRoot("Shared roadmap artifact root. Revisions update the roadmap markdown here across attempts."),
 		attemptDirOutputRoot("Active roadmap revision attempt directory. Debug prompts, attempt metadata, validator output, and phase_complete are written here."),

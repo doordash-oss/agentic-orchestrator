@@ -892,8 +892,8 @@ func TestTUIBoundary_RestartPhaseCmd_NoStoreModifyOrSessionWalk(t *testing.T) {
 	if strings.Contains(body, "m.orchestrator.TransitionTo(") {
 		t.Errorf("restartPhaseCmd must not call TransitionTo directly — orchestrator.RestartPhase owns the phase/status transitions")
 	}
-	if strings.Contains(body, "m.orchestrator.SetBrainstormReady(") {
-		t.Errorf("restartPhaseCmd must not call SetBrainstormReady directly — orchestrator.RestartPhase handles brainstorm restart")
+	if strings.Contains(body, "m.orchestrator.SetDesignReady(") {
+		t.Errorf("restartPhaseCmd must not call SetDesignReady directly — orchestrator.RestartPhase handles design restart")
 	}
 	if !strings.Contains(body, "m.orchestrator.RestartPhase(") {
 		t.Errorf("restartPhaseCmd must delegate to orchestrator.RestartPhase — that is the single restart entrypoint")
@@ -965,7 +965,7 @@ func TestTUIBoundary_GateReviewStartCmd_DelegatesToOrchestrator(t *testing.T) {
 		bannedArtifactKeys := []string{
 			`resolvePhaseArtifactPath(f, "inquire")`,
 			`resolvePhaseArtifactPath(f, "research")`,
-			`resolvePhaseArtifactPath(f, "brainstorm")`,
+			`resolvePhaseArtifactPath(f, "design")`,
 			`resolvePhaseArtifactPath(f, "roadmap")`,
 			`resolvePhaseArtifactPath(f, "plan")`,
 		}
@@ -992,7 +992,7 @@ func TestTUIBoundary_RewindReviewStartCmd_DelegatesToOrchestrator(t *testing.T) 
 	for _, b := range []string{
 		`resolvePhaseArtifactPath(f, "inquire")`,
 		`resolvePhaseArtifactPath(f, "research")`,
-		`resolvePhaseArtifactPath(f, "brainstorm")`,
+		`resolvePhaseArtifactPath(f, "design")`,
 		`resolvePhaseArtifactPath(f, "plan")`,
 	} {
 		if strings.Contains(body, b) {

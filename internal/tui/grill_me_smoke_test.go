@@ -182,7 +182,7 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 				t.Errorf("qa-answers.md was not written from session QALog.\n--- got ---\n%s\n--- want ---\n%s", got, grillMeSmokeHarnessQAFile)
 			}
 
-			// (g) Downstream Brainstorm consumes the path via
+			// (g) Downstream Design consumes the path via
 			// collectQAFilePaths (refPrefix is empty for non-refactor
 			// features). HandlePhaseCompletion routed through the
 			// orchestrator's stateDir helper, so the same store/PhaseRunner

@@ -28,16 +28,16 @@ func TestBuildRoadmapPrompt(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/brainstorm.md", nil, KBInfo{
+	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil, KBInfo{
 		IndexPath: "/kb/index.md",
 		RootDir:   "/kb/",
 	})
 
-	if !strings.Contains(prompt, "Design Document: /path/to/brainstorm.md") {
-		t.Error("prompt should contain Design Document line with brainstorm path")
+	if !strings.Contains(prompt, "Design Document: /path/to/design.md") {
+		t.Error("prompt should contain Design Document line with design path")
 	}
 	// Feature name/description are sourced from the design doc when the
-	// brainstorm artifact is present, so they MUST be omitted from the
+	// design artifact is present, so they MUST be omitted from the
 	// roadmap prompt — keeping them creates two competing sources of truth.
 	if strings.Contains(prompt, "Test Feature") {
 		t.Error("prompt should not contain feature name when design doc is present")
@@ -59,7 +59,7 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 		Name:        "Dark Mode",
 		Description: "Add dark theme support",
 	}
-	prompt := BuildRoadmapPrompt(f, "/skills", "/guidelines", "/path/to/brainstorm.md", nil, KBInfo{
+	prompt := BuildRoadmapPrompt(f, "/skills", "/guidelines", "/path/to/design.md", nil, KBInfo{
 		Name:      "agentic",
 		IndexPath: "/kb/agentic/index.md",
 		RootDir:   "/kb/agentic",
@@ -76,7 +76,7 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 			t.Fatalf("BuildRoadmapPrompt() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
 		}
 	}
-	if !strings.Contains(prompt, "Design Document: /path/to/brainstorm.md") {
+	if !strings.Contains(prompt, "Design Document: /path/to/design.md") {
 		t.Fatalf("BuildRoadmapPrompt() missing per-call design path:\n%s", prompt)
 	}
 }
@@ -119,12 +119,12 @@ func TestPlanningRevisionPromptsLeaveRoleSpecOwnedContentToSystemPrompt(t *testi
 	}{
 		{
 			name:      "roadmap revision",
-			prompt:    BuildRoadmapRevisionPrompt(f, "/skills", "/roadmap.md", "/prev.md", "Fix scope", "/brainstorm.md", 2, nil),
+			prompt:    BuildRoadmapRevisionPrompt(f, "/skills", "/roadmap.md", "/prev.md", "Fix scope", "/design.md", 2, nil),
 			skillPath: "/skills/revise-roadmap/SKILL.md",
 		},
 		{
 			name:      "phase plan revision",
-			prompt:    BuildPhasePlanRevisionPrompt(f, "/skills", "/phase-plan.md", "Fix scope", "/brainstorm.md", phase, 2, nil),
+			prompt:    BuildPhasePlanRevisionPrompt(f, "/skills", "/phase-plan.md", "Fix scope", "/design.md", phase, 2, nil),
 			skillPath: "/skills/revise-phase-plan/SKILL.md",
 		},
 	}
@@ -138,10 +138,10 @@ func TestPlanningRevisionPromptsLeaveRoleSpecOwnedContentToSystemPrompt(t *testi
 					t.Fatalf("%s prompt contains RoleSpec-owned content %q:\n%s", tt.name, forbidden, tt.prompt)
 				}
 			}
-			for _, want := range []string{"/brainstorm.md", "Fix scope"} {
-				if want == "/brainstorm.md" {
+			for _, want := range []string{"/design.md", "Fix scope"} {
+				if want == "/design.md" {
 					if strings.Contains(tt.prompt, want) {
-						t.Fatalf("%s prompt unexpectedly includes brainstorm reference %q:\n%s", tt.name, want, tt.prompt)
+						t.Fatalf("%s prompt unexpectedly includes design reference %q:\n%s", tt.name, want, tt.prompt)
 					}
 					continue
 				}
@@ -160,14 +160,14 @@ func TestBuildRoadmapPrompt_Medium(t *testing.T) {
 		Inquireness: feature.InquirenessHigh,
 	}
 
-	// Medium: no brainstorm artifact — feature description must be in prompt
+	// Medium: no design artifact — feature description must be in prompt
 	prompt := BuildRoadmapPrompt(f, "", "", "", nil)
 
 	if !strings.Contains(prompt, "Medium Feature") {
 		t.Error("prompt should contain feature name")
 	}
 	if !strings.Contains(prompt, "Build a new widget") {
-		t.Error("prompt should contain feature description when no brainstorm artifact")
+		t.Error("prompt should contain feature description when no design artifact")
 	}
 	if strings.Contains(prompt, "Design Document") {
 		t.Error("prompt should not contain Design Document section without artifact")
@@ -206,7 +206,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/brainstorm.md", nil)
+		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
 		if !strings.Contains(prompt, "Target Repositories") {
 			t.Error("expected 'Target Repositories' section")
 		}
@@ -225,7 +225,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/brainstorm.md", nil)
+		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
 		if strings.Contains(prompt, "execution-order.yaml") {
 			t.Error("roadmap prompt should not mention execution-order.yaml")
 		}
@@ -238,7 +238,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 			Name:  "test-feature",
 			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a"}},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/brainstorm.md", nil)
+		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
 		if strings.Contains(prompt, "Target Repositories") {
 			t.Error("single-repo should not have Target Repositories section")
 		}
@@ -251,7 +251,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/brainstorm.md", nil)
+		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
 		if !strings.Contains(prompt, "/worktree/a") {
 			t.Error("expected worktree path for repo-a")
 		}
@@ -335,7 +335,7 @@ func TestBuildRoadmapPrompt_WithQAFiles(t *testing.T) {
 	}
 
 	qaFiles := []string{"/state/feat/inquire/qa-answers.md", "/state/feat/research/qa-answers.md"}
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/brainstorm.md", qaFiles)
+	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", qaFiles)
 
 	if !strings.Contains(prompt, "User Decisions") {
 		t.Error("prompt should contain User Decisions section when QA files present")
@@ -357,7 +357,7 @@ func TestBuildRoadmapPrompt_NoQAFiles(t *testing.T) {
 		Description: "A test feature",
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/brainstorm.md", nil)
+	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil)
 
 	if strings.Contains(prompt, "User Decisions") {
 		t.Error("prompt should not contain User Decisions section when no QA files")
@@ -380,13 +380,13 @@ func TestBuildPhasePlanPrompt_WithQAFiles(t *testing.T) {
 		Type:   "tracer-bullet",
 	}
 
-	qaFiles := []string{"/state/feat/brainstorm/qa-answers.md"}
+	qaFiles := []string{"/state/feat/design/qa-answers.md"}
 	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, qaFiles)
 
 	if !strings.Contains(prompt, "User Decisions") {
 		t.Errorf("BuildPhasePlanPrompt(...) missing User Decisions section")
 	}
-	if !strings.Contains(prompt, "/state/feat/brainstorm/qa-answers.md") {
+	if !strings.Contains(prompt, "/state/feat/design/qa-answers.md") {
 		t.Errorf("BuildPhasePlanPrompt(...) missing Q&A file path %q", qaFiles[0])
 	}
 	if !strings.Contains(prompt, "do not re-ask") {

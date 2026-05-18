@@ -19,7 +19,7 @@ import (
 	"testing"
 )
 
-func TestBuildFinalReviewPrompt_DoesNotEmitBrainstormBlock(t *testing.T) {
+func TestBuildFinalReviewPrompt_DoesNotEmitDesignBlock(t *testing.T) {
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
 		FeatureDescription:     "Build a thing",
 		ExitCriteria:           "tests pass",
@@ -28,19 +28,19 @@ func TestBuildFinalReviewPrompt_DoesNotEmitBrainstormBlock(t *testing.T) {
 		VerificationPath:       "/tmp/v.yaml",
 		Iteration:              1,
 		RoadmapPath:            "/tmp/roadmap.md",
-		BrainstormArtifactPath: "/tmp/brainstorm.md",
+		DesignArtifactPath: "/tmp/design.md",
 		FeedbackPath:           "/tmp/feedback.md",
 	})
-	if strings.Contains(prompt, "Brainstorm Reference") {
-		t.Errorf("final review prompt unexpectedly includes brainstorm block")
+	if strings.Contains(prompt, "Design Reference") {
+		t.Errorf("final review prompt unexpectedly includes design block")
 	}
-	if strings.Contains(prompt, "/tmp/brainstorm.md") {
-		t.Errorf("final review prompt unexpectedly includes brainstorm path")
+	if strings.Contains(prompt, "/tmp/design.md") {
+		t.Errorf("final review prompt unexpectedly includes design path")
 	}
 }
 
 // TestBuildFinalReviewPrompt_NoPathNoBlock ensures backward compatibility:
-// when no brainstorm path is supplied, no block is emitted and the prompt
+// when no design path is supplied, no block is emitted and the prompt
 // starts at "# Review Context" as before.
 func TestBuildFinalReviewPrompt_NoPathNoBlock(t *testing.T) {
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
@@ -49,8 +49,8 @@ func TestBuildFinalReviewPrompt_NoPathNoBlock(t *testing.T) {
 		Iteration:          1,
 		FeedbackPath:       "/tmp/feedback.md",
 	})
-	if strings.Contains(prompt, "Brainstorm Reference") {
-		t.Errorf("final review prompt unexpectedly includes brainstorm block when path is empty")
+	if strings.Contains(prompt, "Design Reference") {
+		t.Errorf("final review prompt unexpectedly includes design block when path is empty")
 	}
 	if !strings.HasPrefix(prompt, "# Review Context") {
 		t.Errorf("final review prompt header changed; first 40 chars: %q", prompt[:min(40, len(prompt))])
@@ -76,19 +76,19 @@ func TestBuildFinalReviewPromptLeavesOutputContractToRoleSpec(t *testing.T) {
 	}
 }
 
-func TestBuildFinalFixPrompt_DoesNotEmitBrainstormBlock(t *testing.T) {
+func TestBuildFinalFixPrompt_DoesNotEmitDesignBlock(t *testing.T) {
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
 		Feedback:               "fix this",
 		ExitCriteria:           "tests pass",
 		IterDir:                "/tmp/iter",
 		Iteration:              1,
-		BrainstormArtifactPath: "/tmp/brainstorm.md",
+		DesignArtifactPath: "/tmp/design.md",
 	})
-	if strings.Contains(prompt, "Brainstorm Reference") {
-		t.Errorf("final fix prompt unexpectedly includes brainstorm block")
+	if strings.Contains(prompt, "Design Reference") {
+		t.Errorf("final fix prompt unexpectedly includes design block")
 	}
-	if strings.Contains(prompt, "/tmp/brainstorm.md") {
-		t.Errorf("final fix prompt unexpectedly includes brainstorm path")
+	if strings.Contains(prompt, "/tmp/design.md") {
+		t.Errorf("final fix prompt unexpectedly includes design path")
 	}
 }
 
@@ -118,7 +118,7 @@ func TestBuildFinalFixPrompt_NoPathNoBlock(t *testing.T) {
 		ExitCriteria: "tests pass",
 		Iteration:    1,
 	})
-	if strings.Contains(prompt, "Brainstorm Reference") {
-		t.Errorf("final fix prompt unexpectedly includes brainstorm block when path is empty")
+	if strings.Contains(prompt, "Design Reference") {
+		t.Errorf("final fix prompt unexpectedly includes design block when path is empty")
 	}
 }

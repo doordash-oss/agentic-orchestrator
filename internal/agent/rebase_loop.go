@@ -268,7 +268,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		StateDir:                   stateDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
-		BrainstormArtifactPath:     cfg.Feature.Artifacts["brainstorm"],
+		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,

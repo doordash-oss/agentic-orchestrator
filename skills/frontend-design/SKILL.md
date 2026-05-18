@@ -16,7 +16,7 @@ Start with [playbook/index.md](playbook/index.md) to pick files by surface and p
 
 | Phase | Read |
 |-------|------|
-| Brainstorm / Research | `foundations.md`, `interaction-and-trust.md`, `platforms-and-adaptation.md`, `accessibility-and-inclusion.md` |
+| Design / Research | `foundations.md`, `interaction-and-trust.md`, `platforms-and-adaptation.md`, `accessibility-and-inclusion.md` |
 | Plan | `foundations.md`, `accessibility-and-inclusion.md`, plus the surface-specific file (`platforms-and-adaptation.md` or `terminal-and-tui.md`) |
 | Implement | `foundations.md`, `accessibility-and-inclusion.md`, plus `interaction-and-trust.md` or `terminal-and-tui.md` as the surface demands |
 | Review | `review-rubric.md` plus every file relevant to the implemented surface |
@@ -90,12 +90,12 @@ If the current iteration adds or modifies user-facing UI — React/Vue/Svelte/So
 The implementer deposits screenshots into `<iterDir>/screenshots/`. As the reviewer, your obligation is to consume them.
 
 1. **Diff touches UI code** (any of `.tsx`, `.jsx`, `.vue`, `.svelte`, `.css`, `.scss`, `.sass`, `.html`, Bubbletea/lipgloss/ink Go modules, UI-generating Rust/Python if the repo uses those for rendering, etc.):
-   - **Screenshots present**: Read each image via tool-use. Judge whether the rendered state matches the design commitments — colors, typography, layout, spacing, contrast, state variants, overall aesthetic — against the brainstorm direction, any user-attached mockups (the "Visual References" section of the prompt), and the phase plan's UI exit criteria. Cite what you saw in your feedback: *"the primary button in `dashboard.png` renders as `#7c3aed` but the brainstorm committed to an OKLCH accent in the `0.68 0.12 280` neighborhood"* is feedback a diff-only reviewer cannot produce.
+   - **Screenshots present**: Read each image via tool-use. Judge whether the rendered state matches the design commitments — colors, typography, layout, spacing, contrast, state variants, overall aesthetic — against the design direction, any user-attached mockups (the "Visual References" section of the prompt), and the phase plan's UI exit criteria. Cite what you saw in your feedback: *"the primary button in `dashboard.png` renders as `#7c3aed` but the design committed to an OKLCH accent in the `0.68 0.12 280` neighborhood"* is feedback a diff-only reviewer cannot produce.
    - **Screenshots absent or empty directory**: emit `## Verdict\nCHANGES_REQUESTED` in your `review-feedback.md` with a Critical finding — *"no visual evidence for a UI-touching iteration."* You cannot approve UI work you cannot see. Ask specifically for screenshots of each affected screen into `<iterDir>/screenshots/` on the next iteration, naming which harness the repo has available.
 
 2. **Diff does not touch UI code**: the directory's absence is expected. Do not raise a finding.
 
-Apply the dimensions from [playbook/review-rubric.md](playbook/review-rubric.md) when judging: primary task obvious, scan path intentional, feedback proportional, accessibility and platform fit built in not bolted on. If the brainstorm committed to a distinctive aesthetic direction, the rubric is the yardstick for whether the implementation actually landed on that direction or drifted toward generic defaults.
+Apply the dimensions from [playbook/review-rubric.md](playbook/review-rubric.md) when judging: primary task obvious, scan path intentional, feedback proportional, accessibility and platform fit built in not bolted on. If the design committed to a distinctive aesthetic direction, the rubric is the yardstick for whether the implementation actually landed on that direction or drifted toward generic defaults.
 
 The goal is not exhaustive visual regression — one screenshot per meaningfully distinct screen/state is enough for a judgment call. The failure mode this closes: features that pass code review, tests, and lint, and ship a UI the user hates.
 

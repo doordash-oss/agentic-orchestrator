@@ -30,7 +30,7 @@ import (
 )
 
 // TestCycleConflictPropagation_TweakConflict_OneRepoFailsAnotherSucceeds
-// enforces the brainstorm § 4 invariant that "the existing multi-repo behavior
+// enforces the design § 4 invariant that "the existing multi-repo behavior
 // (siblings continue, conflicting repo is scoped) is preserved" for per-repo
 // post-publish cycles. After Phase 3, every cycle (rebase, tweak,
 // review-comments, refactor) routes through the per-repo lifecycle entry

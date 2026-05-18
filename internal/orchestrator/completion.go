@@ -327,11 +327,11 @@ func findRepo(f *feature.Feature, name string) (feature.FeatureRepo, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Artifact-phase completion (Inquire / Research / Brainstorm)
+// Artifact-phase completion (Inquire / Research / Design)
 // ---------------------------------------------------------------------------
 
 // onArtifactPhaseCompleted handles completion for the three interactive
-// artifact phases (inquire, research, brainstorm). Mirrors
+// artifact phases (inquire, research, design). Mirrors
 // app.go:2861-2913.
 //
 //  1. Validate phase_complete and the registry-owned markdown artifact
@@ -346,6 +346,19 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 	featureID string,
 	input PhaseCompletionInput,
 	phaseKey string,
+	completeFn func(string) error,
+) error {
+	return o.onArtifactPhaseCompletedWithKey(featureID, input, phaseKey, phaseKey, completeFn)
+}
+
+// onArtifactPhaseCompletedWithKey is the canonical entry point that lets the
+// dispatcher record the artifact under a different map key than the on-disk
+// phase directory name.
+func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
+	featureID string,
+	input PhaseCompletionInput,
+	phaseKey string,
+	artifactKey string,
 	completeFn func(string) error,
 ) error {
 	if !input.Success {
@@ -381,10 +394,10 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 		if ff.Artifacts == nil {
 			ff.Artifacts = make(map[string]string)
 		}
-		ff.Artifacts[phaseKey] = outcome.PhaseArtifactPath
+		ff.Artifacts[artifactKey] = outcome.PhaseArtifactPath
 		return nil
 	}); err != nil {
-		return fmt.Errorf("record %s artifact: %w", phaseKey, err)
+		return fmt.Errorf("record %s artifact: %w", artifactKey, err)
 	}
 
 	if artifactPhasePersistsQALog(phaseKey) {
@@ -402,7 +415,7 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 
 func artifactPhasePersistsQALog(phaseKey string) bool {
 	switch phaseKey {
-	case "inquire", "research", "brainstorm":
+	case "inquire", "research", "design":
 		return true
 	default:
 		return false
@@ -415,8 +428,8 @@ func artifactPhaseRole(phase feature.Phase) (agent.Role, bool) {
 		return agent.RoleInquirer, true
 	case feature.PhaseResearch:
 		return agent.RoleResearcher, true
-	case feature.PhaseBrainstorm:
-		return agent.RoleBrainstormer, true
+	case feature.PhaseDesign:
+		return agent.RoleDesigner, true
 	default:
 		return "", false
 	}

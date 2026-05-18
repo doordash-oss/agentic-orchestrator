@@ -48,8 +48,8 @@ func TestForPhaseReturnsCorrectSkills(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "brainstorm includes frontend-design, guideline-reader, and knowledge-reader",
-			phase: feature.PhaseBrainstorm,
+			name:  "design includes frontend-design, guideline-reader, and knowledge-reader",
+			phase: feature.PhaseDesign,
 			want:  []string{"frontend-design", "guideline-reader", "knowledge-reader"},
 		},
 		{
@@ -121,7 +121,7 @@ func TestPhaseAllIncludedEverywhere(t *testing.T) {
 		feature.PhaseReview,
 		feature.PhaseKnowledgeBase,
 		feature.PhaseInquire,
-		feature.PhaseBrainstorm,
+		feature.PhaseDesign,
 	}
 
 	for _, phase := range phases {

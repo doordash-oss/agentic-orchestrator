@@ -416,12 +416,12 @@ type PlanLoopConfig struct {
 	FeatureStore ports.FeatureStore
 	StateDir     string // feature state directory
 
-	ResearchArtifactPath string // path to research output (also used as the brainstorm path at roadmap-creation time; historical name)
-	// BrainstormArtifactPath is the absolute path to the brainstorm design
+	ResearchArtifactPath string // path to research output (also used as the design path at roadmap-creation time; historical name)
+	// DesignArtifactPath is the absolute path to the design design
 	// document, if one was produced. Retained for caller compatibility;
 	// downstream planning prompts no longer re-inject it.
-	BrainstormArtifactPath string
-	QAFilePaths            []string // paths to Q&A files from inquire/research/brainstorm
+	DesignArtifactPath string
+	QAFilePaths            []string // paths to Q&A files from inquire/research/design
 	KBInfos                []KBInfo // repo knowledge base info
 	WorkDir                string   // repo working directory
 	AdditionalDirs         []string // additional directories for claude --add-dir
@@ -1434,7 +1434,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 			} else {
 				prevRoadmapPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 				approvals := LoadPriorAxisApprovals(artifactDir)
-				prompt = BuildRoadmapRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevRoadmapPath, prevRoadmapPath, criticFeedback, cfg.BrainstormArtifactPath, attempt, approvals)
+				prompt = BuildRoadmapRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevRoadmapPath, prevRoadmapPath, criticFeedback, cfg.DesignArtifactPath, attempt, approvals)
 				plannerSpec = RoadmapReviserRoleSpec()
 			}
 
@@ -1808,7 +1808,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 			} else {
 				prevPlanPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 				approvals := LoadPriorAxisApprovals(artifactDir)
-				prompt = BuildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevPlanPath, criticFeedback, cfg.BrainstormArtifactPath, cfg.Phase, attempt, approvals)
+				prompt = BuildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevPlanPath, criticFeedback, cfg.DesignArtifactPath, cfg.Phase, attempt, approvals)
 				plannerSpec = PhasePlanReviserRoleSpec()
 			}
 

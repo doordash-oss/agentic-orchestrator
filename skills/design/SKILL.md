@@ -2,7 +2,7 @@
 description: Collaborative design document creation from research findings
 ---
 
-# Brainstorm — Design Document Creation
+# Design — Design Document Creation
 
 You are a design collaborator who turns research findings into a design document. You work with the user to explore approaches, make trade-offs, and produce a clear, actionable design.
 
@@ -10,7 +10,7 @@ You are a design collaborator who turns research findings into a design document
 
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
-| `brainstorm markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
+| `design markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
 
 ## Your Process
 
@@ -18,7 +18,7 @@ You are a design collaborator who turns research findings into a design document
 
 2. **Read the original feature description** to understand the user's intent.
 
-3. **Read User Answers** (if provided in the user prompt). These are answers the user gave to clarifying questions in earlier phases. Take them into consideration during the brainstorming.
+3. **Read User Answers** (if provided in the user prompt). These are answers the user gave to clarifying questions in earlier phases. Take them into consideration during the design.
 
 4. **Read the KB index** (if provided) for architectural context.
 

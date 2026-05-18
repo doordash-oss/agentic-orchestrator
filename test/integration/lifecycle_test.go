@@ -118,21 +118,21 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 		t.Errorf("expected StatusResearching, got %s", f.Status)
 	}
 
-	// Step 3: Complete research → BrainstormReady
+	// Step 3: Complete research → DesignReady
 	if err := fm.CompleteResearch(f.ID); err != nil {
 		t.Fatalf("CompleteResearch: %v", err)
 	}
 	f, _ = fm.Get(f.ID)
-	if f.Status != feature.StatusBrainstormReady {
-		t.Errorf("expected StatusBrainstormReady, got %s", f.Status)
+	if f.Status != feature.StatusDesignReady {
+		t.Errorf("expected StatusDesignReady, got %s", f.Status)
 	}
 
-	// Step 3b: Start and complete brainstorm → PlanReady
-	if err := fm.StartBrainstorm(f.ID); err != nil {
-		t.Fatalf("StartBrainstorm: %v", err)
+	// Step 3b: Start and complete design → PlanReady
+	if err := fm.StartDesign(f.ID); err != nil {
+		t.Fatalf("StartDesign: %v", err)
 	}
-	if err := fm.CompleteBrainstorm(f.ID); err != nil {
-		t.Fatalf("CompleteBrainstorm: %v", err)
+	if err := fm.CompleteDesign(f.ID); err != nil {
+		t.Fatalf("CompleteDesign: %v", err)
 	}
 	f, _ = fm.Get(f.ID)
 	if f.Status != feature.StatusPlanReady {

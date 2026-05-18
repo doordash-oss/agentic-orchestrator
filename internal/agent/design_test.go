@@ -21,7 +21,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-func TestBuildBrainstormPrompt(t *testing.T) {
+func TestBuildDesignPrompt(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "Test Feature",
 		Description: "Implement user authentication",
@@ -31,7 +31,7 @@ func TestBuildBrainstormPrompt(t *testing.T) {
 		Inquireness: feature.InquirenessHigh,
 	}
 
-	prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research/doc.md", nil)
+	prompt := BuildDesignPrompt(f, "", "", "/tmp/research/doc.md", nil)
 
 	checks := []string{
 		"# Feature Context",
@@ -50,39 +50,39 @@ func TestBuildBrainstormPrompt(t *testing.T) {
 	}
 }
 
-func TestBuildBrainstormPromptNoResearch(t *testing.T) {
+func TestBuildDesignPromptNoResearch(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "No Research",
 		Description: "A feature",
 		Inquireness: feature.InquirenessMedium,
 	}
-	prompt := BuildBrainstormPrompt(f, "", "", "", nil)
+	prompt := BuildDesignPrompt(f, "", "", "", nil)
 	if strings.Contains(prompt, "## Research Findings") {
 		t.Error("expected no research section when path is empty")
 	}
 }
 
-func TestBuildBrainstormPromptWithImages(t *testing.T) {
+func TestBuildDesignPromptWithImages(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "Image Feature",
 		Description: "A feature with images",
 		Images:      []string{"/tmp/images/image-1.png"},
 		Inquireness: feature.InquirenessMedium,
 	}
-	prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", nil)
+	prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
 	if !strings.Contains(prompt, "Attached Images:") {
 		t.Error("expected 'Attached Images' section")
 	}
 }
 
-func TestBuildBrainstormPromptWithQAPaths(t *testing.T) {
+func TestBuildDesignPromptWithQAPaths(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "QA Feature",
 		Description: "A feature with user decisions",
 		Inquireness: feature.InquirenessMedium,
 	}
 	qaFiles := []string{"/tmp/features/abc/inquire/qa-answers.md", "/tmp/features/abc/research/qa-answers.md"}
-	prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", qaFiles)
+	prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", qaFiles)
 
 	if !strings.Contains(prompt, "## User Decisions") {
 		t.Error("expected '## User Decisions' section")
@@ -97,18 +97,18 @@ func TestBuildBrainstormPromptWithQAPaths(t *testing.T) {
 	}
 }
 
-func TestBuildBrainstormPromptNoQAPaths(t *testing.T) {
+func TestBuildDesignPromptNoQAPaths(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "No QA Feature",
 		Description: "A feature without Q&A",
 		Inquireness: feature.InquirenessMedium,
 	}
-	prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", nil)
+	prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
 	if strings.Contains(prompt, "## User Decisions") {
 		t.Error("expected no User Decisions section when qaFilePaths is nil")
 	}
 
-	prompt2 := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", []string{})
+	prompt2 := BuildDesignPrompt(f, "", "", "/tmp/research.md", []string{})
 	if strings.Contains(prompt2, "## User Decisions") {
 		t.Error("expected no User Decisions section when qaFilePaths is empty")
 	}
@@ -159,25 +159,25 @@ func TestBuildResearchFromQuestionsPromptHasRepoInfo(t *testing.T) {
 	}
 }
 
-func TestBuildBrainstormPromptUsesEffectiveDescription(t *testing.T) {
+func TestBuildDesignPromptUsesEffectiveDescription(t *testing.T) {
 	f := &feature.Feature{
-		Name:           "Brainstorm Refactor",
+		Name:           "Design Refactor",
 		Description:    "original desc",
 		RefactorPrompt: "improve performance",
 		Repos: []feature.FeatureRepo{
 			{Name: "repo", Path: "/tmp/test"},
 		},
 	}
-	prompt := BuildBrainstormPrompt(f, "", "", "some research output", nil)
+	prompt := BuildDesignPrompt(f, "", "", "some research output", nil)
 	if !strings.Contains(prompt, "improve performance") {
-		t.Error("expected refactor prompt in brainstorm output")
+		t.Error("expected refactor prompt in design output")
 	}
 	if !strings.Contains(prompt, "original desc") {
-		t.Error("expected original description in brainstorm output")
+		t.Error("expected original description in design output")
 	}
 }
 
-func TestBuildBrainstormPrompt_MultiRepo(t *testing.T) {
+func TestBuildDesignPrompt_MultiRepo(t *testing.T) {
 	t.Run("multi_repo_includes_target_repos", func(t *testing.T) {
 		f := &feature.Feature{
 			Name:        "test-feature",
@@ -187,7 +187,7 @@ func TestBuildBrainstormPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", nil)
+		prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
 		if !strings.Contains(prompt, "Target Repositories") {
 			t.Error("expected 'Target Repositories' section for multi-repo feature")
 		}
@@ -200,7 +200,7 @@ func TestBuildBrainstormPrompt_MultiRepo(t *testing.T) {
 			Name:  "test-feature",
 			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a"}},
 		}
-		prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", nil)
+		prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
 		if strings.Contains(prompt, "Target Repositories") {
 			t.Error("single-repo feature should not have 'Target Repositories' section")
 		}
@@ -213,7 +213,7 @@ func TestBuildBrainstormPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b", WorktreePath: "/wt/b"},
 			},
 		}
-		prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", nil)
+		prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
 		if !strings.Contains(prompt, "/wt/a") {
 			t.Error("expected worktree path /wt/a in prompt")
 		}

@@ -1,12 +1,12 @@
 {{- /*
-  brainstorm.user: the Brainstorm-phase user prompt body. Receives the
+  design.user: the Design-phase user prompt body. Receives the
   research artifact + Q&A files + feature context and produces a design
   document. Multi-repo Target Repositories block only renders for
-  features spanning ≥ 2 repos (single-repo brainstorms inherit the repo
+  features spanning ≥ 2 repos (single-repo designs inherit the repo
   set implicitly from the workdir). The RoleSpec system prompt owns primary
   skill discovery, Useful Resources, output roots, and completion.
 */ -}}
-{{- define "brainstorm.user" -}}
+{{- define "design.user" -}}
 # Feature Context
 
 ## Feature Request

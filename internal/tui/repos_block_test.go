@@ -232,7 +232,7 @@ func TestRenderReposBlockPreImplementation(t *testing.T) {
 	preImplStatuses := []feature.Status{
 		feature.StatusInquiring,
 		feature.StatusResearching,
-		feature.StatusBrainstorming,
+		feature.StatusDesigning,
 		feature.StatusPlanning,
 	}
 	for _, s := range preImplStatuses {

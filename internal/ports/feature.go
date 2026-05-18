@@ -70,11 +70,11 @@ type FeatureLifecycle interface {
 	MarkRepoKBFailed(featureID, repoName, errMsg string) error
 	AllKBsCompleted(featureID string) (bool, error)
 
-	// Interactive phases (inquire, research, brainstorm)
+	// Interactive phases (inquire, research, design)
 	StartInquire(featureID string) error
 	CompleteInquire(featureID string) error
-	StartBrainstorm(featureID string) error
-	CompleteBrainstorm(featureID string) error
+	StartDesign(featureID string) error
+	CompleteDesign(featureID string) error
 	StartResearch(featureID string) error
 	CompleteResearch(featureID string) error
 

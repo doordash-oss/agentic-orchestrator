@@ -173,7 +173,7 @@ func (o *Orchestrator) phasePlanDirForFeature(f *feature.Feature, phase int) str
 // tryLoadPhasePlan in lifecycle_delegates.go.)
 
 // collectQAFilePaths gathers Q&A answer files from earlier phases (inquire,
-// research, brainstorm, roadmap) so they can be passed to planning prompts.
+// research, design, roadmap) so they can be passed to planning prompts.
 // Mirrors app.go:5761-5773. Missing files are gracefully skipped via os.Stat.
 func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) []string {
 	baseDir := o.stateDir()
@@ -182,7 +182,7 @@ func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) 
 	}
 	runDir := agent.ActiveRunDir(baseDir, f)
 	var paths []string
-	for _, phase := range []string{"inquire", "research", "brainstorm", "roadmap"} {
+	for _, phase := range []string{"inquire", "research", "design", "roadmap"} {
 		qaPath := filepath.Join(runDir, refPrefix, phase, "qa-answers.md")
 		if _, err := os.Stat(qaPath); err == nil {
 			paths = append(paths, qaPath)

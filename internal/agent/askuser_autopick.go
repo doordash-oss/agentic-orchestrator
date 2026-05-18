@@ -51,7 +51,7 @@ func askUserAutoPickConfig(store ports.FeatureStore, observer *observe.Observer,
 func askUserAutoPickAllowedPurpose(purpose ports.AskUserAutoPickPurpose) bool {
 	switch purpose {
 	case ports.AskUserAutoPickPurposeInquire,
-		ports.AskUserAutoPickPurposeBrainstorm,
+		ports.AskUserAutoPickPurposeDesign,
 		ports.AskUserAutoPickPurposeRoadmapCreator,
 		ports.AskUserAutoPickPurposePhasePlanCreator:
 		return true
@@ -64,8 +64,8 @@ func interactiveAutoPickPurpose(phase feature.Phase) ports.AskUserAutoPickPurpos
 	switch phase {
 	case feature.PhaseInquire:
 		return ports.AskUserAutoPickPurposeInquire
-	case feature.PhaseBrainstorm:
-		return ports.AskUserAutoPickPurposeBrainstorm
+	case feature.PhaseDesign:
+		return ports.AskUserAutoPickPurposeDesign
 	default:
 		return ports.AskUserAutoPickPurposeNone
 	}

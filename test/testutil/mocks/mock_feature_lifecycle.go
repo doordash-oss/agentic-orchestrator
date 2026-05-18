@@ -42,7 +42,7 @@ type MockFeatureLifecycle struct {
 	// the invocation.
 	StartKnowledgeBaseFn  func(featureID string) error
 	StartInquireFn        func(featureID string) error
-	StartBrainstormFn     func(featureID string) error
+	StartDesignFn     func(featureID string) error
 	StartResearchFn       func(featureID string) error
 	StartPlanningFn       func(featureID string) error
 	StartImplementationFn func(featureID string) error
@@ -52,7 +52,7 @@ type MockFeatureLifecycle struct {
 	CompleteKnowledgeBaseFn  func(featureID string) error
 	CompleteInquireFn        func(featureID string) error
 	CompleteResearchFn       func(featureID string) error
-	CompleteBrainstormFn     func(featureID string) error
+	CompleteDesignFn     func(featureID string) error
 	CompletePlanningFn       func(featureID string) error
 	CompleteImplementationFn func(featureID string) error
 
@@ -217,7 +217,7 @@ func (m *MockFeatureLifecycle) AllKBsCompleted(featureID string) (bool, error) {
 }
 
 // ---------------------------------------------------------------------------
-// Interactive phases (inquire, brainstorm, research)
+// Interactive phases (inquire, design, research)
 // ---------------------------------------------------------------------------
 
 func (m *MockFeatureLifecycle) StartInquire(featureID string) error {
@@ -236,18 +236,18 @@ func (m *MockFeatureLifecycle) CompleteInquire(featureID string) error {
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) StartBrainstorm(featureID string) error {
-	m.record("StartBrainstorm", featureID)
-	if m.StartBrainstormFn != nil {
-		return m.StartBrainstormFn(featureID)
+func (m *MockFeatureLifecycle) StartDesign(featureID string) error {
+	m.record("StartDesign", featureID)
+	if m.StartDesignFn != nil {
+		return m.StartDesignFn(featureID)
 	}
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) CompleteBrainstorm(featureID string) error {
-	m.record("CompleteBrainstorm", featureID)
-	if m.CompleteBrainstormFn != nil {
-		return m.CompleteBrainstormFn(featureID)
+func (m *MockFeatureLifecycle) CompleteDesign(featureID string) error {
+	m.record("CompleteDesign", featureID)
+	if m.CompleteDesignFn != nil {
+		return m.CompleteDesignFn(featureID)
 	}
 	return m.DefaultError
 }

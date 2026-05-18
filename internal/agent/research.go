@@ -30,7 +30,7 @@ import (
 )
 
 // researchFeatureViews projects a feature's repos, images, and attachments
-// into the typed views the research/inquire/brainstorm templates expect.
+// into the typed views the research/inquire/design templates expect.
 // Returned slices are independent copies so callers can mutate them safely.
 func researchFeatureViews(f *feature.Feature) (repos []prompts.RepoView, images []string, attachments []string) {
 	repos = make([]prompts.RepoView, 0, len(f.Repos))

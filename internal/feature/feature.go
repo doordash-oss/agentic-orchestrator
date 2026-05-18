@@ -33,7 +33,7 @@ const (
 	PhaseReview
 	PhaseKnowledgeBase
 	PhaseInquire
-	PhaseBrainstorm
+	PhaseDesign
 	// PhaseFinalReview is the deferred end-of-feature review pass that runs
 	// once after the last roadmap-phase implement completes. The implement
 	// loop's per-iteration review gate handles iteration-level review for
@@ -41,6 +41,17 @@ const (
 	// over all repos" that used to be inlined inside RunMultiRepoOrchestrator.
 	PhaseFinalReview
 )
+
+// DesignArtifactKey is the artifact-map key for the Design phase output.
+const DesignArtifactKey = "design"
+
+// DesignArtifactPath returns the recorded path of the Design artifact for a feature.
+func (f *Feature) DesignArtifactPath() string {
+	if f == nil || f.Artifacts == nil {
+		return ""
+	}
+	return f.Artifacts[DesignArtifactKey]
+}
 
 // LogicalOrder returns the execution/display sequence order for the phase.
 // This avoids breaking existing serialized Phase values (iota-based) while
@@ -53,7 +64,7 @@ func (p Phase) LogicalOrder() int {
 		return 1
 	case PhaseResearch:
 		return 2
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return 3
 	case PhasePlan:
 		return 4
@@ -86,8 +97,8 @@ func (p Phase) String() string {
 		return "Knowledge Base"
 	case PhaseInquire:
 		return "Inquire"
-	case PhaseBrainstorm:
-		return "Brainstorm"
+	case PhaseDesign:
+		return "Design"
 	case PhaseFinalReview:
 		return "Final Review"
 	case PhasePublish:
@@ -112,8 +123,8 @@ func (p Phase) DirName() string {
 		return "knowledgebase"
 	case PhaseInquire:
 		return "inquire"
-	case PhaseBrainstorm:
-		return "brainstorm"
+	case PhaseDesign:
+		return "design"
 	case PhaseFinalReview:
 		// Share the "review" subdir with PhaseReview so existing artifact
 		// resolvers (review_context.go, orchestrator.resolveFinalReviewArtifactDirForRepo)
@@ -133,7 +144,7 @@ func (p Phase) DirName() string {
 // questions" system-reminder that suppresses grilling.
 func (p Phase) RequiresGrilling() bool {
 	switch p {
-	case PhaseInquire, PhaseBrainstorm, PhasePlan:
+	case PhaseInquire, PhaseDesign, PhasePlan:
 		return true
 	default:
 		return false
@@ -276,8 +287,8 @@ const (
 	StatusPlanNeedsReview
 	StatusInquiring
 	StatusInquireReady
-	StatusBrainstormReady
-	StatusBrainstorming
+	StatusDesignReady
+	StatusDesigning
 	StatusPromptNeedsReview
 	StatusInquiryNeedsReview
 	StatusResearchNeedsReview
@@ -331,10 +342,10 @@ func (s Status) String() string {
 		return "Inquiring"
 	case StatusInquireReady:
 		return "InquireReady"
-	case StatusBrainstormReady:
-		return "BrainstormReady"
-	case StatusBrainstorming:
-		return "Brainstorming"
+	case StatusDesignReady:
+		return "DesignReady"
+	case StatusDesigning:
+		return "Designing"
 	case StatusPromptNeedsReview:
 		return "PromptNeedsReview"
 	case StatusInquiryNeedsReview:
@@ -356,7 +367,7 @@ func (s Status) String() string {
 
 // IsRunning returns true if this status represents an actively executing phase.
 func (s Status) IsRunning() bool {
-	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusBrainstorming || s == StatusFinalReviewing
+	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing
 }
 
 // IsNeedsReview returns true if this status represents a pending artifact review.
@@ -375,7 +386,7 @@ func NeedsReviewForPhase(target Phase) Status {
 		return StatusPromptNeedsReview
 	case PhaseResearch:
 		return StatusInquiryNeedsReview
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return StatusResearchNeedsReview
 	case PhasePlan:
 		return StatusDesignNeedsReview
@@ -413,8 +424,8 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
-		"BrainstormReady":     StatusBrainstormReady,
-		"Brainstorming":       StatusBrainstorming,
+		"DesignReady":         StatusDesignReady,
+		"Designing":           StatusDesigning,
 		"PromptNeedsReview":   StatusPromptNeedsReview,
 		"InquiryNeedsReview":  StatusInquiryNeedsReview,
 		"ResearchNeedsReview": StatusResearchNeedsReview,
@@ -470,7 +481,7 @@ func (c Checkpoints) HasGateForPhase(phase Phase) bool {
 	switch phase {
 	case PhaseResearch:
 		return c.InquiryReview
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return c.ResearchReview
 	case PhasePlan:
 		return c.DesignReview
@@ -741,12 +752,12 @@ func (f *Feature) syncRunToShadows() {
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
 	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
-	StatusResearching:         {StatusBrainstormReady, StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusResearching:         {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
 	StatusBuildingKB:          {StatusCreated, StatusFailed, StatusInterrupted},
 	StatusInquiring:           {StatusInquireReady, StatusFailed, StatusInterrupted},
 	StatusInquireReady:        {StatusResearching, StatusFailed},
-	StatusBrainstormReady:     {StatusBrainstorming, StatusFailed},
-	StatusBrainstorming:       {StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusDesignReady:     {StatusDesigning, StatusFailed},
+	StatusDesigning:       {StatusPlanReady, StatusFailed, StatusInterrupted},
 	StatusPlanReady:           {StatusPlanning, StatusFailed},
 	StatusPlanning:            {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
 	StatusImplementReady:      {StatusImplementing, StatusFailed},
@@ -758,12 +769,12 @@ var validTransitions = map[Status][]Status{
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
 	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady},
 	StatusDone:                {},
-	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusBrainstorming, StatusImplementReady, StatusCodeReady},
-	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusBrainstorming, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
+	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
+	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
 	StatusPlanNeedsReview:     {StatusPlanning, StatusImplementReady, StatusFailed},
 	StatusPromptNeedsReview:   {StatusInquiring, StatusFailed},
 	StatusInquiryNeedsReview:  {StatusResearching, StatusFailed},
-	StatusResearchNeedsReview: {StatusBrainstorming, StatusFailed},
+	StatusResearchNeedsReview: {StatusDesigning, StatusFailed},
 	StatusDesignNeedsReview:   {StatusPlanning, StatusFailed},
 }
 
@@ -808,7 +819,7 @@ func (f *Feature) SetPRURL(url string) {
 	f.Run().PRURL = url
 }
 
-// RebaseCount returns the run-level rebase counter. The brainstorm calls
+// RebaseCount returns the run-level rebase counter. The design calls
 // for per-repo cycle counts; until RepoCycleState carries historical
 // counts, this delegates to the run.
 func (f *Feature) RebaseCount() int { return f.Run().RebaseCount }

@@ -107,7 +107,7 @@ func deferralsDueViews(f *feature.Feature, phase int) []prompts.DeferralView {
 // skillsDir and guidelinesDir are retained on the signature for caller
 // stability. RoleSpec-backed system prompts now own the primary skill
 // directive and useful-resource catalog.
-func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, brainstormArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
+func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, designArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
 	_ = skillsDir
 	_ = guidelinesDir
 	_ = kbInfos
@@ -116,7 +116,7 @@ func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, brainstorm
 		Name:                   f.Name,
 		Description:            f.EffectiveDescription(),
 		Repos:                  repos,
-		BrainstormArtifactPath: brainstormArtifactPath,
+		DesignArtifactPath: designArtifactPath,
 		VisualReferences: prompts.VisualReferencesInput{
 			Images: append([]string(nil), f.Images...),
 			Label:  "producing the roadmap",
@@ -146,10 +146,10 @@ func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, brainstorm
 // f is currently unused by the template; retained on the signature for
 // caller stability. roadmapPath is similarly unused (the path is implicit
 // via previousRoadmapPath).
-func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, previousRoadmapPath, criticFeedback, brainstormArtifactPath string, attempt int, approvals []AxisApproval) string {
+func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, previousRoadmapPath, criticFeedback, designArtifactPath string, attempt int, approvals []AxisApproval) string {
 	_ = f
 	_ = roadmapPath
-	_ = brainstormArtifactPath
+	_ = designArtifactPath
 	return roles.BuildRoadmapRevisionPrompt(roles.RoadmapRevisionUserInput{
 		Attempt:        attempt,
 		CriticFeedback: criticFeedback,
@@ -168,7 +168,7 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 // The prose lives in internal/agent/prompts/templates/phase_plan.user.tmpl.
 //
 // qaFilePaths are paths to upstream Q&A files
-// (inquire/research/brainstorm/roadmap qa-answers.md) collected by
+// (inquire/research/design/roadmap qa-answers.md) collected by
 // the orchestrator. Phase-Plan re-injects them under a "User Decisions"
 // section so the planner reads the user's prior answers verbatim and
 // does not re-litigate them. Visual references are intentionally
@@ -212,9 +212,9 @@ func BuildPhasePlanPrompt(f *feature.Feature, skillsDir, guidelinesDir, roadmapP
 //
 // The prose lives in
 // internal/agent/prompts/templates/phase_plan_revision.user.tmpl.
-func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback, brainstormArtifactPath string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
+func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback, designArtifactPath string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
 	_ = f
-	_ = brainstormArtifactPath
+	_ = designArtifactPath
 	return roles.BuildPhasePlanRevisionPrompt(roles.PhasePlanRevisionUserInput{
 		Attempt: attempt,
 		Phase: roles.PhasePlanView{

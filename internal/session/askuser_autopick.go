@@ -81,7 +81,7 @@ type autoPickQuestionSignatureOption struct {
 func askUserAutoPickPurposeCanPick(purpose ports.AskUserAutoPickPurpose) bool {
 	switch purpose {
 	case ports.AskUserAutoPickPurposeInquire,
-		ports.AskUserAutoPickPurposeBrainstorm,
+		ports.AskUserAutoPickPurposeDesign,
 		ports.AskUserAutoPickPurposeRoadmapCreator,
 		ports.AskUserAutoPickPurposePhasePlanCreator:
 		return true

@@ -427,7 +427,7 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 // Item 6: per-phase PhaseRunner dispatch — synchronous phases
 // ---------------------------------------------------------------------------
 //
-// Verifies that startInquire/startResearch/startBrainstorm actually wire
+// Verifies that startInquire/startResearch/startDesign actually wire
 // into PhaseRunner and produce BuildSession invocations carrying the
 // correct BuildSessionOpts.Phase. This is what iteration-01 was missing —
 // the old table-driven test constructed the orchestrator with only
@@ -480,9 +480,9 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 			},
 		},
 		{
-			name:           "Brainstorm",
-			phase:          feature.PhaseBrainstorm,
-			wantTransition: "StartBrainstorm",
+			name:           "Design",
+			phase:          feature.PhaseDesign,
+			wantTransition: "StartDesign",
 			setup: func(t *testing.T, f *feature.Feature, stateDir string) {
 				researchDir := filepath.Join(stateDir, f.ID, "research")
 				if err := os.MkdirAll(researchDir, 0o755); err != nil {

@@ -120,7 +120,7 @@ type TweakUserInput struct {
 	PRURL     string
 }
 
-type BrainstormUserInput struct {
+type DesignUserInput struct {
 	Name        string
 	Description string
 	Images      []string
@@ -145,7 +145,7 @@ type RoadmapUserInput struct {
 	Description string
 	Repos       []RepoView
 
-	BrainstormArtifactPath string
+	DesignArtifactPath string
 
 	VisualReferences VisualReferencesInput
 	QAFiles          QAFilesInput
@@ -371,12 +371,12 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
-			// High-coverage brainstorm fixture: multi-repo, research
+			// High-coverage design fixture: multi-repo, research
 			// artifact, Q&A, and ambiguity handling. The paired system
 			// prompt golden below locks down resource discovery.
-			name: "brainstorm_user_multi_repo",
+			name: "design_user_multi_repo",
 			render: func() string {
-				in := BrainstormUserInput{
+				in := DesignUserInput{
 					Name:        "OAuth login",
 					Description: "Sign in with Google.",
 					Repos: []RepoView{
@@ -391,7 +391,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					Inquireness: GrillMeInquirenessInput{Level: "medium"},
 				}
-				return BrainstormUserPrompt(in)
+				return DesignUserPrompt(in)
 			},
 		},
 		{
@@ -401,7 +401,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					Name:                   "OAuth login",
 					Description:            "Sign in with Google.",
 					Repos:                  []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}},
-					BrainstormArtifactPath: "/state/feat-x/run-1/brainstorm/design.md",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
 					VisualReferences: VisualReferencesInput{
 						Images: []string{"/tmp/login.png"},
 						Label:  "producing the roadmap",
@@ -499,21 +499,21 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
-			name: "brainstorm_system_rolespec",
+			name: "design_system_rolespec",
 			render: func() string {
 				return RoleSystemPrompt(RoleSystemInput{
 					OutputRoots: []OutputRootView{
-						{Name: "phase_dir", Path: "/state/feat-x/run-1/brainstorm", Description: "Brainstorm phase artifact directory."},
+						{Name: "phase_dir", Path: "/state/feat-x/run-1/design", Description: "Design phase artifact directory."},
 					},
-					MarkerPath: "/state/feat-x/run-1/brainstorm/phase_complete",
-					SkillPath:  "/skills/brainstorm/SKILL.md",
+					MarkerPath: "/state/feat-x/run-1/design/phase_complete",
+					SkillPath:  "/skills/design/SKILL.md",
 					Preflight: PreflightInput{
 						KBInfos: []KBView{
 							{Name: "web", IndexPath: "/state/kb/web/index.md", RootDir: "/state/kb/web"},
 							{Name: "api", IndexPath: "/state/kb/api/index.md", RootDir: "/state/kb/api"},
 						},
 						Guidelines:    testGuidelines(),
-						Skills:        testSkills(feature.PhaseBrainstorm),
+						Skills:        testSkills(feature.PhaseDesign),
 						HasKB:         true,
 						HasGuidelines: true,
 						HasSkills:     true,
@@ -670,7 +670,7 @@ func TestLegacyPromptSurfacesAreRemoved(t *testing.T) {
 		filepath.Join("templates", "system_implement_completion_protocol.tmpl"),
 		filepath.Join("templates", "system_validator.tmpl"),
 		filepath.Join("templates", "system_final_review.tmpl"),
-		filepath.Join("partials", "brainstorm_reference.tmpl"),
+		filepath.Join("partials", "design_reference.tmpl"),
 		filepath.Join("partials", "skill_instruction.tmpl"),
 		filepath.Join("partials", "preflight.tmpl"),
 		filepath.Join("testdata", "completion_protocol_with_clause.golden"),

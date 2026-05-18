@@ -53,7 +53,7 @@ func TestVisualReferencesSection_ImagesEmitsBlockWithPaths(t *testing.T) {
 }
 
 // TestBuildRoadmapPrompt_EmitsVisualReferences asserts that in Medium
-// mode (no brainstorm artifact) the roadmap planner still sees
+// mode (no design artifact) the roadmap planner still sees
 // user-attached mockups — the design doc isn't there to carry them
 // forward, so the prompt itself must surface the images.
 func TestBuildRoadmapPrompt_EmitsVisualReferences(t *testing.T) {
@@ -72,7 +72,7 @@ func TestBuildRoadmapPrompt_EmitsVisualReferences(t *testing.T) {
 }
 
 // TestBuildRoadmapPrompt_SuppressesVisualReferencesWhenDesignDocPresent
-// asserts the inverse path: when a brainstorm/design artifact exists,
+// asserts the inverse path: when a design/design artifact exists,
 // the design doc is the authoritative spec and already incorporates the
 // user's visual references. Re-injecting them in the roadmap prompt
 // would create two competing sources of truth, so the prompt suppresses
@@ -83,7 +83,7 @@ func TestBuildRoadmapPrompt_SuppressesVisualReferencesWhenDesignDocPresent(t *te
 		Description: "do a thing",
 		Images:      []string{"/tmp/mockup.png"},
 	}
-	prompt := BuildRoadmapPrompt(f, "", "", "/tmp/brainstorm.md", nil)
+	prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
 	if strings.Contains(prompt, "Visual References") {
 		t.Errorf("roadmap prompt should suppress Visual References when a design doc is present:\n%s", prompt)
 	}

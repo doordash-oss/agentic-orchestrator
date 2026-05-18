@@ -330,7 +330,7 @@ var phaseNameByIntValue = map[int]string{
 	4: "review",
 	5: "knowledgebase",
 	6: "inquire",
-	7: "brainstorm",
+	7: "design",
 }
 
 // readSummaryEvents reads events.jsonl tolerantly, skipping malformed lines.

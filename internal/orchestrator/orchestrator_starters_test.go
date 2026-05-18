@@ -77,20 +77,20 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			wantDispatchPhase: feature.PhaseResearch,
 		},
 		{
-			name:  "Brainstorm",
-			phase: feature.PhaseBrainstorm,
+			name:  "Design",
+			phase: feature.PhaseDesign,
 			setupFeature: func(f *feature.Feature) {
 				f.Artifacts = map[string]string{"research": researchPath}
 			},
-			wantTransition:    "StartBrainstorm",
+			wantTransition:    "StartDesign",
 			wantPhaseStarted:  true,
-			wantDispatchPhase: feature.PhaseBrainstorm,
+			wantDispatchPhase: feature.PhaseDesign,
 		},
 		{
 			name:  "Plan_Large_NoArtifacts_Fails",
 			phase: feature.PhasePlan,
 			setupFeature: func(f *feature.Feature) {
-				// No brainstorm/research → error on large pipeline.
+				// No design/research → error on large pipeline.
 			},
 			wantTransition:   "StartPlanning",
 			wantPhaseStarted: false,

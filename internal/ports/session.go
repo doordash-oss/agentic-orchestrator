@@ -135,7 +135,7 @@ type AskUserAutoPickPurpose string
 const (
 	AskUserAutoPickPurposeNone             AskUserAutoPickPurpose = ""
 	AskUserAutoPickPurposeInquire          AskUserAutoPickPurpose = "inquire"
-	AskUserAutoPickPurposeBrainstorm       AskUserAutoPickPurpose = "brainstorm"
+	AskUserAutoPickPurposeDesign           AskUserAutoPickPurpose = "design"
 	AskUserAutoPickPurposeRoadmapCreator   AskUserAutoPickPurpose = "roadmap_creator"
 	AskUserAutoPickPurposePhasePlanCreator AskUserAutoPickPurpose = "phase_plan_creator"
 	AskUserAutoPickPurposeResearch         AskUserAutoPickPurpose = "research"

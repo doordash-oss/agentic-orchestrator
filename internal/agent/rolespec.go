@@ -48,7 +48,7 @@ const (
 	RoleKnowledgeBaseBuilder        = roles.RoleKnowledgeBaseBuilder
 	RoleInquirer                    = roles.RoleInquirer
 	RoleResearcher                  = roles.RoleResearcher
-	RoleBrainstormer                = roles.RoleBrainstormer
+	RoleDesigner                    = roles.RoleDesigner
 	RoleInteractivePTY              = roles.RoleInteractivePTY
 )
 
@@ -110,9 +110,9 @@ func ResearcherRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.ResearcherRoleSpec())
 }
 
-// BrainstormerRoleSpec returns the RoleSpec-backed brainstorm role.
-func BrainstormerRoleSpec() RoleSpec {
-	return wrapRoleSpec(roles.BrainstormerRoleSpec())
+// DesignerRoleSpec returns the canonical Design RoleSpec wrapper.
+func DesignerRoleSpec() RoleSpec {
+	return wrapRoleSpec(roles.DesignerRoleSpec())
 }
 
 // RefactorPlanRoleSpec returns the RoleSpec-backed refactor-plan role.

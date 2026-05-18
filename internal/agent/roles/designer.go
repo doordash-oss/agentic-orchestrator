@@ -19,31 +19,35 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// RoleBrainstormer is the single-shot Brainstorm session.
-const RoleBrainstormer Role = "brainstormer"
+// RoleDesigner is the canonical single-shot Design session. Legacy callers
+// that still spell the role as "designer" resolve through
+// RoleDesigner; both roles share the same artifact validation behavior.
+const RoleDesigner Role = "designer"
 
-var brainstormerRoleSpec = RoleSpec{
-	Phase:        feature.PhaseBrainstorm,
-	Role:         RoleBrainstormer,
-	SkillName:    "brainstorm",
-	UserTemplate: "brainstorm.user",
+var designerRoleSpec = RoleSpec{
+	Phase:        feature.PhaseDesign,
+	Role:         RoleDesigner,
+	SkillName:    "design",
+	UserTemplate: "design.user",
 	Required:     []feature.Phase{feature.PhaseResearch},
 	OutputRoots: []OutputRootSpec{
-		singleShotPhaseDirOutputRoot("Brainstorm phase artifact directory."),
+		singleShotPhaseDirOutputRoot("Design phase artifact directory."),
 	},
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("brainstorm markdown artifact"),
+		phaseMarkdownRoleArtifact("design markdown artifact"),
 	},
 }
 
-// BrainstormerRoleSpec returns the RoleSpec-backed brainstorm role.
-func BrainstormerRoleSpec() RoleSpec {
-	return CloneRoleSpec(brainstormerRoleSpec)
+// DesignerRoleSpec returns the canonical Design RoleSpec.
+func DesignerRoleSpec() RoleSpec {
+	return CloneRoleSpec(designerRoleSpec)
 }
 
-// BrainstormUserInput is the data passed to brainstorm.user.tmpl.
-type BrainstormUserInput struct {
+// DesignUserInput is the data passed to design.user.tmpl. Shape matches
+// DesignUserInput so callers can migrate without churn; the legacy
+// builder delegates here.
+type DesignUserInput struct {
 	Name        string
 	Description string
 	Images      []string
@@ -57,7 +61,7 @@ type BrainstormUserInput struct {
 	Inquireness prompts.GrillMeInquirenessInput
 }
 
-// BuildBrainstormPrompt renders the brainstorm user prompt.
-func BuildBrainstormPrompt(in BrainstormUserInput) string {
-	return prompts.BrainstormUserPrompt(in)
+// BuildDesignPrompt renders the canonical Design user prompt.
+func BuildDesignPrompt(in DesignUserInput) string {
+	return prompts.DesignUserPrompt(in)
 }

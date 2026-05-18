@@ -652,13 +652,13 @@ func TestLivePreviewRendersTitledSectionBoxes(t *testing.T) {
 
 func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
 	t.Parallel()
-	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseBrainstorm}
-	sess := newLivePreviewSession("activity-title", feature.PhaseBrainstorm,
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseDesign}
+	sess := newLivePreviewSession("activity-title", feature.PhaseDesign,
 		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_read", Name: "Read", Input: rawJSON(`{"file_path":"README.md"}`)}),
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
 
-	if !strings.Contains(view, "Current: Brainstorm · ⟳ Using Read...") {
+	if !strings.Contains(view, "Current: Design · ⟳ Using Read...") {
 		t.Fatalf("activity should render in phase preview title, got:\n%s", view)
 	}
 	if strings.Count(view, "Using Read...") != 1 {

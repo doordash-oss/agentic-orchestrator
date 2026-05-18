@@ -21,9 +21,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// TestBuildBrainstormPrompt_UsesGrillMeDirective pins the Brainstorm-primary
+// TestBuildDesignPrompt_UsesGrillMeDirective pins the Design-primary
 // builder: emits the policy-free [grill-me] header for every Inquireness level.
-func TestBuildBrainstormPrompt_UsesGrillMeDirective(t *testing.T) {
+func TestBuildDesignPrompt_UsesGrillMeDirective(t *testing.T) {
 	levels := []feature.Inquireness{
 		feature.InquirenessNone,
 		feature.InquirenessMedium,
@@ -35,18 +35,18 @@ func TestBuildBrainstormPrompt_UsesGrillMeDirective(t *testing.T) {
 		t.Run(string(level), func(t *testing.T) {
 			f := &feature.Feature{
 				Name:        "Test Feature",
-				Description: "exercise grill-me directive in brainstorm",
+				Description: "exercise grill-me directive in design",
 				Repos: []feature.FeatureRepo{
 					{Name: "myrepo", Path: "/tmp/myrepo"},
 				},
 				Inquireness: level,
 			}
-			prompt := BuildBrainstormPrompt(f, "", "", "/tmp/research.md", nil)
+			prompt := BuildDesignPrompt(f, "", "", "/tmp/research.md", nil)
 
 			if first == "" {
 				first = prompt
 			} else if prompt != first {
-				t.Errorf("brainstorm prompt for level %q differs from first level", level)
+				t.Errorf("design prompt for level %q differs from first level", level)
 			}
 			assertPolicyFreeGrillMePrompt(t, prompt)
 			for _, legacy := range []string{
@@ -54,7 +54,7 @@ func TestBuildBrainstormPrompt_UsesGrillMeDirective(t *testing.T) {
 				"Try to resolve ambiguity on your own first",
 			} {
 				if strings.Contains(prompt, legacy) {
-					t.Errorf("brainstorm prompt still contains legacy prose %q for level %q", legacy, level)
+					t.Errorf("design prompt still contains legacy prose %q for level %q", legacy, level)
 				}
 			}
 		})
@@ -62,7 +62,7 @@ func TestBuildBrainstormPrompt_UsesGrillMeDirective(t *testing.T) {
 }
 
 // TestBuildRoadmapPrompt_UsesGrillMeDirective pins the Roadmap-primary builder
-// flip — same shape as the Brainstorm test above.
+// flip — same shape as the Design test above.
 func TestBuildRoadmapPrompt_UsesGrillMeDirective(t *testing.T) {
 	levels := []feature.Inquireness{
 		feature.InquirenessNone,
@@ -78,7 +78,7 @@ func TestBuildRoadmapPrompt_UsesGrillMeDirective(t *testing.T) {
 				Description: "exercise grill-me directive in roadmap",
 				Inquireness: level,
 			}
-			prompt := BuildRoadmapPrompt(f, "", "", "/tmp/brainstorm.md", nil)
+			prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
 
 			if first == "" {
 				first = prompt

@@ -61,7 +61,7 @@ func TestBuildSession_GuidelinesInjection(t *testing.T) {
 	pr, mockProv := newGuidelinesTestRunner(t)
 
 	codeTouchingPhases := []feature.Phase{
-		feature.PhaseBrainstorm,
+		feature.PhaseDesign,
 		feature.PhasePlan,
 		feature.PhaseImplement,
 		feature.PhaseReview,

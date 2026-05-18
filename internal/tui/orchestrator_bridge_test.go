@@ -512,8 +512,8 @@ func (f *fakeOrch) ClearPendingHelpAndPermissions(featureID string) error {
 	f.lifecycleCalls = append(f.lifecycleCalls, "ClearPendingHelpAndPermissions:"+featureID)
 	return f.lifecycleErr
 }
-func (f *fakeOrch) SetBrainstormReady(featureID string) error {
-	f.lifecycleCalls = append(f.lifecycleCalls, "SetBrainstormReady:"+featureID)
+func (f *fakeOrch) SetDesignReady(featureID string) error {
+	f.lifecycleCalls = append(f.lifecycleCalls, "SetDesignReady:"+featureID)
 	return f.lifecycleErr
 }
 func (f *fakeOrch) MergeFeatureLocal(featureID string) error {

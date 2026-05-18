@@ -34,16 +34,16 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 
 	relInquire := filepath.Join("inquire", "inquire.md")
 	outsideResearch := filepath.Join(t.TempDir(), "research.md")
-	absBrainstorm := filepath.Join(run1Dir, "brainstorm", "brainstorm.md")
+	absDesign := filepath.Join(run1Dir, "design", "design.md")
 	writeCarryForwardFile(t, filepath.Join(run1Dir, relInquire), "inquire")
 	writeCarryForwardFile(t, outsideResearch, "research")
-	writeCarryForwardFile(t, absBrainstorm, "brainstorm")
+	writeCarryForwardFile(t, absDesign, "design")
 
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Artifacts = map[string]string{
 			"inquire":    relInquire,
 			"research":   outsideResearch,
-			"brainstorm": absBrainstorm,
+			"design": absDesign,
 			"pr_url":     "https://github.com/o/r/pull/42",
 		}
 		return nil
@@ -62,7 +62,7 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 	want := map[string]string{
 		"inquire":    relInquire,
 		"research":   outsideResearch,
-		"brainstorm": filepath.Join("brainstorm", "brainstorm.md"),
+		"design": filepath.Join("design", "design.md"),
 	}
 	if len(got.Artifacts) != len(want) {
 		t.Fatalf("Artifacts len = %d, want %d: %v", len(got.Artifacts), len(want), got.Artifacts)
@@ -80,8 +80,8 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRun(1): %v", err)
 	}
-	if sealedRun.Artifacts["brainstorm"] != absBrainstorm {
-		t.Errorf("sealed Artifacts[brainstorm] = %q, want %q", sealedRun.Artifacts["brainstorm"], absBrainstorm)
+	if sealedRun.Artifacts["design"] != absDesign {
+		t.Errorf("sealed Artifacts[design] = %q, want %q", sealedRun.Artifacts["design"], absDesign)
 	}
 	if sealedRun.Artifacts["research"] != outsideResearch {
 		t.Errorf("sealed Artifacts[research] = %q, want %q", sealedRun.Artifacts["research"], outsideResearch)

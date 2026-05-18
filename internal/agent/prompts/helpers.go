@@ -98,10 +98,10 @@ func TweakUserPrompt(in any) string {
 	return MustRender("tweak.user", in)
 }
 
-// BrainstormUserPrompt renders the Brainstorm-phase user prompt
-// (brainstorm.user.tmpl).
-func BrainstormUserPrompt(in any) string {
-	return MustRender("brainstorm.user", in)
+// DesignUserPrompt renders the canonical Design-phase user prompt
+// (design.user.tmpl).
+func DesignUserPrompt(in any) string {
+	return MustRender("design.user", in)
 }
 
 // RefactorPlanUserPrompt renders the refactor-plan step user prompt

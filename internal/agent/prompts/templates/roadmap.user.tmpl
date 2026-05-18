@@ -2,7 +2,7 @@
   roadmap.user: the Plan/Roadmap-phase user prompt for INITIAL roadmap
   creation.
 
-  When a brainstorm/design artifact is present, the design doc is the
+  When a design/design artifact is present, the design doc is the
   authoritative spec — its contents already cover the feature
   description and visual references, so we only point at the path and
   suppress the redundant Feature / Visual References blocks. In Medium
@@ -15,7 +15,7 @@
 {{- define "roadmap.user" -}}
 # Planning Context
 
-{{ if .BrainstormArtifactPath }}Design Document: {{ .BrainstormArtifactPath }}
+{{ if .DesignArtifactPath }}Design Document: {{ .DesignArtifactPath }}
 
 {{ else }}## Feature
 

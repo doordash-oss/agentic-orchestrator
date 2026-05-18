@@ -306,8 +306,8 @@ func TestResolvePhaseArtifactDir(t *testing.T) {
 				f.SetRefactorCount(2)
 				return f
 			}(),
-			phaseName: "brainstorm",
-			want:      filepath.Join(stateDir, "feat-1", "runs", "run-001", "brainstorm"),
+			phaseName: "design",
+			want:      filepath.Join(stateDir, "feat-1", "runs", "run-001", "design"),
 		},
 	}
 	for _, tt := range tests {
@@ -539,14 +539,28 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 			},
 		},
 		{
-			name:          "RunBrainstorm",
+			// Legacy entry point — RunDesign now delegates to RunDesign so
+			// the dispatched session uses the canonical Design identity while
+			// the on-disk subdirectory remains "design" for compat.
+			name:          "RunDesign",
 			featureID:     "test-feat-bs",
-			sessionSuffix: "-brainstorm",
-			dirName:       "brainstorm",
-			commandName:   "brainstorm",
+			sessionSuffix: "-design",
+			dirName:       "design",
+			commandName:   "design",
 			usesSkillRead: true,
 			callPhase: func(pr *PhaseRunner, f *feature.Feature, tmpDir string) (string, error) {
-				return pr.RunBrainstorm(f, "", nil)
+				return pr.RunDesign(f, "", nil)
+			},
+		},
+		{
+			name:          "RunDesign",
+			featureID:     "test-feat-design",
+			sessionSuffix: "-design",
+			dirName:       "design",
+			commandName:   "design",
+			usesSkillRead: true,
+			callPhase: func(pr *PhaseRunner, f *feature.Feature, tmpDir string) (string, error) {
+				return pr.RunDesign(f, "", nil)
 			},
 		},
 	}
@@ -1165,7 +1179,7 @@ func TestBuildSession_PinsPermissionModeForGrillingPhases(t *testing.T) {
 		wantFlagValue string
 	}{
 		{name: "inquire pins default", phase: feature.PhaseInquire, wantHasFlag: true, wantFlagValue: "default"},
-		{name: "brainstorm pins default", phase: feature.PhaseBrainstorm, wantHasFlag: true, wantFlagValue: "default"},
+		{name: "design pins default", phase: feature.PhaseDesign, wantHasFlag: true, wantFlagValue: "default"},
 		{name: "plan pins default", phase: feature.PhasePlan, wantHasFlag: true, wantFlagValue: "default"},
 		{name: "research does not pin", phase: feature.PhaseResearch, wantHasFlag: false},
 		{name: "implement does not pin", phase: feature.PhaseImplement, wantHasFlag: false},
@@ -1819,13 +1833,13 @@ func TestInteractiveNonResearchPhases_PassExplicitEmptyAgentNames(t *testing.T) 
 			},
 		},
 		{
-			name: "brainstorm",
+			name: "design",
 			invoke: func(t *testing.T, pr *PhaseRunner, f *feature.Feature, tmpDir string) error {
 				researchPath := filepath.Join(tmpDir, "research.md")
 				if err := os.WriteFile(researchPath, []byte("# Research"), 0o644); err != nil {
 					t.Fatalf("WriteFile(%s): %v", researchPath, err)
 				}
-				_, err := pr.RunBrainstorm(f, researchPath, nil)
+				_, err := pr.RunDesign(f, researchPath, nil)
 				return err
 			},
 		},

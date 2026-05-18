@@ -14,7 +14,7 @@
 
 // Package agent — refactor_feature_loop.go is the unified feature-level
 // refactor cycle loop under SchemaVersionCurrent = 4. The legacy per-repo
-// refactor entry (RunRefactorLoop sequencing inquire → research → brainstorm
+// refactor entry (RunRefactorLoop sequencing inquire → research → design
 // → roadmap → per-phase plans → implement, scoped to a single repo) is
 // replaced by RunRefactorFeatureLoop: a single planned cycle that runs the
 // refactor-plan step once and then drives the iterative implement loop with
@@ -387,7 +387,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
-		BrainstormArtifactPath:     cfg.Feature.Artifacts["brainstorm"],
+		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,

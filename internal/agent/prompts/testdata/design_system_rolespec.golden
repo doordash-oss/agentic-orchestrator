@@ -11,13 +11,13 @@ For large output artifacts, prefer editing an existing skeleton over rewriting t
 
 ## Output Roots
 
-- `phase_dir`: /state/feat-x/run-1/brainstorm — Brainstorm phase artifact directory.
+- `phase_dir`: /state/feat-x/run-1/design — Design phase artifact directory.
 
 ## Completion
 
 When the task is complete, create this marker file as the very last action:
 
-`/state/feat-x/run-1/brainstorm/phase_complete`
+`/state/feat-x/run-1/design/phase_complete`
 
 The file contents do not matter. Its presence is the signal that the harness should parse the role's output files. If you end your turn without creating this file and without asking a properly formatted question, the harness treats the run as a protocol violation.
 
@@ -27,7 +27,7 @@ Read the SKILL.md file completely before taking any other action.
 
 Path:
 
-`/skills/brainstorm/SKILL.md`
+`/skills/design/SKILL.md`
 
 # Useful Resources
 

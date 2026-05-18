@@ -71,14 +71,14 @@ func statusForPhase(p feature.Phase) feature.Status {
 		return feature.StatusInquiring
 	case feature.PhaseResearch:
 		return feature.StatusResearching
-	case feature.PhaseBrainstorm:
-		return feature.StatusBrainstorming
+	case feature.PhaseDesign:
+		return feature.StatusDesigning
 	}
 	return feature.StatusCreated
 }
 
 // TestTUI_HandleSessionDone_QAWritesForInteractivePlanningPhases drives
-// handleSessionDone for each of {Research, Inquire, Brainstorm, KnowledgeBase}
+// handleSessionDone for each of {Research, Inquire, Design, KnowledgeBase}
 // and asserts qa-answers.md is written for phases whose completed sessions
 // can carry user Q&A.
 func TestTUI_HandleSessionDone_QAWritesForInteractivePlanningPhases(t *testing.T) {
@@ -89,7 +89,7 @@ func TestTUI_HandleSessionDone_QAWritesForInteractivePlanningPhases(t *testing.T
 	}{
 		{"research_writes", feature.PhaseResearch, true},
 		{"inquire_writes", feature.PhaseInquire, true},
-		{"brainstorm_writes", feature.PhaseBrainstorm, true},
+		{"design_writes", feature.PhaseDesign, true},
 		{"knowledge_base_skips", feature.PhaseKnowledgeBase, false},
 	}
 
@@ -174,7 +174,7 @@ func TestTUI_ResultSuccess_ProtocolValidationFailureDoesNotWriteQA(t *testing.T)
 	}{
 		{"research_skips", feature.PhaseResearch, false},
 		{"inquire_skips", feature.PhaseInquire, false},
-		{"brainstorm_skips", feature.PhaseBrainstorm, false},
+		{"design_skips", feature.PhaseDesign, false},
 	}
 
 	for _, tc := range cases {

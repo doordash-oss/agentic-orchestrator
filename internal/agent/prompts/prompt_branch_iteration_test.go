@@ -338,8 +338,8 @@ func TestValidateSpecializedPromptBranches(t *testing.T) {
 
 func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 	retained := map[string]bool{
-		"brainstorm_system_rolespec":     true,
-		"brainstorm_user_multi_repo":     true,
+		"design_system_rolespec":     true,
+		"design_user_multi_repo":     true,
 		"final_fix_user_with_manual":     true,
 		"final_review_user_phase":        true,
 		"implement_system_rolespec":      true,

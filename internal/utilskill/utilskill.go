@@ -38,7 +38,7 @@ type entry struct {
 var registry = map[string]entry{
 	"frontend-design": {
 		phases: []feature.Phase{
-			feature.PhaseBrainstorm,
+			feature.PhaseDesign,
 			feature.PhasePlan,
 			feature.PhaseImplement,
 			feature.PhaseReview,
@@ -48,7 +48,7 @@ var registry = map[string]entry{
 		phases: []feature.Phase{
 			feature.PhaseInquire,
 			feature.PhaseResearch,
-			feature.PhaseBrainstorm,
+			feature.PhaseDesign,
 			feature.PhasePlan,
 			feature.PhaseImplement,
 			feature.PhaseReview,
@@ -62,7 +62,7 @@ var registry = map[string]entry{
 		// produces or evaluates code and benefits from the guidelines
 		// catalog.
 		phases: []feature.Phase{
-			feature.PhaseBrainstorm,
+			feature.PhaseDesign,
 			feature.PhasePlan,
 			feature.PhaseImplement,
 			feature.PhaseReview,

@@ -117,7 +117,7 @@ runs automatically:
     knowledgebase/         # KB Build phase outputs
     inquire/               # Inquiry phase outputs
     research/              # Research phase outputs
-    brainstorm/            # Design phase outputs (directory name retained for legacy state compatibility)
+    design/            # Design phase outputs (directory name retained for legacy state compatibility)
     plan/                  # Plan artifacts (roadmap, phase plans)
     implement/             # Implementation logs and reports
     review/                # Review feedback

@@ -172,16 +172,16 @@ func TestManagerLifecycleTransitions(t *testing.T) {
 		t.Fatalf("complete research: %v", err)
 	}
 	f, _ = mgr.Get(f.ID)
-	if f.Status != feature.StatusBrainstormReady {
-		t.Errorf("status = %v, want BrainstormReady", f.Status)
+	if f.Status != feature.StatusDesignReady {
+		t.Errorf("status = %v, want DesignReady", f.Status)
 	}
 
-	// Start and complete brainstorm
-	if err := mgr.StartBrainstorm(f.ID); err != nil {
-		t.Fatalf("start brainstorm: %v", err)
+	// Start and complete design
+	if err := mgr.StartDesign(f.ID); err != nil {
+		t.Fatalf("start design: %v", err)
 	}
-	if err := mgr.CompleteBrainstorm(f.ID); err != nil {
-		t.Fatalf("complete brainstorm: %v", err)
+	if err := mgr.CompleteDesign(f.ID); err != nil {
+		t.Fatalf("complete design: %v", err)
 	}
 
 	// Start planning
@@ -228,8 +228,8 @@ func TestManagerUpdateIteration(t *testing.T) {
 	f, _ := mgr.Create("Iter Test", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 	_ = mgr.StartResearch(f.ID)
 	_ = mgr.CompleteResearch(f.ID)
-	_ = mgr.StartBrainstorm(f.ID)
-	_ = mgr.CompleteBrainstorm(f.ID)
+	_ = mgr.StartDesign(f.ID)
+	_ = mgr.CompleteDesign(f.ID)
 	_ = mgr.StartPlanning(f.ID)
 	_ = mgr.CompletePlanning(f.ID)
 	_ = mgr.StartImplementation(f.ID)
@@ -342,16 +342,16 @@ func TestManagerPhaseProgression(t *testing.T) {
 		t.Errorf("after StartResearch: phase = %v, want Research", f.CurrentPhase)
 	}
 
-	// CompleteResearch → StartBrainstorm → CompleteBrainstorm → StartPlanning
+	// CompleteResearch → StartDesign → CompleteDesign → StartPlanning
 	_ = mgr.CompleteResearch(f.ID)
-	if err := mgr.StartBrainstorm(f.ID); err != nil {
-		t.Fatalf("start brainstorm: %v", err)
+	if err := mgr.StartDesign(f.ID); err != nil {
+		t.Fatalf("start design: %v", err)
 	}
 	f, _ = mgr.Get(f.ID)
-	if f.CurrentPhase != feature.PhaseBrainstorm {
-		t.Errorf("after StartBrainstorm: phase = %v, want Brainstorm", f.CurrentPhase)
+	if f.CurrentPhase != feature.PhaseDesign {
+		t.Errorf("after StartDesign: phase = %v, want Design", f.CurrentPhase)
 	}
-	_ = mgr.CompleteBrainstorm(f.ID)
+	_ = mgr.CompleteDesign(f.ID)
 	if err := mgr.StartPlanning(f.ID); err != nil {
 		t.Fatalf("start planning: %v", err)
 	}
@@ -1080,8 +1080,8 @@ func TestRewindToPhase_StatusMapping(t *testing.T) {
 	}{
 		{"rewind to inquire", feature.PhaseInquire, feature.StatusPromptNeedsReview, feature.PhaseKnowledgeBase},
 		{"rewind to research", feature.PhaseResearch, feature.StatusInquiryNeedsReview, feature.PhaseInquire},
-		{"rewind to brainstorm", feature.PhaseBrainstorm, feature.StatusResearchNeedsReview, feature.PhaseResearch},
-		{"rewind to plan", feature.PhasePlan, feature.StatusDesignNeedsReview, feature.PhaseBrainstorm},
+		{"rewind to design", feature.PhaseDesign, feature.StatusResearchNeedsReview, feature.PhaseResearch},
+		{"rewind to plan", feature.PhasePlan, feature.StatusDesignNeedsReview, feature.PhaseDesign},
 		{"rewind to implement", feature.PhaseImplement, feature.StatusPlanNeedsReview, feature.PhasePlan},
 	}
 
@@ -1144,7 +1144,7 @@ func TestRewindToPhase_ArtifactsPreservedInSealedRun(t *testing.T) {
 	// Seed phase directories under run-001 (the active run).
 	baseDir := mgr.Store.BaseDir
 	run1Dir := filepath.Join(baseDir, f.ID, "runs", "run-001")
-	for _, phase := range []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm, feature.PhasePlan, feature.PhaseImplement} {
+	for _, phase := range []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement} {
 		dir := filepath.Join(run1Dir, phase.DirName())
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", phase.DirName(), err)
@@ -1157,7 +1157,7 @@ func TestRewindToPhase_ArtifactsPreservedInSealedRun(t *testing.T) {
 	}
 
 	// Post-rewind: the sealed run-001 keeps ALL its phase dirs intact.
-	for _, phase := range []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm, feature.PhasePlan, feature.PhaseImplement} {
+	for _, phase := range []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement} {
 		p := filepath.Join(run1Dir, phase.DirName(), "marker.txt")
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("sealed run-001/%s/marker.txt missing: %v (seal+fork must not destroy artifacts)", phase.DirName(), err)
@@ -1171,7 +1171,7 @@ func TestRewindToPhase_ArtifactsPreservedInSealedRun(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(run2Dir, "inquire", "marker.txt")); err != nil {
 		t.Errorf("run-002/inquire/marker.txt should exist (carried for PhaseResearch target): %v", err)
 	}
-	for _, phase := range []feature.Phase{feature.PhaseResearch, feature.PhaseBrainstorm, feature.PhasePlan, feature.PhaseImplement} {
+	for _, phase := range []feature.Phase{feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement} {
 		if _, err := os.Stat(filepath.Join(run2Dir, phase.DirName())); !os.IsNotExist(err) {
 			t.Errorf("run-002/%s should not exist (not carried for PhaseResearch target)", phase.DirName())
 		}
@@ -1202,14 +1202,14 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 		f.Artifacts = map[string]string{
 			"inquire":    "/path/to/inquire.md",
 			"research":   "/path/to/research.md",
-			"brainstorm": "/path/to/brainstorm.md",
+			"design": "/path/to/design.md",
 			"plan":       "/path/to/plan.md",
 			"implement":  "/path/to/impl.md",
 		}
 		return nil
 	})
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseBrainstorm); err != nil {
+	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseDesign); err != nil {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
 	got, _ := mgr.Get(f.ID)
@@ -1223,9 +1223,9 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 			t.Errorf("new run Artifacts missing carried key %q", k)
 		}
 	}
-	for _, disallowed := range []string{"brainstorm", "plan", "implement"} {
+	for _, disallowed := range []string{"design", "plan", "implement"} {
 		if _, ok := got.Artifacts[disallowed]; ok {
-			t.Errorf("new run Artifacts should NOT contain %q (not carried for PhaseBrainstorm)", disallowed)
+			t.Errorf("new run Artifacts should NOT contain %q (not carried for PhaseDesign)", disallowed)
 		}
 	}
 	// Sealed run-001 retains its full Artifacts map on disk.
@@ -1236,7 +1236,7 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 	if sealedRun.SealedAt == nil {
 		t.Fatalf("run-001 should be sealed")
 	}
-	for _, key := range []string{"inquire", "research", "brainstorm", "plan", "implement"} {
+	for _, key := range []string{"inquire", "research", "design", "plan", "implement"} {
 		if _, ok := sealedRun.Artifacts[key]; !ok {
 			t.Errorf("sealed run-001 lost artifact %q (must be preserved)", key)
 		}
@@ -1436,19 +1436,19 @@ func TestRewindablePhases(t *testing.T) {
 			name:       "implementing allows all phases",
 			status:     feature.StatusImplementing,
 			phase:      feature.PhaseImplement,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm, feature.PhasePlan, feature.PhaseImplement},
+			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement},
 		},
 		{
 			name:       "done allows all phases",
 			status:     feature.StatusDone,
 			phase:      feature.PhasePublish,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm, feature.PhasePlan, feature.PhaseImplement},
+			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement},
 		},
 		{
 			name:       "published allows all phases",
 			status:     feature.StatusPublished,
 			phase:      feature.PhasePublish,
-			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm, feature.PhasePlan, feature.PhaseImplement},
+			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement},
 		},
 	}
 
@@ -1570,10 +1570,10 @@ func TestRewindToPhase_InvalidTargetFromCurrentState(t *testing.T) {
 			wantErrSub: "cannot rewind to knowledge base",
 		},
 		{
-			name:       "cannot rewind to Brainstorm from StatusBrainstormReady",
-			status:     feature.StatusBrainstormReady,
+			name:       "cannot rewind to Design from StatusDesignReady",
+			status:     feature.StatusDesignReady,
 			phase:      feature.PhaseResearch,
-			target:     feature.PhaseBrainstorm, // Brainstorm hasn't completed yet, so not rewindable
+			target:     feature.PhaseDesign, // Design hasn't completed yet, so not rewindable
 			wantErrSub: "cannot rewind",
 		},
 	}
@@ -2588,7 +2588,7 @@ func TestRewindToPhase_ClearsRepoImpl(t *testing.T) {
 
 // TestRewindToPhase_MediumPlanWritesDescriptionReview regression-guards
 // the Medium-rewind-to-Plan fix. Medium pipelines have no inquire /
-// research / brainstorm phases, so rewinding to Plan (the first phase of
+// research / design phases, so rewinding to Plan (the first phase of
 // the Medium pipeline) previously left the feature with no artifact the
 // rewind-review session could display — the TUI aborted with "no artifact
 // found for the previous phase" and the user could not attach to review.
@@ -2630,7 +2630,7 @@ func TestRewindToPhase_MediumPlanWritesDescriptionReview(t *testing.T) {
 
 // TestRewindToPhase_StandardPlanDoesNotWriteDescriptionReview ensures the
 // Medium-only carve-out does not leak into Large/Moonshot pipelines,
-// which still have a real brainstorm/research artifact for PhasePlan rewind
+// which still have a real design/research artifact for PhasePlan rewind
 // to display. Writing description-review.md here would be harmless but
 // semantically misleading — it signals "Plan's input is the description"
 // which is only true for Medium.
@@ -2894,8 +2894,8 @@ func advanceToPublished(t *testing.T, store *feature.Store, featureID string) {
 		feature.StatusInquiring,
 		feature.StatusInquireReady,
 		feature.StatusResearching,
-		feature.StatusBrainstormReady,
-		feature.StatusBrainstorming,
+		feature.StatusDesignReady,
+		feature.StatusDesigning,
 		feature.StatusPlanReady,
 		feature.StatusPlanning,
 		feature.StatusImplementReady,
@@ -2975,7 +2975,7 @@ func TestManagerCompleteRefactor(t *testing.T) {
 
 // TestRefactorTimingAccumulatesAcrossPhases verifies that the "refactor-N"
 // timing key is preserved across all phase starters (Inquire → Research →
-// Brainstorm → Plan → Implement) and that elapsed time accumulates into
+// Design → Plan → Implement) and that elapsed time accumulates into
 // PhaseTimings["refactor-1"] rather than leaking into individual phase keys.
 // advanceToPRReady walks a feature through the full pipeline up to (and including) PRReady.
 func advanceToPRReady(t *testing.T, store *feature.Store, featureID string) {
@@ -2984,8 +2984,8 @@ func advanceToPRReady(t *testing.T, store *feature.Store, featureID string) {
 		feature.StatusInquiring,
 		feature.StatusInquireReady,
 		feature.StatusResearching,
-		feature.StatusBrainstormReady,
-		feature.StatusBrainstorming,
+		feature.StatusDesignReady,
+		feature.StatusDesigning,
 		feature.StatusPlanReady,
 		feature.StatusPlanning,
 		feature.StatusImplementReady,
@@ -3532,7 +3532,7 @@ func TestUpgradeThenRewind_MediumToStandard_ResearchGoesToKB(t *testing.T) {
 	}
 }
 
-func TestUpgradeThenRewind_MediumToMoonshot_BrainstormGoesToKB(t *testing.T) {
+func TestUpgradeThenRewind_MediumToMoonshot_DesignGoesToKB(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended pipeline-upgrade rewind regression")
@@ -3564,8 +3564,8 @@ func TestUpgradeThenRewind_MediumToMoonshot_BrainstormGoesToKB(t *testing.T) {
 		t.Errorf("PipelineUpgradedFrom = %q, want %q", got.PipelineUpgradedFrom, feature.PipelineMedium)
 	}
 
-	// Step 3: Rewind to Brainstorm — should escalate to KB
-	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhaseBrainstorm)
+	// Step 3: Rewind to Design — should escalate to KB
+	_, effective, err := mgr.RewindToPhase(f.ID, feature.PhaseDesign)
 	if err != nil {
 		t.Fatalf("RewindToPhase: %v", err)
 	}
@@ -3986,7 +3986,7 @@ func TestRewindToPhase_FromReviewing_StatusMapping(t *testing.T) {
 		wantPhase   feature.Phase
 	}{
 		{"to_implement", feature.PhaseImplement, feature.StatusPlanNeedsReview, feature.PhasePlan},
-		{"to_plan", feature.PhasePlan, feature.StatusDesignNeedsReview, feature.PhaseBrainstorm},
+		{"to_plan", feature.PhasePlan, feature.StatusDesignNeedsReview, feature.PhaseDesign},
 		{"to_research", feature.PhaseResearch, feature.StatusInquiryNeedsReview, feature.PhaseInquire},
 	}
 	for _, tt := range tests {
@@ -4574,7 +4574,7 @@ func seedCarryForwardFixtures(t *testing.T, run1Dir string) {
 	files := map[string]string{
 		filepath.Join("inquire", "marker.txt"):            "inquire",
 		filepath.Join("research", "marker.txt"):           "research",
-		filepath.Join("brainstorm", "marker.txt"):         "brainstorm",
+		filepath.Join("design", "marker.txt"):         "design",
 		filepath.Join("plan", "plan.md"):                  "plan",
 		filepath.Join("roadmap", "roadmap.md"):            "roadmap",
 		filepath.Join("phase-01", "plan", "plan.md"):      "phase-01-plan",
@@ -4610,30 +4610,30 @@ func TestRewindToPhase_CarriesForwardCorrectPhases(t *testing.T) {
 			name:           "inquire carries nothing",
 			target:         feature.PhaseInquire,
 			wantCarried:    nil,
-			wantNotCarried: []string{"inquire", "research", "brainstorm", "plan", "roadmap", "implement"},
+			wantNotCarried: []string{"inquire", "research", "design", "plan", "roadmap", "implement"},
 		},
 		{
 			name:           "research carries inquire",
 			target:         feature.PhaseResearch,
 			wantCarried:    []string{"inquire"},
-			wantNotCarried: []string{"research", "brainstorm", "plan", "roadmap", "implement"},
+			wantNotCarried: []string{"research", "design", "plan", "roadmap", "implement"},
 		},
 		{
-			name:           "brainstorm carries inquire+research",
-			target:         feature.PhaseBrainstorm,
+			name:           "design carries inquire+research",
+			target:         feature.PhaseDesign,
 			wantCarried:    []string{"inquire", "research"},
-			wantNotCarried: []string{"brainstorm", "plan", "roadmap", "implement"},
+			wantNotCarried: []string{"design", "plan", "roadmap", "implement"},
 		},
 		{
-			name:           "plan carries inquire+research+brainstorm",
+			name:           "plan carries inquire+research+design",
 			target:         feature.PhasePlan,
-			wantCarried:    []string{"inquire", "research", "brainstorm"},
+			wantCarried:    []string{"inquire", "research", "design"},
 			wantNotCarried: []string{"plan", "roadmap", "implement"},
 		},
 		{
 			name:           "implement carries prior+plan+roadmap+phase-NN/plan",
 			target:         feature.PhaseImplement,
-			wantCarried:    []string{"inquire", "research", "brainstorm", "plan", "roadmap", filepath.Join("phase-01", "plan"), filepath.Join("phase-02", "plan")},
+			wantCarried:    []string{"inquire", "research", "design", "plan", "roadmap", filepath.Join("phase-01", "plan"), filepath.Join("phase-02", "plan")},
 			wantNotCarried: []string{"implement", filepath.Join("phase-01", "implement"), filepath.Join("phase-02", "implement")},
 		},
 	}
@@ -4652,7 +4652,7 @@ func TestRewindToPhase_CarriesForwardCorrectPhases(t *testing.T) {
 
 			run2Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-002")
 			// Sealed run preserves every fixture directory.
-			for _, rel := range []string{"inquire", "research", "brainstorm", "plan", "roadmap", "implement", filepath.Join("phase-01", "plan"), filepath.Join("phase-01", "implement"), filepath.Join("phase-02", "plan"), filepath.Join("phase-02", "implement")} {
+			for _, rel := range []string{"inquire", "research", "design", "plan", "roadmap", "implement", filepath.Join("phase-01", "plan"), filepath.Join("phase-01", "implement"), filepath.Join("phase-02", "plan"), filepath.Join("phase-02", "implement")} {
 				if _, err := os.Stat(filepath.Join(run1Dir, rel)); err != nil {
 					t.Errorf("sealed run-001/%s missing (seal+fork must preserve artifacts): %v", rel, err)
 				}
@@ -4761,7 +4761,7 @@ func TestRewindToPhase_ToPhaseImplement_CarriesPlanDirs(t *testing.T) {
 	}
 	// CarriedPhases should contain the static set + every discovered plan dir.
 	gotCarried := append([]string(nil), newRun.CarriedPhases...)
-	want := []string{"inquire", "research", "brainstorm", "roadmap", "plan"}
+	want := []string{"inquire", "research", "design", "roadmap", "plan"}
 	for _, n := range []string{"phase-01", "phase-02", "phase-03", "phase-04", "phase-10"} {
 		want = append(want, filepath.Join(n, "plan"))
 	}
@@ -5445,16 +5445,16 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	skipShortFeatureRegression(t, "extended rewind artifact-map normalization regression")
-	t.Run("rewind to plan carries inquire/research/brainstorm as run-relative", func(t *testing.T) {
+	t.Run("rewind to plan carries inquire/research/design as run-relative", func(t *testing.T) {
 		mgr := newTestManager(t)
 		f, run1Dir := seedRewindableFeature(t, mgr)
 
 		absInquire := filepath.Join(run1Dir, "inquire", "inquire.md")
 		absResearch := filepath.Join(run1Dir, "research", "research.md")
-		absBrainstorm := filepath.Join(run1Dir, "brainstorm", "brainstorm.md")
+		absDesign := filepath.Join(run1Dir, "design", "design.md")
 		absPlan := filepath.Join(run1Dir, "plan", "plan.md")
 		absImpl := filepath.Join(run1Dir, "implement", "impl.md")
-		for _, p := range []string{absInquire, absResearch, absBrainstorm, absPlan, absImpl} {
+		for _, p := range []string{absInquire, absResearch, absDesign, absPlan, absImpl} {
 			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 				t.Fatalf("mkdir %s: %v", p, err)
 			}
@@ -5467,7 +5467,7 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 			ff.Artifacts = map[string]string{
 				"inquire":    absInquire,
 				"research":   absResearch,
-				"brainstorm": absBrainstorm,
+				"design": absDesign,
 				"plan":       absPlan,
 				"implement":  absImpl,
 				"pr_url":     "https://github.com/o/r/pull/1",
@@ -5488,7 +5488,7 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 		wantRel := map[string]string{
 			"inquire":    filepath.Join("inquire", "inquire.md"),
 			"research":   filepath.Join("research", "research.md"),
-			"brainstorm": filepath.Join("brainstorm", "brainstorm.md"),
+			"design": filepath.Join("design", "design.md"),
 		}
 		if len(got.Artifacts) != len(wantRel) {
 			t.Errorf("new run Artifacts len = %d, want %d: %v", len(got.Artifacts), len(wantRel), got.Artifacts)
@@ -5535,7 +5535,7 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 		absMap := map[string]string{
 			"inquire":      filepath.Join(run1Dir, "inquire", "inquire.md"),
 			"research":     filepath.Join(run1Dir, "research", "research.md"),
-			"brainstorm":   filepath.Join(run1Dir, "brainstorm", "brainstorm.md"),
+			"design":   filepath.Join(run1Dir, "design", "design.md"),
 			"plan":         filepath.Join(run1Dir, "plan", "plan.md"),
 			"roadmap":      filepath.Join(run1Dir, "roadmap", "roadmap.md"),
 			"phase-1-plan": filepath.Join(run1Dir, "phase-01", "plan", "plan.md"),
@@ -5571,7 +5571,7 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get: %v", err)
 		}
-		wantCarried := []string{"inquire", "research", "brainstorm", "plan", "roadmap", "phase-1-plan", "phase-2-plan"}
+		wantCarried := []string{"inquire", "research", "design", "plan", "roadmap", "phase-1-plan", "phase-2-plan"}
 		if len(got.Artifacts) != len(wantCarried) {
 			t.Errorf("new run Artifacts len = %d, want %d: %v", len(got.Artifacts), len(wantCarried), got.Artifacts)
 		}

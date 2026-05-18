@@ -373,9 +373,9 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 		{"inquire", feature.PhaseInquire, RoleInquirer, "2026-05-07-inquire.md"},
 		{"research", feature.PhaseResearch, RoleResearcher, "2026-05-07-research.md"},
 		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
-		// Legacy Brainstorm role still resolves and validates the same
+		// Legacy Design role still resolves and validates the same
 		// markdown artifact behavior so older runs continue to complete.
-		{"brainstorm", feature.PhaseBrainstorm, RoleBrainstormer, "2026-05-07-brainstorm.md"},
+		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
 	}
 
 	for _, tt := range tests {
@@ -419,7 +419,7 @@ func TestContractRegistryArtifactPhaseRolesReportMissingMarkdown(t *testing.T) {
 		{feature.PhaseInquire, RoleInquirer},
 		{feature.PhaseResearch, RoleResearcher},
 		{feature.PhaseDesign, RoleDesigner},
-		{feature.PhaseBrainstorm, RoleBrainstormer},
+		{feature.PhaseDesign, RoleDesigner},
 	}
 
 	for _, tt := range tests {
@@ -472,7 +472,7 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 		t.Fatalf("chtimes old artifact: %v", err)
 	}
 
-	out, violations, err := Validate(feature.PhaseBrainstorm, RoleBrainstormer, dir)
+	out, violations, err := Validate(feature.PhaseDesign, RoleDesigner, dir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}

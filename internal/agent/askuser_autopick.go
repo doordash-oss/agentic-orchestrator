@@ -52,7 +52,6 @@ func askUserAutoPickAllowedPurpose(purpose ports.AskUserAutoPickPurpose) bool {
 	switch purpose {
 	case ports.AskUserAutoPickPurposeInquire,
 		ports.AskUserAutoPickPurposeDesign,
-		ports.AskUserAutoPickPurposeBrainstorm,
 		ports.AskUserAutoPickPurposeRoadmapCreator,
 		ports.AskUserAutoPickPurposePhasePlanCreator:
 		return true
@@ -65,10 +64,7 @@ func interactiveAutoPickPurpose(phase feature.Phase) ports.AskUserAutoPickPurpos
 	switch phase {
 	case feature.PhaseInquire:
 		return ports.AskUserAutoPickPurposeInquire
-	case feature.PhaseBrainstorm:
-		// PhaseBrainstorm == PhaseDesign. New sessions emit the canonical
-		// Design purpose; legacy resumed sessions keep working because
-		// AskUserAutoPickPurposeBrainstorm is still on the allow-list.
+	case feature.PhaseDesign:
 		return ports.AskUserAutoPickPurposeDesign
 	default:
 		return ports.AskUserAutoPickPurposeNone

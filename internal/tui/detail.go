@@ -524,7 +524,7 @@ func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
 		{"Building Knowledge Base", feature.PhaseKnowledgeBase, "knowledgebase"},
 		{"Inquire", feature.PhaseInquire, "inquire"},
 		{"Research", feature.PhaseResearch, "research"},
-		{"Design", feature.PhaseBrainstorm, "brainstorm"},
+		{"Design", feature.PhaseDesign, "design"},
 		{"Planning", feature.PhasePlan, "plan"},
 		{"Implement", feature.PhaseImplement, "implement"},
 		{"Final Review", feature.PhaseReview, "review"},
@@ -827,7 +827,7 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 		{"Building Knowledge Base", feature.PhaseKnowledgeBase, "knowledgebase"},
 		{"Inquire", feature.PhaseInquire, "inquire"},
 		{"Research", feature.PhaseResearch, "research"},
-		{"Design", feature.PhaseBrainstorm, "brainstorm"},
+		{"Design", feature.PhaseDesign, "design"},
 		{"Planning", feature.PhasePlan, "plan"},
 		{"Implement", feature.PhaseImplement, "implement"},
 		{"Final Review", feature.PhaseReview, "review"},
@@ -1475,7 +1475,7 @@ func formatPhaseStatus(f *feature.Feature) string {
 		return lipgloss.NewStyle().Foreground(colorInfo).Render("running")
 	case feature.StatusResearching:
 		return lipgloss.NewStyle().Foreground(colorInfo).Render("running")
-	case feature.StatusBrainstorming:
+	case feature.StatusDesigning:
 		return lipgloss.NewStyle().Foreground(colorInfo).Render("running")
 	case feature.StatusPlanning:
 		if f.ValidatingPlan && len(f.ValidatorStatuses) > 0 {

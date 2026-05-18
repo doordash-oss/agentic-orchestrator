@@ -52,9 +52,6 @@ func TestDetailDesignSnapshot(t *testing.T) {
 			t.Errorf("expected detail view to contain %q; got:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Brainstorm") {
-		t.Errorf("did not expect legacy label \"Brainstorm\" in detail view; got:\n%s", view)
-	}
 
 	if out := os.Getenv("AGENTIC_SNAPSHOT_PATH"); out != "" {
 		if err := os.WriteFile(out, []byte(view), 0o644); err != nil {

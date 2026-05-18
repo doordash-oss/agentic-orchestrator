@@ -1401,7 +1401,7 @@ func formatStatus(f *feature.Feature) string {
 			return WarningStyle.Render(label+" | waiting input") + elapsed
 		}
 		return label + elapsed
-	case feature.StatusBrainstorming:
+	case feature.StatusDesigning:
 		label := "Designing"
 		if f.IsRefactoring() {
 			label = "Refactoring: Designing"

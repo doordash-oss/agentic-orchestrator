@@ -115,8 +115,8 @@ func TestRewindCrashAndRetry(t *testing.T) {
 		{"CompleteInquire", mgr.CompleteInquire},
 		{"StartResearch", mgr.StartResearch},
 		{"CompleteResearch", mgr.CompleteResearch},
-		{"StartBrainstorm", mgr.StartBrainstorm},
-		{"CompleteBrainstorm", mgr.CompleteBrainstorm},
+		{"StartDesign", mgr.StartDesign},
+		{"CompleteDesign", mgr.CompleteDesign},
 	} {
 		if err := step.fn(f.ID); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
@@ -126,7 +126,7 @@ func TestRewindCrashAndRetry(t *testing.T) {
 	// Seed marker files under each phase dir so the carry-forward has
 	// something real to copy.
 	run1Dir := filepath.Join(stateDir, f.ID, "runs", "run-001")
-	for _, phase := range []string{"inquire", "research", "brainstorm"} {
+	for _, phase := range []string{"inquire", "research", "design"} {
 		dir := filepath.Join(run1Dir, phase)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir run-001/%s: %v", phase, err)

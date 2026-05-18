@@ -64,17 +64,6 @@ func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 func (o *Orchestrator) resolveArtifactPath(f *feature.Feature, phase string) string {
 	baseDir := o.stateDir()
 	artifactPath, ok := f.Artifacts[phase]
-	if (!ok || artifactPath == "") && (phase == feature.DesignArtifactKey || phase == feature.LegacyBrainstormArtifactKey) {
-		// Design / legacy Brainstorm compatibility: check the alternate key.
-		alt := feature.LegacyBrainstormArtifactKey
-		if phase == feature.LegacyBrainstormArtifactKey {
-			alt = feature.DesignArtifactKey
-		}
-		if v, altOk := f.Artifacts[alt]; altOk && v != "" {
-			artifactPath = v
-			ok = true
-		}
-	}
 	if !ok || artifactPath == "" {
 		// No stored artifact path — try the well-known phase directory.
 		phaseDir := o.resolvePhaseDirForKey(f, phase)
@@ -184,7 +173,7 @@ func (o *Orchestrator) phasePlanDirForFeature(f *feature.Feature, phase int) str
 // tryLoadPhasePlan in lifecycle_delegates.go.)
 
 // collectQAFilePaths gathers Q&A answer files from earlier phases (inquire,
-// research, brainstorm, roadmap) so they can be passed to planning prompts.
+// research, design, roadmap) so they can be passed to planning prompts.
 // Mirrors app.go:5761-5773. Missing files are gracefully skipped via os.Stat.
 func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) []string {
 	baseDir := o.stateDir()
@@ -193,10 +182,7 @@ func (o *Orchestrator) collectQAFilePaths(f *feature.Feature, refPrefix string) 
 	}
 	runDir := agent.ActiveRunDir(baseDir, f)
 	var paths []string
-	// "design" probes the canonical Design directory; "brainstorm" is the
-	// legacy directory layout that older runs persisted before the rename.
-	// Both are checked so legacy state continues to feed planning prompts.
-	for _, phase := range []string{"inquire", "research", "design", "brainstorm", "roadmap"} {
+	for _, phase := range []string{"inquire", "research", "design", "roadmap"} {
 		qaPath := filepath.Join(runDir, refPrefix, phase, "qa-answers.md")
 		if _, err := os.Stat(qaPath); err == nil {
 			paths = append(paths, qaPath)

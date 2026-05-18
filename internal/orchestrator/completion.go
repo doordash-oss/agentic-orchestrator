@@ -327,11 +327,11 @@ func findRepo(f *feature.Feature, name string) (feature.FeatureRepo, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Artifact-phase completion (Inquire / Research / Brainstorm)
+// Artifact-phase completion (Inquire / Research / Design)
 // ---------------------------------------------------------------------------
 
 // onArtifactPhaseCompleted handles completion for the three interactive
-// artifact phases (inquire, research, brainstorm). Mirrors
+// artifact phases (inquire, research, design). Mirrors
 // app.go:2861-2913.
 //
 //  1. Validate phase_complete and the registry-owned markdown artifact
@@ -354,7 +354,7 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 // onArtifactPhaseCompletedWithKey is the canonical entry point that lets the
 // dispatcher record the artifact under a different map key than the on-disk
 // phase directory name. The Design phase uses this to keep the legacy
-// "brainstorm" subdirectory in place while persisting the canonical "design"
+// "design" subdirectory in place while persisting the canonical "design"
 // artifact key.
 func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	featureID string,
@@ -417,7 +417,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 
 func artifactPhasePersistsQALog(phaseKey string) bool {
 	switch phaseKey {
-	case "inquire", "research", "brainstorm", "design":
+	case "inquire", "research", "design":
 		return true
 	default:
 		return false
@@ -430,10 +430,7 @@ func artifactPhaseRole(phase feature.Phase) (agent.Role, bool) {
 		return agent.RoleInquirer, true
 	case feature.PhaseResearch:
 		return agent.RoleResearcher, true
-	case feature.PhaseBrainstorm:
-		// PhaseBrainstorm == PhaseDesign. Validation uses the canonical
-		// Design role; the legacy Brainstorm role still resolves through
-		// roles.Lookup for older callers that look up the spec directly.
+	case feature.PhaseDesign:
 		return agent.RoleDesigner, true
 	default:
 		return "", false

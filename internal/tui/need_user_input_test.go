@@ -115,7 +115,7 @@ func TestNeedUserInputOverlayResumeWhenAnswered(t *testing.T) {
 
 // TestNeedUserInputOverlayPersistsDraftOnDetach asserts that draft answers
 // typed into the questionnaire survive a Ctrl+D detach. This is the
-// round-trip the brainstorm requires for restart safety.
+// round-trip the design requires for restart safety.
 func TestNeedUserInputOverlayPersistsDraftOnDetach(t *testing.T) {
 	gatePath := writeTestGate(t, "Decide.", []string{"Q1", "Q2"}, []string{"", ""})
 	m := newTestNeedUserInputReview(t, "feat-3", gatePath)

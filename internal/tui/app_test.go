@@ -70,12 +70,12 @@ func TestFeatureIDFromSession(t *testing.T) {
 		{"abc123-review-03", "abc123"},
 		{"abc123-kb", "abc123"},
 		{"abc123-inquire", "abc123"},
-		{"abc123-brainstorm", "abc123"},
+		{"abc123-design", "abc123"},
 		{"abc123-artifact-review", "abc123"},
 		{"longid1234567890-artifact-review", "longid1234567890"},
 		{"longid1234567890-research", "longid1234567890"},
 		{"longid1234567890-inquire", "longid1234567890"},
-		{"longid1234567890-brainstorm", "longid1234567890"},
+		{"longid1234567890-design", "longid1234567890"},
 		// Phase-scoped session IDs
 		{"abc123-phase-01-impl-01", "abc123"},
 		{"abc123-phase-02-review-03", "abc123"},
@@ -170,7 +170,7 @@ func TestPhaseFromSessionID(t *testing.T) {
 		{"abc123-review-01", feature.PhaseReview},
 		{"abc123-kb", feature.PhaseKnowledgeBase},
 		{"abc123-inquire", feature.PhaseInquire},
-		{"abc123-brainstorm", feature.PhaseBrainstorm},
+		{"abc123-design", feature.PhaseDesign},
 		// Phase-scoped session IDs
 		{"abc123-phase-01-impl-01", feature.PhaseImplement},
 		{"abc123-phase-02-review-03", feature.PhaseReview},
@@ -182,7 +182,7 @@ func TestPhaseFromSessionID(t *testing.T) {
 		{"abc123-impl-data-research-01", feature.PhaseImplement},
 		{"abc123-impl-my-kb-service-01", feature.PhaseImplement},
 		{"abc123-impl-code-review-tool-01", feature.PhaseImplement},
-		{"abc123-impl-brainstorm-helper-01", feature.PhaseImplement},
+		{"abc123-impl-design-helper-01", feature.PhaseImplement},
 		{"abc123-impl-inquire-svc-01", feature.PhaseImplement},
 		// Fix-agent sessions live inside the final-review loop, so they
 		// resolve to PhaseReview. Repo names may contain phase-like
@@ -3531,12 +3531,12 @@ func TestDashboardPreviewContextPct(t *testing.T) {
 	}
 }
 
-func TestIsRunningFeatureIncludesInquiringAndBrainstorming(t *testing.T) {
+func TestIsRunningFeatureIncludesInquiringAndDesigning(t *testing.T) {
 	runningStatuses := []feature.Status{
 		feature.StatusBuildingKB,
 		feature.StatusResearching,
 		feature.StatusInquiring,
-		feature.StatusBrainstorming,
+		feature.StatusDesigning,
 		feature.StatusPlanning,
 		feature.StatusImplementing,
 	}
@@ -3622,14 +3622,14 @@ func TestIsRunningFeatureIncludesInquiringAndBrainstorming(t *testing.T) {
 	}
 }
 
-func TestStopAllowedForInquiringAndBrainstorming(t *testing.T) {
+func TestStopAllowedForInquiringAndDesigning(t *testing.T) {
 	tests := []struct {
 		name   string
 		status feature.Status
 		phase  feature.Phase
 	}{
 		{"inquiring", feature.StatusInquiring, feature.PhaseInquire},
-		{"brainstorming", feature.StatusBrainstorming, feature.PhaseBrainstorm},
+		{"designing", feature.StatusDesigning, feature.PhaseDesign},
 	}
 
 	for _, tt := range tests {
@@ -4393,7 +4393,7 @@ func tuiArtifactPhaseCases() []tuiArtifactPhaseCase {
 	return []tuiArtifactPhaseCase{
 		{"inquire", feature.PhaseInquire},
 		{"research", feature.PhaseResearch},
-		{"brainstorm", feature.PhaseBrainstorm},
+		{"design", feature.PhaseDesign},
 	}
 }
 
@@ -5158,8 +5158,8 @@ func newTestAppWithPublishedRefactorFeature(t *testing.T, roadmapPhases, current
 	})
 	_ = fm.Transition(f.ID, feature.StatusInquireReady)
 	_ = fm.Transition(f.ID, feature.StatusResearching)
-	_ = fm.Transition(f.ID, feature.StatusBrainstormReady)
-	_ = fm.Transition(f.ID, feature.StatusBrainstorming)
+	_ = fm.Transition(f.ID, feature.StatusDesignReady)
+	_ = fm.Transition(f.ID, feature.StatusDesigning)
 	_ = fm.Transition(f.ID, feature.StatusPlanReady)
 	_ = fm.Transition(f.ID, feature.StatusPlanning)
 	_ = fm.Transition(f.ID, feature.StatusImplementReady)
@@ -5269,8 +5269,8 @@ func TestRoadmapRejectDuringRefactor_WritesToRefactorDir(t *testing.T) {
 	// Advance the refactor pipeline through to PlanReady (where roadmap review happens)
 	_ = fm.Transition(f.ID, feature.StatusInquireReady)
 	_ = fm.Transition(f.ID, feature.StatusResearching)
-	_ = fm.Transition(f.ID, feature.StatusBrainstormReady)
-	_ = fm.Transition(f.ID, feature.StatusBrainstorming)
+	_ = fm.Transition(f.ID, feature.StatusDesignReady)
+	_ = fm.Transition(f.ID, feature.StatusDesigning)
 	_ = fm.Transition(f.ID, feature.StatusPlanReady)
 
 	// Get the updated feature to learn the refactor count
@@ -8957,8 +8957,8 @@ func TestHandleMultiRepoImplDone_MultiRepoRefactor_SkipsFinalReview(t *testing.T
 	// Walk through the refactor pipeline to StatusImplementing
 	_ = fm.Transition(f.ID, feature.StatusInquireReady)
 	_ = fm.Transition(f.ID, feature.StatusResearching)
-	_ = fm.Transition(f.ID, feature.StatusBrainstormReady)
-	_ = fm.Transition(f.ID, feature.StatusBrainstorming)
+	_ = fm.Transition(f.ID, feature.StatusDesignReady)
+	_ = fm.Transition(f.ID, feature.StatusDesigning)
 	_ = fm.Transition(f.ID, feature.StatusPlanReady)
 	_ = fm.Transition(f.ID, feature.StatusPlanning)
 	_ = fm.Transition(f.ID, feature.StatusImplementReady)

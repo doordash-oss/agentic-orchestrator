@@ -79,7 +79,7 @@ type Hooks struct {
 
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly
 // one of the pointer result fields is non-nil for loop-driven phases; for
-// session-parser-driven phases (KB/Inquire/Research/Brainstorm) all pointer
+// session-parser-driven phases (KB/Inquire/Research/Design) all pointer
 // fields are nil and the handler uses Success + ErrorDetail + SessionID.
 type PhaseCompletionInput struct {
 	Phase       feature.Phase
@@ -494,8 +494,8 @@ func (o *Orchestrator) startPhase(featureID string, phase feature.Phase) (featur
 		result, err = o.startInquire(featureID)
 	case feature.PhaseResearch:
 		result, err = o.startResearch(featureID)
-	case feature.PhaseBrainstorm:
-		result, err = o.startBrainstorm(featureID)
+	case feature.PhaseDesign:
+		result, err = o.startDesign(featureID)
 	case feature.PhasePlan:
 		result, err = o.startPlan(featureID)
 	case feature.PhaseImplement:
@@ -800,27 +800,27 @@ func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error)
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
-// startBrainstorm starts the Brainstorm phase. Fails if the research
+// startDesign starts the Design phase. Fails if the research
 // artifact is missing. Collects QA files from inquire/research. Idempotent
-// for recovery resume: when the feature is already StatusBrainstorming,
-// StartBrainstorm is skipped because the
-// StatusBrainstorming → StatusBrainstorming self-transition is invalid
+// for recovery resume: when the feature is already StatusDesigning,
+// StartDesign is skipped because the
+// StatusDesigning → StatusDesigning self-transition is invalid
 // (feature/feature.go:492).
-func (o *Orchestrator) startBrainstorm(featureID string) (PhaseStartResult, error) {
+func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return PhaseStartResult{}, fmt.Errorf("loading feature: %w", err)
 	}
-	if f.Status != feature.StatusBrainstorming {
-		if err := o.deps.Lifecycle.StartBrainstorm(featureID); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("start brainstorm: %w", err)
+	if f.Status != feature.StatusDesigning {
+		if err := o.deps.Lifecycle.StartDesign(featureID); err != nil {
+			return PhaseStartResult{}, fmt.Errorf("start design: %w", err)
 		}
 	}
 	researchPath := o.resolveArtifactPath(f, "research")
 	if researchPath == "" {
 		return PhaseStartResult{}, errors.New("research phase did not produce an artifact; cannot proceed to design")
 	}
-	// QA file paths from inquire/research specifically (brainstorm's own qa
+	// QA file paths from inquire/research specifically (design's own qa
 	// doesn't exist yet — matches app.go:5577-5582).
 	var qaFilePaths []string
 	baseDir := o.stateDir()
@@ -836,7 +836,7 @@ func (o *Orchestrator) startBrainstorm(featureID string) (PhaseStartResult, erro
 	}
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
-		if _, err := o.deps.PhaseRunner.RunBrainstorm(f, researchPath, qaFilePaths, kbInfos...); err != nil {
+		if _, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...); err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run design: %w", err)
 		}
 	}
@@ -844,7 +844,7 @@ func (o *Orchestrator) startBrainstorm(featureID string) (PhaseStartResult, erro
 }
 
 // startPlan starts the Plan phase. Delegates to startRoadmapPhasePlan when
-// CurrentRoadmapPhase > 0. Otherwise resolves brainstorm → research → empty
+// CurrentRoadmapPhase > 0. Otherwise resolves design → research → empty
 // (medium pipeline OK; other pipelines fail on missing artifact). Idempotent
 // for recovery resume: when the feature is already StatusPlanning,
 // StartPlanning is skipped because the StatusPlanning → StatusPlanning
@@ -864,7 +864,7 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 		}
 	}
 
-	inputArtifactPath := o.resolveArtifactPath(f, "brainstorm")
+	inputArtifactPath := o.resolveArtifactPath(f, "design")
 	if inputArtifactPath == "" {
 		inputArtifactPath = o.resolveArtifactPath(f, "research")
 	}
@@ -1282,11 +1282,11 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 		return o.onArtifactPhaseCompleted(featureID, input, "inquire", o.deps.Lifecycle.CompleteInquire)
 	case feature.PhaseResearch:
 		return o.onArtifactPhaseCompleted(featureID, input, "research", o.deps.Lifecycle.CompleteResearch)
-	case feature.PhaseBrainstorm:
-		// Validate against the legacy "brainstorm" on-disk subdirectory but
+	case feature.PhaseDesign:
+		// Validate against the legacy "design" on-disk subdirectory but
 		// persist the canonical Design artifact key so downstream consumers
 		// resolve it through feature.Feature.DesignArtifactPath().
-		return o.onArtifactPhaseCompletedWithKey(featureID, input, "brainstorm", feature.DesignArtifactKey, o.deps.Lifecycle.CompleteBrainstorm)
+		return o.onArtifactPhaseCompletedWithKey(featureID, input, "design", feature.DesignArtifactKey, o.deps.Lifecycle.CompleteDesign)
 	case feature.PhasePlan:
 		return o.onPlanLoopDone(featureID, input.PlanResult)
 	case feature.PhaseImplement:

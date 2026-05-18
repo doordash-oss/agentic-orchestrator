@@ -125,15 +125,15 @@ func (pr *PhaseRunner) resolvePhaseArtifactDir(f *feature.Feature, phaseName str
 
 // interactivePhaseConfig holds the values that differ across the async
 // interactive phase methods (RunInquire, RunResearchFromQuestions,
-// RunBrainstorm). Prompt is the lean user prompt; Spec drives the generic
+// RunDesign). Prompt is the lean user prompt; Spec drives the generic
 // RoleSpec system prompt that owns skill discovery, useful resources, output
 // roots, and completion.
 type interactivePhaseConfig struct {
 	Prompt        string
 	Spec          RoleSpec
-	DirName       string        // artifact subdirectory: "inquire", "research", "brainstorm"
+	DirName       string        // artifact subdirectory: "inquire", "research", "design"
 	SkillName     string        // skill name (used for error messages and session naming)
-	SessionSuffix string        // appended to feature ID: "-inquire", "-research", "-brainstorm"
+	SessionSuffix string        // appended to feature ID: "-inquire", "-research", "-design"
 	Phase         feature.Phase // feature.PhaseInquire, etc.
 	AgentNames    []string
 	GuidelinesDir string
@@ -435,7 +435,7 @@ func researchAgentNames() []string {
 
 // RunDesign starts the canonical Design session for a feature. Returns the
 // session ID. The session runs asynchronously. The on-disk artifact
-// subdirectory remains "brainstorm" so legacy run state stays readable in
+// subdirectory remains "design" so legacy run state stays readable in
 // place; the session identity, skill, and prompt template are Design-facing.
 func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
@@ -449,13 +449,6 @@ func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFi
 		GuidelinesDir: pr.GuidelinesDir,
 		KBInfos:       kbInfos,
 	})
-}
-
-// RunBrainstorm is the legacy entry point for the Design phase. It delegates
-// to RunDesign so callers and tests that still spell the phase as
-// "brainstorm" continue to dispatch the canonical Design session.
-func (pr *PhaseRunner) RunBrainstorm(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
-	return pr.RunDesign(f, researchOutput, qaFilePaths, kbInfos...)
 }
 
 // RunCodebaseIndex builds structural codebase indexes for all repos in a feature.
@@ -662,7 +655,7 @@ func knowledgeBaseAgentNames() []string {
 
 // RunPlanningWithValidation starts the planning loop with validation gate.
 // This runs asynchronously and returns a channel that receives the result.
-// qaFilePaths are paths to Q&A files from earlier phases (inquire, research, brainstorm).
+// qaFilePaths are paths to Q&A files from earlier phases (inquire, research, design).
 func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
 	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
 
@@ -679,7 +672,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		FeatureStore:               pr.FeatureStore,
 		StateDir:                   pr.StateDir,
 		ResearchArtifactPath:       researchArtifactPath,
-		BrainstormArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:     f.DesignArtifactPath(),
 		QAFilePaths:                qaFilePaths,
 		KBInfos:                    kbInfos,
 		WorkDir:                    workDir,
@@ -710,7 +703,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 }
 
 // RunPhasePlanning runs per-phase plan creation + critic loop.
-// qaFilePaths are paths to Q&A files from earlier phases (inquire, research, brainstorm).
+// qaFilePaths are paths to Q&A files from earlier phases (inquire, research, design).
 // priorPhasePlanPaths are approved plan paths from completed phases (phase-01, phase-02, etc.).
 func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, priorPhasePlanPaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
 	// Use the shared resolver so per-phase planning runs in the feature worktree
@@ -741,7 +734,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			Feature:                    f,
 			FeatureStore:               pr.FeatureStore,
 			StateDir:                   pr.StateDir,
-			BrainstormArtifactPath:     f.DesignArtifactPath(),
+			DesignArtifactPath:     f.DesignArtifactPath(),
 			QAFilePaths:                qaFilePaths,
 			KBInfos:                    kbInfos,
 			WorkDir:                    workDir,
@@ -818,7 +811,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
 		PhaseType:                  phaseType,
 		RoadmapPath:                roadmapPath,
-		BrainstormArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:     f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		BuildSession:               pr.BuildSession,
@@ -1101,7 +1094,7 @@ func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
 }
 
 // resolveUnifiedWorkDir computes the working directory and additional directories
-// for unified phases (Inquire, Research, Brainstorm, Plan).
+// for unified phases (Inquire, Research, Design, Plan).
 //
 // With worktrees: workDir = worktree parent, additionalDirs includes
 // each repo's worktree path plus stateDir.
@@ -1209,7 +1202,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	// Guidelines injection: append discovery table for code-touching phases.
 	if pr.GuidelinesDir != "" && opts.SystemPrompt != "" && !opts.SystemPromptHasUsefulResources {
 		switch opts.Phase {
-		case feature.PhaseBrainstorm, feature.PhasePlan, feature.PhaseImplement, feature.PhaseReview:
+		case feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement, feature.PhaseReview:
 			preamble := guidelinedef.BuildPreamble(pr.GuidelinesDir)
 			if preamble != "" {
 				opts.SystemPrompt = opts.SystemPrompt + "\n\n" + preamble

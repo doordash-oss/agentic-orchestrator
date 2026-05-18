@@ -27,7 +27,7 @@ import (
 )
 
 // When next == PhasePublish, advance emits NOTHING — completion handlers own
-// publish dispatch exclusively. (Inquire/Research/Brainstorm → Plan isn't
+// publish dispatch exclusively. (Inquire/Research/Design → Plan isn't
 // Publish, but Implement/Review landing at Publish is the critical case.)
 // We drive this via multi-repo all_passed (non-publishable) which calls
 // CompleteImplementation → advance(Implement → Publish). Next phase is
@@ -403,7 +403,7 @@ func TestOrchestrator_HandleReviewDecision_Iterate_Roadmap_InvalidatesApprovedAt
 	f := &feature.Feature{
 		ID:     featureID,
 		Status: feature.StatusPlanNeedsReview,
-		// PipelineLarge + no brainstorm/research artifact causes startPlan
+		// PipelineLarge + no design/research artifact causes startPlan
 		// to return an error before spawning RunPlanningWithValidation — which
 		// would otherwise panic on a nil ModelRegistry inside its goroutine.
 		// The meta invalidation we care about happens BEFORE that dispatch.
@@ -516,7 +516,7 @@ func TestOrchestrator_HandleReviewDecision_Iterate_Legacy_InvalidatesApprovedAtt
 	f := &feature.Feature{
 		ID:     featureID,
 		Status: feature.StatusPlanNeedsReview,
-		// PipelineLarge + no brainstorm/research artifact causes startPlan
+		// PipelineLarge + no design/research artifact causes startPlan
 		// to return an error before spawning the planning helper — which
 		// would otherwise panic on a nil ModelRegistry inside its goroutine.
 		// The meta invalidation we care about happens BEFORE that dispatch.
@@ -855,7 +855,7 @@ func TestOrchestrator_ProceedFromRewindReview_ToInquire_OverwritesDescription(t 
 }
 
 // ProceedFromRewindReview to PhasePlan on an Medium pipeline: Plan is the
-// first phase of the Medium pipeline (no inquire / research / brainstorm),
+// first phase of the Medium pipeline (no inquire / research / design),
 // so the rewind-review input is the feature description itself — same
 // pattern as rewind-to-Inquire for Large/Moonshot. feature/manager.go
 // writes description-review.md on this rewind; the orchestrator must read it

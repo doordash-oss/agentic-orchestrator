@@ -181,12 +181,12 @@ func TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant(t *testing.T) {
 //	(i) the test pre-writes a stale qa-answers.md at the canonical phase
 //	    directory;
 //	(ii) drives HandlePhaseCompletion with the input shape the production
-//	    code uses for that phase (SessionID-based for Brainstorm, PlanResult-
+//	    code uses for that phase (SessionID-based for Design, PlanResult-
 //	    based for Roadmap and Phase-Plan);
-//	(iii) asserts Brainstorm is replaced from the session Q&A log, while
+//	(iii) asserts Design is replaced from the session Q&A log, while
 //	    Roadmap and Phase-Plan preserve transcripts already written by their
 //	    planner loops;
-//	(iv) for Brainstorm and Roadmap (which have downstream consumers of
+//	(iv) for Design and Roadmap (which have downstream consumers of
 //	    collectQAFilePaths), asserts the path is surfaced to the next phase.
 //
 // Phase-Plan deliberately does not propagate qa-answers.md downstream
@@ -203,17 +203,17 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 		expectedQAPathFn func(stateDir string, f *feature.Feature) string
 	}{
 		{
-			name: "brainstorm",
+			name: "design",
 			phaseDirRel: func(stateDir string, f *feature.Feature) string {
-				return filepath.Join(agent.ActiveRunDir(stateDir, f), "brainstorm")
+				return filepath.Join(agent.ActiveRunDir(stateDir, f), "design")
 			},
 			setupFeature: func() *feature.Feature {
 				return &feature.Feature{
-					ID:           "feat-fanout-brainstorm",
+					ID:           "feat-fanout-design",
 					ActiveRun:    1,
 					RunCount:     1,
-					Status:       feature.StatusBrainstorming,
-					CurrentPhase: feature.PhaseBrainstorm,
+					Status:       feature.StatusDesigning,
+					CurrentPhase: feature.PhaseDesign,
 					Pipeline:     feature.PipelineLarge,
 					Checkpoints: feature.Checkpoints{
 						InquiryReview:  true,
@@ -225,17 +225,17 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 			},
 			invoke: func(t *testing.T, o *Orchestrator, featureID string) {
 				if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-					Phase:     feature.PhaseBrainstorm,
+					Phase:     feature.PhaseDesign,
 					SessionID: "sess-1",
 					Success:   true,
 				}); err != nil {
-					t.Fatalf("HandlePhaseCompletion brainstorm: %v", err)
+					t.Fatalf("HandlePhaseCompletion design: %v", err)
 				}
 			},
 			wantQAFile:      sampleHarnessOwnedQA,
 			assertCollectQA: true,
 			expectedQAPathFn: func(stateDir string, f *feature.Feature) string {
-				return filepath.Join(agent.ActiveRunDir(stateDir, f), "brainstorm", "qa-answers.md")
+				return filepath.Join(agent.ActiveRunDir(stateDir, f), "design", "qa-answers.md")
 			},
 		},
 		{
@@ -381,12 +381,12 @@ func promptTail(prompt string) string {
 }
 
 // TestGrillMeFanout_StartPaths_DriveEntryPath drives all three primary
-// grill-me orchestrator entry points (startBrainstorm, startPlan,
+// grill-me orchestrator entry points (startDesign, startPlan,
 // startRoadmapPhasePlan) via the BuildSessionFn capture pattern and asserts
 // each entry path produces the shared policy-free grill-me directive. This
 // complements TestGrillMeFanout_PrimaryBuilders_EndToEnd's persistence-gate
 // coverage by proving the orchestrator entry path actually wires the invariant
-// builder into the captured prompt for Brainstorm, Roadmap, and Phase-Plan.
+// builder into the captured prompt for Design, Roadmap, and Phase-Plan.
 //
 // The matrix uses Inquireness == medium to prove none of the entry paths leak
 // medium-level auto-pick policy into the agent-facing prompt.
@@ -405,14 +405,14 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 		mustNotContain       []string
 	}{
 		{
-			name: "brainstorm",
+			name: "design",
 			setupFeature: func(stateDir string) *feature.Feature {
 				return &feature.Feature{
-					ID:           "feat-entry-brainstorm",
+					ID:           "feat-entry-design",
 					ActiveRun:    1,
 					RunCount:     1,
-					Status:       feature.StatusBrainstormReady,
-					CurrentPhase: feature.PhaseBrainstorm,
+					Status:       feature.StatusDesignReady,
+					CurrentPhase: feature.PhaseDesign,
 					Pipeline:     feature.PipelineLarge,
 					Inquireness:  feature.InquirenessMedium,
 					Repos: []feature.FeatureRepo{
@@ -435,11 +435,11 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 				f.Artifacts["research"] = researchPath
 			},
 			invoke: func(t *testing.T, o *Orchestrator, f *feature.Feature) {
-				if _, err := o.startBrainstorm(f.ID); err == nil {
-					// startBrainstorm fans through PhaseRunner.RunBrainstorm,
+				if _, err := o.startDesign(f.ID); err == nil {
+					// startDesign fans through PhaseRunner.RunDesign,
 					// which returns the BuildSessionFn error. A nil error
 					// means the capture path was not exercised.
-					t.Fatalf("expected startBrainstorm to surface BuildSession ErrShuttingDown")
+					t.Fatalf("expected startDesign to surface BuildSession ErrShuttingDown")
 				}
 			},
 			expectDispatchFail: false,
@@ -477,18 +477,18 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 				}
 			},
 			seedUpstreamArtifact: func(t *testing.T, stateDir string, f *feature.Feature) {
-				brainstormDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "brainstorm")
-				if err := os.MkdirAll(brainstormDir, 0o755); err != nil {
-					t.Fatalf("mkdir brainstorm: %v", err)
+				designDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "design")
+				if err := os.MkdirAll(designDir, 0o755); err != nil {
+					t.Fatalf("mkdir design: %v", err)
 				}
-				brainstormPath := filepath.Join(brainstormDir, "brainstorm.md")
-				if err := os.WriteFile(brainstormPath, []byte("# brainstorm\n"), 0o644); err != nil {
-					t.Fatalf("write brainstorm: %v", err)
+				designPath := filepath.Join(designDir, "design.md")
+				if err := os.WriteFile(designPath, []byte("# design\n"), 0o644); err != nil {
+					t.Fatalf("write design: %v", err)
 				}
 				if f.Artifacts == nil {
 					f.Artifacts = map[string]string{}
 				}
-				f.Artifacts["brainstorm"] = brainstormPath
+				f.Artifacts["design"] = designPath
 			},
 			invoke: func(t *testing.T, o *Orchestrator, f *feature.Feature) {
 				if _, err := o.startPlan(f.ID); err != nil {

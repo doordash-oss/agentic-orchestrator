@@ -135,7 +135,7 @@ func lifecycleForFeature(f *feature.Feature) *mocks.MockFeatureLifecycle {
 // should apply this helper after lifecycleForFeature.
 func withStatusTransitions(lc *mocks.MockFeatureLifecycle, f *feature.Feature) *mocks.MockFeatureLifecycle {
 	lc.StartInquireFn = func(id string) error { f.Status = feature.StatusInquiring; return nil }
-	lc.StartBrainstormFn = func(id string) error { f.Status = feature.StatusBrainstorming; return nil }
+	lc.StartDesignFn = func(id string) error { f.Status = feature.StatusDesigning; return nil }
 	lc.StartResearchFn = func(id string) error { f.Status = feature.StatusResearching; return nil }
 	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
 	lc.StartImplementationFn = func(id string) error { f.Status = feature.StatusImplementing; return nil }

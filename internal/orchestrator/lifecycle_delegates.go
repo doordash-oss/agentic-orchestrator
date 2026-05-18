@@ -352,19 +352,14 @@ func (o *Orchestrator) ClearPendingHelpAndPermissions(featureID string) error {
 	})
 }
 
-// SetBrainstormReady transitions a feature into StatusBrainstormReady without
+// SetDesignReady transitions a feature into StatusDesignReady without
 // going through Transition (the Design slot has a non-linear entry path). Used
-// by the restart/resume flows for a failed Design (legacy Brainstorm) phase.
-func (o *Orchestrator) SetBrainstormReady(featureID string) error {
+// by the restart/resume flows for a failed Design phase.
+func (o *Orchestrator) SetDesignReady(featureID string) error {
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		f.Status = feature.StatusBrainstormReady
+		f.Status = feature.StatusDesignReady
 		return nil
 	})
-}
-
-// SetDesignReady is the canonical Design-facing alias of SetBrainstormReady.
-func (o *Orchestrator) SetDesignReady(featureID string) error {
-	return o.SetBrainstormReady(featureID)
 }
 
 // UpgradePipeline delegates to Lifecycle.UpgradePipeline for TUI rewind flows.
@@ -845,10 +840,10 @@ func (o *Orchestrator) ResolveRewindReviewContext(featureID string, targetPhase 
 		}
 	case feature.PhaseResearch:
 		artifactPath = o.resolveArtifactPath(f, "inquire")
-	case feature.PhaseBrainstorm:
+	case feature.PhaseDesign:
 		artifactPath = o.resolveArtifactPath(f, "research")
 	case feature.PhasePlan:
-		artifactPath = o.resolveArtifactPath(f, "brainstorm")
+		artifactPath = o.resolveArtifactPath(f, "design")
 		if artifactPath == "" {
 			artifactPath = o.resolveArtifactPath(f, "research")
 		}
@@ -899,10 +894,10 @@ func (o *Orchestrator) ResolveGateReviewContext(featureID string, targetPhase fe
 	switch targetPhase {
 	case feature.PhaseResearch:
 		artifactPath = o.resolveArtifactPath(f, "inquire")
-	case feature.PhaseBrainstorm:
+	case feature.PhaseDesign:
 		artifactPath = o.resolveArtifactPath(f, "research")
 	case feature.PhasePlan:
-		artifactPath = o.resolveArtifactPath(f, "brainstorm")
+		artifactPath = o.resolveArtifactPath(f, "design")
 		if artifactPath == "" {
 			artifactPath = o.resolveArtifactPath(f, "research")
 		}
@@ -1087,8 +1082,8 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 			if err := o.TransitionTo(featureID, feature.StatusResearching); err != nil {
 				return RestartOutcome{}, err
 			}
-		case feature.PhaseBrainstorm:
-			if err := o.SetBrainstormReady(featureID); err != nil {
+		case feature.PhaseDesign:
+			if err := o.SetDesignReady(featureID); err != nil {
 				return RestartOutcome{}, err
 			}
 		case feature.PhasePlan:
@@ -1111,7 +1106,7 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		}
 	default:
 		switch phase {
-		case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm, feature.PhasePlan:
+		case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign, feature.PhasePlan:
 			if err := o.TransitionTo(featureID, feature.StatusInterrupted); err != nil {
 				return RestartOutcome{}, err
 			}

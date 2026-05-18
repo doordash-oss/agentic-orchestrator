@@ -20,15 +20,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// BuildDesignPrompt constructs the user message for the canonical Design
-// phase. The agent receives research output + original ticket and produces a
-// design doc.
-//
+// BuildDesignPrompt constructs the user message for the Design phase. The
+// agent receives research output + original ticket and produces a design doc.
 // The prose lives in internal/agent/prompts/templates/design.user.tmpl.
 //
 // skillsDir, guidelinesDir, and kbInfos are retained for caller compatibility.
-// The RoleSpec system prompt now owns primary skill discovery and Useful
-// Resources.
+// The RoleSpec system prompt now owns primary skill discovery and Useful Resources.
 func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
 	_, _, _ = skillsDir, guidelinesDir, kbInfos
 	repos, images, attachments := researchFeatureViews(f)
@@ -47,12 +44,4 @@ func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArt
 		},
 		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
 	})
-}
-
-// BuildBrainstormPrompt is the legacy entry point for the Design phase
-// prompt. It delegates to BuildDesignPrompt so the legacy callers (and the
-// existing tests pinned to the Brainstorm builder name) keep rendering the
-// same effective user prompt.
-func BuildBrainstormPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
-	return BuildDesignPrompt(f, skillsDir, guidelinesDir, researchArtifactPath, qaFilePaths, kbInfos...)
 }

@@ -2344,7 +2344,7 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 			phase := eventPhase(evt.SessionID, evt.FeatureID, evt.Phase)
 
 			if phase == feature.PhaseResearch || phase == feature.PhaseKnowledgeBase ||
-				phase == feature.PhaseInquire || phase == feature.PhaseBrainstorm {
+				phase == feature.PhaseInquire || phase == feature.PhaseDesign {
 				fid := eventFID(evt.SessionID, evt.FeatureID)
 				sess := m.sessionManager.GetSession(evt.SessionID)
 				var artifactDir string
@@ -2564,7 +2564,7 @@ func (m AppModel) handleTick() (tea.Model, tea.Cmd) {
 
 func phasePersistsQALog(phase feature.Phase) bool {
 	switch phase {
-	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm:
+	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		return true
 	default:
 		return false
@@ -2641,7 +2641,7 @@ func (m AppModel) handleSessionDone(msg SessionDoneTUIMsg) (tea.Model, tea.Cmd) 
 
 	// Capture cost from session's ResultMessage.
 	if sess != nil && (phase == feature.PhaseResearch || phase == feature.PhaseKnowledgeBase ||
-		phase == feature.PhaseInquire || phase == feature.PhaseBrainstorm) {
+		phase == feature.PhaseInquire || phase == feature.PhaseDesign) {
 		cost := agent.ExtractSessionCost(sess)
 		if cost.TotalCostUSD > 0 {
 			_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
@@ -4454,9 +4454,9 @@ func (m AppModel) resumeAllCmd() tea.Cmd {
 				switch phase {
 				case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch:
 					_ = m.orchestrator.TransitionTo(fID, feature.StatusCreated)
-				case feature.PhaseBrainstorm:
-					// Route Failed→BrainstormReady so StartBrainstorm can proceed
-					_ = m.orchestrator.SetBrainstormReady(fID)
+				case feature.PhaseDesign:
+					// Route Failed→DesignReady so StartDesign can proceed
+					_ = m.orchestrator.SetDesignReady(fID)
 				case feature.PhasePlan:
 					_ = m.orchestrator.TransitionTo(fID, feature.StatusResearching)
 					_ = m.orchestrator.TransitionTo(fID, feature.StatusPlanReady)
@@ -6448,8 +6448,8 @@ func hasAdvancedPast(f *feature.Feature, phase feature.Phase) bool {
 	case feature.PhaseResearch:
 		return f.Status != feature.StatusCreated && f.Status != feature.StatusResearching &&
 			f.Status != feature.StatusInquireReady
-	case feature.PhaseBrainstorm:
-		return f.Status != feature.StatusBrainstormReady && f.Status != feature.StatusBrainstorming
+	case feature.PhaseDesign:
+		return f.Status != feature.StatusDesignReady && f.Status != feature.StatusDesigning
 	case feature.PhasePlan:
 		// Planning iterations are managed by the planning loops; skip per-session
 		// artifact writing and PhaseCompletedMsg to avoid clobbering loop-owned
@@ -6742,7 +6742,7 @@ func featureIDFromSession(sessionID string) string {
 
 	// Non-implementation sessions: "<featureID>-<phase>[-<suffix>]"
 	// Includes roadmap/phase patterns from two-tier roadmap system.
-	suffixes := []string{"-artifact-review", "-inquire", "-design", "-brainstorm", "-research", "-roadmap-", "-phase-", "-plan", "-review-", "-kb"}
+	suffixes := []string{"-artifact-review", "-inquire", "-design", "-design", "-research", "-roadmap-", "-phase-", "-plan", "-review-", "-kb"}
 	for _, suffix := range suffixes {
 		idx := findLastIndex(sessionID, suffix)
 		if idx > 0 {
@@ -6843,7 +6843,7 @@ func phaseFromSessionID(sessionID string) feature.Phase {
 		{"-planreview-", feature.PhaseReview},
 		{"-inquire", feature.PhaseInquire},
 		{"-design", feature.PhaseDesign},
-		{"-brainstorm", feature.PhaseBrainstorm},
+		{"-design", feature.PhaseDesign},
 		{"-research", feature.PhaseResearch},
 		{"-review-", feature.PhaseReview},
 		{"-kb", feature.PhaseKnowledgeBase},
@@ -6903,12 +6903,12 @@ func featureCanRecoverQuestion(f *feature.Feature) bool {
 	// Interrupted means the prior live session is gone. Do not resurrect
 	// stale "agent has a question" badges from persisted transcripts on restart.
 	switch f.Status {
-	case feature.StatusInquiring, feature.StatusResearching, feature.StatusBrainstorming:
+	case feature.StatusInquiring, feature.StatusResearching, feature.StatusDesigning:
 	default:
 		return false
 	}
 	switch f.CurrentPhase {
-	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm:
+	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		return true
 	default:
 		return false
@@ -6936,7 +6936,7 @@ func phaseArtifactDir(baseDir string, f *feature.Feature, phase feature.Phase, s
 
 func registryOwnedSingleShotPhase(phase feature.Phase) bool {
 	switch phase {
-	case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm:
+	case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		return true
 	default:
 		return false
@@ -7185,7 +7185,7 @@ func isRunningFeature(f *feature.Feature) bool {
 	if f.Status == feature.StatusBuildingKB ||
 		f.Status == feature.StatusResearching ||
 		f.Status == feature.StatusInquiring ||
-		f.Status == feature.StatusBrainstorming ||
+		f.Status == feature.StatusDesigning ||
 		f.Status == feature.StatusPlanning ||
 		f.Status == feature.StatusImplementing ||
 		f.IsReviewing() {

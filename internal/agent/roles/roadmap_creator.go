@@ -27,7 +27,7 @@ var roadmapCreatorRoleSpec = RoleSpec{
 	Role:         RolePlanRoadmapPlanner,
 	SkillName:    "create-roadmap",
 	UserTemplate: "roadmap.user",
-	Required:     []feature.Phase{feature.PhaseBrainstorm},
+	Required:     []feature.Phase{feature.PhaseDesign},
 	OutputRoots: []OutputRootSpec{
 		artifactDirOutputRoot("Shared roadmap artifact root. The roadmap markdown is written here across attempts."),
 		attemptDirOutputRoot("Active roadmap attempt directory. Debug prompts, attempt metadata, validator output, and phase_complete are written here."),
@@ -50,7 +50,7 @@ type RoadmapUserInput struct {
 	Description string
 	Repos       []prompts.RepoView
 
-	BrainstormArtifactPath string
+	DesignArtifactPath string
 
 	VisualReferences prompts.VisualReferencesInput
 	QAFiles          prompts.QAFilesInput

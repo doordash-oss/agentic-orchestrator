@@ -35,7 +35,7 @@ func TestTransitionValid(t *testing.T) {
 		{"Created->BuildingKB", StatusCreated, StatusBuildingKB},
 		{"Created->PlanReady", StatusCreated, StatusPlanReady},
 		{"Created->Failed", StatusCreated, StatusFailed},
-		{"Researching->BrainstormReady", StatusResearching, StatusBrainstormReady},
+		{"Researching->DesignReady", StatusResearching, StatusDesignReady},
 		{"Researching->PlanReady", StatusResearching, StatusPlanReady},
 		{"Researching->Failed", StatusResearching, StatusFailed},
 		{"Researching->Interrupted", StatusResearching, StatusInterrupted},
@@ -47,11 +47,11 @@ func TestTransitionValid(t *testing.T) {
 		{"Inquiring->Interrupted", StatusInquiring, StatusInterrupted},
 		{"InquireReady->Researching", StatusInquireReady, StatusResearching},
 		{"InquireReady->Failed", StatusInquireReady, StatusFailed},
-		{"BrainstormReady->Brainstorming", StatusBrainstormReady, StatusBrainstorming},
-		{"BrainstormReady->Failed", StatusBrainstormReady, StatusFailed},
-		{"Brainstorming->PlanReady", StatusBrainstorming, StatusPlanReady},
-		{"Brainstorming->Failed", StatusBrainstorming, StatusFailed},
-		{"Brainstorming->Interrupted", StatusBrainstorming, StatusInterrupted},
+		{"DesignReady->Designing", StatusDesignReady, StatusDesigning},
+		{"DesignReady->Failed", StatusDesignReady, StatusFailed},
+		{"Designing->PlanReady", StatusDesigning, StatusPlanReady},
+		{"Designing->Failed", StatusDesigning, StatusFailed},
+		{"Designing->Interrupted", StatusDesigning, StatusInterrupted},
 		{"PlanReady->Planning", StatusPlanReady, StatusPlanning},
 		{"PlanReady->Failed", StatusPlanReady, StatusFailed},
 		{"Planning->ImplementReady", StatusPlanning, StatusImplementReady},
@@ -97,13 +97,13 @@ func TestTransitionValid(t *testing.T) {
 		{"Failed->BuildingKB", StatusFailed, StatusBuildingKB},
 		{"Failed->Inquiring", StatusFailed, StatusInquiring},
 		{"Failed->Researching", StatusFailed, StatusResearching},
-		{"Failed->Brainstorming", StatusFailed, StatusBrainstorming},
+		{"Failed->Designing", StatusFailed, StatusDesigning},
 		{"Failed->ImplementReady", StatusFailed, StatusImplementReady},
 		{"Failed->CodeReady", StatusFailed, StatusCodeReady},
 		{"Interrupted->BuildingKB", StatusInterrupted, StatusBuildingKB},
 		{"Interrupted->Inquiring", StatusInterrupted, StatusInquiring},
 		{"Interrupted->Researching", StatusInterrupted, StatusResearching},
-		{"Interrupted->Brainstorming", StatusInterrupted, StatusBrainstorming},
+		{"Interrupted->Designing", StatusInterrupted, StatusDesigning},
 		{"Interrupted->Planning", StatusInterrupted, StatusPlanning},
 		{"Interrupted->Implementing", StatusInterrupted, StatusImplementing},
 		{"Interrupted->FinalReviewing", StatusInterrupted, StatusFinalReviewing},
@@ -115,7 +115,7 @@ func TestTransitionValid(t *testing.T) {
 		{"PromptNeedsReview->Failed", StatusPromptNeedsReview, StatusFailed},
 		{"InquiryNeedsReview->Researching", StatusInquiryNeedsReview, StatusResearching},
 		{"InquiryNeedsReview->Failed", StatusInquiryNeedsReview, StatusFailed},
-		{"ResearchNeedsReview->Brainstorming", StatusResearchNeedsReview, StatusBrainstorming},
+		{"ResearchNeedsReview->Designing", StatusResearchNeedsReview, StatusDesigning},
 		{"ResearchNeedsReview->Failed", StatusResearchNeedsReview, StatusFailed},
 		{"DesignNeedsReview->Planning", StatusDesignNeedsReview, StatusPlanning},
 		{"DesignNeedsReview->Failed", StatusDesignNeedsReview, StatusFailed},
@@ -170,7 +170,7 @@ func TestPhaseString(t *testing.T) {
 	}{
 		{PhaseResearch, "Research"},
 		{PhaseInquire, "Inquire"},
-		{PhaseBrainstorm, "Design"},
+		{PhaseDesign, "Design"},
 		{PhaseDesign, "Design"},
 		{PhasePlan, "Plan"},
 		{PhaseImplement, "Implement"},
@@ -194,7 +194,7 @@ func TestPhaseRequiresGrilling(t *testing.T) {
 		want  bool
 	}{
 		{PhaseInquire, true},
-		{PhaseBrainstorm, true},
+		{PhaseDesign, true},
 		{PhasePlan, true},
 		{PhaseResearch, false},
 		{PhaseImplement, false},
@@ -219,7 +219,7 @@ func TestPhaseDirName(t *testing.T) {
 	}{
 		{PhaseResearch, "research"},
 		{PhaseInquire, "inquire"},
-		{PhaseBrainstorm, "brainstorm"},
+		{PhaseDesign, "design"},
 		{PhasePlan, "plan"},
 		{PhaseImplement, "implement"},
 		{PhasePublish, "publish"},
@@ -245,8 +245,8 @@ func TestStatusString(t *testing.T) {
 		{StatusFailed, "Failed"},
 		{StatusInquiring, "Inquiring"},
 		{StatusInquireReady, "InquireReady"},
-		{StatusBrainstormReady, "DesignReady"},
-		{StatusBrainstorming, "Designing"},
+		{StatusDesignReady, "DesignReady"},
+		{StatusDesigning, "Designing"},
 		{StatusDesignReady, "DesignReady"},
 		{StatusDesigning, "Designing"},
 	}
@@ -267,7 +267,7 @@ func TestStatusYAMLRoundTrip(t *testing.T) {
 		StatusCodeReady, StatusPublished, StatusFailed, StatusInterrupted,
 		StatusDone, StatusBuildingKB,
 		StatusPlanNeedsReview, StatusInquiring, StatusInquireReady,
-		StatusBrainstormReady, StatusBrainstorming, StatusNeedUserInput,
+		StatusDesignReady, StatusDesigning, StatusNeedUserInput,
 	}
 	for _, s := range statuses {
 		data, err := yaml.Marshal(s)
@@ -284,24 +284,11 @@ func TestStatusYAMLRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDesignBrainstormAliases pins the compatibility contract: the Design
-// canonical names and the legacy Brainstorm names refer to the same
-// underlying lifecycle slot, parse interchangeably from YAML, and serialize
-// to the canonical Design-facing form.
-func TestDesignBrainstormAliases(t *testing.T) {
+// TestDesignStatusBehavior pins the Design status names, transitions, and
+// canonical YAML serialization.
+func TestDesignStatusBehavior(t *testing.T) {
 	t.Parallel()
 
-	if PhaseDesign != PhaseBrainstorm {
-		t.Fatalf("PhaseDesign must alias PhaseBrainstorm (got %d vs %d)", int(PhaseDesign), int(PhaseBrainstorm))
-	}
-	if StatusDesignReady != StatusBrainstormReady {
-		t.Fatalf("StatusDesignReady must alias StatusBrainstormReady")
-	}
-	if StatusDesigning != StatusBrainstorming {
-		t.Fatalf("StatusDesigning must alias StatusBrainstorming")
-	}
-
-	// Canonical serialization is Design-facing.
 	if got := StatusDesigning.String(); got != "Designing" {
 		t.Errorf("StatusDesigning.String() = %q, want %q", got, "Designing")
 	}
@@ -312,14 +299,11 @@ func TestDesignBrainstormAliases(t *testing.T) {
 		t.Errorf("PhaseDesign.String() = %q, want %q", got, "Design")
 	}
 
-	// Legacy Brainstorm YAML still unmarshals.
-	legacyCases := map[string]Status{
-		"Brainstorming":   StatusBrainstorming,
-		"BrainstormReady": StatusBrainstormReady,
-		"Designing":       StatusDesigning,
-		"DesignReady":     StatusDesignReady,
+	roundTrip := map[string]Status{
+		"Designing":   StatusDesigning,
+		"DesignReady": StatusDesignReady,
 	}
-	for in, want := range legacyCases {
+	for in, want := range roundTrip {
 		var got Status
 		if err := yaml.Unmarshal([]byte(in), &got); err != nil {
 			t.Errorf("Unmarshal %q: %v", in, err)
@@ -330,16 +314,14 @@ func TestDesignBrainstormAliases(t *testing.T) {
 		}
 	}
 
-	// New marshal output is the canonical Design-facing form.
-	out, err := yaml.Marshal(StatusBrainstorming)
+	out, err := yaml.Marshal(StatusDesigning)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 	if !bytes.Contains(out, []byte("Designing")) {
-		t.Errorf("Marshal(StatusBrainstorming) = %q, expected canonical %q", string(out), "Designing")
+		t.Errorf("Marshal(StatusDesigning) = %q, expected canonical %q", string(out), "Designing")
 	}
 
-	// Allowed transitions across the Design slot.
 	for _, tc := range []struct {
 		from, to Status
 	}{
@@ -431,8 +413,8 @@ func TestIsRunning(t *testing.T) {
 		{StatusBuildingKB, true},
 		{StatusInquiring, true},
 		{StatusInquireReady, false},
-		{StatusBrainstormReady, false},
-		{StatusBrainstorming, true},
+		{StatusDesignReady, false},
+		{StatusDesigning, true},
 		{StatusPlanNeedsReview, false},
 	}
 	for _, tt := range tests {
@@ -892,7 +874,7 @@ func TestLogicalOrder(t *testing.T) {
 		{PhaseKnowledgeBase, 0},
 		{PhaseInquire, 1},
 		{PhaseResearch, 2},
-		{PhaseBrainstorm, 3},
+		{PhaseDesign, 3},
 		{PhasePlan, 4},
 		{PhaseImplement, 5},
 		{PhaseReview, 6},
@@ -998,18 +980,18 @@ func TestKBStatusPersistence(t *testing.T) {
 	})
 }
 
-// TestInquireResearchBrainstormPlanProgression is a regression test ensuring the
+// TestInquireResearchDesignPlanProgression is a regression test ensuring the
 // full state machine progression through the new phases works end-to-end.
-func TestInquireResearchBrainstormPlanProgression(t *testing.T) {
+func TestInquireResearchDesignPlanProgression(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
-	// Full lifecycle: Created → Inquiring → InquireReady → Researching → BrainstormReady → Brainstorming → PlanReady → Planning
+	// Full lifecycle: Created → Inquiring → InquireReady → Researching → DesignReady → Designing → PlanReady → Planning
 	transitions := []Status{
 		StatusInquiring,
 		StatusInquireReady,
 		StatusResearching,
-		StatusBrainstormReady,
-		StatusBrainstorming,
+		StatusDesignReady,
+		StatusDesigning,
 		StatusPlanReady,
 		StatusPlanning,
 	}
@@ -1060,7 +1042,7 @@ func TestCheckpointsHasGateForPhase(t *testing.T) {
 		want  bool
 	}{
 		{"inquiry gate for research", Checkpoints{InquiryReview: true}, PhaseResearch, true},
-		{"research gate for brainstorm", Checkpoints{ResearchReview: true}, PhaseBrainstorm, true},
+		{"research gate for design", Checkpoints{ResearchReview: true}, PhaseDesign, true},
 		{"design gate for plan", Checkpoints{DesignReview: true}, PhasePlan, true},
 		{"plan gate for implement", Checkpoints{PlanReview: true}, PhaseImplement, true},
 		{"no gate for publish", Checkpoints{ManualPublish: true}, PhasePublish, false},

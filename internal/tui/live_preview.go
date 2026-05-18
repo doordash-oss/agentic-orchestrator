@@ -458,7 +458,7 @@ func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string 
 	switch phase {
 	case feature.PhaseKnowledgeBase:
 		return firstNonEmpty(f.Models.KBBuild, "—")
-	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseBrainstorm:
+	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		return firstNonEmpty(f.Models.Research, "—")
 	case feature.PhasePlan, feature.PhasePublish:
 		return firstNonEmpty(f.Models.Planning, "—")

@@ -66,7 +66,7 @@ func (p PipelineProfile) IsValid() bool {
 
 // PhasesForProfile returns the ordered phases for this profile.
 // Medium: Plan, Implement, Review, Publish
-// Large/Moonshot: KnowledgeBase, Inquire, Research, Brainstorm, Plan, Implement, Review, Publish
+// Large/Moonshot: KnowledgeBase, Inquire, Research, Design, Plan, Implement, Review, Publish
 func PhasesForProfile(profile PipelineProfile) []Phase {
 	switch profile {
 	case PipelineMedium:
@@ -74,7 +74,7 @@ func PhasesForProfile(profile PipelineProfile) []Phase {
 	default:
 		// Large and Moonshot run the same phase sequence; they differ in effort
 		// and validation behavior.
-		return []Phase{PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseBrainstorm, PhasePlan, PhaseImplement, PhaseReview, PhasePublish}
+		return []Phase{PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement, PhaseReview, PhasePublish}
 	}
 }
 
@@ -83,7 +83,7 @@ func PhasesForProfile(profile PipelineProfile) []Phase {
 // Large/Moonshot include all 7 phases (same phase set, different validation behavior)
 func MinimumProfileForPhase(phase Phase) PipelineProfile {
 	switch phase {
-	case PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseBrainstorm:
+	case PhaseKnowledgeBase, PhaseInquire, PhaseResearch, PhaseDesign:
 		return PipelineLarge
 	default: // PhasePlan, PhaseImplement, PhaseReview, PhasePublish
 		return PipelineMedium

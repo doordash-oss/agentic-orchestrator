@@ -393,28 +393,28 @@ func TestHandlePhaseCompletedResearchEmitsPhaseCompleted(t *testing.T) {
 	}
 }
 
-func TestHandlePhaseCompletedBrainstormEmitsPhaseCompleted(t *testing.T) {
+func TestHandlePhaseCompletedDesignEmitsPhaseCompleted(t *testing.T) {
 	m, fm, observeDir := testObservedAppModel(t)
 	m.sessionManager = session.NewManager(nil)
-	fID := "feat-hpc-brainstorm"
+	fID := "feat-hpc-design"
 	now := time.Now()
 	f := &feature.Feature{
 		ID:          fID,
-		Name:        "brainstorm-phase-test",
-		Status:      feature.StatusBrainstorming,
-		TraceID:     "trace-hpc-brainstorm",
+		Name:        "design-phase-test",
+		Status:      feature.StatusDesigning,
+		TraceID:     "trace-hpc-design",
 		Repos:       []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
 		Checkpoints: feature.Checkpoints{DesignReview: true},
 		StartedAt:   &now,
 	}
 	createTestFeature(t, fm, observeDir, f)
-	writeTUIPhaseComplete(t, fm.Store.BaseDir, f, feature.PhaseBrainstorm)
-	writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, feature.PhaseBrainstorm, "brainstorm.md")
+	writeTUIPhaseComplete(t, fm.Store.BaseDir, f, feature.PhaseDesign)
+	writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, feature.PhaseDesign, "design.md")
 
 	msg := PhaseCompletedMsg{
 		FeatureID: fID,
-		Phase:     feature.PhaseBrainstorm,
-		SessionID: "sess-brainstorm-1",
+		Phase:     feature.PhaseDesign,
+		SessionID: "sess-design-1",
 		Success:   true,
 	}
 	m.handlePhaseCompleted(msg)
@@ -424,8 +424,8 @@ func TestHandlePhaseCompletedBrainstormEmitsPhaseCompleted(t *testing.T) {
 	for _, evt := range events {
 		if evt.EventType == "phase.completed" {
 			found = true
-			if evt.Phase != feature.PhaseBrainstorm.String() {
-				t.Errorf("expected phase=%q, got %q", feature.PhaseBrainstorm.String(), evt.Phase)
+			if evt.Phase != feature.PhaseDesign.String() {
+				t.Errorf("expected phase=%q, got %q", feature.PhaseDesign.String(), evt.Phase)
 			}
 			if evt.FeatureID != fID {
 				t.Errorf("expected feature_id=%s, got %s", fID, evt.FeatureID)
@@ -433,7 +433,7 @@ func TestHandlePhaseCompletedBrainstormEmitsPhaseCompleted(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("no phase.completed event found for brainstorm phase")
+		t.Error("no phase.completed event found for design phase")
 	}
 }
 

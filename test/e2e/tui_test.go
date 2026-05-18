@@ -97,11 +97,11 @@ func setupTestEnv(t *testing.T) (fm *feature.Manager, sm *session.Manager, event
 // phaseAwareBuildSessionFn returns a BuildSessionFn that dispatches to
 // different scripts based on the prompt content.
 // - Research prompts contain "# Research Context"
-// - Brainstorm prompts contain "# Feature Context" and "## Research Findings"
+// - Design prompts contain "# Feature Context" and "## Research Findings"
 // - Roadmap planning prompts contain "# Planning Context"
 // - Phase plan prompts start with "# Phase " and include "## Approved Roadmap"
 // - Implementation prompts contain "# Implementation Context"
-func phaseAwareBuildSessionFn(researchScript, brainstormScript, planScript, implScript, reviewScript string, extraScripts ...string) func(agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+func phaseAwareBuildSessionFn(researchScript, designScript, planScript, implScript, reviewScript string, extraScripts ...string) func(agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 	// extraScripts[0] = phasePlanScript (optional)
 	var phasePlanScript string
 	if len(extraScripts) > 0 {
@@ -124,7 +124,7 @@ func phaseAwareBuildSessionFn(researchScript, brainstormScript, planScript, impl
 		var script string
 		switch {
 		case strings.Contains(opts.Prompt, "# Feature Context") && strings.Contains(opts.Prompt, "## Research Findings"):
-			script = brainstormScript
+			script = designScript
 		case strings.Contains(opts.Prompt, "# Planning Context"):
 			script = planScript
 		case strings.Contains(opts.Prompt, "# Phase ") && strings.Contains(opts.Prompt, "## Approved Roadmap"):
@@ -396,16 +396,16 @@ touch "%s/phase_complete"
 %s
 `, testutil.JSONLInit, researchDir, researchArtifact, researchDir, testutil.JSONLSuccess))
 
-	// Brainstorm mock: creates brainstorm artifact and phase_complete.
-	brainstormDir := filepath.Join(stateDir, f.ID, "brainstorm")
-	brainstormArtifact := filepath.Join(brainstormDir, "brainstorm.md")
-	brainstormScript := testutil.WriteScript(t, scriptsDir, "brainstorm.sh", fmt.Sprintf(
+	// Design mock: creates design artifact and phase_complete.
+	designDir := filepath.Join(stateDir, f.ID, "design")
+	designArtifact := filepath.Join(designDir, "design.md")
+	designScript := testutil.WriteScript(t, scriptsDir, "design.sh", fmt.Sprintf(
 		`%s
 mkdir -p "%s"
-echo "# Brainstorm Output" > "%s"
+echo "# Design Output" > "%s"
 touch "%s/phase_complete"
 %s
-`, testutil.JSONLInit, brainstormDir, brainstormArtifact, brainstormDir, testutil.JSONLSuccess))
+`, testutil.JSONLInit, designDir, designArtifact, designDir, testutil.JSONLSuccess))
 
 	// Plan mock: emits init then exits non-zero
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
@@ -413,7 +413,7 @@ touch "%s/phase_complete"
 
 	pr := agent.NewPhaseRunner(sm, fm.Store, stateDir)
 	pr.CommandRunner = agent.NewExecCommandRunner()
-	pr.BuildSessionFn = phaseAwareBuildSessionFn(researchScript, brainstormScript, planScript, "", planScript)
+	pr.BuildSessionFn = phaseAwareBuildSessionFn(researchScript, designScript, planScript, "", planScript)
 
 	orch := newTestOrchestrator(fm, sm, pr)
 	app, err := tui.NewAppModel(fm, sm, orch, nil, eventCh, tui.WithPhaseRunner(pr))

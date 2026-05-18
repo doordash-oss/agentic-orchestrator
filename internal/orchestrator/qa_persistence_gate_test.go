@@ -76,10 +76,10 @@ func newGateLifecycle(f *feature.Feature) *mocks.MockFeatureLifecycle {
 	}
 	lc.CompleteInquireFn = func(id string) error { return nil }
 	lc.CompleteResearchFn = func(id string) error { return nil }
-	lc.CompleteBrainstormFn = func(id string) error { return nil }
+	lc.CompleteDesignFn = func(id string) error { return nil }
 	lc.StartInquireFn = func(id string) error { return nil }
 	lc.StartResearchFn = func(id string) error { return nil }
-	lc.StartBrainstormFn = func(id string) error { return nil }
+	lc.StartDesignFn = func(id string) error { return nil }
 	lc.StartPlanningFn = func(id string) error { return nil }
 	return lc
 }
@@ -106,7 +106,7 @@ func sessionManagerWithQALog(sessionID string) *mocks.MockSessionManager {
 // TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPhases is the
 // table-driven persistence-whitelist regression. It calls onArtifactPhaseCompleted
 // directly with each interactive planning phase plus roadmap/phase-plan
-// sentinel keys. Inquire, Research, and Brainstorm persist the session Q&A log;
+// sentinel keys. Inquire, Research, and Design persist the session Q&A log;
 // Roadmap and Phase-Plan transcripts are owned by the plan loops instead.
 func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPhases(t *testing.T) {
 	cases := []struct {
@@ -118,8 +118,8 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 		{"inquire", feature.PhaseInquire, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
 			return lc.CompleteInquire
 		}},
-		{"brainstorm", feature.PhaseBrainstorm, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
-			return lc.CompleteBrainstorm
+		{"design", feature.PhaseDesign, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
+			return lc.CompleteDesign
 		}},
 		{"roadmap", feature.PhaseInquire /* unused */, false, func(lc *mocks.MockFeatureLifecycle) func(string) error {
 			return func(string) error { return nil }
@@ -224,7 +224,7 @@ _(auto-picked, confidence: 0.85)_
 // TestInquirePhase_WritesHarnessOwnedQAFile pre-writes stale qa-answers.md,
 // drives HandlePhaseCompletion through Inquire, and asserts the file is
 // replaced from the session Q&A log. Then asserts
-// collectQAFilePaths returns the inquire path so Brainstorm consumes it.
+// collectQAFilePaths returns the inquire path so Design consumes it.
 func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 	tmpStateDir := t.TempDir()
 	featureID := "feat-preserve-inq"

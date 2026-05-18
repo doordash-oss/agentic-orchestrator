@@ -127,22 +127,22 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 		want   bool
 	}{
 		{
-			name: "brainstorm_target_repositories_block_emitted_when_multi_repo_with_multiple_repos",
+			name: "design_target_repositories_block_emitted_when_multi_repo_with_multiple_repos",
 			render: func() string {
-				return BrainstormUserPrompt(BrainstormUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
+				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
 			},
 			want: true,
 		},
 		{
-			name: "brainstorm_target_repositories_block_omitted_when_multi_repo_flag_false",
+			name: "design_target_repositories_block_omitted_when_multi_repo_flag_false",
 			render: func() string {
-				return BrainstormUserPrompt(BrainstormUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
+				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
 			},
 		},
 		{
-			name: "brainstorm_target_repositories_block_omitted_when_only_one_repo",
+			name: "design_target_repositories_block_omitted_when_only_one_repo",
 			render: func() string {
-				return BrainstormUserPrompt(BrainstormUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos[:1]})
+				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos[:1]})
 			},
 		},
 		{

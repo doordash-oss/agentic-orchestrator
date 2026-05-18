@@ -26,7 +26,6 @@ var roleSpecs = append([]RoleSpec{
 	inquirerRoleSpec,
 	researcherRoleSpec,
 	designerRoleSpec,
-	brainstormerRoleSpec,
 	refactorPlanRoleSpec,
 	iterationReviewerRoleSpec,
 	finalReviewerRoleSpec,

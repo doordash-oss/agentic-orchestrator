@@ -20,8 +20,8 @@ import (
 )
 
 // RoleDesigner is the canonical single-shot Design session. Legacy callers
-// that still spell the role as "brainstormer" resolve through
-// RoleBrainstormer; both roles share the same artifact validation behavior.
+// that still spell the role as "designer" resolve through
+// RoleDesigner; both roles share the same artifact validation behavior.
 const RoleDesigner Role = "designer"
 
 var designerRoleSpec = RoleSpec{
@@ -45,7 +45,7 @@ func DesignerRoleSpec() RoleSpec {
 }
 
 // DesignUserInput is the data passed to design.user.tmpl. Shape matches
-// BrainstormUserInput so callers can migrate without churn; the legacy
+// DesignUserInput so callers can migrate without churn; the legacy
 // builder delegates here.
 type DesignUserInput struct {
 	Name        string

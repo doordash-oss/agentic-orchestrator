@@ -30,7 +30,7 @@ Explores the problem space by analyzing the codebase and gathering context. The 
 Deep dives into the codebase to understand relevant code paths, existing patterns, and technical constraints. Produces research artifacts that inform planning.
 
 ### Design
-Generates and evaluates implementation approaches. Considers trade-offs, risks, and alternatives before committing to a design direction. (Older docs and persisted state may refer to this phase as "Brainstorm" — it is the same phase under its legacy name and continues to load without migration.)
+Generates and evaluates implementation approaches. Considers trade-offs, risks, and alternatives before committing to a design direction. (Older docs and persisted state may refer to this phase as "Design" — it is the same phase under its legacy name and continues to load without migration.)
 
 ### Plan
 Creates a detailed implementation plan. Uses **two-tier planning**:
@@ -69,8 +69,8 @@ Created → BuildingKB → Inquiring → Researching → Designing → Planning
 | `Inquiring` | Inquiry phase running |
 | `InquireReady` | Inquiry complete, ready for next phase |
 | `Researching` | Research phase running |
-| `Designing` | Design phase running (legacy alias: `Brainstorming`) |
-| `DesignReady` | Design complete, ready for planning (legacy alias: `BrainstormReady`) |
+| `Designing` | Design phase running (legacy alias: `Designing`) |
+| `DesignReady` | Design complete, ready for planning (legacy alias: `DesignReady`) |
 | `PlanReady` | Plan needed |
 | `Planning` | Plan creation in progress |
 | `ImplementReady` | Plan approved, ready for implementation |

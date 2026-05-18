@@ -142,16 +142,16 @@ func cycleRunningLabel(t feature.RepoCycleType) string {
 
 // isPreImplementationStatus returns true for feature statuses where no repo
 // has been scoped for implementation yet. Slice spec: "Pre-implementation
-// feature (Inquiring/Researching/Brainstorming/Planning) → all rows
+// feature (Inquiring/Researching/Designing/Planning) → all rows
 // uniformly render `unpublished`".
 func isPreImplementationStatus(s feature.Status) bool {
 	switch s {
 	case feature.StatusInquiring,
 		feature.StatusResearching,
-		feature.StatusBrainstorming,
+		feature.StatusDesigning,
 		feature.StatusPlanning,
 		feature.StatusInquireReady,
-		feature.StatusBrainstormReady,
+		feature.StatusDesignReady,
 		feature.StatusPlanReady,
 		feature.StatusImplementReady,
 		feature.StatusBuildingKB,

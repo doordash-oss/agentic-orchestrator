@@ -69,7 +69,7 @@ type Deferral struct {
 	Description    string          `yaml:"description"`               // what was deferred, in a single sentence
 	CreatedAt      time.Time       `yaml:"created_at"`                // when the deferral first entered the ledger
 	CreatedInPhase int             `yaml:"created_in_phase"`          // phase number where the deferral was declared; 0 = roadmap-level
-	CreatedInKind  string          `yaml:"created_in_kind"`           // "roadmap" | "plan" | "implement" | "brainstorm"
+	CreatedInKind  string          `yaml:"created_in_kind"`           // "roadmap" | "plan" | "implement" | "design"
 	DueByPhase     int             `yaml:"due_by_phase"`              // target phase (current value; History preserves prior values)
 	Reason         string          `yaml:"reason"`                    // why deferred — required; integrity gate rejects empty reasons
 	Status         DeferralStatus  `yaml:"status"`                    // open | closed | open_redeferred

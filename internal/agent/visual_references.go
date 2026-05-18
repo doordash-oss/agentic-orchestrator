@@ -23,10 +23,10 @@ import (
 // repros, etc.) as an explicit prompt section that instructs the agent
 // to Read each one before producing output.
 //
-// Today's pipeline carries f.Images only through Inquire and Brainstorm;
+// Today's pipeline carries f.Images only through Inquire and Design;
 // every downstream phase — Plan, Implement, Review, FinalReview — has
 // historically dropped them. For a feature whose intent was communicated
-// through pixels, that's the same failure mode as dropping the brainstorm:
+// through pixels, that's the same failure mode as dropping the design:
 // the agent ends up working from text-only summaries of visual commitments.
 //
 // Returns "" when the images slice is empty.

@@ -24,7 +24,7 @@ import (
 )
 
 // TestCollectQAFilePaths_IncludesRoadmap asserts that when fixture
-// qa-answers.md files exist under inquire/, research/, brainstorm/, and
+// qa-answers.md files exist under inquire/, research/, design/, and
 // roadmap/ subdirs, all four paths are returned in the documented order.
 func TestCollectQAFilePaths_IncludesRoadmap(t *testing.T) {
 	tmpStateDir := t.TempDir()
@@ -36,7 +36,7 @@ func TestCollectQAFilePaths_IncludesRoadmap(t *testing.T) {
 	}
 
 	runDir := agent.ActiveRunDir(tmpStateDir, f)
-	for _, phase := range []string{"inquire", "research", "brainstorm", "roadmap"} {
+	for _, phase := range []string{"inquire", "research", "design", "roadmap"} {
 		dir := filepath.Join(runDir, phase)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
@@ -54,7 +54,7 @@ func TestCollectQAFilePaths_IncludesRoadmap(t *testing.T) {
 	want := []string{
 		filepath.Join(runDir, "inquire", "qa-answers.md"),
 		filepath.Join(runDir, "research", "qa-answers.md"),
-		filepath.Join(runDir, "brainstorm", "qa-answers.md"),
+		filepath.Join(runDir, "design", "qa-answers.md"),
 		filepath.Join(runDir, "roadmap", "qa-answers.md"),
 	}
 	if len(got) != len(want) {
@@ -69,7 +69,7 @@ func TestCollectQAFilePaths_IncludesRoadmap(t *testing.T) {
 
 // TestCollectQAFilePaths_RefactorPrefix asserts the new roadmap probe honors
 // a non-empty refactor prefix, mirroring the existing behavior for the
-// inquire/research/brainstorm probes.
+// inquire/research/design probes.
 func TestCollectQAFilePaths_RefactorPrefix(t *testing.T) {
 	tmpStateDir := t.TempDir()
 	featureID := "feat-collect-refprefix"
@@ -86,7 +86,7 @@ func TestCollectQAFilePaths_RefactorPrefix(t *testing.T) {
 	}
 
 	runDir := agent.ActiveRunDir(tmpStateDir, f)
-	for _, phase := range []string{"inquire", "research", "brainstorm", "roadmap"} {
+	for _, phase := range []string{"inquire", "research", "design", "roadmap"} {
 		dir := filepath.Join(runDir, prefix, phase)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
@@ -104,7 +104,7 @@ func TestCollectQAFilePaths_RefactorPrefix(t *testing.T) {
 	want := []string{
 		filepath.Join(runDir, prefix, "inquire", "qa-answers.md"),
 		filepath.Join(runDir, prefix, "research", "qa-answers.md"),
-		filepath.Join(runDir, prefix, "brainstorm", "qa-answers.md"),
+		filepath.Join(runDir, prefix, "design", "qa-answers.md"),
 		filepath.Join(runDir, prefix, "roadmap", "qa-answers.md"),
 	}
 	if len(got) != len(want) {

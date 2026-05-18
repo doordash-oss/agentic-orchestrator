@@ -44,7 +44,7 @@ type FinalReviewPromptOpts struct {
 	PreviousFeedback       string // feedback from prior review iteration (empty on first)
 	Iteration              int
 	RoadmapPath            string // path to the roadmap file (reviewer reads it via tool access)
-	BrainstormArtifactPath string // retained for caller compatibility; no longer re-injected
+	DesignArtifactPath string // retained for caller compatibility; no longer re-injected
 	Images                 []string
 	PhaseType              string // "tracer-bullet", "tdd-fill-in", "collapsed", or ""
 	CycleFocus             string // short description of the active cycle's review scope
@@ -67,7 +67,7 @@ type FinalFixPromptOpts struct {
 	VerificationReportPath string
 	Iteration              int
 	Publishable            bool
-	BrainstormArtifactPath string   // retained for caller compatibility; no longer re-injected
+	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
 	Images                 []string // user-attached visual references, re-injected per iteration
 }
 

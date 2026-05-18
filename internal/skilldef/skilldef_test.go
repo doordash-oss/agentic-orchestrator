@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const expectedEmbeddedSkillCount = 29
+const expectedEmbeddedSkillCount = 28
 
 func TestParseSkillFile(t *testing.T) {
 	tests := []struct {
@@ -240,7 +240,7 @@ func TestReadBody(t *testing.T) {
 
 func TestReadBody_AllCommandSkills(t *testing.T) {
 	commandSkills := []string{
-		"brainstorm", "build-knowledge-base", "chat", "create-roadmap", "design",
+		"design", "build-knowledge-base", "chat", "create-roadmap", "design",
 		"final-fix", "implement", "inquire", "plan-phase", "research-codebase",
 		"revise-phase-plan", "revise-roadmap",
 		"validate-phase-plan-grounding", "validate-phase-plan-scope",

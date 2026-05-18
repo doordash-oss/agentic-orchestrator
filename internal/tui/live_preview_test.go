@@ -644,8 +644,8 @@ func TestLivePreviewRendersTitledSectionBoxes(t *testing.T) {
 
 func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
 	t.Parallel()
-	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseBrainstorm}
-	sess := newLivePreviewSession("activity-title", feature.PhaseBrainstorm,
+	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseDesign}
+	sess := newLivePreviewSession("activity-title", feature.PhaseDesign,
 		assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_read", Name: "Read", Input: rawJSON(`{"file_path":"README.md"}`)}),
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))

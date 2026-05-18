@@ -1401,9 +1401,9 @@ func TestFormatStatusRefactoring(t *testing.T) {
 			wantSubstr: "Refactoring: Researching",
 		},
 		{
-			name: "brainstorming + refactoring",
+			name: "designing + refactoring",
 			feature: &feature.Feature{
-				Status:         feature.StatusBrainstorming,
+				Status:         feature.StatusDesigning,
 				RefactorPrompt: "refactor the auth module",
 			},
 			wantSubstr: "Refactoring: Designing",

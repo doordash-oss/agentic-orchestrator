@@ -24,12 +24,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// TestRunsLayout_CreateInquireBrainstormRewindInquireAgain is the end-to-end
+// TestRunsLayout_CreateInquireDesignRewindInquireAgain is the end-to-end
 // tracer smoke test that proves the runs-first state layout is coherent
 // through the tracer path.
 //
 //  1. Create feature → run-001 exists with run.yaml.
-//  2. Simulate inquire/research/brainstorm: lifecycle transitions plus real
+//  2. Simulate inquire/research/design: lifecycle transitions plus real
 //     artifact writes from the agent package (agent.LogPhaseError, the
 //     run-aware path helpers PhaseDir / RunDir). These are the same writers
 //     production PhaseRunner code goes through — NOT hand-seeded markers —
@@ -42,7 +42,7 @@ import (
 // If any artifact writer still targeted the feature root, steps (2) and (4)
 // would leak into the same directory and step (4) would overwrite step (2)'s
 // fixtures. The run-aware helpers keep them isolated.
-func TestRunsLayout_CreateInquireBrainstormRewindInquireAgain(t *testing.T) {
+func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -94,13 +94,13 @@ func TestRunsLayout_CreateInquireBrainstormRewindInquireAgain(t *testing.T) {
 		t.Fatalf("run-001/run.yaml missing after Create: %v", err)
 	}
 	// No flat per-phase dirs at feature root.
-	for _, name := range []string{"inquire", "research", "brainstorm", "plan", "implement", "roadmap"} {
+	for _, name := range []string{"inquire", "research", "design", "plan", "implement", "roadmap"} {
 		if _, err := os.Stat(filepath.Join(stateDir, f.ID, name)); !os.IsNotExist(err) {
 			t.Errorf("feature root should not contain legacy %s/ dir", name)
 		}
 	}
 
-	// --- Step 2: Simulate inquire → research → brainstorm ------------------
+	// --- Step 2: Simulate inquire → research → design ------------------
 	// Drive lifecycle transitions and exercise REAL agent-package path
 	// writers against the feature. agent.LogPhaseError is the canonical
 	// per-phase writer; if it still targeted the feature root, markers
@@ -132,17 +132,17 @@ func TestRunsLayout_CreateInquireBrainstormRewindInquireAgain(t *testing.T) {
 	agent.LogPhaseError(stateDir, f, "research", "r1-research-error")
 	assertUnderActiveRun(t, stateDir, f, "research", "error.log")
 
-	if err := mgr.StartBrainstorm(f.ID); err != nil {
-		t.Fatalf("StartBrainstorm: %v", err)
+	if err := mgr.StartDesign(f.ID); err != nil {
+		t.Fatalf("StartDesign: %v", err)
 	}
-	if err := mgr.CompleteBrainstorm(f.ID); err != nil {
-		t.Fatalf("CompleteBrainstorm: %v", err)
+	if err := mgr.CompleteDesign(f.ID); err != nil {
+		t.Fatalf("CompleteDesign: %v", err)
 	}
 	if f, err = mgr.Get(f.ID); err != nil {
-		t.Fatalf("Get after brainstorm: %v", err)
+		t.Fatalf("Get after design: %v", err)
 	}
-	agent.LogPhaseError(stateDir, f, "brainstorm", "r1-brainstorm-error")
-	assertUnderActiveRun(t, stateDir, f, "brainstorm", "error.log")
+	agent.LogPhaseError(stateDir, f, "design", "r1-design-error")
+	assertUnderActiveRun(t, stateDir, f, "design", "error.log")
 
 	// Also verify the exported path helpers all root inside run-001.
 	phaseDir := agent.PhaseDir(stateDir, f, 1)
@@ -163,7 +163,7 @@ func TestRunsLayout_CreateInquireBrainstormRewindInquireAgain(t *testing.T) {
 	}
 
 	// No error.log should have leaked to the feature root.
-	for _, phase := range []string{"inquire", "research", "brainstorm"} {
+	for _, phase := range []string{"inquire", "research", "design"} {
 		leaked := filepath.Join(stateDir, f.ID, phase, "error.log")
 		if _, err := os.Stat(leaked); !os.IsNotExist(err) {
 			t.Errorf("leak: %s exists at feature root (should be under runs/run-001/)", leaked)
@@ -204,7 +204,7 @@ func TestRunsLayout_CreateInquireBrainstormRewindInquireAgain(t *testing.T) {
 	}
 	// The real error.log files written by LogPhaseError must still exist in
 	// the sealed run tree — seal+fork must not delete anything.
-	for _, phase := range []string{"inquire", "research", "brainstorm"} {
+	for _, phase := range []string{"inquire", "research", "design"} {
 		path := filepath.Join(run1Dir, phase, "error.log")
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -303,7 +303,7 @@ func TestRunsLayout_CreateInquireBrainstormRewindInquireAgain(t *testing.T) {
 	}
 
 	// Final defense: no error.log anywhere at feature root.
-	for _, phase := range []string{"inquire", "research", "brainstorm"} {
+	for _, phase := range []string{"inquire", "research", "design"} {
 		leaked := filepath.Join(stateDir, f.ID, phase, "error.log")
 		if _, err := os.Stat(leaked); !os.IsNotExist(err) {
 			t.Errorf("final leak: %s exists at feature root", leaked)

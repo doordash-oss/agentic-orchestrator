@@ -379,7 +379,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Category B — Artifact phase completion (Inquire / Research / Brainstorm)
+// Category B — Artifact phase completion (Inquire / Research / Design)
 // ---------------------------------------------------------------------------
 
 type artifactPhaseCase struct {
@@ -394,9 +394,9 @@ func artifactPhaseCases() []artifactPhaseCase {
 	return []artifactPhaseCase{
 		{"inquire", feature.PhaseInquire, "inquire", "inquire", feature.StatusInquiring},
 		{"research", feature.PhaseResearch, "research", "research", feature.StatusResearching},
-		// The Design phase keeps the legacy "brainstorm" on-disk subdir for
+		// The Design phase keeps the legacy "design" on-disk subdir for
 		// compat but persists under the canonical Design artifact key.
-		{"brainstorm", feature.PhaseBrainstorm, "brainstorm", feature.DesignArtifactKey, feature.StatusBrainstorming},
+		{"design", feature.PhaseDesign, "design", feature.DesignArtifactKey, feature.StatusDesigning},
 	}
 }
 
@@ -441,9 +441,9 @@ func newArtifactPhaseOrchestratorFixture(t *testing.T, tc artifactPhaseCase) (*o
 			return nil
 		})
 	}
-	lc.CompleteBrainstormFn = func(id string) error {
+	lc.CompleteDesignFn = func(id string) error {
 		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusBrainstormReady
+			ff.Status = feature.StatusDesignReady
 			return nil
 		})
 	}
@@ -585,9 +585,9 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseSuccessRecordsRegistryA
 	}
 }
 
-// Inquire success: advances to next phase. Brainstorm would be the next
-// phase for PipelineMoonshot (KB→Inquire→Research→Brainstorm), but on
-// PipelineLarge (no brainstorm) it is Research.
+// Inquire success: advances to next phase. Design would be the next
+// phase for PipelineMoonshot (KB→Inquire→Research→Design), but on
+// PipelineLarge (no design) it is Research.
 func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.T) {
 	stateDir := t.TempDir()
 	f := &feature.Feature{

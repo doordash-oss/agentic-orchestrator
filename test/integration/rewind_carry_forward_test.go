@@ -26,10 +26,10 @@ import (
 )
 
 // TestRewindToPlan_EndToEnd_CarriesForwardContent drives a feature through
-// inquire → research → brainstorm, writes real marker files under the
+// inquire → research → design, writes real marker files under the
 // run-001 phase directories, rewinds to PhasePlan, and asserts:
 //
-//  1. run-002/inquire|research|brainstorm/marker.txt exist with identical
+//  1. run-002/inquire|research|design/marker.txt exist with identical
 //     content to the run-001 originals (deep-copy).
 //  2. run-002.Artifacts values are run-relative (not absolute, not
 //     containing "run-001").
@@ -86,7 +86,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	}
 	run1Dir := filepath.Join(stateDir, f.ID, "runs", "run-001")
 
-	// Walk inquire → research → brainstorm with real writers.
+	// Walk inquire → research → design with real writers.
 	phaseSteps := []struct {
 		name  string
 		start func(string) error
@@ -94,7 +94,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	}{
 		{"inquire", mgr.StartInquire, mgr.CompleteInquire},
 		{"research", mgr.StartResearch, mgr.CompleteResearch},
-		{"brainstorm", mgr.StartBrainstorm, mgr.CompleteBrainstorm},
+		{"design", mgr.StartDesign, mgr.CompleteDesign},
 	}
 	for _, step := range phaseSteps {
 		if err := step.start(f.ID); err != nil {
@@ -124,12 +124,12 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	// Populate Artifacts with absolute paths pointing under run-001/.
 	absInquire := filepath.Join(run1Dir, "inquire", "inquire.md")
 	absResearch := filepath.Join(run1Dir, "research", "research.md")
-	absBrainstorm := filepath.Join(run1Dir, "brainstorm", "brainstorm.md")
+	absDesign := filepath.Join(run1Dir, "design", "design.md")
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Artifacts = map[string]string{
 			"inquire":    absInquire,
 			"research":   absResearch,
-			"brainstorm": absBrainstorm,
+			"design": absDesign,
 			"pr_url":     "https://github.com/o/r/pull/99",
 		}
 		// Advance to implementing state so rewind to Plan is valid.
@@ -148,7 +148,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	run2Dir := filepath.Join(stateDir, f.ID, "runs", "run-002")
 	// 1. Carried marker files exist at run-002/<phase>/<phase>.md with
 	//    identical content.
-	for _, phase := range []string{"inquire", "research", "brainstorm"} {
+	for _, phase := range []string{"inquire", "research", "design"} {
 		r1 := filepath.Join(run1Dir, phase, phase+".md")
 		r2 := filepath.Join(run2Dir, phase, phase+".md")
 		r1Bytes, err := os.ReadFile(r1)
@@ -173,7 +173,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	if freshRun.CarriedFromRun != 1 {
 		t.Errorf("CarriedFromRun = %d, want 1", freshRun.CarriedFromRun)
 	}
-	for _, phase := range []string{"inquire", "research", "brainstorm"} {
+	for _, phase := range []string{"inquire", "research", "design"} {
 		v, ok := freshRun.Artifacts[phase]
 		if !ok {
 			t.Errorf("run-002 Artifacts missing carried key %q", phase)
@@ -233,7 +233,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 // "no artifact found for the previous phase" and proceed persists an empty
 // plan path.
 //
-// This test seeds the lifecycle through inquire → research → brainstorm,
+// This test seeds the lifecycle through inquire → research → design,
 // writes phase-NN/plan/plan.md under run-001 (simulating a roadmap planner's
 // output), populates f.Artifacts["plan"] with the absolute path (matching
 // orchestrator.go:854's write), then drives RewindToPhase(PhaseImplement)
@@ -291,7 +291,7 @@ func TestRewindToImplement_RoadmapPipeline_CarriedPlanPathResolves(t *testing.T)
 	}
 	run1Dir := filepath.Join(stateDir, f.ID, "runs", "run-001")
 
-	// Walk inquire → research → brainstorm with real writers so carry-forward
+	// Walk inquire → research → design with real writers so carry-forward
 	// has genuine content to copy, not just seeded fixtures.
 	phaseSteps := []struct {
 		name  string
@@ -300,7 +300,7 @@ func TestRewindToImplement_RoadmapPipeline_CarriedPlanPathResolves(t *testing.T)
 	}{
 		{"inquire", mgr.StartInquire, mgr.CompleteInquire},
 		{"research", mgr.StartResearch, mgr.CompleteResearch},
-		{"brainstorm", mgr.StartBrainstorm, mgr.CompleteBrainstorm},
+		{"design", mgr.StartDesign, mgr.CompleteDesign},
 	}
 	for _, step := range phaseSteps {
 		if err := step.start(f.ID); err != nil {

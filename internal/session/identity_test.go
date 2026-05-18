@@ -68,7 +68,7 @@ func TestAssertEmissionIdentity_QuietOnFullIdentity(t *testing.T) {
 // variety of role-suffixed session IDs and asserts the manager populates
 // FeatureID/Phase on both SDKEventMsg and SessionDoneMsg. This is the
 // forcing function for F4: every new role (fix, tweak, rebase, kb,
-// inquire, brainstorm, …) the manager emits for must carry identity
+// inquire, design, …) the manager emits for must carry identity
 // directly on the struct, so the TUI never has to parse SessionID.
 func TestEmittedEventsCarryIdentity_TableDriven(t *testing.T) {
 	if testing.Short() {
@@ -88,7 +88,7 @@ func TestEmittedEventsCarryIdentity_TableDriven(t *testing.T) {
 		{"rebase", "feat-abc-rebase-01", feature.PhaseImplement},
 		{"kb", "feat-abc-kb", feature.PhaseKnowledgeBase},
 		{"inquire", "feat-abc-inquire", feature.PhaseInquire},
-		{"brainstorm", "feat-abc-brainstorm", feature.PhaseBrainstorm},
+		{"design", "feat-abc-design", feature.PhaseDesign},
 	}
 
 	tmpDir := t.TempDir()

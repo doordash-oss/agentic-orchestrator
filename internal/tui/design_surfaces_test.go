@@ -15,7 +15,6 @@
 package tui
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -38,15 +37,11 @@ func TestCheckpointDescriptionsUseDesignLanguage(t *testing.T) {
 		if cf.Desc != exp {
 			t.Errorf("checkpoint %v desc = %q, want %q", cf.Gate, cf.Desc, exp)
 		}
-		if strings.Contains(strings.ToLower(cf.Desc), "brainstorm") {
-			t.Errorf("checkpoint %v desc still references legacy brainstorm: %q", cf.Gate, cf.Desc)
-		}
 	}
 }
 
 // TestSessionIDParsingCanonicalDesignSuffix ensures the canonical "-design"
-// suffix routes to PhaseDesign. Legacy "-brainstorm" handling is covered
-// alongside the other suffix routes in TestPhaseFromSessionID.
+// suffix routes to PhaseDesign.
 func TestSessionIDParsingCanonicalDesignSuffix(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -55,8 +50,6 @@ func TestSessionIDParsingCanonicalDesignSuffix(t *testing.T) {
 	}{
 		{"abc123-design", feature.PhaseDesign},
 		{"longid1234567890-design", feature.PhaseDesign},
-		// Legacy alias still resolves to the same logical phase.
-		{"abc123-brainstorm", feature.PhaseDesign},
 	}
 	for _, tt := range tests {
 		t.Run(tt.sessionID, func(t *testing.T) {

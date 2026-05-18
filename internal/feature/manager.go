@@ -350,15 +350,15 @@ func (m *Manager) CompleteInquire(featureID string) error {
 	return m.Transition(featureID, StatusInquireReady)
 }
 
-// StartBrainstorm transitions a feature to Brainstorming status and sets CurrentPhase.
-func (m *Manager) StartBrainstorm(featureID string) error {
+// StartDesign transitions a feature to Designing status and sets CurrentPhase.
+func (m *Manager) StartDesign(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
-		if err := f.Transition(StatusBrainstorming); err != nil {
+		if err := f.Transition(StatusDesigning); err != nil {
 			return err
 		}
-		f.CurrentPhase = PhaseBrainstorm
+		f.CurrentPhase = PhaseDesign
 		if !isCycleTimingKey(f.ActiveTimingKey) {
-			f.ActiveTimingKey = "brainstorm"
+			f.ActiveTimingKey = "design"
 		}
 		now := time.Now()
 		f.ActivePhaseStart = &now
@@ -369,23 +369,9 @@ func (m *Manager) StartBrainstorm(featureID string) error {
 	})
 }
 
-// CompleteBrainstorm transitions a feature to PlanReady.
-func (m *Manager) CompleteBrainstorm(featureID string) error {
-	return m.Transition(featureID, StatusPlanReady)
-}
-
-// StartDesign is the canonical Design-facing entry point for moving a feature
-// into the Designing state. It is a thin alias of StartBrainstorm; new code
-// should call StartDesign while the legacy name remains available for older
-// callers and tests.
-func (m *Manager) StartDesign(featureID string) error {
-	return m.StartBrainstorm(featureID)
-}
-
-// CompleteDesign is the canonical Design-facing entry point for transitioning
-// a feature to PlanReady. It is an alias of CompleteBrainstorm.
+// CompleteDesign transitions a feature to PlanReady.
 func (m *Manager) CompleteDesign(featureID string) error {
-	return m.CompleteBrainstorm(featureID)
+	return m.Transition(featureID, StatusPlanReady)
 }
 
 // StartResearch transitions a feature to Researching status and sets CurrentPhase.
@@ -407,9 +393,9 @@ func (m *Manager) StartResearch(featureID string) error {
 	})
 }
 
-// CompleteResearch transitions a feature to BrainstormReady.
+// CompleteResearch transitions a feature to DesignReady.
 func (m *Manager) CompleteResearch(featureID string) error {
-	return m.Transition(featureID, StatusBrainstormReady)
+	return m.Transition(featureID, StatusDesignReady)
 }
 
 // StartKnowledgeBase transitions a feature to BuildingKB status and sets CurrentPhase.
@@ -1023,7 +1009,7 @@ func firstRewindablePhase(p PipelineProfile) Phase {
 
 // PhasesFromOnwards returns all phases from targetPhase through PhaseImplement in logical order.
 func PhasesFromOnwards(target Phase) []Phase {
-	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseBrainstorm, PhasePlan, PhaseImplement}
+	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement}
 	var result []Phase
 	found := false
 	for _, p := range allPhases {
@@ -1044,10 +1030,10 @@ func phaseBeforeTarget(target Phase) Phase {
 		return PhaseKnowledgeBase
 	case PhaseResearch:
 		return PhaseInquire
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return PhaseResearch
 	case PhasePlan:
-		return PhaseBrainstorm
+		return PhaseDesign
 	case PhaseImplement:
 		return PhasePlan
 	default:
@@ -1062,14 +1048,14 @@ func RewindablePhases(f *Feature) []Phase {
 	switch f.Status {
 	case StatusInquiring, StatusInquireReady, StatusPromptNeedsReview:
 		completedUpTo = PhaseInquire
-	case StatusResearching, StatusBrainstormReady, StatusInquiryNeedsReview:
+	case StatusResearching, StatusDesignReady, StatusInquiryNeedsReview:
 		completedUpTo = PhaseResearch
-	case StatusBrainstorming, StatusPlanReady, StatusResearchNeedsReview:
-		completedUpTo = PhaseBrainstorm
+	case StatusDesigning, StatusPlanReady, StatusResearchNeedsReview:
+		completedUpTo = PhaseDesign
 	case StatusDesignNeedsReview:
 		completedUpTo = PhasePlan
 	case StatusPlanNeedsReview:
-		completedUpTo = PhaseBrainstorm
+		completedUpTo = PhaseDesign
 		if f.PendingReviewPhase != nil && f.IsRewind && *f.PendingReviewPhase == PhaseImplement {
 			completedUpTo = PhaseImplement
 		}
@@ -1087,7 +1073,7 @@ func RewindablePhases(f *Feature) []Phase {
 		return nil // StatusCreated, StatusBuildingKB, etc.
 	}
 
-	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseBrainstorm, PhasePlan, PhaseImplement}
+	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement}
 	var result []Phase
 	for _, p := range allPhases {
 		if p.LogicalOrder() > completedUpTo.LogicalOrder() {
@@ -1114,14 +1100,14 @@ func RewindChoicesForFeature(f *Feature) []RewindChoice {
 	switch f.Status {
 	case StatusInquiring, StatusInquireReady, StatusPromptNeedsReview:
 		completedUpTo = PhaseInquire
-	case StatusResearching, StatusBrainstormReady, StatusInquiryNeedsReview:
+	case StatusResearching, StatusDesignReady, StatusInquiryNeedsReview:
 		completedUpTo = PhaseResearch
-	case StatusBrainstorming, StatusPlanReady, StatusResearchNeedsReview:
-		completedUpTo = PhaseBrainstorm
+	case StatusDesigning, StatusPlanReady, StatusResearchNeedsReview:
+		completedUpTo = PhaseDesign
 	case StatusDesignNeedsReview:
 		completedUpTo = PhasePlan
 	case StatusPlanNeedsReview:
-		completedUpTo = PhaseBrainstorm
+		completedUpTo = PhaseDesign
 		if f.PendingReviewPhase != nil && f.IsRewind && *f.PendingReviewPhase == PhaseImplement {
 			completedUpTo = PhaseImplement
 		}
@@ -1139,7 +1125,7 @@ func RewindChoicesForFeature(f *Feature) []RewindChoice {
 	}
 
 	profile := f.EffectivePipeline()
-	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseBrainstorm, PhasePlan, PhaseImplement}
+	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement}
 	var choices []RewindChoice
 	for _, p := range allPhases {
 		if p.LogicalOrder() > completedUpTo.LogicalOrder() {
@@ -1521,18 +1507,18 @@ func carryForwardDirs(target Phase) []string {
 	switch target {
 	case PhaseResearch:
 		return []string{"inquire"}
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return []string{"inquire", "research"}
 	case PhasePlan:
-		return []string{"inquire", "research", "brainstorm"}
+		return []string{"inquire", "research", "design"}
 	case PhaseImplement:
-		return []string{"inquire", "research", "brainstorm", "roadmap", "plan"}
+		return []string{"inquire", "research", "design", "roadmap", "plan"}
 	case PhaseFinalReview:
 		// Rewinding into the deferred end-of-feature Final Review pass
 		// preserves every upstream artifact dir AND the implement output so
 		// the FR pass can re-run against the prior implementation. Per-phase
 		// plan dirs are picked up dynamically by discoverCarriedPhasePlanDirs.
-		return []string{"inquire", "research", "brainstorm", "roadmap", "plan", "implement"}
+		return []string{"inquire", "research", "design", "roadmap", "plan", "implement"}
 	}
 	return nil
 }

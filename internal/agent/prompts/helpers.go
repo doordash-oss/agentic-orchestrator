@@ -104,14 +104,6 @@ func DesignUserPrompt(in any) string {
 	return MustRender("design.user", in)
 }
 
-// BrainstormUserPrompt renders the legacy Brainstorm-phase user prompt
-// (brainstorm.user.tmpl). The template body matches design.user, so this
-// helper is the legacy entry point retained for compatibility with callers
-// and snapshots that still reference the Brainstorm surface.
-func BrainstormUserPrompt(in any) string {
-	return MustRender("brainstorm.user", in)
-}
-
 // RefactorPlanUserPrompt renders the refactor-plan step user prompt
 // (refactor_plan.user.tmpl).
 func RefactorPlanUserPrompt(in any) string {

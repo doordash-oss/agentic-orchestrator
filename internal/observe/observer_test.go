@@ -798,7 +798,7 @@ func TestFeatureRewoundFullOmitRoadmapPhase(t *testing.T) {
 		EffectiveTarget: feature.PhaseImplement,
 		SourceRun:       1,
 		NewRun:          2,
-		CarriedPhases:   []string{"inquire", "research", "brainstorm", "roadmap", "plan"},
+		CarriedPhases:   []string{"inquire", "research", "design", "roadmap", "plan"},
 		BackupBranches:  map[string]string{"repo-a": "feature/example-backup"},
 	})
 

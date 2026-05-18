@@ -66,10 +66,10 @@ type ImplementConfig struct {
 	// Included in the review prompt so the reviewer has full context.
 	RoadmapPath string
 
-	// BrainstormArtifactPath is the absolute path to the brainstorm design
+	// DesignArtifactPath is the absolute path to the design design
 	// document, if one was produced. Retained for caller compatibility;
 	// implementation prompts no longer re-inject it.
-	BrainstormArtifactPath string
+	DesignArtifactPath string
 
 	// DangerouslySkipPermissions enables --dangerously-skip-permissions for
 	// interactive sessions, replacing the default --permission-mode flag.
@@ -322,7 +322,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Re-inject user-attached visual references (mockups, design
 			// comps, desired-state screenshots) on every implement
 			// iteration. They communicate intent that text-only phase
-			// plans can't carry; without this they die at Brainstorm.
+			// plans can't carry; without this they die at Design.
 			if cfg.Feature != nil {
 				if block := visualReferencesSection(cfg.Feature.Images, "implementing this iteration"); block != "" {
 					prompt = block + prompt

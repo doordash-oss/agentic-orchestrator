@@ -108,7 +108,7 @@ func (f *needUserInputForm) SetWidth(width int) {
 // by the artifact-review shell BEFORE this is called. Every editing
 // keystroke is flushed to disk via Persist so a hard restart while the
 // questionnaire is open recovers the draft from the persisted gate
-// artifact (the brainstorm's restart-recovery contract).
+// artifact (the design's restart-recovery contract).
 func (f *needUserInputForm) HandleKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "tab", "down":

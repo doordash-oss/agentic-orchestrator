@@ -33,7 +33,7 @@ const (
 	PhaseReview
 	PhaseKnowledgeBase
 	PhaseInquire
-	PhaseBrainstorm
+	PhaseDesign
 	// PhaseFinalReview is the deferred end-of-feature review pass that runs
 	// once after the last roadmap-phase implement completes. The implement
 	// loop's per-iteration review gate handles iteration-level review for
@@ -42,36 +42,16 @@ const (
 	PhaseFinalReview
 )
 
-// DesignArtifactKey is the canonical Design-facing artifact-map key for the
-// Design (legacy: Brainstorm) phase output. New writes should use this key.
+// DesignArtifactKey is the artifact-map key for the Design phase output.
 const DesignArtifactKey = "design"
 
-// LegacyBrainstormArtifactKey is the on-disk artifact-map key persisted by
-// older runs that pre-dated the Design rename. Read paths must fall back to
-// this key so legacy state continues to feed Plan, carry-forward, rewind,
-// and review-cycle inputs.
-const LegacyBrainstormArtifactKey = "brainstorm"
-
-// DesignArtifactPath returns the recorded path of the Design (legacy:
-// Brainstorm) artifact for a feature. New runs persist the artifact under
-// the canonical Design key; legacy runs persist it under the Brainstorm key.
-// The helper checks both so callers get a single, compat-safe accessor.
+// DesignArtifactPath returns the recorded path of the Design artifact for a feature.
 func (f *Feature) DesignArtifactPath() string {
 	if f == nil || f.Artifacts == nil {
 		return ""
 	}
-	if v := f.Artifacts[DesignArtifactKey]; v != "" {
-		return v
-	}
-	return f.Artifacts[LegacyBrainstormArtifactKey]
+	return f.Artifacts[DesignArtifactKey]
 }
-
-// PhaseDesign is the canonical Design-facing alias of PhaseBrainstorm. They
-// share the same underlying int value so persisted Brainstorm phase
-// identifiers continue to load, compare, dispatch, and transition as Design.
-// New workflow code should reference PhaseDesign; PhaseBrainstorm is retained
-// as a legacy alias for older fixtures and tests.
-const PhaseDesign = PhaseBrainstorm
 
 // LogicalOrder returns the execution/display sequence order for the phase.
 // This avoids breaking existing serialized Phase values (iota-based) while
@@ -84,7 +64,7 @@ func (p Phase) LogicalOrder() int {
 		return 1
 	case PhaseResearch:
 		return 2
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return 3
 	case PhasePlan:
 		return 4
@@ -117,7 +97,7 @@ func (p Phase) String() string {
 		return "Knowledge Base"
 	case PhaseInquire:
 		return "Inquire"
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return "Design"
 	case PhaseFinalReview:
 		return "Final Review"
@@ -143,12 +123,12 @@ func (p Phase) DirName() string {
 		return "knowledgebase"
 	case PhaseInquire:
 		return "inquire"
-	case PhaseBrainstorm:
-		// The on-disk subdirectory name stays "brainstorm" so legacy run
+	case PhaseDesign:
+		// The on-disk subdirectory name stays "design" so legacy run
 		// state remains readable in place without an explicit migration.
 		// Canonical Design-facing naming is exposed through Phase.String,
 		// Status display, and the design-artifact lookup helper.
-		return "brainstorm"
+		return "design"
 	case PhaseFinalReview:
 		// Share the "review" subdir with PhaseReview so existing artifact
 		// resolvers (review_context.go, orchestrator.resolveFinalReviewArtifactDirForRepo)
@@ -168,7 +148,7 @@ func (p Phase) DirName() string {
 // questions" system-reminder that suppresses grilling.
 func (p Phase) RequiresGrilling() bool {
 	switch p {
-	case PhaseInquire, PhaseBrainstorm, PhasePlan:
+	case PhaseInquire, PhaseDesign, PhasePlan:
 		return true
 	default:
 		return false
@@ -311,8 +291,8 @@ const (
 	StatusPlanNeedsReview
 	StatusInquiring
 	StatusInquireReady
-	StatusBrainstormReady
-	StatusBrainstorming
+	StatusDesignReady
+	StatusDesigning
 	StatusPromptNeedsReview
 	StatusInquiryNeedsReview
 	StatusResearchNeedsReview
@@ -330,15 +310,6 @@ const (
 	// StatusReviewPassed → StatusFinalReviewing on entry and
 	// StatusFinalReviewing → StatusCodeReady on success.
 	StatusFinalReviewing
-)
-
-// StatusDesignReady and StatusDesigning are the canonical Design-facing
-// aliases for the BrainstormReady/Brainstorming statuses. They share the
-// same underlying int values so persisted Brainstorm status identifiers
-// continue to load, compare, and transition as Design.
-const (
-	StatusDesignReady = StatusBrainstormReady
-	StatusDesigning   = StatusBrainstorming
 )
 
 func (s Status) String() string {
@@ -375,9 +346,9 @@ func (s Status) String() string {
 		return "Inquiring"
 	case StatusInquireReady:
 		return "InquireReady"
-	case StatusBrainstormReady:
+	case StatusDesignReady:
 		return "DesignReady"
-	case StatusBrainstorming:
+	case StatusDesigning:
 		return "Designing"
 	case StatusPromptNeedsReview:
 		return "PromptNeedsReview"
@@ -400,7 +371,7 @@ func (s Status) String() string {
 
 // IsRunning returns true if this status represents an actively executing phase.
 func (s Status) IsRunning() bool {
-	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusBrainstorming || s == StatusFinalReviewing
+	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing
 }
 
 // IsNeedsReview returns true if this status represents a pending artifact review.
@@ -419,7 +390,7 @@ func NeedsReviewForPhase(target Phase) Status {
 		return StatusPromptNeedsReview
 	case PhaseResearch:
 		return StatusInquiryNeedsReview
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return StatusResearchNeedsReview
 	case PhasePlan:
 		return StatusDesignNeedsReview
@@ -457,8 +428,6 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
-		"BrainstormReady":     StatusBrainstormReady, // legacy alias
-		"Brainstorming":       StatusBrainstorming,   // legacy alias
 		"DesignReady":         StatusDesignReady,
 		"Designing":           StatusDesigning,
 		"PromptNeedsReview":   StatusPromptNeedsReview,
@@ -516,7 +485,7 @@ func (c Checkpoints) HasGateForPhase(phase Phase) bool {
 	switch phase {
 	case PhaseResearch:
 		return c.InquiryReview
-	case PhaseBrainstorm:
+	case PhaseDesign:
 		return c.ResearchReview
 	case PhasePlan:
 		return c.DesignReview
@@ -787,12 +756,12 @@ func (f *Feature) syncRunToShadows() {
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
 	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
-	StatusResearching:         {StatusBrainstormReady, StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusResearching:         {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
 	StatusBuildingKB:          {StatusCreated, StatusFailed, StatusInterrupted},
 	StatusInquiring:           {StatusInquireReady, StatusFailed, StatusInterrupted},
 	StatusInquireReady:        {StatusResearching, StatusFailed},
-	StatusBrainstormReady:     {StatusBrainstorming, StatusFailed},
-	StatusBrainstorming:       {StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusDesignReady:     {StatusDesigning, StatusFailed},
+	StatusDesigning:       {StatusPlanReady, StatusFailed, StatusInterrupted},
 	StatusPlanReady:           {StatusPlanning, StatusFailed},
 	StatusPlanning:            {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
 	StatusImplementReady:      {StatusImplementing, StatusFailed},
@@ -804,12 +773,12 @@ var validTransitions = map[Status][]Status{
 	StatusCodeReady:           {StatusPublished, StatusDone, StatusFailed, StatusImplementReady, StatusInquiring},
 	StatusPublished:           {StatusDone, StatusFailed, StatusImplementReady, StatusInquiring, StatusPlanReady},
 	StatusDone:                {},
-	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusBrainstorming, StatusImplementReady, StatusCodeReady},
-	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusBrainstorming, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
+	StatusFailed:              {StatusCreated, StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusImplementReady, StatusCodeReady},
+	StatusInterrupted:         {StatusBuildingKB, StatusInquiring, StatusResearching, StatusDesigning, StatusPlanning, StatusImplementing, StatusFinalReviewing, StatusFailed},
 	StatusPlanNeedsReview:     {StatusPlanning, StatusImplementReady, StatusFailed},
 	StatusPromptNeedsReview:   {StatusInquiring, StatusFailed},
 	StatusInquiryNeedsReview:  {StatusResearching, StatusFailed},
-	StatusResearchNeedsReview: {StatusBrainstorming, StatusFailed},
+	StatusResearchNeedsReview: {StatusDesigning, StatusFailed},
 	StatusDesignNeedsReview:   {StatusPlanning, StatusFailed},
 }
 
@@ -854,7 +823,7 @@ func (f *Feature) SetPRURL(url string) {
 	f.Run().PRURL = url
 }
 
-// RebaseCount returns the run-level rebase counter. The brainstorm calls
+// RebaseCount returns the run-level rebase counter. The design calls
 // for per-repo cycle counts; until RepoCycleState carries historical
 // counts, this delegates to the run.
 func (f *Feature) RebaseCount() int { return f.Run().RebaseCount }

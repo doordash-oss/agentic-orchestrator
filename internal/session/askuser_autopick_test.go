@@ -65,7 +65,7 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 		},
 		{
 			name:        "medium threshold picks above threshold",
-			purpose:     ports.AskUserAutoPickPurposeBrainstorm,
+			purpose:     ports.AskUserAutoPickPurposeDesign,
 			inquireness: feature.InquirenessMedium,
 			input:       askInput(`{"question":"Design?","options":[{"label":"A","confidence":0.71},{"label":"B","confidence":0.2}]}`),
 			wantPick:    true,
@@ -74,7 +74,7 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 		},
 		{
 			name:        "medium threshold equal picks",
-			purpose:     ports.AskUserAutoPickPurposeBrainstorm,
+			purpose:     ports.AskUserAutoPickPurposeDesign,
 			inquireness: feature.InquirenessMedium,
 			input:       askInput(`{"question":"Design?","options":[{"label":"A","confidence":0.7},{"label":"B","confidence":0.2}]}`),
 			wantPick:    true,
@@ -83,7 +83,7 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 		},
 		{
 			name:        "medium threshold below declines",
-			purpose:     ports.AskUserAutoPickPurposeBrainstorm,
+			purpose:     ports.AskUserAutoPickPurposeDesign,
 			inquireness: feature.InquirenessMedium,
 			input:       askInput(`{"question":"Design?","options":[{"label":"A (Recommended)","confidence":0.69},{"label":"B","confidence":0.2}]}`),
 		},
@@ -234,7 +234,7 @@ func TestAskUserAutoPickPurposeCanPickAllowlist(t *testing.T) {
 		want    bool
 	}{
 		{ports.AskUserAutoPickPurposeInquire, true},
-		{ports.AskUserAutoPickPurposeBrainstorm, true},
+		{ports.AskUserAutoPickPurposeDesign, true},
 		{ports.AskUserAutoPickPurposeRoadmapCreator, true},
 		{ports.AskUserAutoPickPurposePhasePlanCreator, true},
 		{ports.AskUserAutoPickPurposeNone, false},

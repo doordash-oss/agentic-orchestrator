@@ -117,7 +117,7 @@ type orchestratorAPI interface {
 	// phase-implement loop can re-run the active phase from iteration 1.
 	RetryPhase(featureID string) error
 	ClearPendingHelpAndPermissions(featureID string) error
-	SetBrainstormReady(featureID string) error
+	SetDesignReady(featureID string) error
 	MergeFeatureLocal(featureID string) error
 	UpgradePipeline(featureID string, profile feature.PipelineProfile) error
 	RewindToPhase(featureID string, targetPhase feature.Phase) ([]string, feature.Phase, error)

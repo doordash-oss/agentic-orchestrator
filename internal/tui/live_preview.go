@@ -1170,7 +1170,7 @@ func livePreviewToolInputSummary(toolName string, input json.RawMessage) string 
 		return stringField(parsed, "path")
 	case "WebFetch":
 		return stringField(parsed, "url")
-	case "Task":
+	case "Agent", "Task":
 		return firstNonEmpty(stringField(parsed, "description"), stringField(parsed, "prompt"))
 	}
 	return livePreviewJSONSummary(input)

@@ -353,13 +353,18 @@ func (o *Orchestrator) ClearPendingHelpAndPermissions(featureID string) error {
 }
 
 // SetBrainstormReady transitions a feature into StatusBrainstormReady without
-// going through Transition (Brainstorm has a non-linear entry path). Used by
-// the restart/resume flows for a failed brainstorm phase.
+// going through Transition (the Design slot has a non-linear entry path). Used
+// by the restart/resume flows for a failed Design (legacy Brainstorm) phase.
 func (o *Orchestrator) SetBrainstormReady(featureID string) error {
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 		f.Status = feature.StatusBrainstormReady
 		return nil
 	})
+}
+
+// SetDesignReady is the canonical Design-facing alias of SetBrainstormReady.
+func (o *Orchestrator) SetDesignReady(featureID string) error {
+	return o.SetBrainstormReady(featureID)
 }
 
 // UpgradePipeline delegates to Lifecycle.UpgradePipeline for TUI rewind flows.

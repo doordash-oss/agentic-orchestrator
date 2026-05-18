@@ -650,7 +650,7 @@ func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
 
-	if !strings.Contains(view, "Current: Brainstorm · ⟳ Using Read...") {
+	if !strings.Contains(view, "Current: Design · ⟳ Using Read...") {
 		t.Fatalf("activity should render in phase preview title, got:\n%s", view)
 	}
 	if strings.Count(view, "Using Read...") != 1 {

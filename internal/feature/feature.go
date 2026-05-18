@@ -42,6 +42,37 @@ const (
 	PhaseFinalReview
 )
 
+// DesignArtifactKey is the canonical Design-facing artifact-map key for the
+// Design (legacy: Brainstorm) phase output. New writes should use this key.
+const DesignArtifactKey = "design"
+
+// LegacyBrainstormArtifactKey is the on-disk artifact-map key persisted by
+// older runs that pre-dated the Design rename. Read paths must fall back to
+// this key so legacy state continues to feed Plan, carry-forward, rewind,
+// and review-cycle inputs.
+const LegacyBrainstormArtifactKey = "brainstorm"
+
+// DesignArtifactPath returns the recorded path of the Design (legacy:
+// Brainstorm) artifact for a feature. New runs persist the artifact under
+// the canonical Design key; legacy runs persist it under the Brainstorm key.
+// The helper checks both so callers get a single, compat-safe accessor.
+func (f *Feature) DesignArtifactPath() string {
+	if f == nil || f.Artifacts == nil {
+		return ""
+	}
+	if v := f.Artifacts[DesignArtifactKey]; v != "" {
+		return v
+	}
+	return f.Artifacts[LegacyBrainstormArtifactKey]
+}
+
+// PhaseDesign is the canonical Design-facing alias of PhaseBrainstorm. They
+// share the same underlying int value so persisted Brainstorm phase
+// identifiers continue to load, compare, dispatch, and transition as Design.
+// New workflow code should reference PhaseDesign; PhaseBrainstorm is retained
+// as a legacy alias for older fixtures and tests.
+const PhaseDesign = PhaseBrainstorm
+
 // LogicalOrder returns the execution/display sequence order for the phase.
 // This avoids breaking existing serialized Phase values (iota-based) while
 // providing the correct ordering for progress bar display and done checks.
@@ -87,7 +118,7 @@ func (p Phase) String() string {
 	case PhaseInquire:
 		return "Inquire"
 	case PhaseBrainstorm:
-		return "Brainstorm"
+		return "Design"
 	case PhaseFinalReview:
 		return "Final Review"
 	case PhasePublish:
@@ -113,6 +144,10 @@ func (p Phase) DirName() string {
 	case PhaseInquire:
 		return "inquire"
 	case PhaseBrainstorm:
+		// The on-disk subdirectory name stays "brainstorm" so legacy run
+		// state remains readable in place without an explicit migration.
+		// Canonical Design-facing naming is exposed through Phase.String,
+		// Status display, and the design-artifact lookup helper.
 		return "brainstorm"
 	case PhaseFinalReview:
 		// Share the "review" subdir with PhaseReview so existing artifact
@@ -297,6 +332,15 @@ const (
 	StatusFinalReviewing
 )
 
+// StatusDesignReady and StatusDesigning are the canonical Design-facing
+// aliases for the BrainstormReady/Brainstorming statuses. They share the
+// same underlying int values so persisted Brainstorm status identifiers
+// continue to load, compare, and transition as Design.
+const (
+	StatusDesignReady = StatusBrainstormReady
+	StatusDesigning   = StatusBrainstorming
+)
+
 func (s Status) String() string {
 	switch s {
 	case StatusCreated:
@@ -332,9 +376,9 @@ func (s Status) String() string {
 	case StatusInquireReady:
 		return "InquireReady"
 	case StatusBrainstormReady:
-		return "BrainstormReady"
+		return "DesignReady"
 	case StatusBrainstorming:
-		return "Brainstorming"
+		return "Designing"
 	case StatusPromptNeedsReview:
 		return "PromptNeedsReview"
 	case StatusInquiryNeedsReview:
@@ -413,8 +457,10 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
-		"BrainstormReady":     StatusBrainstormReady,
-		"Brainstorming":       StatusBrainstorming,
+		"BrainstormReady":     StatusBrainstormReady, // legacy alias
+		"Brainstorming":       StatusBrainstorming,   // legacy alias
+		"DesignReady":         StatusDesignReady,
+		"Designing":           StatusDesigning,
 		"PromptNeedsReview":   StatusPromptNeedsReview,
 		"InquiryNeedsReview":  StatusInquiryNeedsReview,
 		"ResearchNeedsReview": StatusResearchNeedsReview,

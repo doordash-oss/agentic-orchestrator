@@ -1402,9 +1402,9 @@ func formatStatus(f *feature.Feature) string {
 		}
 		return label + elapsed
 	case feature.StatusBrainstorming:
-		label := "Brainstorming"
+		label := "Designing"
 		if f.IsRefactoring() {
-			label = "Refactoring: Brainstorming"
+			label = "Refactoring: Designing"
 		}
 		if needsInput {
 			return WarningStyle.Render(label+" | waiting input") + elapsed

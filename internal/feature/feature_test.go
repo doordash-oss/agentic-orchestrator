@@ -170,7 +170,8 @@ func TestPhaseString(t *testing.T) {
 	}{
 		{PhaseResearch, "Research"},
 		{PhaseInquire, "Inquire"},
-		{PhaseBrainstorm, "Brainstorm"},
+		{PhaseBrainstorm, "Design"},
+		{PhaseDesign, "Design"},
 		{PhasePlan, "Plan"},
 		{PhaseImplement, "Implement"},
 		{PhasePublish, "Publish"},
@@ -244,8 +245,10 @@ func TestStatusString(t *testing.T) {
 		{StatusFailed, "Failed"},
 		{StatusInquiring, "Inquiring"},
 		{StatusInquireReady, "InquireReady"},
-		{StatusBrainstormReady, "BrainstormReady"},
-		{StatusBrainstorming, "Brainstorming"},
+		{StatusBrainstormReady, "DesignReady"},
+		{StatusBrainstorming, "Designing"},
+		{StatusDesignReady, "DesignReady"},
+		{StatusDesigning, "Designing"},
 	}
 	for _, tt := range tests {
 		if got := tt.status.String(); got != tt.want {
@@ -277,6 +280,80 @@ func TestStatusYAMLRoundTrip(t *testing.T) {
 		}
 		if got != s {
 			t.Errorf("round-trip: got %v, want %v (yaml: %q)", got, s, string(data))
+		}
+	}
+}
+
+// TestDesignBrainstormAliases pins the compatibility contract: the Design
+// canonical names and the legacy Brainstorm names refer to the same
+// underlying lifecycle slot, parse interchangeably from YAML, and serialize
+// to the canonical Design-facing form.
+func TestDesignBrainstormAliases(t *testing.T) {
+	t.Parallel()
+
+	if PhaseDesign != PhaseBrainstorm {
+		t.Fatalf("PhaseDesign must alias PhaseBrainstorm (got %d vs %d)", int(PhaseDesign), int(PhaseBrainstorm))
+	}
+	if StatusDesignReady != StatusBrainstormReady {
+		t.Fatalf("StatusDesignReady must alias StatusBrainstormReady")
+	}
+	if StatusDesigning != StatusBrainstorming {
+		t.Fatalf("StatusDesigning must alias StatusBrainstorming")
+	}
+
+	// Canonical serialization is Design-facing.
+	if got := StatusDesigning.String(); got != "Designing" {
+		t.Errorf("StatusDesigning.String() = %q, want %q", got, "Designing")
+	}
+	if got := StatusDesignReady.String(); got != "DesignReady" {
+		t.Errorf("StatusDesignReady.String() = %q, want %q", got, "DesignReady")
+	}
+	if got := PhaseDesign.String(); got != "Design" {
+		t.Errorf("PhaseDesign.String() = %q, want %q", got, "Design")
+	}
+
+	// Legacy Brainstorm YAML still unmarshals.
+	legacyCases := map[string]Status{
+		"Brainstorming":   StatusBrainstorming,
+		"BrainstormReady": StatusBrainstormReady,
+		"Designing":       StatusDesigning,
+		"DesignReady":     StatusDesignReady,
+	}
+	for in, want := range legacyCases {
+		var got Status
+		if err := yaml.Unmarshal([]byte(in), &got); err != nil {
+			t.Errorf("Unmarshal %q: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("Unmarshal %q: got %v want %v", in, got, want)
+		}
+	}
+
+	// New marshal output is the canonical Design-facing form.
+	out, err := yaml.Marshal(StatusBrainstorming)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !bytes.Contains(out, []byte("Designing")) {
+		t.Errorf("Marshal(StatusBrainstorming) = %q, expected canonical %q", string(out), "Designing")
+	}
+
+	// Allowed transitions across the Design slot.
+	for _, tc := range []struct {
+		from, to Status
+	}{
+		{StatusResearching, StatusDesignReady},
+		{StatusDesignReady, StatusDesigning},
+		{StatusDesigning, StatusPlanReady},
+		{StatusDesigning, StatusFailed},
+		{StatusDesigning, StatusInterrupted},
+		{StatusFailed, StatusDesigning},
+		{StatusInterrupted, StatusDesigning},
+	} {
+		f := &Feature{Status: tc.from}
+		if err := f.Transition(tc.to); err != nil {
+			t.Errorf("expected transition %s -> %s, got: %v", tc.from, tc.to, err)
 		}
 	}
 }

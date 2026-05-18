@@ -374,6 +374,20 @@ func (m *Manager) CompleteBrainstorm(featureID string) error {
 	return m.Transition(featureID, StatusPlanReady)
 }
 
+// StartDesign is the canonical Design-facing entry point for moving a feature
+// into the Designing state. It is a thin alias of StartBrainstorm; new code
+// should call StartDesign while the legacy name remains available for older
+// callers and tests.
+func (m *Manager) StartDesign(featureID string) error {
+	return m.StartBrainstorm(featureID)
+}
+
+// CompleteDesign is the canonical Design-facing entry point for transitioning
+// a feature to PlanReady. It is an alias of CompleteBrainstorm.
+func (m *Manager) CompleteDesign(featureID string) error {
+	return m.CompleteBrainstorm(featureID)
+}
+
 // StartResearch transitions a feature to Researching status and sets CurrentPhase.
 func (m *Manager) StartResearch(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {

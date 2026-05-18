@@ -224,10 +224,10 @@ func carryForwardArtifactKey(key string, target Phase) bool {
 	case PhaseBrainstorm:
 		return key == "inquire" || key == "research"
 	case PhasePlan:
-		return key == "inquire" || key == "research" || key == "brainstorm"
+		return key == "inquire" || key == "research" || key == "brainstorm" || key == "design"
 	case PhaseImplement:
 		switch key {
-		case "inquire", "research", "brainstorm", "roadmap", "plan":
+		case "inquire", "research", "brainstorm", "design", "roadmap", "plan":
 			return true
 		}
 		return strings.HasPrefix(key, "phase-") && strings.HasSuffix(key, "-plan")
@@ -237,7 +237,7 @@ func carryForwardArtifactKey(key string, target Phase) bool {
 
 func carryForwardArtifactKeyForPartialImplement(key string, targetRoadmapPhase int) bool {
 	switch key {
-	case "inquire", "research", "brainstorm", "roadmap":
+	case "inquire", "research", "brainstorm", "design", "roadmap":
 		return true
 	}
 	if phase, kind, ok := roadmapArtifactKey(key); ok {

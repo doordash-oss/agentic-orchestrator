@@ -1406,7 +1406,7 @@ func TestFormatStatusRefactoring(t *testing.T) {
 				Status:         feature.StatusBrainstorming,
 				RefactorPrompt: "refactor the auth module",
 			},
-			wantSubstr: "Refactoring: Brainstorming",
+			wantSubstr: "Refactoring: Designing",
 		},
 		{
 			name: "planning + refactoring + roadmap phase 0",

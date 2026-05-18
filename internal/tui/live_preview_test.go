@@ -841,6 +841,44 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	}
 }
 
+func TestDashboardLivePreviewAgentToolUseShowsDescriptionOnly(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-agent",
+		Name:         "Agent Feature",
+		Slug:         "agent-feature",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Created:      time.Now(),
+		Repos:        []feature.FeatureRepo{{Name: "api"}},
+	}
+	sess := newLivePreviewSession("feat-agent-impl", feature.PhaseImplement,
+		assistantMessage(llm.ContentBlock{
+			Type: "tool_use",
+			ID:   "toolu_agent",
+			Name: "Agent",
+			Input: rawJSON(`{
+				"description":"Feature state + schema + recovery",
+				"prompt":"delegated prompt body with internal instructions and large JSON"
+			}`),
+		}),
+	)
+	m := dashboardWithSelectedFeature(f)
+	m.focusPanel = 1
+	m.livePreview.session = sess
+
+	view := stripANSI(m.View())
+	t.Logf("dashboard Agent live preview:\n%s", view)
+	if !strings.Contains(view, "Agent: Feature state + schema + recovery") {
+		t.Fatalf("dashboard Agent live preview missing description row:\n%s", view)
+	}
+	for _, notWant := range []string{"delegated prompt body", `"prompt"`, "internal instructions"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("dashboard Agent live preview leaked %q:\n%s", notWant, view)
+		}
+	}
+}
+
 func TestLivePreviewContextMetadata(t *testing.T) {
 	t.Parallel()
 

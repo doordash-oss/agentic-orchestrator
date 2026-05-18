@@ -878,6 +878,56 @@ func TestOrchestrator_StartPlan_RoadmapPhase_WhenPlanning_SkipsTransition(t *tes
 	}
 }
 
+func TestOrchestrator_StartPlan_UsesLegacyBrainstormArtifactDir(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	featureID := "feat-legacy-brainstorm-plan"
+	f := &feature.Feature{
+		ID:            featureID,
+		Name:          "Legacy Brainstorm Plan",
+		Slug:          "legacy-brainstorm-plan",
+		Description:   "resume planning from a pre-rename brainstorm artifact",
+		Created:       time.Now().Truncate(time.Second),
+		Status:        feature.StatusPlanReady,
+		CurrentPhase:  feature.PhasePlan,
+		Pipeline:      feature.PipelineLarge,
+		Inquireness:   feature.InquirenessMedium,
+		Repos:         []feature.FeatureRepo{{Name: "repo1", Path: stateDir}},
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	brainstormDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "brainstorm")
+	if err := os.MkdirAll(brainstormDir, 0o755); err != nil {
+		t.Fatalf("mkdir brainstorm dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(brainstormDir, "brainstorm.md"), []byte("# Legacy Brainstorm\n"), 0o644); err != nil {
+		t.Fatalf("write brainstorm artifact: %v", err)
+	}
+
+	mgr := feature.NewManager(store, nil)
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: mgr,
+		Store:     store,
+	}, orchestrator.Hooks{})
+
+	if err := o.StartFeature(featureID); err != nil {
+		t.Fatalf("StartFeature() error = %v; want nil", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if loaded.Status != feature.StatusPlanning {
+		t.Errorf("loaded.Status = %v, want %v", loaded.Status, feature.StatusPlanning)
+	}
+}
+
 func TestOrchestrator_StartPlan_RoadmapPhase_WhenNotPlanning_Transitions(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase,

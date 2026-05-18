@@ -16,6 +16,7 @@ package feature
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -424,7 +425,9 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"PlanNeedsReview":     StatusPlanNeedsReview,
 		"Inquiring":           StatusInquiring,
 		"InquireReady":        StatusInquireReady,
+		"BrainstormReady":     StatusDesignReady, // legacy pre-design rename
 		"DesignReady":         StatusDesignReady,
+		"Brainstorming":       StatusDesigning, // legacy pre-design rename
 		"Designing":           StatusDesigning,
 		"PromptNeedsReview":   StatusPromptNeedsReview,
 		"InquiryNeedsReview":  StatusInquiryNeedsReview,
@@ -675,6 +678,7 @@ func (f *Feature) syncShadowsToRun() {
 	if f.run == nil {
 		return
 	}
+	normalizeLegacyArtifactAliases(f.Artifacts)
 	r := f.run
 	r.StartedAt = f.StartedAt
 	r.CurrentIteration = f.CurrentIteration
@@ -716,6 +720,7 @@ func (f *Feature) syncRunToShadows() {
 		return
 	}
 	r := f.run
+	normalizeLegacyArtifactAliases(r.Artifacts)
 	f.StartedAt = r.StartedAt
 	f.CurrentIteration = r.CurrentIteration
 	f.ReviewingGate = r.ReviewingGate
@@ -749,6 +754,27 @@ func (f *Feature) syncRunToShadows() {
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus
 }
 
+func normalizeLegacyArtifactAliases(artifacts map[string]string) {
+	if artifacts == nil {
+		return
+	}
+	if strings.TrimSpace(artifacts["design"]) != "" {
+		return
+	}
+	legacy := strings.TrimSpace(artifacts["brainstorm"])
+	if legacy == "" {
+		return
+	}
+	artifacts["design"] = legacyDesignArtifactPath(legacy)
+}
+
+func legacyDesignArtifactPath(path string) string {
+	if filepath.IsAbs(path) || strings.ContainsAny(path, `/\`) {
+		return path
+	}
+	return filepath.Join("brainstorm", path)
+}
+
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
 	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
@@ -756,8 +782,8 @@ var validTransitions = map[Status][]Status{
 	StatusBuildingKB:          {StatusCreated, StatusFailed, StatusInterrupted},
 	StatusInquiring:           {StatusInquireReady, StatusFailed, StatusInterrupted},
 	StatusInquireReady:        {StatusResearching, StatusFailed},
-	StatusDesignReady:     {StatusDesigning, StatusFailed},
-	StatusDesigning:       {StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusDesignReady:         {StatusDesigning, StatusFailed},
+	StatusDesigning:           {StatusPlanReady, StatusFailed, StatusInterrupted},
 	StatusPlanReady:           {StatusPlanning, StatusFailed},
 	StatusPlanning:            {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
 	StatusImplementReady:      {StatusImplementing, StatusFailed},

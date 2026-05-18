@@ -44,7 +44,6 @@
 package agent
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -259,14 +258,20 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		}
 	}
 
-	maxPlanFailures := cfg.MaxConsecFails
-	if maxPlanFailures <= 0 {
-		maxPlanFailures = 3
+	sidecar, err := ReadProtocolRetrySidecar(artifactDir)
+	if err != nil {
+		errMsg := err.Error()
+		_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+		return &RefactorFeatureLoopResult{
+			FinalStatus: "failed",
+			LastError:   errMsg,
+			ArtifactDir: artifactDir,
+		}, fmt.Errorf("refactor feature loop: read protocol retry sidecar: %w", err)
 	}
 
 	var planPath string
-	for attempt := 1; attempt <= maxPlanFailures; attempt++ {
-		if err := clearRefactorPlanAttemptArtifacts(artifactDir); err != nil {
+	for {
+		if err := RemovePhaseCompleteMarker(artifactDir); err != nil {
 			_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, err.Error())
 			return &RefactorFeatureLoopResult{
 				FinalStatus: "failed",
@@ -277,16 +282,54 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		candidate, planErr := planRunner(artifactDir)
 		if planErr != nil {
 			if isProtocolViolationError(planErr) {
-				errMsg := planErr.Error()
-				if attempt >= maxPlanFailures {
+				decision := DecideProtocolRetry(
+					RoleRefactorPlanStep,
+					artifactDir,
+					cfg.Feature.ActiveRun,
+					sidecar,
+					protocolViolationsFromError(planErr),
+					cfg.MaxConsecFails,
+				)
+				if decision.NewSidecar != nil {
+					if err := WriteProtocolRetrySidecar(artifactDir, *decision.NewSidecar); err != nil {
+						errMsg := err.Error()
+						_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+						return &RefactorFeatureLoopResult{
+							FinalStatus: "failed",
+							LastError:   errMsg,
+							ArtifactDir: artifactDir,
+						}, fmt.Errorf("refactor feature loop: write protocol retry sidecar: %w", err)
+					}
+					sidecar = decision.NewSidecar
+				}
+				switch decision.Action {
+				case ProtocolRetryActionRetry:
+					continue
+				case ProtocolRetryActionTerminal:
+					errMsg := planErr.Error()
 					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
 					return &RefactorFeatureLoopResult{
 						FinalStatus: "protocol_violation",
 						LastError:   errMsg,
 						ArtifactDir: artifactDir,
 					}, nil
+				case ProtocolRetryActionSucceed:
+					errMsg := planErr.Error()
+					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+					return &RefactorFeatureLoopResult{
+						FinalStatus: "failed",
+						LastError:   errMsg,
+						ArtifactDir: artifactDir,
+					}, fmt.Errorf("refactor feature loop: protocol violation had no violations: %w", planErr)
+				default:
+					errMsg := fmt.Sprintf("unknown protocol retry action %d", decision.Action)
+					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+					return &RefactorFeatureLoopResult{
+						FinalStatus: "failed",
+						LastError:   errMsg,
+						ArtifactDir: artifactDir,
+					}, fmt.Errorf("refactor feature loop: %s", errMsg)
 				}
-				continue
 			}
 			_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, planErr.Error())
 			return &RefactorFeatureLoopResult{
@@ -295,6 +338,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				ArtifactDir: artifactDir,
 			}, fmt.Errorf("refactor feature loop: plan step: %w", planErr)
 		}
+		_ = DeleteProtocolRetrySidecar(artifactDir)
 		planPath = candidate
 		break
 	}
@@ -606,9 +650,9 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		AskingClause:  asking,
 	})
 
-	// Clear stale completion and plan artifacts BEFORE spawning so every
-	// validated plan belongs to this marker-bearing attempt.
-	if err := clearRefactorPlanAttemptArtifacts(in.ArtifactDir); err != nil {
+	// Clear stale completion marker before spawning. Refactor-plan retries
+	// intentionally leave markdown and retry sidecars in place.
+	if err := RemovePhaseCompleteMarker(in.ArtifactDir); err != nil {
 		return "", err
 	}
 
@@ -673,26 +717,6 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		return "", fmt.Errorf("validating refactor plan step contract: validated without plan path")
 	}
 	return outcome.PlanMarkdownPath, nil
-}
-
-func clearRefactorPlanAttemptArtifacts(artifactDir string) error {
-	if err := os.Remove(filepath.Join(artifactDir, PhaseCompleteFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale %s: %w", PhaseCompleteFile, err)
-	}
-
-	matches, err := filepath.Glob(filepath.Join(artifactDir, "*.md"))
-	if err != nil {
-		return fmt.Errorf("glob refactor-plan artifacts: %w", err)
-	}
-	for _, match := range matches {
-		if IsArtifactExcluded(filepath.Base(match)) {
-			continue
-		}
-		if err := os.Remove(match); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale refactor-plan artifact %s: %w", match, err)
-		}
-	}
-	return nil
 }
 
 // buildRefactorPlanPrompt composes the user prompt for the refactor-plan

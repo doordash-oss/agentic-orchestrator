@@ -21,15 +21,15 @@ import (
 
 func TestBuildFinalReviewPrompt_DoesNotEmitDesignBlock(t *testing.T) {
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
-		FeatureDescription:     "Build a thing",
-		ExitCriteria:           "tests pass",
-		DiffBase:               "main",
-		WorkDir:                "/tmp/work",
-		VerificationPath:       "/tmp/v.yaml",
-		Iteration:              1,
-		RoadmapPath:            "/tmp/roadmap.md",
+		FeatureDescription: "Build a thing",
+		ExitCriteria:       "tests pass",
+		DiffBase:           "main",
+		WorkDir:            "/tmp/work",
+		VerificationPath:   "/tmp/v.yaml",
+		Iteration:          1,
+		RoadmapPath:        "/tmp/roadmap.md",
 		DesignArtifactPath: "/tmp/design.md",
-		FeedbackPath:           "/tmp/feedback.md",
+		FeedbackPath:       "/tmp/feedback.md",
 	})
 	if strings.Contains(prompt, "Design Reference") {
 		t.Errorf("final review prompt unexpectedly includes design block")
@@ -78,10 +78,10 @@ func TestBuildFinalReviewPromptLeavesOutputContractToRoleSpec(t *testing.T) {
 
 func TestBuildFinalFixPrompt_DoesNotEmitDesignBlock(t *testing.T) {
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
-		Feedback:               "fix this",
-		ExitCriteria:           "tests pass",
-		IterDir:                "/tmp/iter",
-		Iteration:              1,
+		Feedback:           "fix this",
+		ExitCriteria:       "tests pass",
+		IterDir:            "/tmp/iter",
+		Iteration:          1,
 		DesignArtifactPath: "/tmp/design.md",
 	})
 	if strings.Contains(prompt, "Design Reference") {

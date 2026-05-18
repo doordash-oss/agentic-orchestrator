@@ -113,9 +113,9 @@ func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, designArti
 	_ = kbInfos
 	repos := roadmapFeatureViews(f)
 	return roles.BuildRoadmapPrompt(roles.RoadmapUserInput{
-		Name:                   f.Name,
-		Description:            f.EffectiveDescription(),
-		Repos:                  repos,
+		Name:               f.Name,
+		Description:        f.EffectiveDescription(),
+		Repos:              repos,
 		DesignArtifactPath: designArtifactPath,
 		VisualReferences: prompts.VisualReferencesInput{
 			Images: append([]string(nil), f.Images...),

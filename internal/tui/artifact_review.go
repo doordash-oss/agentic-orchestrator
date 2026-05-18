@@ -46,8 +46,10 @@ func isArtifactReviewSession(sessionID string) bool {
 // edit artifact files and optionally chat with an AI agent that can also edit
 // the file, with green-highlighted changes and batch accept/reject.
 type ArtifactReviewModel struct {
-	editor       MarkdownEditor
-	artifactPath string
+	editor          MarkdownEditor
+	previewViewport viewport.Model
+	documentMode    artifactDocumentMode
+	artifactPath    string
 
 	// Review mode
 	reviewMode string // "plan" | "rewind" | "gate" | "need_user_input"
@@ -129,6 +131,13 @@ const (
 	chatSpacingH           = 2  // border top+bottom of chat panel
 )
 
+type artifactDocumentMode int
+
+const (
+	artifactDocumentRaw artifactDocumentMode = iota
+	artifactDocumentPreview
+)
+
 // artifactReviewMsgsMsg carries SDK messages from the agent session.
 type artifactReviewMsgsMsg struct {
 	messages []llm.SDKMessage
@@ -190,10 +199,15 @@ func NewArtifactReviewModel(artifactPath, featureID, reviewMode string, rewindPh
 		PageUp:   key.NewBinding(key.WithKeys("pgup")),
 		PageDown: key.NewBinding(key.WithKeys("pgdown")),
 	}
+	m.previewViewport = newArtifactPreviewViewport(m.editorContentWidth(), m.editorHeight())
 
 	m.recalcLayout()
 	m.editor = NewMarkdownEditor(m.editorContentWidth(), m.editorHeight())
 	_ = m.editor.Load(artifactPath)
+	if isMarkdownReviewArtifact(artifactPath) {
+		m.documentMode = artifactDocumentPreview
+		m.refreshPreviewContent()
+	}
 
 	// For plan-mode reviews, check whether the critic already approved the last
 	// attempt. If so, "Iterate more" is dropped from the menu (it would just
@@ -206,6 +220,40 @@ func NewArtifactReviewModel(artifactPath, featureID, reviewMode string, rewindPh
 	}
 
 	return m
+}
+
+func newArtifactPreviewViewport(width, height int) viewport.Model {
+	vp := viewport.New(viewport.WithWidth(max(width, 1)), viewport.WithHeight(max(height, 1)))
+	vp.SoftWrap = true
+	vp.FillHeight = true
+	vp.KeyMap = viewport.KeyMap{
+		Up:       key.NewBinding(key.WithKeys("up", "k")),
+		Down:     key.NewBinding(key.WithKeys("down", "j")),
+		PageUp:   key.NewBinding(key.WithKeys("pgup")),
+		PageDown: key.NewBinding(key.WithKeys("pgdown")),
+	}
+	return vp
+}
+
+func isMarkdownReviewArtifact(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".markdown":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m ArtifactReviewModel) supportsRenderedPreview() bool {
+	return m.nuiForm == nil && isMarkdownReviewArtifact(m.artifactPath)
+}
+
+func (m *ArtifactReviewModel) refreshPreviewContent() {
+	if !m.supportsRenderedPreview() {
+		return
+	}
+	width := max(m.previewViewport.Width(), m.editorContentWidth())
+	m.previewViewport.SetContent(renderMarkdown(m.editor.Content(), width))
 }
 
 // Init returns the initial command. Note: this is a value receiver (per
@@ -226,6 +274,7 @@ func (m ArtifactReviewModel) Update(msg tea.Msg) (ArtifactReviewModel, tea.Cmd) 
 			return m, nil
 		}
 		m.recalcLayout()
+		m.refreshPreviewContent()
 		return m, nil
 
 	case tea.PasteMsg:
@@ -237,6 +286,9 @@ func (m ArtifactReviewModel) Update(msg tea.Msg) (ArtifactReviewModel, tea.Cmd) 
 			var cmd tea.Cmd
 			m.chatInput, cmd = m.chatInput.Update(msg)
 			return m, cmd
+		}
+		if m.documentMode == artifactDocumentPreview {
+			return m, nil
 		}
 		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
@@ -337,6 +389,9 @@ func (m ArtifactReviewModel) handleKey(msg tea.KeyPressMsg) (ArtifactReviewModel
 	}
 
 	switch msg.String() {
+	case "ctrl+p":
+		return m.toggleDocumentMode()
+
 	case "ctrl+d":
 		if m.editor.Dirty() {
 			_ = m.editor.Save()
@@ -377,8 +432,7 @@ func (m ArtifactReviewModel) handleKey(msg tea.KeyPressMsg) (ArtifactReviewModel
 		return m.handleChatKey(msg)
 	}
 
-	// Esc in normal mode shows the Ctrl+D menu; in insert mode, the editor handles it
-	if msg.String() == "esc" && m.editor.Mode() == NormalMode {
+	if msg.String() == "esc" && (m.documentMode == artifactDocumentPreview || m.editor.Mode() == NormalMode) {
 		if m.editor.Dirty() {
 			_ = m.editor.Save()
 		}
@@ -387,8 +441,40 @@ func (m ArtifactReviewModel) handleKey(msg tea.KeyPressMsg) (ArtifactReviewModel
 		return m, nil
 	}
 
+	if m.documentMode == artifactDocumentPreview {
+		return m.handlePreviewKey(msg)
+	}
+
 	var cmd tea.Cmd
 	m.editor, cmd = m.editor.Update(msg)
+	return m, cmd
+}
+
+func (m ArtifactReviewModel) toggleDocumentMode() (ArtifactReviewModel, tea.Cmd) {
+	if !m.supportsRenderedPreview() {
+		return m, nil
+	}
+	if m.documentMode == artifactDocumentPreview {
+		m.documentMode = artifactDocumentRaw
+		return m, nil
+	}
+	m.documentMode = artifactDocumentPreview
+	m.refreshPreviewContent()
+	return m, nil
+}
+
+func (m ArtifactReviewModel) handlePreviewKey(msg tea.KeyPressMsg) (ArtifactReviewModel, tea.Cmd) {
+	m.refreshPreviewContent()
+	switch msg.String() {
+	case "ctrl+u":
+		m.previewViewport.HalfPageUp()
+		return m, nil
+	case "ctrl+f":
+		m.previewViewport.HalfPageDown()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.previewViewport, cmd = m.previewViewport.Update(msg)
 	return m, cmd
 }
 
@@ -1087,6 +1173,8 @@ func (m *ArtifactReviewModel) recalcLayout() {
 	contentW := m.editorContentWidth()
 	editorH := m.editorHeight()
 	m.editor.SetSize(contentW, editorH)
+	m.previewViewport.SetWidth(contentW)
+	m.previewViewport.SetHeight(editorH)
 
 	chatContentW := max(m.width-6, 20)
 	chatContentH := max(m.chatHeight()-chatSpacingH, 1)
@@ -1106,23 +1194,11 @@ func (m ArtifactReviewModel) View() string {
 
 	panelW := max(m.width-2, 20)
 
-	editorView := m.editor.View()
+	editorView := m.renderDocumentContent()
 	editorStyle := panelStyle(!m.chatFocused).Width(panelW)
 	editorPanel := editorStyle.Render(editorView)
 
-	// Add border title with filename
-	filename := filepath.Base(m.artifactPath)
-	modeStr := "NORMAL"
-	if m.editor.Mode() == InsertMode {
-		modeStr = "INSERT"
-	}
-	title := " " + filename + " [" + modeStr + "] "
-	if m.editor.Dirty() {
-		title = " " + filename + " [" + modeStr + "] [+] "
-	}
-	if len(m.editor.highlightedLines) > 0 {
-		title += "[agent edits pending] "
-	}
+	title := m.documentTitle()
 	titleStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	editorPanel = renderBorderTitle(editorPanel, title, titleStyle)
 
@@ -1163,6 +1239,41 @@ func (m ArtifactReviewModel) View() string {
 	}
 
 	return sb.String()
+}
+
+func (m ArtifactReviewModel) renderDocumentContent() string {
+	if m.documentMode != artifactDocumentPreview {
+		return m.editor.View()
+	}
+	m.refreshPreviewContent()
+	return m.previewViewport.View()
+}
+
+func (m ArtifactReviewModel) documentTitle() string {
+	filename := filepath.Base(m.artifactPath)
+	if m.documentMode == artifactDocumentPreview {
+		title := " " + filename + " [Rendered preview] "
+		if m.editor.Dirty() {
+			title = " " + filename + " [Rendered preview] [+] "
+		}
+		if len(m.editor.highlightedLines) > 0 {
+			title += "[agent edits pending] "
+		}
+		return title
+	}
+
+	modeStr := "NORMAL"
+	if m.editor.Mode() == InsertMode {
+		modeStr = "INSERT"
+	}
+	title := " " + filename + " [Source " + modeStr + "] "
+	if m.editor.Dirty() {
+		title = " " + filename + " [Source " + modeStr + "] [+] "
+	}
+	if len(m.editor.highlightedLines) > 0 {
+		title += "[agent edits pending] "
+	}
+	return title
 }
 
 func (m ArtifactReviewModel) renderChatContent() string {
@@ -1241,14 +1352,27 @@ func (m ArtifactReviewModel) renderFooter() string {
 
 	var hints []string
 	if m.chatFocused {
-		hints = append(hints, "Tab: editor", "↑/↓: scroll", "Enter: send", "Shift+Enter: newline", "Ctrl+D: done")
-	} else {
-		if m.editor.Mode() == InsertMode {
-			hints = append(hints, "Esc: normal mode")
-		} else {
-			hints = append(hints, "i: insert")
+		target := "editor"
+		if m.documentMode == artifactDocumentPreview {
+			target = "preview"
 		}
-		hints = append(hints, "Ctrl+U/F: scroll", "Tab: chat", "Ctrl+D: done", "Esc: back")
+		hints = append(hints, "Tab: "+target, "↑/↓: scroll", "Enter: send", "Shift+Enter: newline", "Ctrl+D: done")
+	} else {
+		if m.documentMode == artifactDocumentPreview {
+			hints = append(hints, "Preview", "Ctrl+U/F: scroll", "Ctrl+P: raw")
+		} else {
+			hints = append(hints, "Raw")
+			if m.supportsRenderedPreview() {
+				hints = append(hints, "Ctrl+P: preview")
+			}
+			if m.editor.Mode() == InsertMode {
+				hints = append(hints, "Esc: normal mode")
+			} else {
+				hints = append(hints, "i: insert")
+			}
+			hints = append(hints, "Ctrl+U/F: scroll")
+		}
+		hints = append(hints, "Tab: chat", "Ctrl+D: done", "Esc: back")
 	}
 	if len(m.editor.highlightedLines) > 0 {
 		hints = append(hints, "Ctrl+Y: accept edits", "Ctrl+Z: reject edits")

@@ -1200,11 +1200,11 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 		f.Status = feature.StatusImplementing
 		f.CurrentPhase = feature.PhaseImplement
 		f.Artifacts = map[string]string{
-			"inquire":    "/path/to/inquire.md",
-			"research":   "/path/to/research.md",
-			"design": "/path/to/design.md",
-			"plan":       "/path/to/plan.md",
-			"implement":  "/path/to/impl.md",
+			"inquire":   "/path/to/inquire.md",
+			"research":  "/path/to/research.md",
+			"design":    "/path/to/design.md",
+			"plan":      "/path/to/plan.md",
+			"implement": "/path/to/impl.md",
 		}
 		return nil
 	})
@@ -4574,7 +4574,7 @@ func seedCarryForwardFixtures(t *testing.T, run1Dir string) {
 	files := map[string]string{
 		filepath.Join("inquire", "marker.txt"):            "inquire",
 		filepath.Join("research", "marker.txt"):           "research",
-		filepath.Join("design", "marker.txt"):         "design",
+		filepath.Join("design", "marker.txt"):             "design",
 		filepath.Join("plan", "plan.md"):                  "plan",
 		filepath.Join("roadmap", "roadmap.md"):            "roadmap",
 		filepath.Join("phase-01", "plan", "plan.md"):      "phase-01-plan",
@@ -5465,12 +5465,12 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 
 		if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 			ff.Artifacts = map[string]string{
-				"inquire":    absInquire,
-				"research":   absResearch,
-				"design": absDesign,
-				"plan":       absPlan,
-				"implement":  absImpl,
-				"pr_url":     "https://github.com/o/r/pull/1",
+				"inquire":   absInquire,
+				"research":  absResearch,
+				"design":    absDesign,
+				"plan":      absPlan,
+				"implement": absImpl,
+				"pr_url":    "https://github.com/o/r/pull/1",
 			}
 			return nil
 		}); err != nil {
@@ -5486,9 +5486,9 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 			t.Fatalf("Get: %v", err)
 		}
 		wantRel := map[string]string{
-			"inquire":    filepath.Join("inquire", "inquire.md"),
-			"research":   filepath.Join("research", "research.md"),
-			"design": filepath.Join("design", "design.md"),
+			"inquire":  filepath.Join("inquire", "inquire.md"),
+			"research": filepath.Join("research", "research.md"),
+			"design":   filepath.Join("design", "design.md"),
 		}
 		if len(got.Artifacts) != len(wantRel) {
 			t.Errorf("new run Artifacts len = %d, want %d: %v", len(got.Artifacts), len(wantRel), got.Artifacts)
@@ -5535,7 +5535,7 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 		absMap := map[string]string{
 			"inquire":      filepath.Join(run1Dir, "inquire", "inquire.md"),
 			"research":     filepath.Join(run1Dir, "research", "research.md"),
-			"design":   filepath.Join(run1Dir, "design", "design.md"),
+			"design":       filepath.Join(run1Dir, "design", "design.md"),
 			"plan":         filepath.Join(run1Dir, "plan", "plan.md"),
 			"roadmap":      filepath.Join(run1Dir, "roadmap", "roadmap.md"),
 			"phase-1-plan": filepath.Join(run1Dir, "phase-01", "plan", "plan.md"),

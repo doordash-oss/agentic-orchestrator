@@ -42,7 +42,7 @@ type MockFeatureLifecycle struct {
 	// the invocation.
 	StartKnowledgeBaseFn  func(featureID string) error
 	StartInquireFn        func(featureID string) error
-	StartDesignFn     func(featureID string) error
+	StartDesignFn         func(featureID string) error
 	StartResearchFn       func(featureID string) error
 	StartPlanningFn       func(featureID string) error
 	StartImplementationFn func(featureID string) error
@@ -52,7 +52,7 @@ type MockFeatureLifecycle struct {
 	CompleteKnowledgeBaseFn  func(featureID string) error
 	CompleteInquireFn        func(featureID string) error
 	CompleteResearchFn       func(featureID string) error
-	CompleteDesignFn     func(featureID string) error
+	CompleteDesignFn         func(featureID string) error
 	CompletePlanningFn       func(featureID string) error
 	CompleteImplementationFn func(featureID string) error
 

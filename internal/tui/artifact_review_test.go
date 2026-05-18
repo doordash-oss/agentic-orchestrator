@@ -50,6 +50,7 @@ func TestArtifactReview_EditorFocusedOnStart(t *testing.T) {
 		t.Fatal("editor should start in NormalMode")
 	}
 
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	keyMsg := tea.KeyPressMsg{Code: 'i', Text: "i"}
 	m, _ = m.Update(keyMsg)
 
@@ -149,6 +150,136 @@ func TestArtifactReview_GateMenuHasProceedAndDetach(t *testing.T) {
 	}
 	if items[1].decision != "detach" {
 		t.Errorf("expected decision 'detach', got %q", items[1].decision)
+	}
+}
+
+func TestArtifactReview_MarkdownReviewsOpenRenderedPreviewByDefault(t *testing.T) {
+	previous := renderMarkdown
+	SetMarkdownRenderer(func(text string, width int) string {
+		return fmt.Sprintf("renderer-marker width=%d\n%s", width, text)
+	})
+	t.Cleanup(func() { renderMarkdown = previous })
+
+	for _, mode := range []string{"plan", "gate", "rewind"} {
+		t.Run(mode, func(t *testing.T) {
+			m, _ := newTestArtifactReview(t, "# Review\nbody", mode)
+
+			if m.documentMode != artifactDocumentPreview {
+				t.Fatalf("documentMode = %v, want preview", m.documentMode)
+			}
+
+			view := m.View()
+			if !strings.Contains(view, "renderer-marker") {
+				t.Fatalf("ArtifactReviewModel.View() missing renderer marker in %s mode:\n%s", mode, view)
+			}
+			if !strings.Contains(view, "Rendered preview") {
+				t.Errorf("ArtifactReviewModel.View() missing preview title in %s mode", mode)
+			}
+			if !strings.Contains(view, "Ctrl+P: raw") {
+				t.Errorf("ArtifactReviewModel.View() missing preview toggle hint in %s mode", mode)
+			}
+		})
+	}
+}
+
+func TestArtifactReview_CtrlPTogglesPreviewAndRawEditor(t *testing.T) {
+	previous := renderMarkdown
+	SetMarkdownRenderer(func(text string, width int) string {
+		return "preview-only-marker\n" + text
+	})
+	t.Cleanup(func() { renderMarkdown = previous })
+
+	m, _ := newTestArtifactReview(t, "# Plan\nbody", "plan")
+	if m.documentMode != artifactDocumentPreview {
+		t.Fatalf("documentMode = %v, want preview", m.documentMode)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if m.documentMode != artifactDocumentRaw {
+		t.Fatalf("documentMode after first Ctrl+P = %v, want raw", m.documentMode)
+	}
+	rawView := m.View()
+	if !strings.Contains(rawView, "Source") {
+		t.Errorf("raw view title should identify source mode")
+	}
+	if strings.Contains(rawView, "preview-only-marker") {
+		t.Errorf("raw view should render the editor, not markdown preview")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if m.editor.Mode() != InsertMode {
+		t.Fatalf("editor mode after i = %v, want insert", m.editor.Mode())
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if !strings.Contains(m.editor.Content(), "x# Plan") {
+		t.Fatalf("raw editor did not handle insert key; content = %q", m.editor.Content())
+	}
+
+	before := m.editor.Content()
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if m.documentMode != artifactDocumentPreview {
+		t.Fatalf("documentMode after Ctrl+P in insert mode = %v, want preview", m.documentMode)
+	}
+	if m.editor.Content() != before {
+		t.Fatalf("Ctrl+P inserted text in raw insert mode: got %q, want %q", m.editor.Content(), before)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if m.documentMode != artifactDocumentRaw {
+		t.Fatalf("documentMode after toggling back = %v, want raw", m.documentMode)
+	}
+	if m.editor.Mode() != InsertMode {
+		t.Fatalf("editor mode after raw toggle = %v, want insert", m.editor.Mode())
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: '!', Text: "!"})
+	if !strings.Contains(m.editor.Content(), "x!# Plan") {
+		t.Fatalf("raw editor did not resume insert handling; content = %q", m.editor.Content())
+	}
+}
+
+func TestArtifactReview_PreviewScrollResizeAndChrome(t *testing.T) {
+	var lines []string
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	m, _ := newTestArtifactReview(t, strings.Join(lines, "\n"), "plan")
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	offset := m.previewViewport.YOffset()
+	if offset == 0 {
+		t.Fatalf("preview viewport YOffset() = 0, want scrolled after Ctrl+F")
+	}
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if m.previewViewport.YOffset() != offset {
+		t.Fatalf("preview viewport YOffset() after resize = %d, want %d", m.previewViewport.YOffset(), offset)
+	}
+
+	previewView := m.View()
+	for _, want := range []string{"Rendered preview", "Ctrl+P: raw", "Ctrl+U/F: scroll", "Chat"} {
+		if !strings.Contains(previewView, want) {
+			t.Errorf("preview view missing %q", want)
+		}
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	rawView := m.View()
+	for _, want := range []string{"Source", "Ctrl+P: preview", "Chat"} {
+		if !strings.Contains(rawView, want) {
+			t.Errorf("raw view missing %q", want)
+		}
+	}
+}
+
+func TestArtifactReview_NeedUserInputExcludesPreviewControls(t *testing.T) {
+	gatePath := writeTestGate(t, "Decide.", []string{"Q1"}, []string{""})
+	m := newTestNeedUserInputReview(t, "feat-preview-exclusion", gatePath)
+
+	view := m.View()
+	for _, unwanted := range []string{"Rendered preview", "Source", "Ctrl+P"} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("need-user-input view should not include %q:\n%s", unwanted, view)
+		}
 	}
 }
 
@@ -272,6 +403,7 @@ func TestArtifactReview_AutoSaveOnFocusSwitch(t *testing.T) {
 	m, f := newTestArtifactReview(t, "original", "plan")
 
 	// Enter insert mode and type something
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'X', Text: "X"})
 
@@ -418,6 +550,7 @@ func TestArtifactReview_EscInInsertModeDoesNotDetach(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Plan", "plan")
 
 	// Enter insert mode
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	if m.editor.Mode() != InsertMode {
 		t.Fatal("should be in insert mode")

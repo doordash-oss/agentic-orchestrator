@@ -35,21 +35,21 @@ import (
 
 // FinalReviewPromptOpts contains the parameters for building the final review prompt.
 type FinalReviewPromptOpts struct {
-	FeatureDescription     string
-	ExitCriteria           string
-	DiffBase               string // branch to diff against (e.g., "main")
-	WorkDir                string // repo working directory
-	VerificationPath       string // implementation verification report (mutable single source of truth)
-	TestingContractPath    string // bound testing contract path
-	PreviousFeedback       string // feedback from prior review iteration (empty on first)
-	Iteration              int
-	RoadmapPath            string // path to the roadmap file (reviewer reads it via tool access)
-	DesignArtifactPath string // retained for caller compatibility; no longer re-injected
-	Images                 []string
-	PhaseType              string // "tracer-bullet", "tdd-fill-in", "collapsed", or ""
-	CycleFocus             string // short description of the active cycle's review scope
-	FeedbackPath           string // path where the reviewer must write its feedback file
-	Publishable            bool   // whether the repo has a remote / is publishable
+	FeatureDescription  string
+	ExitCriteria        string
+	DiffBase            string // branch to diff against (e.g., "main")
+	WorkDir             string // repo working directory
+	VerificationPath    string // implementation verification report (mutable single source of truth)
+	TestingContractPath string // bound testing contract path
+	PreviousFeedback    string // feedback from prior review iteration (empty on first)
+	Iteration           int
+	RoadmapPath         string // path to the roadmap file (reviewer reads it via tool access)
+	DesignArtifactPath  string // retained for caller compatibility; no longer re-injected
+	Images              []string
+	PhaseType           string // "tracer-bullet", "tdd-fill-in", "collapsed", or ""
+	CycleFocus          string // short description of the active cycle's review scope
+	FeedbackPath        string // path where the reviewer must write its feedback file
+	Publishable         bool   // whether the repo has a remote / is publishable
 
 	PriorImplementationPlanPaths         []string
 	PriorImplementationContractPaths     []string
@@ -67,7 +67,7 @@ type FinalFixPromptOpts struct {
 	VerificationReportPath string
 	Iteration              int
 	Publishable            bool
-	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
+	DesignArtifactPath     string   // retained for caller compatibility; no longer re-injected
 	Images                 []string // user-attached visual references, re-injected per iteration
 }
 

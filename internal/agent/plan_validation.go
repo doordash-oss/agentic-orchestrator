@@ -421,10 +421,10 @@ type PlanLoopConfig struct {
 	// document, if one was produced. Retained for caller compatibility;
 	// downstream planning prompts no longer re-inject it.
 	DesignArtifactPath string
-	QAFilePaths            []string // paths to Q&A files from inquire/research/design
-	KBInfos                []KBInfo // repo knowledge base info
-	WorkDir                string   // repo working directory
-	AdditionalDirs         []string // additional directories for claude --add-dir
+	QAFilePaths        []string // paths to Q&A files from inquire/research/design
+	KBInfos            []KBInfo // repo knowledge base info
+	WorkDir            string   // repo working directory
+	AdditionalDirs     []string // additional directories for claude --add-dir
 
 	// MaxAttempts overrides the default maxPlanValidationAttempts.
 	// When zero, falls back to the hardcoded constant.

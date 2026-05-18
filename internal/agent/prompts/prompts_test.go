@@ -398,9 +398,9 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "roadmap_user_multi_repo",
 			render: func() string {
 				in := RoadmapUserInput{
-					Name:                   "OAuth login",
-					Description:            "Sign in with Google.",
-					Repos:                  []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}},
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					Repos:              []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}},
 					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
 					VisualReferences: VisualReferencesInput{
 						Images: []string{"/tmp/login.png"},

@@ -41,10 +41,10 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Artifacts = map[string]string{
-			"inquire":    relInquire,
-			"research":   outsideResearch,
-			"design": absDesign,
-			"pr_url":     "https://github.com/o/r/pull/42",
+			"inquire":  relInquire,
+			"research": outsideResearch,
+			"design":   absDesign,
+			"pr_url":   "https://github.com/o/r/pull/42",
 		}
 		return nil
 	}); err != nil {
@@ -60,9 +60,9 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	want := map[string]string{
-		"inquire":    relInquire,
-		"research":   outsideResearch,
-		"design": filepath.Join("design", "design.md"),
+		"inquire":  relInquire,
+		"research": outsideResearch,
+		"design":   filepath.Join("design", "design.md"),
 	}
 	if len(got.Artifacts) != len(want) {
 		t.Fatalf("Artifacts len = %d, want %d: %v", len(got.Artifacts), len(want), got.Artifacts)

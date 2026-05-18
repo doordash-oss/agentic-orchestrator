@@ -431,7 +431,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,

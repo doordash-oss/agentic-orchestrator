@@ -359,6 +359,14 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 			want: []string{"Bash: go test ./internal/tui -run LivePreview"},
 		},
 		{
+			name: "agent tool use summarizes description",
+			messages: []llm.SDKMessage{
+				assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_agent", Name: "Agent", Input: rawJSON(`{"description":"Explore KB completion handler","prompt":"This long delegated prompt should not render in the dashboard preview tail."}`)}),
+			},
+			want:    []string{"Agent: Explore KB completion handler"},
+			notWant: []string{"long delegated prompt", `"prompt"`},
+		},
+		{
 			name: "successful tool result",
 			messages: []llm.SDKMessage{
 				assistantMessage(llm.ContentBlock{Type: "tool_use", ID: "toolu_2", Name: "Read", Input: rawJSON(`{"file_path":"internal/tui/live_preview.go"}`)}),

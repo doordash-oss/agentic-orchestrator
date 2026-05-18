@@ -27,8 +27,7 @@ import (
 // compatibility with existing git-package callers.
 type CrossRefEntry = ports.CrossRefEntry
 
-// CrossRefSectionHeader is the markdown header for the cross-reference section.
-const CrossRefSectionHeader = "## Related PRs"
+const crossRefSectionHeader = "## Related PRs"
 
 // BuildCrossReferenceSection builds a markdown table of related PRs for a multi-repo feature.
 // Returns empty string if there are fewer than 2 entries (no cross-refs for single-repo).
@@ -38,7 +37,7 @@ func BuildCrossReferenceSection(featureName string, entries []CrossRefEntry) str
 	}
 
 	var sb strings.Builder
-	sb.WriteString(CrossRefSectionHeader)
+	sb.WriteString(crossRefSectionHeader)
 	sb.WriteString("\n\n")
 	fmt.Fprintf(&sb, "This PR is part of the multi-repo feature **\"%s\"**.", featureName)
 	sb.WriteString("\n\n")
@@ -73,7 +72,7 @@ func InjectCrossReferenceSection(body, section string) string {
 	}
 
 	// Remove existing cross-reference section if present.
-	if strings.Contains(body, CrossRefSectionHeader) {
+	if strings.Contains(body, crossRefSectionHeader) {
 		body = RemoveCrossReferenceSection(body)
 	}
 
@@ -96,7 +95,7 @@ func InjectCrossReferenceSection(body, section string) string {
 // Returns the section including the header, trimmed of trailing whitespace.
 // Returns empty string if no cross-reference section is found.
 func ExtractCrossReferenceSection(body string) string {
-	idx := strings.Index(body, CrossRefSectionHeader)
+	idx := strings.Index(body, crossRefSectionHeader)
 	if idx < 0 {
 		return ""
 	}
@@ -108,10 +107,10 @@ func ExtractCrossReferenceSection(body string) string {
 	endIdx := len(rest)
 
 	// Look for next markdown H2 header after the current one.
-	afterHeader := rest[len(CrossRefSectionHeader):]
+	afterHeader := rest[len(crossRefSectionHeader):]
 	nextH2 := strings.Index(afterHeader, "\n## ")
 	if nextH2 >= 0 {
-		candidate := len(CrossRefSectionHeader) + nextH2
+		candidate := len(crossRefSectionHeader) + nextH2
 		if candidate < endIdx {
 			endIdx = candidate
 		}
@@ -129,7 +128,7 @@ func ExtractCrossReferenceSection(body string) string {
 // RemoveCrossReferenceSection removes the cross-reference section from a PR body.
 // Cleans up extra whitespace left behind.
 func RemoveCrossReferenceSection(body string) string {
-	idx := strings.Index(body, CrossRefSectionHeader)
+	idx := strings.Index(body, crossRefSectionHeader)
 	if idx < 0 {
 		return body
 	}
@@ -140,10 +139,10 @@ func RemoveCrossReferenceSection(body string) string {
 	// Find the end boundary (same logic as ExtractCrossReferenceSection).
 	endIdx := len(rest)
 
-	afterHeader := rest[len(CrossRefSectionHeader):]
+	afterHeader := rest[len(crossRefSectionHeader):]
 	nextH2 := strings.Index(afterHeader, "\n## ")
 	if nextH2 >= 0 {
-		candidate := len(CrossRefSectionHeader) + nextH2
+		candidate := len(crossRefSectionHeader) + nextH2
 		if candidate < endIdx {
 			endIdx = candidate
 		}

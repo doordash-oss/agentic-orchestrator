@@ -36,7 +36,7 @@ func TestBuildCrossReferenceSection(t *testing.T) {
 				{RepoName: "repo-b", Branch: "branch-b", PRURL: "https://github.com/org/repo-b/pull/43"},
 			},
 			contains: []string{
-				CrossRefSectionHeader,
+				crossRefSectionHeader,
 				"repo-a",
 				"repo-b",
 				"[#42]",
@@ -133,7 +133,7 @@ func TestBuildCrossReferenceSection(t *testing.T) {
 }
 
 func TestInjectCrossReferenceSection(t *testing.T) {
-	section := CrossRefSectionHeader + "\n\nsection content"
+	section := crossRefSectionHeader + "\n\nsection content"
 
 	tests := []struct {
 		name    string
@@ -159,12 +159,12 @@ func TestInjectCrossReferenceSection(t *testing.T) {
 			check: func(t *testing.T, result string) {
 				t.Helper()
 				sigIdx := strings.Index(result, PRSignature)
-				sectionIdx := strings.Index(result, CrossRefSectionHeader)
+				sectionIdx := strings.Index(result, crossRefSectionHeader)
 				if sigIdx < 0 {
 					t.Fatal("PRSignature not found in result")
 				}
 				if sectionIdx < 0 {
-					t.Fatal("CrossRefSectionHeader not found in result")
+					t.Fatal("cross-reference header not found in result")
 				}
 				if sectionIdx >= sigIdx {
 					t.Errorf("section should appear before PRSignature: section at %d, signature at %d", sectionIdx, sigIdx)
@@ -185,8 +185,8 @@ func TestInjectCrossReferenceSection(t *testing.T) {
 		},
 		{
 			name:    "body already has cross-ref",
-			body:    "content\n\n" + CrossRefSectionHeader + "\n\nold table\n",
-			section: CrossRefSectionHeader + "\n\nnew table",
+			body:    "content\n\n" + crossRefSectionHeader + "\n\nold table\n",
+			section: crossRefSectionHeader + "\n\nnew table",
 			check: func(t *testing.T, result string) {
 				t.Helper()
 				if strings.Contains(result, "old table") {
@@ -232,17 +232,17 @@ func TestRemoveCrossReferenceSection(t *testing.T) {
 		},
 		{
 			name:     "section at end",
-			body:     "content\n\n" + CrossRefSectionHeader + "\n\n|table|",
+			body:     "content\n\n" + crossRefSectionHeader + "\n\n|table|",
 			expected: "content\n\n",
 		},
 		{
 			name:     "section before signature",
-			body:     "content\n\n" + CrossRefSectionHeader + "\n\n|table|" + PRSignature,
+			body:     "content\n\n" + crossRefSectionHeader + "\n\n|table|" + PRSignature,
 			expected: "content" + PRSignature,
 		},
 		{
 			name:     "section between sections",
-			body:     "## Summary\n\ncontent\n\n" + CrossRefSectionHeader + "\n\n|table|\n\n## Test Plan",
+			body:     "## Summary\n\ncontent\n\n" + crossRefSectionHeader + "\n\n|table|\n\n## Test Plan",
 			expected: "## Summary\n\ncontent\n\n## Test Plan",
 		},
 	}
@@ -270,13 +270,13 @@ func TestExtractCrossReferenceSection(t *testing.T) {
 		},
 		{
 			name:     "section at end",
-			body:     "content\n\n" + CrossRefSectionHeader + "\n\nsome table",
-			expected: CrossRefSectionHeader + "\n\nsome table",
+			body:     "content\n\n" + crossRefSectionHeader + "\n\nsome table",
+			expected: crossRefSectionHeader + "\n\nsome table",
 		},
 		{
 			name:     "section before other heading",
-			body:     CrossRefSectionHeader + "\n\ntable\n\n## Other",
-			expected: CrossRefSectionHeader + "\n\ntable",
+			body:     crossRefSectionHeader + "\n\ntable\n\n## Other",
+			expected: crossRefSectionHeader + "\n\ntable",
 		},
 	}
 

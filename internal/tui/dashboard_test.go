@@ -286,22 +286,49 @@ func TestGhostCTASuppressedDuringCreation(t *testing.T) {
 	}
 }
 
-func TestCreatingFeatureRowRendersAtTop(t *testing.T) {
+func TestCreatingFeatureRowRendersAtTopOfInProgressFeatures(t *testing.T) {
 	t.Parallel()
 	m := NewDashboardModel([]*feature.Feature{
 		{ID: "feat-1", Name: "older", Slug: "older-feature", Status: feature.StatusImplementing, Created: time.Now()},
 	}, "")
 	m.creatingName = "creating-feature"
+	m.buildVisibleItems()
 
 	lines := strings.Split(strings.TrimRight(ansi.Strip(m.renderFeatureList()), "\n"), "\n")
 	if len(lines) < 4 {
 		t.Fatalf("expected creating row plus feature section, got lines=%q", lines)
 	}
-	if !strings.Contains(lines[0], "creating-feature") {
-		t.Fatalf("first line = %q, want creating feature row", lines[0])
+	if !strings.Contains(lines[0], "IN PROGRESS") {
+		t.Fatalf("first line = %q, want in-progress section header", lines[0])
 	}
-	if !strings.Contains(lines[1], "IN PROGRESS") {
-		t.Fatalf("second line = %q, want in-progress section header after creating row", lines[1])
+	if !strings.Contains(lines[2], "creating-feature") {
+		t.Fatalf("third line = %q, want creating feature row", lines[2])
+	}
+	if !strings.Contains(lines[3], "older-feature") {
+		t.Fatalf("fourth line = %q, want first persisted in-progress feature", lines[3])
+	}
+}
+
+func TestCreatingFeatureRowCreatesInProgressSection(t *testing.T) {
+	t.Parallel()
+	m := NewDashboardModel([]*feature.Feature{
+		{ID: "feat-1", Name: "published", Slug: "published-feature", Status: feature.StatusPublished, Created: time.Now()},
+	}, "")
+	m.creatingName = "creating-feature"
+	m.buildVisibleItems()
+
+	lines := strings.Split(strings.TrimRight(ansi.Strip(m.renderFeatureList()), "\n"), "\n")
+	if len(lines) < 6 {
+		t.Fatalf("expected creating row plus published section, got lines=%q", lines)
+	}
+	if !strings.Contains(lines[0], "IN PROGRESS (1)") {
+		t.Fatalf("first line = %q, want in-progress section for creating feature", lines[0])
+	}
+	if !strings.Contains(lines[2], "creating-feature") {
+		t.Fatalf("third line = %q, want creating feature row", lines[2])
+	}
+	if !strings.Contains(lines[4], "PUBLISHED") {
+		t.Fatalf("fifth line = %q, want published section after creating row", lines[4])
 	}
 }
 

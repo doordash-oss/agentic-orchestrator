@@ -649,7 +649,7 @@ func (m *DashboardModel) buildVisibleItems() {
 
 	var items []listItem
 	for _, sec := range sections {
-		if len(sec.features) == 0 {
+		if len(sec.features) == 0 && !(sec.key == "inProgress" && m.creatingName != "") {
 			continue
 		}
 		items = append(items, listItem{kind: listItemSectionHeader, section: sec.key})
@@ -676,9 +676,6 @@ func (m *DashboardModel) buildVisibleItems() {
 // This must be called whenever cursor or visibleItems change.
 func (m *DashboardModel) computeCursorLine() {
 	lineIndex := 0
-	if m.creatingName != "" {
-		lineIndex++
-	}
 	prevSection := ""
 	for i, item := range m.visibleItems {
 		switch item.kind {
@@ -693,6 +690,9 @@ func (m *DashboardModel) computeCursorLine() {
 			}
 			lineIndex++ // header line
 			lineIndex++ // blank after header
+			if item.section == "inProgress" && m.creatingName != "" {
+				lineIndex++ // creating feature row
+			}
 		case listItemFeature:
 			if i == m.cursor {
 				m.cursorLine = lineIndex
@@ -723,6 +723,9 @@ func (m *DashboardModel) updateScrollState(panelHeight int) {
 			}
 			prevSection = item.section
 			totalLines += 2 // header + blank after
+			if item.section == "inProgress" && m.creatingName != "" {
+				totalLines++ // creating feature row
+			}
 		} else {
 			totalLines++ // feature row
 		}
@@ -801,6 +804,9 @@ func (m DashboardModel) sectionFeatureCount(sectionKey string) int {
 			}
 		}
 	}
+	if sectionKey == "inProgress" && m.creatingName != "" {
+		count++
+	}
 	return count
 }
 
@@ -822,11 +828,6 @@ func sectionLabel(key string) string {
 func (m DashboardModel) renderFeatureList() string {
 	var content strings.Builder
 	lineIndex := 0
-
-	if m.creatingName != "" {
-		content.WriteString(m.renderCreatingFeatureRow() + "\n")
-		lineIndex++
-	}
 
 	prevSection := ""
 	for i, item := range m.visibleItems {
@@ -857,6 +858,10 @@ func (m DashboardModel) renderFeatureList() string {
 			// Blank line after header
 			content.WriteString("\n")
 			lineIndex++
+			if item.section == "inProgress" && m.creatingName != "" {
+				content.WriteString(m.renderCreatingFeatureRow() + "\n")
+				lineIndex++
+			}
 
 		case listItemFeature:
 			f := item.feature

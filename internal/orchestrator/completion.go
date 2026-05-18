@@ -353,9 +353,7 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 
 // onArtifactPhaseCompletedWithKey is the canonical entry point that lets the
 // dispatcher record the artifact under a different map key than the on-disk
-// phase directory name. The Design phase uses this to keep the legacy
-// "design" subdirectory in place while persisting the canonical "design"
-// artifact key.
+// phase directory name.
 func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	featureID string,
 	input PhaseCompletionInput,

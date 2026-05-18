@@ -124,10 +124,6 @@ func (p Phase) DirName() string {
 	case PhaseInquire:
 		return "inquire"
 	case PhaseDesign:
-		// The on-disk subdirectory name stays "design" so legacy run
-		// state remains readable in place without an explicit migration.
-		// Canonical Design-facing naming is exposed through Phase.String,
-		// Status display, and the design-artifact lookup helper.
 		return "design"
 	case PhaseFinalReview:
 		// Share the "review" subdir with PhaseReview so existing artifact

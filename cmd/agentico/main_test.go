@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/colorprofile"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -338,5 +339,38 @@ func TestCheckRequiredProviders_NoneDetected(t *testing.T) {
 	_, _, err := checkRequiredProviders(r)
 	if err == nil {
 		t.Fatal("expected error when no providers detected")
+	}
+}
+
+// TestOverrideColorProfileForcesANSI256InAppleTerminal guards the workaround
+// for macOS Terminal.app: when TERM_PROGRAM=Apple_Terminal we force the
+// bubbletea renderer to ANSI256, overriding the user's COLORTERM env var
+// (commonly set to "truecolor" by Neovim/tmux tutorials). Terminal.app
+// silently drops 24-bit escapes, so without the override the TUI renders as
+// default foreground.
+func TestOverrideColorProfileForcesANSI256InAppleTerminal(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "Apple_Terminal")
+	t.Setenv("COLORTERM", "truecolor") // user lie that we're overriding
+
+	profile, ok := overrideColorProfile()
+	if !ok {
+		t.Fatal("expected override to be applied for Apple_Terminal")
+	}
+	if profile != colorprofile.ANSI256 {
+		t.Errorf("profile = %v, want ANSI256", profile)
+	}
+}
+
+// TestOverrideColorProfileLeavesOtherTerminalsAlone ensures iTerm2 / WezTerm /
+// Ghostty / etc. continue receiving full 24-bit color via bubbletea's normal
+// auto-detection.
+func TestOverrideColorProfileLeavesOtherTerminalsAlone(t *testing.T) {
+	for _, term := range []string{"iTerm.app", "WezTerm", "ghostty", "vscode", ""} {
+		t.Run(term, func(t *testing.T) {
+			t.Setenv("TERM_PROGRAM", term)
+			if _, ok := overrideColorProfile(); ok {
+				t.Errorf("TERM_PROGRAM=%q should not trigger an override", term)
+			}
+		})
 	}
 }

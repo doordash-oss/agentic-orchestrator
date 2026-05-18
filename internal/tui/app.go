@@ -6742,7 +6742,7 @@ func featureIDFromSession(sessionID string) string {
 
 	// Non-implementation sessions: "<featureID>-<phase>[-<suffix>]"
 	// Includes roadmap/phase patterns from two-tier roadmap system.
-	suffixes := []string{"-artifact-review", "-inquire", "-brainstorm", "-research", "-roadmap-", "-phase-", "-plan", "-review-", "-kb"}
+	suffixes := []string{"-artifact-review", "-inquire", "-design", "-brainstorm", "-research", "-roadmap-", "-phase-", "-plan", "-review-", "-kb"}
 	for _, suffix := range suffixes {
 		idx := findLastIndex(sessionID, suffix)
 		if idx > 0 {
@@ -6842,6 +6842,7 @@ func phaseFromSessionID(sessionID string) feature.Phase {
 	patterns := []entry{
 		{"-planreview-", feature.PhaseReview},
 		{"-inquire", feature.PhaseInquire},
+		{"-design", feature.PhaseDesign},
 		{"-brainstorm", feature.PhaseBrainstorm},
 		{"-research", feature.PhaseResearch},
 		{"-review-", feature.PhaseReview},

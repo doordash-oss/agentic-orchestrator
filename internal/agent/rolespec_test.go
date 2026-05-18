@@ -307,6 +307,19 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 			wantMarker: filepath.Join(base, "runs", "run-001", "research", "phase_complete"),
 		},
 		{
+			name:       "design",
+			spec:       DesignerRoleSpec(),
+			phaseDir:   filepath.Join(base, "runs", "run-001", "brainstorm"),
+			wantPhase:  feature.PhaseDesign,
+			wantRole:   RoleDesigner,
+			wantSkill:  "design",
+			wantPath:   filepath.Join(base, "runs", "run-001", "brainstorm"),
+			wantMarker: filepath.Join(base, "runs", "run-001", "brainstorm", "phase_complete"),
+		},
+		{
+			// Legacy alias: resumed/older runs that still resolve the role as
+			// RoleBrainstormer must validate the same markdown artifact in the
+			// same phase directory.
 			name:       "brainstorm",
 			spec:       BrainstormerRoleSpec(),
 			phaseDir:   filepath.Join(base, "runs", "run-001", "brainstorm"),

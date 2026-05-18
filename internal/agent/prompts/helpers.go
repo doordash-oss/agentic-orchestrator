@@ -98,8 +98,16 @@ func TweakUserPrompt(in any) string {
 	return MustRender("tweak.user", in)
 }
 
-// BrainstormUserPrompt renders the Brainstorm-phase user prompt
-// (brainstorm.user.tmpl).
+// DesignUserPrompt renders the canonical Design-phase user prompt
+// (design.user.tmpl).
+func DesignUserPrompt(in any) string {
+	return MustRender("design.user", in)
+}
+
+// BrainstormUserPrompt renders the legacy Brainstorm-phase user prompt
+// (brainstorm.user.tmpl). The template body matches design.user, so this
+// helper is the legacy entry point retained for compatibility with callers
+// and snapshots that still reference the Brainstorm surface.
 func BrainstormUserPrompt(in any) string {
 	return MustRender("brainstorm.user", in)
 }

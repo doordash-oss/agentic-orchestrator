@@ -433,20 +433,29 @@ func researchAgentNames() []string {
 	}
 }
 
-// RunBrainstorm starts a brainstorm session for a feature.
-// Returns the session ID. The session runs asynchronously.
-func (pr *PhaseRunner) RunBrainstorm(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
+// RunDesign starts the canonical Design session for a feature. Returns the
+// session ID. The session runs asynchronously. The on-disk artifact
+// subdirectory remains "brainstorm" so legacy run state stays readable in
+// place; the session identity, skill, and prompt template are Design-facing.
+func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:        BuildBrainstormPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
-		Spec:          BrainstormerRoleSpec(),
-		DirName:       "brainstorm",
-		SkillName:     "brainstorm",
-		SessionSuffix: "-brainstorm",
-		Phase:         feature.PhaseBrainstorm,
+		Prompt:        BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
+		Spec:          DesignerRoleSpec(),
+		DirName:       feature.PhaseDesign.DirName(),
+		SkillName:     "design",
+		SessionSuffix: "-design",
+		Phase:         feature.PhaseDesign,
 		AgentNames:    []string{},
 		GuidelinesDir: pr.GuidelinesDir,
 		KBInfos:       kbInfos,
 	})
+}
+
+// RunBrainstorm is the legacy entry point for the Design phase. It delegates
+// to RunDesign so callers and tests that still spell the phase as
+// "brainstorm" continue to dispatch the canonical Design session.
+func (pr *PhaseRunner) RunBrainstorm(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
+	return pr.RunDesign(f, researchOutput, qaFilePaths, kbInfos...)
 }
 
 // RunCodebaseIndex builds structural codebase indexes for all repos in a feature.
@@ -670,7 +679,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		FeatureStore:               pr.FeatureStore,
 		StateDir:                   pr.StateDir,
 		ResearchArtifactPath:       researchArtifactPath,
-		BrainstormArtifactPath:     f.Artifacts["brainstorm"],
+		BrainstormArtifactPath:     f.DesignArtifactPath(),
 		QAFilePaths:                qaFilePaths,
 		KBInfos:                    kbInfos,
 		WorkDir:                    workDir,
@@ -732,7 +741,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			Feature:                    f,
 			FeatureStore:               pr.FeatureStore,
 			StateDir:                   pr.StateDir,
-			BrainstormArtifactPath:     f.Artifacts["brainstorm"],
+			BrainstormArtifactPath:     f.DesignArtifactPath(),
 			QAFilePaths:                qaFilePaths,
 			KBInfos:                    kbInfos,
 			WorkDir:                    workDir,
@@ -809,7 +818,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
 		PhaseType:                  phaseType,
 		RoadmapPath:                roadmapPath,
-		BrainstormArtifactPath:     f.Artifacts["brainstorm"],
+		BrainstormArtifactPath:     f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		BuildSession:               pr.BuildSession,

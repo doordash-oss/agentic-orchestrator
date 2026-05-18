@@ -153,7 +153,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
 		RoadmapPath:                cfg.Feature.Artifacts["roadmap"],
-		BrainstormArtifactPath:     cfg.Feature.Artifacts["brainstorm"],
+		BrainstormArtifactPath:     cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,

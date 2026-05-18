@@ -135,7 +135,11 @@ type AskUserAutoPickPurpose string
 const (
 	AskUserAutoPickPurposeNone             AskUserAutoPickPurpose = ""
 	AskUserAutoPickPurposeInquire          AskUserAutoPickPurpose = "inquire"
-	AskUserAutoPickPurposeBrainstorm       AskUserAutoPickPurpose = "brainstorm"
+	// AskUserAutoPickPurposeBrainstorm is the legacy purpose value persisted
+	// by sessions started before the Design rename. Resumed sessions still
+	// emit it; new sessions emit AskUserAutoPickPurposeDesign.
+	AskUserAutoPickPurposeBrainstorm AskUserAutoPickPurpose = "brainstorm"
+	AskUserAutoPickPurposeDesign     AskUserAutoPickPurpose = "design"
 	AskUserAutoPickPurposeRoadmapCreator   AskUserAutoPickPurpose = "roadmap_creator"
 	AskUserAutoPickPurposePhasePlanCreator AskUserAutoPickPurpose = "phase_plan_creator"
 	AskUserAutoPickPurposeResearch         AskUserAutoPickPurpose = "research"

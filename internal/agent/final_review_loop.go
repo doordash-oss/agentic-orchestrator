@@ -516,7 +516,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		PreviousFeedback:                     previousFeedback,
 		Iteration:                            iteration,
 		RoadmapPath:                          cfg.Feature.Artifacts["roadmap"],
-		BrainstormArtifactPath:               cfg.Feature.Artifacts["brainstorm"],
+		BrainstormArtifactPath:               cfg.Feature.DesignArtifactPath(),
 		Images:                               cfg.Feature.Images,
 		PhaseType:                            cfg.Feature.RoadmapPhaseType,
 		FeedbackPath:                         feedbackPath,
@@ -641,7 +641,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		VerificationReportPath: verificationReportPath,
 		Iteration:              iteration,
 		Publishable:            cfg.Feature.IsPublishable(),
-		BrainstormArtifactPath: cfg.Feature.Artifacts["brainstorm"],
+		BrainstormArtifactPath: cfg.Feature.DesignArtifactPath(),
 		Images:                 cfg.Feature.Images,
 	})
 

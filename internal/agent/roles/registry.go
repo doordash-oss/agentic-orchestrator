@@ -25,6 +25,7 @@ var roleSpecs = append([]RoleSpec{
 	knowledgeBaseBuilderRoleSpec,
 	inquirerRoleSpec,
 	researcherRoleSpec,
+	designerRoleSpec,
 	brainstormerRoleSpec,
 	refactorPlanRoleSpec,
 	iterationReviewerRoleSpec,

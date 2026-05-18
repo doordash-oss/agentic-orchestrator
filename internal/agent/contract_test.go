@@ -372,6 +372,9 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 	}{
 		{"inquire", feature.PhaseInquire, RoleInquirer, "2026-05-07-inquire.md"},
 		{"research", feature.PhaseResearch, RoleResearcher, "2026-05-07-research.md"},
+		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
+		// Legacy Brainstorm role still resolves and validates the same
+		// markdown artifact behavior so older runs continue to complete.
 		{"brainstorm", feature.PhaseBrainstorm, RoleBrainstormer, "2026-05-07-brainstorm.md"},
 	}
 
@@ -415,6 +418,7 @@ func TestContractRegistryArtifactPhaseRolesReportMissingMarkdown(t *testing.T) {
 	}{
 		{feature.PhaseInquire, RoleInquirer},
 		{feature.PhaseResearch, RoleResearcher},
+		{feature.PhaseDesign, RoleDesigner},
 		{feature.PhaseBrainstorm, RoleBrainstormer},
 	}
 

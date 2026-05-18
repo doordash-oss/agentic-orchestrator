@@ -1283,7 +1283,10 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 	case feature.PhaseResearch:
 		return o.onArtifactPhaseCompleted(featureID, input, "research", o.deps.Lifecycle.CompleteResearch)
 	case feature.PhaseBrainstorm:
-		return o.onArtifactPhaseCompleted(featureID, input, "brainstorm", o.deps.Lifecycle.CompleteBrainstorm)
+		// Validate against the legacy "brainstorm" on-disk subdirectory but
+		// persist the canonical Design artifact key so downstream consumers
+		// resolve it through feature.Feature.DesignArtifactPath().
+		return o.onArtifactPhaseCompletedWithKey(featureID, input, "brainstorm", feature.DesignArtifactKey, o.deps.Lifecycle.CompleteBrainstorm)
 	case feature.PhasePlan:
 		return o.onPlanLoopDone(featureID, input.PlanResult)
 	case feature.PhaseImplement:

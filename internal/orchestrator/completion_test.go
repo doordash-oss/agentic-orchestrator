@@ -383,17 +383,20 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type artifactPhaseCase struct {
-	name     string
-	phase    feature.Phase
-	phaseKey string
-	status   feature.Status
+	name        string
+	phase       feature.Phase
+	phaseKey    string
+	artifactKey string
+	status      feature.Status
 }
 
 func artifactPhaseCases() []artifactPhaseCase {
 	return []artifactPhaseCase{
-		{"inquire", feature.PhaseInquire, "inquire", feature.StatusInquiring},
-		{"research", feature.PhaseResearch, "research", feature.StatusResearching},
-		{"brainstorm", feature.PhaseBrainstorm, "brainstorm", feature.StatusBrainstorming},
+		{"inquire", feature.PhaseInquire, "inquire", "inquire", feature.StatusInquiring},
+		{"research", feature.PhaseResearch, "research", "research", feature.StatusResearching},
+		// The Design phase keeps the legacy "brainstorm" on-disk subdir for
+		// compat but persists under the canonical Design artifact key.
+		{"brainstorm", feature.PhaseBrainstorm, "brainstorm", feature.DesignArtifactKey, feature.StatusBrainstorming},
 	}
 }
 
@@ -575,8 +578,8 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseSuccessRecordsRegistryA
 			}
 
 			reloaded := loadStoredFeature(t, store, f.ID)
-			if got := reloaded.Artifacts[tc.phaseKey]; got != newPath {
-				t.Fatalf("Artifacts[%q] = %q, want %q", tc.phaseKey, got, newPath)
+			if got := reloaded.Artifacts[tc.artifactKey]; got != newPath {
+				t.Fatalf("Artifacts[%q] = %q, want %q", tc.artifactKey, got, newPath)
 			}
 		})
 	}

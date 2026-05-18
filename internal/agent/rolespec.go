@@ -49,6 +49,7 @@ const (
 	RoleInquirer                    = roles.RoleInquirer
 	RoleResearcher                  = roles.RoleResearcher
 	RoleBrainstormer                = roles.RoleBrainstormer
+	RoleDesigner                    = roles.RoleDesigner
 	RoleInteractivePTY              = roles.RoleInteractivePTY
 )
 
@@ -110,9 +111,16 @@ func ResearcherRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.ResearcherRoleSpec())
 }
 
-// BrainstormerRoleSpec returns the RoleSpec-backed brainstorm role.
+// BrainstormerRoleSpec returns the legacy Brainstorm RoleSpec wrapper. New
+// code should call DesignerRoleSpec; this exists for older callers and
+// completion paths that still resolve the legacy role.
 func BrainstormerRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.BrainstormerRoleSpec())
+}
+
+// DesignerRoleSpec returns the canonical Design RoleSpec wrapper.
+func DesignerRoleSpec() RoleSpec {
+	return wrapRoleSpec(roles.DesignerRoleSpec())
 }
 
 // RefactorPlanRoleSpec returns the RoleSpec-backed refactor-plan role.

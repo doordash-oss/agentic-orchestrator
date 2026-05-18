@@ -15,13 +15,18 @@
 package roles
 
 import (
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// RoleBrainstormer is the single-shot Brainstorm session.
+// RoleBrainstormer is the legacy single-shot Design session identifier.
+// New code should use RoleDesigner; this constant is kept so older callers,
+// persisted sessions, and tests that still resolve the role by its legacy
+// name continue to look up a valid contract.
 const RoleBrainstormer Role = "brainstormer"
 
+// brainstormerRoleSpec is the legacy alias RoleSpec for the pre-rename
+// Brainstorm role. It validates the same phase-markdown artifact in the same
+// on-disk subdirectory; only the Design-facing identity differs.
 var brainstormerRoleSpec = RoleSpec{
 	Phase:        feature.PhaseBrainstorm,
 	Role:         RoleBrainstormer,
@@ -37,27 +42,22 @@ var brainstormerRoleSpec = RoleSpec{
 	},
 }
 
-// BrainstormerRoleSpec returns the RoleSpec-backed brainstorm role.
+// BrainstormerRoleSpec returns the legacy Brainstorm RoleSpec. New code
+// should call DesignerRoleSpec instead; this remains as a compatibility
+// wrapper so older lookups still resolve a valid contract.
 func BrainstormerRoleSpec() RoleSpec {
 	return CloneRoleSpec(brainstormerRoleSpec)
 }
 
-// BrainstormUserInput is the data passed to brainstorm.user.tmpl.
-type BrainstormUserInput struct {
-	Name        string
-	Description string
-	Images      []string
-	Attachments []string
-	Repos       []prompts.RepoView
+// BrainstormUserInput is the legacy data shape passed to brainstorm.user.tmpl.
+// It mirrors DesignUserInput so the canonical builder can render the same
+// effective prompt; new code should use DesignUserInput directly.
+type BrainstormUserInput = DesignUserInput
 
-	MultiRepo            bool
-	ResearchArtifactPath string
-
-	QAFiles     prompts.QAFilesInput
-	Inquireness prompts.GrillMeInquirenessInput
-}
-
-// BuildBrainstormPrompt renders the brainstorm user prompt.
+// BuildBrainstormPrompt renders the legacy brainstorm user prompt. It
+// delegates to BuildDesignPrompt so the two prompt surfaces stay in lockstep
+// while the legacy template/file path is retained for compatibility tests
+// that assert the older surface still exists.
 func BuildBrainstormPrompt(in BrainstormUserInput) string {
-	return prompts.BrainstormUserPrompt(in)
+	return BuildDesignPrompt(in)
 }

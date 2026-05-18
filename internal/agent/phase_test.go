@@ -539,14 +539,28 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 			},
 		},
 		{
+			// Legacy entry point — RunBrainstorm now delegates to RunDesign so
+			// the dispatched session uses the canonical Design identity while
+			// the on-disk subdirectory remains "brainstorm" for compat.
 			name:          "RunBrainstorm",
 			featureID:     "test-feat-bs",
-			sessionSuffix: "-brainstorm",
+			sessionSuffix: "-design",
 			dirName:       "brainstorm",
-			commandName:   "brainstorm",
+			commandName:   "design",
 			usesSkillRead: true,
 			callPhase: func(pr *PhaseRunner, f *feature.Feature, tmpDir string) (string, error) {
 				return pr.RunBrainstorm(f, "", nil)
+			},
+		},
+		{
+			name:          "RunDesign",
+			featureID:     "test-feat-design",
+			sessionSuffix: "-design",
+			dirName:       "brainstorm",
+			commandName:   "design",
+			usesSkillRead: true,
+			callPhase: func(pr *PhaseRunner, f *feature.Feature, tmpDir string) (string, error) {
+				return pr.RunDesign(f, "", nil)
 			},
 		},
 	}

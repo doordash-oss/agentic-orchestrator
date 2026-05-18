@@ -348,6 +348,21 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 	phaseKey string,
 	completeFn func(string) error,
 ) error {
+	return o.onArtifactPhaseCompletedWithKey(featureID, input, phaseKey, phaseKey, completeFn)
+}
+
+// onArtifactPhaseCompletedWithKey is the canonical entry point that lets the
+// dispatcher record the artifact under a different map key than the on-disk
+// phase directory name. The Design phase uses this to keep the legacy
+// "brainstorm" subdirectory in place while persisting the canonical "design"
+// artifact key.
+func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
+	featureID string,
+	input PhaseCompletionInput,
+	phaseKey string,
+	artifactKey string,
+	completeFn func(string) error,
+) error {
 	if !input.Success {
 		// LastError keeps the "<Phase> phase failed: <detail>" format so
 		// downstream reporters (banners, observe-summary.yaml) can attribute
@@ -381,10 +396,10 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 		if ff.Artifacts == nil {
 			ff.Artifacts = make(map[string]string)
 		}
-		ff.Artifacts[phaseKey] = outcome.PhaseArtifactPath
+		ff.Artifacts[artifactKey] = outcome.PhaseArtifactPath
 		return nil
 	}); err != nil {
-		return fmt.Errorf("record %s artifact: %w", phaseKey, err)
+		return fmt.Errorf("record %s artifact: %w", artifactKey, err)
 	}
 
 	if artifactPhasePersistsQALog(phaseKey) {
@@ -402,7 +417,7 @@ func (o *Orchestrator) onArtifactPhaseCompleted(
 
 func artifactPhasePersistsQALog(phaseKey string) bool {
 	switch phaseKey {
-	case "inquire", "research", "brainstorm":
+	case "inquire", "research", "brainstorm", "design":
 		return true
 	default:
 		return false
@@ -416,7 +431,10 @@ func artifactPhaseRole(phase feature.Phase) (agent.Role, bool) {
 	case feature.PhaseResearch:
 		return agent.RoleResearcher, true
 	case feature.PhaseBrainstorm:
-		return agent.RoleBrainstormer, true
+		// PhaseBrainstorm == PhaseDesign. Validation uses the canonical
+		// Design role; the legacy Brainstorm role still resolves through
+		// roles.Lookup for older callers that look up the spec directly.
+		return agent.RoleDesigner, true
 	default:
 		return "", false
 	}

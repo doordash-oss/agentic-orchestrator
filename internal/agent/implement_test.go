@@ -133,7 +133,6 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 		Slug:          "test-feature",
 		Description:   "Legacy tagged feature",
 		Images:        []string{"/tmp/mockup.png"},
-		Tags:          []string{"frontend"},
 		Status:        feature.StatusImplementing,
 		CurrentPhase:  feature.PhaseImplement,
 		ActiveRun:     1,
@@ -147,6 +146,27 @@ func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing
 	store := feature.NewStore(filepath.Join(tmpDir, "state"))
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
+	}
+	featurePath := filepath.Join(tmpDir, "state", f.ID, "feature.yaml")
+	rawFeature, err := os.ReadFile(featurePath)
+	if err != nil {
+		t.Fatalf("read feature.yaml: %v", err)
+	}
+	var legacyFeature map[string]any
+	if err := yaml.Unmarshal(rawFeature, &legacyFeature); err != nil {
+		t.Fatalf("unmarshal feature.yaml: %v", err)
+	}
+	legacyFeature["tags"] = []string{"frontend"}
+	taggedFeature, err := yaml.Marshal(legacyFeature)
+	if err != nil {
+		t.Fatalf("marshal legacy feature.yaml: %v", err)
+	}
+	if err := os.WriteFile(featurePath, taggedFeature, 0o644); err != nil {
+		t.Fatalf("write legacy feature.yaml: %v", err)
+	}
+	f, err = store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load legacy feature with tags: %v", err)
 	}
 	buildSession, captured := capturingBuildSession(agentScript, reviewScript)
 	sm := session.NewManager(make(chan interface{}, 100))

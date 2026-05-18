@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -41,7 +40,6 @@ func TestStoreSaveAndLoad(t *testing.T) {
 		Name:         "Test Feature",
 		Slug:         "test-feature",
 		Description:  "A test feature",
-		Tags:         []string{"frontend", "backend"},
 		Created:      time.Now().Truncate(time.Second),
 		Status:       StatusCreated,
 		CurrentPhase: PhaseResearch,
@@ -61,6 +59,13 @@ func TestStoreSaveAndLoad(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	raw, err := os.ReadFile(filepath.Join(dir, "test-001", "feature.yaml"))
+	if err != nil {
+		t.Fatalf("read feature.yaml: %v", err)
+	}
+	if strings.Contains(string(raw), "\ntags:") {
+		t.Errorf("fresh feature.yaml contains legacy tags key:\n%s", string(raw))
+	}
 
 	loaded, err := store.Load("test-001")
 	if err != nil {
@@ -75,9 +80,6 @@ func TestStoreSaveAndLoad(t *testing.T) {
 	}
 	if loaded.Status != f.Status {
 		t.Errorf("Status mismatch: got %v, want %v", loaded.Status, f.Status)
-	}
-	if !slices.Equal(loaded.Tags, f.Tags) {
-		t.Errorf("Tags mismatch: got %v, want %v", loaded.Tags, f.Tags)
 	}
 	if len(loaded.Repos) != 1 {
 		t.Fatalf("expected 1 repo, got %d", len(loaded.Repos))
@@ -1043,4 +1045,127 @@ artifacts: {}
 	if !strings.Contains(savedStr, "PROJ-123") {
 		t.Errorf("saved feature.yaml lost ticket reference in description field")
 	}
+}
+
+// TestStoreLoadCurrentSchemaIgnoresLegacyTags verifies that a feature.yaml at
+// SchemaVersionCurrent with the removed legacy tags key still loads, and that
+// a round-trip save drops tags while preserving supported durable fields.
+func TestStoreLoadCurrentSchemaIgnoresLegacyTags(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "tags-legacy-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Tags Feature
+slug: legacy-tags-feature
+description: Keeps supported fields while dropping obsolete tags.
+images:
+  - /tmp/mockup.png
+attachments:
+  - /tmp/spec.md
+tags:
+  - frontend
+  - backend
+created: 2026-01-01T00:00:00Z
+status: Created
+current_phase: 1
+repos:
+  - name: repo-a
+    path: /tmp/a
+    worktree_path: /tmp/worktree-a
+    branch: feature/a
+    base_branch: main
+models:
+  research: opus
+  planning: sonnet
+  implementation: codex
+  review: haiku
+exit_criteria: tests pass
+inquireness: high
+permissions_queue: []
+help_queue: []
+checkpoints:
+  research_review: true
+last_attached_repo: repo-a
+trace_id: trace-001
+feature_span_id: span-001
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `started_at: 2026-01-01T00:00:00Z
+phase_timings: {}
+phase_costs: {}
+artifacts: {}
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil (current schema with legacy tags must load cleanly)", err)
+	}
+	if loaded.SchemaVersion != SchemaVersionCurrent {
+		t.Errorf("loaded.SchemaVersion = %d, want %d", loaded.SchemaVersion, SchemaVersionCurrent)
+	}
+	if got, want := loaded.Images, []string{"/tmp/mockup.png"}; !stringSlicesEqual(got, want) {
+		t.Errorf("loaded.Images = %v, want %v", got, want)
+	}
+	if got, want := loaded.Attachments, []string{"/tmp/spec.md"}; !stringSlicesEqual(got, want) {
+		t.Errorf("loaded.Attachments = %v, want %v", got, want)
+	}
+	if len(loaded.Repos) != 1 || loaded.Repos[0].Name != "repo-a" || loaded.Repos[0].WorktreePath != "/tmp/worktree-a" {
+		t.Errorf("loaded.Repos = %#v, want repo-a with worktree path", loaded.Repos)
+	}
+	if loaded.Models.Implementation != "codex" || loaded.Models.Review != "haiku" {
+		t.Errorf("loaded.Models = %#v, want implementation codex and review haiku", loaded.Models)
+	}
+	if !loaded.Checkpoints.ResearchReview {
+		t.Error("loaded.Checkpoints.ResearchReview = false, want true")
+	}
+	if loaded.ActiveRun != 1 || loaded.RunCount != 1 {
+		t.Errorf("ActiveRun/RunCount = %d/%d, want 1/1", loaded.ActiveRun, loaded.RunCount)
+	}
+
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() error = %v; want nil", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(featureDir, "feature.yaml"))
+	if err != nil {
+		t.Fatalf("ReadFile after Save: %v", err)
+	}
+	savedStr := string(saved)
+	if strings.Contains(savedStr, "\ntags:") {
+		t.Errorf("saved feature.yaml still contains legacy tags key after round-trip:\n%s", savedStr)
+	}
+	for _, want := range []string{
+		"images:",
+		"/tmp/mockup.png",
+		"attachments:",
+		"/tmp/spec.md",
+		"repo-a",
+		"worktree_path: /tmp/worktree-a",
+		"implementation: codex",
+		"review: haiku",
+		"research_review: true",
+		"active_run: 1",
+		"run_count: 1",
+	} {
+		if !strings.Contains(savedStr, want) {
+			t.Errorf("saved feature.yaml missing supported field %q:\n%s", want, savedStr)
+		}
+	}
+	t.Logf("legacy tags round-trip saved feature.yaml:\n%s", savedStr)
 }

@@ -158,8 +158,6 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 		case "--version", "-v":
 			opts.mode = launchModeVersion
 			return opts, nil
-		case "--refresh-models":
-			return opts, fmt.Errorf("unknown flag: --refresh-models")
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown flag: %s", arg)

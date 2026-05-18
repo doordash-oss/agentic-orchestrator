@@ -118,6 +118,15 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 }
 
 func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
+	body, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("ReadFile(main.go): %v", err)
+	}
+	if strings.Contains(string(body), `case "--refresh-models"`) {
+		t.Fatal("parseLaunchArgs still matches --refresh-models directly; want generic unknown-flag handling")
+	}
+	t.Log("parseLaunchArgs has no direct --refresh-models branch")
+
 	tests := []struct {
 		name    string
 		args    []string
@@ -137,6 +146,9 @@ func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 			}
 			if err.Error() != tt.wantErr {
 				t.Fatalf("parseLaunchArgs(%v) error = %q, want %q", tt.args, err.Error(), tt.wantErr)
+			}
+			if tt.name == "refresh models" {
+				t.Logf("retired launch flag rejected as %q", err.Error())
 			}
 		})
 	}

@@ -1048,6 +1048,10 @@ func (m *ArtifactReviewModel) Reattach() tea.Cmd {
 		m.showMenu = false
 		return m.nuiForm.Focus()
 	}
+	m.showMenu = false
+	m.chatFocused = false
+	m.chatInput.Blur()
+	m.recalcLayout()
 	return m.editor.Focus()
 }
 

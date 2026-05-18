@@ -587,6 +587,48 @@ func TestArtifactReview_Reattach(t *testing.T) {
 	}
 }
 
+func TestArtifactReview_ReattachAfterChatDetachReturnsToPreviewDocument(t *testing.T) {
+	m, _ := newTestArtifactReview(t, "# Plan\ncontent", "plan")
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if !m.chatFocused {
+		t.Fatal("chat should be focused before detach")
+	}
+	if got := m.chatInput.Value(); got != "dr" {
+		t.Fatalf("chat draft before detach = %q, want %q", got, "dr")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.Detached() {
+		t.Fatal("selecting Return to dashboard should detach")
+	}
+	if m.Decided() {
+		t.Fatal("detaching should not decide the review")
+	}
+
+	_ = m.Reattach()
+	if m.chatFocused {
+		t.Fatal("chatFocused after Reattach() = true, want false")
+	}
+	if m.chatInput.Focused() {
+		t.Fatal("chat input should be blurred after Reattach()")
+	}
+	if !m.editor.Focused() {
+		t.Fatal("editor should be focused after Reattach()")
+	}
+	if m.documentMode != artifactDocumentPreview {
+		t.Fatalf("documentMode after Reattach() = %v, want preview", m.documentMode)
+	}
+	if got := m.chatInput.Value(); got != "dr" {
+		t.Fatalf("chat draft after Reattach() = %q, want %q", got, "dr")
+	}
+}
+
 func TestArtifactReview_FeatureIDAndReviewMode(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Plan", "plan")
 	if m.FeatureID() != "feat-1" {

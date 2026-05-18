@@ -391,20 +391,6 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	_ = fxApp.Stop(context.Background())
 }
 
-// overrideColorProfile returns a forced color profile for terminals that lie
-// about their capabilities, plus true to signal the override should be applied.
-//
-// Background: macOS Terminal.app advertises xterm-256color and does not
-// support 24-bit color, but many developers have `COLORTERM=truecolor` in
-// their shell rc (a common Neovim/tmux tutorial recommendation). That env
-// var makes lipgloss/termenv emit raw 24-bit escapes, which Terminal.app
-// silently drops — rendering the whole TUI as default foreground. Forcing
-// ANSI256 when we detect Terminal.app makes lipgloss quantize colors to the
-// 256-color cube and produces a visibly colored UI again.
-//
-// iTerm2 and other terminals with real truecolor support set
-// TERM_PROGRAM=iTerm.app / WezTerm / ghostty / etc. and are left alone so
-// they continue receiving full 24-bit color.
 func overrideColorProfile() (colorprofile.Profile, bool) {
 	if os.Getenv("TERM_PROGRAM") == "Apple_Terminal" {
 		return colorprofile.ANSI256, true

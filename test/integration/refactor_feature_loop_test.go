@@ -15,6 +15,7 @@
 package integration
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,10 +23,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -328,4 +331,413 @@ func sliceContains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestRefactorFeatureLoop_ProtocolViolation_FirstViolationRetriesThenSucceeds(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	fix := newRefactorProtocolFixture(t, "refactor-retry-success")
+	markerStatePath := filepath.Join(fix.tmpDir, "marker-state.txt")
+	markerPath := filepath.Join(fix.artifactDir, agent.PhaseCompleteFile)
+	scripts := []string{
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
+		writeRefactorPlanSessionScript(t, fix, "success.sh", true, true, []string{
+			fmt.Sprintf(`if [ -e %q ]; then printf present > %q; else printf absent > %q; fi`, markerPath, markerStatePath, markerStatePath),
+		}),
+	}
+
+	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
+	if runErr != nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v", runErr)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+	if calls != 2 {
+		t.Fatalf("refactor-plan calls = %d, want 2", calls)
+	}
+	if got := readTrimmedFile(t, markerStatePath); got != "absent" {
+		t.Fatalf("phase_complete at second attempt start = %q, want absent", got)
+	}
+	assertNoRefactorSidecar(t, fix.artifactDir)
+}
+
+func TestRefactorFeatureLoop_ProtocolViolation_ThreeConsecutiveViolationsTerminate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	fix := newRefactorProtocolFixture(t, "refactor-three-violations")
+	scripts := []string{
+		writeRefactorPlanSessionScript(t, fix, "missing-plan-1.sh", false, true, nil),
+		writeRefactorPlanSessionScript(t, fix, "missing-plan-2.sh", false, true, nil),
+		writeRefactorPlanSessionScript(t, fix, "missing-plan-3.sh", false, true, nil),
+	}
+
+	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
+	if runErr != nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v, want nil protocol result", runErr)
+	}
+	if calls != agent.DefaultMaxConsecutiveProtocolViolations {
+		t.Fatalf("refactor-plan calls = %d, want %d", calls, agent.DefaultMaxConsecutiveProtocolViolations)
+	}
+	if result.FinalStatus != "protocol_violation" {
+		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
+	}
+	wantErr := refactorPlanValidationError(t, fix.artifactDir)
+	if result.LastError != wantErr {
+		t.Fatalf("LastError = %q, want %q", result.LastError, wantErr)
+	}
+
+	sidecar := readRefactorSidecar(t, fix.artifactDir)
+	if sidecar.Consecutive != agent.DefaultMaxConsecutiveProtocolViolations {
+		t.Fatalf("sidecar.Consecutive = %d, want %d", sidecar.Consecutive, agent.DefaultMaxConsecutiveProtocolViolations)
+	}
+	if sidecar.Role != agent.RoleRefactorPlanStep {
+		t.Fatalf("sidecar.Role = %q, want %q", sidecar.Role, agent.RoleRefactorPlanStep)
+	}
+	if sidecar.ActiveRun != fix.feature.ActiveRun {
+		t.Fatalf("sidecar.ActiveRun = %d, want %d", sidecar.ActiveRun, fix.feature.ActiveRun)
+	}
+	if sidecar.LastViolation == "" {
+		t.Fatal("sidecar.LastViolation is empty")
+	}
+	if sidecar.UpdatedAt.IsZero() {
+		t.Fatal("sidecar.UpdatedAt is zero")
+	}
+
+	got, err := fix.store.Load(fix.feature.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if got.ActiveCycle == nil || got.ActiveCycle.Status != feature.RepoCycleFailed {
+		t.Fatalf("ActiveCycle = %+v, want failed", got.ActiveCycle)
+	}
+	if got.ActiveCycle.LastError != wantErr {
+		t.Fatalf("ActiveCycle.LastError = %q, want %q", got.ActiveCycle.LastError, wantErr)
+	}
+}
+
+func TestRefactorFeatureLoop_ProtocolViolation_RestartSurvival(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	fix := newRefactorProtocolFixture(t, "refactor-restart-survival")
+	seedRefactorSidecar(t, fix, fix.feature.ActiveRun, 2)
+	scripts := []string{
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
+	}
+
+	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
+	if runErr != nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v, want nil protocol result", runErr)
+	}
+	if calls != 1 {
+		t.Fatalf("refactor-plan calls = %d, want 1", calls)
+	}
+	if result.FinalStatus != "protocol_violation" {
+		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
+	}
+	sidecar := readRefactorSidecar(t, fix.artifactDir)
+	if sidecar.Consecutive != agent.DefaultMaxConsecutiveProtocolViolations {
+		t.Fatalf("sidecar.Consecutive = %d, want %d", sidecar.Consecutive, agent.DefaultMaxConsecutiveProtocolViolations)
+	}
+}
+
+func TestRefactorFeatureLoop_ProtocolViolation_StaleActiveRunResetsCounter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	fix := newRefactorProtocolFixture(t, "refactor-stale-active-run")
+	seedRefactorSidecar(t, fix, fix.feature.ActiveRun+99, 2)
+	captureDir := filepath.Join(fix.tmpDir, "captured-sidecar")
+	scripts := []string{
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
+		writeRefactorPlanSessionScript(t, fix, "success.sh", true, true, []string{
+			fmt.Sprintf(`mkdir -p %q`, captureDir),
+			fmt.Sprintf(`cp %q %q`, filepath.Join(fix.artifactDir, agent.ProtocolRetrySidecarFile), filepath.Join(captureDir, agent.ProtocolRetrySidecarFile)),
+		}),
+	}
+
+	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
+	if runErr != nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v", runErr)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+	if calls != 2 {
+		t.Fatalf("refactor-plan calls = %d, want 2", calls)
+	}
+	captured := readRefactorSidecar(t, captureDir)
+	if captured.Consecutive != 1 {
+		t.Fatalf("captured sidecar.Consecutive = %d, want 1", captured.Consecutive)
+	}
+	if captured.ActiveRun != fix.feature.ActiveRun {
+		t.Fatalf("captured sidecar.ActiveRun = %d, want %d", captured.ActiveRun, fix.feature.ActiveRun)
+	}
+	assertNoRefactorSidecar(t, fix.artifactDir)
+}
+
+func TestRefactorFeatureLoop_NonProtocolErrorDoesNotRetry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	fix := newRefactorProtocolFixture(t, "refactor-non-protocol")
+	planErr := errors.New("planner exploded")
+	calls := 0
+	cfg := baseRefactorProtocolConfig(fix)
+	cfg.RunRefactorPlanFn = func(string) (string, error) {
+		calls++
+		return "", planErr
+	}
+	cfg.RunImplementFn = func(agent.ImplementConfig, ports.SessionManager) (*agent.LoopResult, error) {
+		t.Fatal("RunImplementFn must not run after non-protocol plan error")
+		return nil, nil
+	}
+
+	result, runErr := agent.RunRefactorFeatureLoop(cfg, nil)
+	if runErr == nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = nil, want wrapped plan error")
+	}
+	if !errors.Is(runErr, planErr) {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v, want errors.Is planner error", runErr)
+	}
+	if calls != 1 {
+		t.Fatalf("refactor-plan calls = %d, want 1", calls)
+	}
+	if result == nil || result.FinalStatus != "failed" {
+		t.Fatalf("result = %+v, want failed result", result)
+	}
+	if result.LastError != planErr.Error() {
+		t.Fatalf("LastError = %q, want %q", result.LastError, planErr.Error())
+	}
+	assertNoRefactorSidecar(t, fix.artifactDir)
+}
+
+func TestRefactorFeatureLoop_ProtocolViolation_SuccessDeletesPriorSidecar(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	fix := newRefactorProtocolFixture(t, "refactor-prior-sidecar")
+	seedRefactorSidecar(t, fix, fix.feature.ActiveRun, 1)
+	captureDir := filepath.Join(fix.tmpDir, "captured-sidecar")
+	scripts := []string{
+		writeRefactorPlanSessionScript(t, fix, "missing-plan.sh", false, true, nil),
+		writeRefactorPlanSessionScript(t, fix, "success.sh", true, true, []string{
+			fmt.Sprintf(`mkdir -p %q`, captureDir),
+			fmt.Sprintf(`cp %q %q`, filepath.Join(fix.artifactDir, agent.ProtocolRetrySidecarFile), filepath.Join(captureDir, agent.ProtocolRetrySidecarFile)),
+		}),
+	}
+
+	result, runErr, calls := runRefactorProtocolLoopWithScripts(t, fix, scripts, 0)
+	if runErr != nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v", runErr)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+	if calls != 2 {
+		t.Fatalf("refactor-plan calls = %d, want 2", calls)
+	}
+	captured := readRefactorSidecar(t, captureDir)
+	if captured.Consecutive != 2 {
+		t.Fatalf("captured sidecar.Consecutive = %d, want 2", captured.Consecutive)
+	}
+	assertNoRefactorSidecar(t, fix.artifactDir)
+}
+
+type refactorProtocolFixture struct {
+	tmpDir      string
+	stateDir    string
+	scriptsDir  string
+	artifactDir string
+	store       *feature.Store
+	feature     *feature.Feature
+}
+
+func newRefactorProtocolFixture(t *testing.T, featureID string) refactorProtocolFixture {
+	t.Helper()
+	tmp := t.TempDir()
+	stateDir := filepath.Join(tmp, "state")
+	scriptsDir := filepath.Join(tmp, "scripts")
+	repoDir := filepath.Join(tmp, "repo")
+	for _, dir := range []string{stateDir, scriptsDir, repoDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	store := feature.NewStore(stateDir)
+	f := &feature.Feature{
+		ID:             featureID,
+		Name:           "Refactor protocol retry",
+		Slug:           featureID,
+		Description:    "Refactor retry test fixture",
+		Status:         feature.StatusPublished,
+		ActiveRun:      1,
+		RunCount:       1,
+		SchemaVersion:  feature.SchemaVersionCurrent,
+		RefactorPrompt: "tighten retry behavior",
+		Repos: []feature.FeatureRepo{
+			{Name: "repo", Path: repoDir, WorktreePath: repoDir, Branch: "feature/test", BaseBranch: "main"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"repo": {Touched: true, PRURL: "https://github.com/example/repo/pull/1"},
+		},
+		MaxIterations: 3,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("reload feature: %v", err)
+	}
+	artifactDir := filepath.Join(agent.ActiveRunDir(stateDir, loaded), "refactor-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	return refactorProtocolFixture{
+		tmpDir:      tmp,
+		stateDir:    stateDir,
+		scriptsDir:  scriptsDir,
+		artifactDir: artifactDir,
+		store:       store,
+		feature:     loaded,
+	}
+}
+
+func baseRefactorProtocolConfig(fix refactorProtocolFixture) agent.RefactorFeatureLoopConfig {
+	return agent.RefactorFeatureLoopConfig{
+		Feature:       fix.feature,
+		FeatureStore:  fix.store,
+		StateDir:      fix.stateDir,
+		Prompt:        "tighten retry behavior",
+		Model:         "agent",
+		PlanningModel: "planner",
+		MaxIterations: 3,
+		RunImplementFn: func(agent.ImplementConfig, ports.SessionManager) (*agent.LoopResult, error) {
+			return &agent.LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil
+		},
+	}
+}
+
+func runRefactorProtocolLoopWithScripts(t *testing.T, fix refactorProtocolFixture, scripts []string, maxConsecFails int) (*agent.RefactorFeatureLoopResult, error, int) {
+	t.Helper()
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	t.Cleanup(sm.Shutdown)
+
+	calls := 0
+	cfg := baseRefactorProtocolConfig(fix)
+	cfg.MaxConsecFails = maxConsecFails
+	cfg.BuildSession = func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		if calls >= len(scripts) {
+			return nil, nil, nil, fmt.Errorf("unexpected refactor-plan attempt %d", calls+1)
+		}
+		script := scripts[calls]
+		calls++
+		return []string{"bash", script}, nil, &ports.SessionOpts{
+			PIDDir:        opts.PIDDir,
+			PermHandler:   opts.PermHandler,
+			InitialPrompt: opts.Prompt,
+			RepoName:      opts.RepoName,
+			LogPath:       opts.LogPath,
+		}, nil
+	}
+
+	result, err := agent.RunRefactorFeatureLoop(cfg, sm)
+	return result, err, calls
+}
+
+func writeRefactorPlanSessionScript(t *testing.T, fix refactorProtocolFixture, name string, writePlan, touchMarker bool, beforeSuccess []string) string {
+	t.Helper()
+	planPath := filepath.Join(fix.artifactDir, "refactor-plan.md")
+	lines := []string{
+		testutil.JSONLInit,
+		fmt.Sprintf("mkdir -p %q", fix.artifactDir),
+	}
+	lines = append(lines, beforeSuccess...)
+	if writePlan {
+		lines = append(lines, fmt.Sprintf("cat > %q <<'PLAN_EOF'\n%s\nPLAN_EOF", planPath, refactorProtocolPlanText()))
+	}
+	if touchMarker {
+		lines = append(lines, fmt.Sprintf("touch %q", filepath.Join(fix.artifactDir, agent.PhaseCompleteFile)))
+	}
+	lines = append(lines, testutil.JSONLSuccess)
+	return testutil.WriteScript(t, fix.scriptsDir, name, strings.Join(lines, "\n")+"\n")
+}
+
+func refactorProtocolPlanText() string {
+	return "# Refactor: retry coverage\n\n" +
+		"## Tasks\n\n" +
+		"### Task 1: update retry handling\n\n" +
+		"**Repo:** repo\n\n" +
+		"Use the shared retry helper for refactor-plan protocol violations.\n\n" +
+		"#### Automated Verification:\n" +
+		"- [ ] retry tests pass: `go test ./test/integration/...`\n"
+}
+
+func seedRefactorSidecar(t *testing.T, fix refactorProtocolFixture, activeRun, consecutive int) {
+	t.Helper()
+	if err := agent.WriteProtocolRetrySidecar(fix.artifactDir, agent.ProtocolRetrySidecar{
+		Role:          agent.RoleRefactorPlanStep,
+		ActiveRun:     activeRun,
+		Consecutive:   consecutive,
+		LastViolation: "prior violation",
+		UpdatedAt:     time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("WriteProtocolRetrySidecar() error = %v", err)
+	}
+}
+
+func readRefactorSidecar(t *testing.T, dir string) *agent.ProtocolRetrySidecar {
+	t.Helper()
+	sidecar, err := agent.ReadProtocolRetrySidecar(dir)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecar(%s) error = %v", dir, err)
+	}
+	if sidecar == nil {
+		t.Fatalf("ReadProtocolRetrySidecar(%s) = nil, want sidecar", dir)
+	}
+	return sidecar
+}
+
+func assertNoRefactorSidecar(t *testing.T, dir string) {
+	t.Helper()
+	sidecar, err := agent.ReadProtocolRetrySidecar(dir)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecar(%s) error = %v", dir, err)
+	}
+	if sidecar != nil {
+		t.Fatalf("ReadProtocolRetrySidecar(%s) = %#v, want nil", dir, sidecar)
+	}
+	if _, err := os.Stat(filepath.Join(dir, agent.ProtocolRetrySidecarFile)); !os.IsNotExist(err) {
+		t.Fatalf("sidecar stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func refactorPlanValidationError(t *testing.T, artifactDir string) string {
+	t.Helper()
+	_, violations, err := agent.Validate(feature.PhasePlan, agent.RoleRefactorPlanStep, artifactDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	return agent.FormatSingleShotProtocolViolationError(agent.RoleRefactorPlanStep, artifactDir, violations)
+}
+
+func readTrimmedFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return strings.TrimSpace(string(data))
 }

@@ -1471,6 +1471,88 @@ func TestFormatStatus_PublishedActiveReviewCommentsCycle(t *testing.T) {
 	}
 }
 
+func TestDashboardStatusShowsActiveArtifactPhaseDuringProtocolRetry(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		status      feature.Status
+		current     feature.Phase
+		consecutive int
+		want        string
+	}{
+		{"inquire_first_retry", feature.StatusInquiring, feature.PhaseInquire, 1, "Inquiring"},
+		{"research_second_retry", feature.StatusResearching, feature.PhaseResearch, 2, "Researching"},
+		{"design_second_retry", feature.StatusDesigning, feature.PhaseDesign, 2, "Designing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           tt.name,
+				Name:         tt.name,
+				Slug:         tt.name,
+				Status:       tt.status,
+				CurrentPhase: tt.current,
+				FailureType:  "",
+				LastError:    "",
+			}
+			got := formatStatus(f)
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("formatStatus() = %q, want active label %q for retry streak %d", got, tt.want, tt.consecutive)
+			}
+			if strings.Contains(got, "Failed") || strings.Contains(got, "protocol violation") {
+				t.Fatalf("formatStatus() = %q, want active phase during retry streak %d", got, tt.consecutive)
+			}
+		})
+	}
+}
+
+func TestDashboardStatusShowsBuildingKBDuringProtocolRetry(t *testing.T) {
+	t.Parallel()
+	for _, consecutive := range []int{1, 2} {
+		t.Run(fmt.Sprintf("kb_retry_%d", consecutive), func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           fmt.Sprintf("feat-kb-retry-%d", consecutive),
+				Name:         "KB Retry",
+				Slug:         "kb-retry",
+				Status:       feature.StatusBuildingKB,
+				CurrentPhase: feature.PhaseKnowledgeBase,
+				Repos:        []feature.FeatureRepo{{Name: "repo-a"}},
+				KBStatus:     map[string]string{"repo-a": "building"},
+				FailureType:  "",
+				LastError:    "",
+			}
+			got := formatStatus(f)
+			if !strings.Contains(got, "Building KB") {
+				t.Fatalf("formatStatus() = %q, want Building KB for retry streak %d", got, consecutive)
+			}
+			if strings.Contains(got, "Failed") || strings.Contains(got, "protocol violation") {
+				t.Fatalf("formatStatus() = %q, want in-progress KB during retry streak %d", got, consecutive)
+			}
+		})
+	}
+}
+
+func TestDashboardStatusShowsTerminalKBProtocolViolation(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-kb-terminal",
+		Name:         "KB Terminal",
+		Slug:         "kb-terminal",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		FailureType:  feature.FailureProtocolViolation,
+		LastError:    "protocol violation: knowledge_base_builder @ /tmp/kb: index.md: missing",
+	}
+	got := formatStatus(f)
+	if !strings.Contains(got, "Failed") || !strings.Contains(got, "protocol violation") {
+		t.Fatalf("formatStatus() = %q, want terminal protocol violation", got)
+	}
+	if strings.Contains(got, "Building KB") {
+		t.Fatalf("formatStatus() = %q, should not render active KB after terminal failure", got)
+	}
+}
+
 func TestFormatStatus_RepoPausedOnInput_StylesAsWaitingInput(t *testing.T) {
 	t.Parallel()
 	// Schema v3 always routes implement completion through the multi-repo

@@ -107,6 +107,16 @@ func phaseAwareBuildSessionFn(researchScript, designScript, planScript, implScri
 	if len(extraScripts) > 0 {
 		phasePlanScript = extraScripts[0]
 	}
+	// extraScripts[1] = knowledge-base script (optional)
+	var kbScript string
+	if len(extraScripts) > 1 {
+		kbScript = extraScripts[1]
+	}
+	// extraScripts[2] = inquire script (optional)
+	var inquireScript string
+	if len(extraScripts) > 2 {
+		inquireScript = extraScripts[2]
+	}
 	return func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		sessOpts := &session.SessionOpts{
 			PIDDir:        opts.PIDDir,
@@ -123,6 +133,10 @@ func phaseAwareBuildSessionFn(researchScript, designScript, planScript, implScri
 
 		var script string
 		switch {
+		case opts.Phase == feature.PhaseInquire && inquireScript != "":
+			script = inquireScript
+		case opts.Phase == feature.PhaseKnowledgeBase && kbScript != "":
+			script = kbScript
 		case strings.Contains(opts.Prompt, "# Feature Context") && strings.Contains(opts.Prompt, "## Research Findings"):
 			script = designScript
 		case strings.Contains(opts.Prompt, "# Planning Context"):
@@ -385,8 +399,21 @@ func TestTUI_FeatureFailsMidChain(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
+	runDir := agent.ActiveRunDir(stateDir, f)
+
+	// Inquire mock: succeeds (with phase_complete for TUI to detect completion)
+	inquireDir := filepath.Join(runDir, "inquire")
+	inquireArtifact := filepath.Join(inquireDir, "inquire.md")
+	inquireScript := testutil.WriteScript(t, scriptsDir, "inquire.sh", fmt.Sprintf(
+		`%s
+mkdir -p "%s"
+echo "# Inquire Output" > "%s"
+touch "%s/phase_complete"
+%s
+`, testutil.JSONLInit, inquireDir, inquireArtifact, inquireDir, testutil.JSONLSuccess))
+
 	// Research mock: succeeds (with phase_complete for TUI to detect completion)
-	researchDir := filepath.Join(stateDir, f.ID, "research")
+	researchDir := filepath.Join(runDir, "research")
 	researchArtifact := filepath.Join(researchDir, "research.md")
 	researchScript := testutil.WriteScript(t, scriptsDir, "research.sh", fmt.Sprintf(
 		`%s
@@ -397,7 +424,7 @@ touch "%s/phase_complete"
 `, testutil.JSONLInit, researchDir, researchArtifact, researchDir, testutil.JSONLSuccess))
 
 	// Design mock: creates design artifact and phase_complete.
-	designDir := filepath.Join(stateDir, f.ID, "design")
+	designDir := filepath.Join(runDir, "design")
 	designArtifact := filepath.Join(designDir, "design.md")
 	designScript := testutil.WriteScript(t, scriptsDir, "design.sh", fmt.Sprintf(
 		`%s
@@ -407,13 +434,22 @@ touch "%s/phase_complete"
 %s
 `, testutil.JSONLInit, designDir, designArtifact, designDir, testutil.JSONLSuccess))
 
+	kbDir := agent.KBStateDir(stateDir, "test-repo")
+	kbScript := testutil.WriteScript(t, scriptsDir, "kb.sh", fmt.Sprintf(
+		`%s
+mkdir -p "%s"
+echo "# Knowledge Base" > "%s"
+touch "%s/phase_complete"
+%s
+`, testutil.JSONLInit, kbDir, agent.KBPath(kbDir), kbDir, testutil.JSONLSuccess))
+
 	// Plan mock: emits init then exits non-zero
 	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
 		testutil.JSONLInit+"\n"+testutil.JSONLError("planning failed")+"\nexit 1\n")
 
 	pr := agent.NewPhaseRunner(sm, fm.Store, stateDir)
 	pr.CommandRunner = agent.NewExecCommandRunner()
-	pr.BuildSessionFn = phaseAwareBuildSessionFn(researchScript, designScript, planScript, "", planScript)
+	pr.BuildSessionFn = phaseAwareBuildSessionFn(researchScript, designScript, planScript, "", planScript, "", kbScript, inquireScript)
 
 	orch := newTestOrchestrator(fm, sm, pr)
 	app, err := tui.NewAppModel(fm, sm, orch, nil, eventCh, tui.WithPhaseRunner(pr))

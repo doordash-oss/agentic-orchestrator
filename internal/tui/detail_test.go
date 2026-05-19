@@ -15,6 +15,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -323,6 +324,87 @@ func TestProtocolViolationFailureRendering(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("DetailModel.View() missing %q in protocol violation rendering:\n%s", want, view)
 		}
+	}
+}
+
+func TestDetailStatusShowsActiveArtifactPhaseDuringProtocolRetry(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		status      feature.Status
+		current     feature.Phase
+		consecutive int
+		want        string
+	}{
+		{"inquire_first_retry", feature.StatusInquiring, feature.PhaseInquire, 1, "Inquiring"},
+		{"research_second_retry", feature.StatusResearching, feature.PhaseResearch, 2, "Researching"},
+		{"design_second_retry", feature.StatusDesigning, feature.PhaseDesign, 2, "Designing"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           tt.name,
+				Slug:         tt.name,
+				Status:       tt.status,
+				CurrentPhase: tt.current,
+				FailureType:  "",
+				LastError:    "",
+			}
+			view := NewDetailModel(f, "").View()
+			if !strings.Contains(view, tt.want) {
+				t.Fatalf("DetailModel.View() missing active label %q for retry streak %d:\n%s", tt.want, tt.consecutive, view)
+			}
+			if strings.Contains(view, "Failure Info") || strings.Contains(view, "protocol violation") {
+				t.Fatalf("DetailModel.View() rendered failure during retry streak %d:\n%s", tt.consecutive, view)
+			}
+		})
+	}
+}
+
+func TestDetailStatusShowsBuildingKBDuringProtocolRetry(t *testing.T) {
+	t.Parallel()
+	for _, consecutive := range []int{1, 2} {
+		t.Run(fmt.Sprintf("kb_retry_%d", consecutive), func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           fmt.Sprintf("feat-kb-retry-%d", consecutive),
+				Slug:         "kb-retry",
+				Status:       feature.StatusBuildingKB,
+				CurrentPhase: feature.PhaseKnowledgeBase,
+				Repos:        []feature.FeatureRepo{{Name: "repo-a"}},
+				KBStatus:     map[string]string{"repo-a": "building"},
+				FailureType:  "",
+				LastError:    "",
+			}
+			view := NewDetailModel(f, "").View()
+			if !strings.Contains(view, "Building Knowledge Base") && !strings.Contains(view, "BuildingKB") {
+				t.Fatalf("DetailModel.View() missing active KB label for retry streak %d:\n%s", consecutive, view)
+			}
+			if strings.Contains(view, "Failure Info") || strings.Contains(view, "protocol violation") {
+				t.Fatalf("DetailModel.View() rendered failure during KB retry streak %d:\n%s", consecutive, view)
+			}
+		})
+	}
+}
+
+func TestDetailStatusShowsTerminalKBProtocolViolation(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-kb-terminal",
+		Slug:         "kb-terminal",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		FailureType:  feature.FailureProtocolViolation,
+		LastError:    "protocol violation: knowledge_base_builder @ /tmp/kb: index.md: missing",
+	}
+	view := NewDetailModel(f, "").View()
+	for _, want := range []string{"Failed (protocol violation)", "Failure Info", "knowledge_base_builder", "index.md"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("DetailModel.View() missing %q for terminal KB protocol violation:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Building KB") {
+		t.Fatalf("DetailModel.View() rendered active KB after terminal failure:\n%s", view)
 	}
 }
 

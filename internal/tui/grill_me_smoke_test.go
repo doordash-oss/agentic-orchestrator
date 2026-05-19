@@ -134,6 +134,9 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 			if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
+			if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
+				t.Fatalf("write phase_complete: %v", err)
+			}
 			qaPath := filepath.Join(phaseDir, "qa-answers.md")
 			if err := os.WriteFile(qaPath, []byte(grillMeSmokeStaleQAFile), 0o644); err != nil {
 				t.Fatalf("pre-write stale qa-answers.md: %v", err)
@@ -158,21 +161,7 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 			}
 			_, _ = app.handleSessionDone(doneMsg)
 
-			// (e) Drive the orchestrator gate the same way handleSessionDone
-			// would dispatch in production: a PhaseCompletedMsg flows through
-			// handlePhaseCompleted into HandlePhaseCompletion. We invoke the
-			// orchestrator directly with the same input so the gate exercises
-			// the production code path without reaching into Bubble Tea
-			// command-batch plumbing.
-			if err := app.orchestrator.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
-				Phase:     feature.PhaseInquire,
-				SessionID: sess.ID(),
-				Success:   true,
-			}); err != nil {
-				t.Fatalf("HandlePhaseCompletion: %v", err)
-			}
-
-			// (f) Both gates honored: the transcript is written from the
+			// (e) Both gates honored: the transcript is written from the
 			// session Q&A log, not from stale agent-authored bytes.
 			got, err := os.ReadFile(qaPath)
 			if err != nil {
@@ -246,6 +235,9 @@ func TestInquirePhase_GrillMe_AutoPickSmokeEndToEnd(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(phaseDir, "inquire.md"), []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write inquire artifact: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write phase_complete: %v", err)
 	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
 	if err := os.WriteFile(qaPath, []byte(grillMeSmokeStaleQAFile), 0o644); err != nil {
@@ -340,13 +332,6 @@ drained:
 			Status:    session.SessionDone,
 		},
 	})
-	if err := app.orchestrator.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
-		Phase:     feature.PhaseInquire,
-		SessionID: sess.ID(),
-		Success:   true,
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
 	got, err := os.ReadFile(qaPath)
 	if err != nil {
 		t.Fatalf("read qa-answers.md: %v", err)

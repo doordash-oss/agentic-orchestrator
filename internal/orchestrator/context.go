@@ -62,6 +62,16 @@ func (o *Orchestrator) computeKBInfos(f *feature.Feature) []agent.KBInfo {
 // artifact without reading its content. Mirrors app.go:9695-9742 but reads
 // the state dir from PhaseRunner rather than TUI state.
 func (o *Orchestrator) resolveArtifactPath(f *feature.Feature, phase string) string {
+	if path := o.resolveArtifactPathForKey(f, phase); path != "" {
+		return path
+	}
+	if phase == "design" {
+		return o.resolveArtifactPathForKey(f, "brainstorm")
+	}
+	return ""
+}
+
+func (o *Orchestrator) resolveArtifactPathForKey(f *feature.Feature, phase string) string {
 	baseDir := o.stateDir()
 	artifactPath, ok := f.Artifacts[phase]
 	if !ok || artifactPath == "" {

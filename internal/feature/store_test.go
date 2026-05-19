@@ -957,6 +957,63 @@ artifacts: {}
 	}
 }
 
+func TestStoreLoadMigratesLegacyBrainstormStatusAndArtifact(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "legacy-brainstorm-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Legacy Brainstorm Feature
+slug: legacy-brainstorm-feature
+description: legacy brainstorm status
+created: 2026-01-01T00:00:00Z
+status: BrainstormReady
+current_phase: 7
+repos:
+  - name: repo-a
+    path: /tmp/a
+models: {}
+exit_criteria: ""
+inquireness: medium
+active_run: 1
+run_count: 1
+schema_version: %d
+`, featureID, SchemaVersionCurrent)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+
+	runYAML := `run_number: 1
+artifacts:
+  brainstorm: brainstorm.md
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil", err)
+	}
+	if loaded.Status != StatusDesignReady {
+		t.Errorf("loaded.Status = %v, want %v", loaded.Status, StatusDesignReady)
+	}
+	wantArtifact := filepath.Join("brainstorm", "brainstorm.md")
+	if got := loaded.Artifacts["design"]; got != wantArtifact {
+		t.Errorf("loaded.Artifacts[design] = %q, want %q", got, wantArtifact)
+	}
+	if got := loaded.Run().Artifacts["design"]; got != wantArtifact {
+		t.Errorf("loaded.Run().Artifacts[design] = %q, want %q", got, wantArtifact)
+	}
+}
+
 // TestStoreLoadCurrentSchemaIgnoresLegacyJiraKeys verifies that a feature.yaml
 // at SchemaVersionCurrent that still contains legacy jira_ticket / jira_base_url
 // keys (left over from a pre-Jira-removal state dir) loads successfully, and

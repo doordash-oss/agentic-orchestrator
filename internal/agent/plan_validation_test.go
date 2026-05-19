@@ -952,6 +952,10 @@ func TestIsArtifactExcluded(t *testing.T) {
 		{"plan.md", false},
 		{"research.md", false},
 		{"qa-answers.md", true},
+		{".protocol-retry.yaml", true},
+		{".protocol-retry-feat-abc123.yaml", true},
+		{"protocol-retry.yaml", false},
+		{".protocol-retry-feat-abc123.txt", false},
 		{"2026-03-13-my-feature.md", false},
 	}
 	for _, tt := range tests {

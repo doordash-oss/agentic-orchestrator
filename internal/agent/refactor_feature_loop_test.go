@@ -778,7 +778,7 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationTripsAfterBudget(t *tes
 	}
 }
 
-func TestRunRefactorFeatureLoop_PlanStepProtocolViolationClearsStalePlanBetweenAttempts(t *testing.T) {
+func TestRunRefactorFeatureLoop_PlanStepProtocolViolationPreservesPlanBetweenAttempts(t *testing.T) {
 	stateDir := t.TempDir()
 	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-stale", []string{"api"})
 	calls := 0
@@ -822,24 +822,22 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationClearsStalePlanBetweenA
 			}
 		},
 		RunImplementFn: func(ImplementConfig, ports.SessionManager) (*LoopResult, error) {
-			t.Fatal("RunImplementFn must not run when retry only writes a fresh marker")
-			return nil, nil
+			return &LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil
 		},
 	}
 
 	result, err := RunRefactorFeatureLoop(cfg, nil)
 	if err != nil {
-		t.Fatalf("RunRefactorFeatureLoop() error = %v, want nil protocol result", err)
+		t.Fatalf("RunRefactorFeatureLoop() error = %v", err)
 	}
 	if calls != 2 {
 		t.Fatalf("plan calls = %d, want 2", calls)
 	}
-	if result.FinalStatus != "protocol_violation" {
-		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
-	if !strings.Contains(result.LastError, "refactor-plan.md") ||
-		!strings.Contains(result.LastError, "missing") {
-		t.Fatalf("LastError = %q, want missing refactor-plan.md protocol violation", result.LastError)
+	if _, err := os.Stat(filepath.Join(result.ArtifactDir, "refactor-plan.md")); err != nil {
+		t.Fatalf("refactor-plan.md stat error = %v, want preserved between attempts", err)
 	}
 }
 
@@ -926,7 +924,7 @@ func TestRunRefactorPlanStep_MissingPhaseCompleteReturnsProtocolViolation(t *tes
 	}
 }
 
-func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsProtocolViolation(t *testing.T) {
+func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsPlan(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
 	scriptsDir := t.TempDir()
@@ -946,17 +944,15 @@ func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsProtocolViolation(t 
 	sm := session.NewManager(make(chan interface{}, 10))
 	defer sm.Shutdown()
 
-	_, err := runRefactorPlanStep(refactorPlanStepTestInput(t, store, f, stateDir, artifactDir, planScript), sm)
-	if err == nil {
-		t.Fatal("runRefactorPlanStep() error = nil, want protocol violation")
+	got, err := runRefactorPlanStep(refactorPlanStepTestInput(t, store, f, stateDir, artifactDir, planScript), sm)
+	if err != nil {
+		t.Fatalf("runRefactorPlanStep() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "protocol violation: refactor_plan_step @") ||
-		!strings.Contains(err.Error(), "refactor-plan.md") ||
-		!strings.Contains(err.Error(), "missing") {
-		t.Fatalf("error = %q, want stale plan ignored and missing refactor-plan.md violation", err)
+	if got != stalePlanPath {
+		t.Fatalf("plan path = %q, want %q", got, stalePlanPath)
 	}
-	if _, statErr := os.Stat(stalePlanPath); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("stale refactor-plan.md stat error = %v, want os.ErrNotExist", statErr)
+	if _, statErr := os.Stat(stalePlanPath); statErr != nil {
+		t.Fatalf("stale refactor-plan.md stat error = %v, want preserved", statErr)
 	}
 }
 

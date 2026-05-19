@@ -524,18 +524,30 @@ func reportGateViolations(gate ReportGateResult) []ProtocolViolation {
 }
 
 type protocolViolationError struct {
-	msg string
+	msg        string
+	violations []ProtocolViolation
 }
 
 func (e *protocolViolationError) Error() string { return e.msg }
 
 func newProtocolViolationError(role Role, iterDir string, violations []ProtocolViolation) error {
-	return &protocolViolationError{msg: formatProtocolViolationError(role, iterDir, violations)}
+	return &protocolViolationError{
+		msg:        formatProtocolViolationError(role, iterDir, violations),
+		violations: append([]ProtocolViolation(nil), violations...),
+	}
 }
 
 func isProtocolViolationError(err error) bool {
 	var target *protocolViolationError
 	return errors.As(err, &target)
+}
+
+func protocolViolationsFromError(err error) []ProtocolViolation {
+	var target *protocolViolationError
+	if !errors.As(err, &target) {
+		return nil
+	}
+	return append([]ProtocolViolation(nil), target.violations...)
 }
 
 // JoinProtocolViolations renders protocol violations for LastError and review

@@ -259,6 +259,7 @@ func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
 	if err := yaml.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("parsing run file: %w", err)
 	}
+	normalizeLegacyArtifactAliases(r.Artifacts)
 	return &r, nil
 }
 

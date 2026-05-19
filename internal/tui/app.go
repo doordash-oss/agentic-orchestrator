@@ -36,13 +36,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
-	"github.com/doordash-oss/agentic-orchestrator/internal/guidelinedef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
-	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 )
 
 // TickMsg fires periodically to check for missed session events.
@@ -669,17 +667,9 @@ func NewAppModel(fm *feature.Manager, sm *session.Manager, orch orchestratorAPI,
 		}
 	}
 
-	// Reconcile skills to disk using the simple file-based approach.
-	skillsDir := filepath.Join(filepath.Dir(stateDir), "skills")
-	if err := skilldef.ReconcileSkills(skillsDir); err == nil {
-		app.phaseRunner.SkillsDir = skillsDir
-	}
-
-	// Reconcile guidelines to disk.
-	guidelinesDir := filepath.Join(filepath.Dir(stateDir), "guidelines")
-	if err := guidelinedef.ReconcileGuidelines(guidelinesDir); err == nil {
-		app.phaseRunner.GuidelinesDir = guidelinesDir
-	}
+	// Skills and guidelines reconcile is owned by cmd/agentico/main.go so the
+	// launch spinner is the single source of "syncing..." UI; the resulting
+	// PhaseRunner.SkillsDir / .GuidelinesDir fields are set there too.
 
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.kbStaleWarnings = make(map[string]string)
@@ -1790,7 +1780,7 @@ func (m AppModel) contextPctForFeature(f *feature.Feature) int {
 	}
 	maxActivePct := -1
 	for _, s := range m.sessionManager.FeatureSessions(f.ID) {
-		if !s.IsActive() {
+		if !isGenericFeatureSession(s) || !s.IsActive() {
 			continue
 		}
 		if pct := s.ContextPercentage(); pct > maxActivePct {
@@ -1826,11 +1816,18 @@ func (m *AppModel) livePreviewSessionForFeature(f *feature.Feature) session.Sess
 		}
 	}
 	for _, s := range m.sessionManager.FeatureSessions(f.ID) {
-		if s.IsActive() {
+		if isGenericFeatureSession(s) && s.IsActive() {
 			return s
 		}
 	}
 	return nil
+}
+
+func isGenericFeatureSession(s session.SessionView) bool {
+	if s == nil {
+		return false
+	}
+	return !isChatSession(s.ID()) && !isArtifactReviewSession(s.ID())
 }
 
 func resolveInitialAttentionTab(tabs []repoTab, lastAttachedRepo string) int {
@@ -2442,6 +2439,9 @@ func (m AppModel) handleTick() (tea.Model, tea.Cmd) {
 
 	// Poll active sessions for missed status events
 	for _, s := range m.sessionManager.ActiveSessions() {
+		if !isGenericFeatureSession(s) {
+			continue
+		}
 		f, err := m.featureManager.Get(s.FeatureID())
 		if err != nil {
 			continue
@@ -5277,10 +5277,33 @@ func (m AppModel) updateArtifactReview(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		if m.artifactReview.Decided() {
 			m.artifactReview.StopSession()
 		}
+		m.clearReviewGateDashboardAttention(m.artifactReview.FeatureID())
 		m.currentView = ViewDashboard
 		return m, tea.Batch(cmd, func() tea.Msg { return RefreshFeaturesMsg{} })
 	}
 	return m, cmd
+}
+
+func (m AppModel) clearReviewGateDashboardAttention(featureID string) {
+	if featureID == "" || m.featureManager == nil || m.featureManager.Store == nil {
+		return
+	}
+	_ = m.featureManager.Store.Modify(featureID, func(f *feature.Feature) error {
+		if !f.Status.IsNeedsReview() {
+			return nil
+		}
+		for i := range f.HelpQueue {
+			if f.HelpQueue[i].Pending {
+				f.HelpQueue[i].Pending = false
+			}
+		}
+		for i := range f.PermissionsQueue {
+			if f.PermissionsQueue[i].Pending {
+				f.PermissionsQueue[i].Pending = false
+			}
+		}
+		return nil
+	})
 }
 
 func (m AppModel) updateChat(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -6341,6 +6364,7 @@ func (m AppModel) forwardToActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.artifactReview.Decided() {
 				m.artifactReview.StopSession()
 			}
+			m.clearReviewGateDashboardAttention(m.artifactReview.FeatureID())
 			m.currentView = ViewDashboard
 			return m, tea.Batch(cmd, func() tea.Msg { return RefreshFeaturesMsg{} })
 		}
@@ -7457,7 +7481,7 @@ func (m *AppModel) buildRepoTabs(f *feature.Feature) []repoTab {
 	)
 	sessionByRepo := make(map[string]session.SessionView)
 	for _, s := range allSessions {
-		if !s.IsActive() {
+		if !isGenericFeatureSession(s) || !s.IsActive() {
 			continue
 		}
 		switch s.Kind() {
@@ -7677,7 +7701,7 @@ func (m *AppModel) attachToMultiRepoFeature(f *feature.Feature) tea.Cmd {
 		// (e.g., session from a previous TUI instance not yet recovered)
 		sessions := m.sessionManager.ActiveSessions()
 		for _, s := range sessions {
-			if s.FeatureID() == f.ID {
+			if isGenericFeatureSession(s) && s.FeatureID() == f.ID {
 				return m.attachToSession(s)
 			}
 		}
@@ -7736,13 +7760,15 @@ func (m *AppModel) attachToFeature(f *feature.Feature) tea.Cmd {
 	// recovered from disk before a kind was stamped.
 	sessions := m.sessionManager.ActiveSessions()
 	for _, s := range sessions {
-		if s.FeatureID() == f.ID {
+		if isGenericFeatureSession(s) && s.FeatureID() == f.ID {
 			return m.attachToSession(s)
 		}
 	}
 	allSessions := m.sessionManager.FeatureSessions(f.ID)
-	if len(allSessions) > 0 {
-		return m.attachToSession(allSessions[0])
+	for _, s := range allSessions {
+		if isGenericFeatureSession(s) {
+			return m.attachToSession(s)
+		}
 	}
 	// Nothing to attach to. Surface a reason rather than silently no-op'ing
 	// — the [a] hint stays visible during BuildingKB but a feature waiting on

@@ -512,7 +512,26 @@ func (m *Manager) CompletePlanning(featureID string) error {
 
 // NeedsPlanReview transitions a feature to StatusPlanNeedsReview.
 func (m *Manager) NeedsPlanReview(featureID string) error {
-	return m.Transition(featureID, StatusPlanNeedsReview)
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if err := f.Transition(StatusPlanNeedsReview); err != nil {
+			return err
+		}
+		clearPendingFeatureAttention(f)
+		return nil
+	})
+}
+
+func clearPendingFeatureAttention(f *Feature) {
+	for i := range f.HelpQueue {
+		if f.HelpQueue[i].Pending {
+			f.HelpQueue[i].Pending = false
+		}
+	}
+	for i := range f.PermissionsQueue {
+		if f.PermissionsQueue[i].Pending {
+			f.PermissionsQueue[i].Pending = false
+		}
+	}
 }
 
 // StartImplementation transitions a feature to Implementing and updates iteration count.
@@ -1484,6 +1503,7 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 		f.Status = NeedsReviewForPhase(targetPhase)
 		f.PendingReviewPhase = &tp
+		clearPendingFeatureAttention(f)
 		if partial.enabled {
 			pendingRoadmapPhase := partial.roadmapPhase
 			f.PendingRewindReviewRoadmapPhase = &pendingRoadmapPhase

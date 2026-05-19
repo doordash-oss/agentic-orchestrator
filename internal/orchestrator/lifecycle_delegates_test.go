@@ -72,8 +72,14 @@ func TestOrchestrator_ApplyRefactorPipeline_SetsProfileAndCheckpoints(t *testing
 
 func TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase(t *testing.T) {
 	f := &feature.Feature{
-		ID:       "feat-1",
-		Status:   feature.StatusImplementReady,
+		ID:     "feat-1",
+		Status: feature.StatusImplementReady,
+		HelpQueue: []feature.HelpRequest{
+			{Question: "stale question", Pending: true},
+		},
+		PermissionsQueue: []feature.PermissionRequest{
+			{Tool: "Bash", Pending: true},
+		},
 		IsRewind: true, // Should be cleared by EnterReviewGate.
 	}
 	lc := lifecycleForFeature(f)
@@ -97,6 +103,12 @@ func TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase(t *testing.T) {
 	}
 	if f.IsRewind {
 		t.Errorf("IsRewind should be cleared after entering a review gate")
+	}
+	if f.HelpQueue[0].Pending {
+		t.Errorf("HelpQueue pending flag should be cleared after entering a review gate")
+	}
+	if f.PermissionsQueue[0].Pending {
+		t.Errorf("PermissionsQueue pending flag should be cleared after entering a review gate")
 	}
 }
 
@@ -604,6 +616,56 @@ func TestOrchestrator_RestartPhase_RunningResearch_TransitionsToInterrupted(t *t
 	}
 	if f.Status != feature.StatusInterrupted {
 		t.Errorf("Status = %v, want Interrupted", f.Status)
+	}
+}
+
+func TestOrchestrator_RestartPhase_NeedsReviewRestartsCompletedPhase(t *testing.T) {
+	target := feature.PhaseResearch
+	f := &feature.Feature{
+		ID:                 "feat-1",
+		Status:             feature.StatusInquiryNeedsReview,
+		CurrentPhase:       feature.PhaseInquire,
+		PendingReviewPhase: &target,
+		HelpQueue: []feature.HelpRequest{
+			{Question: "Agent is waiting for input — press 'a' to answer", Pending: true},
+		},
+		PermissionsQueue: []feature.PermissionRequest{
+			{Tool: "Bash", Pending: true},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+	}, orchestrator.Hooks{})
+
+	outcome, err := o.RestartPhase("feat-1", 0, 0)
+	if err != nil {
+		t.Fatalf("RestartPhase: %v", err)
+	}
+	if outcome.Action != orchestrator.RestartDispatchPhase {
+		t.Fatalf("Action = %v, want RestartDispatchPhase", outcome.Action)
+	}
+	if outcome.Phase != feature.PhaseInquire {
+		t.Errorf("Phase = %v, want PhaseInquire", outcome.Phase)
+	}
+	if f.Status != feature.StatusInterrupted {
+		t.Errorf("Status = %v, want Interrupted", f.Status)
+	}
+	if f.PendingReviewPhase != nil {
+		t.Errorf("PendingReviewPhase = %v, want nil", f.PendingReviewPhase)
+	}
+	for _, h := range f.HelpQueue {
+		if h.Pending {
+			t.Fatalf("HelpQueue still has pending entry: %+v", h)
+		}
+	}
+	for _, p := range f.PermissionsQueue {
+		if p.Pending {
+			t.Fatalf("PermissionsQueue still has pending entry: %+v", p)
+		}
 	}
 }
 
@@ -1214,6 +1276,47 @@ func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 	// owns that loop; RestartPhase doubling up would race it.
 	if len(sm.StopCalls) != 0 {
 		t.Errorf("StopSession called %d times; busy-guard must not stop sessions", len(sm.StopCalls))
+	}
+}
+
+func TestOrchestrator_RestartPhase_AllowsArtifactReviewSession(t *testing.T) {
+	target := feature.PhaseResearch
+	f := &feature.Feature{
+		ID:                 "feat-review-busy",
+		Status:             feature.StatusInquiryNeedsReview,
+		CurrentPhase:       feature.PhaseInquire,
+		PendingReviewPhase: &target,
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+
+	sm := mocks.NewMockSessionManager()
+	reviewSess := mocks.NewMockSessionView("feat-review-busy-artifact-review", "feat-review-busy")
+	sm.FeatureSessionsFn = func(id string) []session.SessionView {
+		return []session.SessionView{reviewSess}
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		Sessions:  sm,
+	}, orchestrator.Hooks{})
+
+	outcome, err := o.RestartPhase("feat-review-busy", 10, 2)
+	if err != nil {
+		t.Fatalf("RestartPhase: %v", err)
+	}
+	if outcome.Action != orchestrator.RestartDispatchPhase {
+		t.Fatalf("Action = %v, want RestartDispatchPhase", outcome.Action)
+	}
+	if outcome.Phase != feature.PhaseInquire {
+		t.Errorf("Phase = %v, want PhaseInquire", outcome.Phase)
+	}
+	if f.Status != feature.StatusInterrupted {
+		t.Errorf("Status = %v, want Interrupted", f.Status)
+	}
+	if len(sm.StopCalls) != 1 || sm.StopCalls[0] != "feat-review-busy-artifact-review" {
+		t.Errorf("StopCalls = %v, want artifact review session stopped during restart cleanup", sm.StopCalls)
 	}
 }
 

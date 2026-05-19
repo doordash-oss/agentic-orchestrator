@@ -1108,6 +1108,9 @@ func roadmapPhaseTiming(f *feature.Feature, key string) string {
 }
 
 func (m DetailModel) renderAttention(f *feature.Feature) string {
+	if f.Status.IsNeedsReview() {
+		return ""
+	}
 	var b strings.Builder
 	for _, h := range f.HelpQueue {
 		if h.Pending {

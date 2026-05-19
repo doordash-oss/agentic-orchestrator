@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -627,14 +628,35 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 // given target phase and records the pending review. Used by triggerReviewGateCmd
 // so the gate bookkeeping lives in the orchestrator rather than the TUI.
 func (o *Orchestrator) EnterReviewGate(featureID string, targetPhase feature.Phase) error {
-	reviewStatus := feature.NeedsReviewForPhase(targetPhase)
 	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		f.Status = reviewStatus
-		tp := targetPhase
-		f.PendingReviewPhase = &tp
-		f.IsRewind = false
+		enterReviewGateFeatureState(f, targetPhase)
 		return nil
 	})
+}
+
+func enterReviewGateFeatureState(f *feature.Feature, targetPhase feature.Phase) {
+	reviewStatus := feature.NeedsReviewForPhase(targetPhase)
+	tp := targetPhase
+	f.Status = reviewStatus
+	f.PendingReviewPhase = &tp
+	f.IsRewind = false
+	clearPendingFeatureAttention(f)
+}
+
+func clearPendingFeatureAttention(f *feature.Feature) {
+	if f == nil {
+		return
+	}
+	for i := range f.HelpQueue {
+		if f.HelpQueue[i].Pending {
+			f.HelpQueue[i].Pending = false
+		}
+	}
+	for i := range f.PermissionsQueue {
+		if f.PermissionsQueue[i].Pending {
+			f.PermissionsQueue[i].Pending = false
+		}
+	}
 }
 
 // ResetToPublishedFromTweak force-resets a feature that is in an active tweak
@@ -1001,7 +1023,7 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	// user never asked for.
 	if o.deps.Sessions != nil {
 		for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-			if s != nil && s.IsActive() {
+			if s != nil && s.IsActive() && !isArtifactReviewSession(s) {
 				return RestartOutcome{}, ErrFeatureBusy
 			}
 		}
@@ -1033,6 +1055,7 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	if f.Status == feature.StatusFailed {
 		_ = o.ExtendFailedPhaseBudget(featureID, maxIterationsDelta, maxPlanIterationsDelta)
 	}
+	phase := f.CurrentPhase
 
 	// Published/code-ready features with repo cycles (running, failed, or
 	// interrupted): clear and return per-cycle restart descriptors for the
@@ -1056,9 +1079,22 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		}, nil
 	}
 
+	if f.Status.IsNeedsReview() {
+		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusInterrupted
+			ff.PendingReviewPhase = nil
+			ff.PendingRewindReviewRoadmapPhase = nil
+			ff.IsRewind = false
+			clearPendingFeatureAttention(ff)
+			return nil
+		}); err != nil {
+			return RestartOutcome{}, fmt.Errorf("restart review gate: %w", err)
+		}
+		return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
+	}
+
 	// Restart the current phase: transition state to a startable status and
 	// return the phase for the TUI to re-launch via StartPhaseMsg.
-	phase := f.CurrentPhase
 	switch f.Status {
 	case feature.StatusInterrupted:
 		// Already in a valid state for start commands — no transition needed.
@@ -1122,6 +1158,13 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	}
 
 	return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
+}
+
+func isArtifactReviewSession(s ports.SessionView) bool {
+	if s == nil {
+		return false
+	}
+	return strings.HasSuffix(s.ID(), "-artifact-review")
 }
 
 func (o *Orchestrator) restoreStatusForRepoCycleRestart(featureID string) error {

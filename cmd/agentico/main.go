@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -43,6 +44,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui/markdown"
 	"go.uber.org/fx"
+	"golang.org/x/term"
 )
 
 const (
@@ -309,21 +311,30 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		os.Exit(1)
 	}
 
-	// Reconcile embedded skills to disk (non-fatal).
+	// Reconcile embedded skills and guidelines to disk (non-fatal). When
+	// either side has work to do (stamp missing or mismatched), surface a
+	// spinner so the user knows the pause is intentional.
 	skillsDir := filepath.Join(filepath.Dir(stateDir), "skills")
+	guidelinesDir := filepath.Join(filepath.Dir(stateDir), "guidelines")
+	stop := func() {}
+	if skilldef.NeedsReconcile(skillsDir) || guidelinedef.NeedsReconcile(guidelinesDir) {
+		stop = startSyncSpinner(os.Stderr, "Syncing skills and guidelines")
+	}
 	if err := skilldef.ReconcileSkills(skillsDir); err != nil {
+		stop()
+		stop = func() {}
 		fmt.Fprintf(os.Stderr, "Warning: could not reconcile skills: %v\n", err)
 	} else {
 		phaseRunner.SkillsDir = skillsDir
 	}
-
-	// Reconcile embedded guidelines to disk (non-fatal).
-	guidelinesDir := filepath.Join(filepath.Dir(stateDir), "guidelines")
 	if err := guidelinedef.ReconcileGuidelines(guidelinesDir); err != nil {
+		stop()
+		stop = func() {}
 		fmt.Fprintf(os.Stderr, "Warning: could not reconcile guidelines: %v\n", err)
 	} else {
 		phaseRunner.GuidelinesDir = guidelinesDir
 	}
+	stop()
 
 	// Provider-generic version check (replaces old CheckCLIVersion)
 	for _, vr := range agent.CheckProviderVersions(detected) {
@@ -396,6 +407,46 @@ func overrideColorProfile() (colorprofile.Profile, bool) {
 		return colorprofile.ANSI256, true
 	}
 	return 0, false
+}
+
+// startSyncSpinner shows a "<msg>..." indicator on w while the embedded
+// skills/guidelines reconcile runs. On a TTY the trailing dots animate so
+// the user can tell the process is still doing work; on a non-TTY (CI,
+// piped output) a single static line is printed instead. The returned
+// stop() blocks until the animation goroutine has cleared its line, so
+// subsequent writes to w don't collide with the spinner.
+func startSyncSpinner(w io.Writer, msg string) func() {
+	f, _ := w.(*os.File)
+	isTTY := f != nil && term.IsTerminal(int(f.Fd()))
+	if !isTTY {
+		fmt.Fprintf(w, "%s...\n", msg)
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		frames := []string{".  ", ".. ", "..."}
+		i := 0
+		fmt.Fprintf(w, "\r%s%s", msg, frames[i])
+		ticker := time.NewTicker(300 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				clear := strings.Repeat(" ", len(msg)+len(frames[0]))
+				fmt.Fprintf(w, "\r%s\r%s... done\n", clear, msg)
+				return
+			case <-ticker.C:
+				i = (i + 1) % len(frames)
+				fmt.Fprintf(w, "\r%s%s", msg, frames[i])
+			}
+		}
+	})
+	return func() {
+		close(done)
+		wg.Wait()
+	}
 }
 
 func formatInstanceLockBusyMessage(stateDir string, owner instancelock.Owner) string {

@@ -50,6 +50,15 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 	if f == nil {
 		return featureAttention{Kind: attentionNone}
 	}
+	if f.Status.IsNeedsReview() {
+		return featureAttention{
+			Kind:       attentionReview,
+			CTALabel:   "Review",
+			TypeLabel:  "Review Required",
+			Summary:    reviewAttentionSummary(f),
+			ReviewMode: reviewAttentionMode(f),
+		}
+	}
 	if summary, ok := pendingPermissionSummary(f, sess); ok {
 		return featureAttention{
 			Kind:      attentionPermission,
@@ -85,15 +94,6 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 			RepoName:  cycle.RepoName,
 			GatePath:  cycle.GatePath,
 			CycleType: cycle.CycleType,
-		}
-	}
-	if f.Status.IsNeedsReview() {
-		return featureAttention{
-			Kind:       attentionReview,
-			CTALabel:   "Review",
-			TypeLabel:  "Review Required",
-			Summary:    reviewAttentionSummary(f),
-			ReviewMode: reviewAttentionMode(f),
 		}
 	}
 	if isWatchAttentionEligible(f) {

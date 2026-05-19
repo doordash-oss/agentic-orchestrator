@@ -1680,9 +1680,7 @@ func (o *Orchestrator) advanceToNextPhase(featureID string, completedPhase featu
 	if f.Checkpoints.HasGateForPhase(next) {
 		nextPhase := next
 		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			ff.Status = feature.NeedsReviewForPhase(nextPhase)
-			ff.PendingReviewPhase = &nextPhase
-			ff.IsRewind = false
+			enterReviewGateFeatureState(ff, nextPhase)
 			return nil
 		}); err != nil {
 			return fmt.Errorf("transition to review gate: %w", err)

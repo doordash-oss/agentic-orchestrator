@@ -294,8 +294,12 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if len(opts.DisallowedTools) > 0 {
-		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
+	disallowed := opts.DisallowedTools
+	if opts.ReadOnlyOutsideRoots {
+		disallowed = appendUniqueTools(disallowed, claudeFileMutationTools)
+	}
+	if len(disallowed) > 0 {
+		args = append(args, "--disallowedTools", strings.Join(disallowed, ","))
 	}
 	if len(opts.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
@@ -304,4 +308,26 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 		args = append(args, "--resume", opts.ResumeSessionID)
 	}
 	return args
+}
+
+// claudeFileMutationTools are added to --disallowedTools for
+// ReadOnlyOutsideRoots roles.
+var claudeFileMutationTools = []string{"Edit", "MultiEdit", "Write", "NotebookEdit"}
+
+func appendUniqueTools(existing []string, extras []string) []string {
+	if len(existing) == 0 {
+		return append([]string(nil), extras...)
+	}
+	seen := make(map[string]bool, len(existing))
+	for _, t := range existing {
+		seen[t] = true
+	}
+	out := append([]string(nil), existing...)
+	for _, t := range extras {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }

@@ -500,6 +500,91 @@ type capturedArgs struct {
 	additionalDirs []string
 }
 
+// TestRunInquire_ReadOnlySandboxAppliedAtBuildSession is the regression
+// test for run-004 of feature 7cd00ca0578e462e, where an inquire agent
+// translated and rewrote README.md in the worktree even with the
+// document-only system prompt in place. The plumbing must hand
+// BuildSession a WritableRoots list confined to the phase dir and
+// ReadOnlyOutsideRoots=true so that codex's sandbox and Claude's
+// --disallowedTools each get the chance to enforce the rule at the
+// provider layer.
+func TestRunInquire_ReadOnlySandboxAppliedAtBuildSession(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateDir := filepath.Join(tmpDir, "state")
+	worktree := filepath.Join(tmpDir, "worktrees", "feat", "repo")
+	for _, d := range []string{stateDir, worktree} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	hostileFile := filepath.Join(worktree, "README.md")
+	if err := os.WriteFile(hostileFile, []byte("# original"), 0o644); err != nil {
+		t.Fatalf("seed README: %v", err)
+	}
+
+	var (
+		mu       sync.Mutex
+		captured BuildSessionOpts
+	)
+	buildSessionFn := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		mu.Lock()
+		captured = opts
+		mu.Unlock()
+		return nil, nil, nil, fmt.Errorf("stub: short-circuit")
+	}
+
+	eventCh := make(chan any, 10)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+	store := feature.NewStore(stateDir)
+
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		FeatureStore:   store,
+		StateDir:       stateDir,
+		BuildSessionFn: buildSessionFn,
+	}
+	// Even a hostile user prompt that explicitly asks for code edits must
+	// not let the agent reach the worktree. The agent layer's job is to
+	// narrow the session opts; providers refuse beyond that.
+	f := &feature.Feature{
+		ID:            "feat-hostile",
+		Name:          "translate readme",
+		Description:   "rewrite the README.md in the worktree directly",
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun:     1,
+		RunCount:      1,
+		Repos: []feature.FeatureRepo{
+			{Name: "repo", Path: worktree, WorktreePath: worktree},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	if _, err := pr.RunInquire(f); err == nil {
+		t.Fatalf("RunInquire: expected stub error, got nil")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !captured.ReadOnlyOutsideRoots {
+		t.Errorf("captured.ReadOnlyOutsideRoots = false, want true")
+	}
+	wantRoot := filepath.Join(stateDir, "feat-hostile", "runs", "run-001", "inquire")
+	if !slices.Equal(captured.WritableRoots, []string{wantRoot}) {
+		t.Errorf("captured.WritableRoots = %v, want [%s]", captured.WritableRoots, wantRoot)
+	}
+	if slices.Contains(captured.WritableRoots, worktree) {
+		t.Errorf("worktree %q remained in WritableRoots; agent could still write to source", worktree)
+	}
+	// AdditionalDirs still carries the worktree (the agent has to read code)
+	// — the sandbox just downgrades that mount to read-only.
+	if !slices.Contains(captured.AdditionalDirs, worktree) {
+		t.Errorf("worktree dropped from AdditionalDirs; agent loses read access: %v", captured.AdditionalDirs)
+	}
+}
+
 func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

@@ -625,6 +625,129 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 	}
 }
 
+<<<<<<< Updated upstream
+=======
+func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
+	// Only the four planning/research/design role families are document-only
+	// agents that must refuse to touch source code. Implementer, validators,
+	// reviewers, refactor-plan, KB-builder, and InteractivePTY all have
+	// legitimate non-document writes (code, working-tree artifacts, etc.).
+	readOnly := []struct {
+		name string
+		spec RoleSpec
+	}{
+		{"inquirer", InquirerRoleSpec()},
+		{"designer", DesignerRoleSpec()},
+		{"roadmap creator", RoadmapCreatorRoleSpec()},
+		{"roadmap reviser", RoadmapReviserRoleSpec()},
+		{"phase plan creator", PhasePlanCreatorRoleSpec()},
+		{"phase plan reviser", PhasePlanReviserRoleSpec()},
+	}
+	for _, tt := range readOnly {
+		t.Run(tt.name+"_flag_set", func(t *testing.T) {
+			if !tt.spec.ReadOnlyOutsideRoots {
+				t.Fatalf("%s ReadOnlyOutsideRoots = false, want true", tt.name)
+			}
+			got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+				Spec:         tt.spec,
+				IterationDir: "/state/feat/run-001/" + tt.name,
+				SkillsDir:    "/skills",
+			})
+			for _, want := range []string{
+				"ABSOLUTE: write only inside the output roots above.",
+				"Your role never writes code",
+				"refuse",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("%s system prompt missing %q in:\n%s", tt.name, want, got)
+				}
+			}
+		})
+	}
+
+	writeAllowed := []struct {
+		name string
+		spec RoleSpec
+	}{
+		{"implementer", ImplementRoleSpec()},
+		{"final reviewer", FinalReviewerRoleSpec()},
+		{"final review fixer", FinalReviewFixerRoleSpec()},
+		{"iteration reviewer", IterationReviewerRoleSpec()},
+		{"researcher", ResearcherRoleSpec()},
+		{"knowledge base builder", KnowledgeBaseBuilderRoleSpec()},
+		{"refactor plan", RefactorPlanRoleSpec()},
+	}
+	for _, tt := range writeAllowed {
+		t.Run(tt.name+"_flag_unset", func(t *testing.T) {
+			if tt.spec.ReadOnlyOutsideRoots {
+				t.Fatalf("%s ReadOnlyOutsideRoots = true, want false", tt.name)
+			}
+			got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+				Spec:         tt.spec,
+				IterationDir: "/state/feat/run-001/" + tt.name,
+				SkillsDir:    "/skills",
+			})
+			if strings.Contains(got, "ABSOLUTE: write only inside the output roots above.") {
+				t.Fatalf("%s system prompt contains read-only-outside-roots clause but role legitimately writes outside its output roots:\n%s", tt.name, got)
+			}
+		})
+	}
+}
+
+// TestApplyRoleSandbox covers the agent-layer policy: the helper must
+// narrow WritableRoots to the resolved output root paths and forward
+// ReadOnlyOutsideRoots to the BuildSessionOpts. It is a pure-policy
+// helper — provider-specific enforcement (Claude tool names, codex cwd)
+// lives in the provider packages and is tested there.
+func TestApplyRoleSandbox(t *testing.T) {
+	t.Run("no-op for write-allowed role", func(t *testing.T) {
+		opts := BuildSessionOpts{
+			WritableRoots:        []string{"/repos/web"},
+			WorkDir:              "/repos/web",
+			ReadOnlyOutsideRoots: false,
+		}
+		ApplyRoleSandbox(&opts, ImplementRoleSpec(), "/state/feat/run-1/phase-1/implement/iteration-02")
+		if !slices.Equal(opts.WritableRoots, []string{"/repos/web"}) {
+			t.Errorf("WritableRoots mutated: %v", opts.WritableRoots)
+		}
+		if opts.WorkDir != "/repos/web" {
+			t.Errorf("WorkDir mutated: %q", opts.WorkDir)
+		}
+		if opts.ReadOnlyOutsideRoots {
+			t.Errorf("ReadOnlyOutsideRoots set on write-allowed role")
+		}
+	})
+
+	t.Run("single-root role narrows to phase_dir", func(t *testing.T) {
+		opts := BuildSessionOpts{WritableRoots: []string{"/repos/web", "/state"}}
+		ApplyRoleSandbox(&opts, InquirerRoleSpec(), "/state/feat/run-1/inquire")
+		want := []string{"/state/feat/run-1/inquire"}
+		if !slices.Equal(opts.WritableRoots, want) {
+			t.Errorf("WritableRoots = %v, want %v", opts.WritableRoots, want)
+		}
+		if !opts.ReadOnlyOutsideRoots {
+			t.Errorf("ReadOnlyOutsideRoots = false, want true")
+		}
+	})
+
+	t.Run("planning role includes both artifact and attempt dirs", func(t *testing.T) {
+		opts := BuildSessionOpts{}
+		ApplyRoleSandbox(&opts, RoadmapCreatorRoleSpec(), "/state/feat/run-1/roadmap/attempt-02")
+		want := []string{"/state/feat/run-1/roadmap", "/state/feat/run-1/roadmap/attempt-02"}
+		if !slices.Equal(opts.WritableRoots, want) {
+			t.Errorf("WritableRoots = %v, want %v", opts.WritableRoots, want)
+		}
+		if !opts.ReadOnlyOutsideRoots {
+			t.Errorf("ReadOnlyOutsideRoots = false, want true")
+		}
+	})
+
+	t.Run("nil opts is a no-op", func(t *testing.T) {
+		ApplyRoleSandbox(nil, InquirerRoleSpec(), "/state/feat/run-1/inquire")
+	})
+}
+
+>>>>>>> Stashed changes
 func TestBuildValidatorSystemPromptFromRoleSpec(t *testing.T) {
 	role, ok := PlanValidatorRoleForSkill("validate-roadmap-architecture")
 	if !ok {

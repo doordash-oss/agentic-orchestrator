@@ -1456,7 +1456,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 			// the agent may write the marker before we get here, and we'd
 			// delete it.
 			RemovePhaseComplete(attemptDir)
-			cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
+			plannerSessOpts := BuildSessionOpts{
 				Model:                          cfg.Feature.Models.Planning,
 				Prompt:                         prompt,
 				SystemPrompt:                   systemPrompt,
@@ -1468,7 +1468,9 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,
 				SystemPromptHasUsefulResources: true,
-			})
+			}
+			ApplyRoleSandbox(&plannerSessOpts, plannerSpec, attemptDir)
+			cmd, env, sessOpts, err := cfg.BuildSession(plannerSessOpts)
 			if err != nil {
 				return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
 			}
@@ -1830,7 +1832,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 			// the agent may write the marker before we get here, and we'd
 			// delete it.
 			RemovePhaseComplete(attemptDir)
-			cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
+			plannerSessOpts := BuildSessionOpts{
 				Model:                          cfg.Feature.Models.Planning,
 				Prompt:                         prompt,
 				SystemPrompt:                   systemPrompt,
@@ -1842,7 +1844,9 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,
 				SystemPromptHasUsefulResources: true,
-			})
+			}
+			ApplyRoleSandbox(&plannerSessOpts, plannerSpec, attemptDir)
+			cmd, env, sessOpts, err := cfg.BuildSession(plannerSessOpts)
 			if err != nil {
 				return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)
 			}

@@ -151,6 +151,7 @@ type CommandBuildOpts struct {
 	ResumeSessionID      string
 	IncludePartial       bool
 	AdditionalDirs       []string
+	WritableRoots        []string
 	AgentNames           []string
 	AgentsJSON           string
 	StateDir             string
@@ -163,6 +164,14 @@ type CommandBuildOpts struct {
 	// Code's "auto" mode because it injects a "work without stopping for
 	// clarifying questions" system-reminder that overrides [grill-me].
 	PermissionMode string
+	// ReadOnlyOutsideRoots, when true, asks the provider to forbid all file
+	// mutation outside the writable roots configured for the session. The
+	// semantics are provider-defined: Claude appends file-mutation tools
+	// (Edit/MultiEdit/Write/NotebookEdit) to --disallowedTools; Codex installs
+	// an apply_patch hook and receives WritableRoots so it can reject patch
+	// edits outside the declared output roots. Callers set this for planning/
+	// research/design roles whose only deliverable is a markdown artifact.
+	ReadOnlyOutsideRoots bool
 }
 
 // ProtocolOpts contains all parameters needed to create a Protocol instance.
@@ -176,6 +185,13 @@ type ProtocolOpts struct {
 	WritableRoots  []string
 	DSP            bool
 	StateDir       string
+	// ReadOnlyOutsideRoots, when true, asks the protocol to confine the
+	// agent's writes to WritableRoots. For Codex this means the protocol
+	// will redirect cwd to a path inside WritableRoots if necessary so the
+	// workspace-write sandbox does not implicitly expose a parent
+	// directory through cwd. Providers that already enforce path-scoped
+	// writes (Claude via tool flags) can ignore this on the protocol side.
+	ReadOnlyOutsideRoots bool
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider

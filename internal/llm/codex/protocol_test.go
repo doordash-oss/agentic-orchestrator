@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -363,6 +364,113 @@ func TestCodexProtocol_DSPApprovalPolicyIsNever(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex", DSP: true})
 	if p.approvalPolicy != "never" {
 		t.Errorf("DSP approvalPolicy = %q, want %q", p.approvalPolicy, "never")
+	}
+}
+
+// TestCodexProtocol_ReadOnlyOutsideRootsPinsWorkspaceWrite verifies that
+// ReadOnlyOutsideRoots forces workspace-write at both thread and turn
+// scope — even under approvalPolicy="never" (DSP), which would otherwise
+// upgrade to dangerFullAccess and silently bypass the WritableRoots
+// fence. Document-only roles must keep the sandbox.
+func TestCodexProtocol_ReadOnlyOutsideRootsPinsWorkspaceWrite(t *testing.T) {
+	t.Run("DSP without flag keeps dangerFullAccess", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{
+			Model:         "codex",
+			WorkDir:       "/repos/web",
+			WritableRoots: []string{"/state"},
+			DSP:           true,
+		})
+		if got := p.threadSandboxMode(); got != SandboxModeDangerFullAccess {
+			t.Errorf("threadSandboxMode() = %q, want %q", got, SandboxModeDangerFullAccess)
+		}
+		policy := p.turnSandboxPolicy([]string{"/state"})
+		if policy.Type != "dangerFullAccess" {
+			t.Errorf("turnSandboxPolicy().Type = %q, want dangerFullAccess", policy.Type)
+		}
+	})
+
+	t.Run("DSP with flag stays in workspaceWrite", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{
+			Model:                "codex",
+			WorkDir:              "/state/inquire",
+			WritableRoots:        []string{"/state/inquire"},
+			DSP:                  true,
+			ReadOnlyOutsideRoots: true,
+		})
+		if got := p.threadSandboxMode(); got != SandboxModeWorkspaceWrite {
+			t.Errorf("threadSandboxMode() = %q, want %q", got, SandboxModeWorkspaceWrite)
+		}
+		policy := p.turnSandboxPolicy([]string{"/state/inquire"})
+		if policy.Type != "workspaceWrite" {
+			t.Errorf("turnSandboxPolicy().Type = %q, want workspaceWrite", policy.Type)
+		}
+		if !slices.Equal(policy.WritableRoots, []string{"/state/inquire"}) {
+			t.Errorf("turnSandboxPolicy().WritableRoots = %v, want [/state/inquire]", policy.WritableRoots)
+		}
+	})
+
+	t.Run("non-DSP without flag uses workspaceWrite", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{Model: "codex", WorkDir: "/repos/web"})
+		if got := p.threadSandboxMode(); got != SandboxModeWorkspaceWrite {
+			t.Errorf("threadSandboxMode() = %q, want %q", got, SandboxModeWorkspaceWrite)
+		}
+	})
+}
+
+// TestCodexProtocol_ReadOnlyOutsideRootsRedirectsCwd verifies that the
+// thread/start cwd is forced into WritableRoots when ReadOnlyOutsideRoots
+// is set. The codex workspace-write sandbox implicitly grants writes to
+// cwd, so a cwd outside the writable set would let a misbehaving model
+// edit the worktree even after the agent layer narrows WritableRoots.
+func TestCodexProtocol_ReadOnlyOutsideRootsRedirectsCwd(t *testing.T) {
+	tests := []struct {
+		name          string
+		workDir       string
+		writableRoots []string
+		readOnly      bool
+		wantCwd       string
+	}{
+		{
+			name:          "flag off leaves caller cwd",
+			workDir:       "/repos/web",
+			writableRoots: []string{"/state/feat/inquire"},
+			readOnly:      false,
+			wantCwd:       "/repos/web",
+		},
+		{
+			name:          "cwd already inside a writable root stays",
+			workDir:       "/state/feat/inquire",
+			writableRoots: []string{"/state/feat/inquire"},
+			readOnly:      true,
+			wantCwd:       "/state/feat/inquire",
+		},
+		{
+			name:          "cwd outside roots redirects to deepest writable root",
+			workDir:       "/repos/web",
+			writableRoots: []string{"/state/feat", "/state/feat/inquire"},
+			readOnly:      true,
+			wantCwd:       "/state/feat/inquire",
+		},
+		{
+			name:          "empty writable roots keeps caller cwd",
+			workDir:       "/repos/web",
+			writableRoots: nil,
+			readOnly:      true,
+			wantCwd:       "/repos/web",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{
+				Model:                "codex",
+				WorkDir:              tt.workDir,
+				WritableRoots:        tt.writableRoots,
+				ReadOnlyOutsideRoots: tt.readOnly,
+			})
+			if got := p.threadCwd(); got != tt.wantCwd {
+				t.Errorf("threadCwd() = %q, want %q", got, tt.wantCwd)
+			}
+		})
 	}
 }
 

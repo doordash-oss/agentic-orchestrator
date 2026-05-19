@@ -17,6 +17,7 @@ package codex
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +115,36 @@ func assertConfigOverride(t *testing.T, cmd []string, want string) {
 	t.Fatalf("command %v missing -c %s", cmd, want)
 }
 
+func hasAdjacentArgs(cmd []string, wantA, wantB string) bool {
+	for i := 0; i < len(cmd)-1; i++ {
+		if cmd[i] == wantA && cmd[i+1] == wantB {
+			return true
+		}
+	}
+	return false
+}
+
+func configOverrides(cmd []string) []string {
+	var out []string
+	for i := 0; i < len(cmd)-1; i++ {
+		if cmd[i] == "-c" {
+			out = append(out, cmd[i+1])
+			i++
+		}
+	}
+	return out
+}
+
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimPrefix(entry, prefix), true
+		}
+	}
+	return "", false
+}
+
 func snapshotAgentModTimes(t *testing.T, codexHome string) map[string]time.Time {
 	t.Helper()
 
@@ -209,6 +240,129 @@ func TestProviderBuildCommand_ReturnsNilEnvAndInteractiveEffortOverride(t *testi
 			}
 		})
 	}
+}
+
+func TestProviderBuildCommand_ReadOnlyOutsideRootsInstallsApplyPatchHook(t *testing.T) {
+	p := &Provider{}
+	homeDir := t.TempDir()
+	stateDir := t.TempDir()
+	root := filepath.Join(stateDir, "runs", "run-001", "inquire")
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", homeDir)
+
+	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:                "gpt-5.4",
+		StateDir:             stateDir,
+		WritableRoots:        []string{root},
+		ReadOnlyOutsideRoots: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	if !hasAdjacentArgs(cmd, "--enable", "codex_hooks") {
+		t.Fatalf("BuildCommand() cmd = %v, want --enable codex_hooks", cmd)
+	}
+
+	configs := strings.Join(configOverrides(cmd), "\n")
+	for _, want := range []string{"hooks.PreToolUse=", "hooks.PermissionRequest=", "^apply_patch$", "Checking apply_patch paths", ReadOnlyApplyPatchHookFlag} {
+		if !strings.Contains(configs, want) {
+			t.Fatalf("hook configs missing %q:\n%s", want, configs)
+		}
+	}
+
+	rootsJSON, ok := envValue(env, readOnlyApplyPatchRootsEnv)
+	if !ok {
+		t.Fatalf("BuildCommand() env = %v, missing %s", env, readOnlyApplyPatchRootsEnv)
+	}
+	var roots []string
+	if err := json.Unmarshal([]byte(rootsJSON), &roots); err != nil {
+		t.Fatalf("unmarshal roots env: %v", err)
+	}
+	if len(roots) != 1 || roots[0] != root {
+		t.Fatalf("roots env = %v, want [%s]", roots, root)
+	}
+}
+
+func TestReadOnlyApplyPatchHook_DeniesOutsideWritableRoots(t *testing.T) {
+	dir := t.TempDir()
+	outputRoot := filepath.Join(dir, "phase")
+	worktree := filepath.Join(dir, "worktree")
+	if err := os.MkdirAll(outputRoot, 0o755); err != nil {
+		t.Fatalf("mkdir outputRoot: %v", err)
+	}
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("mkdir worktree: %v", err)
+	}
+
+	outsidePatch := "*** Begin Patch\n*** Update File: " + filepath.Join(worktree, "README.md") + "\n@@\n-old\n+new\n*** End Patch\n"
+	stdout := runReadOnlyApplyPatchHook(t, "PreToolUse", outputRoot, []string{outputRoot}, outsidePatch)
+	var pre map[string]any
+	if err := json.Unmarshal([]byte(stdout), &pre); err != nil {
+		t.Fatalf("unmarshal PreToolUse denial %q: %v", stdout, err)
+	}
+	hookOut := pre["hookSpecificOutput"].(map[string]any)
+	if hookOut["permissionDecision"] != "deny" {
+		t.Fatalf("permissionDecision = %v, want deny", hookOut["permissionDecision"])
+	}
+
+	insidePatch := "*** Begin Patch\n*** Add File: notes.md\n+ok\n*** End Patch\n"
+	if stdout := runReadOnlyApplyPatchHook(t, "PreToolUse", outputRoot, []string{outputRoot}, insidePatch); strings.TrimSpace(stdout) != "" {
+		t.Fatalf("inside patch stdout = %q, want empty allow", stdout)
+	}
+
+	traversalPatch := "*** Begin Patch\n*** Add File: ../worktree/README.md\n+bad\n*** End Patch\n"
+	stdout = runReadOnlyApplyPatchHook(t, "PermissionRequest", outputRoot, []string{outputRoot}, traversalPatch)
+	var perm map[string]any
+	if err := json.Unmarshal([]byte(stdout), &perm); err != nil {
+		t.Fatalf("unmarshal PermissionRequest denial %q: %v", stdout, err)
+	}
+	permOut := perm["hookSpecificOutput"].(map[string]any)
+	decision := permOut["decision"].(map[string]any)
+	if decision["behavior"] != "deny" {
+		t.Fatalf("PermissionRequest behavior = %v, want deny", decision["behavior"])
+	}
+
+	linkPath := filepath.Join(outputRoot, "worktree-link")
+	if err := os.Symlink(worktree, linkPath); err != nil {
+		t.Skipf("symlink setup failed: %v", err)
+	}
+	symlinkPatch := "*** Begin Patch\n*** Add File: worktree-link/README.md\n+bad\n*** End Patch\n"
+	stdout = runReadOnlyApplyPatchHook(t, "pre_tool_use", outputRoot, []string{outputRoot}, symlinkPatch)
+	var symlinkDeny map[string]any
+	if err := json.Unmarshal([]byte(stdout), &symlinkDeny); err != nil {
+		t.Fatalf("unmarshal symlink denial %q: %v", stdout, err)
+	}
+	symlinkOut := symlinkDeny["hookSpecificOutput"].(map[string]any)
+	if symlinkOut["permissionDecision"] != "deny" {
+		t.Fatalf("symlink permissionDecision = %v, want deny", symlinkOut["permissionDecision"])
+	}
+}
+
+func runReadOnlyApplyPatchHook(t *testing.T, event, cwd string, roots []string, command string) string {
+	t.Helper()
+	rootsJSON, err := json.Marshal(roots)
+	if err != nil {
+		t.Fatalf("marshal roots: %v", err)
+	}
+	payload := map[string]any{
+		"hook_event_name": event,
+		"tool_name":       "apply_patch",
+		"cwd":             cwd,
+		"tool_input": map[string]any{
+			"command": command,
+		},
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	t.Setenv(readOnlyApplyPatchRootsEnv, string(rootsJSON))
+	var stdout bytes.Buffer
+	if code := RunReadOnlyApplyPatchHook(bytes.NewReader(payloadJSON), &stdout); code != 0 {
+		t.Fatalf("hook exit code = %d, want 0", code)
+	}
+	return stdout.String()
 }
 
 func TestProviderReconcileAgenticAgents_Idempotent(t *testing.T) {

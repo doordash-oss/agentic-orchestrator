@@ -17,11 +17,13 @@ package codex
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -97,6 +99,7 @@ func MapEffortLevel(level llm.EffortLevel) string {
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	// Interactive: app-server mode. Model/prompt delivered via JSON-RPC.
 	args := []string{"codex", "app-server"}
+	var env []string
 	if opts.EffortLevel != "" {
 		args = append(args, "-c", "model_reasoning_effort="+MapEffortLevel(opts.EffortLevel))
 	}
@@ -106,7 +109,23 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 	if err := p.prepareRealHome(); err != nil {
 		return nil, nil, fmt.Errorf("preparing codex home: %w", err)
 	}
-	return args, nil, nil
+	if opts.ReadOnlyOutsideRoots {
+		hookCommand, err := readOnlyApplyPatchHookCommand()
+		if err != nil {
+			return nil, nil, fmt.Errorf("building read-only apply_patch hook command: %w", err)
+		}
+		rootsJSON, err := json.Marshal(opts.WritableRoots)
+		if err != nil {
+			return nil, nil, fmt.Errorf("encoding codex writable roots: %w", err)
+		}
+		env = append(env, readOnlyApplyPatchRootsEnv+"="+string(rootsJSON))
+		args = append(args,
+			"--enable", "codex_hooks",
+			"-c", readOnlyApplyPatchHookConfig("PreToolUse", hookCommand),
+			"-c", readOnlyApplyPatchHookConfig("PermissionRequest", hookCommand),
+		)
+	}
+	return args, env, nil
 }
 
 func (p *Provider) AskingQuestionsClause() string {
@@ -322,6 +341,26 @@ func (p *Provider) prepareRealHome() error {
 		return err
 	}
 	return p.reconcileAgenticAgents(codexHome)
+}
+
+func readOnlyApplyPatchHookCommand() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolving agentico executable: %w", err)
+	}
+	return shellQuote(exe) + " " + ReadOnlyApplyPatchHookFlag, nil
+}
+
+func readOnlyApplyPatchHookConfig(event, command string) string {
+	return fmt.Sprintf(
+		"hooks.%s=[{matcher=\"^apply_patch$\",hooks=[{type=\"command\",command=%s,timeout=10,statusMessage=\"Checking apply_patch paths\"}]}]",
+		event,
+		strconv.Quote(command),
+	)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }
 
 func defaultCodexHome() string {

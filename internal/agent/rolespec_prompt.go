@@ -55,6 +55,40 @@ func BuildImplementSystemPrompt(in BuildImplementSystemPromptInput) string {
 	})
 }
 
+// ApplyRoleSandbox declares the role's sandbox policy on the
+// BuildSessionOpts. For roles that mark themselves ReadOnlyOutsideRoots
+// it sets:
+//
+//   - WritableRoots: every resolved output root path (the only locations
+//     the agent should be able to write to).
+//   - ReadOnlyOutsideRoots: forwarded to the LLM provider so it can apply
+//     provider-specific enforcement (Claude's --disallowedTools list,
+//     codex's sandbox cwd resolution).
+//
+// This is a no-op for roles whose contract permits writing outside their
+// declared output roots (Implement, validators, refactor, KB-builder,
+// review), so call sites can invoke it unconditionally before handing the
+// opts to BuildSession.
+func ApplyRoleSandbox(opts *BuildSessionOpts, spec RoleSpec, iterDir string) {
+	if opts == nil || !spec.ReadOnlyOutsideRoots {
+		return
+	}
+	rt := RoleRuntime{IterationDir: iterDir}
+	paths := spec.OutputRootPaths(rt)
+	roots := make([]string, 0, len(spec.OutputRoots))
+	seen := make(map[string]bool, len(spec.OutputRoots))
+	for _, root := range spec.OutputRoots {
+		p := paths[root.Name]
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		roots = append(roots, p)
+	}
+	opts.WritableRoots = roots
+	opts.ReadOnlyOutsideRoots = true
+}
+
 // BuildRoleSystemPrompt renders the generic RoleSpec-backed system prompt.
 func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 	spec := in.Spec

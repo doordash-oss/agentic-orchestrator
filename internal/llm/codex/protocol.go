@@ -288,10 +288,7 @@ func (p *Protocol) sendInitialize() error {
 func (p *Protocol) startThread() error {
 	id := int(nextID.Add(1))
 
-	sandbox := SandboxModeWorkspaceWrite
-	if p.approvalPolicy == "never" {
-		sandbox = SandboxModeDangerFullAccess
-	}
+	sandbox := p.threadSandboxMode()
 
 	model := p.model
 	if model == "" {
@@ -304,12 +301,80 @@ func (p *Protocol) startThread() error {
 		ID:      id,
 		Params: ThreadStartParams{
 			Model:          model,
-			Cwd:            p.opts.WorkDir,
+			Cwd:            p.threadCwd(),
 			ApprovalPolicy: p.approvalPolicy,
 			Sandbox:        &sandbox,
 		},
 	}
 	return p.writeJSON(req)
+}
+
+// threadCwd returns the working directory for thread/start. For
+// ReadOnlyOutsideRoots sessions in workspace-write mode it forces cwd to
+// be inside WritableRoots so the implicit cwd-is-writable rule does not
+// re-expose a parent (e.g. the worktree) that the caller deliberately
+// excluded from WritableRoots. Selects the longest writable root for
+// stable, deterministic behavior under nested roots.
+func (p *Protocol) threadCwd() string {
+	cwd := p.opts.WorkDir
+	if !p.opts.ReadOnlyOutsideRoots || len(p.opts.WritableRoots) == 0 {
+		return cwd
+	}
+	if cwd != "" {
+		for _, root := range p.opts.WritableRoots {
+			if pathInside(cwd, root) {
+				return cwd
+			}
+		}
+	}
+	deepest := p.opts.WritableRoots[0]
+	for _, root := range p.opts.WritableRoots[1:] {
+		if len(root) > len(deepest) {
+			deepest = root
+		}
+	}
+	return deepest
+}
+
+// threadSandboxMode picks the thread/start sandbox. ReadOnlyOutsideRoots
+// pins workspace-write even under approvalPolicy="never" (DSP), so the
+// WritableRoots-bounded sandbox is never silently upgraded to
+// dangerFullAccess for document-only roles.
+func (p *Protocol) threadSandboxMode() SandboxMode {
+	if p.opts.ReadOnlyOutsideRoots {
+		return SandboxModeWorkspaceWrite
+	}
+	if p.approvalPolicy == "never" {
+		return SandboxModeDangerFullAccess
+	}
+	return SandboxModeWorkspaceWrite
+}
+
+// turnSandboxPolicy is the per-turn analog of threadSandboxMode. Both
+// turn/start and sendFollowUpTurn use it so the worktree is never
+// re-exposed mid-thread.
+func (p *Protocol) turnSandboxPolicy(writableRoots []string) *SandboxPolicy {
+	if !p.opts.ReadOnlyOutsideRoots && p.approvalPolicy == "never" {
+		return &SandboxPolicy{Type: "dangerFullAccess", NetworkAccess: true}
+	}
+	return &SandboxPolicy{
+		Type:          "workspaceWrite",
+		WritableRoots: writableRoots,
+		NetworkAccess: true,
+	}
+}
+
+// pathInside reports whether child is at or below parent. Both paths are
+// treated as already-cleaned absolute paths; codex passes absolute paths
+// through ProtocolOpts.
+func pathInside(child, parent string) bool {
+	if child == parent {
+		return true
+	}
+	if !strings.HasSuffix(parent, "/") {
+		parent += "/"
+	}
+	return strings.HasPrefix(child, parent)
 }
 
 func (p *Protocol) startTurn(userPrompt string) error {
@@ -330,17 +395,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 		collabSettings.DeveloperInstructions = &systemPrompt
 	}
 
-	sandboxPolicy := &SandboxPolicy{
-		Type:          "workspaceWrite",
-		WritableRoots: writableRoots,
-		NetworkAccess: true,
-	}
-	if p.approvalPolicy == "never" {
-		sandboxPolicy = &SandboxPolicy{
-			Type:          "dangerFullAccess",
-			NetworkAccess: true,
-		}
-	}
+	sandboxPolicy := p.turnSandboxPolicy(writableRoots)
 
 	input := []InputItem{
 		{Type: "text", Text: userPrompt},
@@ -378,17 +433,7 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 		policy = "on-request"
 	}
 
-	sandbox := &SandboxPolicy{
-		Type:          "workspaceWrite",
-		WritableRoots: writableRoots,
-		NetworkAccess: true,
-	}
-	if policy == "never" {
-		sandbox = &SandboxPolicy{
-			Type:          "dangerFullAccess",
-			NetworkAccess: true,
-		}
-	}
+	sandbox := p.turnSandboxPolicy(writableRoots)
 
 	req := Request{
 		JSONRPC: "2.0",

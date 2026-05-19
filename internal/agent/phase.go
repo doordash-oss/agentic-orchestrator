@@ -166,7 +166,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	phaseCtx := featureCtx.Child()
 	pr.Observer.PhaseStarted(phaseCtx, cfg.Phase.String())
 
-	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+	sessionOpts := BuildSessionOpts{
 		Model:                          researchModel,
 		Prompt:                         cfg.Prompt,
 		SystemPrompt:                   systemPrompt,
@@ -178,7 +178,9 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
-	})
+	}
+	ApplyRoleSandbox(&sessionOpts, cfg.Spec, artifactDir)
+	cmd, env, sessOpts, err := pr.BuildSession(sessionOpts)
 	if err != nil {
 		return "", fmt.Errorf("building inquire session: %w", err)
 	}
@@ -672,7 +674,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		FeatureStore:               pr.FeatureStore,
 		StateDir:                   pr.StateDir,
 		ResearchArtifactPath:       researchArtifactPath,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		QAFilePaths:                qaFilePaths,
 		KBInfos:                    kbInfos,
 		WorkDir:                    workDir,
@@ -734,7 +736,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			Feature:                    f,
 			FeatureStore:               pr.FeatureStore,
 			StateDir:                   pr.StateDir,
-			DesignArtifactPath:     f.DesignArtifactPath(),
+			DesignArtifactPath:         f.DesignArtifactPath(),
 			QAFilePaths:                qaFilePaths,
 			KBInfos:                    kbInfos,
 			WorkDir:                    workDir,
@@ -811,7 +813,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
 		PhaseType:                  phaseType,
 		RoadmapPath:                roadmapPath,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		BuildSession:               pr.BuildSession,
@@ -1141,15 +1143,22 @@ type BuildSessionOpts struct {
 	// for bounded helpers that must read mounted directories without making
 	// them writable.
 	WritableRoots []string
-	PIDDir        string
-	PermHandler   ports.PermissionHandler
-	RepoName      string
-	WorkDir       string
-	LogPath       string          // session output log path
-	EffortLevel   llm.EffortLevel // pipeline-driven effort level; providers map to their own naming
-	AgentNames    []string
-	TurnMode      ports.SessionTurnMode
-	Phase         feature.Phase // current phase, used to filter utility skill preamble
+	// ReadOnlyOutsideRoots is forwarded to the LLM provider so it can apply
+	// provider-specific enforcement when the role's only deliverable is a
+	// document inside WritableRoots (Inquire/Design/Roadmap/PhasePlan).
+	// Claude appends file-mutation tools to --disallowedTools; codex
+	// redirects cwd into WritableRoots if needed. Set by ApplyRoleSandbox
+	// from RoleSpec.ReadOnlyOutsideRoots; do not hand-set elsewhere.
+	ReadOnlyOutsideRoots bool
+	PIDDir               string
+	PermHandler          ports.PermissionHandler
+	RepoName             string
+	WorkDir              string
+	LogPath              string          // session output log path
+	EffortLevel          llm.EffortLevel // pipeline-driven effort level; providers map to their own naming
+	AgentNames           []string
+	TurnMode             ports.SessionTurnMode
+	Phase                feature.Phase // current phase, used to filter utility skill preamble
 	// SystemPromptHasUsefulResources indicates the system prompt already
 	// includes the soft KB/guideline/skill discovery catalog. Bounded helpers
 	// that still pass ad-hoc prompts leave this false so BuildSession can
@@ -1237,11 +1246,13 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		DisallowedTools:      opts.DisallowedTools,
 		DangerouslySkipPerms: pr.DangerouslySkipPermissions,
 		AdditionalDirs:       opts.AdditionalDirs,
+		WritableRoots:        writableRoots,
 		StateDir:             pr.StateDir,
 		AgentsJSON:           agentsJSON,
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
 		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
+		ReadOnlyOutsideRoots: opts.ReadOnlyOutsideRoots,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)
@@ -1255,14 +1266,15 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
-		Model:         bareModel,
-		ContextWindow: contextWindow,
-		WorkDir:       opts.WorkDir,
-		SystemPrompt:  opts.SystemPrompt,
-		InitialPrompt: opts.Prompt,
-		WritableRoots: writableRoots,
-		DSP:           pr.DangerouslySkipPermissions,
-		StateDir:      pr.StateDir,
+		Model:                bareModel,
+		ContextWindow:        contextWindow,
+		WorkDir:              opts.WorkDir,
+		SystemPrompt:         opts.SystemPrompt,
+		InitialPrompt:        opts.Prompt,
+		WritableRoots:        writableRoots,
+		DSP:                  pr.DangerouslySkipPermissions,
+		StateDir:             pr.StateDir,
+		ReadOnlyOutsideRoots: opts.ReadOnlyOutsideRoots,
 	})
 
 	sessOpts = &ports.SessionOpts{

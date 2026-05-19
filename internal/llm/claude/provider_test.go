@@ -16,6 +16,7 @@ package claude
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -144,6 +145,57 @@ func TestBuildInteractiveCommand_PermissionMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildInteractiveCommand_ReadOnlyOutsideRoots pins the Claude-side
+// enforcement for document-only roles: file-mutation tools must land in
+// --disallowedTools (with no duplicates against any caller-supplied list)
+// when the agent opts in via ReadOnlyOutsideRoots.
+func TestBuildInteractiveCommand_ReadOnlyOutsideRoots(t *testing.T) {
+	t.Run("appends mutation tools when flag set", func(t *testing.T) {
+		args := buildInteractiveCommand(llm.CommandBuildOpts{
+			Model:                "opus",
+			ReadOnlyOutsideRoots: true,
+		})
+		got := extractFlagValue(args, "--disallowedTools")
+		for _, want := range []string{"Edit", "MultiEdit", "Write", "NotebookEdit"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("--disallowedTools = %q, missing %q", got, want)
+			}
+		}
+	})
+
+	t.Run("flag not set leaves disallowedTools empty", func(t *testing.T) {
+		args := buildInteractiveCommand(llm.CommandBuildOpts{Model: "opus"})
+		if slices.Contains(args, "--disallowedTools") {
+			t.Errorf("--disallowedTools should not be emitted: %v", args)
+		}
+	})
+
+	t.Run("preserves caller-supplied disallows and dedupes", func(t *testing.T) {
+		args := buildInteractiveCommand(llm.CommandBuildOpts{
+			Model:                "opus",
+			DisallowedTools:      []string{"WebSearch", "Write"},
+			ReadOnlyOutsideRoots: true,
+		})
+		got := extractFlagValue(args, "--disallowedTools")
+		// WebSearch stays, Write isn't repeated.
+		if !strings.Contains(got, "WebSearch") {
+			t.Errorf("--disallowedTools = %q lost WebSearch", got)
+		}
+		if strings.Count(got, "Write") != 1 {
+			t.Errorf("--disallowedTools = %q duplicates Write", got)
+		}
+	})
+}
+
+func extractFlagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 // TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP verifies that

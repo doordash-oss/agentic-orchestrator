@@ -108,6 +108,9 @@ func pickRuntimeParent(stat func(string) (os.FileInfo, error)) string {
 }
 
 func run() {
+	if len(os.Args) > 1 && os.Args[1] == codex.ReadOnlyApplyPatchHookFlag {
+		os.Exit(codex.RunReadOnlyApplyPatchHook(os.Stdin, os.Stdout))
+	}
 	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runTUI))
 }
 

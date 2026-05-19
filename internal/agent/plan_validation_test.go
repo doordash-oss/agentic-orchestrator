@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1882,6 +1883,19 @@ func TestPhasePlanLoop_SkillReadInstruction(t *testing.T) {
 	}
 	if strings.Contains(planOpts.Prompt, expectedSkillPath) {
 		t.Errorf("planning session user prompt contains RoleSpec-owned skill-read instruction %q", expectedSkillPath)
+	}
+
+	// Phase-plan creator is a document-only role: its session opts must
+	// declare the read-only sandbox so codex and Claude both see it.
+	if !planOpts.ReadOnlyOutsideRoots {
+		t.Errorf("planning session ReadOnlyOutsideRoots = false, want true")
+	}
+	wantRoots := []string{phasePlanDir, filepath.Join(phasePlanDir, "attempt-01")}
+	if !slices.Equal(planOpts.WritableRoots, wantRoots) {
+		t.Errorf("planning session WritableRoots = %v, want %v", planOpts.WritableRoots, wantRoots)
+	}
+	if slices.Contains(planOpts.WritableRoots, workDir) {
+		t.Errorf("planning session WritableRoots leaks worktree %q: %v", workDir, planOpts.WritableRoots)
 	}
 }
 

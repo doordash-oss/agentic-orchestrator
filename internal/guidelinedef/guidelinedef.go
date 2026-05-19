@@ -16,6 +16,8 @@ package guidelinedef
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"log"
@@ -166,6 +168,12 @@ func titleCase(s string) string {
 // For each language directory, it writes index.md and any sub-files (category
 // index.md files and leaf topic files). Files whose content already matches on disk
 // are skipped. Writes use atomic temp-file + rename.
+//
+// A content hash of the embedded FS is persisted to a sibling stamp file
+// after a successful reconcile. If the next call finds a matching stamp,
+// the full walk (~291 files) is skipped — the common steady-state path
+// where the binary hasn't been rebuilt. To force a re-reconcile (e.g.
+// after manually editing or deleting an on-disk file), delete the stamp.
 func ReconcileGuidelines(guidelinesDir string) error {
 	defs, err := ParseEmbedded()
 	if err != nil {
@@ -174,6 +182,12 @@ func ReconcileGuidelines(guidelinesDir string) error {
 
 	if err := os.MkdirAll(guidelinesDir, 0o755); err != nil {
 		return fmt.Errorf("creating guidelines dir %s: %w", guidelinesDir, err)
+	}
+
+	embedHash := embeddedGuidelinesHash()
+	stampPath := stampPathFor(guidelinesDir)
+	if existing, err := os.ReadFile(stampPath); err == nil && bytes.Equal(existing, []byte(embedHash)) {
+		return nil
 	}
 
 	for name := range defs {
@@ -199,7 +213,93 @@ func ReconcileGuidelines(guidelinesDir string) error {
 		}
 	}
 
+	if err := writeStamp(stampPath, []byte(embedHash)); err != nil {
+		// Stamp write failure is non-fatal: the next launch will simply
+		// re-run the walk and find everything already in sync.
+		log.Printf("guidelinedef: writing reconcile stamp: %v", err)
+	}
 	return nil
+}
+
+// NeedsReconcile reports whether ReconcileGuidelines would do real work
+// for guidelinesDir — i.e. whether the on-disk stamp is missing or does
+// not match the embedded FS hash. Callers can use this to surface a
+// progress indicator only when the upcoming reconcile is going to be slow.
+func NeedsReconcile(guidelinesDir string) bool {
+	embed := []byte(embeddedGuidelinesHash())
+	existing, err := os.ReadFile(stampPathFor(guidelinesDir))
+	return err != nil || !bytes.Equal(existing, embed)
+}
+
+// stampPathFor returns the sibling stamp path for a target directory.
+// Storing the stamp outside the target dir keeps the directory listing
+// (and tests that count entries) free of bookkeeping artifacts.
+func stampPathFor(targetDir string) string {
+	return filepath.Join(filepath.Dir(targetDir), "."+filepath.Base(targetDir)+"-stamp")
+}
+
+// writeStamp writes data to path atomically via temp file + rename.
+func writeStamp(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating stamp dir %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".stamp.*")
+	if err != nil {
+		return fmt.Errorf("creating stamp temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return fmt.Errorf("writing stamp temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("closing stamp temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return fmt.Errorf("renaming stamp: %w", err)
+	}
+	return nil
+}
+
+var (
+	embeddedGuidelinesHashOnce  sync.Once
+	embeddedGuidelinesHashValue string
+)
+
+// embeddedGuidelinesHash returns a deterministic hex digest of the embedded
+// guidelines FS — every file path and its content contribute to the hash.
+// The result is cached per process; the embedded FS is immutable.
+func embeddedGuidelinesHash() string {
+	embeddedGuidelinesHashOnce.Do(func() {
+		h := sha256.New()
+		var paths []string
+		_ = fs.WalkDir(guidelinesFS.FS, ".", func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			paths = append(paths, p)
+			return nil
+		})
+		sort.Strings(paths)
+		for _, p := range paths {
+			data, err := fs.ReadFile(guidelinesFS.FS, p)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(h, "%s\x00%d\x00", p, len(data))
+			h.Write(data)
+			h.Write([]byte{0})
+		}
+		embeddedGuidelinesHashValue = hex.EncodeToString(h.Sum(nil))
+	})
+	return embeddedGuidelinesHashValue
 }
 
 // reconcileFile writes data to target atomically, skipping if the content matches.

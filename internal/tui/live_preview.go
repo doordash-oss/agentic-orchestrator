@@ -56,6 +56,9 @@ func isLivePreviewEligible(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
+	if f.Status.IsNeedsReview() {
+		return false
+	}
 	return computeFeatureAttention(f, nil).HasCTA()
 }
 

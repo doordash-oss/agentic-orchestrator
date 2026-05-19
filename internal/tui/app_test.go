@@ -898,6 +898,77 @@ func TestDashboardWatchAttachUsesExistingSingleSessionPath(t *testing.T) {
 	}
 }
 
+func TestDashboardNeedsReviewIgnoresArtifactReviewSessionForWatch(t *testing.T) {
+	app, fm := newTestAppModel(t)
+
+	f, err := fm.Create("Review Gate", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	target := feature.PhaseResearch
+	if err := fm.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusInquiryNeedsReview
+		ff.CurrentPhase = feature.PhaseInquire
+		ff.PendingReviewPhase = &target
+		ff.HelpQueue = []feature.HelpRequest{{Question: waitingInputHelpMessage, Pending: true}}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	f, _ = fm.Get(f.ID)
+
+	artifactPath := filepath.Join(t.TempDir(), "questions.md")
+	if err := os.WriteFile(artifactPath, []byte("# Questions\n"), 0o644); err != nil {
+		t.Fatalf("write artifact: %v", err)
+	}
+	app.artifactReview = NewArtifactReviewModel(artifactPath, f.ID, "gate", target, 120, 30, app.sessionManager, t.TempDir(), nil)
+	app.artifactReview.detached = true
+
+	reviewSess := session.NewSession(f.ID+"-artifact-review", f.ID, target)
+	reviewSess.SetStatus(session.SessionWaitingHelp)
+	reviewSess.SetLastControlRequest(&llm.ControlRequestMessage{
+		RequestID: "ask-review",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "AskUserQuestion",
+			Input:    json.RawMessage(`{"questions":[{"question":"Review helper question?"}]}`),
+		},
+	})
+	app.sessionManager.RegisterTestSession(reviewSess)
+
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.cursor = 1
+	app.dashboard.syncPreview()
+	app.dashboard.focusPanel = 1
+
+	if sess := app.livePreviewSessionForFeature(f); sess != nil {
+		t.Fatalf("livePreviewSessionForFeature() = %q, want nil for artifact-review helper", sess.ID())
+	}
+	if tabs := app.buildRepoTabs(f); len(tabs) != 0 {
+		t.Fatalf("buildRepoTabs() included artifact-review helper: %+v", tabs)
+	}
+
+	view := stripANSI(app.View().Content)
+	if strings.Contains(view, "Live Preview") {
+		t.Fatalf("needs-review feature should render overview, not live preview:\n%s", view)
+	}
+	if !strings.Contains(view, "[a] Review") || strings.Contains(view, "[a] Answer") {
+		t.Fatalf("needs-review footer should route [a] to Review, got:\n%s", view)
+	}
+	if strings.Contains(view, waitingInputHelpMessage) {
+		t.Fatalf("needs-review overview should suppress stale generic help, got:\n%s", view)
+	}
+
+	result, _ := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	updated := result.(AppModel)
+	if updated.currentView != ViewArtifactReview {
+		t.Fatalf("currentView = %v, want ViewArtifactReview", updated.currentView)
+	}
+	if updated.currentView == ViewAttach {
+		t.Fatalf("artifact-review helper must not open generic Watch view")
+	}
+}
+
 func TestDashboardWatchAttachPreservesMultiRepoTabs(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	fm.Config.Repos["api"] = config.RepoConfig{Path: "/tmp/api"}

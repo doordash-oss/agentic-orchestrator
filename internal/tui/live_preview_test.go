@@ -78,7 +78,7 @@ func TestLivePreviewEligible(t *testing.T) {
 		{
 			name: "needs review",
 			f:    &feature.Feature{Status: feature.StatusPlanNeedsReview},
-			want: true,
+			want: false,
 		},
 		{
 			name: "need user input",

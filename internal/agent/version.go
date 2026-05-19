@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -32,36 +33,51 @@ type VersionResult struct {
 
 // CheckProviderVersions calls VersionInfo() on each provider and validates
 // the returned version against the provider's own MinVersion(). Returns one
-// result per provider.
+// result per provider, in the same order as the input.
+//
+// Providers are queried concurrently because VersionInfo() forks an external
+// CLI (e.g. `claude --version`) — running them serially was a measurable
+// chunk of startup latency.
 func CheckProviderVersions(providers []llm.LLMProvider) []VersionResult {
-	var results []VersionResult
-	for _, p := range providers {
-		r := VersionResult{Provider: p.Name()}
-		version, err := p.VersionInfo()
-		if err != nil {
-			r.Err = err
-			results = append(results, r)
-			continue
-		}
-		r.Version = version
-		major, minor, patch, parseErr := parseCLIVersion(version)
-		if parseErr != nil {
-			r.Warning = fmt.Sprintf("could not parse version %q from %s CLI", version, p.Name())
-			results = append(results, r)
-			continue
-		}
-		minVer := p.MinVersion()
-		if !meetsMinVersion(major, minor, patch, minVer) {
-			r.Warning = fmt.Sprintf(
-				"%s CLI version %d.%d.%d is below minimum %d.%d.%d; upgrade with: %s",
-				p.Name(), major, minor, patch,
-				minVer[0], minVer[1], minVer[2],
-				p.InstallHint(),
-			)
-		}
-		results = append(results, r)
+	if len(providers) == 0 {
+		return nil
 	}
+	results := make([]VersionResult, len(providers))
+	var wg sync.WaitGroup
+	wg.Add(len(providers))
+	for i, p := range providers {
+		go func(i int, p llm.LLMProvider) {
+			defer wg.Done()
+			results[i] = checkOneProviderVersion(p)
+		}(i, p)
+	}
+	wg.Wait()
 	return results
+}
+
+func checkOneProviderVersion(p llm.LLMProvider) VersionResult {
+	r := VersionResult{Provider: p.Name()}
+	version, err := p.VersionInfo()
+	if err != nil {
+		r.Err = err
+		return r
+	}
+	r.Version = version
+	major, minor, patch, parseErr := parseCLIVersion(version)
+	if parseErr != nil {
+		r.Warning = fmt.Sprintf("could not parse version %q from %s CLI", version, p.Name())
+		return r
+	}
+	minVer := p.MinVersion()
+	if !meetsMinVersion(major, minor, patch, minVer) {
+		r.Warning = fmt.Sprintf(
+			"%s CLI version %d.%d.%d is below minimum %d.%d.%d; upgrade with: %s",
+			p.Name(), major, minor, patch,
+			minVer[0], minVer[1], minVer[2],
+			p.InstallHint(),
+		)
+	}
+	return r
 }
 
 // versionRe matches version strings like "1.2.3" or "claude 1.2.3".

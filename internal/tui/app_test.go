@@ -4601,6 +4601,62 @@ func TestHandleSDKEvent_ArtifactPhaseResultSuccessRoutesThroughProtocolValidatio
 	}
 }
 
+func TestHandleSessionDone_StaleRegistryOwnedCompletionDoesNotRetryReplacement(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	app.eventCh = make(chan interface{}, 1)
+	app.lastNotifyTime = make(map[notifyKey]time.Time)
+	f := createFeatureInPhase(t, fm, feature.PhaseInquire)
+	writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, feature.PhaseInquire, "inquiry.md")
+
+	sm := session.NewManager(nil)
+	sessionID := f.ID + "-inquire"
+	oldSess := session.NewSession(sessionID, f.ID, feature.PhaseInquire)
+	appendAssistantQuestion(t, oldSess)
+	oldStartedAt := oldSess.StartedAt()
+	if oldStartedAt.IsZero() {
+		t.Fatal("old session StartedAt is zero")
+	}
+	sm.RegisterTestSession(oldSess)
+	app.sessionManager = sm
+
+	_, _ = app.handleSDKEvent(SDKSessionEventMsg{
+		Event: session.SDKEventMsg{
+			SessionID: sessionID,
+			FeatureID: f.ID,
+			Phase:     feature.PhaseInquire,
+			StartedAt: oldStartedAt,
+			Message: llm.SDKMessage{
+				Type:    "result",
+				Subtype: "success",
+				Result:  &llm.ResultMessage{Type: "result", Subtype: "success"},
+			},
+		},
+	})
+
+	retrySess := session.NewSession(sessionID, f.ID, feature.PhaseInquire)
+	for retrySess.StartedAt().Equal(oldStartedAt) {
+		time.Sleep(time.Nanosecond)
+		retrySess = session.NewSession(sessionID, f.ID, feature.PhaseInquire)
+	}
+	sm.RegisterTestSession(retrySess)
+
+	_, _ = app.handleSessionDone(SessionDoneTUIMsg{
+		Done: session.SessionDoneMsg{
+			SessionID: sessionID,
+			FeatureID: f.ID,
+			Phase:     feature.PhaseInquire,
+			StartedAt: oldStartedAt,
+			Status:    session.SessionDone,
+		},
+	})
+
+	updated, err := fm.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get feature: %v", err)
+	}
+	assertTUIArtifactPhaseRetry(t, fm, updated, feature.PhaseInquire, agent.PhaseCompleteFile)
+}
+
 func TestHandleSessionDone_ArtifactPhaseSuccessRoutesThroughProtocolValidation(t *testing.T) {
 	for _, tc := range tuiArtifactPhaseCases() {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2238,6 +2238,9 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 	if isChatSession(evt.SessionID) || isArtifactReviewSession(evt.SessionID) {
 		return m, m.listenForEvents()
 	}
+	if staleSessionEvent(m.sessionManager.GetSession(evt.SessionID), evt.StartedAt) {
+		return m, m.listenForEvents()
+	}
 
 	var notifyCmd tea.Cmd
 
@@ -2590,6 +2593,9 @@ func (m AppModel) handleSessionDone(msg SessionDoneTUIMsg) (tea.Model, tea.Cmd) 
 	fid := eventFID(done.SessionID, done.FeatureID)
 	sess := m.sessionManager.GetSession(done.SessionID)
 	phase := eventPhase(done.SessionID, done.FeatureID, done.Phase)
+	if staleSessionEvent(sess, done.StartedAt) {
+		return m, m.listenForEvents()
+	}
 
 	// Derive success primarily from the SDK result status (StatusCh),
 	// not the process exit code. A clean exit (SessionDone) does NOT
@@ -2725,6 +2731,14 @@ func (m AppModel) handleSessionDone(msg SessionDoneTUIMsg) (tea.Model, tea.Cmd) 
 	)
 
 	return m, cmd
+}
+
+func staleSessionEvent(sess session.SessionView, eventStartedAt time.Time) bool {
+	if sess == nil || eventStartedAt.IsZero() {
+		return false
+	}
+	currentStartedAt := sess.StartedAt()
+	return !currentStartedAt.IsZero() && !currentStartedAt.Equal(eventStartedAt)
 }
 
 func (m AppModel) completeRegistryOwnedSingleShotPhase(

@@ -40,6 +40,7 @@ type SDKEventMsg struct {
 	SessionID string
 	FeatureID string
 	Phase     feature.Phase
+	StartedAt time.Time
 	Message   llm.SDKMessage
 }
 
@@ -51,6 +52,7 @@ type SessionDoneMsg struct {
 	SessionID string
 	FeatureID string
 	Phase     feature.Phase
+	StartedAt time.Time
 	Status    SessionStatus
 }
 
@@ -216,6 +218,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 				SessionID: id,
 				FeatureID: featureID,
 				Phase:     phase,
+				StartedAt: s.StartedAt(),
 				Status:    s.Status(),
 			}
 			// SessionDoneMsg is critical — use blocking send since it's a
@@ -289,6 +292,7 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 			SessionID: id,
 			FeatureID: featureID,
 			Phase:     phase,
+			StartedAt: s.StartedAt(),
 			Message:   msg,
 		}
 		select {

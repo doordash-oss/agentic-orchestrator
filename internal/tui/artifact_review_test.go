@@ -155,7 +155,7 @@ func TestArtifactReview_GateMenuHasProceedAndDetach(t *testing.T) {
 	}
 }
 
-func TestArtifactReview_MarkdownReviewsOpenRenderedPreviewByDefault(t *testing.T) {
+func TestArtifactReview_MarkdownReviewsOpenHybridDocumentByDefault(t *testing.T) {
 	previous := renderMarkdown
 	SetMarkdownRenderer(func(text string, width int) string {
 		return fmt.Sprintf("renderer-marker width=%d\n%s", width, text)
@@ -174,38 +174,31 @@ func TestArtifactReview_MarkdownReviewsOpenRenderedPreviewByDefault(t *testing.T
 			if !strings.Contains(view, "renderer-marker") {
 				t.Fatalf("ArtifactReviewModel.View() missing renderer marker in %s mode:\n%s", mode, view)
 			}
-			if !strings.Contains(view, "Rendered preview") {
-				t.Errorf("ArtifactReviewModel.View() missing preview title in %s mode", mode)
+			if !strings.Contains(view, "Rendered source") {
+				t.Errorf("ArtifactReviewModel.View() missing hybrid title in %s mode", mode)
 			}
-			if !strings.Contains(view, "Ctrl+P: raw") {
-				t.Errorf("ArtifactReviewModel.View() missing preview toggle hint in %s mode", mode)
+			if strings.Contains(view, "Ctrl+P") || strings.Contains(view, "Raw") || strings.Contains(view, "Preview") {
+				t.Errorf("ArtifactReviewModel.View() contains obsolete document-mode chrome in %s mode:\n%s", mode, view)
 			}
 		})
 	}
 }
 
-func TestArtifactReview_CtrlPTogglesPreviewAndRawEditor(t *testing.T) {
+func TestArtifactReview_HybridDocumentEditsWithoutCtrlPToggle(t *testing.T) {
 	previous := renderMarkdown
 	SetMarkdownRenderer(func(text string, width int) string {
-		return "preview-only-marker\n" + text
+		return "rendered-row\n" + text
 	})
 	t.Cleanup(func() { renderMarkdown = previous })
 
 	m, _ := newTestArtifactReview(t, "# Plan\nbody", "plan")
 	if m.documentMode != artifactDocumentPreview {
-		t.Fatalf("documentMode = %v, want preview", m.documentMode)
+		t.Fatalf("documentMode = %v, want rendered-source document", m.documentMode)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if m.documentMode != artifactDocumentRaw {
-		t.Fatalf("documentMode after first Ctrl+P = %v, want raw", m.documentMode)
-	}
-	rawView := m.View()
-	if !strings.Contains(rawView, "Source") {
-		t.Errorf("raw view title should identify source mode")
-	}
-	if strings.Contains(rawView, "preview-only-marker") {
-		t.Errorf("raw view should render the editor, not markdown preview")
+	if m.documentMode != artifactDocumentPreview {
+		t.Fatalf("documentMode after Ctrl+P = %v, want unchanged rendered-source document", m.documentMode)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
@@ -214,32 +207,80 @@ func TestArtifactReview_CtrlPTogglesPreviewAndRawEditor(t *testing.T) {
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
 	if !strings.Contains(m.editor.Content(), "x# Plan") {
-		t.Fatalf("raw editor did not handle insert key; content = %q", m.editor.Content())
+		t.Fatalf("hybrid editor did not handle insert key; content = %q", m.editor.Content())
 	}
 
 	before := m.editor.Content()
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if m.documentMode != artifactDocumentPreview {
-		t.Fatalf("documentMode after Ctrl+P in insert mode = %v, want preview", m.documentMode)
+		t.Fatalf("documentMode after Ctrl+P in insert mode = %v, want unchanged rendered-source document", m.documentMode)
 	}
 	if m.editor.Content() != before {
-		t.Fatalf("Ctrl+P inserted text in raw insert mode: got %q, want %q", m.editor.Content(), before)
+		t.Fatalf("Ctrl+P inserted text in hybrid insert mode: got %q, want %q", m.editor.Content(), before)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if m.documentMode != artifactDocumentRaw {
-		t.Fatalf("documentMode after toggling back = %v, want raw", m.documentMode)
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "rendered-row") {
+		t.Fatalf("hybrid view should keep surrounding markdown rendered:\n%s", view)
 	}
-	if m.editor.Mode() != InsertMode {
-		t.Fatalf("editor mode after raw toggle = %v, want insert", m.editor.Mode())
+	if strings.Contains(view, "Ctrl+P") {
+		t.Fatalf("hybrid view should not expose Ctrl+P toggle:\n%s", view)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: '!', Text: "!"})
 	if !strings.Contains(m.editor.Content(), "x!# Plan") {
-		t.Fatalf("raw editor did not resume insert handling; content = %q", m.editor.Content())
+		t.Fatalf("hybrid editor did not resume insert handling; content = %q", m.editor.Content())
 	}
 }
 
-func TestArtifactReview_RenderedPreviewUsesUnsavedEditorBuffer(t *testing.T) {
+func TestArtifactReview_HybridActiveRawRowFollowsCursor(t *testing.T) {
+	previous := renderMarkdown
+	SetMarkdownRenderer(func(text string, width int) string {
+		return "rendered-row\n" + text
+	})
+	t.Cleanup(func() { renderMarkdown = previous })
+
+	m, _ := newTestArtifactReview(t, "# Plan\n- item one\nplain paragraph", "plan")
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "1 # Plan") {
+		t.Fatalf("initial hybrid view should show row 1 as raw source:\n%s", view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	view = stripANSI(m.View())
+	for _, want := range []string{"rendered-row", "2 - item one"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("hybrid view after j missing %q:\n%s", want, view)
+		}
+	}
+	if m.editor.row != 1 {
+		t.Fatalf("editor row after j = %d, want 1", m.editor.row)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	view = stripANSI(m.View())
+	if !strings.Contains(view, "3 plain paragraph") {
+		t.Fatalf("hybrid view after down should show row 3 as raw source:\n%s", view)
+	}
+	if m.editor.row != 2 {
+		t.Fatalf("editor row after down = %d, want 2", m.editor.row)
+	}
+}
+
+func TestArtifactReview_HybridActiveRawRowIncludesWrappedContinuations(t *testing.T) {
+	longLine := strings.Repeat("wrapped", 12)
+	m, _ := newTestArtifactReview(t, longLine+"\nrendered after", "plan")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 32, Height: 18})
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "1 wrapped") {
+		t.Fatalf("hybrid view should show active row line number:\n%s", view)
+	}
+	if count := strings.Count(view, "wrapped"); count < 2 {
+		t.Fatalf("hybrid view should show wrapped active-row continuations, got %d wrapped segments:\n%s", count, view)
+	}
+}
+
+func TestArtifactReview_HybridDocumentUsesUnsavedEditorBuffer(t *testing.T) {
 	previous := renderMarkdown
 	SetMarkdownRenderer(func(text string, width int) string {
 		return "rendered-buffer\n" + text
@@ -247,7 +288,6 @@ func TestArtifactReview_RenderedPreviewUsesUnsavedEditorBuffer(t *testing.T) {
 	t.Cleanup(func() { renderMarkdown = previous })
 
 	m, f := newTestArtifactReview(t, "# Plan\noriginal", "plan")
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: '!', Text: "!"})
 
@@ -259,29 +299,28 @@ func TestArtifactReview_RenderedPreviewUsesUnsavedEditorBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != "# Plan\noriginal" {
-		t.Fatalf("raw edit should not save before a save point; disk = %q", string(data))
+		t.Fatalf("hybrid edit should not save before a save point; disk = %q", string(data))
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	view := stripANSI(m.View())
 	for _, want := range []string{"rendered-buffer", "!# Plan"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("preview should render unsaved editor buffer with %q, got:\n%s", want, view)
+			t.Fatalf("hybrid document should render unsaved editor buffer with %q, got:\n%s", want, view)
 		}
 	}
 	if !m.editor.Dirty() {
-		t.Fatal("toggling to preview should preserve dirty state")
+		t.Fatal("hybrid render should preserve dirty state")
 	}
 	data, err = os.ReadFile(f)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "# Plan\noriginal" {
-		t.Fatalf("preview toggle should not save; disk = %q", string(data))
+		t.Fatalf("hybrid render should not save; disk = %q", string(data))
 	}
 }
 
-func TestArtifactReview_MalformedPreviewFallbackKeepsPlainText(t *testing.T) {
+func TestArtifactReview_MalformedHybridRenderFallbackKeepsPlainText(t *testing.T) {
 	previous := renderMarkdown
 	SetMarkdownRenderer(func(text string, width int) string {
 		return ""
@@ -292,9 +331,9 @@ func TestArtifactReview_MalformedPreviewFallbackKeepsPlainText(t *testing.T) {
 	m, f := newTestArtifactReview(t, content, "plan")
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Rendered preview", "Broken artifact", "func main", "plain fallback survives", "Chat"} {
+	for _, want := range []string{"Rendered source", "Broken artifact", "func main", "plain fallback survives", "Chat"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("fallback preview missing %q:\n%s", want, view)
+			t.Fatalf("fallback hybrid view missing %q:\n%s", want, view)
 		}
 	}
 	if out := os.Getenv("AGENTIC_ARTIFACT_REVIEW_MALFORMED_SNAPSHOT_PATH"); out != "" {
@@ -303,23 +342,22 @@ func TestArtifactReview_MalformedPreviewFallbackKeepsPlainText(t *testing.T) {
 		writeArtifactReviewSnapshot(t, out, stripANSI(narrow.View()))
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if m.documentMode != artifactDocumentRaw {
-		t.Fatalf("documentMode after Ctrl+P = %v, want raw", m.documentMode)
+	if strings.Contains(view, "Ctrl+P") || strings.Contains(view, "Preview") || strings.Contains(view, "Raw") {
+		t.Fatalf("fallback hybrid view should not expose obsolete preview/raw controls:\n%s", view)
 	}
 	if m.editor.Content() != content {
-		t.Fatalf("raw source changed after fallback preview: got %q, want %q", m.editor.Content(), content)
+		t.Fatalf("source changed after fallback hybrid render: got %q, want %q", m.editor.Content(), content)
 	}
 	data, err := os.ReadFile(f)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != content {
-		t.Fatalf("artifact file changed after fallback preview: got %q, want %q", string(data), content)
+		t.Fatalf("artifact file changed after fallback hybrid render: got %q, want %q", string(data), content)
 	}
 }
 
-func TestArtifactReview_RendererPanicFallsBackToPlainText(t *testing.T) {
+func TestArtifactReview_HybridRendererPanicFallsBackToPlainText(t *testing.T) {
 	previous := renderMarkdown
 	SetMarkdownRenderer(func(text string, width int) string {
 		panic("renderer failed")
@@ -329,25 +367,25 @@ func TestArtifactReview_RendererPanicFallsBackToPlainText(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Panicking renderer\n\nbody remains reviewable", "plan")
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Rendered preview", "Panicking renderer", "body remains reviewable"} {
+	for _, want := range []string{"Rendered source", "Panicking renderer", "body remains reviewable"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("panic fallback preview missing %q:\n%s", want, view)
+			t.Fatalf("panic fallback hybrid view missing %q:\n%s", want, view)
 		}
 	}
 }
 
-func TestArtifactReview_EmptyPreviewStaysUsable(t *testing.T) {
+func TestArtifactReview_EmptyHybridDocumentStaysUsable(t *testing.T) {
 	m, f := newTestArtifactReview(t, "", "plan")
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Rendered preview", "Chat", "Ctrl+P: raw", "Tab to chat"} {
+	for _, want := range []string{"Rendered source", "Chat", "Tab to chat"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("empty preview missing %q:\n%s", want, view)
+			t.Fatalf("empty hybrid view missing %q:\n%s", want, view)
 		}
 	}
-	for _, unwanted := range []string{"No artifact content", "Empty artifact"} {
+	for _, unwanted := range []string{"No artifact content", "Empty artifact", "Ctrl+P", "Preview", "Raw"} {
 		if strings.Contains(view, unwanted) {
-			t.Fatalf("empty preview should not add artifact placeholder %q:\n%s", unwanted, view)
+			t.Fatalf("empty hybrid view should not include %q:\n%s", unwanted, view)
 		}
 	}
 	if out := os.Getenv("AGENTIC_ARTIFACT_REVIEW_EMPTY_SNAPSHOT_PATH"); out != "" {
@@ -359,11 +397,11 @@ func TestArtifactReview_EmptyPreviewStaysUsable(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 28, Height: 16})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if m.documentMode != artifactDocumentRaw {
-		t.Fatalf("documentMode after Ctrl+P = %v, want raw", m.documentMode)
+	if m.documentMode != artifactDocumentPreview {
+		t.Fatalf("documentMode after Ctrl+P = %v, want unchanged rendered-source document", m.documentMode)
 	}
 	if m.editor.Content() != "" {
-		t.Fatalf("raw empty content = %q, want empty", m.editor.Content())
+		t.Fatalf("empty content = %q, want empty", m.editor.Content())
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -383,35 +421,27 @@ func TestArtifactReview_EmptyPreviewStaysUsable(t *testing.T) {
 	}
 }
 
-func TestArtifactReview_DirtyStateVisibleInPreviewAndRawFooter(t *testing.T) {
+func TestArtifactReview_DirtyStateVisibleInHybridTitleAndFooter(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Plan", "plan")
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: '*', Text: "*"})
 
-	rawView := stripANSI(m.View())
-	for _, want := range []string{"[Source INSERT] [+]", "Raw", "Unsaved"} {
-		if !strings.Contains(rawView, want) {
-			t.Fatalf("raw dirty view missing %q:\n%s", want, rawView)
+	view := stripANSI(m.View())
+	for _, want := range []string{"[Rendered source INSERT] [+]", "Document", "Unsaved"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("hybrid dirty view missing %q:\n%s", want, view)
 		}
 	}
-
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	previewView := stripANSI(m.View())
-	for _, want := range []string{"[Rendered preview] [+]", "Preview", "Unsaved"} {
-		if !strings.Contains(previewView, want) {
-			t.Fatalf("preview dirty view missing %q:\n%s", want, previewView)
-		}
+	if strings.Contains(view, "Ctrl+P") || strings.Contains(view, "Preview") || strings.Contains(view, "Raw") {
+		t.Fatalf("hybrid dirty view should not expose obsolete document-mode chrome:\n%s", view)
 	}
 }
 
-func TestArtifactReview_SavePointsPersistPreviewBuffer(t *testing.T) {
-	t.Run("focus_chat_from_preview", func(t *testing.T) {
+func TestArtifactReview_SavePointsPersistHybridBuffer(t *testing.T) {
+	t.Run("focus_chat_from_hybrid_document", func(t *testing.T) {
 		m, f := newTestArtifactReview(t, "original", "plan")
-		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'X', Text: "X"})
-		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
 		if !m.editor.Dirty() {
 			t.Fatal("editor should be dirty before save point")
@@ -430,12 +460,10 @@ func TestArtifactReview_SavePointsPersistPreviewBuffer(t *testing.T) {
 		}
 	})
 
-	t.Run("action_menu_from_preview", func(t *testing.T) {
+	t.Run("action_menu_from_hybrid_document", func(t *testing.T) {
 		m, f := newTestArtifactReview(t, "original", "plan")
-		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'Y', Text: "Y"})
-		m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 
 		data, err := os.ReadFile(f)
@@ -451,7 +479,7 @@ func TestArtifactReview_SavePointsPersistPreviewBuffer(t *testing.T) {
 	})
 }
 
-func TestArtifactReview_PreviewScrollResizeAndChrome(t *testing.T) {
+func TestArtifactReview_HybridNavigationResizeAndChrome(t *testing.T) {
 	var lines []string
 	for i := 0; i < 80; i++ {
 		lines = append(lines, fmt.Sprintf("line %02d", i))
@@ -459,29 +487,55 @@ func TestArtifactReview_PreviewScrollResizeAndChrome(t *testing.T) {
 	m, _ := newTestArtifactReview(t, strings.Join(lines, "\n"), "plan")
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
-	offset := m.previewViewport.YOffset()
-	if offset == 0 {
-		t.Fatalf("preview viewport YOffset() = 0, want scrolled after Ctrl+F")
+	row := m.editor.row
+	if row == 0 {
+		t.Fatalf("editor row = 0, want active row to move after Ctrl+F")
 	}
 
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if m.previewViewport.YOffset() != offset {
-		t.Fatalf("preview viewport YOffset() after resize = %d, want %d", m.previewViewport.YOffset(), offset)
+	if m.editor.row != row {
+		t.Fatalf("editor row after resize = %d, want %d", m.editor.row, row)
 	}
 
-	previewView := m.View()
-	for _, want := range []string{"Rendered preview", "Ctrl+P: raw", "Ctrl+U/F: scroll", "Chat"} {
-		if !strings.Contains(previewView, want) {
-			t.Errorf("preview view missing %q", want)
+	view := stripANSI(m.View())
+	for _, want := range []string{"Rendered source", "Ctrl+U/F: move", "Chat", fmt.Sprintf("line %02d", row)} {
+		if !strings.Contains(view, want) {
+			t.Errorf("hybrid view missing %q", want)
 		}
 	}
+	if strings.Contains(view, "Ctrl+P") || strings.Contains(view, "Preview") || strings.Contains(view, "Raw") {
+		t.Errorf("hybrid view should not expose obsolete document-mode chrome:\n%s", view)
+	}
+}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	rawView := m.View()
-	for _, want := range []string{"Source", "Ctrl+P: preview", "Chat"} {
-		if !strings.Contains(rawView, want) {
-			t.Errorf("raw view missing %q", want)
-		}
+func TestArtifactReview_HybridActiveRowStaysVisibleWhenChatFocused(t *testing.T) {
+	var lines []string
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf("line %02d", i))
+	}
+	m, _ := newTestArtifactReview(t, strings.Join(lines, "\n"), "plan")
+
+	for range 3 {
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	}
+	row := m.editor.row
+	if row <= m.editor.height {
+		t.Fatalf("active row = %d, want beyond the first viewport height %d before focusing chat", row, m.editor.height)
+	}
+	want := fmt.Sprintf("line %02d", row)
+	if view := stripANSI(m.View()); !strings.Contains(view, want) {
+		t.Fatalf("hybrid view before chat focus missing active row %q:\n%s", want, view)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.chatFocused {
+		t.Fatal("chat should be focused after Tab")
+	}
+	if m.editor.row != row {
+		t.Fatalf("editor row after focusing chat = %d, want %d", m.editor.row, row)
+	}
+	if view := stripANSI(m.View()); !strings.Contains(view, want) {
+		t.Fatalf("hybrid view after chat focus missing active row %q:\n%s", want, view)
 	}
 }
 
@@ -492,10 +546,13 @@ func TestArtifactReview_NarrowLayoutKeepsChromeWithinWidth(t *testing.T) {
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 28, Height: 18})
 
 	assertViewLinesWithinWidth(t, m.View(), 28)
-	for _, want := range []string{"Preview", "Ctrl+P", "Chat"} {
+	for _, want := range []string{"Document", "Chat"} {
 		if !strings.Contains(stripANSI(m.View()), want) {
-			t.Fatalf("narrow preview missing %q:\n%s", want, stripANSI(m.View()))
+			t.Fatalf("narrow hybrid view missing %q:\n%s", want, stripANSI(m.View()))
 		}
+	}
+	if view := stripANSI(m.View()); strings.Contains(view, "Ctrl+P") || strings.Contains(view, "Preview") || strings.Contains(view, "Raw") {
+		t.Fatalf("narrow hybrid view should not expose obsolete document-mode chrome:\n%s", view)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
@@ -505,25 +562,25 @@ func TestArtifactReview_NarrowLayoutKeepsChromeWithinWidth(t *testing.T) {
 	assertViewLinesWithinWidth(t, m.View(), 28)
 }
 
-func TestArtifactReview_WideLayoutPreservesPreviewState(t *testing.T) {
+func TestArtifactReview_WideLayoutPreservesHybridActiveRow(t *testing.T) {
 	var lines []string
 	for i := 0; i < 80; i++ {
-		lines = append(lines, fmt.Sprintf("wide line %02d with enough words to wrap in preview", i))
+		lines = append(lines, fmt.Sprintf("wide line %02d with enough words to wrap in rendered source", i))
 	}
 	m, _ := newTestArtifactReview(t, strings.Join(lines, "\n"), "plan")
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 34})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
-	offset := m.previewViewport.YOffset()
-	if offset == 0 {
-		t.Fatal("preview should scroll before wide resize")
+	row := m.editor.row
+	if row == 0 {
+		t.Fatal("active row should move before wide resize")
 	}
 
 	m, _ = m.Update(tea.WindowSizeMsg{Width: 180, Height: 36})
 	if m.documentMode != artifactDocumentPreview {
-		t.Fatalf("documentMode after wide resize = %v, want preview", m.documentMode)
+		t.Fatalf("documentMode after wide resize = %v, want rendered-source document", m.documentMode)
 	}
-	if m.previewViewport.YOffset() != offset {
-		t.Fatalf("preview YOffset after wide resize = %d, want %d", m.previewViewport.YOffset(), offset)
+	if m.editor.row != row {
+		t.Fatalf("active row after wide resize = %d, want %d", m.editor.row, row)
 	}
 	assertViewLinesWithinWidth(t, m.View(), 180)
 }
@@ -552,7 +609,7 @@ func TestArtifactReview_NeedUserInputExcludesPreviewControls(t *testing.T) {
 	m := newTestNeedUserInputReview(t, "feat-preview-exclusion", gatePath)
 
 	view := m.View()
-	for _, unwanted := range []string{"Rendered preview", "Source", "Ctrl+P", "Unsaved"} {
+	for _, unwanted := range []string{"Rendered source", "Document", "Source", "Ctrl+P", "Unsaved"} {
 		if strings.Contains(view, unwanted) {
 			t.Errorf("need-user-input view should not include %q:\n%s", unwanted, view)
 		}
@@ -679,7 +736,6 @@ func TestArtifactReview_AutoSaveOnFocusSwitch(t *testing.T) {
 	m, f := newTestArtifactReview(t, "original", "plan")
 
 	// Enter insert mode and type something
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'X', Text: "X"})
 
@@ -795,18 +851,16 @@ func TestArtifactReview_RejectAgentEdit(t *testing.T) {
 	}
 }
 
-func TestArtifactReview_AgentEditSavesDirtyBufferAndRefreshesPreview(t *testing.T) {
+func TestArtifactReview_AgentEditSavesDirtyBufferAndRefreshesHybridDocument(t *testing.T) {
 	previous := renderMarkdown
 	SetMarkdownRenderer(func(text string, width int) string {
-		return "preview-after-agent\n" + text
+		return "rendered-after-agent\n" + text
 	})
 	t.Cleanup(func() { renderMarkdown = previous })
 
 	m, f := newTestArtifactReview(t, "# Plan\noriginal", "plan")
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'U', Text: "U"})
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 
 	m, _ = m.Update(artifactReviewMsgsMsg{messages: []llm.SDKMessage{
 		assistantMessage(llm.ContentBlock{
@@ -838,9 +892,9 @@ func TestArtifactReview_AgentEditSavesDirtyBufferAndRefreshesPreview(t *testing.
 	}})
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"preview-after-agent", "# Agent Plan", "agent edits pending", "Ctrl+Y: accept edits", "Ctrl+Z: reject edits"} {
+	for _, want := range []string{"rendered-after-agent", "# Agent Plan", "agent edits pending", "Ctrl+Y: accept edits", "Ctrl+Z: reject edits"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("preview after agent edit missing %q:\n%s", want, view)
+			t.Fatalf("hybrid document after agent edit missing %q:\n%s", want, view)
 		}
 	}
 	if m.editor.Dirty() {
@@ -848,7 +902,7 @@ func TestArtifactReview_AgentEditSavesDirtyBufferAndRefreshesPreview(t *testing.
 	}
 }
 
-func TestArtifactReview_AcceptAndRejectAgentEditFromPreview(t *testing.T) {
+func TestArtifactReview_AcceptAndRejectAgentEditFromHybridDocument(t *testing.T) {
 	t.Run("accept", func(t *testing.T) {
 		m, _ := newTestArtifactReview(t, "line1\nline2\nline3", "plan")
 		m.preEditContent = "line1\nline2\nline3"
@@ -858,13 +912,13 @@ func TestArtifactReview_AcceptAndRejectAgentEditFromPreview(t *testing.T) {
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 
 		if len(m.editor.highlightedLines) != 0 {
-			t.Fatal("accept from preview should clear highlights")
+			t.Fatal("accept from hybrid document should clear highlights")
 		}
 		if m.preEditContent != "" {
-			t.Fatal("accept from preview should clear preEditContent")
+			t.Fatal("accept from hybrid document should clear preEditContent")
 		}
 		if m.editor.Content() != "line1\nMODIFIED\nline3" {
-			t.Fatalf("accept from preview changed content to %q", m.editor.Content())
+			t.Fatalf("accept from hybrid document changed content to %q", m.editor.Content())
 		}
 	})
 
@@ -877,10 +931,10 @@ func TestArtifactReview_AcceptAndRejectAgentEditFromPreview(t *testing.T) {
 		m, _ = m.Update(tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
 
 		if len(m.editor.highlightedLines) != 0 {
-			t.Fatal("reject from preview should clear highlights")
+			t.Fatal("reject from hybrid document should clear highlights")
 		}
 		if m.editor.Content() != "line1\nline2\nline3" {
-			t.Fatalf("reject from preview restored %q, want pre-edit content", m.editor.Content())
+			t.Fatalf("reject from hybrid document restored %q, want pre-edit content", m.editor.Content())
 		}
 		data, err := os.ReadFile(f)
 		if err != nil {
@@ -892,16 +946,19 @@ func TestArtifactReview_AcceptAndRejectAgentEditFromPreview(t *testing.T) {
 	})
 }
 
-func TestArtifactReview_PreviewDirtyPendingSnapshot(t *testing.T) {
+func TestArtifactReview_HybridDirtyPendingSnapshot(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Plan\nupdated", "plan")
 	m.preEditContent = "# Plan\noriginal"
 	m.editor.SetContent("# Plan\nagent update\nlocal draft", true)
 
 	view := stripANSI(m.View())
-	for _, want := range []string{"Rendered preview", "[+]", "agent edits pending", "Preview", "Unsaved", "Ctrl+Y: accept edits", "Ctrl+Z: reject edits"} {
+	for _, want := range []string{"Rendered source", "[+]", "agent edits pending", "Document", "Unsaved", "Ctrl+Y: accept edits", "Ctrl+Z: reject edits"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("preview dirty pending view missing %q:\n%s", want, view)
+			t.Fatalf("hybrid dirty pending view missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Ctrl+P") || strings.Contains(view, "Preview") || strings.Contains(view, "Raw") {
+		t.Fatalf("hybrid dirty pending view should not expose obsolete document-mode chrome:\n%s", view)
 	}
 
 	if out := os.Getenv("AGENTIC_ARTIFACT_REVIEW_SNAPSHOT_PATH"); out != "" {
@@ -945,7 +1002,6 @@ func TestArtifactReview_EscInInsertModeDoesNotDetach(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Plan", "plan")
 
 	// Enter insert mode
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	if m.editor.Mode() != InsertMode {
 		t.Fatal("should be in insert mode")

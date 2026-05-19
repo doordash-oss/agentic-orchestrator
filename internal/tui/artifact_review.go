@@ -289,9 +289,6 @@ func (m ArtifactReviewModel) Update(msg tea.Msg) (ArtifactReviewModel, tea.Cmd) 
 			m.chatInput, cmd = m.chatInput.Update(msg)
 			return m, cmd
 		}
-		if m.documentMode == artifactDocumentPreview {
-			return m, nil
-		}
 		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
 		return m, cmd
@@ -391,9 +388,6 @@ func (m ArtifactReviewModel) handleKey(msg tea.KeyPressMsg) (ArtifactReviewModel
 	}
 
 	switch msg.String() {
-	case "ctrl+p":
-		return m.toggleDocumentMode()
-
 	case "ctrl+d":
 		if m.editor.Dirty() {
 			_ = m.editor.Save()
@@ -434,7 +428,7 @@ func (m ArtifactReviewModel) handleKey(msg tea.KeyPressMsg) (ArtifactReviewModel
 		return m.handleChatKey(msg)
 	}
 
-	if msg.String() == "esc" && (m.documentMode == artifactDocumentPreview || m.editor.Mode() == NormalMode) {
+	if msg.String() == "esc" && m.editor.Mode() == NormalMode {
 		if m.editor.Dirty() {
 			_ = m.editor.Save()
 		}
@@ -453,30 +447,12 @@ func (m ArtifactReviewModel) handleKey(msg tea.KeyPressMsg) (ArtifactReviewModel
 }
 
 func (m ArtifactReviewModel) toggleDocumentMode() (ArtifactReviewModel, tea.Cmd) {
-	if !m.supportsRenderedPreview() {
-		return m, nil
-	}
-	if m.documentMode == artifactDocumentPreview {
-		m.documentMode = artifactDocumentRaw
-		return m, nil
-	}
-	m.documentMode = artifactDocumentPreview
-	m.refreshPreviewContent()
 	return m, nil
 }
 
 func (m ArtifactReviewModel) handlePreviewKey(msg tea.KeyPressMsg) (ArtifactReviewModel, tea.Cmd) {
-	m.refreshPreviewContent()
-	switch msg.String() {
-	case "ctrl+u":
-		m.previewViewport.HalfPageUp()
-		return m, nil
-	case "ctrl+f":
-		m.previewViewport.HalfPageDown()
-		return m, nil
-	}
 	var cmd tea.Cmd
-	m.previewViewport, cmd = m.previewViewport.Update(msg)
+	m.editor, cmd = m.editor.Update(msg)
 	return m, cmd
 }
 
@@ -1248,19 +1224,204 @@ func (m ArtifactReviewModel) View() string {
 }
 
 func (m ArtifactReviewModel) renderDocumentContent() string {
-	if m.documentMode != artifactDocumentPreview {
+	if m.documentMode != artifactDocumentPreview || !m.supportsRenderedPreview() {
 		return m.editor.View()
 	}
-	m.refreshPreviewContent()
-	return m.previewViewport.View()
+	return m.renderHybridDocumentContent()
+}
+
+type hybridDocumentLine struct {
+	text   string
+	cursor bool
+	anchor bool
+}
+
+func (m ArtifactReviewModel) renderHybridDocumentContent() string {
+	lines := m.hybridDocumentLines()
+	height := max(m.editor.height, 1)
+	if len(lines) == 0 {
+		lines = append(lines, hybridDocumentLine{text: m.emptyHybridDocumentLine()})
+	}
+
+	cursorIndex := 0
+	for i, line := range lines {
+		if line.cursor || line.anchor {
+			cursorIndex = i
+			break
+		}
+	}
+	start := cursorIndex - height/2
+	if start < 0 {
+		start = 0
+	}
+	if maxStart := max(len(lines)-height, 0); start > maxStart {
+		start = maxStart
+	}
+	end := min(start+height, len(lines))
+
+	visible := make([]string, 0, height)
+	for _, line := range lines[start:end] {
+		visible = append(visible, line.text)
+	}
+	for len(visible) < height {
+		visible = append(visible, m.emptyHybridDocumentLine())
+	}
+	return strings.Join(visible, "\n")
+}
+
+func (m ArtifactReviewModel) hybridDocumentLines() []hybridDocumentLine {
+	lines := make([]hybridDocumentLine, 0, len(m.editor.lines))
+	for row := range m.editor.lines {
+		if row == m.editor.row {
+			lines = append(lines, m.renderHybridActiveRow(row)...)
+			continue
+		}
+		lines = append(lines, m.renderHybridRenderedRow(row)...)
+	}
+	return lines
+}
+
+func (m ArtifactReviewModel) renderHybridRenderedRow(row int) []hybridDocumentLine {
+	e := m.editor
+	cWidth := e.contentWidth()
+	text := e.lines[row]
+	rendered := renderMarkdownPreview(text, cWidth)
+	if strings.TrimRight(rendered, "\n") == "" {
+		return []hybridDocumentLine{{text: m.formatHybridDocumentLine(row, true, "", e.highlightedLines[row])}}
+	}
+
+	renderedLines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+	lines := make([]hybridDocumentLine, 0, len(renderedLines))
+	for i, line := range renderedLines {
+		lines = append(lines, hybridDocumentLine{
+			text: m.formatHybridDocumentLine(row, i == 0, line, e.highlightedLines[row]),
+		})
+	}
+	return lines
+}
+
+func (m ArtifactReviewModel) renderHybridActiveRow(row int) []hybridDocumentLine {
+	e := m.editor
+	cWidth := e.contentWidth()
+	runes := []rune(e.lines[row])
+	if len(runes) == 0 {
+		return []hybridDocumentLine{m.renderHybridRawSegment(row, nil, 0, true, e.focused, true)}
+	}
+
+	lines := make([]hybridDocumentLine, 0, e.visualRowCount(row))
+	for start := 0; start < len(runes); start += cWidth {
+		end := min(start+cWidth, len(runes))
+		anchorOnSegment := row == e.row && e.col >= start && (e.col < end || end == len(runes))
+		cursorOnSegment := e.focused && anchorOnSegment
+		if e.col == len(runes) && len(runes)%cWidth == 0 {
+			cursorOnSegment = false
+			anchorOnSegment = false
+		}
+		lines = append(lines, m.renderHybridRawSegment(row, runes[start:end], start, start == 0, cursorOnSegment, anchorOnSegment))
+	}
+	if row == e.row && e.col == len(runes) && len(runes)%cWidth == 0 {
+		lines = append(lines, m.renderHybridRawSegment(row, nil, len(runes), false, e.focused, true))
+	}
+	return lines
+}
+
+func (m ArtifactReviewModel) renderHybridRawSegment(row int, runes []rune, colOffset int, first, cursorOnSegment, anchorOnSegment bool) hybridDocumentLine {
+	e := m.editor
+	cWidth := e.contentWidth()
+	highlighted := e.highlightedLines[row]
+	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Underline(true)
+
+	var content strings.Builder
+	if cursorOnSegment {
+		localCol := e.col - colOffset
+		if localCol < 0 {
+			localCol = 0
+		}
+		if localCol > len(runes) {
+			localCol = len(runes)
+		}
+
+		before := string(runes[:localCol])
+		if highlighted {
+			before = highlightStyle.Render(before)
+		}
+		content.WriteString(before)
+
+		cursorChar := " "
+		if localCol < len(runes) {
+			cursorChar = string(runes[localCol])
+		}
+		e.cursor.SetChar(cursorChar)
+		content.WriteString(e.cursor.View())
+
+		if localCol+1 < len(runes) {
+			after := string(runes[localCol+1:])
+			if highlighted {
+				after = highlightStyle.Render(after)
+			}
+			content.WriteString(after)
+		}
+	} else {
+		text := string(runes)
+		if highlighted {
+			text = highlightStyle.Render(text)
+		}
+		content.WriteString(text)
+	}
+
+	rendered := content.String()
+	if lipgloss.Width(rendered) > cWidth {
+		rendered = ansi.Truncate(rendered, cWidth, "")
+	}
+	if pad := cWidth - lipgloss.Width(rendered); pad > 0 {
+		rendered += strings.Repeat(" ", pad)
+	}
+	return hybridDocumentLine{
+		text:   m.hybridLinePrefix(row, first) + rendered,
+		cursor: cursorOnSegment,
+		anchor: anchorOnSegment,
+	}
+}
+
+func (m ArtifactReviewModel) formatHybridDocumentLine(row int, first bool, text string, highlighted bool) string {
+	cWidth := m.editor.contentWidth()
+	if lipgloss.Width(text) > cWidth {
+		text = ansi.Truncate(text, cWidth, "")
+	}
+	if highlighted {
+		text = lipgloss.NewStyle().Foreground(lipgloss.Color("#00FF00")).Underline(true).Render(text)
+	}
+	if pad := cWidth - lipgloss.Width(text); pad > 0 {
+		text += strings.Repeat(" ", pad)
+	}
+	return m.hybridLinePrefix(row, first) + text
+}
+
+func (m ArtifactReviewModel) hybridLinePrefix(row int, first bool) string {
+	lnWidth := m.editor.lineNumberWidth()
+	lnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	if first {
+		return lnStyle.Render(fmt.Sprintf("%*d ", lnWidth-1, row+1))
+	}
+	return lnStyle.Render(strings.Repeat(" ", lnWidth))
+}
+
+func (m ArtifactReviewModel) emptyHybridDocumentLine() string {
+	lnWidth := m.editor.lineNumberWidth()
+	lnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	return lnStyle.Render(fmt.Sprintf("%*s ", lnWidth-1, "~")) + strings.Repeat(" ", m.editor.contentWidth())
 }
 
 func (m ArtifactReviewModel) documentTitle() string {
 	filename := filepath.Base(m.artifactPath)
-	if m.documentMode == artifactDocumentPreview {
-		title := " " + filename + " [Rendered preview] "
+	if m.documentMode == artifactDocumentPreview && m.supportsRenderedPreview() {
+		modeStr := "NORMAL"
+		if m.editor.Mode() == InsertMode {
+			modeStr = "INSERT"
+		}
+		title := " " + filename + " [Rendered source " + modeStr + "] "
 		if m.editor.Dirty() {
-			title = " " + filename + " [Rendered preview] [+] "
+			title = " " + filename + " [Rendered source " + modeStr + "] [+] "
 		}
 		if len(m.editor.highlightedLines) > 0 {
 			title += "[agent edits pending] "
@@ -1289,8 +1450,11 @@ func (m ArtifactReviewModel) documentTitleForWidth(width int) string {
 	}
 
 	filename := filepath.Base(m.artifactPath)
-	if m.documentMode == artifactDocumentPreview {
-		status := "Preview"
+	if m.documentMode == artifactDocumentPreview && m.supportsRenderedPreview() {
+		status := "Doc NORM"
+		if m.editor.Mode() == InsertMode {
+			status = "Doc INS"
+		}
 		if m.editor.Dirty() {
 			status += " +"
 		}
@@ -1393,19 +1557,22 @@ func (m ArtifactReviewModel) renderFooter() string {
 
 	var hints []string
 	if m.chatFocused {
-		target := "editor"
-		if m.documentMode == artifactDocumentPreview {
-			target = "preview"
+		target := "source"
+		if m.documentMode == artifactDocumentPreview && m.supportsRenderedPreview() {
+			target = "document"
 		}
 		hints = append(hints, "Tab: "+target, "↑/↓: scroll", "Enter: send", "Shift+Enter: newline", "Ctrl+D: done")
 	} else {
-		if m.documentMode == artifactDocumentPreview {
-			hints = append(hints, "Preview", "Ctrl+U/F: scroll", "Ctrl+P: raw")
-		} else {
-			hints = append(hints, "Raw")
-			if m.supportsRenderedPreview() {
-				hints = append(hints, "Ctrl+P: preview")
+		if m.documentMode == artifactDocumentPreview && m.supportsRenderedPreview() {
+			hints = append(hints, "Document")
+			if m.editor.Mode() == InsertMode {
+				hints = append(hints, "Esc: normal mode")
+			} else {
+				hints = append(hints, "i: edit", "j/k: row")
 			}
+			hints = append(hints, "Ctrl+U/F: move")
+		} else {
+			hints = append(hints, "Source")
 			if m.editor.Mode() == InsertMode {
 				hints = append(hints, "Esc: normal mode")
 			} else {
@@ -1432,38 +1599,34 @@ func (m ArtifactReviewModel) renderFooter() string {
 
 func (m ArtifactReviewModel) compactFooterHints() []string {
 	if len(m.editor.highlightedLines) > 0 {
-		hints := []string{"Preview"}
-		if m.documentMode != artifactDocumentPreview {
-			hints = []string{"Raw"}
+		hints := []string{"Source"}
+		if m.documentMode == artifactDocumentPreview && m.supportsRenderedPreview() {
+			hints = []string{"Document"}
 		}
 		if m.editor.Dirty() {
 			hints = append(hints, "Unsaved")
 		}
 		hints = append(hints, "Ctrl+Y: accept edits", "Ctrl+Z: reject edits")
-		if m.supportsRenderedPreview() {
-			if m.documentMode == artifactDocumentPreview {
-				hints = append(hints, "Ctrl+P:raw")
-			} else {
-				hints = append(hints, "Ctrl+P:preview")
-			}
-		}
 		return hints
 	}
 
 	var hints []string
 	if m.chatFocused {
-		target := "editor"
-		if m.documentMode == artifactDocumentPreview {
-			target = "preview"
+		target := "source"
+		if m.documentMode == artifactDocumentPreview && m.supportsRenderedPreview() {
+			target = "document"
 		}
 		hints = append(hints, "Tab:"+target, "Enter:send", "Ctrl+D")
-	} else if m.documentMode == artifactDocumentPreview {
-		hints = append(hints, "Preview", "Ctrl+P:raw", "Tab:chat", "Ctrl+D")
-	} else {
-		hints = append(hints, "Raw")
-		if m.supportsRenderedPreview() {
-			hints = append(hints, "Ctrl+P:preview")
+	} else if m.documentMode == artifactDocumentPreview && m.supportsRenderedPreview() {
+		hints = append(hints, "Document")
+		if m.editor.Mode() == InsertMode {
+			hints = append(hints, "Esc")
+		} else {
+			hints = append(hints, "i", "j/k")
 		}
+		hints = append(hints, "Tab:chat", "Ctrl+D")
+	} else {
+		hints = append(hints, "Source")
 		if m.editor.Mode() == InsertMode {
 			hints = append(hints, "Esc")
 		} else {

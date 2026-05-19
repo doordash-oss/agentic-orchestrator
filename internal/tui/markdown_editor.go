@@ -139,6 +139,7 @@ func (e *MarkdownEditor) FilePath() string {
 func (e *MarkdownEditor) SetSize(w, h int) {
 	e.width = max(w, 1)
 	e.height = max(h, 1)
+	e.ensureVisible()
 }
 
 // Focus focuses the editor and starts cursor blink.

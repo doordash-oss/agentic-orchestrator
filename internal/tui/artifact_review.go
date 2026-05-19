@@ -26,6 +26,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -253,7 +255,7 @@ func (m *ArtifactReviewModel) refreshPreviewContent() {
 		return
 	}
 	width := max(m.previewViewport.Width(), m.editorContentWidth())
-	m.previewViewport.SetContent(renderMarkdown(m.editor.Content(), width))
+	m.previewViewport.SetContent(renderMarkdownPreview(m.editor.Content(), width))
 }
 
 // Init returns the initial command. Note: this is a value receiver (per
@@ -1169,8 +1171,8 @@ func (m ArtifactReviewModel) editorHeight() int {
 }
 
 func (m ArtifactReviewModel) editorContentWidth() int {
-	panelW := max(m.width-2, 20)
-	return max(panelW-4, 10)
+	panelW := max(m.width-2, 1)
+	return max(panelW-4, 1)
 }
 
 func (m *ArtifactReviewModel) recalcLayout() {
@@ -1180,7 +1182,7 @@ func (m *ArtifactReviewModel) recalcLayout() {
 	m.previewViewport.SetWidth(contentW)
 	m.previewViewport.SetHeight(editorH)
 
-	chatContentW := max(m.width-6, 20)
+	chatContentW := max(m.width-6, 1)
 	chatContentH := max(m.chatHeight()-chatSpacingH, 1)
 	m.chatViewport.SetWidth(chatContentW)
 	m.chatViewport.SetHeight(max(chatContentH-3, 1)) // Reserve space for input
@@ -1196,13 +1198,13 @@ func (m ArtifactReviewModel) View() string {
 
 	sb.WriteString(m.renderHeader())
 
-	panelW := max(m.width-2, 20)
+	panelW := max(m.width-2, 1)
 
 	editorView := m.renderDocumentContent()
 	editorStyle := panelStyle(!m.chatFocused).Width(panelW)
 	editorPanel := editorStyle.Render(editorView)
 
-	title := m.documentTitle()
+	title := m.documentTitleForWidth(panelW)
 	titleStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	editorPanel = renderBorderTitle(editorPanel, title, titleStyle)
 
@@ -1280,6 +1282,40 @@ func (m ArtifactReviewModel) documentTitle() string {
 	return title
 }
 
+func (m ArtifactReviewModel) documentTitleForWidth(width int) string {
+	title := m.documentTitle()
+	if lipgloss.Width(title) <= max(width-5, 1) {
+		return title
+	}
+
+	filename := filepath.Base(m.artifactPath)
+	if m.documentMode == artifactDocumentPreview {
+		status := "Preview"
+		if m.editor.Dirty() {
+			status += " +"
+		}
+		title = " " + filename + " [" + status + "] "
+		if len(m.editor.highlightedLines) > 0 {
+			title += "[edits] "
+		}
+		return title
+	}
+
+	modeStr := "NORM"
+	if m.editor.Mode() == InsertMode {
+		modeStr = "INS"
+	}
+	status := "Src " + modeStr
+	if m.editor.Dirty() {
+		status += " +"
+	}
+	title = " " + filename + " [" + status + "] "
+	if len(m.editor.highlightedLines) > 0 {
+		title += "[edits] "
+	}
+	return title
+}
+
 func (m ArtifactReviewModel) renderChatContent() string {
 	var sb strings.Builder
 
@@ -1295,7 +1331,7 @@ func (m ArtifactReviewModel) renderChatContent() string {
 	sb.WriteString(m.chatViewport.View())
 
 	// Separator line between history and input
-	chatContentW := max(m.chatViewport.Width(), 20)
+	chatContentW := max(m.chatViewport.Width(), 1)
 	sepStyle := lipgloss.NewStyle().Foreground(colorSurface)
 	sb.WriteString("\n")
 	sb.WriteString(sepStyle.Render(strings.Repeat("─", chatContentW)))
@@ -1330,6 +1366,7 @@ func (m ArtifactReviewModel) renderChatContent() string {
 }
 
 func (m ArtifactReviewModel) renderHeader() string {
+	width := max(m.width, 1)
 	artLines := []string{
 		" \u2584\u2580\u2588 \u2588\u2580\u2580 \u2588\u2580\u2580 \u2588\u2584\u2591\u2588 \u2580\u2588\u2580 \u2588 \u2588\u2580\u2580",
 		" \u2588\u2580\u2588 \u2588\u2584\u2588 \u2588\u2588\u2584 \u2588\u2591\u2580\u2588 \u2591\u2588\u2591 \u2588 \u2588\u2584\u2584",
@@ -1339,10 +1376,10 @@ func (m ArtifactReviewModel) renderHeader() string {
 
 	var header strings.Builder
 	for _, line := range artLines {
-		header.WriteString(brandStyle.Render(line))
+		header.WriteString(brandStyle.Render(ansi.Truncate(line, width, "…")))
 		header.WriteByte('\n')
 	}
-	header.WriteString(dimStyle.Render(strings.Repeat("\u2500", m.width)))
+	header.WriteString(dimStyle.Render(strings.Repeat("\u2500", width)))
 	header.WriteByte('\n')
 	return header.String()
 }
@@ -1385,15 +1422,69 @@ func (m ArtifactReviewModel) renderFooter() string {
 		hints = append(hints, "Ctrl+Y: accept edits", "Ctrl+Z: reject edits")
 	}
 
-	return hintStyle.Render(strings.Join(hints, " │ "))
+	width := max(m.width, 1)
+	footer := strings.Join(hints, " │ ")
+	if lipgloss.Width(footer) > width {
+		footer = strings.Join(m.compactFooterHints(), " ")
+	}
+	return hintStyle.Render(ansi.Truncate(footer, width, "…"))
+}
+
+func (m ArtifactReviewModel) compactFooterHints() []string {
+	if len(m.editor.highlightedLines) > 0 {
+		hints := []string{"Preview"}
+		if m.documentMode != artifactDocumentPreview {
+			hints = []string{"Raw"}
+		}
+		if m.editor.Dirty() {
+			hints = append(hints, "Unsaved")
+		}
+		hints = append(hints, "Ctrl+Y: accept edits", "Ctrl+Z: reject edits")
+		if m.supportsRenderedPreview() {
+			if m.documentMode == artifactDocumentPreview {
+				hints = append(hints, "Ctrl+P:raw")
+			} else {
+				hints = append(hints, "Ctrl+P:preview")
+			}
+		}
+		return hints
+	}
+
+	var hints []string
+	if m.chatFocused {
+		target := "editor"
+		if m.documentMode == artifactDocumentPreview {
+			target = "preview"
+		}
+		hints = append(hints, "Tab:"+target, "Enter:send", "Ctrl+D")
+	} else if m.documentMode == artifactDocumentPreview {
+		hints = append(hints, "Preview", "Ctrl+P:raw", "Tab:chat", "Ctrl+D")
+	} else {
+		hints = append(hints, "Raw")
+		if m.supportsRenderedPreview() {
+			hints = append(hints, "Ctrl+P:preview")
+		}
+		if m.editor.Mode() == InsertMode {
+			hints = append(hints, "Esc")
+		} else {
+			hints = append(hints, "i")
+		}
+		hints = append(hints, "Tab:chat", "Ctrl+D")
+	}
+	if m.editor.Dirty() {
+		hints = append(hints, "Unsaved")
+	}
+	return hints
 }
 
 func (m ArtifactReviewModel) renderMenuOverlay(bg string) string {
 	items := m.menuItems()
 	var menuLines []string
+	menuWidth := min(max(m.width-2, 1), 48)
+	menuContentWidth := max(menuWidth-6, 1)
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
-	menuLines = append(menuLines, titleStyle.Render("Choose an action:"))
+	menuLines = append(menuLines, titleStyle.Render(ansi.Truncate("Choose an action:", menuContentWidth, "…")))
 	menuLines = append(menuLines, "")
 
 	for i, item := range items {
@@ -1408,12 +1499,12 @@ func (m ArtifactReviewModel) renderMenuOverlay(bg string) string {
 		if m.nuiForm != nil && item.decision == "resume" && !m.nuiForm.AllAnswered() {
 			style = style.Foreground(lipgloss.Color("240"))
 		}
-		menuLines = append(menuLines, style.Render(prefix+item.label))
+		menuLines = append(menuLines, style.Render(ansi.Truncate(prefix+item.label, menuContentWidth, "…")))
 	}
 
 	menuLines = append(menuLines, "")
 	dimStyle := lipgloss.NewStyle().Foreground(colorSurface)
-	menuLines = append(menuLines, dimStyle.Render("Enter: select │ Esc: cancel"))
+	menuLines = append(menuLines, dimStyle.Render(ansi.Truncate("Enter: select │ Esc: cancel", menuContentWidth, "…")))
 
 	menuContent := strings.Join(menuLines, "\n")
 
@@ -1421,6 +1512,7 @@ func (m ArtifactReviewModel) renderMenuOverlay(bg string) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorBrand).
 		Padding(1, 2).
+		Width(menuWidth).
 		Render(menuContent)
 
 	return overlayModal(bg, menuBox, m.width, m.height)
@@ -1433,7 +1525,7 @@ func (m ArtifactReviewModel) renderNeedUserInputView() string {
 	var sb strings.Builder
 	sb.WriteString(m.renderHeader())
 
-	panelW := max(m.width-2, 20)
+	panelW := max(m.width-2, 1)
 	body := m.nuiForm.View()
 	box := panelStyle(true).Width(panelW).Render(body)
 	titleStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)

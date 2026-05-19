@@ -14,7 +14,11 @@
 
 package tui
 
-import "charm.land/lipgloss/v2"
+import (
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
 
 type markdownRenderer func(text string, width int) string
 
@@ -29,4 +33,23 @@ func SetMarkdownRenderer(renderer markdownRenderer) {
 		return
 	}
 	renderMarkdown = renderer
+}
+
+func renderMarkdownPreview(text string, width int) (out string) {
+	width = max(width, 1)
+	defer func() {
+		if recover() != nil {
+			out = renderPlainMarkdownPreview(text, width)
+		}
+	}()
+
+	out = renderMarkdown(text, width)
+	if strings.TrimSpace(text) != "" && strings.TrimSpace(ansiRegex.ReplaceAllString(out, "")) == "" {
+		return renderPlainMarkdownPreview(text, width)
+	}
+	return out
+}
+
+func renderPlainMarkdownPreview(text string, width int) string {
+	return lipgloss.NewStyle().Width(width).Render(text)
 }

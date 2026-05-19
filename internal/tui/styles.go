@@ -21,6 +21,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // ansiRegex matches ANSI escape sequences for stripping from rendered text.
@@ -262,7 +263,8 @@ func renderBorderTitle(box, title string, titleStyle lipgloss.Style) string {
 	// is the border color lipgloss applied.
 	borderColor := leadingANSI(line)
 
-	rendered := titleStyle.Render(title)
+	maxTitleWidth := max(visWidth-5, 1)
+	rendered := titleStyle.Render(ansi.Truncate(title, maxTitleWidth, "…"))
 	// Build: "╭─" + " Title " + "──...──" + "╮", with border color
 	// wrapping the non-title parts.
 	insertPoint := 2 // after "╭─"

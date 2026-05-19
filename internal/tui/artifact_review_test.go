@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -280,6 +281,108 @@ func TestArtifactReview_RenderedPreviewUsesUnsavedEditorBuffer(t *testing.T) {
 	}
 }
 
+func TestArtifactReview_MalformedPreviewFallbackKeepsPlainText(t *testing.T) {
+	previous := renderMarkdown
+	SetMarkdownRenderer(func(text string, width int) string {
+		return ""
+	})
+	t.Cleanup(func() { renderMarkdown = previous })
+
+	content := "# Broken artifact\n\n```go\nfunc main() {\n\n| name | value\n| ---\nplain fallback survives"
+	m, f := newTestArtifactReview(t, content, "plan")
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Rendered preview", "Broken artifact", "func main", "plain fallback survives", "Chat"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("fallback preview missing %q:\n%s", want, view)
+		}
+	}
+	if out := os.Getenv("AGENTIC_ARTIFACT_REVIEW_MALFORMED_SNAPSHOT_PATH"); out != "" {
+		narrow := m
+		narrow, _ = narrow.Update(tea.WindowSizeMsg{Width: 28, Height: 18})
+		writeArtifactReviewSnapshot(t, out, stripANSI(narrow.View()))
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if m.documentMode != artifactDocumentRaw {
+		t.Fatalf("documentMode after Ctrl+P = %v, want raw", m.documentMode)
+	}
+	if m.editor.Content() != content {
+		t.Fatalf("raw source changed after fallback preview: got %q, want %q", m.editor.Content(), content)
+	}
+	data, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != content {
+		t.Fatalf("artifact file changed after fallback preview: got %q, want %q", string(data), content)
+	}
+}
+
+func TestArtifactReview_RendererPanicFallsBackToPlainText(t *testing.T) {
+	previous := renderMarkdown
+	SetMarkdownRenderer(func(text string, width int) string {
+		panic("renderer failed")
+	})
+	t.Cleanup(func() { renderMarkdown = previous })
+
+	m, _ := newTestArtifactReview(t, "# Panicking renderer\n\nbody remains reviewable", "plan")
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Rendered preview", "Panicking renderer", "body remains reviewable"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("panic fallback preview missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestArtifactReview_EmptyPreviewStaysUsable(t *testing.T) {
+	m, f := newTestArtifactReview(t, "", "plan")
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Rendered preview", "Chat", "Ctrl+P: raw", "Tab to chat"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("empty preview missing %q:\n%s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"No artifact content", "Empty artifact"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("empty preview should not add artifact placeholder %q:\n%s", unwanted, view)
+		}
+	}
+	if out := os.Getenv("AGENTIC_ARTIFACT_REVIEW_EMPTY_SNAPSHOT_PATH"); out != "" {
+		wide := m
+		wide, _ = wide.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+		writeArtifactReviewSnapshot(t, out, stripANSI(wide.View()))
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 28, Height: 16})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if m.documentMode != artifactDocumentRaw {
+		t.Fatalf("documentMode after Ctrl+P = %v, want raw", m.documentMode)
+	}
+	if m.editor.Content() != "" {
+		t.Fatalf("raw empty content = %q, want empty", m.editor.Content())
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.chatFocused {
+		t.Fatal("Tab should focus chat for empty artifacts")
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if !m.showMenu {
+		t.Fatal("Ctrl+D should open the action menu for an empty clean buffer")
+	}
+	data, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "" {
+		t.Fatalf("empty artifact changed after no-op save points: got %q", string(data))
+	}
+}
+
 func TestArtifactReview_DirtyStateVisibleInPreviewAndRawFooter(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Plan", "plan")
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
@@ -379,6 +482,68 @@ func TestArtifactReview_PreviewScrollResizeAndChrome(t *testing.T) {
 		if !strings.Contains(rawView, want) {
 			t.Errorf("raw view missing %q", want)
 		}
+	}
+}
+
+func TestArtifactReview_NarrowLayoutKeepsChromeWithinWidth(t *testing.T) {
+	longLine := strings.Repeat("unbroken-source-token", 8)
+	longHeading := "# " + strings.Repeat("LongHeading", 8)
+	m, _ := newTestArtifactReview(t, longHeading+"\n\n"+longLine, "plan")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 28, Height: 18})
+
+	assertViewLinesWithinWidth(t, m.View(), 28)
+	for _, want := range []string{"Preview", "Ctrl+P", "Chat"} {
+		if !strings.Contains(stripANSI(m.View()), want) {
+			t.Fatalf("narrow preview missing %q:\n%s", want, stripANSI(m.View()))
+		}
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if !m.showMenu {
+		t.Fatal("Ctrl+D should open the narrow layout action menu")
+	}
+	assertViewLinesWithinWidth(t, m.View(), 28)
+}
+
+func TestArtifactReview_WideLayoutPreservesPreviewState(t *testing.T) {
+	var lines []string
+	for i := 0; i < 80; i++ {
+		lines = append(lines, fmt.Sprintf("wide line %02d with enough words to wrap in preview", i))
+	}
+	m, _ := newTestArtifactReview(t, strings.Join(lines, "\n"), "plan")
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 34})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'f', Mod: tea.ModCtrl})
+	offset := m.previewViewport.YOffset()
+	if offset == 0 {
+		t.Fatal("preview should scroll before wide resize")
+	}
+
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 180, Height: 36})
+	if m.documentMode != artifactDocumentPreview {
+		t.Fatalf("documentMode after wide resize = %v, want preview", m.documentMode)
+	}
+	if m.previewViewport.YOffset() != offset {
+		t.Fatalf("preview YOffset after wide resize = %d, want %d", m.previewViewport.YOffset(), offset)
+	}
+	assertViewLinesWithinWidth(t, m.View(), 180)
+}
+
+func assertViewLinesWithinWidth(t *testing.T, view string, width int) {
+	t.Helper()
+	for i, line := range strings.Split(stripANSI(view), "\n") {
+		if got := lipgloss.Width(line); got > width {
+			t.Fatalf("view line %d width = %d, want <= %d:\n%q\n\nfull view:\n%s", i+1, got, width, line, stripANSI(view))
+		}
+	}
+}
+
+func writeArtifactReviewSnapshot(t *testing.T, path, view string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create snapshot dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(view), 0o644); err != nil {
+		t.Fatalf("write snapshot: %v", err)
 	}
 }
 

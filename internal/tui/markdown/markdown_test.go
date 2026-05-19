@@ -60,6 +60,70 @@ func TestRender_HeadingHasANSI(t *testing.T) {
 	}
 }
 
+func TestRender_StyledBlocksPreservePlainText(t *testing.T) {
+	in := strings.Join([]string{
+		"# Heading",
+		"",
+		"- list item",
+		"",
+		"[link text](https://example.com)",
+		"",
+		"`inline code`",
+		"",
+		"> quoted text",
+		"",
+		"```go",
+		"fmt.Println(\"code block\")",
+		"```",
+	}, "\n")
+	out := Render(in, 80)
+	if !hasANSI(out) {
+		t.Fatalf("expected ANSI escapes in rendered markdown, got %q", out)
+	}
+
+	plain := stripANSI(out)
+	for _, want := range []string{"Heading", "list item", "link text", "inline code", "quoted text", "fmt.Println"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("rendered markdown missing source text %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestBuildStyle_UsesSemanticPalette(t *testing.T) {
+	tests := []struct {
+		name  string
+		style bool
+		want  palette
+	}{
+		{name: "dark", style: true, want: mochaPalette()},
+		{name: "light", style: false, want: lattePalette()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			style := buildStyle(tt.style)
+			assertColor(t, "Heading.Color", style.Heading.Color, tt.want.brand)
+			assertColor(t, "H1.Color", style.H1.Color, tt.want.brand)
+			assertColor(t, "Link.Color", style.Link.Color, tt.want.info)
+			assertColor(t, "LinkText.Color", style.LinkText.Color, tt.want.brand)
+			assertColor(t, "Code.Color", style.Code.Color, tt.want.peach)
+			assertColor(t, "BlockQuote.Color", style.BlockQuote.Color, tt.want.active)
+			assertColor(t, "Item.Color", style.Item.Color, tt.want.subtext)
+			assertColor(t, "HorizontalRule.Color", style.HorizontalRule.Color, tt.want.overlay)
+		})
+	}
+}
+
+func assertColor(t *testing.T, name string, got *string, want string) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s = nil, want %q", name, want)
+	}
+	if *got != want {
+		t.Fatalf("%s = %q, want %q", name, *got, want)
+	}
+}
+
 func TestRender_CacheHit(t *testing.T) {
 	in := "## Cached heading\n\nSome text."
 	first := Render(in, 60)

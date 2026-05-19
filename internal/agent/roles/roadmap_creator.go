@@ -37,6 +37,7 @@ var roadmapCreatorRoleSpec = RoleSpec{
 		roadmapMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
 	},
+	ReadOnlyOutsideRoots: true,
 }
 
 // RoadmapCreatorRoleSpec returns the RoleSpec-backed roadmap creation role.

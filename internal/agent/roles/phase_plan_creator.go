@@ -36,6 +36,7 @@ var phasePlanCreatorRoleSpec = RoleSpec{
 		phasePlanMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
 	},
+	ReadOnlyOutsideRoots: true,
 }
 
 // PhasePlanCreatorRoleSpec returns the RoleSpec-backed phase-plan creation role.

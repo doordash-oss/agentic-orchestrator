@@ -36,6 +36,7 @@ var phasePlanReviserRoleSpec = RoleSpec{
 		phasePlanMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
 	},
+	ReadOnlyOutsideRoots: true,
 }
 
 // PhasePlanReviserRoleSpec returns the RoleSpec-backed phase-plan revision role.

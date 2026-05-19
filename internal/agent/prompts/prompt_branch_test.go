@@ -119,6 +119,30 @@ func TestPreflightBranchBehavior(t *testing.T) {
 	}
 }
 
+func TestReadOnlyOutsideRootsBranch(t *testing.T) {
+	render := func(readOnly bool) string {
+		return RoleSystemPrompt(RoleSystemInput{
+			OutputRoots:          []OutputRootView{{Name: "phase_dir", Path: "/phase"}},
+			MarkerPath:           "/phase/phase_complete",
+			SkillPath:            "/skills/role/SKILL.md",
+			ReadOnlyOutsideRoots: readOnly,
+		})
+	}
+
+	on := render(true)
+	requireContains(t, on, "ABSOLUTE: write only inside the output roots above.")
+	requireContains(t, on, "Your role never writes code")
+	requireContains(t, on, "refuse and explain")
+	// The prohibition must sit between the output-roots list and the
+	// completion marker — agents skip ahead to "## Completion", so placing
+	// the rule there keeps it on the path of an attentive reader.
+	requireOrder(t, on, "## Output Roots", "ABSOLUTE: write only inside the output roots above.", "## Completion")
+
+	off := render(false)
+	requireNotContains(t, off, "ABSOLUTE: write only inside the output roots above.")
+	requireNotContains(t, off, "Your role never writes code")
+}
+
 func TestMultiRepoPromptBranches(t *testing.T) {
 	repos := []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}}
 	tests := []struct {

@@ -37,6 +37,7 @@ var designerRoleSpec = RoleSpec{
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("design markdown artifact"),
 	},
+	ReadOnlyOutsideRoots: true,
 }
 
 // DesignerRoleSpec returns the canonical Design RoleSpec.

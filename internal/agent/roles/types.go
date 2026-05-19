@@ -96,18 +96,27 @@ type RoleArtifactSpec struct {
 }
 
 // RoleSpec is the canonical declaration for one phase/role pairing.
+//
+// ReadOnlyOutsideRoots marks a role whose only deliverables are documents
+// in the named OutputRoots. When set, the RoleSpec-backed system prompt
+// adds an absolute prohibition against writing anywhere else on disk —
+// including the working tree of any target repo — and an explicit "this
+// role never writes code" reminder. Use it for the Inquiry/Design/Roadmap/
+// Plan family of roles; leave it false for Implement and any other role
+// that has to modify source code.
 type RoleSpec struct {
-	Phase           feature.Phase
-	Role            Role
-	SkillName       string
-	UserTemplate    string
-	OutputRoots     []OutputRootSpec
-	MarkerRoot      string
-	Artifacts       []RoleArtifactSpec
-	Required        []feature.Phase
-	AskingClauseFor func(model string) string
-	NoOp            bool
-	NoOpReason      string
+	Phase                feature.Phase
+	Role                 Role
+	SkillName            string
+	UserTemplate         string
+	OutputRoots          []OutputRootSpec
+	MarkerRoot           string
+	Artifacts            []RoleArtifactSpec
+	Required             []feature.Phase
+	AskingClauseFor      func(model string) string
+	NoOp                 bool
+	NoOpReason           string
+	ReadOnlyOutsideRoots bool
 }
 
 // CloneRoleSpec returns a copy that callers can inspect without mutating the

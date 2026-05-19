@@ -62,11 +62,18 @@ type OutputRootView struct {
 
 // RoleSystemInput is the data passed to system.tmpl for RoleSpec-backed
 // phase sessions.
+//
+// ReadOnlyOutsideRoots, when true, makes the rendered prompt assert that
+// the OutputRoots are the ONLY locations the agent may write to — and that
+// this role never writes code. It is the per-role plumbing for the
+// RoleSpec field of the same name. Leave false for roles that legitimately
+// modify source code (e.g. Implement).
 type RoleSystemInput struct {
-	OutputRoots []OutputRootView
-	MarkerPath  string
-	SkillPath   string
-	Preflight   PreflightInput
+	OutputRoots          []OutputRootView
+	MarkerPath           string
+	SkillPath            string
+	Preflight            PreflightInput
+	ReadOnlyOutsideRoots bool
 
 	AskingClause string
 }

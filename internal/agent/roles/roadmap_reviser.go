@@ -37,6 +37,7 @@ var roadmapReviserRoleSpec = RoleSpec{
 		roadmapMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
 	},
+	ReadOnlyOutsideRoots: true,
 }
 
 // RoadmapReviserRoleSpec returns the RoleSpec-backed roadmap revision role.

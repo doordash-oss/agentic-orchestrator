@@ -625,6 +625,73 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 	}
 }
 
+func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
+	// Only the four planning/research/design role families are document-only
+	// agents that must refuse to touch source code. Implementer, validators,
+	// reviewers, refactor-plan, KB-builder, and InteractivePTY all have
+	// legitimate non-document writes (code, working-tree artifacts, etc.).
+	readOnly := []struct {
+		name string
+		spec RoleSpec
+	}{
+		{"inquirer", InquirerRoleSpec()},
+		{"designer", DesignerRoleSpec()},
+		{"roadmap creator", RoadmapCreatorRoleSpec()},
+		{"roadmap reviser", RoadmapReviserRoleSpec()},
+		{"phase plan creator", PhasePlanCreatorRoleSpec()},
+		{"phase plan reviser", PhasePlanReviserRoleSpec()},
+	}
+	for _, tt := range readOnly {
+		t.Run(tt.name+"_flag_set", func(t *testing.T) {
+			if !tt.spec.ReadOnlyOutsideRoots {
+				t.Fatalf("%s ReadOnlyOutsideRoots = false, want true", tt.name)
+			}
+			got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+				Spec:         tt.spec,
+				IterationDir: "/state/feat/run-001/" + tt.name,
+				SkillsDir:    "/skills",
+			})
+			for _, want := range []string{
+				"ABSOLUTE: write only inside the output roots above.",
+				"Your role never writes code",
+				"refuse",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("%s system prompt missing %q in:\n%s", tt.name, want, got)
+				}
+			}
+		})
+	}
+
+	writeAllowed := []struct {
+		name string
+		spec RoleSpec
+	}{
+		{"implementer", ImplementRoleSpec()},
+		{"final reviewer", FinalReviewerRoleSpec()},
+		{"final review fixer", FinalReviewFixerRoleSpec()},
+		{"iteration reviewer", IterationReviewerRoleSpec()},
+		{"researcher", ResearcherRoleSpec()},
+		{"knowledge base builder", KnowledgeBaseBuilderRoleSpec()},
+		{"refactor plan", RefactorPlanRoleSpec()},
+	}
+	for _, tt := range writeAllowed {
+		t.Run(tt.name+"_flag_unset", func(t *testing.T) {
+			if tt.spec.ReadOnlyOutsideRoots {
+				t.Fatalf("%s ReadOnlyOutsideRoots = true, want false", tt.name)
+			}
+			got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+				Spec:         tt.spec,
+				IterationDir: "/state/feat/run-001/" + tt.name,
+				SkillsDir:    "/skills",
+			})
+			if strings.Contains(got, "ABSOLUTE: write only inside the output roots above.") {
+				t.Fatalf("%s system prompt contains read-only-outside-roots clause but role legitimately writes outside its output roots:\n%s", tt.name, got)
+			}
+		})
+	}
+}
+
 func TestBuildValidatorSystemPromptFromRoleSpec(t *testing.T) {
 	role, ok := PlanValidatorRoleForSkill("validate-roadmap-architecture")
 	if !ok {

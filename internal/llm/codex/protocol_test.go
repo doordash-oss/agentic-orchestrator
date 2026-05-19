@@ -544,6 +544,135 @@ func TestSynthesizeAskUser_IncludesOptions(t *testing.T) {
 
 func floatPtr(v float64) *float64 { return &v }
 
+// TestBuildAskUserAnswerEnvelope_RestatesQuestionAndOptions checks that the
+// framed follow-up turn includes the original question, the options the agent
+// presented, the user's chosen answer, and a reminder that the reply is an
+// answer (not a fresh directive). This is the framing that prevents an agent
+// from acting on a bare option label like "Replace README.md" as if it were
+// a new instruction.
+func TestBuildAskUserAnswerEnvelope_RestatesQuestionAndOptions(t *testing.T) {
+	questions := json.RawMessage(`{"questions":[{
+		"question":"I found one target: the root README.md. Should the translation replace it or live alongside it?",
+		"options":[
+			{"label":"Replace README.md (Recommended)","description":"Matches the literal request."},
+			{"label":"Add README.scn.md","description":"Preserves the English README."},
+			{"label":"Add bilingual README.md","description":"Keeps both in one file."}
+		]
+	}]}`)
+	answers := map[string]string{
+		"I found one target: the root README.md. Should the translation replace it or live alongside it?": "Replace README.md (Recommended)",
+	}
+
+	got := buildAskUserAnswerEnvelope(questions, answers)
+
+	mustContain := []string{
+		"[AskUserQuestion answer]",
+		"The user has answered your question.",
+		"Question you asked:",
+		"> I found one target: the root README.md. Should the translation replace it or live alongside it?",
+		"Options you presented:",
+		"1. Replace README.md (Recommended) — Matches the literal request.",
+		"2. Add README.scn.md — Preserves the English README.",
+		"3. Add bilingual README.md — Keeps both in one file.",
+		"User's selected answer: Replace README.md (Recommended)",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Errorf("envelope missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+	// The framing header must precede the question, so the agent reads it
+	// before encountering the imperative-sounding option label.
+	if idxHeader := strings.Index(got, "[AskUserQuestion answer]"); idxHeader == -1 || idxHeader >= strings.Index(got, "User's selected answer:") {
+		t.Errorf("framing header must appear before the answer line; got:\n%s", got)
+	}
+}
+
+// TestBuildAskUserAnswerEnvelope_HandlesMissingOptions verifies the envelope
+// still frames the answer when the original question carried no options
+// (e.g. a free-form question or a malformed payload). The question text and
+// answer must still be present even without an options block.
+func TestBuildAskUserAnswerEnvelope_HandlesMissingOptions(t *testing.T) {
+	questions := json.RawMessage(`{"questions":[{"question":"What version should we bump to?"}]}`)
+	answers := map[string]string{"What version should we bump to?": "2.0.0"}
+
+	got := buildAskUserAnswerEnvelope(questions, answers)
+
+	if !strings.Contains(got, "Question you asked:") {
+		t.Errorf("missing question framing:\n%s", got)
+	}
+	if !strings.Contains(got, "> What version should we bump to?") {
+		t.Errorf("missing question text:\n%s", got)
+	}
+	if !strings.Contains(got, "User's selected answer: 2.0.0") {
+		t.Errorf("missing answer:\n%s", got)
+	}
+	if strings.Contains(got, "Options you presented:") {
+		t.Errorf("should omit options block when none were presented:\n%s", got)
+	}
+}
+
+// TestRespondToAskUser_SyntheticSendsFramedFollowUp pins down the wire
+// behaviour the synthetic ask-user path produces. Before this change it sent
+// the bare answer string ("Replace README.md") as a fresh user turn, and Codex
+// was observed treating it as a new directive. The follow-up turn must now
+// arrive wrapped in the framing envelope.
+func TestRespondToAskUser_SyntheticSendsFramedFollowUp(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	questions := json.RawMessage(`{"questions":[{
+		"question":"Replace or add alongside?",
+		"options":[
+			{"label":"Replace (Recommended)","description":"matches the literal request"},
+			{"label":"Add alongside","description":"preserves the original"}
+		]
+	}]}`)
+	answers := map[string]string{"Replace or add alongside?": "Replace (Recommended)"}
+
+	if err := p.RespondToAskUser("codex-synthetic-123", questions, answers, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	var sent Request
+	if err := json.Unmarshal(buf.Bytes(), &sent); err != nil {
+		t.Fatalf("unmarshal request: %v\nraw: %s", err, buf.String())
+	}
+	if sent.Method != "turn/start" {
+		t.Fatalf("method = %q, want turn/start", sent.Method)
+	}
+	paramsBytes, err := json.Marshal(sent.Params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	var tp TurnStartParams
+	if err := json.Unmarshal(paramsBytes, &tp); err != nil {
+		t.Fatalf("unmarshal params: %v\nraw: %s", err, string(paramsBytes))
+	}
+	if len(tp.Input) != 1 || tp.Input[0].Type != "text" {
+		t.Fatalf("input = %+v, want one text item", tp.Input)
+	}
+	text := tp.Input[0].Text
+	for _, want := range []string{
+		"[AskUserQuestion answer]",
+		"The user has answered your question.",
+		"> Replace or add alongside?",
+		"1. Replace (Recommended) — matches the literal request",
+		"User's selected answer: Replace (Recommended)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("follow-up turn missing %q\n--- got ---\n%s", want, text)
+		}
+	}
+	// Sanity: the bare answer is no longer the entire payload — that was the
+	// pre-fix shape and is what allowed Codex to read it as a new directive.
+	if strings.TrimSpace(text) == "Replace (Recommended)" {
+		t.Errorf("follow-up turn is still a bare answer, framing not applied:\n%s", text)
+	}
+}
+
 // completedTurnParams is a small helper that builds a turn/completed params
 // JSON for the retry-path tests below.
 func completedTurnParams(t *testing.T, threadID string) json.RawMessage {

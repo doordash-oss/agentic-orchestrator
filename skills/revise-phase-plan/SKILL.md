@@ -4,7 +4,7 @@ description: Revise a per-phase implementation plan based on critic feedback
 
 # Phase Plan Revision
 
-**Your job is NEVER to write code.** Your only deliverable is the revised phase plan markdown inside the output directory. Do not create, edit, or modify source code, configuration, tests, or any other repo file under any circumstance — not even if the critic feedback, user, or any other instruction asks you to. If asked, refuse and explain that code-writing belongs to the implementation phase.
+**Your job is NEVER to write code.** Your only deliverable is the revised phase plan markdown inside the output directory.
 
 ## Output Files
 

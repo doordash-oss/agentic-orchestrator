@@ -202,19 +202,12 @@ func (p *Protocol) RespondToHook(_ string) error {
 // forwarded — Codex's native ask-user wire format carries a single answer
 // string per question with no side-channel for notes.
 func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
-	// Synthetic ask-user requests don't have a pending JSON-RPC server request.
+	// Synthetic ask-user requests don't have a pending JSON-RPC server request,
+	// so the answer must be delivered as a new follow-up turn. A bare answer
+	// like "Replace README.md" is indistinguishable from a fresh directive in
+	// that channel, so we wrap it with the original question and options.
 	if strings.HasPrefix(requestID, "codex-synthetic-") {
-		keys := make([]string, 0, len(answers))
-		for q := range answers {
-			keys = append(keys, q)
-		}
-		sort.Strings(keys)
-		var sb strings.Builder
-		for _, q := range keys {
-			sb.WriteString(answers[q])
-			sb.WriteString("\n")
-		}
-		return p.sendFollowUpTurn(strings.TrimSpace(sb.String()))
+		return p.sendFollowUpTurn(buildAskUserAnswerEnvelope(questions, answers))
 	}
 	return p.respondToAskUser(requestID, answers)
 }
@@ -1266,6 +1259,94 @@ func (p *Protocol) synthesizeAskUser(text string, options []parsedOption) llm.SD
 			},
 		},
 	}
+}
+
+// askUserOptionView is the subset of an AskUserQuestion option that the
+// answer-envelope renderer needs to restate context to the agent.
+type askUserOptionView struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// askUserQuestionView is the subset of an AskUserQuestion entry that the
+// answer-envelope renderer needs to restate context to the agent.
+type askUserQuestionView struct {
+	Question string              `json:"question"`
+	Options  []askUserOptionView `json:"options,omitempty"`
+}
+
+// buildAskUserAnswerEnvelope wraps the user's AskUserQuestion answers in a
+// framed follow-up turn that restates the original question and option set.
+// On the synthetic ask-user path the response is delivered to Codex as a plain
+// user turn — without framing, an option label like "Replace README.md
+// (Recommended)" is indistinguishable from a fresh directive, and the agent
+// has been observed to act on it by jumping out of its current planning role
+// and into implementation work.
+//
+// The envelope keeps the agent inside its current task and role: it labels the
+// payload as an AskUserQuestion answer, restates the question and options for
+// context, and reminds the agent that the reply refines the existing task
+// rather than introducing a new one. The wire format remains a single user
+// turn — only the rendered text changes.
+func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]string) string {
+	parsed := parseAskUserQuestions(questions)
+	byText := make(map[string]askUserQuestionView, len(parsed))
+	for _, q := range parsed {
+		byText[q.Question] = q
+	}
+
+	keys := make([]string, 0, len(answers))
+	for q := range answers {
+		keys = append(keys, q)
+	}
+	sort.Strings(keys)
+
+	var sb strings.Builder
+	sb.WriteString("[AskUserQuestion answer]\n")
+	sb.WriteString("The user has answered your question.\n")
+
+	for _, q := range keys {
+		sb.WriteString("\nQuestion you asked:\n> ")
+		sb.WriteString(strings.ReplaceAll(strings.TrimSpace(q), "\n", "\n> "))
+		sb.WriteString("\n")
+		if qv, ok := byText[q]; ok && len(qv.Options) > 0 {
+			sb.WriteString("\nOptions you presented:\n")
+			for i, opt := range qv.Options {
+				fmt.Fprintf(&sb, "  %d. %s", i+1, opt.Label)
+				if opt.Description != "" {
+					sb.WriteString(" — ")
+					sb.WriteString(opt.Description)
+				}
+				sb.WriteString("\n")
+			}
+		}
+		sb.WriteString("\nUser's selected answer: ")
+		sb.WriteString(answers[q])
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// parseAskUserQuestions extracts the question entries from an AskUserQuestion
+// input payload. Production callers pass the envelope `{"questions":[...]}`,
+// but some test paths pass the inner array directly, so both shapes are
+// accepted. Returns nil on any parse failure — the caller falls back to a
+// no-options framing.
+func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
+	if len(raw) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Questions []askUserQuestionView `json:"questions"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Questions) > 0 {
+		return envelope.Questions
+	}
+	var bare []askUserQuestionView
+	if err := json.Unmarshal(raw, &bare); err == nil && len(bare) > 0 {
+		return bare
+	}
+	return nil
 }
 
 // maxQuestionFormatRetries caps the number of automatic reminders we send back

@@ -6,6 +6,8 @@ description: Write a vertical-slice plan for a single roadmap phase
 
 You are taking one approved roadmap phase — a single vertical slice — and turning it into a concise set of behavior-centered tasks that the implementer can execute. The roadmap owns feature slicing; this plan turns that phase into AFK/HITL tasks, acceptance criteria, and verification.
 
+**Your job is NEVER to write code.** Your only deliverable is the phase plan markdown inside the output directory.
+
 ## Output Files
 
 | Artifact | Path | Requirement | Purpose |

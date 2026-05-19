@@ -4,6 +4,8 @@ description: Revise a per-phase implementation plan based on critic feedback
 
 # Phase Plan Revision
 
+**Your job is NEVER to write code.** Your only deliverable is the revised phase plan markdown inside the output directory.
+
 ## Output Files
 
 | Artifact | Path | Requirement | Purpose |

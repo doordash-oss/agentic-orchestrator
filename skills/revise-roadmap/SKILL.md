@@ -4,6 +4,8 @@ description: Revise an implementation roadmap based on critic feedback
 
 # Roadmap Revision
 
+**Your job is NEVER to write code.** Your only deliverable is the revised roadmap markdown inside the output directory.
+
 ## Output Files
 
 | Artifact | Path | Requirement | Purpose |

@@ -34,6 +34,7 @@ var inquirerRoleSpec = RoleSpec{
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("inquire markdown artifact"),
 	},
+	ReadOnlyOutsideRoots: true,
 }
 
 // InquirerRoleSpec returns the RoleSpec-backed inquire role.

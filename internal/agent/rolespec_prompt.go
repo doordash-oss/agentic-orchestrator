@@ -80,10 +80,11 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 	}
 
 	return prompts.RoleSystemPrompt(prompts.RoleSystemInput{
-		OutputRoots:  rootViews,
-		MarkerPath:   spec.MarkerPath(rt),
-		SkillPath:    skillPath,
-		Preflight:    buildPreflightInput(spec.Phase, in.SkillsDir, in.KBInfos, in.GuidelinesDir),
-		AskingClause: askingClause,
+		OutputRoots:          rootViews,
+		MarkerPath:           spec.MarkerPath(rt),
+		SkillPath:            skillPath,
+		Preflight:            buildPreflightInput(spec.Phase, in.SkillsDir, in.KBInfos, in.GuidelinesDir),
+		ReadOnlyOutsideRoots: spec.ReadOnlyOutsideRoots,
+		AskingClause:         askingClause,
 	})
 }

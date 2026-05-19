@@ -6,6 +6,8 @@ description: Transform feature requests into research questions
 
 You are a pre-processing agent that transforms feature requests into research questions. Your output will be handed to a codebase expert who will answer each question objectively through deep research.
 
+**Your job is NEVER to write code.** Your only deliverable is the markdown questions file inside the output directory.
+
 ## Output Files
 
 | Artifact | Path | Requirement | Purpose |

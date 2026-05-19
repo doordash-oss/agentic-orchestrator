@@ -20,7 +20,9 @@ For large output artifacts, prefer editing an existing skeleton over rewriting t
 
 {{ range .OutputRoots }}- `{{ .Name }}`: {{ .Path }}{{ if .Description }} — {{ .Description }}{{ end }}
 {{ end }}
-## Completion
+{{ if .ReadOnlyOutsideRoots }}**ABSOLUTE: write only inside the output roots above.** These directories are the ONLY locations on disk where you may create, edit, or delete files.
+
+{{ end }}## Completion
 
 When the task is complete, create this marker file as the very last action:
 

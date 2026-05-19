@@ -500,6 +500,7 @@ func NewSession(id, featureID string, phase feature.Phase) *Session {
 		id:                        id,
 		featureID:                 featureID,
 		phase:                     phase,
+		startedAt:                 time.Now(),
 		messageLog:                NewMessageLog(),
 		status:                    SessionRunning,
 		statusCh:                  make(chan string, 1),

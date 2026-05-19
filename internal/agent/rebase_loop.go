@@ -128,16 +128,19 @@ type RebaseRepoTarget struct {
 //     AtomicPhaseStamp wrote failed (LastError set).
 //   - "interrupted":      shutdown / feature stopped mid-loop. No atomic
 //     stamp; persisted state preserved for restart.
+//   - "need_user_input":  iteration emitted NEED_USER_INPUT — cycle pause
+//     gate; NeedUserInputPath points to the persisted gate artifact.
 //   - "no_op":            no behind repos at loop entry; nothing to do.
 //   - "failed":           dispatch error before iteration began.
 //
 // Repos is the deduplicated, sorted list of behind-subset repo names — the
 // canonical "rebase-staged subset" the AtomicPhaseStamp wrote to.
 type RebaseLoopResult struct {
-	FinalStatus string
-	Iterations  int
-	LastError   string
-	Repos       []string
+	FinalStatus       string
+	Iterations        int
+	LastError         string
+	NeedUserInputPath string
+	Repos             []string
 }
 
 // RunRebaseLoop drives the unified rebase cycle. Cwd at the feature state
@@ -268,7 +271,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		StateDir:                   stateDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,
@@ -347,6 +350,21 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 			FinalStatus: "interrupted",
 			Iterations:  loopResult.Iterations,
 			Repos:       repoNames,
+		}, nil
+
+	case "need_user_input":
+		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
+			FeatureID: cfg.Feature.ID,
+			Repos:     repoNames,
+			Outcome:   PhaseOutcomeNeedUserInput,
+			GatePath:  loopResult.NeedUserInputPath,
+		})
+		return &RebaseLoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        loopResult.Iterations,
+			LastError:         loopResult.LastError,
+			NeedUserInputPath: loopResult.NeedUserInputPath,
+			Repos:             repoNames,
 		}, nil
 
 	default:

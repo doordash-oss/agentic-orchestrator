@@ -283,6 +283,18 @@ func (o *Orchestrator) handleFeatureRebaseDone(
 		// them.
 		return
 
+	case "need_user_input":
+		gate := &agent.LoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        result.Iterations,
+			LastError:         result.LastError,
+			NeedUserInputPath: result.NeedUserInputPath,
+		}
+		for _, t := range behind {
+			_ = o.onRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleRebase, gate)
+		}
+		return
+
 	default:
 		// max_iterations / safety_rail / failed: surface conflict per
 		// repo so the TUI can present the failed cycle.

@@ -410,6 +410,63 @@ func TestRunRebaseLoop_InterruptedPreservesState(t *testing.T) {
 	}
 }
 
+// TestRunRebaseLoop_NeedUserInputSurfacesGate verifies that an agent-authored
+// NEED_USER_INPUT handoff pauses the rebase cycle instead of stamping the
+// staged repos failed.
+func TestRunRebaseLoop_NeedUserInputSurfacesGate(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-nui", []string{"api", "web"})
+	gatePath := filepath.Join(stateDir, "rebase-1", "iteration-01", "need-user-input.yaml")
+
+	cfg := RebaseLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		BehindRepos: []RebaseRepoTarget{
+			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: "web", RebaseTarget: "main"},
+		},
+		MaxIterations: 3,
+		RunImplementFn: stubRunImplementFn(&LoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        1,
+			LastError:         "Build gate needs a human decision.",
+			NeedUserInputPath: gatePath,
+		}, nil),
+	}
+
+	result, err := RunRebaseLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+	if result.FinalStatus != "need_user_input" {
+		t.Fatalf("FinalStatus = %q, want need_user_input", result.FinalStatus)
+	}
+	if result.NeedUserInputPath != gatePath {
+		t.Errorf("NeedUserInputPath = %q, want %q", result.NeedUserInputPath, gatePath)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.PendingNeedUserInputPath != gatePath {
+		t.Errorf("PendingNeedUserInputPath = %q, want %q", loaded.PendingNeedUserInputPath, gatePath)
+	}
+	for _, name := range []string{"api", "web"} {
+		st := loaded.RepoStates[name]
+		if st == nil || st.LastError != "" {
+			t.Errorf("repo %s = %+v, want prior state without failure", name, st)
+		}
+	}
+	if loaded.ActiveCycle == nil {
+		t.Fatal("ActiveCycle = nil, want preserved at Status=running for gate resume")
+	}
+	if loaded.ActiveCycle.Status != feature.RepoCycleRunning {
+		t.Errorf("ActiveCycle.Status = %q, want running", loaded.ActiveCycle.Status)
+	}
+}
+
 // TestRunRebaseLoop_NoBehindReposShortCircuits verifies the no-op
 // degenerate case: zero behind repos returns FinalStatus=no_op without
 // touching any state.

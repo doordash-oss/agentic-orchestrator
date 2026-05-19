@@ -259,6 +259,18 @@ func (o *Orchestrator) handleFeatureReviewCommentsDone(
 		// action handles them.
 		return
 
+	case "need_user_input":
+		gate := &agent.LoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        result.Iterations,
+			LastError:         result.LastError,
+			NeedUserInputPath: result.NeedUserInputPath,
+		}
+		for _, t := range targets {
+			_ = o.onRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleReviewComments, gate)
+		}
+		return
+
 	default:
 		// max_iterations / safety_rail / failed: surface error per
 		// repo so the TUI can present the failed cycle.

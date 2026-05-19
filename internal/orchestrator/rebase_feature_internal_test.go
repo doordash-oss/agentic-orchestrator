@@ -15,6 +15,7 @@
 package orchestrator
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -114,4 +115,65 @@ func TestHandleFeatureRebaseDone_ManualPublishDoesNotResumePublish(t *testing.T)
 		&agent.RebaseLoopResult{FinalStatus: "review_passed", Repos: []string{"agentic"}},
 		nil,
 	)
+}
+
+func TestHandleFeatureRebaseDone_NeedUserInputPausesCycle(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	cfg := config.NewDefault()
+	mgr := feature.NewManager(store, cfg)
+	gatePath := filepath.Join(t.TempDir(), "need-user-input.yaml")
+
+	const featureID = "feat-rebase-nui"
+	f := &feature.Feature{
+		ID:            featureID,
+		Name:          "Rebase Need User Input",
+		Slug:          "rebase-need-user-input",
+		Status:        feature.StatusPublished,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: "agentic", Path: "/tmp/agentic", Branch: "feature/rebase-need-user-input"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"agentic": {Touched: true, PRURL: "https://github.com/example/agentic/pull/1"},
+		},
+		RepoCycles: map[string]*feature.RepoCycleState{
+			"agentic": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning, Count: 1},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	o := New(Deps{Lifecycle: mgr, Store: store}, Hooks{})
+	o.handleFeatureRebaseDone(featureID,
+		[]agent.RebaseRepoTarget{{RepoName: "agentic", RebaseTarget: "master"}},
+		&agent.RebaseLoopResult{
+			FinalStatus:       "need_user_input",
+			LastError:         "Build gate needs a human decision.",
+			NeedUserInputPath: gatePath,
+			Repos:             []string{"agentic"},
+		},
+		nil,
+	)
+
+	got, err := mgr.Get(featureID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	rc := got.RepoCycles["agentic"]
+	if rc == nil {
+		t.Fatal("RepoCycles[agentic] missing")
+	}
+	if rc.Status != feature.RepoCycleNeedUserInput {
+		t.Fatalf("RepoCycles[agentic].Status = %q, want %q", rc.Status, feature.RepoCycleNeedUserInput)
+	}
+	if rc.PendingNeedUserInputPath != gatePath {
+		t.Errorf("PendingNeedUserInputPath = %q, want %q", rc.PendingNeedUserInputPath, gatePath)
+	}
+	if rc.LastError != "Build gate needs a human decision." {
+		t.Errorf("LastError = %q", rc.LastError)
+	}
+	if st := got.RepoStates["agentic"]; st == nil || st.LastError != "" {
+		t.Errorf("RepoStates[agentic] = %+v, want no failure", st)
+	}
 }

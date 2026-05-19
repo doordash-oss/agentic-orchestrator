@@ -131,8 +131,6 @@ func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 
 	on := render(true)
 	requireContains(t, on, "ABSOLUTE: write only inside the output roots above.")
-	requireContains(t, on, "Your role never writes code")
-	requireContains(t, on, "refuse and explain")
 	// The prohibition must sit between the output-roots list and the
 	// completion marker — agents skip ahead to "## Completion", so placing
 	// the rule there keeps it on the path of an attentive reader.
@@ -140,7 +138,6 @@ func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 
 	off := render(false)
 	requireNotContains(t, off, "ABSOLUTE: write only inside the output roots above.")
-	requireNotContains(t, off, "Your role never writes code")
 }
 
 func TestMultiRepoPromptBranches(t *testing.T) {

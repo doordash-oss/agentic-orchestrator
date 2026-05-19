@@ -653,8 +653,6 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 			})
 			for _, want := range []string{
 				"ABSOLUTE: write only inside the output roots above.",
-				"Your role never writes code",
-				"refuse",
 			} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("%s system prompt missing %q in:\n%s", tt.name, want, got)

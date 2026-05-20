@@ -427,7 +427,7 @@ func TestParseProgressMd_VerificationPathMismatch(t *testing.T) {
 	}
 }
 
-func TestParseProgressMd_DetectsProseHedge(t *testing.T) {
+func TestParseProgressMd_AllowsFuturePhaseProse(t *testing.T) {
 	dir := t.TempDir()
 	iterDir := filepath.Join(dir, "iteration-01")
 	_ = os.MkdirAll(iterDir, 0o755)
@@ -436,7 +436,7 @@ func TestParseProgressMd_DetectsProseHedge(t *testing.T) {
 ## Iteration Handoff
 
 ### Completed this iteration
-- Base styles shipped; Tailwind lands in Phase 3.
+- Fixed prior feedback: progress.md used to mention "lands in Phase 8" while deferrals were empty.
 
 ### Remaining from the plan
 
@@ -463,17 +463,8 @@ SUCCESS
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
 	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
-	if parsed.OK() {
-		t.Fatalf("expected violation for prose-only deferral hedge")
-	}
-	hit := false
-	for _, v := range parsed.ProtocolViolations {
-		if strings.Contains(v, "lands in Phase 3") {
-			hit = true
-		}
-	}
-	if !hit {
-		t.Errorf("expected prose-hedge violation citing the matched phrase; got %v", parsed.ProtocolViolations)
+	if !parsed.OK() {
+		t.Fatalf("expected future-phase prose to stay out of protocol validation; got %v", parsed.ProtocolViolations)
 	}
 }
 

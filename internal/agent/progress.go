@@ -211,25 +211,6 @@ var progressVerificationPathRE = regexp.MustCompile(`(?m)^\s*-\s*\*\*Path\*\*\s*
 // progressVerificationNotesRE matches the optional `**Notes**:` bullet.
 var progressVerificationNotesRE = regexp.MustCompile(`(?m)^\s*-\s*\*\*Notes\*\*\s*:\s*(.+?)\s*$`)
 
-// deferralProseHedgePatterns match prose that declares or implies a
-// cross-phase deferral without emitting a structured deferrals: entry. The
-// parser's job here is detection-asymmetric: if the agent's prose says
-// "we're punting this to Phase 3" but the structured block is empty,
-// reject. Better to force a cheap rewrite than let an unstructured deferral
-// slip past the ledger.
-//
-// (Moved here from report_integrity.go when deferrals migrated out of
-// verification-report.yaml. The patterns themselves are unchanged.)
-var deferralProseHedgePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bdeferred\s+to\s+(?:phase|step)\s+\d+\b`),
-	regexp.MustCompile(`(?i)\blands?\s+in\s+(?:phase|step)\s+\d+\b`),
-	regexp.MustCompile(`(?i)\b(?:phase|step)\s+\d+\s+will\s+(?:add|ship|handle|cover|implement|fix|complete)\b`),
-	regexp.MustCompile(`(?i)\btodo\s*\(\s*(?:phase|step)\s*\d+\s*\)`),
-	regexp.MustCompile(`(?i)\bin\s+a\s+(?:later|future|subsequent|following)\s+(?:phase|step|iteration)\b`),
-	regexp.MustCompile(`(?i)\bwill\s+land\s+(?:in|alongside|with)\s+(?:phase|step|the)\s+\d+\b`),
-	regexp.MustCompile(`(?i)\bpunt(?:ed)?\s+to\s+(?:phase|step)\s+\d+\b`),
-}
-
 // deferralsYAMLDoc is the on-the-wire shape inside the Deferrals fenced YAML
 // block. We accept the empty form (`deferrals: []`, `closed_deferrals: []`)
 // but require both keys to be present so the agent's intent is unambiguous —
@@ -411,20 +392,6 @@ func ParseProgressMd(path, expectedVerificationPath string) (*ParsedProgress, er
 		}
 	}
 	validateQuestionsSectionPlacement(body, parsed)
-
-	// Prose-hedge detection: if the agent wrote "lands in Phase 3" anywhere
-	// in progress.md outside the Deferrals YAML block but the structured
-	// deferrals: list is empty, that's a smell. Same logic the report
-	// integrity gate used to apply against verification-report.yaml prose.
-	if len(parsed.Deferrals) == 0 {
-		hedges := findProgressDeferralHedges(body)
-		if len(hedges) > 0 {
-			parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf(
-				"progress.md prose mentions future-phase work (%s) but `deferrals:` is empty — use a deferral only for Agentic-owned work due in a numbered roadmap phase; otherwise rewrite the prose or use NEED_USER_INPUT",
-				strings.Join(quoteUnique(hedges), ", "),
-			))
-		}
-	}
 
 	return parsed, nil
 }
@@ -696,63 +663,4 @@ func splitStateTokenAndNote(body string) (token, note string) {
 	}
 	note = strings.TrimSpace(strings.Join(lines[tokenIdx+1:], "\n"))
 	return token, note
-}
-
-// findProgressDeferralHedges scans the document for prose that implies a
-// cross-phase deferral without a structured entry. Returns matched
-// substrings (deduped) for feedback quotation. The agent's structured
-// `deferrals:` YAML block is excluded from the scan to avoid false
-// positives on YAML field values.
-func findProgressDeferralHedges(body string) []string {
-	scan := stripFencedBlocks(body)
-	seen := map[string]struct{}{}
-	var out []string
-	for _, re := range deferralProseHedgePatterns {
-		for _, m := range re.FindAllString(scan, -1) {
-			key := strings.ToLower(strings.TrimSpace(m))
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, m)
-		}
-	}
-	return out
-}
-
-// stripFencedBlocks removes ```...``` and ~~~...~~~ fenced regions from s
-// so prose-hedge regexes don't false-positive on YAML field values that
-// happen to contain "lands in Phase 3" inside the structured block.
-func stripFencedBlocks(s string) string {
-	out := s
-	for _, fence := range []string{"```", "~~~"} {
-		for {
-			start := strings.Index(out, fence)
-			if start < 0 {
-				break
-			}
-			end := strings.Index(out[start+len(fence):], fence)
-			if end < 0 {
-				break
-			}
-			out = out[:start] + out[start+len(fence)+end+len(fence):]
-		}
-	}
-	return out
-}
-
-// quoteUnique returns each string wrapped in quotes, deduped by lowercase
-// comparison. Used to render prose-hedge findings inline in feedback.
-func quoteUnique(in []string) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, s := range in {
-		key := strings.ToLower(strings.TrimSpace(s))
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, fmt.Sprintf("%q", s))
-	}
-	return out
 }

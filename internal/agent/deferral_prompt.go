@@ -23,12 +23,9 @@ import (
 // prompt fragment listing every ledger entry whose DueByPhase matches the
 // given phase and whose status is still open.
 //
-// This is the carry-forward mechanism that keeps prose hedges from
-// cascading silently across phase boundaries. A Phase-1 implement iteration
-// that said "Tailwind lands in Phase 3" created a ledger entry with
-// DueByPhase=3; when the Phase-3 plan and implement prompts are built,
-// this helper surfaces that entry verbatim so the agent cannot claim
-// ignorance.
+// This is the carry-forward mechanism for structured deferrals. When the
+// target phase starts, this helper surfaces due entries verbatim so the agent
+// cannot claim ignorance.
 //
 // Behavior modes:
 //

@@ -15,14 +15,17 @@
 package orchestrator
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 func TestHandleFeatureRebaseDone_PrePRCodeReadyResumesPublish(t *testing.T) {
@@ -177,6 +180,59 @@ func TestHandleFeatureRebaseDone_NeedUserInputPausesCycle(t *testing.T) {
 	}
 	if st := got.RepoStates["agentic"]; st == nil || st.LastError != "" {
 		t.Errorf("RepoStates[agentic] = %+v, want no failure", st)
+	}
+}
+
+func TestHandleFeatureRebaseDone_NeedUserInputClearFeatureGateErrorFailsCycle(t *testing.T) {
+	const featureID = "feat-rebase-nui-clear-fails"
+	gatePath := filepath.Join(t.TempDir(), "need-user-input.yaml")
+
+	store := mocks.NewMockFeatureStore()
+	modifyCalls := 0
+	store.ModifyFn = func(_ string, fn func(*feature.Feature) error) error {
+		modifyCalls++
+		if modifyCalls == 1 {
+			return fn(&feature.Feature{
+				RepoCycles: map[string]*feature.RepoCycleState{
+					"agentic": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning, Count: 1},
+				},
+				PendingNeedUserInputPath: gatePath,
+			})
+		}
+		return errors.New("store write failed")
+	}
+	lifecycle := mocks.NewMockFeatureLifecycle()
+
+	o := New(Deps{Lifecycle: lifecycle, Store: store}, Hooks{})
+	o.handleFeatureRebaseDone(featureID,
+		[]agent.RebaseRepoTarget{{RepoName: "agentic", RebaseTarget: "main"}},
+		&agent.RebaseLoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        1,
+			LastError:         "Build gate needs a human decision.",
+			NeedUserInputPath: gatePath,
+			Repos:             []string{"agentic"},
+		},
+		nil,
+	)
+
+	var failCall *mocks.MockCall
+	for i := range lifecycle.Calls {
+		if lifecycle.Calls[i].Method == "FailRepoCycle" {
+			failCall = &lifecycle.Calls[i]
+			break
+		}
+	}
+	if failCall == nil {
+		t.Fatal("FailRepoCycle was not called")
+	}
+	if got := failCall.Args[1]; got != "agentic" {
+		t.Fatalf("FailRepoCycle repo = %v, want agentic", got)
+	}
+	msg, _ := failCall.Args[2].(string)
+	if !strings.Contains(msg, "rebase: clear stale feature-level need-user-input gate") ||
+		!strings.Contains(msg, "store write failed") {
+		t.Fatalf("FailRepoCycle message = %q, want stale-gate persistence error context", msg)
 	}
 }
 

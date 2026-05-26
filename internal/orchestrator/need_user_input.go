@@ -140,6 +140,33 @@ func (o *Orchestrator) onRepoCycleNeedUserInput(
 	return nil
 }
 
+func (o *Orchestrator) recordRepoCycleNeedUserInput(
+	featureID, repoName string,
+	cycleType feature.RepoCycleType,
+	gate *agent.LoopResult,
+) {
+	if err := o.onRepoCycleNeedUserInput(featureID, repoName, cycleType, gate); err != nil {
+		o.failRepoCycleGatePersistence(featureID, repoName,
+			fmt.Errorf("%s: persist need-user-input gate for repo %q: %w", cycleType, repoName, err))
+	}
+}
+
+func (o *Orchestrator) failRepoCycleGatePersistence(featureID, repoName string, cause error) {
+	if cause == nil {
+		return
+	}
+	msg := cause.Error()
+	if err := o.deps.Lifecycle.FailRepoCycle(featureID, repoName, msg); err != nil {
+		o.emitEventBlocking(ports.Event{
+			Type:      ports.PhaseCompleted,
+			FeatureID: featureID,
+			Phase:     feature.PhaseImplement,
+			Error:     fmt.Errorf("%s (also failed to mark repo cycle failed: %w)", msg, err),
+			Message:   msg,
+		})
+	}
+}
+
 // handleRepoCycleNeedUserInputDecision handles a cycle-scoped need-user-input
 // decision. Resume validates answers, clears the paused gate fields while
 // preserving cycle Count / Type / artifact anchors, then dispatches to the

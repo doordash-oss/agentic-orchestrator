@@ -267,7 +267,7 @@ func (o *Orchestrator) handleFeatureReviewCommentsDone(
 			NeedUserInputPath: result.NeedUserInputPath,
 		}
 		for _, t := range targets {
-			_ = o.onRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleReviewComments, gate)
+			o.recordRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleReviewComments, gate)
 		}
 		return
 

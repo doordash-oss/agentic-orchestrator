@@ -295,14 +295,19 @@ func (o *Orchestrator) handleFeatureRebaseDone(
 			NeedUserInputPath: result.NeedUserInputPath,
 		}
 		for _, t := range behind {
-			_ = o.onRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleRebase, gate)
+			o.recordRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleRebase, gate)
 		}
-		_ = o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
 			if f.PendingNeedUserInputPath == result.NeedUserInputPath {
 				f.PendingNeedUserInputPath = ""
 			}
 			return nil
-		})
+		}); err != nil {
+			for _, t := range behind {
+				o.failRepoCycleGatePersistence(featureID, t.RepoName,
+					fmt.Errorf("rebase: clear stale feature-level need-user-input gate: %w", err))
+			}
+		}
 		return
 
 	default:

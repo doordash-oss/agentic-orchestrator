@@ -15,13 +15,16 @@
 package orchestrator
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) {
@@ -86,5 +89,48 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) 
 	}
 	if st := got.RepoStates["agentic"]; st == nil || st.LastError != "" {
 		t.Errorf("RepoStates[agentic] = %+v, want no failure", st)
+	}
+}
+
+func TestHandleFeatureReviewCommentsDone_NeedUserInputPersistenceErrorFailsCycle(t *testing.T) {
+	store := mocks.NewMockFeatureStore()
+	store.ModifyFn = func(string, func(*feature.Feature) error) error {
+		return errors.New("store unavailable")
+	}
+	lifecycle := mocks.NewMockFeatureLifecycle()
+
+	o := New(Deps{Lifecycle: lifecycle, Store: store}, Hooks{})
+	o.handleFeatureReviewCommentsDone("feat-review-comments-nui",
+		[]agent.ReviewCommentsRepoTarget{{
+			RepoName: "agentic",
+			PRURL:    "https://github.com/example/agentic/pull/1",
+			Comments: []ports.ReviewComment{{ID: 1}},
+		}},
+		&agent.ReviewCommentsLoopResult{
+			FinalStatus:       "need_user_input",
+			LastError:         "Reviewer request conflicts with product decision.",
+			NeedUserInputPath: filepath.Join(t.TempDir(), "need-user-input.yaml"),
+			Repos:             []string{"agentic"},
+		},
+		nil,
+	)
+
+	var failCall *mocks.MockCall
+	for i := range lifecycle.Calls {
+		if lifecycle.Calls[i].Method == "FailRepoCycle" {
+			failCall = &lifecycle.Calls[i]
+			break
+		}
+	}
+	if failCall == nil {
+		t.Fatal("FailRepoCycle was not called")
+	}
+	if got := failCall.Args[1]; got != "agentic" {
+		t.Fatalf("FailRepoCycle repo = %v, want agentic", got)
+	}
+	msg, _ := failCall.Args[2].(string)
+	if !strings.Contains(msg, "review-comments: persist need-user-input gate") ||
+		!strings.Contains(msg, "store unavailable") {
+		t.Fatalf("FailRepoCycle message = %q, want persistence error context", msg)
 	}
 }

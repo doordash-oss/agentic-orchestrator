@@ -410,6 +410,63 @@ func TestRunRebaseLoop_InterruptedPreservesState(t *testing.T) {
 	}
 }
 
+// TestRunRebaseLoop_NeedUserInputSurfacesGate verifies that an agent-authored
+// NEED_USER_INPUT handoff pauses the rebase cycle instead of stamping the
+// staged repos failed.
+func TestRunRebaseLoop_NeedUserInputSurfacesGate(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-nui", []string{"api", "web"})
+	gatePath := filepath.Join(stateDir, "rebase-1", "iteration-01", "need-user-input.yaml")
+
+	cfg := RebaseLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		BehindRepos: []RebaseRepoTarget{
+			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: "web", RebaseTarget: "main"},
+		},
+		MaxIterations: 3,
+		RunImplementFn: stubRunImplementFn(&LoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        1,
+			LastError:         "Build gate needs a human decision.",
+			NeedUserInputPath: gatePath,
+		}, nil),
+	}
+
+	result, err := RunRebaseLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+	if result.FinalStatus != "need_user_input" {
+		t.Fatalf("FinalStatus = %q, want need_user_input", result.FinalStatus)
+	}
+	if result.NeedUserInputPath != gatePath {
+		t.Errorf("NeedUserInputPath = %q, want %q", result.NeedUserInputPath, gatePath)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.PendingNeedUserInputPath != gatePath {
+		t.Errorf("PendingNeedUserInputPath = %q, want %q", loaded.PendingNeedUserInputPath, gatePath)
+	}
+	for _, name := range []string{"api", "web"} {
+		st := loaded.RepoStates[name]
+		if st == nil || st.LastError != "" {
+			t.Errorf("repo %s = %+v, want prior state without failure", name, st)
+		}
+	}
+	if loaded.ActiveCycle == nil {
+		t.Fatal("ActiveCycle = nil, want preserved at Status=running for gate resume")
+	}
+	if loaded.ActiveCycle.Status != feature.RepoCycleRunning {
+		t.Errorf("ActiveCycle.Status = %q, want running", loaded.ActiveCycle.Status)
+	}
+}
+
 // TestRunRebaseLoop_NoBehindReposShortCircuits verifies the no-op
 // degenerate case: zero behind repos returns FinalStatus=no_op without
 // touching any state.
@@ -698,6 +755,66 @@ func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	// ArtifactManager.LatestIteration sees it during recovery.
 	if _, err := os.Stat(filepath.Join(wantDir, "iteration-01")); err != nil {
 		t.Errorf("iteration-01 missing: %v (recovery would not see prior iteration)", err)
+	}
+}
+
+func TestRunRebaseLoop_ResumeExistingCycleReusesArtifactDir(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-resume", []string{"api"})
+
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.SetRebaseCount(1)
+		ff.SetActiveCycleType(feature.CycleRebase)
+		ff.ActiveCycle = &feature.CycleState{
+			Type:   feature.CycleRebase,
+			Status: feature.RepoCycleRunning,
+			Count:  1,
+		}
+		ff.PendingNeedUserInputPath = filepath.Join(stateDir, "gate.yaml")
+		return nil
+	}); err != nil {
+		t.Fatalf("seed paused rebase state: %v", err)
+	}
+	loaded, _ := store.Load(f.ID)
+
+	priorDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-1", "iteration-01")
+	if err := os.MkdirAll(priorDir, 0o755); err != nil {
+		t.Fatalf("seed iteration-01: %v", err)
+	}
+
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2})
+	cfg := RebaseLoopConfig{
+		Feature:      loaded,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		BehindRepos: []RebaseRepoTarget{
+			{RepoName: "api", RebaseTarget: "main"},
+		},
+		MaxIterations:       3,
+		ResumeExistingCycle: true,
+		RunImplementFn:      captureFn,
+	}
+
+	if _, err := RunRebaseLoop(cfg, nil); err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured calls = %d, want 1", len(*captured))
+	}
+	loaded, _ = store.Load(f.ID)
+	if loaded.RebaseCount() != 1 {
+		t.Fatalf("RebaseCount = %d, want 1", loaded.RebaseCount())
+	}
+	wantDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-1")
+	if got := (*captured)[0].ArtifactDir; got != wantDir {
+		t.Fatalf("ArtifactDir = %q, want existing cycle dir %q", got, wantDir)
+	}
+	if _, err := os.Stat(filepath.Join(wantDir, "iteration-01")); err != nil {
+		t.Fatalf("existing iteration-01 missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-2")); !os.IsNotExist(err) {
+		t.Fatalf("rebase-2 exists after resume; expected no new rebase dir (stat err=%v)", err)
 	}
 }
 

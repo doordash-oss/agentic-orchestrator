@@ -269,6 +269,11 @@ type Orchestrator struct {
 		planPath string,
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.LoopResult, error)
+
+	// runRebaseLoopFn is a test seam over agent.RunRebaseLoop. The default
+	// launches the production unified rebase loop; tests override it to
+	// verify rebase gate routing without booting agent sessions.
+	runRebaseLoopFn func(agent.RebaseLoopConfig, ports.SessionManager) (*agent.RebaseLoopResult, error)
 }
 
 // SetRunImplementationFn installs a test seam that intercepts
@@ -310,6 +315,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		}
 		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
 	}
+	o.runRebaseLoopFn = agent.RunRebaseLoop
 	return o
 }
 

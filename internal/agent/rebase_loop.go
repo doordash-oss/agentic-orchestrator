@@ -98,6 +98,12 @@ type RebaseLoopConfig struct {
 	GuidelinesDir              string
 	Observer                   *observe.Observer
 
+	// ResumeExistingCycle reuses the current ActiveCycle.Count instead of
+	// opening a new rebase-N directory. Used when resuming a rebase
+	// NEED_USER_INPUT gate so answered prompts carry into the next
+	// iteration of the same cycle.
+	ResumeExistingCycle bool
+
 	// RunImplementFn is a test seam: when non-nil, RunRebaseLoop calls
 	// this instead of RunImplementationLoop so unit tests can drive the
 	// outer loop's state-machine transitions without launching a real
@@ -128,16 +134,19 @@ type RebaseRepoTarget struct {
 //     AtomicPhaseStamp wrote failed (LastError set).
 //   - "interrupted":      shutdown / feature stopped mid-loop. No atomic
 //     stamp; persisted state preserved for restart.
+//   - "need_user_input":  iteration emitted NEED_USER_INPUT — cycle pause
+//     gate; NeedUserInputPath points to the persisted gate artifact.
 //   - "no_op":            no behind repos at loop entry; nothing to do.
 //   - "failed":           dispatch error before iteration began.
 //
 // Repos is the deduplicated, sorted list of behind-subset repo names — the
 // canonical "rebase-staged subset" the AtomicPhaseStamp wrote to.
 type RebaseLoopResult struct {
-	FinalStatus string
-	Iterations  int
-	LastError   string
-	Repos       []string
+	FinalStatus       string
+	Iterations        int
+	LastError         string
+	NeedUserInputPath string
+	Repos             []string
 }
 
 // RunRebaseLoop drives the unified rebase cycle. Cwd at the feature state
@@ -191,11 +200,24 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 	}
 
 	// Increment RebaseCount and set ActiveCycle = {Type: rebase, Status:
-	// running} at loop entry. Both are persisted in the same Modify so a
-	// crash between the two (e.g. another goroutine reads partial state)
-	// cannot observe one without the other.
+	// running} at loop entry. NEED_USER_INPUT resume reuses the existing
+	// ActiveCycle.Count so the next iteration lands in the same rebase-N
+	// artifact directory and can read prior answered gates.
 	rebaseCount := 0
 	if err := cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+		if cfg.ResumeExistingCycle {
+			if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRebase || f.ActiveCycle.Count <= 0 {
+				return fmt.Errorf("resume requested without an active rebase cycle")
+			}
+			rebaseCount = f.ActiveCycle.Count
+			f.ActiveCycle.Status = feature.RepoCycleRunning
+			if f.RebaseCount() < rebaseCount {
+				f.SetRebaseCount(rebaseCount)
+			}
+			f.SetActiveCycleType(feature.CycleRebase)
+			return nil
+		}
+
 		f.SetRebaseCount(f.RebaseCount() + 1)
 		f.SetActiveCycleType(feature.CycleRebase)
 		f.ActiveCycle = &feature.CycleState{
@@ -268,7 +290,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		StateDir:                   stateDir,
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,
@@ -347,6 +369,21 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 			FinalStatus: "interrupted",
 			Iterations:  loopResult.Iterations,
 			Repos:       repoNames,
+		}, nil
+
+	case "need_user_input":
+		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
+			FeatureID: cfg.Feature.ID,
+			Repos:     repoNames,
+			Outcome:   PhaseOutcomeNeedUserInput,
+			GatePath:  loopResult.NeedUserInputPath,
+		})
+		return &RebaseLoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        loopResult.Iterations,
+			LastError:         loopResult.LastError,
+			NeedUserInputPath: loopResult.NeedUserInputPath,
+			Repos:             repoNames,
 		}, nil
 
 	default:

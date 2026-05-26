@@ -365,6 +365,63 @@ func TestRunReviewCommentsLoop_InterruptedPreservesState(t *testing.T) {
 	}
 }
 
+// TestRunReviewCommentsLoop_NeedUserInputSurfacesGate verifies that an
+// ambiguous review-comment decision pauses the cycle instead of stamping
+// staged repos failed.
+func TestRunReviewCommentsLoop_NeedUserInputSurfacesGate(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newReviewCommentsTestFeature(t, stateDir, "rc-nui", []string{"api", "web"})
+	gatePath := filepath.Join(stateDir, "review-comments-1", "iteration-01", "need-user-input.yaml")
+
+	cfg := ReviewCommentsLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		RepoTargets: []ReviewCommentsRepoTarget{
+			makeReviewCommentTarget("api", "https://github.com/example/api/pull/1", 1),
+			makeReviewCommentTarget("web", "https://github.com/example/web/pull/1", 2),
+		},
+		MaxIterations: 3,
+		RunImplementFn: stubRunImplementFn(&LoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        1,
+			LastError:         "Reviewer request conflicts with product decision.",
+			NeedUserInputPath: gatePath,
+		}, nil),
+	}
+
+	result, err := RunReviewCommentsLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunReviewCommentsLoop: %v", err)
+	}
+	if result.FinalStatus != "need_user_input" {
+		t.Fatalf("FinalStatus = %q, want need_user_input", result.FinalStatus)
+	}
+	if result.NeedUserInputPath != gatePath {
+		t.Errorf("NeedUserInputPath = %q, want %q", result.NeedUserInputPath, gatePath)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.PendingNeedUserInputPath != gatePath {
+		t.Errorf("PendingNeedUserInputPath = %q, want %q", loaded.PendingNeedUserInputPath, gatePath)
+	}
+	for _, name := range []string{"api", "web"} {
+		st := loaded.RepoStates[name]
+		if st == nil || st.LastError != "" {
+			t.Errorf("repo %s = %+v, want prior state without failure", name, st)
+		}
+	}
+	if loaded.ActiveCycle == nil {
+		t.Fatal("ActiveCycle = nil, want preserved at Status=running for gate resume")
+	}
+	if loaded.ActiveCycle.Status != feature.RepoCycleRunning {
+		t.Errorf("ActiveCycle.Status = %q, want running", loaded.ActiveCycle.Status)
+	}
+}
+
 // TestRunReviewCommentsLoop_NoTargetsShortCircuits verifies the no-op
 // degenerate case: zero repos with comments returns FinalStatus=no_op
 // without touching state.

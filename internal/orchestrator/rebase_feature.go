@@ -124,7 +124,11 @@ func (o *Orchestrator) startFeatureRebase(
 
 	sm := o.deps.Sessions
 	o.cycleWG.Go(func() {
-		result, loopErr := agent.RunRebaseLoop(cfg, sm)
+		runRebaseLoop := o.runRebaseLoopFn
+		if runRebaseLoop == nil {
+			runRebaseLoop = agent.RunRebaseLoop
+		}
+		result, loopErr := runRebaseLoop(cfg, sm)
 		o.handleFeatureRebaseDone(featureID, behind, result, loopErr)
 	})
 
@@ -281,6 +285,29 @@ func (o *Orchestrator) handleFeatureRebaseDone(
 		// nothing to do. Either way, leave the per-repo cycle entries
 		// in place; the harness recovery / next user action handles
 		// them.
+		return
+
+	case "need_user_input":
+		gate := &agent.LoopResult{
+			FinalStatus:       "need_user_input",
+			Iterations:        result.Iterations,
+			LastError:         result.LastError,
+			NeedUserInputPath: result.NeedUserInputPath,
+		}
+		for _, t := range behind {
+			o.recordRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleRebase, gate)
+		}
+		if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+			if f.PendingNeedUserInputPath == result.NeedUserInputPath {
+				f.PendingNeedUserInputPath = ""
+			}
+			return nil
+		}); err != nil {
+			for _, t := range behind {
+				o.failRepoCycleGatePersistence(featureID, t.RepoName,
+					fmt.Errorf("rebase: clear stale feature-level need-user-input gate: %w", err))
+			}
+		}
 		return
 
 	default:

@@ -56,24 +56,6 @@ func TestFormatGateFeedback_UnclosedDeferralRendersSection(t *testing.T) {
 	}
 }
 
-func TestFormatGateFeedback_ProseHedgeRendersSection(t *testing.T) {
-	result := ReportGateResult{
-		Rejected: true,
-		Findings: []ReportGateFinding{{
-			Category: GateCategoryDeferral,
-			Kind:     KindDeferralProseHedge,
-			Detail:   "report prose mentions cross-phase deferral(s) (\"lands in Phase 3\") but the structured `deferrals:` block is empty",
-		}},
-	}
-	out := FormatGateFeedback(result)
-	if !strings.Contains(out, "prose hedge") {
-		t.Errorf("missing prose-hedge section header; got:\n%s", out)
-	}
-	if !strings.Contains(out, "lands in Phase 3") {
-		t.Errorf("missing matched phrase citation; got:\n%s", out)
-	}
-}
-
 func TestFormatGateFeedback_MissingReasonRendersSection(t *testing.T) {
 	result := ReportGateResult{
 		Rejected: true,

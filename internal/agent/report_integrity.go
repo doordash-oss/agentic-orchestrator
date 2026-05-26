@@ -40,10 +40,7 @@ const (
 	// didn't.
 	GateCategoryHedge ReportGateCategory = "hedge"
 
-	// GateCategoryDeferral covers cross-phase commitment failures: either
-	// the agent hedged in prose (e.g. "lands in Phase 3") without emitting
-	// a structured deferrals: entry, or a ledger deferral is due this
-	// phase and neither closed nor re-deferred.
+	// GateCategoryDeferral covers structured cross-phase commitment failures.
 	GateCategoryDeferral ReportGateCategory = "deferral"
 )
 
@@ -65,7 +62,6 @@ const (
 	KindSubstituteItem        ReportGateKind = "invalid_substitute_item"
 	KindPolicyViolation       ReportGateKind = "policy_violation"
 	KindEvidenceFile          ReportGateKind = "invalid_evidence_file"
-	KindDeferralProseHedge    ReportGateKind = "deferral_prose_hedge"
 	KindDeferralUnclosed      ReportGateKind = "deferral_unclosed_due_this_phase"
 	KindDeferralMissingReason ReportGateKind = "deferral_missing_reason"
 )
@@ -535,11 +531,6 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 //     reason-less deferrals produce a thin ledger useful to no downstream
 //     reader. Reject them at the source.
 //
-// Prose-hedge detection on progress.md (the third historical check) lives
-// in the progress.md parser itself (ParseProgressMd) — it is enforced
-// before this function is called and surfaces as a ProtocolViolations
-// entry rather than a gate finding.
-//
 // currentPhase == 0 disables check (1) — useful during pipelines that
 // haven't reached the roadmap phase boundary yet.
 //
@@ -753,14 +744,6 @@ func formatDeferralFindings(findings []ReportGateFinding) string {
 		}
 		b.WriteString("\n")
 	}
-	if fs := byKind[KindDeferralProseHedge]; len(fs) > 0 {
-		fmt.Fprintf(&b, "**%d prose hedge%s found without a matching structured entry.** Use `deferrals:` only for Agentic-owned work due in a numbered roadmap phase; otherwise rewrite the prose or ask the user:\n\n",
-			len(fs), plural(len(fs)))
-		for _, f := range fs {
-			fmt.Fprintf(&b, "- %s\n", f.Detail)
-		}
-		b.WriteString("\n")
-	}
 	if fs := byKind[KindDeferralMissingReason]; len(fs) > 0 {
 		fmt.Fprintf(&b, "**%d deferral%s missing a `reason`.** Every entry must cite why work is being punted (read by the target phase's planner and by chronic-slippage audits):\n\n",
 			len(fs), plural(len(fs)))
@@ -772,7 +755,6 @@ func formatDeferralFindings(findings []ReportGateFinding) string {
 	// Forward-compat for any future deferral kinds added to the enum.
 	handled := map[ReportGateKind]bool{
 		KindDeferralUnclosed:      true,
-		KindDeferralProseHedge:    true,
 		KindDeferralMissingReason: true,
 	}
 	for kind, fs := range byKind {

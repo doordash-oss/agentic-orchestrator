@@ -163,7 +163,7 @@ func (o *Orchestrator) StartRepoCycleImplement(
 		ArtifactDir:                artifactDir,
 		StateDir:                   filepath.Join(baseDir, featureID),
 		RepoName:                   repoName,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		BuildSession:               pr.BuildSession,
@@ -268,7 +268,9 @@ func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error 
 		return fmt.Errorf("no cycle entry for repo %q", repoName)
 	}
 	switch rc.Type {
-	case feature.CycleRebase, feature.CycleReviewComments:
+	case feature.CycleRebase:
+		return o.restartPausedFeatureRebase(featureID, repoName)
+	case feature.CycleReviewComments:
 		_, err := o.restartRepoCycleImplement(featureID, repoName, rc)
 		return err
 	case feature.CycleRefactor:
@@ -276,6 +278,93 @@ func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error 
 	default:
 		return fmt.Errorf("unsupported cycle type %q for repo %q", rc.Type, repoName)
 	}
+}
+
+// restartPausedFeatureRebase re-launches the unified rebase loop after an
+// answered NEED_USER_INPUT gate. Unlike legacy per-repo cycle restarts, rebase
+// owns every behind repo in one flat artifact directory, so resume must route
+// through RunRebaseLoop with ResumeExistingCycle rather than the generic
+// per-repo RunImplementationLoop wrapper.
+func (o *Orchestrator) restartPausedFeatureRebase(featureID, repoName string) error {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return fmt.Errorf("load feature: %w", err)
+	}
+	behind, err := o.activeRebaseTargets(f)
+	if err != nil {
+		return err
+	}
+	if len(behind) == 0 {
+		return fmt.Errorf("no active rebase cycles to resume for repo %q", repoName)
+	}
+
+	pr := o.deps.PhaseRunner
+	if pr == nil {
+		return errors.New("phase runner not configured")
+	}
+
+	cfg := agent.RebaseLoopConfig{
+		Feature:                    f,
+		FeatureStore:               o.deps.Store,
+		StateDir:                   o.stateDir(),
+		BehindRepos:                behind,
+		Model:                      f.Models.Implementation,
+		ReviewModel:                f.Models.Review,
+		MaxIterations:              f.MaxIterations,
+		MaxConsecFails:             3,
+		MaxConsecNoProgress:        3,
+		KBInfos:                    o.computeKBInfos(f),
+		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
+		PermissionCache:            pr.PermissionCache,
+		BuildSession:               pr.BuildSession,
+		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
+		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		SkillsDir:                  pr.SkillsDir,
+		GuidelinesDir:              pr.GuidelinesDir,
+		Observer:                   pr.Observer,
+		ResumeExistingCycle:        true,
+	}
+
+	sm := o.deps.Sessions
+	o.cycleWG.Go(func() {
+		runRebaseLoop := o.runRebaseLoopFn
+		if runRebaseLoop == nil {
+			runRebaseLoop = agent.RunRebaseLoop
+		}
+		result, loopErr := runRebaseLoop(cfg, sm)
+		o.handleFeatureRebaseDone(featureID, behind, result, loopErr)
+	})
+	return nil
+}
+
+func (o *Orchestrator) activeRebaseTargets(f *feature.Feature) ([]agent.RebaseRepoTarget, error) {
+	if f == nil {
+		return nil, errors.New("feature is nil")
+	}
+	prURLs := f.PRURLs()
+	var out []agent.RebaseRepoTarget
+	for i := range f.Repos {
+		repo := &f.Repos[i]
+		rc, ok := f.RepoCycles[repo.Name]
+		if !ok || rc == nil || rc.Type != feature.CycleRebase {
+			continue
+		}
+		switch rc.Status {
+		case feature.RepoCycleRunning, feature.RepoCycleNeedUserInput:
+		default:
+			continue
+		}
+		target := o.resolveRebaseTarget(f, repo)
+		if target == "" {
+			return nil, fmt.Errorf("resolve rebase target for repo %q", repo.Name)
+		}
+		out = append(out, agent.RebaseRepoTarget{
+			RepoName:     repo.Name,
+			RebaseTarget: target,
+			PRURL:        prURLs[repo.Name],
+		})
+	}
+	return out, nil
 }
 
 // restartRefactorRepoCycle re-launches a refactor loop for a paused refactor
@@ -378,7 +467,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 		ArtifactDir:                cycleBaseDir,
 		StateDir:                   filepath.Join(baseDir, featureID),
 		RepoName:                   repoName,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		BuildSession:               pr.BuildSession,

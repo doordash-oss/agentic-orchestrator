@@ -124,7 +124,11 @@ func (o *Orchestrator) startFeatureRebase(
 
 	sm := o.deps.Sessions
 	o.cycleWG.Go(func() {
-		result, loopErr := agent.RunRebaseLoop(cfg, sm)
+		runRebaseLoop := o.runRebaseLoopFn
+		if runRebaseLoop == nil {
+			runRebaseLoop = agent.RunRebaseLoop
+		}
+		result, loopErr := runRebaseLoop(cfg, sm)
 		o.handleFeatureRebaseDone(featureID, behind, result, loopErr)
 	})
 
@@ -293,6 +297,12 @@ func (o *Orchestrator) handleFeatureRebaseDone(
 		for _, t := range behind {
 			_ = o.onRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleRebase, gate)
 		}
+		_ = o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+			if f.PendingNeedUserInputPath == result.NeedUserInputPath {
+				f.PendingNeedUserInputPath = ""
+			}
+			return nil
+		})
 		return
 
 	default:

@@ -98,6 +98,12 @@ type RebaseLoopConfig struct {
 	GuidelinesDir              string
 	Observer                   *observe.Observer
 
+	// ResumeExistingCycle reuses the current ActiveCycle.Count instead of
+	// opening a new rebase-N directory. Used when resuming a rebase
+	// NEED_USER_INPUT gate so answered prompts carry into the next
+	// iteration of the same cycle.
+	ResumeExistingCycle bool
+
 	// RunImplementFn is a test seam: when non-nil, RunRebaseLoop calls
 	// this instead of RunImplementationLoop so unit tests can drive the
 	// outer loop's state-machine transitions without launching a real
@@ -194,11 +200,24 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 	}
 
 	// Increment RebaseCount and set ActiveCycle = {Type: rebase, Status:
-	// running} at loop entry. Both are persisted in the same Modify so a
-	// crash between the two (e.g. another goroutine reads partial state)
-	// cannot observe one without the other.
+	// running} at loop entry. NEED_USER_INPUT resume reuses the existing
+	// ActiveCycle.Count so the next iteration lands in the same rebase-N
+	// artifact directory and can read prior answered gates.
 	rebaseCount := 0
 	if err := cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+		if cfg.ResumeExistingCycle {
+			if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRebase || f.ActiveCycle.Count <= 0 {
+				return fmt.Errorf("resume requested without an active rebase cycle")
+			}
+			rebaseCount = f.ActiveCycle.Count
+			f.ActiveCycle.Status = feature.RepoCycleRunning
+			if f.RebaseCount() < rebaseCount {
+				f.SetRebaseCount(rebaseCount)
+			}
+			f.SetActiveCycleType(feature.CycleRebase)
+			return nil
+		}
+
 		f.SetRebaseCount(f.RebaseCount() + 1)
 		f.SetActiveCycleType(feature.CycleRebase)
 		f.ActiveCycle = &feature.CycleState{

@@ -21,6 +21,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -172,18 +173,27 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 		if !rec.AllAnswered() {
 			return errors.New("cannot resume: every question must have a non-empty answer before resume")
 		}
+		resumeRepos := []string{d.RepoName}
+		if rc.Type == feature.CycleRebase {
+			resumeRepos = repoCycleGateRepos(f, feature.CycleRebase, gatePath, d.RepoName)
+		}
 		// Clear the paused-gate fields but preserve Count, PlanPath, and
 		// Type so the restart seam reuses the existing cycle record. Set
 		// status back to Running so HasActiveRepoCycles still treats the
 		// cycle as in-flight while the restart launches.
 		if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			cycle, ok := ff.RepoCycles[d.RepoName]
-			if !ok || cycle == nil {
-				return fmt.Errorf("repo %q vanished from repo_cycles mid-resume", d.RepoName)
+			for _, name := range resumeRepos {
+				cycle, ok := ff.RepoCycles[name]
+				if !ok || cycle == nil {
+					return fmt.Errorf("repo %q vanished from repo_cycles mid-resume", name)
+				}
+				cycle.Status = feature.RepoCycleRunning
+				cycle.PendingNeedUserInputPath = ""
+				cycle.LastError = ""
 			}
-			cycle.Status = feature.RepoCycleRunning
-			cycle.PendingNeedUserInputPath = ""
-			cycle.LastError = ""
+			if ff.PendingNeedUserInputPath == gatePath {
+				ff.PendingNeedUserInputPath = ""
+			}
 			return nil
 		}); err != nil {
 			return fmt.Errorf("clear cycle gate: %w", err)
@@ -192,12 +202,14 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 			// Roll back: restore the paused gate so the user can retry or
 			// abort from the same paused state.
 			if rbErr := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-				cycle, ok := ff.RepoCycles[d.RepoName]
-				if !ok || cycle == nil {
-					return fmt.Errorf("repo %q vanished during rollback", d.RepoName)
+				for _, name := range resumeRepos {
+					cycle, ok := ff.RepoCycles[name]
+					if !ok || cycle == nil {
+						return fmt.Errorf("repo %q vanished during rollback", name)
+					}
+					cycle.Status = feature.RepoCycleNeedUserInput
+					cycle.PendingNeedUserInputPath = gatePath
 				}
-				cycle.Status = feature.RepoCycleNeedUserInput
-				cycle.PendingNeedUserInputPath = gatePath
 				return nil
 			}); rbErr != nil {
 				return fmt.Errorf("relaunch cycle: %w (rollback to gate also failed: %v)", err, rbErr)
@@ -213,12 +225,47 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 		if summary == "" {
 			summary = fmt.Sprintf("user aborted at need-user-input gate for cycle on repo %s", d.RepoName)
 		}
+		abortRepos := []string{d.RepoName}
+		if rc.Type == feature.CycleRebase {
+			abortRepos = repoCycleGateRepos(f, feature.CycleRebase, gatePath, d.RepoName)
+		}
 		// FailRepoCycle clears the gate path and, for refactor cycles, the
 		// feature-level RefactorPrompt. The parent feature stays Published.
-		return o.deps.Lifecycle.FailRepoCycle(featureID, d.RepoName, summary)
+		for _, name := range abortRepos {
+			if err := o.deps.Lifecycle.FailRepoCycle(featureID, name, summary); err != nil {
+				return err
+			}
+		}
+		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+			if ff.PendingNeedUserInputPath == gatePath {
+				ff.PendingNeedUserInputPath = ""
+			}
+			return nil
+		})
+		return nil
 	default:
 		return fmt.Errorf("unknown need-user-input decision %q (want resume|abort)", d.Decision)
 	}
+}
+
+func repoCycleGateRepos(f *feature.Feature, cycleType feature.RepoCycleType, gatePath, fallback string) []string {
+	var names []string
+	if f != nil {
+		for name, rc := range f.RepoCycles {
+			if rc == nil ||
+				rc.Type != cycleType ||
+				rc.Status != feature.RepoCycleNeedUserInput ||
+				rc.PendingNeedUserInputPath != gatePath {
+				continue
+			}
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 && fallback != "" {
+		names = append(names, fallback)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // handleFeatureNeedUserInputDecision implements the original single-repo /

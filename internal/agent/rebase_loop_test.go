@@ -758,6 +758,66 @@ func TestRunRebaseLoop_CrashRecoveryReusesArtifactDir(t *testing.T) {
 	}
 }
 
+func TestRunRebaseLoop_ResumeExistingCycleReusesArtifactDir(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-resume", []string{"api"})
+
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.SetRebaseCount(1)
+		ff.SetActiveCycleType(feature.CycleRebase)
+		ff.ActiveCycle = &feature.CycleState{
+			Type:   feature.CycleRebase,
+			Status: feature.RepoCycleRunning,
+			Count:  1,
+		}
+		ff.PendingNeedUserInputPath = filepath.Join(stateDir, "gate.yaml")
+		return nil
+	}); err != nil {
+		t.Fatalf("seed paused rebase state: %v", err)
+	}
+	loaded, _ := store.Load(f.ID)
+
+	priorDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-1", "iteration-01")
+	if err := os.MkdirAll(priorDir, 0o755); err != nil {
+		t.Fatalf("seed iteration-01: %v", err)
+	}
+
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 2})
+	cfg := RebaseLoopConfig{
+		Feature:      loaded,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		BehindRepos: []RebaseRepoTarget{
+			{RepoName: "api", RebaseTarget: "main"},
+		},
+		MaxIterations:       3,
+		ResumeExistingCycle: true,
+		RunImplementFn:      captureFn,
+	}
+
+	if _, err := RunRebaseLoop(cfg, nil); err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+
+	if len(*captured) != 1 {
+		t.Fatalf("captured calls = %d, want 1", len(*captured))
+	}
+	loaded, _ = store.Load(f.ID)
+	if loaded.RebaseCount() != 1 {
+		t.Fatalf("RebaseCount = %d, want 1", loaded.RebaseCount())
+	}
+	wantDir := filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-1")
+	if got := (*captured)[0].ArtifactDir; got != wantDir {
+		t.Fatalf("ArtifactDir = %q, want existing cycle dir %q", got, wantDir)
+	}
+	if _, err := os.Stat(filepath.Join(wantDir, "iteration-01")); err != nil {
+		t.Fatalf("existing iteration-01 missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ActiveRunDir(stateDir, loaded), "rebase-2")); !os.IsNotExist(err) {
+		t.Fatalf("rebase-2 exists after resume; expected no new rebase dir (stat err=%v)", err)
+	}
+}
+
 // TestRunRebaseLoop_ActiveCycleSetAtEntry verifies the cycle entry stamp:
 // before the inner loop runs, ActiveCycle is stamped {Type: rebase,
 // Status: running} so the TUI and observers can see the active cycle.

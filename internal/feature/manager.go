@@ -108,11 +108,20 @@ type CreateOptions struct {
 	// UseCurrentBranch, when true, creates worktrees from the repo's current
 	// HEAD instead of the detected default branch. The BaseBranch field is
 	// still set to the default branch for diff/PR purposes.
+	//
+	// Acts as a global fallback when UseCurrentBranchPerRepo is nil or does
+	// not contain an entry for a given repo. UseCurrentBranchPerRepo wins
+	// when both are set.
 	UseCurrentBranch bool
-	Checkpoints      Checkpoints
-	Attachments      []string // temp attachment file paths
-	RiskLevel        RiskLevel
-	Pipeline         PipelineProfile
+	// UseCurrentBranchPerRepo overrides UseCurrentBranch on a per-repo basis.
+	// Keys are repo names; true means "start from current HEAD"; false means
+	// "start from default branch". Repos not in the map fall back to
+	// UseCurrentBranch.
+	UseCurrentBranchPerRepo map[string]bool
+	Checkpoints             Checkpoints
+	Attachments             []string // temp attachment file paths
+	RiskLevel               RiskLevel
+	Pipeline                PipelineProfile
 }
 
 // Re-entrancy / crash recovery:
@@ -210,7 +219,11 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	if m.Worktrees != nil {
 		for i, fr := range featureRepos {
 			startPoint := fr.BaseBranch
-			if opt.UseCurrentBranch {
+			useCurrent := opt.UseCurrentBranch
+			if v, ok := opt.UseCurrentBranchPerRepo[fr.Name]; ok {
+				useCurrent = v
+			}
+			if useCurrent {
 				startPoint = "" // empty → HEAD in worktree.Create
 			}
 			wtPath, err := m.Worktrees.Create(fr.Path, slug, fr.Name, startPoint)

@@ -60,6 +60,18 @@ const (
 	wizardStepReview                     // Step 4: Summary + create
 )
 
+// whereFocus is the focus axis on the Where step (chip picker layout).
+// Tab cycles forward, Shift+Tab cycles backward. The list is the primary
+// axis; the others become reachable as the user moves through the picker.
+type whereFocus int
+
+const (
+	whereFocusList     whereFocus = iota // repo list (default; filter input is part of this focus)
+	whereFocusBrowse                     // "Browse for more..." action row
+	whereFocusCreate                     // "Create new repo..." action row (only when workspace roots exist)
+	whereFocusContinue                   // "Continue with N repos" CTA button
+)
+
 type summaryField int
 
 const (
@@ -87,18 +99,25 @@ type RepoBranchInfo struct {
 
 // WizardResult holds the collected data from the wizard.
 type WizardResult struct {
-	Name             string
-	Description      string
-	Images           []string // temp image paths
-	Attachments      []string // temp attachment file paths
-	Repos            []string
-	Models           config.ModelConfig
-	ExitCriteria     string
-	Inquireness      string
-	RiskLevel        string
-	Pipeline         feature.PipelineProfile
-	UseCurrentBranch bool // true if user chose to branch from current HEAD instead of default
-	Checkpoints      feature.Checkpoints
+	Name         string
+	Description  string
+	Images       []string // temp image paths
+	Attachments  []string // temp attachment file paths
+	Repos        []string
+	Models       config.ModelConfig
+	ExitCriteria string
+	Inquireness  string
+	RiskLevel    string
+	Pipeline     feature.PipelineProfile
+	// UseCurrentBranch is the "any repo branched off default" flag, retained
+	// for downstream callers that just need a yes/no signal. The per-repo
+	// truth lives in UseCurrentBranchPerRepo.
+	UseCurrentBranch bool
+	// UseCurrentBranchPerRepo carries each repo's branch-base choice: true
+	// means "start the worktree from current HEAD"; false (or missing) means
+	// "start from default branch". Only off-default repos appear in the map.
+	UseCurrentBranchPerRepo map[string]bool
+	Checkpoints             feature.Checkpoints
 }
 
 type WizardModel struct {
@@ -116,6 +135,7 @@ type WizardModel struct {
 	selectedRepos           map[string]bool
 	repoCursor              int
 	repoScrollOffset        int                          // scroll window start index for visible repos
+	whereFocus              whereFocus                   // focus axis on Step 2 (list / browse / create / continue)
 	repoError               string                       // validation error ("Select at least one repo")
 	repos                   map[string]config.RepoConfig // full repo configs for pipeline gate overrides
 	models                  config.ModelConfig
@@ -135,8 +155,10 @@ type WizardModel struct {
 	pipelineCursor          int
 	pipelineOptions         []string         // ["moonshot", "medium", "large"]
 	branchInfos             []RepoBranchInfo // populated when entering branch warning step
-	branchCursor            int              // 0=default branch (recommended), 1=current branch
-	showBranchWarning       bool             // true when inline branch warning is shown on Where step
+	branchScreenIndex       int              // which off-default repo's screen we're currently on (0..len(offDefaultRepos)-1)
+	branchOptionCursor      int              // 0 = start from default branch (recommended), 1 = start from current branch
+	branchChoices           map[string]bool  // repo name -> useCurrentBranch (true = start from current HEAD)
+	showBranchWarning       bool             // true when the dedicated branch-selection screen replaces the Where panel
 	checkpointsCursor       int              // which row is focused (0-4)
 	checkpoints             [5]bool          // toggle state for each checkpoint item
 	result                  *WizardResult
@@ -1066,37 +1088,68 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			}
 		}
 
-		// When branch warning is showing on Where step, route keys to branch navigation
+		// When the dedicated branch-selection screen is showing, one repo is
+		// asked about at a time. The user toggles between two options
+		// (default branch / current branch), Enter saves the choice and
+		// advances to the next off-default repo; on the last screen it
+		// continues to Step 3. Esc backs up one screen (or dismisses the
+		// whole branch flow on the first screen).
 		if m.showBranchWarning && m.step == wizardStepWhere {
+			rows := m.offDefaultRepos()
 			switch {
 			case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
 				m.cancelled = true
 				return m, nil
+
 			case key.Matches(msg, key.NewBinding(key.WithKeys("enter"))),
 				key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+j"))):
+				// Save the choice for the current screen's repo.
+				if m.branchScreenIndex >= 0 && m.branchScreenIndex < len(rows) {
+					if m.branchChoices == nil {
+						m.branchChoices = make(map[string]bool)
+					}
+					m.branchChoices[rows[m.branchScreenIndex].Name] = m.branchOptionCursor == 1
+				}
+				// More repos to ask about? Advance to the next one.
+				if m.branchScreenIndex < len(rows)-1 {
+					m.branchScreenIndex++
+					// Pre-seed the option cursor from any previously-saved
+					// choice for this repo (lets back-and-forth navigation
+					// remember what was picked).
+					next := rows[m.branchScreenIndex].Name
+					if m.branchChoices[next] {
+						m.branchOptionCursor = 1
+					} else {
+						m.branchOptionCursor = 0
+					}
+					return m, nil
+				}
+				// Last repo: continue to Step 3.
 				return m.advance()
-			case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))),
-				key.Matches(msg, key.NewBinding(key.WithKeys("shift+tab"))):
-				// Dismiss branch warning, return to repo selection
+
+			case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+				if m.branchScreenIndex > 0 {
+					m.branchScreenIndex--
+					prev := rows[m.branchScreenIndex].Name
+					if m.branchChoices[prev] {
+						m.branchOptionCursor = 1
+					} else {
+						m.branchOptionCursor = 0
+					}
+					return m, nil
+				}
+				// Already on the first screen: dismiss the branch flow.
 				m.showBranchWarning = false
+				m.whereFocus = whereFocusList
 				m.repoInput.Focus()
 				return m, textinput.Blink
-			case key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
-				m.branchCursor = 1 - m.branchCursor // toggle between 0 and 1
-				return m, nil
+
 			case key.Matches(msg, key.NewBinding(key.WithKeys("up"))),
-				key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+p"))),
-				key.Matches(msg, key.NewBinding(key.WithKeys("k"))):
-				if m.branchCursor > 0 {
-					m.branchCursor--
-				}
-				return m, nil
-			case key.Matches(msg, key.NewBinding(key.WithKeys("down"))),
-				key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+n"))),
-				key.Matches(msg, key.NewBinding(key.WithKeys("j"))):
-				if m.branchCursor < 1 {
-					m.branchCursor++
-				}
+				key.Matches(msg, key.NewBinding(key.WithKeys("down"))),
+				key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
+				// Two options, vertically stacked: ↑/↓/tab all flip between
+				// them. Minimal set - users don't need to memorize alternates.
+				m.branchOptionCursor = 1 - m.branchOptionCursor
 				return m, nil
 			}
 			// Block all other keys (typing into repo filter, etc.)
@@ -1111,6 +1164,15 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+c"))):
 			m.cancelled = true
+			return m, nil
+
+		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+d"))):
+			// Ctrl+D = "I'm done" shortcut. On the Where step, jumps straight
+			// to advance (Continue) from anywhere - so users who get used to
+			// the chip picker can skip the Tab dance.
+			if m.step == wizardStepWhere && !m.showBranchWarning {
+				return m.advance()
+			}
 			return m, nil
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
@@ -1169,6 +1231,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				case summaryFieldRepos:
 					m.showBranchWarning = false
 					m.step = wizardStepWhere
+					m.whereFocus = whereFocusList
 					m.repoInput.Focus()
 					return m, textinput.Blink
 				case summaryFieldRisk:
@@ -1212,7 +1275,20 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				cmd := m.descInput.Focus()
 				return m, cmd
 			}
-			// On wizardStepWhat (description) and wizardStepWhere, enter advances
+			// Where step: Enter is contextual based on the focus axis.
+			if m.step == wizardStepWhere {
+				switch m.whereFocus {
+				case whereFocusList:
+					return m.addFocusedRepo()
+				case whereFocusBrowse:
+					return m.openBrowsePicker()
+				case whereFocusCreate:
+					return m.openRootPicker()
+				case whereFocusContinue:
+					return m.advance()
+				}
+			}
+			// wizardStepWhat (description) — advance to Where
 			return m.advance()
 
 		case key.Matches(msg, key.NewBinding(key.WithKeys("shift+tab"))):
@@ -1250,15 +1326,9 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				return m, textinput.Blink
 			}
 			if m.step == wizardStepWhere {
-				// Tab jumps between the repo list and the + options section
-				if m.repoCursor < len(m.filteredRepos) {
-					// In repo list → jump to first + option (Browse)
-					m.repoCursor = len(m.filteredRepos)
-				} else {
-					// In + options → jump back to first repo
-					m.repoCursor = 0
-					m.repoScrollOffset = 0
-				}
+				// Tab cycles list -> Browse -> Create (if visible) -> Continue -> list.
+				m.whereFocus = m.cycleWhereFocusForward()
+				m.handleWhereFocusEntry()
 				return m, nil
 			}
 			if m.step == wizardStepReview && !m.summaryEditing {
@@ -1277,10 +1347,37 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.step == wizardStepWhat && m.whatFocus == 1 {
 				break
 			}
-			if m.step == wizardStepWhere && m.repoCursor > 0 {
-				m.repoCursor--
-				if m.repoCursor < m.repoScrollOffset {
-					m.repoScrollOffset = m.repoCursor
+			if m.step == wizardStepWhere {
+				avail := m.availableRepos()
+				switch m.whereFocus {
+				case whereFocusList:
+					if m.repoCursor > 0 {
+						m.repoCursor--
+						if m.repoCursor < m.repoScrollOffset {
+							m.repoScrollOffset = m.repoCursor
+						}
+					}
+				case whereFocusBrowse:
+					// Jump into the list at its last row.
+					if len(avail) > 0 {
+						m.whereFocus = whereFocusList
+						m.repoCursor = len(avail) - 1
+						const maxVisibleRepos = 12
+						if m.repoCursor >= m.repoScrollOffset+maxVisibleRepos {
+							m.repoScrollOffset = m.repoCursor - maxVisibleRepos + 1
+						}
+						m.handleWhereFocusEntry()
+					}
+				case whereFocusCreate:
+					m.whereFocus = whereFocusBrowse
+					m.handleWhereFocusEntry()
+				case whereFocusContinue:
+					if m.whereCreateVisible() {
+						m.whereFocus = whereFocusCreate
+					} else {
+						m.whereFocus = whereFocusBrowse
+					}
+					m.handleWhereFocusEntry()
 				}
 			}
 			if m.step == wizardStepPipeline && m.pipelineCursor > 0 {
@@ -1304,11 +1401,33 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.step == wizardStepWhat && m.whatFocus == 1 {
 				break
 			}
-			if m.step == wizardStepWhere && m.repoCursor < m.maxRepoCursor() {
-				m.repoCursor++
-				const maxVisibleRepos = 15
-				if m.repoCursor < len(m.filteredRepos) && m.repoCursor >= m.repoScrollOffset+maxVisibleRepos {
-					m.repoScrollOffset = m.repoCursor - maxVisibleRepos + 1
+			if m.step == wizardStepWhere {
+				avail := m.availableRepos()
+				switch m.whereFocus {
+				case whereFocusList:
+					if m.repoCursor < m.maxRepoCursor() {
+						m.repoCursor++
+						const maxVisibleRepos = 12
+						if m.repoCursor >= m.repoScrollOffset+maxVisibleRepos {
+							m.repoScrollOffset = m.repoCursor - maxVisibleRepos + 1
+						}
+					} else if len(avail) > 0 {
+						// At bottom of list - step into the action axis.
+						m.whereFocus = whereFocusBrowse
+						m.handleWhereFocusEntry()
+					}
+				case whereFocusBrowse:
+					if m.whereCreateVisible() {
+						m.whereFocus = whereFocusCreate
+					} else {
+						m.whereFocus = whereFocusContinue
+					}
+					m.handleWhereFocusEntry()
+				case whereFocusCreate:
+					m.whereFocus = whereFocusContinue
+					m.handleWhereFocusEntry()
+				case whereFocusContinue:
+					// Stay at the bottom.
 				}
 			}
 			if m.step == wizardStepPipeline && m.pipelineCursor < len(m.pipelineOptions)-1 {
@@ -1385,24 +1504,25 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				}
 			}
 		case wizardStepWhere:
-			// Space toggles the highlighted repo instead of typing into filter
-			if key.Matches(msg, key.NewBinding(key.WithKeys("space"))) {
-				if m.repoCursor == len(m.filteredRepos) {
-					return m.openBrowsePicker()
-				}
-				if m.repoCursor == len(m.filteredRepos)+1 && len(m.workspaceRoots) > 0 {
-					return m.openRootPicker()
-				}
-				if len(m.filteredRepos) > 0 {
-					repo := m.filteredRepos[m.repoCursor]
-					m.selectedRepos[repo] = !m.selectedRepos[repo]
-					m.createRepoActive = false
-					m.createRepoParentPath = ""
-					m.createRepoPath = ""
-					m.createRepoNameInput.Reset()
-					m.recomputeProvisionalPublishability()
-					m.repoError = ""
-				}
+			// Space is kept as a synonym for Enter on the list axis (muscle-
+			// memory back-compat from the prior toggle-by-space UX).
+			if key.Matches(msg, key.NewBinding(key.WithKeys("space"))) && m.whereFocus == whereFocusList {
+				return m.addFocusedRepo()
+			}
+			// Backspace on an EMPTY filter input removes the last selected
+			// chip (matches the chip/pill picker convention from GitHub /
+			// Linear / Slack). When the filter input has text, fall through
+			// so Backspace edits the filter normally.
+			if key.Matches(msg, key.NewBinding(key.WithKeys("backspace"))) &&
+				m.whereFocus == whereFocusList &&
+				m.repoInput.Value() == "" &&
+				m.hasAnyRepoSelected() {
+				chips := m.selectedReposInOrder()
+				last := chips[len(chips)-1]
+				delete(m.selectedRepos, last)
+				m.recomputeProvisionalPublishability()
+				m.repoError = ""
+				m.handleWhereFocusEntry()
 				return m, nil
 			}
 			prevVal := m.repoInput.Value()
@@ -1656,14 +1776,315 @@ func (m *WizardModel) recomputeProvisionalPublishability() {
 	}
 }
 
-// maxRepoCursor returns the maximum valid repoCursor index.
-// When workspace roots are configured the "Create new repo..." row is present,
-// so the max is len(filteredRepos)+1; otherwise it is len(filteredRepos) (browse only).
+// maxRepoCursor returns the maximum valid repoCursor index within the
+// available-repo list. Chip-picker layout: only the in-list rows count
+// (Browse / Create / Continue live on their own focus axis).
 func (m WizardModel) maxRepoCursor() int {
-	if len(m.workspaceRoots) > 0 {
-		return len(m.filteredRepos) + 1
+	n := len(m.availableRepos())
+	if n == 0 {
+		return 0
 	}
-	return len(m.filteredRepos)
+	return n - 1
+}
+
+// availableRepos returns the filtered repos that are not yet selected.
+// Selected repos appear as chips at the top and are excluded from the
+// list so a repo cannot be "added" twice.
+func (m WizardModel) availableRepos() []string {
+	out := make([]string, 0, len(m.filteredRepos))
+	for _, r := range m.filteredRepos {
+		if !m.selectedRepos[r] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// selectedReposInOrder returns selected repos in availRepos order (stable
+// for chip rendering and undo-via-backspace).
+func (m WizardModel) selectedReposInOrder() []string {
+	out := make([]string, 0, len(m.selectedRepos))
+	for _, r := range m.availRepos {
+		if m.selectedRepos[r] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// hasAnyRepoSelected returns true when at least one repo is selected.
+func (m WizardModel) hasAnyRepoSelected() bool {
+	for _, v := range m.selectedRepos {
+		if v {
+			return true
+		}
+	}
+	return false
+}
+
+// whereCreateVisible returns true when the "Create new repo" action is
+// available (workspace roots are configured).
+func (m WizardModel) whereCreateVisible() bool {
+	return len(m.workspaceRoots) > 0
+}
+
+// cycleWhereFocusForward returns the next focus position for Tab on the
+// Where step. Cycle: list → browse → create (if visible) → continue → list.
+func (m WizardModel) cycleWhereFocusForward() whereFocus {
+	switch m.whereFocus {
+	case whereFocusList:
+		return whereFocusBrowse
+	case whereFocusBrowse:
+		if m.whereCreateVisible() {
+			return whereFocusCreate
+		}
+		return whereFocusContinue
+	case whereFocusCreate:
+		return whereFocusContinue
+	case whereFocusContinue:
+		return whereFocusList
+	}
+	return whereFocusList
+}
+
+// addFocusedRepo adds the repo at repoCursor (in availableRepos space) to
+// the selected set. Used by Enter / Space on the list axis. Acts as a
+// no-op when there is no repo to add at the cursor.
+func (m WizardModel) addFocusedRepo() (WizardModel, tea.Cmd) {
+	avail := m.availableRepos()
+	if len(avail) == 0 || m.repoCursor < 0 || m.repoCursor >= len(avail) {
+		return m, nil
+	}
+	repo := avail[m.repoCursor]
+	m.selectedRepos[repo] = true
+	m.createRepoActive = false
+	m.createRepoParentPath = ""
+	m.createRepoPath = ""
+	m.createRepoNameInput.Reset()
+	m.recomputeProvisionalPublishability()
+	m.repoError = ""
+	// After removing the picked repo from the list, the cursor naturally
+	// points at the next one. Clamp / scroll-adjust via the focus helper.
+	m.handleWhereFocusEntry()
+	return m, nil
+}
+
+// handleWhereFocusEntry runs side effects whenever m.whereFocus has just
+// changed: it focuses the filter input when the list axis is active and
+// blurs it otherwise, and clamps repoCursor to the current availableRepos
+// length so the cursor never points past the end.
+func (m *WizardModel) handleWhereFocusEntry() {
+	if m.whereFocus == whereFocusList {
+		m.repoInput.Focus()
+	} else {
+		m.repoInput.Blur()
+	}
+	availLen := len(m.availableRepos())
+	if availLen == 0 {
+		m.repoCursor = 0
+		m.repoScrollOffset = 0
+		return
+	}
+	if m.repoCursor > availLen-1 {
+		m.repoCursor = availLen - 1
+	}
+	const maxVisibleRepos = 12
+	if m.repoCursor < m.repoScrollOffset {
+		m.repoScrollOffset = m.repoCursor
+	}
+	if m.repoCursor >= m.repoScrollOffset+maxVisibleRepos {
+		m.repoScrollOffset = m.repoCursor - maxVisibleRepos + 1
+	}
+}
+
+// renderRepoChips lays out selected repos as removable pills. Wraps at the
+// available width; first chip is rendered with a bracket border. Style is
+// kept simple (no per-chip cursor) - chips are removed via Backspace on
+// an empty filter input, not by direct focus.
+func (m WizardModel) renderRepoChips(chips []string, maxWidth int) string {
+	chipStyle := lipgloss.NewStyle().
+		Foreground(colorActive).
+		Bold(true)
+	xStyle := MutedStyle
+	var lines []string
+	var current strings.Builder
+	currentWidth := 0
+	for _, name := range chips {
+		pill := chipStyle.Render("[ "+name+" ") + xStyle.Render("✕") + chipStyle.Render(" ]")
+		// 4 visual chars of overhead per pill (brackets + spaces) + name + x
+		pillWidth := len(name) + 6
+		if currentWidth > 0 && currentWidth+pillWidth+1 > maxWidth {
+			lines = append(lines, current.String())
+			current.Reset()
+			currentWidth = 0
+		}
+		if currentWidth > 0 {
+			current.WriteString(" ")
+			currentWidth++
+		}
+		current.WriteString(pill)
+		currentWidth += pillWidth
+	}
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+	return "  " + strings.Join(lines, "\n  ")
+}
+
+// renderActionRow renders one of the "+ Browse" / "+ Create" rows with
+// focus-sensitive styling.
+func (m WizardModel) renderActionRow(label string, focused bool) string {
+	if focused {
+		return SelectedRowStyle.Render("▸" + label)
+	}
+	return " " + MutedStyle.Render(label)
+}
+
+// renderBranchSelectionScreen renders the dedicated branch-selection screen
+// shown when off-default branches are detected. The screen asks about one repo
+// at a time so the user only ever has two choices and one action (Enter).
+// After answering for one repo, Enter moves to the next repo's screen; on the
+// last, Enter advances to Step 3. Esc backs up one screen, or dismisses the
+// flow on the first.
+//
+// The recommended option (default branch) is pre-selected.
+func (m WizardModel) renderBranchSelectionScreen(headingStyle lipgloss.Style, maxWidth int) string {
+	rows := m.offDefaultRepos()
+	if len(rows) == 0 {
+		return ""
+	}
+	idx := m.branchScreenIndex
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(rows) {
+		idx = len(rows) - 1
+	}
+	bi := rows[idx]
+
+	var c strings.Builder
+	bodyStyle := lipgloss.NewStyle().Foreground(colorSubtext)
+
+	// Header: which repo + how many are left.
+	progress := ""
+	if len(rows) > 1 {
+		progress = MutedStyle.Render(fmt.Sprintf("   (%d of %d)", idx+1, len(rows)))
+	}
+	repoHeadingStyle := headingStyle.Bold(true)
+	c.WriteString(repoHeadingStyle.Render(bi.Name) + headingStyle.Render(" is on a non-default branch.") + progress + "\n\n")
+
+	// Decision guidance before the choices. "Current branch" means current
+	// HEAD: committed branch history, not dirty working-tree changes.
+	guidanceStyle := bodyStyle.Width(maxWidth)
+	c.WriteString(guidanceStyle.Render("Start from "+SuccessStyle.Render(bi.DefaultBranch)+" for a clean feature branch.") + "\n")
+	c.WriteString(guidanceStyle.Render("Use "+WarningStyle.Render(bi.CurrentBranch)+" only if this feature depends on commits already there.") + "\n\n")
+
+	// Two full-width action buttons. The selected button uses the same active
+	// color treatment as the Step 2 Continue CTA, while the unselected button
+	// stays quiet so the screen reads as a branch-base decision rather than a
+	// warning form.
+	useCurrent := m.branchOptionCursor == 1
+	c.WriteString(renderBranchSourceButton(
+		fmt.Sprintf("Start from %s", bi.DefaultBranch),
+		"Recommended",
+		"Create the feature branch from the default codebase.",
+		!useCurrent,
+		maxWidth,
+	) + "\n\n")
+	c.WriteString(renderBranchSourceButton(
+		fmt.Sprintf("Start from %s", bi.CurrentBranch),
+		"Include current branch commits",
+		"Build on work that already exists on this branch.",
+		useCurrent,
+		maxWidth,
+	) + "\n")
+
+	return c.String()
+}
+
+func renderBranchSourceButton(title, primary, secondary string, selected bool, width int) string {
+	if width < 32 {
+		width = 32
+	}
+
+	borderColor := colorOverlay
+	border := lipgloss.RoundedBorder()
+	titleStyle := MutedStyle
+	primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(colorSubtext)
+	secondaryStyle := MutedStyle
+	if selected {
+		borderColor = colorActive
+		border = lipgloss.ThickBorder()
+		titleStyle = lipgloss.NewStyle().Foreground(colorActive).Bold(true)
+		primaryStyle = lipgloss.NewStyle().Bold(true).Foreground(colorActive)
+		secondaryStyle = lipgloss.NewStyle().Foreground(colorSubtext)
+	}
+
+	prefix := "  "
+	if selected {
+		prefix = "› "
+	}
+	content := primaryStyle.Render(prefix+primary) + "\n" +
+		secondaryStyle.Render("  "+secondary)
+
+	box := lipgloss.NewStyle().
+		Border(border).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(width).
+		Render(content)
+
+	title = truncateString(title, width-6)
+	return renderBorderTitle(box, title, titleStyle)
+}
+
+// renderContinueButton renders the primary Continue CTA. It is bright
+// brand-colored and bordered when enabled, dim when no repos are selected.
+// The outer width matches the filter-input box (maxWidth) so the CTA lines
+// up with the input above it.
+func (m WizardModel) renderContinueButton(count int, maxWidth int) string {
+	enabled := count > 0
+	focused := m.whereFocus == whereFocusContinue
+	var label string
+	switch {
+	case count == 0:
+		label = "Continue (select a repo to enable)"
+	case count == 1:
+		label = "Continue with 1 repo →"
+	default:
+		label = fmt.Sprintf("Continue with %d repos →", count)
+	}
+
+	if maxWidth < 24 {
+		maxWidth = 24
+	}
+	// The style's Width is the OUTER width (lipgloss includes border+padding
+	// inside the given width when a border/padding is set), so passing
+	// maxWidth here makes the button align exactly with the filter input.
+	style := lipgloss.NewStyle().
+		Padding(0, 1).
+		Width(maxWidth).
+		Align(lipgloss.Center)
+
+	switch {
+	case !enabled:
+		style = style.Foreground(colorOverlay).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorOverlay)
+	case focused:
+		// Focused state shifts to colorActive (teal) so it stands out clearly
+		// against the brand-purple unfocused state — matching how
+		// SelectedRowStyle teals the highlighted list/action rows.
+		style = style.Foreground(colorActive).
+			Bold(true).
+			Border(lipgloss.ThickBorder()).
+			BorderForeground(colorActive)
+	default:
+		style = style.Foreground(colorBrand).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorBrand)
+	}
+	return style.Render(label)
 }
 
 // RefreshRepos updates the wizard's repo list after a workspace root was added.
@@ -1781,6 +2202,37 @@ func (m WizardModel) hasOffDefaultRepos() bool {
 	return false
 }
 
+// offDefaultRepos returns the branch info rows for repos that are NOT on
+// their default branch. Order matches the order of m.branchInfos (which
+// itself is derived from m.availRepos via detectBranches), so navigation
+// in the branch-selection screen is stable.
+func (m WizardModel) offDefaultRepos() []RepoBranchInfo {
+	out := make([]RepoBranchInfo, 0, len(m.branchInfos))
+	for _, bi := range m.branchInfos {
+		if bi.IsOffDefault {
+			out = append(out, bi)
+		}
+	}
+	return out
+}
+
+// useCurrentBranchPerRepo returns a copy of m.branchChoices restricted to
+// the repos currently known to be off-default. Default-branch repos are
+// not in the map (they always use the default base). Returns nil if no
+// off-default repos exist, so consumers can rely on the absence of the
+// map as a signal that no per-repo decision was made.
+func (m WizardModel) useCurrentBranchPerRepo() map[string]bool {
+	rows := m.offDefaultRepos()
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(rows))
+	for _, bi := range rows {
+		out[bi.Name] = m.branchChoices[bi.Name]
+	}
+	return out
+}
+
 func (m WizardModel) goBack() (WizardModel, tea.Cmd) {
 	switch m.step {
 	case wizardStepWhat:
@@ -1802,6 +2254,7 @@ func (m WizardModel) goBack() (WizardModel, tea.Cmd) {
 	case wizardStepPipeline:
 		m.showBranchWarning = false
 		m.step = wizardStepWhere
+		m.whereFocus = whereFocusList
 		m.repoInput.Focus()
 		return m, textinput.Blink
 
@@ -1830,6 +2283,7 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 
 		// Advance to Where
 		m.step = wizardStepWhere
+		m.whereFocus = whereFocusList
 		m.nameInput.Blur()
 		m.descInput.Blur()
 		m.repoInput.Focus()
@@ -1846,6 +2300,7 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 		}
 		if !hasSelected && !m.createRepoActive {
 			m.repoError = "Select at least one repo"
+			m.whereFocus = whereFocusList
 			m.repoInput.Focus()
 			return m, textinput.Blink
 		}
@@ -1853,12 +2308,22 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 		m.repoInput.Blur()
 
 		if !m.showBranchWarning {
-			// First Enter: detect branches for selected repos
+			// First Continue: detect branches for selected repos.
 			m.branchInfos = m.detectBranches()
 			if m.hasOffDefaultRepos() {
-				m.branchCursor = 0 // default to "use default branch"
+				// Initialize per-repo choices to "use default" (false).
+				m.branchChoices = make(map[string]bool)
+				for _, bi := range m.branchInfos {
+					if bi.IsOffDefault {
+						m.branchChoices[bi.Name] = false
+					}
+				}
+				// Start on the first off-default repo's screen with the
+				// recommended (default-branch) option selected.
+				m.branchScreenIndex = 0
+				m.branchOptionCursor = 0
 				m.showBranchWarning = true
-				return m, nil // stay on Where step, show inline warning
+				return m, nil // stay on Where step, show the dedicated branch screen
 			}
 		}
 
@@ -1888,19 +2353,28 @@ func (m WizardModel) advance() (WizardModel, tea.Cmd) {
 			}
 		}
 		projection := m.currentGateProjection()
+		perRepo := m.useCurrentBranchPerRepo()
+		anyCurrent := false
+		for _, v := range perRepo {
+			if v {
+				anyCurrent = true
+				break
+			}
+		}
 		m.result = &WizardResult{
-			Name:             strings.TrimSpace(m.nameInput.Value()),
-			Description:      strings.TrimSpace(m.descInput.Value()),
-			Images:           m.images,
-			Attachments:      m.attachments,
-			Repos:            repos,
-			Models:           m.models,
-			ExitCriteria:     m.exitCriteria,
-			Inquireness:      m.inquirenessOptions[m.inquirenessCursor],
-			RiskLevel:        m.riskOptions[m.riskCursor],
-			Pipeline:         pipelineProfileFromKey(m.pipelineOptions[m.pipelineCursor]),
-			UseCurrentBranch: m.branchCursor == 1 && m.hasOffDefaultRepos(),
-			Checkpoints:      projection.Checkpoints,
+			Name:                    strings.TrimSpace(m.nameInput.Value()),
+			Description:             strings.TrimSpace(m.descInput.Value()),
+			Images:                  m.images,
+			Attachments:             m.attachments,
+			Repos:                   repos,
+			Models:                  m.models,
+			ExitCriteria:            m.exitCriteria,
+			Inquireness:             m.inquirenessOptions[m.inquirenessCursor],
+			RiskLevel:               m.riskOptions[m.riskCursor],
+			Pipeline:                pipelineProfileFromKey(m.pipelineOptions[m.pipelineCursor]),
+			UseCurrentBranch:        anyCurrent,
+			UseCurrentBranchPerRepo: perRepo,
+			Checkpoints:             projection.Checkpoints,
 		}
 		return m, nil
 	}
@@ -2317,109 +2791,102 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 			c.WriteString(m.filePicker.View() + "\n")
 		}
 	case wizardStepWhere:
-		c.WriteString(LabelStyle.Render("Repos") + MutedStyle.Render("  type to filter \u00b7 space to select") + "\n\n")
+		// LabelStyle has a hard Width(12) cap, so any heading or repo-name
+		// label that might exceed 12 characters has to use a plain inline
+		// style. Matches Step 3's heading pattern.
+		headingStyle := lipgloss.NewStyle().Foreground(colorSubtext)
 
-		// Render search input in a bordered box
+		// When off-default branches were detected and the user hit Continue,
+		// the picker is replaced entirely by a dedicated branch-selection
+		// screen — one decision per off-default repo, no competing CTAs.
+		if m.showBranchWarning {
+			c.WriteString(m.renderBranchSelectionScreen(headingStyle, inputBoxWidth))
+			break
+		}
+
+		// Chips: selected repos shown as removable pills at the top.
+		chips := m.selectedReposInOrder()
+		if len(chips) > 0 {
+			c.WriteString(headingStyle.Render("Building in") + "\n")
+			c.WriteString(m.renderRepoChips(chips, inputBoxWidth) + "\n\n")
+		} else {
+			c.WriteString(headingStyle.Render("Pick one or more repos") + "\n\n")
+		}
+
+		// Filter input. The border brightens when focus is on the list axis.
+		mutedBorder := compat.AdaptiveColor{Light: lipgloss.Color("#b5b9c8"), Dark: lipgloss.Color("#45475a")}
+		activeBorder := compat.AdaptiveColor(mutedBorder)
+		if m.whereFocus == whereFocusList {
+			activeBorder = colorOverlay
+		}
 		repoInputBox := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorOverlay).
+			BorderForeground(activeBorder).
 			Padding(0, 1).
 			Width(inputBoxWidth).
 			Render(m.repoInput.View())
-		c.WriteString(repoInputBox + "\n\n")
+		c.WriteString(repoInputBox + "\n")
 
-		// Show match count when filtering
+		// Show match count when filtering.
+		avail := m.availableRepos()
 		if filter := m.repoInput.Value(); filter != "" {
-			c.WriteString(MutedStyle.Render(fmt.Sprintf("  %d of %d repos", len(m.filteredRepos), len(m.availRepos))) + "\n")
+			c.WriteString(MutedStyle.Render(fmt.Sprintf("  %d of %d available", len(avail), len(m.availRepos)-len(chips))) + "\n")
+		} else {
+			c.WriteString("\n")
 		}
 
-		// Render visible repos with scroll window (max 10 visible)
-		const maxVisibleRepos = 15
+		// Render visible repos with scroll window.
+		const maxVisibleRepos = 12
 		visibleStart := m.repoScrollOffset
 		visibleEnd := visibleStart + maxVisibleRepos
-		if visibleEnd > len(m.filteredRepos) {
-			visibleEnd = len(m.filteredRepos)
+		if visibleEnd > len(avail) {
+			visibleEnd = len(avail)
 		}
 
 		if visibleStart > 0 {
 			c.WriteString(MutedStyle.Render(fmt.Sprintf("  ↑ %d more", visibleStart)) + "\n")
 		}
+		listFocused := m.whereFocus == whereFocusList
 		for i := visibleStart; i < visibleEnd; i++ {
-			r := m.filteredRepos[i]
-			check := MutedStyle.Render("○") // ○
-			if m.selectedRepos[r] {
-				check = SuccessStyle.Render("●") // ●
-			}
-			label := fmt.Sprintf(" %s %s", check, r)
-			if i == m.repoCursor {
+			r := avail[i]
+			label := fmt.Sprintf(" %s", r)
+			if listFocused && i == m.repoCursor {
 				c.WriteString(SelectedRowStyle.Render("▸" + label))
 			} else {
 				c.WriteString(" " + label)
 			}
 			c.WriteString("\n")
 		}
-		if visibleEnd < len(m.filteredRepos) {
-			c.WriteString(MutedStyle.Render(fmt.Sprintf("  ↓ %d more", len(m.filteredRepos)-visibleEnd)) + "\n")
+		if visibleEnd < len(avail) {
+			c.WriteString(MutedStyle.Render(fmt.Sprintf("  ↓ %d more", len(avail)-visibleEnd)) + "\n")
 		}
-		if len(m.filteredRepos) == 0 && m.repoInput.Value() != "" {
-			c.WriteString(MutedStyle.Render("  No repos match filter.") + "\n")
-		}
-
-		// Visual separator between repo list and action items
-		c.WriteString("\n")
-
-		// Always render "Browse for more..." after the repo list
-		browseLabel := " + Browse for more..."
-		if m.repoCursor == len(m.filteredRepos) {
-			c.WriteString(SelectedRowStyle.Render("▸" + browseLabel))
-		} else {
-			c.WriteString(" " + MutedStyle.Render(browseLabel))
-		}
-		c.WriteString("\n")
-
-		// Render "Create new repo..." after "Browse for more..." (only when workspace roots exist)
-		if len(m.workspaceRoots) > 0 {
-			createLabel := " + Create new repo..."
-			if m.repoCursor == len(m.filteredRepos)+1 {
-				c.WriteString(SelectedRowStyle.Render("▸" + createLabel))
-			} else {
-				c.WriteString(" " + MutedStyle.Render(createLabel))
+		if len(avail) == 0 {
+			switch {
+			case m.repoInput.Value() != "" && len(m.filteredRepos) == 0:
+				c.WriteString(MutedStyle.Render("  No repos match filter.") + "\n")
+			case len(m.availRepos) > 0 && len(chips) == len(m.availRepos):
+				c.WriteString(MutedStyle.Render("  All repos added.") + "\n")
+			case len(m.availRepos) == 0:
+				c.WriteString(MutedStyle.Render("  No repos configured - browse or create one below.") + "\n")
+			default:
+				c.WriteString(MutedStyle.Render("  No repos to add.") + "\n")
 			}
-			c.WriteString("\n")
 		}
+
+		// Action rows: Browse, then Create (if workspace roots exist).
+		c.WriteString("\n")
+		c.WriteString(m.renderActionRow(" + Browse for more...", m.whereFocus == whereFocusBrowse) + "\n")
+		if m.whereCreateVisible() {
+			c.WriteString(m.renderActionRow(" + Create new repo...", m.whereFocus == whereFocusCreate) + "\n")
+		}
+
+		// Continue button - the explicit CTA.
+		c.WriteString("\n")
+		c.WriteString(m.renderContinueButton(len(chips), inputBoxWidth) + "\n")
 
 		// Validation error
 		if m.repoError != "" {
 			c.WriteString("\n" + WarningStyle.Render("  ✗ "+m.repoError) + "\n")
-		}
-
-		// Inline branch warning (shown after first Enter when off-default repos detected)
-		if m.showBranchWarning {
-			c.WriteString("\n")
-			c.WriteString(WarningStyle.Render("Branch Warning") + "\n\n")
-			for _, bi := range m.branchInfos {
-				if bi.IsOffDefault {
-					c.WriteString(fmt.Sprintf("  %s is on %s (default: %s)\n",
-						LabelStyle.Render(bi.Name),
-						WarningStyle.Render(bi.CurrentBranch),
-						SuccessStyle.Render(bi.DefaultBranch)))
-				}
-			}
-			c.WriteString("\n")
-			defBranch := m.defaultBranchName()
-			options := []struct{ label, desc string }{
-				{"Start from default branch", "recommended — clean slate from " + defBranch},
-				{"Start from current branch", "worktree will include in-flight changes"},
-			}
-			for i, opt := range options {
-				label := fmt.Sprintf("%s  %s", opt.label, MutedStyle.Render(opt.desc))
-				if i == m.branchCursor {
-					c.WriteString(SelectedRowStyle.Render("▸ " + label))
-				} else {
-					c.WriteString("  " + label)
-				}
-				c.WriteString("\n")
-			}
 		}
 
 	case wizardStepPipeline:
@@ -2560,9 +3027,25 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		}
 		renderRow(summaryFieldRepos, "Repos", strings.Join(repos, ", "), "")
 		if m.hasOffDefaultRepos() {
-			baseVal := SuccessStyle.Render("default branch")
-			if m.branchCursor == 1 {
+			countCurrent := 0
+			countOffDefault := 0
+			for _, bi := range m.branchInfos {
+				if !bi.IsOffDefault {
+					continue
+				}
+				countOffDefault++
+				if m.branchChoices[bi.Name] {
+					countCurrent++
+				}
+			}
+			var baseVal string
+			switch {
+			case countCurrent == 0:
+				baseVal = SuccessStyle.Render("default branch")
+			case countCurrent == countOffDefault:
 				baseVal = WarningStyle.Render("current branch")
+			default:
+				baseVal = WarningStyle.Render(fmt.Sprintf("mixed (%d of %d on current)", countCurrent, countOffDefault))
 			}
 			card.WriteString("  " + WizardLabelStyle.Render("Base") + baseVal + "\n")
 		}
@@ -2660,8 +3143,13 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		c.WriteString(gButton + " Create and start " + firstPhaseLabel)
 	}
 
-	// Wrap content in a main panel
+	// Wrap content in a main panel. The branch-selection screen lives inside
+	// Step 2; surface that in the title bar so users know they're in a
+	// sub-screen rather than a new step.
 	stepTitle := titlePrefix + stepProgress
+	if m.step == wizardStepWhere && m.showBranchWarning {
+		stepTitle = titlePrefix + stepProgress + StepStyle.Render(" · Branch base")
+	}
 	contentBox = panelStyle(true).
 		Width(panelWidth).
 		Render(c.String())
@@ -2672,9 +3160,9 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		footer = KeyHelpStyle.Render(" [tab] Switch field   [enter] Next   [esc] Cancel")
 	case wizardStepWhere:
 		if m.showBranchWarning {
-			footer = KeyHelpStyle.Render(" [enter] Confirm   [↑↓] Select   [esc] Back")
+			footer = KeyHelpStyle.Render(" [↑↓/tab] Switch   [enter] Choose   [esc] Back")
 		} else {
-			footer = KeyHelpStyle.Render(" [space] Select   [tab] More options   [enter] Next   [esc] Back")
+			footer = KeyHelpStyle.Render(" [enter] Add   [backspace] Remove last   [tab] Cycle focus   [ctrl+d] Continue   [esc] Back")
 		}
 	case wizardStepPipeline:
 		footer = KeyHelpStyle.Render(" [↑↓] Select   [enter] Next   [esc] Back")

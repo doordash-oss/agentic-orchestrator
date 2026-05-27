@@ -8048,15 +8048,10 @@ func TestWizardBrowseOverlayStacking(t *testing.T) {
 	result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // description → Where
 	app = result.(AppModel)
 
-	// Navigate to browse item
-	repoCount := len(app.wizard.filteredRepos)
-	for i := 0; i < repoCount; i++ {
-		result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-		app = result.(AppModel)
-	}
-
-	// Space to open picker (Space activates Browse/Root items on Where step)
-	result, _ = app.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Tab to Browse focus, then Enter to open the picker.
+	result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	app = result.(AppModel)
+	result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	app = result.(AppModel)
 
 	if !app.wizard.IsPickerActive() {
@@ -8238,13 +8233,10 @@ func TestWizardBrowseNonKeyMessagesReachPicker(t *testing.T) {
 	result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // description → Where
 	app = result.(AppModel)
 
-	// Navigate to browse and open picker
-	repoCount := len(app.wizard.filteredRepos)
-	for i := 0; i < repoCount; i++ {
-		result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-		app = result.(AppModel)
-	}
-	result, _ = app.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Tab to Browse focus, then Enter to open the picker.
+	result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	app = result.(AppModel)
+	result, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	app = result.(AppModel)
 
 	if !app.wizard.IsPickerActive() {

@@ -278,11 +278,11 @@ func TestMediumWizardGateProjectionSmoke(t *testing.T) {
 	)
 
 	tm.Send(tea.KeyPressMsg{Text: "medium wizard smoke"})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	tm.Send(tea.KeyPressMsg{Code: ' ', Text: " "})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyUp})
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})                  // name -> description
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})                  // description -> Where
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})                  // add focused repo to chips
+	tm.Send(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})         // Ctrl+D advances Where -> Pipeline
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyUp})                     // pipeline cursor up -> medium
 
 	teatest.WaitFor(t, tm.Output(),
 		func(bts []byte) bool {

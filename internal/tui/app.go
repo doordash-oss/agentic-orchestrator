@@ -4211,11 +4211,12 @@ func (m AppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 		riskLevel := feature.RiskLevel(result.RiskLevel)
 		projection := result.Pipeline.ProjectGates(result.Checkpoints, true)
 		opts := feature.CreateOptions{
-			UseCurrentBranch: result.UseCurrentBranch,
-			Checkpoints:      projection.Checkpoints,
-			Attachments:      result.Attachments,
-			RiskLevel:        riskLevel,
-			Pipeline:         result.Pipeline,
+			UseCurrentBranch:        result.UseCurrentBranch,
+			UseCurrentBranchPerRepo: result.UseCurrentBranchPerRepo,
+			Checkpoints:             projection.Checkpoints,
+			Attachments:             result.Attachments,
+			RiskLevel:               riskLevel,
+			Pipeline:                result.Pipeline,
 		}
 
 		// Route creation through the orchestrator so its post-creation hook

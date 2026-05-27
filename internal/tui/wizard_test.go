@@ -1536,14 +1536,20 @@ func TestWizardBranchWarningView(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "Branch selection") {
-		t.Error("expected view title to contain 'Branch selection'")
+	if !containsString(view, "Branch base") {
+		t.Error("expected view title to contain 'Branch base'")
 	}
 	if !containsString(view, "Start from main") {
 		t.Error("expected view to contain 'Start from main' (default-branch option)")
 	}
 	if !containsString(view, "Start from feature/xyz") {
 		t.Error("expected view to contain 'Start from feature/xyz' (current-branch option)")
+	}
+	if !containsString(view, "Recommended") {
+		t.Error("expected view to identify the default branch as recommended")
+	}
+	if !containsString(view, "Include current branch commits") {
+		t.Error("expected view to explain the current-branch option")
 	}
 	if !containsString(view, "repo-a") {
 		t.Error("expected view to contain 'repo-a'")
@@ -1561,8 +1567,8 @@ func TestWizardBranchWarningFooter(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "Next") {
-		t.Error("expected footer to contain 'Next' (enter action label)")
+	if !containsString(view, "Choose") {
+		t.Error("expected footer to contain 'Choose' (enter action label)")
 	}
 	if !containsString(view, "Switch") {
 		t.Error("expected footer to contain 'Switch' (toggle action label)")

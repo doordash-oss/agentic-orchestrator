@@ -1940,28 +1940,12 @@ func (m WizardModel) renderActionRow(label string, focused bool) string {
 	return " " + MutedStyle.Render(label)
 }
 
-// renderBranchSelectionScreen renders the dedicated branch-selection
-// screen shown when off-default branches are detected. The screen asks
-// about ONE repo at a time so the user only ever has two options on
-// screen and one action (Enter). After answering for one repo, Enter
-// moves to the next repo's screen; on the last, Enter advances to
-// Step 3. Esc backs up one screen, or dismisses the flow on the first.
-//
-// Layout (one screen per off-default repo):
-//
-//	<repo-name> is on a non-default branch.
-//
-//	  Current branch: <current>
-//	  Default branch: <default>
-//
-//	The orchestrator will create a fresh feature branch in a new
-//	worktree. Where should that worktree start from?
-//
-//	▸ ◉ Start from <default>      clean slate (recommended)
-//	  ○ Start from <current>      keep in-flight changes
-//
-//	Tip: pick "current branch" when you have uncommitted work in
-//	this repo that you want the orchestrator to build on.
+// renderBranchSelectionScreen renders the dedicated branch-selection screen
+// shown when off-default branches are detected. The screen asks about one repo
+// at a time so the user only ever has two choices and one action (Enter).
+// After answering for one repo, Enter moves to the next repo's screen; on the
+// last, Enter advances to Step 3. Esc backs up one screen, or dismisses the
+// flow on the first.
 //
 // The recommended option (default branch) is pre-selected.
 func (m WizardModel) renderBranchSelectionScreen(headingStyle lipgloss.Style, maxWidth int) string {
@@ -1979,7 +1963,6 @@ func (m WizardModel) renderBranchSelectionScreen(headingStyle lipgloss.Style, ma
 	bi := rows[idx]
 
 	var c strings.Builder
-	repoNameStyle := lipgloss.NewStyle().Foreground(colorSubtext).Bold(true)
 	bodyStyle := lipgloss.NewStyle().Foreground(colorSubtext)
 
 	// Header: which repo + how many are left.
@@ -1987,53 +1970,72 @@ func (m WizardModel) renderBranchSelectionScreen(headingStyle lipgloss.Style, ma
 	if len(rows) > 1 {
 		progress = MutedStyle.Render(fmt.Sprintf("   (%d of %d)", idx+1, len(rows)))
 	}
-	c.WriteString(headingStyle.Render(fmt.Sprintf("%s is on a non-default branch.", bi.Name)) + progress + "\n\n")
+	repoHeadingStyle := headingStyle.Bold(true)
+	c.WriteString(repoHeadingStyle.Render(bi.Name) + headingStyle.Render(" is on a non-default branch.") + progress + "\n\n")
 
-	// Branch facts.
-	c.WriteString("  " + repoNameStyle.Render("Current branch:") + " " + WarningStyle.Render(bi.CurrentBranch) + "\n")
-	c.WriteString("  " + repoNameStyle.Render("Default branch:") + " " + SuccessStyle.Render(bi.DefaultBranch) + "\n\n")
+	// Decision guidance before the choices. "Current branch" means current
+	// HEAD: committed branch history, not dirty working-tree changes.
+	guidanceStyle := bodyStyle.Width(maxWidth)
+	c.WriteString(guidanceStyle.Render("Start from "+SuccessStyle.Render(bi.DefaultBranch)+" for a clean feature branch.") + "\n")
+	c.WriteString(guidanceStyle.Render("Use "+WarningStyle.Render(bi.CurrentBranch)+" only if this feature depends on commits already there.") + "\n\n")
 
-	// Explanatory body: what's about to happen, what the choice means.
-	c.WriteString(bodyStyle.Render("  The orchestrator creates a fresh feature branch in a new worktree.") + "\n")
-	c.WriteString(bodyStyle.Render("  Where should that worktree start from?") + "\n\n")
-
-	// Two radio options. The cursor (`▸`) points at the focused option;
-	// the chosen option gets a filled radio (`◉`). With only two options,
-	// the cursor and the radio always land on the same row.
+	// Two full-width action buttons. The selected button uses the same active
+	// color treatment as the Step 2 Continue CTA, while the unselected button
+	// stays quiet so the screen reads as a branch-base decision rather than a
+	// warning form.
 	useCurrent := m.branchOptionCursor == 1
-	defaultRadio := "○"
-	currentRadio := "○"
-	if useCurrent {
-		currentRadio = SuccessStyle.Render("◉")
-	} else {
-		defaultRadio = SuccessStyle.Render("◉")
-	}
-	defaultLabel := fmt.Sprintf("%s Start from %s   %s",
-		defaultRadio, bi.DefaultBranch,
-		MutedStyle.Render("clean slate (recommended)"))
-	currentLabel := fmt.Sprintf("%s Start from %s   %s",
-		currentRadio, bi.CurrentBranch,
-		MutedStyle.Render("keep in-flight changes"))
-
-	writeOpt := func(label string, isChosen bool) {
-		if isChosen {
-			c.WriteString("  " + SelectedRowStyle.Render("▸ "+label))
-		} else {
-			c.WriteString("    " + label)
-		}
-		c.WriteString("\n")
-	}
-	writeOpt(defaultLabel, !useCurrent)
-	writeOpt(currentLabel, useCurrent)
-
-	// Tip: helps the user decide between the two options. Rendered with a
-	// width so lipgloss only wraps it when the terminal is too narrow to
-	// fit the full sentence on one line.
-	c.WriteString("\n")
-	tipStyle := MutedStyle.PaddingLeft(2).Width(maxWidth)
-	c.WriteString(tipStyle.Render(`Tip: pick "current branch" when you have uncommitted work in this repo that you want the orchestrator to build on.`) + "\n")
+	c.WriteString(renderBranchSourceButton(
+		fmt.Sprintf("Start from %s", bi.DefaultBranch),
+		"Recommended",
+		"Create the feature branch from the default codebase.",
+		!useCurrent,
+		maxWidth,
+	) + "\n\n")
+	c.WriteString(renderBranchSourceButton(
+		fmt.Sprintf("Start from %s", bi.CurrentBranch),
+		"Include current branch commits",
+		"Build on work that already exists on this branch.",
+		useCurrent,
+		maxWidth,
+	) + "\n")
 
 	return c.String()
+}
+
+func renderBranchSourceButton(title, primary, secondary string, selected bool, width int) string {
+	if width < 32 {
+		width = 32
+	}
+
+	borderColor := colorOverlay
+	border := lipgloss.RoundedBorder()
+	titleStyle := MutedStyle
+	primaryStyle := lipgloss.NewStyle().Bold(true).Foreground(colorSubtext)
+	secondaryStyle := MutedStyle
+	if selected {
+		borderColor = colorActive
+		border = lipgloss.ThickBorder()
+		titleStyle = lipgloss.NewStyle().Foreground(colorActive).Bold(true)
+		primaryStyle = lipgloss.NewStyle().Bold(true).Foreground(colorActive)
+		secondaryStyle = lipgloss.NewStyle().Foreground(colorSubtext)
+	}
+
+	prefix := "  "
+	if selected {
+		prefix = "› "
+	}
+	content := primaryStyle.Render(prefix+primary) + "\n" +
+		secondaryStyle.Render("  "+secondary)
+
+	box := lipgloss.NewStyle().
+		Border(border).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(width).
+		Render(content)
+
+	title = truncateString(title, width-6)
+	return renderBorderTitle(box, title, titleStyle)
 }
 
 // renderContinueButton renders the primary Continue CTA. It is bright
@@ -2084,7 +2086,6 @@ func (m WizardModel) renderContinueButton(count int, maxWidth int) string {
 	}
 	return style.Render(label)
 }
-
 
 // RefreshRepos updates the wizard's repo list after a workspace root was added.
 // Preserves existing selections by stable path identity so that collision-induced
@@ -3147,7 +3148,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 	// sub-screen rather than a new step.
 	stepTitle := titlePrefix + stepProgress
 	if m.step == wizardStepWhere && m.showBranchWarning {
-		stepTitle = titlePrefix + stepProgress + StepStyle.Render(" · Branch selection")
+		stepTitle = titlePrefix + stepProgress + StepStyle.Render(" · Branch base")
 	}
 	contentBox = panelStyle(true).
 		Width(panelWidth).
@@ -3159,7 +3160,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		footer = KeyHelpStyle.Render(" [tab] Switch field   [enter] Next   [esc] Cancel")
 	case wizardStepWhere:
 		if m.showBranchWarning {
-			footer = KeyHelpStyle.Render(" [↑↓/tab] Switch   [enter] Next   [esc] Back")
+			footer = KeyHelpStyle.Render(" [↑↓/tab] Switch   [enter] Choose   [esc] Back")
 		} else {
 			footer = KeyHelpStyle.Render(" [enter] Add   [backspace] Remove last   [tab] Cycle focus   [ctrl+d] Continue   [esc] Back")
 		}

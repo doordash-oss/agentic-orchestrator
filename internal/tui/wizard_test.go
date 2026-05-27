@@ -57,9 +57,9 @@ func TestWizardSteps(t *testing.T) {
 	if m.step != wizardStepWhere {
 		t.Errorf("expected step Where, got %d", m.step)
 	}
-	// Toggle first repo (Space toggles on Where step)
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Add first repo (Enter on list axis = add to chips), then Ctrl+D to advance
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
 
 	// Step 3 (Pipeline): Confirm selection
 	if m.step != wizardStepPipeline {
@@ -733,17 +733,18 @@ func TestWizardRepoFilter(t *testing.T) {
 		t.Errorf("repoCursor after filter = %d, want 0", m.repoCursor)
 	}
 
-	// Space to toggle first filtered repo (geo-intel)
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Enter to add first filtered repo (geo-intel). After adding, the picked
+	// repo is removed from the available list and the cursor naturally
+	// points at the next one (geo-proxy).
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.selectedRepos["geo-intel"] {
-		t.Error("expected geo-intel to be selected after Space")
+		t.Error("expected geo-intel to be selected after Enter")
 	}
 
-	// Navigate down and toggle second filtered repo (geo-proxy)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Enter again to add the next available repo (geo-proxy)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.selectedRepos["geo-proxy"] {
-		t.Error("expected geo-proxy to be selected after Space")
+		t.Error("expected geo-proxy to be selected after second Enter")
 	}
 
 	// Clear filter by sending backspace keys
@@ -782,12 +783,14 @@ func TestWizardCtrlNCtrlPNavigation(t *testing.T) {
 	if m.step != wizardStepWhere {
 		t.Fatalf("expected step Where, got %d", m.step)
 	}
-
+	if m.whereFocus != whereFocusList {
+		t.Fatalf("expected initial focus on the list, got %d", m.whereFocus)
+	}
 	if m.repoCursor != 0 {
 		t.Fatalf("expected repoCursor = 0, got %d", m.repoCursor)
 	}
 
-	// ctrl+n moves down
+	// ctrl+n moves down within the repo list
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
 	if m.repoCursor != 1 {
 		t.Errorf("expected repoCursor = 1 after ctrl+n, got %d", m.repoCursor)
@@ -809,42 +812,40 @@ func TestWizardCtrlNCtrlPNavigation(t *testing.T) {
 		t.Errorf("expected repoCursor = 0 after second ctrl+p, got %d", m.repoCursor)
 	}
 
-	// ctrl+p at top stays at 0
+	// ctrl+p at top of list stays at 0
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if m.repoCursor != 0 {
 		t.Errorf("expected repoCursor to stay at 0, got %d", m.repoCursor)
 	}
 
-	// Navigate to bottom and verify ctrl+n bounds
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	if m.repoCursor != 3 {
-		t.Errorf("expected repoCursor = 3, got %d", m.repoCursor)
+	// ctrl+n past the bottom of the list steps into the action axis (Browse)
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}) // 0 -> 1
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}) // 1 -> 2
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}) // 2 -> 3 (last list row)
+	if m.repoCursor != 3 || m.whereFocus != whereFocusList {
+		t.Fatalf("expected to be on last list row, got cursor=%d focus=%d", m.repoCursor, m.whereFocus)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}) // list -> Browse
+	if m.whereFocus != whereFocusBrowse {
+		t.Errorf("expected focus on Browse after stepping past last list row, got %d", m.whereFocus)
 	}
 
-	// Space to toggle at navigated position (delta is at index 3)
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	if !m.selectedRepos["delta"] {
-		t.Error("expected delta to be selected after Space at cursor 3")
+	// Browse -> Create
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	if m.whereFocus != whereFocusCreate {
+		t.Errorf("expected focus on Create after ctrl+n, got %d", m.whereFocus)
 	}
 
-	// ctrl+n goes to browse item (index 4)
+	// Create -> Continue
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	if m.repoCursor != 4 {
-		t.Errorf("expected repoCursor = 4 (browse item), got %d", m.repoCursor)
+	if m.whereFocus != whereFocusContinue {
+		t.Errorf("expected focus on Continue after ctrl+n, got %d", m.whereFocus)
 	}
 
-	// ctrl+n goes to create-new-repo item (index 5)
+	// ctrl+n on Continue stays there (bottom of the page)
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	if m.repoCursor != 5 {
-		t.Errorf("expected repoCursor = 5 (create-new-repo item), got %d", m.repoCursor)
-	}
-
-	// ctrl+n at create-new-repo item stays at max
-	m, _ = m.Update(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	if m.repoCursor != 5 {
-		t.Errorf("expected repoCursor to stay at 5, got %d", m.repoCursor)
+	if m.whereFocus != whereFocusContinue {
+		t.Errorf("expected focus to stay on Continue, got %d", m.whereFocus)
 	}
 }
 
@@ -1138,8 +1139,15 @@ func TestWizardBranchWarningShownOnOffDefault(t *testing.T) {
 	if len(m.branchInfos) == 0 {
 		t.Error("expected branchInfos to be populated")
 	}
-	if m.branchCursor != 0 {
-		t.Errorf("expected branchCursor 0, got %d", m.branchCursor)
+	if m.branchScreenIndex != 0 {
+		t.Errorf("expected branchScreenIndex 0, got %d", m.branchScreenIndex)
+	}
+	if m.branchOptionCursor != 0 {
+		t.Errorf("expected branchOptionCursor 0 (default-branch pre-selected), got %d", m.branchOptionCursor)
+	}
+	// Default choice for the single off-default repo should be "use default branch" (false)
+	if got, ok := m.branchChoices["repo-a"]; !ok || got {
+		t.Errorf("expected branchChoices[repo-a]=false, got value=%v present=%v", got, ok)
 	}
 }
 
@@ -1187,70 +1195,129 @@ func TestWizardNoBranchWarningNoRepoPaths(t *testing.T) {
 
 // --- Test Group: Branch Warning Navigation ---
 
-func TestWizardBranchWarningUpDown(t *testing.T) {
+func TestWizardBranchScreenOptionToggle(t *testing.T) {
+	// Within a single repo's screen, ↑/↓/tab all flip between the two
+	// options (default / current). Only two options, so toggle keys are
+	// symmetric - they don't care about direction.
 	defaults := config.DefaultsConfig{}
 	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
-	m.branchCursor = 0
+	m.branchChoices = map[string]bool{"repo-a": false}
+	m.branchScreenIndex = 0
+	m.branchOptionCursor = 0
 
-	// Down moves to 1
+	// Down flips to "current branch"
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.branchCursor != 1 {
-		t.Errorf("expected branchCursor 1 after down, got %d", m.branchCursor)
+	if m.branchOptionCursor != 1 {
+		t.Errorf("expected option cursor 1 after down, got %d", m.branchOptionCursor)
 	}
-	// Up moves back to 0
+	// Up flips back to "default branch"
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.branchCursor != 0 {
-		t.Errorf("expected branchCursor 0 after up, got %d", m.branchCursor)
+	if m.branchOptionCursor != 0 {
+		t.Errorf("expected option cursor 0 after up, got %d", m.branchOptionCursor)
 	}
-	// Up again stays at 0 (no wrap)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.branchCursor != 0 {
-		t.Errorf("expected branchCursor 0 after second up, got %d", m.branchCursor)
-	}
-	// Down twice: should stop at 1
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.branchCursor != 1 {
-		t.Errorf("expected branchCursor 1 after double down, got %d", m.branchCursor)
+	// Tab also toggles
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.branchOptionCursor != 1 {
+		t.Errorf("expected option cursor 1 after tab, got %d", m.branchOptionCursor)
 	}
 }
 
-func TestWizardBranchWarningTab(t *testing.T) {
+func TestWizardBranchScreenEnterAdvancesPerRepo(t *testing.T) {
+	// With two off-default repos: Enter on the first repo saves its choice
+	// AND advances to the second repo's screen (not to Pipeline). Enter on
+	// the second one (the last) advances to Pipeline.
 	defaults := config.DefaultsConfig{}
-	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
+	repos := []string{"repo-a", "repo-b"}
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
-	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
-	m.branchCursor = 0
-
-	// Tab toggles to 1
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.branchCursor != 1 {
-		t.Errorf("expected branchCursor 1 after tab, got %d", m.branchCursor)
+	m.branchInfos = []RepoBranchInfo{
+		{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true},
+		{Name: "repo-b", CurrentBranch: "bugfix/foo", DefaultBranch: "master", IsOffDefault: true},
 	}
-	// Tab again toggles back to 0
+	m.branchChoices = map[string]bool{"repo-a": false, "repo-b": false}
+	m.nameInput.SetValue("test-feature")
+	m.descInput.SetValue("test description")
+	m.selectedRepos["repo-a"] = true
+	m.selectedRepos["repo-b"] = true
+
+	// Pick "current branch" on repo-a (Tab to toggle), then Enter.
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.branchCursor != 0 {
-		t.Errorf("expected branchCursor 0 after second tab, got %d", m.branchCursor)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.step != wizardStepWhere {
+		t.Errorf("expected to still be on Where step (next repo screen), got %v", m.step)
+	}
+	if m.branchScreenIndex != 1 {
+		t.Errorf("expected to be on screen 1 (repo-b), got %d", m.branchScreenIndex)
+	}
+	if !m.branchChoices["repo-a"] {
+		t.Error("expected repo-a choice to be saved as true")
+	}
+	// repo-b's screen should start with the recommended (default) option
+	if m.branchOptionCursor != 0 {
+		t.Errorf("expected option cursor to reset to 0 (recommended) on new screen, got %d", m.branchOptionCursor)
+	}
+
+	// Enter on the last screen advances to Pipeline.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.step != wizardStepPipeline {
+		t.Errorf("expected step wizardStepPipeline after last Enter, got %v", m.step)
+	}
+	if m.branchChoices["repo-b"] {
+		t.Error("expected repo-b choice to be saved as false (recommended)")
 	}
 }
 
-func TestWizardBranchWarningSecondEnterAdvances(t *testing.T) {
+func TestWizardBranchScreenEscBacksUpOneRepo(t *testing.T) {
+	// On screen 2 (second repo): Esc backs to screen 1 (first repo), NOT
+	// to the repo picker. Esc on screen 1 dismisses the branch flow.
+	defaults := config.DefaultsConfig{}
+	repos := []string{"repo-a", "repo-b"}
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
+	m.step = wizardStepWhere
+	m.showBranchWarning = true
+	m.branchInfos = []RepoBranchInfo{
+		{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true},
+		{Name: "repo-b", CurrentBranch: "bugfix/foo", DefaultBranch: "master", IsOffDefault: true},
+	}
+	m.branchChoices = map[string]bool{"repo-a": true, "repo-b": false}
+	m.branchScreenIndex = 1
+
+	// Esc backs to screen 0 and remembers the previously-saved choice
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.branchScreenIndex != 0 {
+		t.Errorf("expected to back up to screen 0, got %d", m.branchScreenIndex)
+	}
+	if !m.showBranchWarning {
+		t.Error("expected branch screen to still be active")
+	}
+	if m.branchOptionCursor != 1 {
+		t.Errorf("expected option cursor to reflect saved repo-a choice (true), got %d", m.branchOptionCursor)
+	}
+
+	// Esc on screen 0 dismisses the branch flow and returns to repo picker
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.showBranchWarning {
+		t.Error("expected branch screen to be dismissed after esc on first screen")
+	}
+}
+
+func TestWizardBranchScreenSingleRepoEnterAdvances(t *testing.T) {
 	defaults := config.DefaultsConfig{}
 	repos := []string{"repo-a"}
 	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
-	m.branchCursor = 0
+	m.branchChoices = map[string]bool{"repo-a": false}
 	m.nameInput.SetValue("test-feature")
 	m.descInput.SetValue("test description")
 	m.selectedRepos["repo-a"] = true
 
-	// Enter advances to Pipeline
+	// One off-default repo: Enter advances directly to Pipeline.
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.step != wizardStepPipeline {
 		t.Errorf("expected step wizardStepPipeline, got %v", m.step)
@@ -1275,16 +1342,19 @@ func TestWizardBranchWarningBlocksRepoKeys(t *testing.T) {
 
 // --- Test Group: Branch Warning Back Navigation ---
 
-func TestWizardBranchWarningShiftTabDismisses(t *testing.T) {
+func TestWizardBranchScreenEscOnFirstDismisses(t *testing.T) {
+	// Esc on the first screen dismisses the branch flow entirely and
+	// returns to the repo picker. (Replaces the prior shift+tab dismiss
+	// path; shift+tab is no longer wired on the branch screen.)
 	defaults := config.DefaultsConfig{}
 	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.showBranchWarning {
-		t.Error("expected showBranchWarning to be false after shift+tab")
+		t.Error("expected showBranchWarning to be false after esc on first screen")
 	}
 	if m.step != wizardStepWhere {
 		t.Errorf("expected step wizardStepWhere (stays), got %v", m.step)
@@ -1329,19 +1399,22 @@ func TestWizardUseCurrentBranchTrue(t *testing.T) {
 	m.descInput.SetValue("test description")
 	m, _ = m.advance() // What -> Where
 	m.selectedRepos["repo-a"] = true
-	m, _ = m.advance() // First Enter -> shows warning
+	m, _ = m.advance() // First Continue -> shows branch screen
 	if !m.showBranchWarning {
-		t.Fatal("expected branch warning to be shown")
+		t.Fatal("expected branch screen to be shown")
 	}
-	// Move cursor down to select "current branch"
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.branchCursor != 1 {
-		t.Fatalf("expected branchCursor 1, got %d", m.branchCursor)
+	// Tab toggles the option cursor to "use current branch"
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.branchOptionCursor != 1 {
+		t.Fatalf("expected branchOptionCursor=1 after tab, got %d", m.branchOptionCursor)
 	}
-	// Second Enter -> advances to Pipeline
+	// Enter saves the choice and (last repo) advances to Pipeline
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.step != wizardStepPipeline {
 		t.Fatalf("expected step wizardStepPipeline, got %v", m.step)
+	}
+	if !m.branchChoices["repo-a"] {
+		t.Fatalf("expected branchChoices[repo-a]=true after enter, got %v", m.branchChoices)
 	}
 	// Enter -> Review
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -1352,7 +1425,10 @@ func TestWizardUseCurrentBranchTrue(t *testing.T) {
 	}
 	result := m.Result()
 	if !result.UseCurrentBranch {
-		t.Error("expected UseCurrentBranch to be true")
+		t.Error("expected UseCurrentBranch (global fallback) to be true")
+	}
+	if v, ok := result.UseCurrentBranchPerRepo["repo-a"]; !ok || !v {
+		t.Errorf("expected UseCurrentBranchPerRepo[repo-a]=true, got value=%v present=%v", v, ok)
 	}
 }
 
@@ -1370,13 +1446,10 @@ func TestWizardUseCurrentBranchFalseDefault(t *testing.T) {
 	m.descInput.SetValue("test description")
 	m, _ = m.advance() // What -> Where
 	m.selectedRepos["repo-a"] = true
-	m, _ = m.advance() // First Enter -> shows warning
-	// Leave cursor at 0 (default branch)
-	// Second Enter -> Pipeline
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	// Enter -> Review
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	// Press G to create
+	m, _ = m.advance() // First Continue -> shows branch screen with default-branch pre-selected
+	// Don't toggle - leave the default choice in place
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Branch -> Pipeline
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Pipeline -> Review
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
 	if !m.IsDone() {
 		t.Fatal("expected wizard to be done")
@@ -1384,6 +1457,68 @@ func TestWizardUseCurrentBranchFalseDefault(t *testing.T) {
 	result := m.Result()
 	if result.UseCurrentBranch {
 		t.Error("expected UseCurrentBranch to be false")
+	}
+	if v, ok := result.UseCurrentBranchPerRepo["repo-a"]; !ok || v {
+		t.Errorf("expected UseCurrentBranchPerRepo[repo-a]=false, got value=%v present=%v", v, ok)
+	}
+}
+
+// TestWizardUseCurrentBranchPerRepoMixed exercises the multi-repo case where
+// the user picks "default branch" for one repo and "current branch" for
+// another. The per-repo map must reflect each choice independently; the
+// global UseCurrentBranch boolean is true because ANY repo opted into
+// current branch.
+func TestWizardUseCurrentBranchPerRepoMixed(t *testing.T) {
+	repos := []string{"repo-a", "repo-b"}
+	defaults := config.DefaultsConfig{}
+	m := NewWizardModel(repos, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
+	m.detectBranchesFn = func(WizardModel) []RepoBranchInfo {
+		return []RepoBranchInfo{
+			{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true},
+			{Name: "repo-b", CurrentBranch: "bugfix/foo", DefaultBranch: "master", IsOffDefault: true},
+		}
+	}
+	m.nameInput.SetValue("test-feature")
+	m.descInput.SetValue("test description")
+	m, _ = m.advance() // What -> Where
+	m.selectedRepos["repo-a"] = true
+	m.selectedRepos["repo-b"] = true
+	m, _ = m.advance() // First Continue -> branch screen
+	if !m.showBranchWarning {
+		t.Fatal("expected branch screen to be shown")
+	}
+
+	// Screen 1 (repo-a): leave at default, Enter to save+advance to screen 2.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.branchScreenIndex != 1 {
+		t.Fatalf("expected to advance to screen 1 (repo-b), got %d", m.branchScreenIndex)
+	}
+	if m.branchChoices["repo-a"] {
+		t.Error("expected repo-a choice to remain false")
+	}
+
+	// Screen 2 (repo-b): Tab flips to current branch, then Enter saves+advances.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.branchOptionCursor != 1 {
+		t.Fatalf("expected option cursor=1 after tab on repo-b, got %d", m.branchOptionCursor)
+	}
+
+	// Confirm and finish
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Branch -> Pipeline
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // Pipeline -> Review
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
+	if !m.IsDone() {
+		t.Fatal("expected wizard to be done")
+	}
+	result := m.Result()
+	if !result.UseCurrentBranch {
+		t.Error("expected UseCurrentBranch=true (any repo opted in)")
+	}
+	if v := result.UseCurrentBranchPerRepo["repo-a"]; v {
+		t.Errorf("expected repo-a=false in per-repo map, got %v", v)
+	}
+	if v := result.UseCurrentBranchPerRepo["repo-b"]; !v {
+		t.Errorf("expected repo-b=true in per-repo map, got %v", v)
 	}
 }
 
@@ -1396,19 +1531,19 @@ func TestWizardBranchWarningView(t *testing.T) {
 	m.step = wizardStepWhere
 	m.showBranchWarning = true
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
-	m.branchCursor = 0
+	m.branchChoices = map[string]bool{"repo-a": false}
 	m.width = 80
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "Branch Warning") {
-		t.Error("expected view to contain 'Branch Warning'")
+	if !containsString(view, "Branch selection") {
+		t.Error("expected view title to contain 'Branch selection'")
 	}
-	if !containsString(view, "Start from default branch") {
-		t.Error("expected view to contain 'Start from default branch'")
+	if !containsString(view, "Start from main") {
+		t.Error("expected view to contain 'Start from main' (default-branch option)")
 	}
-	if !containsString(view, "Start from current branch") {
-		t.Error("expected view to contain 'Start from current branch'")
+	if !containsString(view, "Start from feature/xyz") {
+		t.Error("expected view to contain 'Start from feature/xyz' (current-branch option)")
 	}
 	if !containsString(view, "repo-a") {
 		t.Error("expected view to contain 'repo-a'")
@@ -1426,8 +1561,11 @@ func TestWizardBranchWarningFooter(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "Confirm") {
-		t.Error("expected footer to contain 'Confirm'")
+	if !containsString(view, "Next") {
+		t.Error("expected footer to contain 'Next' (enter action label)")
+	}
+	if !containsString(view, "Switch") {
+		t.Error("expected footer to contain 'Switch' (toggle action label)")
 	}
 }
 
@@ -1440,7 +1578,7 @@ func TestWizardReviewShowsBranchChoice(t *testing.T) {
 	m.selectedRepos["repo-a"] = true
 	m.step = wizardStepReview
 	m.branchInfos = []RepoBranchInfo{{Name: "repo-a", CurrentBranch: "feature/xyz", DefaultBranch: "main", IsOffDefault: true}}
-	m.branchCursor = 1
+	m.branchChoices = map[string]bool{"repo-a": true} // user picked current branch
 	m.width = 80
 	m.height = 24
 
@@ -1450,7 +1588,7 @@ func TestWizardReviewShowsBranchChoice(t *testing.T) {
 	}
 
 	// Switch to default branch
-	m.branchCursor = 0
+	m.branchChoices["repo-a"] = false
 	view = m.View()
 	if !containsString(view, "default branch") {
 		t.Error("expected review to show 'default branch'")
@@ -3414,30 +3552,35 @@ func TestWizardCursorCanReachBrowseItem(t *testing.T) {
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, []string{"/tmp/roots"})
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Move down twice to reach browse item (index 2, after repos 0 and 1)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-
-	if m.repoCursor != len(m.filteredRepos) {
-		t.Errorf("expected cursor at %d (browse item), got %d", len(m.filteredRepos), m.repoCursor)
+	// Tab cycles list -> Browse
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusBrowse {
+		t.Errorf("expected focus on Browse after Tab, got %d", m.whereFocus)
 	}
 
-	// Down again reaches create-new-repo item
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.repoCursor != len(m.filteredRepos)+1 {
-		t.Errorf("expected cursor at %d (create item), got %d", len(m.filteredRepos)+1, m.repoCursor)
+	// Tab again reaches Create
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusCreate {
+		t.Errorf("expected focus on Create after second Tab, got %d", m.whereFocus)
 	}
 
-	// Down again should clamp at create item
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.repoCursor != len(m.filteredRepos)+1 {
-		t.Errorf("cursor should clamp at create item, got %d", m.repoCursor)
+	// Tab again reaches Continue
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusContinue {
+		t.Errorf("expected focus on Continue after third Tab, got %d", m.whereFocus)
 	}
 
-	// Up should go back to browse item
+	// Tab again wraps back to the list
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusList {
+		t.Errorf("expected focus to wrap to list, got %d", m.whereFocus)
+	}
+
+	// Up from Continue with the create row visible should land on Create
+	m.whereFocus = whereFocusContinue
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.repoCursor != len(m.filteredRepos) {
-		t.Errorf("expected cursor at %d (browse item) after up, got %d", len(m.filteredRepos), m.repoCursor)
+	if m.whereFocus != whereFocusCreate {
+		t.Errorf("expected Up from Continue to land on Create, got %d", m.whereFocus)
 	}
 }
 
@@ -3446,15 +3589,16 @@ func TestWizardTabOnBrowseOpensPicker(t *testing.T) {
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Move cursor to browse item
-	for i := 0; i < len(repos); i++ {
-		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	// Tab cycles to Browse focus
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusBrowse {
+		t.Fatalf("expected focus on Browse after Tab, got %d", m.whereFocus)
 	}
 
-	// Space opens picker (Space activates Browse/Root items on Where step)
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Enter on Browse opens the picker
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.IsPickerActive() {
-		t.Error("expected picker to be active after space on browse item")
+		t.Error("expected picker to be active after Enter on Browse focus")
 	}
 	if m.ConsumeBrowseRoot() != "" {
 		t.Error("no root should be selected yet")
@@ -3466,9 +3610,9 @@ func TestWizardPickerCancelReturnToRepos(t *testing.T) {
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Move to browse and open
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Tab to Browse, then Enter to open picker
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.IsPickerActive() {
 		t.Fatal("precondition: picker should be active")
 	}
@@ -3586,9 +3730,9 @@ func TestWizardDirPickerDelegatesAllMessages(t *testing.T) {
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Open picker (Space activates Browse item on Where step)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Tab to Browse, then Enter to open the picker.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Send non-key message — should not panic
 	m, _ = m.Update(gitRepoScanMsg{dir: "/tmp", count: 0, repoDirs: map[string]bool{}})
@@ -3605,23 +3749,22 @@ func TestWizardMultipleBrowseRounds(t *testing.T) {
 	m := NewWizardModel([]string{"repo-a"}, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Round 1: open picker, set root manually, consume
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Round 1: Tab to Browse, Enter to open, Esc to cancel.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.IsPickerActive() {
 		t.Fatal("round 1: expected picker active")
 	}
-	// Cancel round 1
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.IsPickerActive() {
 		t.Fatal("round 1: expected picker cancelled")
 	}
 
-	// Round 2: cursor should still be on browse item, reopen
-	if m.repoCursor != len(m.filteredRepos) {
-		t.Fatalf("cursor should be on browse item, got %d", m.repoCursor)
+	// Round 2: focus should still be on Browse, Enter reopens.
+	if m.whereFocus != whereFocusBrowse {
+		t.Fatalf("focus should remain on Browse, got %d", m.whereFocus)
 	}
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.IsPickerActive() {
 		t.Error("round 2: expected picker to reopen")
 	}
@@ -4108,20 +4251,20 @@ func TestWizardCreateNewRepoHiddenWithoutRoots(t *testing.T) {
 
 func TestWizardCursorClampsAtBrowseWithoutRoots(t *testing.T) {
 	repos := []string{"repo-a"}
-	// No workspace roots → cursor max should be len(repos) (browse item only)
+	// No workspace roots → action axis only has Browse and Continue (no Create row).
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Move down past repo to browse item
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.repoCursor != len(m.filteredRepos) {
-		t.Errorf("expected cursor at %d (browse item), got %d", len(m.filteredRepos), m.repoCursor)
+	// Tab cycles list -> Browse (skips Create when no workspace roots)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusBrowse {
+		t.Errorf("expected focus on Browse after Tab, got %d", m.whereFocus)
 	}
 
-	// Down again should clamp at browse (no create-repo row)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.repoCursor != len(m.filteredRepos) {
-		t.Errorf("cursor should clamp at browse item without roots, got %d", m.repoCursor)
+	// Tab again goes to Continue (NOT Create — Create is not visible)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusContinue {
+		t.Errorf("expected focus to skip Create and land on Continue, got %d", m.whereFocus)
 	}
 }
 
@@ -4131,18 +4274,17 @@ func TestWizardCreateNewRepoRootPicker(t *testing.T) {
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, roots)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Navigate to "Create new repo..." (index len(repos)+1 = 2)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // browse
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // create
-
-	if m.repoCursor != len(m.filteredRepos)+1 {
-		t.Fatalf("expected cursor at create item, got %d", m.repoCursor)
+	// Tab twice to cycle list -> Browse -> Create
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.whereFocus != whereFocusCreate {
+		t.Fatalf("expected focus on Create after two Tabs, got %d", m.whereFocus)
 	}
 
-	// Space opens root picker overlay (Space activates items on Where step)
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Enter opens root picker overlay
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.IsRootPickerActive() {
-		t.Fatal("expected root picker to be active after space on create item")
+		t.Fatal("expected root picker to be active after Enter on Create focus")
 	}
 	if m.rootPickerCursor != 0 {
 		t.Errorf("expected root picker cursor at 0, got %d", m.rootPickerCursor)
@@ -4189,10 +4331,10 @@ func TestWizardRootPickerEscCancels(t *testing.T) {
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, roots)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Navigate to create item and open root picker (Space activates items on Where step)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Tab to Create then Enter to open root picker
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if !m.IsRootPickerActive() {
 		t.Fatal("expected root picker to be active")
@@ -4214,10 +4356,10 @@ func TestWizardRootPickerEscFromNameGoesBack(t *testing.T) {
 	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, roots)
 	m = advanceWizardToWhereViaUI(m, "test")
 
-	// Open root picker and select a root (Space activates items on Where step)
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	// Tab twice to Create, Enter opens root picker, Enter again selects first root.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // select root → name input phase
 
 	if !m.createRepoActive {

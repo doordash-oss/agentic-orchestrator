@@ -63,16 +63,16 @@ You are tasked with conducting comprehensive research across the codebase to ans
    - Don't write detailed prompts about HOW to search - the agents already know
    - Remind agents they are documenting, not evaluating or improving
 
-4. **Wait for all sub-agents to complete and synthesize findings:**
-   - IMPORTANT: Wait for ALL sub-agent tasks to complete before proceeding
-   - Compile all sub-agent results
-   - Connect findings across different components
-   - Include specific file paths and line numbers for reference
-   - Highlight patterns, connections, and architectural decisions
-   - Answer the user's specific questions with concrete evidence
+4. **Checkpoint each sub-agent's findings as it returns:**
+   - Write each completed sub-agent's findings to `{phase_dir}/findings/<slug>.md` before synthesizing. These survive an interrupted session and are never re-run. (The `findings/` subdir is scratch, not the artifact.)
+   - Wait for ALL sub-agents to complete before proceeding.
 
-5. **Write the research document to the output directory:**
-   - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`)
+5. **Synthesize and write the research document incrementally:**
+   - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`) at the root of `{phase_dir}`.
+   - Synthesize by reading the `findings/` files, not from accumulated context — this keeps each turn small.
+   - Write a skeleton (title + section headers) first, then fill one section at a time with Edit, keeping each payload below ~20KB. Never emit the whole document in one write.
+   - Connect findings across components, cite file paths and line numbers, and answer the user's specific questions with concrete evidence.
+   - Only create `phase_complete` once every section is filled (no empty bodies or placeholders).
    - Structure the document as follows:
 
      ```markdown
@@ -131,5 +131,5 @@ You are tasked with conducting comprehensive research across the codebase to ans
 - **File reading**: Always read mentioned files FULLY (no limit/offset) before spawning sub-tasks
 - **Critical ordering**: Follow the numbered steps exactly
   - ALWAYS read mentioned files first before spawning sub-tasks (step 1)
-  - ALWAYS wait for all sub-agents to complete before synthesizing (step 4)
+  - ALWAYS wait for all sub-agents to complete before synthesizing (step 5)
   - NEVER write the research document with placeholder values

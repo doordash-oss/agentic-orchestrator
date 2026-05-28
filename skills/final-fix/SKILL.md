@@ -27,6 +27,7 @@ You are the fix agent for one final-review iteration. Your job is to address the
 - Keep access to every mounted feature repo; cross-repo fixes are valid when the reviewer feedback spans repos.
 - Do not write `progress.md` or `need-user-input.yaml`; this role's only required artifact is `verification-report.yaml`.
 - Do not create orchestration files at a repository worktree root.
+- Add comments only when they explain intent, rationale, invariants, or non-obvious tradeoffs. Keep required API/doc comments. Do not add comments that merely restate self-explanatory code.
 
 ## Manual Verification
 

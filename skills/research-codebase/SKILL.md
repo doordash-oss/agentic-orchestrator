@@ -69,9 +69,11 @@ You are tasked with conducting comprehensive research across the codebase to ans
 
 5. **Synthesize and write the research document incrementally:**
    - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`) at the root of `{phase_dir}`.
-   - Synthesize by reading the `findings/` files, not from accumulated context — this keeps each turn small.
-   - Connect findings across components, cite file paths and line numbers, and answer the user's specific questions with concrete evidence.
-   - Structure the document as follows:
+   - Synthesize by reading the `findings/` files, not from accumulated context
+   - Connect findings across different components
+   - Include specific file paths and line numbers for reference
+   - Highlight patterns, connections, and architectural decisions
+   - Answer the user's specific questions with concrete evidence
 
      ```markdown
      # Research: [Topic]

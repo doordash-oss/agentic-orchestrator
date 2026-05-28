@@ -65,7 +65,7 @@ You are tasked with conducting comprehensive research across the codebase to ans
 
 4. **Checkpoint each sub-agent's findings as it returns:**
    - Write each completed sub-agent's findings to `{phase_dir}/findings/<slug>.md` before synthesizing. These survive an interrupted session and are never re-run. (The `findings/` subdir is scratch, not the artifact.)
-   - Wait for ALL sub-agents to complete before proceeding.
+   - IMPORTANT: Wait for ALL sub-agent tasks to complete before proceeding
 
 5. **Synthesize and write the research document incrementally:**
    - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`) at the root of `{phase_dir}`.

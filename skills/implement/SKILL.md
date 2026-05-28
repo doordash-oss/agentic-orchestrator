@@ -25,6 +25,7 @@ You are the coordinator for the whole phase. Keep main context focused on readin
 - If a test is hard to write, treat that as design feedback: simplify the interface, introduce dependency injection, or narrow the behavior under test.
 - Use stubs only when the approved plan explicitly calls for them. Mark intentional stubs with `// STUB(Phase N): <what the real implementation will do>`.
 - Do not invent extra scope. New useful checks go in `verification-report.yaml` under `additional_checks:`, not in the contract `results:`.
+- Add comments only when they explain intent, rationale, invariants, or non-obvious tradeoffs. Keep required API/doc comments. Do not add comments that merely restate self-explanatory code.
 
 ## Workspace
 

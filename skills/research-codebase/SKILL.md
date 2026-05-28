@@ -70,9 +70,7 @@ You are tasked with conducting comprehensive research across the codebase to ans
 5. **Synthesize and write the research document incrementally:**
    - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`) at the root of `{phase_dir}`.
    - Synthesize by reading the `findings/` files, not from accumulated context — this keeps each turn small.
-   - Write a skeleton (title + section headers) first, then fill one section at a time with Edit, keeping each payload below ~20KB. Never emit the whole document in one write.
    - Connect findings across components, cite file paths and line numbers, and answer the user's specific questions with concrete evidence.
-   - Only create `phase_complete` once every section is filled (no empty bodies or placeholders).
    - Structure the document as follows:
 
      ```markdown

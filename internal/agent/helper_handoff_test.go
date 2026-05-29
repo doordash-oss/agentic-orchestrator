@@ -85,6 +85,64 @@ func TestReviewProgressHandoffFingerprint(t *testing.T) {
 	}
 }
 
+func TestValidatorHandoffAssetsShareReviewProgressContract(t *testing.T) {
+	skills := []string{
+		"validate-roadmap-architecture",
+		"validate-roadmap-scope",
+		"validate-phase-plan-structural",
+		"validate-phase-plan-scope",
+		"validate-phase-plan-grounding",
+		"validate-plan-security",
+		"validate-plan-performance",
+		"validate-plan-testing",
+	}
+
+	var baseline []byte
+	for _, skill := range skills {
+		t.Run(skill, func(t *testing.T) {
+			path := repoRootPath(t, "skills", skill, "HANDOFF.md")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading %s: %v", path, err)
+			}
+			if baseline == nil {
+				baseline = append([]byte(nil), data...)
+			} else if string(data) != string(baseline) {
+				t.Fatalf("%s HANDOFF.md differs from first validator handoff", skill)
+			}
+			text := string(data)
+			for _, want := range []string{
+				"## Examined Work",
+				"## Advisory Findings",
+				"## Where I Stopped",
+				"## Handoff State",
+				"CONTINUE",
+				"COMPLETE",
+				"advisory only",
+				"validation-<axis>-feedback.md",
+				"phase_complete",
+			} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s HANDOFF.md missing %q", skill, want)
+				}
+			}
+		})
+	}
+
+	sample := extractFirstMarkdownFence(t, string(baseline))
+	path := writeHelperHandoff(t, t.TempDir(), ReviewProgressHandoffFilename, sample)
+	parsed, err := ParseReviewProgressHandoffMd(path)
+	if err != nil {
+		t.Fatalf("ParseReviewProgressHandoffMd() error = %v", err)
+	}
+	if !parsed.OK() {
+		t.Fatalf("validator HANDOFF.md sample violations = %v", parsed.ProtocolViolations)
+	}
+	if parsed.State != HelperHandoffContinue {
+		t.Fatalf("State = %s, want CONTINUE", parsed.State)
+	}
+}
+
 func TestParseProducerProgressHandoffMd(t *testing.T) {
 	path := writeHelperHandoff(t, t.TempDir(), ProducerProgressHandoffFilename, validProducerProgressHandoff("COMPLETE", "updated config loader"))
 
@@ -366,6 +424,20 @@ func writeHelperHandoff(t testing.TB, dir, name, body string) string {
 		t.Fatalf("WriteFile(%q) error = %v", path, err)
 	}
 	return path
+}
+
+func extractFirstMarkdownFence(t testing.TB, body string) string {
+	t.Helper()
+	start := strings.Index(body, "```markdown\n")
+	if start < 0 {
+		t.Fatal("missing markdown fence")
+	}
+	start += len("```markdown\n")
+	end := strings.Index(body[start:], "\n```")
+	if end < 0 {
+		t.Fatal("unterminated markdown fence")
+	}
+	return body[start : start+end]
 }
 
 func containsViolation(violations []string, want string) bool {

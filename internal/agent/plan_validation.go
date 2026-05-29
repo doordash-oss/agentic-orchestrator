@@ -635,6 +635,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		addDirs = []string{cfg.StateDir}
 	}
 	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
+	handoffPath := filepath.Join(helperIterDir, ReviewProgressHandoffFilename)
 	helper := &PhaseRunner{
 		SessionManager: sm,
 		StateDir:       cfg.StateDir,
@@ -644,25 +645,31 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		BuildSessionFn: cfg.BuildSession,
 	}
 	helperResult, err := helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
-		SessionID:              reviewID,
-		FeatureID:              cfg.Feature.ID,
-		Phase:                  feature.PhasePlan,
-		ParentSpanCtx:          parentCtx,
-		Model:                  validatorModel,
-		Prompt:                 validationPrompt,
-		PromptPath:             promptPath,
-		FeedbackPath:           feedbackPath,
-		HelperIterDir:          helperIterDir,
-		Role:                   validatorSpec.Role,
-		WorkDir:                cfg.WorkDir,
-		RepoName:               cfg.RepoName,
-		AdditionalDirs:         addDirs,
-		LogPath:                logPath,
-		SystemPromptPrefix:     "validation-" + domainLower,
-		CompletionAskingClause: cfg.AskingClause,
-		EffortLevel:            cfg.EffortLevel,
-		Kind:                   ports.KindValidator,
-		Label:                  domain.Name,
+		SessionID:               reviewID,
+		FeatureID:               cfg.Feature.ID,
+		Phase:                   feature.PhasePlan,
+		ParentSpanCtx:           parentCtx,
+		Model:                   validatorModel,
+		Prompt:                  validationPrompt,
+		PromptPath:              promptPath,
+		FeedbackPath:            feedbackPath,
+		HelperIterDir:           helperIterDir,
+		Role:                    validatorSpec.Role,
+		WorkDir:                 cfg.WorkDir,
+		RepoName:                cfg.RepoName,
+		AdditionalDirs:          addDirs,
+		LogPath:                 logPath,
+		SystemPromptPrefix:      "validation-" + domainLower,
+		CompletionAskingClause:  cfg.AskingClause,
+		EffortLevel:             cfg.EffortLevel,
+		Kind:                    ports.KindValidator,
+		Label:                   domain.Name,
+		EnableSmartZoneHandoff:  true,
+		HandoffPath:             handoffPath,
+		MaxConsecNoProgress:     cfg.MaxConsecNoProgress,
+		MaxConsecHandoffFails:   cfg.MaxConsecFails,
+		ContextHandoffIteration: attempt,
+		ContinuationPaths:       []string{planArtifactPath, feedbackPath, handoffPath},
 	})
 	if err != nil {
 		feedback := ""

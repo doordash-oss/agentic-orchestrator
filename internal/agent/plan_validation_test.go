@@ -758,6 +758,201 @@ func TestPhasePlanningLoopSmartZoneContinuationStaysInSameAttempt(t *testing.T) 
 	}
 }
 
+func TestPlanValidatorFanOutSmartZoneContinuationIsPerAxis(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := filepath.Join(tmpDir, "state")
+	artifactDir := filepath.Join(tmpDir, "roadmap")
+	attemptDir := filepath.Join(artifactDir, "attempt-01")
+	observeDir := filepath.Join(tmpDir, "observe")
+	for _, dir := range []string{workDir, attemptDir, filepath.Join(observeDir, "feat-validator-continuation")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+	planPath := filepath.Join(artifactDir, "roadmap.md")
+	if err := os.WriteFile(planPath, []byte(validRoadmapText()), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:            "feat-validator-continuation",
+		Name:          "Validator Continuation",
+		Description:   "Validate concurrent helper continuations.",
+		RiskLevel:     feature.RiskMedium,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	validators := []validatorDomain{
+		{Name: "Architecture", Template: "validate-roadmap-architecture"},
+		{Name: "Scope", Template: "validate-roadmap-scope"},
+	}
+
+	var (
+		mu              sync.Mutex
+		startsByAxis    = map[string]int{}
+		handoffMessages = map[string]string{}
+		capturedOpts    []BuildSessionOpts
+	)
+	writeErrCh := make(chan error, 8)
+	manager := &stubSessionManager{
+		start: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+			axis := validatorAxisFromSessionID(id)
+			mu.Lock()
+			startsByAxis[axis]++
+			mu.Unlock()
+
+			sess := session.NewSession(id, featureID, phase)
+			sess.SetProviderName("codex")
+			if !strings.Contains(id, "-c02") {
+				sess.SetLatestUsage(&llm.Usage{
+					ContextTotalTokens: 80_000,
+					ContextWindow:      200_000,
+				})
+				sink := attachCaptureSink(sess)
+				go func() {
+					select {
+					case <-sink.done:
+						mu.Lock()
+						handoffMessages[axis] = sink.contents()
+						mu.Unlock()
+						writeErrCh <- writeValidatorHandoffForTest(attemptDir, axis, "CONTINUE")
+						sess.SetCost(&llm.ResultMessage{Subtype: "success"})
+						sess.CloseDone()
+						sess.SendStatus(agentStatusSuccess)
+					case <-time.After(500 * time.Millisecond):
+						writeErrCh <- fmt.Errorf("%s validator timed out waiting for Smart Zone handoff", axis)
+						sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+						sess.CloseDone()
+						sess.SendStatus(agentStatusFailed)
+					}
+				}()
+				return sess, nil
+			}
+
+			go func() {
+				if err := writeValidatorHandoffForTest(attemptDir, axis, "COMPLETE"); err != nil {
+					writeErrCh <- err
+					sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+					sess.CloseDone()
+					sess.SendStatus(agentStatusFailed)
+					return
+				}
+				if err := writeValidatorFeedbackForTest(attemptDir, axis); err != nil {
+					writeErrCh <- err
+					sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+					sess.CloseDone()
+					sess.SendStatus(agentStatusFailed)
+					return
+				}
+				writeErrCh <- nil
+				sess.SetCost(&llm.ResultMessage{Subtype: "success"})
+				sess.CloseDone()
+				sess.SendStatus(agentStatusSuccess)
+			}()
+			return sess, nil
+		},
+	}
+	cfg := PlanLoopConfig{
+		Feature:                    f,
+		StateDir:                   stateDir,
+		WorkDir:                    workDir,
+		BuildSession:               validatorContinuationBuildSession(&mu, &capturedOpts),
+		Observer:                   observe.New(true, observeDir, false, "", false, "agentic"),
+		PhaseSpanCtx:               observe.SpanContextForFeature(f.ID, "trace-validator-continuation", f.Name, "span-validator-continuation"),
+		MaxConsecNoProgress:        3,
+		MaxConsecFails:             3,
+		DangerouslySkipPermissions: true,
+	}
+
+	results, status, feedback, err := runValidatorSet(cfg, manager, 1, attemptDir, planPath, validators, validationArtifactRoadmap, planValidationExtras{})
+	if err != nil {
+		t.Fatalf("runValidatorSet() error = %v", err)
+	}
+	if status != ReviewApproved {
+		t.Fatalf("status = %s, want APPROVED\n%s", status, feedback)
+	}
+	if len(results) != len(validators) {
+		t.Fatalf("results = %d, want %d", len(results), len(validators))
+	}
+	for i := 0; i < 4; i++ {
+		if err := <-writeErrCh; err != nil {
+			t.Fatalf("validator write error: %v", err)
+		}
+	}
+
+	mu.Lock()
+	gotStarts := map[string]int{}
+	for axis, count := range startsByAxis {
+		gotStarts[axis] = count
+	}
+	gotMessages := map[string]string{}
+	for axis, msg := range handoffMessages {
+		gotMessages[axis] = msg
+	}
+	gotOpts := append([]BuildSessionOpts(nil), capturedOpts...)
+	mu.Unlock()
+
+	for _, axis := range []string{"architecture", "scope"} {
+		if gotStarts[axis] != 2 {
+			t.Fatalf("%s validator starts = %d, want 2", axis, gotStarts[axis])
+		}
+		msg := gotMessages[axis]
+		if countHandoffMessages(msg) != 1 || !strings.Contains(msg, "skills/validate-roadmap-"+axis+"/HANDOFF.md") {
+			t.Fatalf("%s handoff message missing validator HANDOFF.md pointer:\n%s", axis, msg)
+		}
+		helperDir := filepath.Join(attemptDir, "validate-"+axis)
+		for _, path := range []string{
+			filepath.Join(helperDir, ReviewProgressHandoffFilename),
+			filepath.Join(helperDir, "validation-"+axis+"-feedback.md"),
+			filepath.Join(attemptDir, "validation-"+axis+"-feedback.md"),
+			filepath.Join(attemptDir, "axis-approved-"+axis+".md"),
+		} {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("expected %s artifact %q: %v", axis, path, err)
+			}
+		}
+	}
+	if len(gotOpts) != 4 {
+		t.Fatalf("BuildSession calls = %d, want 4", len(gotOpts))
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 exists before sticky check or stat failed unexpectedly: %v", err)
+	}
+	events := filterEventsByType(readObserveEvents(t, observeDir, f.ID), "context.handoff_triggered")
+	if len(events) != 2 {
+		t.Fatalf("context.handoff_triggered events = %d, want 2", len(events))
+	}
+	for _, event := range events {
+		if got := event.Data["threshold_tokens"]; got != float64(80_000) {
+			t.Fatalf("threshold_tokens = %v, want 80000", got)
+		}
+	}
+
+	attemptDir2 := filepath.Join(artifactDir, "attempt-02")
+	if err := os.MkdirAll(attemptDir2, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", attemptDir2, err)
+	}
+	blockingManager := &stubSessionManager{
+		start: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+			return nil, fmt.Errorf("sticky-approved validator unexpectedly launched session %s", id)
+		},
+	}
+	results, status, feedback, err = runValidatorSet(cfg, blockingManager, 2, attemptDir2, planPath, validators, validationArtifactRoadmap, planValidationExtras{})
+	if err != nil {
+		t.Fatalf("runValidatorSet(sticky) error = %v", err)
+	}
+	if status != ReviewApproved {
+		t.Fatalf("sticky status = %s, want APPROVED\n%s", status, feedback)
+	}
+	for _, result := range results {
+		if result.Status != ReviewApproved || result.AxisApproved == "" {
+			t.Fatalf("sticky result = %+v, want cached approval with axis marker", result)
+		}
+	}
+}
+
 func TestPhasePlanningLoopInvalidPlanningHandoffStaysInContinuation(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
@@ -884,6 +1079,52 @@ func writePlanningHandoffFiles(attemptDir, state, planText string) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), []byte("complete\n"), 0o644)
+}
+
+func validatorContinuationBuildSession(mu *sync.Mutex, captured *[]BuildSessionOpts) func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+	return func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		mu.Lock()
+		*captured = append(*captured, opts)
+		mu.Unlock()
+		return []string{"mock-validator"}, nil, &session.SessionOpts{
+			PIDDir:                        opts.PIDDir,
+			PermHandler:                   opts.PermHandler,
+			RepoName:                      opts.RepoName,
+			ProviderName:                  "codex",
+			DebugSystemPrompt:             opts.SystemPrompt,
+			ContextHandoffThresholdTokens: 80_000,
+		}, nil
+	}
+}
+
+func validatorAxisFromSessionID(id string) string {
+	for _, axis := range []string{"architecture", "scope"} {
+		if strings.Contains(id, "-"+axis+"-") {
+			return axis
+		}
+	}
+	return "unknown"
+}
+
+func writeValidatorHandoffForTest(attemptDir, axis, state string) error {
+	helperDir := filepath.Join(attemptDir, "validate-"+axis)
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		return err
+	}
+	body := validReviewProgressHandoff(state, "checked "+axis+" validator")
+	if err := os.WriteFile(filepath.Join(helperDir, ReviewProgressHandoffFilename), []byte(body), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(helperDir, PhaseCompleteFile), []byte("complete\n"), 0o644)
+}
+
+func writeValidatorFeedbackForTest(attemptDir, axis string) error {
+	helperDir := filepath.Join(attemptDir, "validate-"+axis)
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		return err
+	}
+	body := testutil.StructuredReviewFeedbackWithSticky("", "", "APPROVED", axis, []string{"## Phase 1: Skeleton"})
+	return os.WriteFile(filepath.Join(helperDir, "validation-"+axis+"-feedback.md"), []byte(body), 0o644)
 }
 
 func writeInvalidPlanningHandoff(attemptDir string) error {

@@ -622,6 +622,44 @@ func TestReconcileSkills_NonSkillMdFiles(t *testing.T) {
 	}
 }
 
+func TestReconcileSkills_WritesValidatorHandoffFiles(t *testing.T) {
+	skillsDir := filepath.Join(t.TempDir(), "skills")
+	if err := ReconcileSkills(skillsDir); err != nil {
+		t.Fatalf("ReconcileSkills() error: %v", err)
+	}
+
+	validators := []string{
+		"validate-roadmap-architecture",
+		"validate-roadmap-scope",
+		"validate-phase-plan-structural",
+		"validate-phase-plan-scope",
+		"validate-phase-plan-grounding",
+		"validate-plan-security",
+		"validate-plan-performance",
+		"validate-plan-testing",
+	}
+
+	var baseline string
+	for _, validator := range validators {
+		path := filepath.Join(skillsDir, validator, "HANDOFF.md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		text := string(data)
+		if baseline == "" {
+			baseline = text
+		} else if text != baseline {
+			t.Fatalf("%s HANDOFF.md differs from first validator handoff", validator)
+		}
+		for _, want := range []string{"review-progress.md", "validation-<axis>-feedback.md", "advisory only", "phase_complete"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s HANDOFF.md missing %q", validator, want)
+			}
+		}
+	}
+}
+
 func TestReconcileSkills_SubdirectoryStructure(t *testing.T) {
 	skillsDir := filepath.Join(t.TempDir(), "skills")
 

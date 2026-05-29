@@ -989,9 +989,15 @@ func (s *cleanupFailedAfterSuccessSession) Stop() error {
 // via t.Cleanup so subsequent tests are unaffected.
 func withHandoffPollInterval(t *testing.T, d time.Duration) {
 	t.Helper()
+	contextHandoffPollIntervalMu.Lock()
 	prev := contextHandoffPollInterval
 	contextHandoffPollInterval = d
-	t.Cleanup(func() { contextHandoffPollInterval = prev })
+	contextHandoffPollIntervalMu.Unlock()
+	t.Cleanup(func() {
+		contextHandoffPollIntervalMu.Lock()
+		contextHandoffPollInterval = prev
+		contextHandoffPollIntervalMu.Unlock()
+	})
 }
 
 func handoffPollHook(ch chan<- struct{}) func() {

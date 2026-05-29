@@ -83,7 +83,17 @@ func NewProgressTracker() *ProgressTracker {
 // handoff-narrative-scoped fingerprint so iteration-specific paths in
 // progress.md don't mask a stalled agent.
 func (pt *ProgressTracker) Check(progressPath string) (bool, error) {
-	fp, err := ProgressFingerprint(progressPath)
+	return pt.CheckWithFingerprint(progressPath, ProgressFingerprint)
+}
+
+// CheckWithFingerprint compares a caller-supplied stable fingerprint with the
+// last one. Planning continuations reuse the same no-progress counter but
+// fingerprint a different artifact shape.
+func (pt *ProgressTracker) CheckWithFingerprint(progressPath string, fingerprint func(string) (string, error)) (bool, error) {
+	if fingerprint == nil {
+		return false, fmt.Errorf("progress fingerprint function is nil")
+	}
+	fp, err := fingerprint(progressPath)
 	if err != nil {
 		return false, err
 	}

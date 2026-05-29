@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -421,14 +420,22 @@ type PlanLoopConfig struct {
 	// document, if one was produced. Retained for caller compatibility;
 	// downstream planning prompts no longer re-inject it.
 	DesignArtifactPath string
-	QAFilePaths            []string // paths to Q&A files from inquire/research/design
-	KBInfos                []KBInfo // repo knowledge base info
-	WorkDir                string   // repo working directory
-	AdditionalDirs         []string // additional directories for claude --add-dir
+	QAFilePaths        []string // paths to Q&A files from inquire/research/design
+	KBInfos            []KBInfo // repo knowledge base info
+	WorkDir            string   // repo working directory
+	AdditionalDirs     []string // additional directories for claude --add-dir
 
 	// MaxAttempts overrides the default maxPlanValidationAttempts.
 	// When zero, falls back to the hardcoded constant.
 	MaxAttempts int
+
+	// MaxConsecFails bounds consecutive malformed planning handoffs within
+	// one Smart Zone continuation unit. Zero falls back to the default.
+	MaxConsecFails int
+
+	// MaxConsecNoProgress bounds identical planning handoffs within one
+	// Smart Zone continuation unit. Zero falls back to the default.
+	MaxConsecNoProgress int
 
 	// DangerouslySkipPermissions enables --dangerously-skip-permissions for
 	// interactive planning sessions.
@@ -1446,106 +1453,42 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				KBInfos:       cfg.KBInfos,
 				AskingClause:  cfg.AskingClause,
 			})
-			pidDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
-
-			addDirs := cfg.AdditionalDirs
-			if len(addDirs) == 0 {
-				addDirs = []string{cfg.StateDir}
-			}
-			// Clear stale phase_complete BEFORE spawning the script: otherwise
-			// the agent may write the marker before we get here, and we'd
-			// delete it.
-			RemovePhaseComplete(attemptDir)
-			cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
-				Model:                          cfg.Feature.Models.Planning,
-				Prompt:                         prompt,
-				SystemPrompt:                   systemPrompt,
-				AdditionalDirs:                 addDirs,
-				AgentNames:                     []string{},
-				PIDDir:                         pidDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
-				WorkDir:                        cfg.WorkDir,
-				EffortLevel:                    cfg.EffortLevel,
-				Phase:                          feature.PhasePlan,
-				SystemPromptHasUsefulResources: true,
-				MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
-			})
-			if err != nil {
-				return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
-			}
-			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-			WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
-			sessOpts.PermCacheScope = cfg.RepoName
-
 			sessionID := fmt.Sprintf("%s-roadmap-%02d", cfg.Feature.ID, attempt)
-			planSessionCtx := cfg.PhaseSpanCtx.Child()
+			autoPickPurpose := ports.AskUserAutoPickPurposeNone
 			if attempt == 1 {
-				sessOpts.AskUserAutoPick = askUserAutoPickConfig(
-					cfg.FeatureStore,
-					cfg.Observer,
-					cfg.Feature,
-					ports.AskUserAutoPickPurposeRoadmapCreator,
-					planSessionCtx,
-					sessionID,
-					cfg.RepoName,
-					0,
-				)
+				autoPickPurpose = ports.AskUserAutoPickPurposeRoadmapCreator
 			}
-			startSession := cfg.SessionStartFunc
-			if startSession == nil {
-				startSession = sm.StartSession
-			}
-			sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
-			if err != nil {
-				if errors.Is(err, ports.ErrSessionShuttingDown) {
-					return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
-				}
-				return nil, fmt.Errorf("starting roadmap session (attempt %d): %w", attempt, err)
-			}
-
-			providerName := ""
-			if sessOpts != nil {
-				providerName = sessOpts.ProviderName
-			}
-			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName)
-			(&ContextReadTracker{
-				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
-				SkillsDir:     cfg.SkillsDir,
-				GuidelinesDir: cfg.GuidelinesDir,
-				Observer:      cfg.Observer,
-			}).Install(sess, planSessionCtx, "plan", sessionID)
-			sessionStart := time.Now()
-
-			logPath := filepath.Join(attemptDir, "output.txt")
-			logFile, err := os.Create(logPath)
-			if err == nil {
-				sess.SetLogFile(logFile)
-			}
-
-			agentStatus := waitForStatus(sess, sm, sessionID, func() bool {
-				if HasPhaseComplete(attemptDir) {
-					sess.SetHasUnansweredQuestion(false)
-					return true
-				}
-				return false
+			outcome, err := runPlanningSessionWithContinuations(planningContinuationInput{
+				Config:          cfg,
+				SessionManager:  sm,
+				Attempt:         attempt,
+				AttemptDir:      attemptDir,
+				ArtifactDir:     artifactDir,
+				Prompt:          prompt,
+				SystemPrompt:    systemPrompt,
+				PlannerSpec:     plannerSpec,
+				SessionIDBase:   sessionID,
+				Model:           cfg.Feature.Models.Planning,
+				CostKey:         "plan",
+				AutoPickPurpose: autoPickPurpose,
+				CanonicalPath:   filepath.Join(artifactDir, "roadmap.md"),
 			})
-
-			cost := ExtractSessionCost(sess)
-			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
-				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					f.AddPhaseCost("plan", cost.TotalCostUSD)
-					return nil
-				})
+			if err != nil {
+				return nil, err
 			}
-
-			cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
-				toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
-
-			output := sess.MessageLog().Text()
-			_ = os.WriteFile(logPath, []byte(output), 0o644)
-
+			agentStatus := outcome.AgentStatus
 			if agentStatus != "SUCCESS" {
 				// Graceful shutdown: see implement.go:377 for the rationale.
+				if agentStatus == planningAgentStatusInterrupted {
+					return &PlanLoopResult{FinalStatus: "interrupted", Iterations: outcome.Iterations}, nil
+				}
+				if agentStatus == planningAgentStatusSafetyRail {
+					return &PlanLoopResult{FinalStatus: "safety_rail", Iterations: attempt, LastError: outcome.LastError}, nil
+				}
+				if agentStatus == planningAgentStatusHandoffProtocolViolation {
+					lastErr := fmt.Sprintf("planning handoff protocol violation escaped continuation boundary: %s", strings.Join(outcome.HandoffViolations, "; "))
+					return &PlanLoopResult{FinalStatus: "safety_rail", Iterations: attempt, LastError: lastErr}, nil
+				}
 				if agentStatus == "FAILED" && sm != nil && sm.IsShuttingDown() {
 					return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
 				}
@@ -1568,7 +1511,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: "roadmap session did not complete successfully"}, nil
 			}
 			if attempt == 1 {
-				if _, err := WriteQAFile(sess.QALog(), artifactDir); err != nil {
+				if _, err := WriteQAFile(outcome.QALog, artifactDir); err != nil {
 					return nil, fmt.Errorf("writing roadmap qa file: %w", err)
 				}
 			}
@@ -1821,107 +1764,42 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				KBInfos:       cfg.KBInfos,
 				AskingClause:  cfg.AskingClause,
 			})
-			pidDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
-
-			addDirs := cfg.AdditionalDirs
-			if len(addDirs) == 0 {
-				addDirs = []string{cfg.StateDir}
-			}
-			// Clear stale phase_complete BEFORE spawning the script: otherwise
-			// the agent may write the marker before we get here, and we'd
-			// delete it.
-			RemovePhaseComplete(attemptDir)
-			cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
-				Model:                          cfg.Feature.Models.Planning,
-				Prompt:                         prompt,
-				SystemPrompt:                   systemPrompt,
-				AdditionalDirs:                 addDirs,
-				AgentNames:                     []string{},
-				PIDDir:                         pidDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
-				WorkDir:                        cfg.WorkDir,
-				EffortLevel:                    cfg.EffortLevel,
-				Phase:                          feature.PhasePlan,
-				SystemPromptHasUsefulResources: true,
-				MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
-			})
-			if err != nil {
-				return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)
-			}
-			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-			WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
-			sessOpts.PermCacheScope = cfg.RepoName
-
 			sessionID := fmt.Sprintf("%s-phase-%02d-plan-%02d", cfg.Feature.ID, cfg.Phase.Number, attempt)
-			planSessionCtx := cfg.PlanLoopConfig.PhaseSpanCtx.Child()
+			autoPickPurpose := ports.AskUserAutoPickPurposeNone
 			if attempt == 1 {
-				sessOpts.AskUserAutoPick = askUserAutoPickConfig(
-					cfg.FeatureStore,
-					cfg.Observer,
-					cfg.Feature,
-					ports.AskUserAutoPickPurposePhasePlanCreator,
-					planSessionCtx,
-					sessionID,
-					cfg.RepoName,
-					0,
-				)
+				autoPickPurpose = ports.AskUserAutoPickPurposePhasePlanCreator
 			}
-			startSession := cfg.SessionStartFunc
-			if startSession == nil {
-				startSession = sm.StartSession
-			}
-			sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
-			if err != nil {
-				if errors.Is(err, ports.ErrSessionShuttingDown) {
-					return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
-				}
-				return nil, fmt.Errorf("starting phase plan session (attempt %d): %w", attempt, err)
-			}
-
-			providerName := ""
-			if sessOpts != nil {
-				providerName = sessOpts.ProviderName
-			}
-			cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName)
-			(&ContextReadTracker{
-				KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
-				SkillsDir:     cfg.SkillsDir,
-				GuidelinesDir: cfg.GuidelinesDir,
-				Observer:      cfg.Observer,
-			}).Install(sess, planSessionCtx, "plan", sessionID)
-			sessionStart := time.Now()
-
-			logPath := filepath.Join(attemptDir, "output.txt")
-			logFile, err := os.Create(logPath)
-			if err == nil {
-				sess.SetLogFile(logFile)
-			}
-
-			agentStatus := waitForStatus(sess, sm, sessionID, func() bool {
-				if HasPhaseComplete(attemptDir) {
-					sess.SetHasUnansweredQuestion(false)
-					return true
-				}
-				return false
+			outcome, err := runPlanningSessionWithContinuations(planningContinuationInput{
+				Config:          cfg.PlanLoopConfig,
+				SessionManager:  sm,
+				Attempt:         attempt,
+				AttemptDir:      attemptDir,
+				ArtifactDir:     artifactDir,
+				Prompt:          prompt,
+				SystemPrompt:    systemPrompt,
+				PlannerSpec:     plannerSpec,
+				SessionIDBase:   sessionID,
+				Model:           cfg.Feature.Models.Planning,
+				CostKey:         fmt.Sprintf("phase-%d-plan", cfg.Phase.Number),
+				AutoPickPurpose: autoPickPurpose,
+				CanonicalPath:   filepath.Join(artifactDir, "plan.md"),
 			})
-
-			cost := ExtractSessionCost(sess)
-			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
-				costKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
-				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					f.AddPhaseCost(costKey, cost.TotalCostUSD)
-					return nil
-				})
+			if err != nil {
+				return nil, err
 			}
-
-			cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
-				toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
-
-			output := sess.MessageLog().Text()
-			_ = os.WriteFile(logPath, []byte(output), 0o644)
-
+			agentStatus := outcome.AgentStatus
 			if agentStatus != "SUCCESS" {
 				// Graceful shutdown: see implement.go:377 for the rationale.
+				if agentStatus == planningAgentStatusInterrupted {
+					return &PlanLoopResult{FinalStatus: "interrupted", Iterations: outcome.Iterations}, nil
+				}
+				if agentStatus == planningAgentStatusSafetyRail {
+					return &PlanLoopResult{FinalStatus: "safety_rail", Iterations: attempt, LastError: outcome.LastError}, nil
+				}
+				if agentStatus == planningAgentStatusHandoffProtocolViolation {
+					lastErr := fmt.Sprintf("planning handoff protocol violation escaped continuation boundary: %s", strings.Join(outcome.HandoffViolations, "; "))
+					return &PlanLoopResult{FinalStatus: "safety_rail", Iterations: attempt, LastError: lastErr}, nil
+				}
 				if agentStatus == "FAILED" && sm != nil && sm.IsShuttingDown() {
 					return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
 				}
@@ -1944,7 +1822,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: "phase plan session did not complete"}, nil
 			}
 			if attempt == 1 {
-				if _, err := WriteQAFile(sess.QALog(), artifactDir); err != nil {
+				if _, err := WriteQAFile(outcome.QALog, artifactDir); err != nil {
 					return nil, fmt.Errorf("writing phase plan qa file: %w", err)
 				}
 			}
@@ -2215,7 +2093,7 @@ func IsArtifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile:
+	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile || lower == PlanningHandoffFilename:
 		return true
 	case strings.HasPrefix(lower, ".protocol-retry-") && strings.HasSuffix(lower, ".yaml"):
 		return true

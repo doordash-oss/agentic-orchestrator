@@ -669,6 +669,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 	}
 
 	planningModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
+	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
 	cfg := PlanLoopConfig{
 		Feature:                    f,
 		FeatureStore:               pr.FeatureStore,
@@ -680,6 +681,8 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		WorkDir:                    workDir,
 		AdditionalDirs:             additionalDirs,
 		MaxAttempts:                f.MaxPlanIterations,
+		MaxConsecFails:             maxFails,
+		MaxConsecNoProgress:        maxNoProgress,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		RepoName:                   repoName,
@@ -731,6 +734,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 	}
 
 	phasePlanModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
+	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
 	cfg := PhasePlanLoopConfig{
 		PlanLoopConfig: PlanLoopConfig{
 			Feature:                    f,
@@ -742,6 +746,8 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			WorkDir:                    workDir,
 			AdditionalDirs:             additionalDirs,
 			MaxAttempts:                maxAttempts,
+			MaxConsecFails:             maxFails,
+			MaxConsecNoProgress:        maxNoProgress,
 			DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 			PermissionCache:            pr.PermissionCache,
 			RepoName:                   planRepoName,

@@ -254,6 +254,9 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				KBInfos:                    cfg.KBInfos,
 				SkillsDir:                  cfg.SkillsDir,
 				GuidelinesDir:              cfg.GuidelinesDir,
+				MaxConsecFails:             cfg.MaxConsecFails,
+				MaxConsecNoProgress:        cfg.MaxConsecNoProgress,
+				Observer:                   cfg.Observer,
 			}, sm)
 		}
 	}
@@ -281,6 +284,15 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		}
 		candidate, planErr := planRunner(artifactDir)
 		if planErr != nil {
+			if isPlanningSafetyRailError(planErr) {
+				errMsg := planErr.Error()
+				_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
+				return &RefactorFeatureLoopResult{
+					FinalStatus: "safety_rail",
+					LastError:   errMsg,
+					ArtifactDir: artifactDir,
+				}, nil
+			}
 			if isProtocolViolationError(planErr) {
 				decision := DecideProtocolRetry(
 					RoleRefactorPlanStep,
@@ -431,7 +443,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,
@@ -615,6 +627,9 @@ type refactorPlanStepInput struct {
 	KBInfos                    []KBInfo
 	SkillsDir                  string
 	GuidelinesDir              string
+	MaxConsecFails             int
+	MaxConsecNoProgress        int
+	Observer                   *observe.Observer
 }
 
 // runRefactorPlanStep launches a single Claude session to author the
@@ -650,58 +665,53 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		AskingClause:  asking,
 	})
 
-	// Clear stale completion marker before spawning. Refactor-plan retries
-	// intentionally leave markdown and retry sidecars in place.
-	if err := RemovePhaseCompleteMarker(in.ArtifactDir); err != nil {
+	spanCtx := observe.SpanContextForFeature(in.Feature.ID, in.Feature.TraceID, in.Feature.Name, in.Feature.FeatureSpanID).WithRun(in.Feature.ActiveRun).Child()
+	planningOutcome, err := runPlanningSessionWithContinuations(planningContinuationInput{
+		Config: PlanLoopConfig{
+			Feature:                    in.Feature,
+			FeatureStore:               in.FeatureStore,
+			StateDir:                   in.StateDir,
+			WorkDir:                    in.Workspace.Cwd,
+			AdditionalDirs:             in.Workspace.AdditionalDirs,
+			DangerouslySkipPermissions: in.DangerouslySkipPermissions,
+			PermissionCache:            in.PermissionCache,
+			BuildSession:               in.BuildSession,
+			EffortLevel:                in.EffortLevel,
+			SkillsDir:                  in.SkillsDir,
+			GuidelinesDir:              in.GuidelinesDir,
+			Observer:                   in.Observer,
+			MaxConsecFails:             in.MaxConsecFails,
+			MaxConsecNoProgress:        in.MaxConsecNoProgress,
+			PhaseSpanCtx:               spanCtx,
+		},
+		SessionManager: sm,
+		Attempt:        1,
+		AttemptDir:     in.ArtifactDir,
+		ArtifactDir:    in.ArtifactDir,
+		Prompt:         prompt,
+		SystemPrompt:   systemPrompt,
+		PlannerSpec:    RefactorPlanRoleSpec(),
+		SessionIDBase:  fmt.Sprintf("%s-refactor-plan", in.Feature.ID),
+		Model:          model,
+		CostKey:        "refactor-plan",
+		CanonicalPath:  filepath.Join(in.ArtifactDir, "refactor-plan.md"),
+	})
+	if err != nil {
 		return "", err
 	}
 
-	cmd, env, sessOpts, err := in.BuildSession(BuildSessionOpts{
-		Model:                          model,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 in.Workspace.AdditionalDirs,
-		PIDDir:                         filepath.Join(in.StateDir, in.Feature.ID),
-		PermHandler:                    permHandlerFor(in.DangerouslySkipPermissions, in.PermissionCache, ""),
-		WorkDir:                        in.Workspace.Cwd,
-		EffortLevel:                    in.EffortLevel,
-		Phase:                          feature.PhasePlan,
-		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(in.ArtifactDir, PhaseCompleteFile),
-	})
-	if err != nil {
-		return "", fmt.Errorf("building refactor-plan session: %w", err)
-	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-	WriteDebugPrompts(in.ArtifactDir, sessOpts.DebugSystemPrompt, prompt)
-
-	sessID := fmt.Sprintf("%s-refactor-plan", in.Feature.ID)
-	sess, err := sm.StartSession(sessID, in.Feature.ID, feature.PhasePlan, cmd, in.Workspace.Cwd, env, sessOpts)
-	if err != nil {
-		return "", fmt.Errorf("starting refactor-plan session: %w", err)
-	}
-
-	logPath := filepath.Join(in.ArtifactDir, "output.txt")
-	if logFile, ferr := os.Create(logPath); ferr == nil {
-		sess.SetLogFile(logFile)
-	}
-
-	agentStatus := waitForStatus(sess, sm, sessID, func() bool {
-		if HasPhaseComplete(in.ArtifactDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
-
-	output := sess.MessageLog().Text()
-	_ = os.WriteFile(logPath, []byte(output), 0o644)
-
+	agentStatus := planningOutcome.AgentStatus
 	if agentStatus == agentStatusMissingMarker {
 		return "", newProtocolViolationError(RoleRefactorPlanStep, in.ArtifactDir, []ProtocolViolation{{
 			Artifact: PhaseCompleteFile,
 			Reason:   "SDK reported success but phase_complete was not present",
 		}})
+	}
+	if agentStatus == planningAgentStatusHandoffProtocolViolation {
+		return "", planningSafetyRailError{message: fmt.Sprintf("planning handoff protocol violation escaped continuation boundary: %s", JoinProtocolViolations(handoffProtocolViolations(planningOutcome.HandoffViolations)))}
+	}
+	if agentStatus == planningAgentStatusSafetyRail {
+		return "", planningSafetyRailError{message: planningOutcome.LastError}
 	}
 	if agentStatus != agentStatusSuccess {
 		return "", fmt.Errorf("refactor-plan session did not complete successfully (status: %s)", agentStatus)

@@ -22,9 +22,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -606,6 +608,297 @@ func TestPhasePlanningLoopMissingPlanMarkdownTripsProtocolViolation(t *testing.T
 	}
 }
 
+func TestPhasePlanningLoopSmartZoneContinuationStaysInSameAttempt(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := filepath.Join(tmpDir, "state")
+	artifactBaseDir := filepath.Join(tmpDir, "artifacts")
+	phasePlanDir := filepath.Join(artifactBaseDir, "phase-01", "plan")
+	attemptDir := filepath.Join(phasePlanDir, "attempt-01")
+	observeDir := filepath.Join(tmpDir, "observe")
+	for _, dir := range []string{workDir, attemptDir, filepath.Join(observeDir, "test-plan-001")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.TraceID = "trace-plan-continuation"
+	f.FeatureSpanID = "span-plan-continuation"
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+
+	var (
+		mu         sync.Mutex
+		starts     int
+		prompts    []string
+		writeErrCh = make(chan error, 2)
+		handoffMsg = make(chan string, 1)
+	)
+
+	buildSession := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		mu.Lock()
+		prompts = append(prompts, opts.Prompt)
+		mu.Unlock()
+		return []string{"mock-planner"}, nil, &session.SessionOpts{
+			PIDDir:                        opts.PIDDir,
+			PermHandler:                   opts.PermHandler,
+			RepoName:                      opts.RepoName,
+			ProviderName:                  "codex",
+			DebugSystemPrompt:             opts.SystemPrompt,
+			ContextHandoffThresholdTokens: 80_000,
+		}, nil
+	}
+	startSession := func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		mu.Lock()
+		starts++
+		startNo := starts
+		mu.Unlock()
+
+		sess := session.NewSession(id, featureID, phase)
+		sess.SetProviderName("codex")
+		if startNo == 1 {
+			sess.SetLatestUsage(&llm.Usage{
+				ContextTotalTokens: 80_000,
+				ContextWindow:      200_000,
+			})
+			sink := attachCaptureSink(sess)
+			go func() {
+				select {
+				case <-sink.done:
+					handoffMsg <- sink.contents()
+					writeErrCh <- writePlanningHandoffFiles(attemptDir, "CONTINUE", "")
+					sess.SendStatus(agentStatusSuccess)
+				case <-time.After(2 * time.Second):
+					handoffMsg <- ""
+					writeErrCh <- fmt.Errorf("timed out waiting for Smart Zone handoff message")
+					sess.SendStatus(agentStatusFailed)
+				}
+			}()
+			return sess, nil
+		}
+
+		go func() {
+			writeErrCh <- writePlanningHandoffFiles(attemptDir, "COMPLETE", validPhasePlanText())
+			sess.SendStatus(agentStatusSuccess)
+		}()
+		return sess, nil
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			ArtifactBaseDir:            artifactBaseDir,
+			MaxAttempts:                2,
+			MaxConsecNoProgress:        3,
+			DangerouslySkipPermissions: true,
+			BuildSession:               buildSession,
+			SessionStartFunc:           startSession,
+			Observer:                   observe.New(true, observeDir, false, "", false, "agentic"),
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Test Phase",
+			Type:   "tdd-fill-in",
+			Goal:   "Test phase planner continuation",
+		},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "approved" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want approved in attempt 1", result)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := <-writeErrCh; err != nil {
+			t.Fatalf("session %d write error: %v", i+1, err)
+		}
+	}
+	msg := <-handoffMsg
+	if got := countHandoffMessages(msg); got != 1 {
+		t.Fatalf("handoff messages = %d, want 1; message: %s", got, msg)
+	}
+	if !strings.Contains(msg, "skills/plan-phase/HANDOFF.md") {
+		t.Fatalf("handoff message missing plan-phase handoff pointer: %s", msg)
+	}
+
+	mu.Lock()
+	gotStarts := starts
+	gotPrompts := append([]string(nil), prompts...)
+	mu.Unlock()
+	if gotStarts != 2 {
+		t.Fatalf("planning sessions started = %d, want 2", gotStarts)
+	}
+	if len(gotPrompts) != 2 || !strings.Contains(gotPrompts[1], PlanningHandoffFilename) {
+		t.Fatalf("continuation prompt missing %s: %#v", PlanningHandoffFilename, gotPrompts)
+	}
+	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 exists or stat failed unexpectedly: %v", err)
+	}
+
+	events := filterEventsByType(readObserveEvents(t, observeDir, f.ID), "context.handoff_triggered")
+	if len(events) != 1 {
+		t.Fatalf("context.handoff_triggered events = %d, want 1", len(events))
+	}
+	if got := events[0].Data["threshold_tokens"]; got != float64(80_000) {
+		t.Fatalf("threshold_tokens = %v, want 80000", got)
+	}
+}
+
+func TestPhasePlanningLoopInvalidPlanningHandoffStaysInContinuation(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := filepath.Join(tmpDir, "state")
+	artifactBaseDir := filepath.Join(tmpDir, "artifacts")
+	phasePlanDir := filepath.Join(artifactBaseDir, "phase-01", "plan")
+	attemptDir := filepath.Join(phasePlanDir, "attempt-01")
+	for _, dir := range []string{workDir, attemptDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+	}
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save(feature) error = %v", err)
+	}
+
+	var (
+		mu      sync.Mutex
+		starts  int
+		prompts []string
+	)
+	buildSession := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		mu.Lock()
+		prompts = append(prompts, opts.Prompt)
+		mu.Unlock()
+		return []string{"mock-planner"}, nil, &session.SessionOpts{
+			PIDDir:            opts.PIDDir,
+			PermHandler:       opts.PermHandler,
+			RepoName:          opts.RepoName,
+			ProviderName:      "codex",
+			DebugSystemPrompt: opts.SystemPrompt,
+		}, nil
+	}
+	startSession := func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+		mu.Lock()
+		starts++
+		startNo := starts
+		mu.Unlock()
+
+		sess := session.NewSession(id, featureID, phase)
+		go func() {
+			var err error
+			if startNo == 1 {
+				err = writeInvalidPlanningHandoff(attemptDir)
+			} else {
+				err = writePlanningHandoffFiles(attemptDir, "COMPLETE", validPhasePlanText())
+			}
+			if err != nil {
+				sess.SendStatus(agentStatusFailed)
+				return
+			}
+			sess.SendStatus(agentStatusSuccess)
+		}()
+		return sess, nil
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:                    f,
+			FeatureStore:               store,
+			StateDir:                   stateDir,
+			WorkDir:                    workDir,
+			ArtifactBaseDir:            artifactBaseDir,
+			MaxAttempts:                2,
+			MaxConsecNoProgress:        3,
+			DangerouslySkipPermissions: true,
+			BuildSession:               buildSession,
+			SessionStartFunc:           startSession,
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Test Phase",
+			Type:   "tdd-fill-in",
+			Goal:   "Test phase planner continuation",
+		},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "approved" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want approved in attempt 1", result)
+	}
+
+	mu.Lock()
+	gotStarts := starts
+	gotPrompts := append([]string(nil), prompts...)
+	mu.Unlock()
+	if gotStarts != 2 {
+		t.Fatalf("planning sessions started = %d, want 2", gotStarts)
+	}
+	if len(gotPrompts) != 2 || !strings.Contains(gotPrompts[1], "planning handoff did not satisfy") {
+		t.Fatalf("repair prompt missing handoff violation context: %#v", gotPrompts)
+	}
+	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 exists or stat failed unexpectedly: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(attemptDir, "validation-feedback.md")); !os.IsNotExist(err) {
+		t.Fatalf("validation-feedback.md exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+func writePlanningHandoffFiles(attemptDir, state, planText string) error {
+	if planText != "" {
+		if err := os.WriteFile(filepath.Join(filepath.Dir(attemptDir), "plan.md"), []byte(planText), 0o644); err != nil {
+			return err
+		}
+	}
+	body := "# Planning Handoff\n\n" +
+		"## Understanding\n- read the phase context and prior decisions\n\n" +
+		"## Plan Progress\n" +
+		"### Drafted\n- drafted the canonical artifact so far\n\n" +
+		"### Remaining\n- finish validation handoff\n\n" +
+		"### Where I stopped\n- continue with the next acceptance criterion\n\n" +
+		"## Handoff State\n" + state + "\n"
+	if err := os.WriteFile(filepath.Join(attemptDir, PlanningHandoffFilename), []byte(body), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), []byte("complete\n"), 0o644)
+}
+
+func writeInvalidPlanningHandoff(attemptDir string) error {
+	body := "# Planning Handoff\n\n" +
+		"## Understanding\n- read the phase context and prior decisions\n\n" +
+		"## Plan Progress\n" +
+		"### Drafted\n- drafted the canonical artifact so far\n\n" +
+		"### Remaining\n- finish validation handoff\n\n" +
+		"### Where I stopped\n- continue with the next acceptance criterion\n"
+	if err := os.WriteFile(filepath.Join(attemptDir, PlanningHandoffFilename), []byte(body), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), []byte("complete\n"), 0o644)
+}
+
 func TestPhasePlanningLoopWritesFirstAttemptQALog(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -952,6 +1245,7 @@ func TestIsArtifactExcluded(t *testing.T) {
 		{"plan.md", false},
 		{"research.md", false},
 		{"qa-answers.md", true},
+		{"planning-handoff.md", true},
 		{".protocol-retry.yaml", true},
 		{".protocol-retry-feat-abc123.yaml", true},
 		{"protocol-retry.yaml", false},

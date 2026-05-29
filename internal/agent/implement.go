@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
@@ -1185,7 +1186,16 @@ const largeCommandOutputThresholdChars = 20_000
 // contextHandoffPollInterval is how often the implementation waiter samples
 // session token usage to decide whether to send the handoff message.
 // Declared as var (not const) so tests can override it without a flag plumb.
-var contextHandoffPollInterval = 2 * time.Second
+var (
+	contextHandoffPollIntervalMu sync.RWMutex
+	contextHandoffPollInterval   = 2 * time.Second
+)
+
+func currentContextHandoffPollInterval() time.Duration {
+	contextHandoffPollIntervalMu.RLock()
+	defer contextHandoffPollIntervalMu.RUnlock()
+	return contextHandoffPollInterval
+}
 
 type contextSnapshot struct {
 	Pct             int
@@ -1207,6 +1217,7 @@ type waitForStatusOptions struct {
 	EnableContextHandoff          bool
 	ContextHandoffDisabled        bool
 	ContextHandoffThresholdTokens int
+	ContextHandoffRole            string
 	OnContextHandoff              func(contextSnapshot)
 	// ContextHandoffPollHook is a test hook for observing ticker progress
 	// without sleeping. Production callers leave it nil.
@@ -1383,7 +1394,7 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 		thresholdTokens = llm.DefaultSmartZoneThresholdTokens
 	}
 	if opts.EnableContextHandoff {
-		handoffTicker = time.NewTicker(contextHandoffPollInterval)
+		handoffTicker = time.NewTicker(currentContextHandoffPollInterval())
 		handoffC = handoffTicker.C
 		defer handoffTicker.Stop()
 	}
@@ -1445,7 +1456,11 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 			if snap.TotalTokens < thresholdTokens {
 				continue
 			}
-			if err := sess.SendUserMessage(formatContextHandoffMessage(snap)); err == nil {
+			role := opts.ContextHandoffRole
+			if role == "" {
+				role = "implement"
+			}
+			if err := sess.SendUserMessage(formatContextHandoffMessageForRole(role, snap)); err == nil {
 				handoffSent = true
 				handoff = snap
 				if opts.OnContextHandoff != nil {

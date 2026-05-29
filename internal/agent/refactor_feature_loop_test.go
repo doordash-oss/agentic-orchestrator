@@ -1133,6 +1133,170 @@ func TestBuildRefactorPlanPromptLeavesOutputRulesToSkill(t *testing.T) {
 	}
 }
 
+func TestRunRefactorPlanStepPlanningContinuation(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, repoPaths := newRefactorTestFeature(t, stateDir, "refactor-plan-continuation", []string{"api"})
+	artifactDir := filepath.Join(stateDir, f.ID, "runs", "run-001", "refactor-1")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(artifactDir) error = %v", err)
+	}
+
+	scriptsDir := filepath.Join(t.TempDir(), "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(scriptsDir) error = %v", err)
+	}
+	continueScript := testutil.WriteScript(t, scriptsDir, "refactor-plan-continue.sh",
+		testutil.JSONLInit+"\n"+
+			writePlanningHandoffScript(artifactDir, "CONTINUE")+
+			testutil.JSONLSuccess+"\n")
+	completeScript := testutil.WriteScript(t, scriptsDir, "refactor-plan-complete.sh",
+		testutil.JSONLInit+"\n"+
+			fmt.Sprintf("cat > %q <<'PLANEOF'\n%s\nPLANEOF\n", filepath.Join(artifactDir, "refactor-plan.md"), validRefactorPlanText())+
+			writePlanningHandoffScript(artifactDir, "COMPLETE")+
+			testutil.JSONLSuccess+"\n")
+
+	scripts := []string{continueScript, completeScript}
+	buildCalls := 0
+	buildSession := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		if buildCalls >= len(scripts) {
+			t.Fatalf("unexpected BuildSession call %d", buildCalls+1)
+		}
+		script := scripts[buildCalls]
+		buildCalls++
+		return []string{"bash", script}, nil, &session.SessionOpts{
+			PIDDir:            opts.PIDDir,
+			DebugSystemPrompt: opts.SystemPrompt,
+			ProviderName:      "codex",
+		}, nil
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	planPath, err := runRefactorPlanStep(refactorPlanStepInput{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		ArtifactDir:  artifactDir,
+		Workspace: WorkspaceSetup{
+			Cwd:            filepath.Join(stateDir, f.ID),
+			RepoPaths:      map[string]string{"api": repoPaths[0]},
+			AdditionalDirs: repoPaths,
+		},
+		Prompt:              "extract shared config",
+		PlanningModel:       "planner",
+		ImplementModel:      "implementer",
+		BuildSession:        buildSession,
+		MaxConsecNoProgress: 3,
+	}, sm)
+	if err != nil {
+		t.Fatalf("runRefactorPlanStep() error = %v", err)
+	}
+	if planPath != filepath.Join(artifactDir, "refactor-plan.md") {
+		t.Fatalf("planPath = %q, want refactor-plan.md", planPath)
+	}
+	if buildCalls != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2", buildCalls)
+	}
+}
+
+func TestRunRefactorFeatureLoopInvalidPlanningHandoffDoesNotConsumeProtocolRetry(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-invalid-handoff", []string{"api"})
+	artifactDir := filepath.Join(ActiveRunDir(stateDir, f), "refactor-1")
+
+	scriptsDir := filepath.Join(t.TempDir(), "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(scriptsDir) error = %v", err)
+	}
+	invalidScript := testutil.WriteScript(t, scriptsDir, "refactor-plan-invalid-handoff.sh",
+		testutil.JSONLInit+"\n"+
+			writeInvalidPlanningHandoffScript(artifactDir)+
+			testutil.JSONLSuccess+"\n")
+	completeScript := testutil.WriteScript(t, scriptsDir, "refactor-plan-complete-after-invalid.sh",
+		testutil.JSONLInit+"\n"+
+			fmt.Sprintf("if [ -e %q ]; then echo 'unexpected protocol retry sidecar'; exit 1; fi\n", filepath.Join(artifactDir, ProtocolRetrySidecarFile))+
+			fmt.Sprintf("cat > %q <<'PLANEOF'\n%s\nPLANEOF\n", filepath.Join(artifactDir, "refactor-plan.md"), validRefactorPlanText())+
+			writePlanningHandoffScript(artifactDir, "COMPLETE")+
+			testutil.JSONLSuccess+"\n")
+
+	scripts := []string{invalidScript, completeScript}
+	buildCalls := 0
+	buildSession := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		if buildCalls >= len(scripts) {
+			t.Fatalf("unexpected BuildSession call %d", buildCalls+1)
+		}
+		script := scripts[buildCalls]
+		buildCalls++
+		return []string{"bash", script}, nil, &session.SessionOpts{
+			PIDDir:            opts.PIDDir,
+			DebugSystemPrompt: opts.SystemPrompt,
+			ProviderName:      "codex",
+		}, nil
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	result, err := RunRefactorFeatureLoop(RefactorFeatureLoopConfig{
+		Feature:              f,
+		FeatureStore:         store,
+		StateDir:             stateDir,
+		Prompt:               "extract shared config",
+		Model:                "implementer",
+		PlanningModel:        "planner",
+		MaxConsecFails:       2,
+		MaxConsecNoProgress:  3,
+		BuildSession:         buildSession,
+		RunImplementFn:       stubRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1}, nil),
+		AskingClauseForModel: func(string) string { return "" },
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunRefactorFeatureLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if buildCalls != 2 {
+		t.Fatalf("BuildSession calls = %d, want 2", buildCalls)
+	}
+	if _, err := os.Stat(filepath.Join(artifactDir, ProtocolRetrySidecarFile)); !os.IsNotExist(err) {
+		t.Fatalf("%s exists or stat failed unexpectedly: %v", ProtocolRetrySidecarFile, err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load(feature) error = %v", err)
+	}
+	if got := loaded.RefactorCount(); got != 1 {
+		t.Fatalf("RefactorCount = %d, want 1", got)
+	}
+}
+
+func writePlanningHandoffScript(dir, state string) string {
+	return fmt.Sprintf("cat > %q <<'HANDOFFEOF'\n%sHANDOFFEOF\nmkdir -p %q\ntouch %q\n",
+		filepath.Join(dir, PlanningHandoffFilename),
+		planningHandoffText(state),
+		dir,
+		filepath.Join(dir, PhaseCompleteFile))
+}
+
+func writeInvalidPlanningHandoffScript(dir string) string {
+	body := "# Planning Handoff\n\n" +
+		"## Understanding\n- read the refactor context and repo list\n\n" +
+		"## Plan Progress\n" +
+		"### Drafted\n- drafted the plan shape\n\n" +
+		"### Remaining\n- finish the refactor plan\n\n" +
+		"### Where I stopped\n- continue with the next task\n"
+	return fmt.Sprintf("cat > %q <<'HANDOFFEOF'\n%sHANDOFFEOF\nmkdir -p %q\ntouch %q\n",
+		filepath.Join(dir, PlanningHandoffFilename),
+		body,
+		dir,
+		filepath.Join(dir, PhaseCompleteFile))
+}
+
 // TestRefactorFeature_PromptStashedAtCycleEntry ensures the loop
 // persists the user-supplied prompt onto the feature so a crashed/
 // interrupted run can be resumed by simply re-launching against the

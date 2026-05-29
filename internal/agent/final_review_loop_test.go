@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -318,6 +319,417 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 			t.Errorf("repo %s = %+v, want review_passed", name, st)
 		}
 	}
+}
+
+func TestRunFeatureFinalReviewLoop_FinalReviewerContinuationStaysInSameIteration(t *testing.T) {
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-review-continuation", []string{"api", "web"})
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	firstRunMarker := filepath.Join(env.scriptsDir, "review-first-run")
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review-continuation.sh",
+		fmt.Sprintf(`if [ ! -f "%s" ]; then
+  touch "%s"
+  for _d in "%s"/iteration-*; do :; done
+  cat > "$_d/%s" <<'EOF'
+%s
+EOF
+  touch "$_d/phase_complete"
+  %s
+  %s
+else
+  for _d in "%s"/iteration-*; do :; done
+  cat > "$_d/%s" <<'EOF'
+%s
+EOF
+  %s
+  %s
+  %s
+fi`,
+			firstRunMarker,
+			firstRunMarker,
+			artDir,
+			ReviewProgressHandoffFilename,
+			validReviewProgressHandoff("CONTINUE", "checked seeded verification evidence"),
+			testutil.JSONLInit,
+			testutil.JSONLSuccess,
+			artDir,
+			ReviewProgressHandoffFilename,
+			validReviewProgressHandoff("COMPLETE", "checked seeded verification evidence"),
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewApproved(artDir),
+			testutil.JSONLSuccess))
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	buildSession, captured := capturingBuildSessionByModel(map[string]string{"reviewer": reviewScript})
+	cfg := OrchestratorConfig{
+		Feature:             f,
+		FeatureStore:        store,
+		StateDir:            env.stateDir,
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		MaxIterations:       3,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		BuildSession:        buildSession,
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" || result.Iterations != 1 {
+		t.Fatalf("result = %+v, want review_passed in iteration 1", result)
+	}
+	if _, err := os.Stat(filepath.Join(artDir, "iteration-02")); !os.IsNotExist(err) {
+		t.Fatalf("iteration-02 exists or stat failed unexpectedly: %v", err)
+	}
+	reviewPrompts := promptsForModel(*captured, "reviewer")
+	if len(reviewPrompts) != 2 {
+		t.Fatalf("review prompts = %d, want 2", len(reviewPrompts))
+	}
+	if !strings.Contains(reviewPrompts[1], ReviewProgressHandoffFilename) {
+		t.Fatalf("continuation prompt missing %s:\n%s", ReviewProgressHandoffFilename, reviewPrompts[1])
+	}
+}
+
+func TestRunFeatureFinalReviewLoop_FinalReviewerContextHandoffNilObserverNoPanic(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-review-nil-observer", []string{"api"})
+	artDir := frArtifactDir(env.stateDir, f)
+	handoffSeen := make(chan string, 1)
+	writeErr := make(chan error, 1)
+
+	sm := &stubSessionManager{
+		start: func(id, featureID string, phase feature.Phase, command []string, workdir string, envVars []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+			sess := session.NewSession(id, featureID, phase)
+			sess.SetProviderName("codex")
+			sess.SetLatestUsage(&llm.Usage{
+				ContextTotalTokens: 80_000,
+				ContextWindow:      200_000,
+			})
+			sink := attachCaptureSink(sess)
+			go func() {
+				select {
+				case <-sink.done:
+					handoffSeen <- sink.contents()
+					iterDir := filepath.Join(artDir, "iteration-01")
+					if err := writeFinalReviewApprovedArtifacts(iterDir); err != nil {
+						writeErr <- err
+						sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+						sess.SendStatus(agentStatusFailed)
+						return
+					}
+					writeErr <- nil
+					sess.SetCost(&llm.ResultMessage{Subtype: "success"})
+					sess.SendStatus(agentStatusSuccess)
+				case <-time.After(2 * time.Second):
+					handoffSeen <- ""
+					writeErr <- fmt.Errorf("timed out waiting for Smart Zone handoff message")
+					sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+					sess.SendStatus(agentStatusFailed)
+				}
+			}()
+			return sess, nil
+		},
+	}
+
+	cfg := OrchestratorConfig{
+		Feature:             f,
+		FeatureStore:        store,
+		StateDir:            env.stateDir,
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		MaxIterations:       1,
+		MaxConsecFails:      1,
+		MaxConsecNoProgress: 1,
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			return []string{opts.Model}, nil, &ports.SessionOpts{
+				ProviderName:                  "codex",
+				ContextHandoffThresholdTokens: 80_000,
+			}, nil
+		},
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatalf("write final review artifacts: %v", err)
+	}
+	if msg := <-handoffSeen; !strings.Contains(msg, "skills/final-review/HANDOFF.md") {
+		t.Fatalf("handoff message missing final-review skill:\n%s", msg)
+	}
+}
+
+func TestRunFeatureFinalReviewLoop_FinalFixContextHandoffNilObserverNoPanic(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-fix-nil-observer", []string{"api"})
+	artDir := frArtifactDir(env.stateDir, f)
+	handoffSeen := make(chan string, 1)
+	writeErr := make(chan error, 3)
+	reviewStarts := 0
+
+	sm := &stubSessionManager{
+		start: func(id, featureID string, phase feature.Phase, command []string, workdir string, envVars []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+			model := ""
+			if len(command) > 0 {
+				model = command[0]
+			}
+			sess := session.NewSession(id, featureID, phase)
+			sess.SetProviderName("codex")
+			switch model {
+			case "reviewer":
+				reviewStarts++
+				startNo := reviewStarts
+				go func() {
+					iterDir := filepath.Join(artDir, fmt.Sprintf("iteration-%02d", startNo))
+					var err error
+					if startNo == 1 {
+						err = writeFinalReviewChangesRequestedArtifacts(iterDir, "- **High**: needs fix")
+					} else {
+						err = writeFinalReviewApprovedArtifacts(iterDir)
+					}
+					if err != nil {
+						writeErr <- err
+						sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+						sess.SendStatus(agentStatusFailed)
+						return
+					}
+					writeErr <- nil
+					sess.SetCost(&llm.ResultMessage{Subtype: "success"})
+					sess.SendStatus(agentStatusSuccess)
+				}()
+			case "agent":
+				sess.SetLatestUsage(&llm.Usage{
+					ContextTotalTokens: 80_000,
+					ContextWindow:      200_000,
+				})
+				sink := attachCaptureSink(sess)
+				go func() {
+					select {
+					case <-sink.done:
+						handoffSeen <- sink.contents()
+						if err := writeFinalReviewFixArtifacts(filepath.Join(artDir, "iteration-01")); err != nil {
+							writeErr <- err
+							sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+							sess.SendStatus(agentStatusFailed)
+							return
+						}
+						writeErr <- nil
+						sess.SetCost(&llm.ResultMessage{Subtype: "success"})
+						sess.SendStatus(agentStatusSuccess)
+					case <-time.After(2 * time.Second):
+						handoffSeen <- ""
+						writeErr <- fmt.Errorf("timed out waiting for Smart Zone handoff message")
+						sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+						sess.SendStatus(agentStatusFailed)
+					}
+				}()
+			default:
+				return nil, fmt.Errorf("unexpected model %q", model)
+			}
+			return sess, nil
+		},
+	}
+
+	cfg := OrchestratorConfig{
+		Feature:             f,
+		FeatureStore:        store,
+		StateDir:            env.stateDir,
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		MaxIterations:       2,
+		MaxConsecFails:      1,
+		MaxConsecNoProgress: 1,
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			return []string{opts.Model}, nil, &ports.SessionOpts{
+				ProviderName:                  "codex",
+				ContextHandoffThresholdTokens: 80_000,
+			}, nil
+		},
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+	for i := 0; i < 3; i++ {
+		if err := <-writeErr; err != nil {
+			t.Fatalf("write final review/fix artifacts: %v", err)
+		}
+	}
+	if msg := <-handoffSeen; !strings.Contains(msg, "skills/final-fix/HANDOFF.md") {
+		t.Fatalf("handoff message missing final-fix skill:\n%s", msg)
+	}
+}
+
+func TestRunFeatureFinalReviewLoop_FinalFixContinuationStaysInSameIteration(t *testing.T) {
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-fix-continuation", []string{"api", "web"})
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review-then-approve.sh",
+		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
+%s
+%s
+else
+%s
+%s
+fi`,
+			artDir,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewApproved(artDir)+"\n"+testutil.JSONLSuccess,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: needs fix")+"\n"+testutil.JSONLSuccess))
+
+	firstFixMarker := filepath.Join(env.scriptsDir, "fix-first-run")
+	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix-continuation.sh",
+		fmt.Sprintf(`if [ ! -f "%s" ]; then
+  touch "%s"
+  for _d in "%s"/iteration-*; do :; done
+  cat > "$_d/%s" <<'EOF'
+%s
+EOF
+  touch "$_d/phase_complete"
+  %s
+  %s
+else
+  for _d in "%s"/iteration-*; do :; done
+  cat > "$_d/%s" <<'EOF'
+%s
+EOF
+  %s
+  %s
+  %s
+fi`,
+			firstFixMarker,
+			firstFixMarker,
+			artDir,
+			ProducerProgressHandoffFilename,
+			validProducerProgressHandoff("CONTINUE", "updated failing check"),
+			testutil.JSONLInit,
+			testutil.JSONLSuccess,
+			artDir,
+			ProducerProgressHandoffFilename,
+			validProducerProgressHandoff("COMPLETE", "updated failing check"),
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewFixSuccessArtifacts(artDir),
+			testutil.JSONLSuccess))
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	buildSession, captured := capturingBuildSessionByModel(map[string]string{
+		"reviewer": reviewScript,
+		"agent":    fixScript,
+	})
+	cfg := OrchestratorConfig{
+		Feature:             f,
+		FeatureStore:        store,
+		StateDir:            env.stateDir,
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		MaxIterations:       4,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		BuildSession:        buildSession,
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want review_passed in iteration 2", result)
+	}
+	fixPrompts := promptsForModel(*captured, "agent")
+	if len(fixPrompts) != 2 {
+		t.Fatalf("fix prompts = %d, want 2", len(fixPrompts))
+	}
+	if !strings.Contains(fixPrompts[1], ProducerProgressHandoffFilename) {
+		t.Fatalf("fix continuation prompt missing %s:\n%s", ProducerProgressHandoffFilename, fixPrompts[1])
+	}
+	if _, err := os.Stat(filepath.Join(artDir, "iteration-01", ProducerProgressHandoffFilename)); err != nil {
+		t.Fatalf("producer handoff missing in iteration-01: %v", err)
+	}
+}
+
+func writeFinalReviewApprovedArtifacts(iterDir string) error {
+	if err := markVerificationReportPassed(iterDir); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("done\n"), 0o644)
+}
+
+func writeFinalReviewChangesRequestedArtifacts(iterDir, findings string) error {
+	if err := os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(testutil.StructuredReviewFeedback(findings, "", "CHANGES_REQUESTED")), 0o644); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("done\n"), 0o644)
+}
+
+func writeFinalReviewFixArtifacts(iterDir string) error {
+	if err := markVerificationReportPassed(iterDir); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("done\n"), 0o644)
+}
+
+func markVerificationReportPassed(iterDir string) error {
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	report, err := ReadVerificationReport(reportPath)
+	if err != nil {
+		return err
+	}
+	markChecksPassed := func(checks []VerificationCheckResult) {
+		for i := range checks {
+			checks[i].Status = VerificationStatusPassed
+			exitCode := 0
+			checks[i].EvidenceData = VerificationEvidence{
+				ExitCode: &exitCode,
+				Summary:  "mock final review check passed",
+			}
+		}
+	}
+	markChecksPassed(report.Results)
+	markChecksPassed(report.RequiredChecks)
+	markChecksPassed(report.AdditionalChecks)
+	return WriteVerificationReport(reportPath, *report)
+}
+
+func promptsForModel(opts []BuildSessionOpts, model string) []string {
+	var prompts []string
+	for _, opt := range opts {
+		if opt.Model == model {
+			prompts = append(prompts, opt.Prompt)
+		}
+	}
+	return prompts
 }
 
 // TestRunFeatureFinalReviewLoop_ChangesRequestedThenFixApproves drives the

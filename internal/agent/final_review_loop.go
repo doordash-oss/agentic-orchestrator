@@ -27,6 +27,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -516,7 +517,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		PreviousFeedback:                     previousFeedback,
 		Iteration:                            iteration,
 		RoadmapPath:                          cfg.Feature.Artifacts["roadmap"],
-		DesignArtifactPath:               cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
 		Images:                               cfg.Feature.Images,
 		PhaseType:                            cfg.Feature.RoadmapPhaseType,
 		FeedbackPath:                         feedbackPath,
@@ -544,69 +545,124 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		AskingClause:  cfg.AskingClause,
 	})
 
-	command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
-		Model:                          cfg.ReviewModel,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     []string{},
-		PIDDir:                         s.stateDir,
-		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
-		WorkDir:                        s.workspace.Cwd,
-		EffortLevel:                    cfg.EffortLevel,
-		Phase:                          feature.PhaseReview,
-		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+	handoffPath := filepath.Join(iterDir, ReviewProgressHandoffFilename)
+	reviewSpec := FinalReviewerRoleSpec()
+	continuation, runErr := runHelperWithContinuations(context.Background(), helperContinuationConfig{
+		Label:                "final reviewer",
+		SessionIDBase:        s.featureFinalReviewSessionID("final-review", iteration),
+		HandoffPath:          handoffPath,
+		CanonicalPaths:       []string{filepath.Join(iterDir, "review-prompt.md"), feedbackPath, verificationPath, s.contractPath},
+		ParseHandoff:         ParseReviewProgressHandoffMd,
+		Fingerprint:          ReviewProgressHandoffFingerprint,
+		MaxConsecNoProgress:  cfg.MaxConsecNoProgress,
+		MaxConsecMalformed:   cfg.MaxConsecFails,
+		ContinuationSkill:    reviewSpec.SkillName,
+		ContinuationArtifact: ReviewProgressHandoffFilename,
+		ForbiddenOnContinue:  []string{feedbackPath},
+		RunSession: func(ctx context.Context, in helperContinuationRunInput) (helperContinuationRunResult, error) {
+			runPrompt := prompt
+			if in.Prompt != "" {
+				runPrompt = in.Prompt
+			}
+			command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
+				Model:                          cfg.ReviewModel,
+				Prompt:                         runPrompt,
+				SystemPrompt:                   systemPrompt,
+				AdditionalDirs:                 additionalDirs,
+				AgentNames:                     []string{},
+				PIDDir:                         s.stateDir,
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
+				WorkDir:                        s.workspace.Cwd,
+				EffortLevel:                    cfg.EffortLevel,
+				Phase:                          feature.PhaseReview,
+				SystemPromptHasUsefulResources: true,
+				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+			})
+			if buildErr != nil {
+				return helperContinuationRunResult{}, fmt.Errorf("building feature final review session: %w", buildErr)
+			}
+			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, runPrompt)
+
+			sess, err := s.sm.StartSession(in.SessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
+			if err != nil {
+				if errors.Is(err, ports.ErrSessionShuttingDown) {
+					return helperContinuationRunResult{}, fmt.Errorf("session manager shutting down")
+				}
+				return helperContinuationRunResult{}, fmt.Errorf("starting feature final review session: %w", err)
+			}
+			providerName := ""
+			if sessOpts != nil {
+				providerName = sessOpts.ProviderName
+			}
+			sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, in.SessionID, providerName, cfg.ReviewModel)
+			defer func() {
+				if observed {
+					cost := ExtractSessionCost(sess)
+					cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), in.SessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+				}
+			}()
+
+			logName := "review-response.txt"
+			if in.Continuation > 0 {
+				logName = fmt.Sprintf("review-response-c%02d.txt", in.Continuation+1)
+			}
+			logFile, err := os.Create(filepath.Join(iterDir, logName))
+			if err != nil {
+				return helperContinuationRunResult{}, fmt.Errorf("creating review log file: %w", err)
+			}
+			sess.SetLogFile(logFile)
+
+			waitResult := waitForStatusDetailed(sess, s.sm, in.SessionID, waitForStatusOptions{
+				ReadyCheck: func() bool {
+					if HasPhaseComplete(iterDir) {
+						sess.SetHasUnansweredQuestion(false)
+						return true
+					}
+					return false
+				},
+				EnableContextHandoff:          true,
+				ContextHandoffDisabled:        sessOpts.ContextHandoffDisabled,
+				ContextHandoffThresholdTokens: sessOpts.ContextHandoffThresholdTokens,
+				ContextHandoffRole:            reviewSpec.SkillName,
+				OnContextHandoff: func(snap contextSnapshot) {
+					if cfg.Observer == nil {
+						return
+					}
+					cfg.Observer.ContextHandoffTriggered(
+						sessionCtx,
+						feature.PhaseFinalReview.String(),
+						in.SessionID,
+						"",
+						providerName,
+						iteration,
+						snap.Pct,
+						snap.ThresholdPct,
+						snap.ThresholdTokens,
+						snap.TotalTokens,
+						snap.WindowTokens,
+						snap.BaselineTokens,
+					)
+				},
+			})
+			agentStatus := waitResult.Status
+			if agentStatus == agentStatusMissingMarker {
+				return helperContinuationRunResult{Status: agentStatus, Handoff: waitResult.Handoff}, newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
+					Artifact: PhaseCompleteFile,
+					Reason:   "SDK reported success but phase_complete was not present",
+				}})
+			}
+			if agentStatus != agentStatusSuccess {
+				return helperContinuationRunResult{Status: agentStatus, Handoff: waitResult.Handoff}, fmt.Errorf("feature final review session did not complete successfully (status: %s)", agentStatus)
+			}
+			return helperContinuationRunResult{Status: agentStatus, Handoff: waitResult.Handoff}, nil
+		},
 	})
-	if buildErr != nil {
-		return ReviewFailed, "", fmt.Errorf("building feature final review session: %w", buildErr)
+	if runErr != nil {
+		return ReviewFailed, "", runErr
 	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
-
-	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
-
-	sess, err := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
-	if err != nil {
-		if errors.Is(err, ports.ErrSessionShuttingDown) {
-			return ReviewFailed, "", fmt.Errorf("session manager shutting down")
-		}
-		return ReviewFailed, "", fmt.Errorf("starting feature final review session: %w", err)
-	}
-	providerName := ""
-	if sessOpts != nil {
-		providerName = sessOpts.ProviderName
-	}
-	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.ReviewModel)
-	defer func() {
-		if observed {
-			cost := ExtractSessionCost(sess)
-			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
-		}
-	}()
-
-	logFile, err := os.Create(filepath.Join(iterDir, "review-response.txt"))
-	if err != nil {
-		return ReviewFailed, "", fmt.Errorf("creating review log file: %w", err)
-	}
-	sess.SetLogFile(logFile)
-
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
-
-	if agentStatus == agentStatusMissingMarker {
-		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
-			Artifact: PhaseCompleteFile,
-			Reason:   "SDK reported success but phase_complete was not present",
-		}})
-	}
-	if agentStatus != agentStatusSuccess {
-		return ReviewFailed, "", fmt.Errorf("feature final review session did not complete successfully (status: %s)", agentStatus)
+	if continuation.Status != "" && continuation.Status != agentStatusSuccess {
+		return ReviewFailed, "", fmt.Errorf("feature final review session did not complete successfully (status: %s)", continuation.Status)
 	}
 
 	outcome, violations, validateErr := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
@@ -642,7 +698,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		VerificationReportPath: verificationReportPath,
 		Iteration:              iteration,
 		Publishable:            cfg.Feature.IsPublishable(),
-		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
 		Images:                 cfg.Feature.Images,
 	})
 
@@ -662,61 +718,111 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	additionalDirs := append([]string{s.stateDir}, additionalDirsExcludingStateDir(s.workspace, s.stateDir)...)
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
 
-	command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     []string{},
-		PIDDir:                         s.stateDir,
-		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
-		WorkDir:                        s.workspace.Cwd,
-		EffortLevel:                    cfg.EffortLevel,
-		Phase:                          feature.PhaseReview,
-		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+	fixSpec := FinalReviewFixerRoleSpec()
+	continuation, runErr := runHelperWithContinuations(context.Background(), helperContinuationConfig{
+		Label:                "final fix",
+		SessionIDBase:        s.featureFinalReviewSessionID("fix", iteration),
+		HandoffPath:          filepath.Join(iterDir, ProducerProgressHandoffFilename),
+		CanonicalPaths:       []string{filepath.Join(iterDir, "fix-prompt.md"), feedbackPath, verificationReportPath},
+		ParseHandoff:         ParseProducerProgressHandoffMd,
+		Fingerprint:          ProducerProgressHandoffFingerprint,
+		MaxConsecNoProgress:  cfg.MaxConsecNoProgress,
+		MaxConsecMalformed:   cfg.MaxConsecFails,
+		ContinuationSkill:    fixSpec.SkillName,
+		ContinuationArtifact: ProducerProgressHandoffFilename,
+		RunSession: func(ctx context.Context, in helperContinuationRunInput) (helperContinuationRunResult, error) {
+			runPrompt := prompt
+			if in.Prompt != "" {
+				runPrompt = in.Prompt
+			}
+			command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
+				Model:                          cfg.Model,
+				Prompt:                         runPrompt,
+				SystemPrompt:                   systemPrompt,
+				AdditionalDirs:                 additionalDirs,
+				AgentNames:                     []string{},
+				PIDDir:                         s.stateDir,
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
+				WorkDir:                        s.workspace.Cwd,
+				EffortLevel:                    cfg.EffortLevel,
+				Phase:                          feature.PhaseReview,
+				SystemPromptHasUsefulResources: true,
+				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
+			})
+			if buildErr != nil {
+				return helperContinuationRunResult{}, fmt.Errorf("building feature fix agent session: %w", buildErr)
+			}
+			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, runPrompt)
+
+			sess, startErr := s.sm.StartSession(in.SessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
+			if startErr != nil {
+				if errors.Is(startErr, ports.ErrSessionShuttingDown) {
+					return helperContinuationRunResult{}, fmt.Errorf("session manager shutting down")
+				}
+				return helperContinuationRunResult{}, fmt.Errorf("starting feature fix agent session: %w", startErr)
+			}
+			providerName := ""
+			if sessOpts != nil {
+				providerName = sessOpts.ProviderName
+			}
+			sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, in.SessionID, providerName, cfg.Model)
+			defer func() {
+				if observed {
+					cost := ExtractSessionCost(sess)
+					cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), in.SessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+				}
+			}()
+
+			logName := "fix-output.txt"
+			if in.Continuation > 0 {
+				logName = fmt.Sprintf("fix-output-c%02d.txt", in.Continuation+1)
+			}
+			logFile, logErr := os.Create(filepath.Join(iterDir, logName))
+			if logErr != nil {
+				return helperContinuationRunResult{}, fmt.Errorf("creating fix log file: %w", logErr)
+			}
+			sess.SetLogFile(logFile)
+
+			waitResult := waitForStatusDetailed(sess, s.sm, in.SessionID, waitForStatusOptions{
+				ReadyCheck: func() bool {
+					if HasPhaseComplete(iterDir) {
+						sess.SetHasUnansweredQuestion(false)
+						return true
+					}
+					return false
+				},
+				EnableContextHandoff:          true,
+				ContextHandoffDisabled:        sessOpts.ContextHandoffDisabled,
+				ContextHandoffThresholdTokens: sessOpts.ContextHandoffThresholdTokens,
+				ContextHandoffRole:            fixSpec.SkillName,
+				OnContextHandoff: func(snap contextSnapshot) {
+					if cfg.Observer == nil {
+						return
+					}
+					cfg.Observer.ContextHandoffTriggered(
+						sessionCtx,
+						feature.PhaseFinalReview.String(),
+						in.SessionID,
+						"",
+						providerName,
+						iteration,
+						snap.Pct,
+						snap.ThresholdPct,
+						snap.ThresholdTokens,
+						snap.TotalTokens,
+						snap.WindowTokens,
+						snap.BaselineTokens,
+					)
+				},
+			})
+			return helperContinuationRunResult{Status: waitResult.Status, Handoff: waitResult.Handoff}, nil
+		},
 	})
-	if buildErr != nil {
-		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
+	if runErr != nil {
+		return continuation.Status, runErr
 	}
-	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
-	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
-
-	sessionID := s.featureFinalReviewSessionID("fix", iteration)
-
-	sess, startErr := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
-	if startErr != nil {
-		if errors.Is(startErr, ports.ErrSessionShuttingDown) {
-			return "", fmt.Errorf("session manager shutting down")
-		}
-		return "", fmt.Errorf("starting feature fix agent session: %w", startErr)
-	}
-	providerName := ""
-	if sessOpts != nil {
-		providerName = sessOpts.ProviderName
-	}
-	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.Model)
-	defer func() {
-		if observed {
-			cost := ExtractSessionCost(sess)
-			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
-		}
-	}()
-
-	logFile, logErr := os.Create(filepath.Join(iterDir, "fix-output.txt"))
-	if logErr != nil {
-		return "", fmt.Errorf("creating fix log file: %w", logErr)
-	}
-	sess.SetLogFile(logFile)
-
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
-	return agentStatus, nil
+	return continuation.Status, nil
 }
 
 func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string, iteration int, violations []ProtocolViolation, consecutiveFailures *int) *FeatureFinalReviewResult {

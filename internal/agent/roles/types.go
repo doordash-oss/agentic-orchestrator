@@ -363,7 +363,7 @@ func artifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == "planning-handoff.md":
+	case lower == "qa-answers.md" || lower == "planning-handoff.md" || lower == "review-progress.md" || lower == "producer-progress.md":
 		return true
 	default:
 		return false

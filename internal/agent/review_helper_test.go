@@ -16,14 +16,18 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -238,6 +242,164 @@ func TestRunReadOnlyReviewHelper_ProtocolViolationOverridesApprovedFeedback(t *t
 	}
 }
 
+func TestRunReadOnlyReviewHelper_SmartZoneHandoffContinuation(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	root := t.TempDir()
+	helperDir := filepath.Join(root, "review")
+	workDir := filepath.Join(root, "work")
+	for _, dir := range []string{helperDir, workDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %q: %v", dir, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, "feature-1"), 0o755); err != nil {
+		t.Fatalf("mkdir feature state: %v", err)
+	}
+
+	var (
+		mu          sync.Mutex
+		starts      int
+		handoffText string
+		captured    []BuildSessionOpts
+	)
+	handoffPath := filepath.Join(helperDir, ReviewProgressHandoffFilename)
+	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
+	promptPath := filepath.Join(helperDir, "review-prompt.md")
+	originalPrompt := "review the diff"
+	manager := &stubSessionManager{
+		start: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+			mu.Lock()
+			starts++
+			startNo := starts
+			mu.Unlock()
+
+			sess := session.NewSession(id, featureID, phase)
+			sess.SetProviderName("codex")
+			if startNo == 1 {
+				sess.SetLatestUsage(&llm.Usage{
+					ContextTotalTokens: 80_000,
+					ContextWindow:      200_000,
+				})
+				sink := attachCaptureSink(sess)
+				go func() {
+					select {
+					case <-sink.done:
+						mu.Lock()
+						handoffText = sink.contents()
+						mu.Unlock()
+						_ = os.WriteFile(handoffPath, []byte(validReviewProgressHandoff("CONTINUE", "checked report")), 0o644)
+						_ = os.WriteFile(filepath.Join(helperDir, "phase_complete"), []byte("done\n"), 0o644)
+						sess.SetCost(&llm.ResultMessage{Subtype: "success"})
+						sess.CloseDone()
+						sess.SendStatus(agentStatusSuccess)
+					case <-time.After(2 * time.Second):
+						sess.SetCost(&llm.ResultMessage{Subtype: "error", IsError: true})
+						sess.CloseDone()
+						sess.SendStatus(agentStatusFailed)
+					}
+				}()
+				return sess, nil
+			}
+			go func() {
+				_ = os.WriteFile(handoffPath, []byte(validReviewProgressHandoff("COMPLETE", "checked report")), 0o644)
+				_ = os.WriteFile(feedbackPath, []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644)
+				_ = os.WriteFile(filepath.Join(helperDir, "phase_complete"), []byte("done\n"), 0o644)
+				sess.SetCost(&llm.ResultMessage{Subtype: "success"})
+				sess.CloseDone()
+				sess.SendStatus(agentStatusSuccess)
+			}()
+			return sess, nil
+		},
+	}
+	pr := &PhaseRunner{
+		StateDir:       root,
+		SessionManager: manager,
+		Observer:       observe.New(true, root, false, "", false, "agentic"),
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			mu.Lock()
+			captured = append(captured, opts)
+			mu.Unlock()
+			return []string{"mock-reviewer"}, nil, &ports.SessionOpts{
+				PermHandler:                   opts.PermHandler,
+				DebugSystemPrompt:             opts.SystemPrompt,
+				ProviderName:                  "codex",
+				ContextHandoffThresholdTokens: 80_000,
+			}, nil
+		},
+	}
+
+	result, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+		SessionID:               "review-helper-smart-zone",
+		FeatureID:               "feature-1",
+		Phase:                   feature.PhaseReview,
+		Model:                   "test-model",
+		Prompt:                  originalPrompt,
+		PromptPath:              promptPath,
+		ResponsePath:            filepath.Join(helperDir, "review-output.txt"),
+		FeedbackPath:            feedbackPath,
+		HelperIterDir:           helperDir,
+		Role:                    RoleIterationReviewer,
+		WorkDir:                 workDir,
+		LogPath:                 filepath.Join(helperDir, "review-output.txt"),
+		SystemPromptPrefix:      "review",
+		CompletionAskingClause:  "Ask at most one blocking question.",
+		EffortLevel:             llm.EffortMedium,
+		EnableSmartZoneHandoff:  true,
+		HandoffPath:             handoffPath,
+		MaxConsecNoProgress:     3,
+		MaxConsecHandoffFails:   3,
+		ContextHandoffIteration: 1,
+	})
+	if err != nil {
+		t.Fatalf("RunReadOnlyReviewHelper() error = %v", err)
+	}
+	if result.Status != ReviewApproved {
+		t.Fatalf("result.Status = %s, want APPROVED", result.Status)
+	}
+	mu.Lock()
+	gotStarts := starts
+	gotHandoff := handoffText
+	gotCaptured := append([]BuildSessionOpts(nil), captured...)
+	mu.Unlock()
+	if gotStarts != 2 {
+		t.Fatalf("starts = %d, want 2", gotStarts)
+	}
+	if !strings.Contains(gotHandoff, "skills/review-implementation/HANDOFF.md") {
+		t.Fatalf("handoff pointer missing review-implementation skill:\n%s", gotHandoff)
+	}
+	if len(gotCaptured) == 0 || !stringSliceContains(gotCaptured[0].WritableRoots, handoffPath) {
+		t.Fatalf("WritableRoots missing handoff scratch %q: %#v", handoffPath, gotCaptured)
+	}
+	if len(gotCaptured) < 2 || !strings.Contains(gotCaptured[1].Prompt, ReviewProgressHandoffFilename) {
+		t.Fatalf("continuation prompt missing %s: %#v", ReviewProgressHandoffFilename, gotCaptured)
+	}
+	promptData, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("read original review prompt: %v", err)
+	}
+	if string(promptData) != originalPrompt {
+		t.Fatalf("original review prompt overwritten by continuation prompt:\n%s", promptData)
+	}
+	continuationPromptPath := filepath.Join(helperDir, "review-prompt-c02.md")
+	continuationData, err := os.ReadFile(continuationPromptPath)
+	if err != nil {
+		t.Fatalf("read continuation review prompt: %v", err)
+	}
+	if !strings.Contains(string(continuationData), ReviewProgressHandoffFilename) {
+		t.Fatalf("continuation prompt file missing handoff context:\n%s", continuationData)
+	}
+	events, err := os.ReadFile(filepath.Join(root, "feature-1", "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+	if !strings.Contains(string(events), `"event_type":"context.handoff_triggered"`) ||
+		!strings.Contains(string(events), `"phase":"review"`) ||
+		!strings.Contains(string(events), `"threshold_tokens":80000`) {
+		t.Fatalf("events.jsonl missing review handoff threshold event:\n%s", events)
+	}
+}
+
 func permissionHandlerIncludesBoundedArtifacts(handler ports.PermissionHandler) bool {
 	switch h := handler.(type) {
 	case *permission.BoundedHelperArtifactHandler:
@@ -248,6 +410,27 @@ func permissionHandlerIncludesBoundedArtifacts(handler ports.PermissionHandler) 
 		return false
 	}
 }
+
+type stubSessionManager struct {
+	start func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
+}
+
+func (m *stubSessionManager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+	if m.start == nil {
+		return nil, fmt.Errorf("stub session manager: missing start func")
+	}
+	return m.start(id, featureID, phase, command, workdir, env, opts...)
+}
+
+func (m *stubSessionManager) StopSession(string) error                   { return nil }
+func (m *stubSessionManager) GetSession(string) ports.SessionView        { return nil }
+func (m *stubSessionManager) ActiveSessions() []ports.SessionView        { return nil }
+func (m *stubSessionManager) FeatureSessions(string) []ports.SessionView { return nil }
+func (m *stubSessionManager) SendInput(string, []byte) error             { return nil }
+func (m *stubSessionManager) Attach(string) (ports.SessionView, error)   { return nil, nil }
+func (m *stubSessionManager) Detach()                                    {}
+func (m *stubSessionManager) Shutdown()                                  {}
+func (m *stubSessionManager) IsShuttingDown() bool                       { return false }
 
 func stringSliceContains(values []string, want string) bool {
 	for _, got := range values {

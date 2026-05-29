@@ -20,15 +20,17 @@ import (
 	"testing"
 )
 
-func TestNewestPlanMarkdownArtifactExcludesPlanningHandoff(t *testing.T) {
+func TestNewestPlanMarkdownArtifactExcludesHelperHandoffs(t *testing.T) {
 	dir := t.TempDir()
 	planPath := filepath.Join(dir, "plan.md")
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
 		t.Fatalf("write plan.md: %v", err)
 	}
-	handoffPath := filepath.Join(dir, "planning-handoff.md")
-	if err := os.WriteFile(handoffPath, []byte("# Planning Handoff\n"), 0o644); err != nil {
-		t.Fatalf("write planning-handoff.md: %v", err)
+	for _, name := range []string{"planning-handoff.md", "review-progress.md", "producer-progress.md"} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("# Handoff\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
 	}
 
 	if got := newestPlanMarkdownArtifact(dir); got != planPath {

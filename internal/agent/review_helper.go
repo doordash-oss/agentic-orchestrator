@@ -61,6 +61,15 @@ type ReviewHelperConfig struct {
 	// Label is a short context-specific sub-label (validator domain, review
 	// target, …) surfaced in attach-view tabs.
 	Label string
+	// EnableSmartZoneHandoff opts this helper into helper-level Smart Zone
+	// continuations. The shared bounded-helper path remains unarmed unless a
+	// call-site sets this field.
+	EnableSmartZoneHandoff  bool
+	HandoffPath             string
+	MaxConsecNoProgress     int
+	MaxConsecHandoffFails   int
+	ContextHandoffIteration int
+	ContinuationPaths       []string
 }
 
 // ReviewHelperResult captures the parsed verdict from a bounded helper run.
@@ -106,84 +115,68 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		return nil, fmt.Errorf("running review helper: missing helper role")
 	}
 
-	if cfg.PromptPath != "" {
-		if err := os.WriteFile(cfg.PromptPath, []byte(cfg.Prompt), 0o644); err != nil {
-			return nil, fmt.Errorf("running review helper: writing prompt: %w", err)
-		}
-	}
-
-	pidDir := pr.StateDir
-	if cfg.FeatureID != "" {
-		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
-	}
-
 	spec, ok := lookupRoleSpec(cfg.Phase, cfg.Role)
 	if !ok {
 		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", cfg.Phase, cfg.Role)
 	}
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:          spec,
-		IterationDir:  cfg.HelperIterDir,
-		SkillsDir:     pr.SkillsDir,
-		GuidelinesDir: pr.GuidelinesDir,
-		AskingClause:  cfg.CompletionAskingClause,
-	})
-	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
-	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         cfg.Prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 cfg.AdditionalDirs,
-		WritableRoots:                  allowedPaths,
-		PIDDir:                         pidDir,
-		PermHandler:                    permission.Guarded(&permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}),
-		RepoName:                       cfg.RepoName,
-		WorkDir:                        cfg.WorkDir,
-		LogPath:                        cfg.LogPath,
-		EffortLevel:                    cfg.EffortLevel,
-		AgentNames:                     []string{},
-		Phase:                          cfg.Phase,
-		SystemPromptHasUsefulResources: true,
-		MarkerPath:                     filepath.Join(cfg.HelperIterDir, PhaseCompleteFile),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("running review helper: building session: %w", err)
-	}
-	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
-		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
-	}
-	if sessOpts != nil {
-		if cfg.Kind != 0 {
-			sessOpts.Kind = cfg.Kind
-		} else {
-			sessOpts.Kind = ports.KindReviewHelper
+	var boundedResult *BoundedHelperResult
+	var runErr error
+	if cfg.EnableSmartZoneHandoff {
+		if cfg.HandoffPath == "" {
+			cfg.HandoffPath = filepath.Join(cfg.HelperIterDir, ReviewProgressHandoffFilename)
 		}
-		if cfg.Label != "" {
-			sessOpts.Label = cfg.Label
+		paths := append([]string(nil), cfg.ContinuationPaths...)
+		for _, path := range []string{cfg.PromptPath, cfg.FeedbackPath, cfg.HandoffPath} {
+			if strings.TrimSpace(path) != "" && !sliceContainsString(paths, path) {
+				paths = append(paths, path)
+			}
 		}
+		_, runErr = runHelperWithContinuations(ctx, helperContinuationConfig{
+			Label:                "review helper",
+			SessionIDBase:        cfg.SessionID,
+			HandoffPath:          cfg.HandoffPath,
+			CanonicalPaths:       paths,
+			ParseHandoff:         ParseReviewProgressHandoffMd,
+			Fingerprint:          ReviewProgressHandoffFingerprint,
+			MaxConsecNoProgress:  cfg.MaxConsecNoProgress,
+			MaxConsecMalformed:   cfg.MaxConsecHandoffFails,
+			ContinuationSkill:    spec.SkillName,
+			ContinuationArtifact: ReviewProgressHandoffFilename,
+			ForbiddenOnContinue:  []string{cfg.FeedbackPath},
+			RunSession: func(ctx context.Context, in helperContinuationRunInput) (helperContinuationRunResult, error) {
+				runCfg := cfg
+				prompt := cfg.Prompt
+				if in.Prompt != "" {
+					prompt = in.Prompt
+					runCfg.PromptPath = reviewHelperContinuationPromptPath(cfg.PromptPath, in.Continuation)
+				}
+				result, err := pr.runReadOnlyReviewHelperOnce(ctx, runCfg, spec, prompt, in.SessionID, cfg.Role, true, true)
+				boundedResult = result
+				if result == nil {
+					return helperContinuationRunResult{}, err
+				}
+				status := agentStatusSuccess
+				if result.Status != BoundedHelperStatusCompleted {
+					status = result.Status
+				}
+				return helperContinuationRunResult{Status: status}, err
+			},
+		})
+		if runErr == nil {
+			outcome, violations, validateErr := Validate(cfg.Phase, cfg.Role, cfg.HelperIterDir)
+			if validateErr != nil {
+				runErr = fmt.Errorf("running review helper: validating helper contract: %w", validateErr)
+			} else if !outcome.OK {
+				if outcome.ReviewFeedback != nil && !outcome.ReviewFeedback.OK() {
+					synth := FormatReviewProtocolViolationFeedback(outcome.ReviewFeedback)
+					_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
+				}
+				runErr = newProtocolViolationError(cfg.Role, cfg.HelperIterDir, violations)
+			}
+		}
+	} else {
+		boundedResult, runErr = pr.runReadOnlyReviewHelperOnce(ctx, cfg, spec, cfg.Prompt, cfg.SessionID, cfg.Role, false, false)
 	}
-
-	// requireOutput stays false: the verdict lives in FeedbackPath, not in
-	// chat output, so an empty stdout body is a perfectly valid run.
-	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:        cfg.SessionID,
-		featureID:        cfg.FeatureID,
-		phase:            cfg.Phase,
-		label:            "review helper",
-		observerPhase:    "review",
-		model:            cfg.Model,
-		responsePath:     cfg.ResponsePath,
-		repoName:         cfg.RepoName,
-		workDir:          cfg.WorkDir,
-		command:          command,
-		env:              env,
-		sessOpts:         sessOpts,
-		requireOutput:    false,
-		phaseCompleteDir: cfg.HelperIterDir,
-		contractPhase:    cfg.Phase,
-		contractRole:     cfg.Role,
-		parentSpanCtx:    cfg.ParentSpanCtx,
-	})
 	if boundedResult == nil {
 		return nil, runErr
 	}
@@ -227,6 +220,108 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	return result, nil
 }
 
+func (pr *PhaseRunner) runReadOnlyReviewHelperOnce(ctx context.Context, cfg ReviewHelperConfig, spec RoleSpec, prompt, sessionID string, contractRole Role, enableHandoff, skipValidation bool) (*BoundedHelperResult, error) {
+	if cfg.PromptPath != "" {
+		if err := os.WriteFile(cfg.PromptPath, []byte(prompt), 0o644); err != nil {
+			return nil, fmt.Errorf("running review helper: writing prompt: %w", err)
+		}
+	}
+
+	pidDir := pr.StateDir
+	if cfg.FeatureID != "" {
+		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
+	}
+
+	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+		Spec:          spec,
+		IterationDir:  cfg.HelperIterDir,
+		SkillsDir:     pr.SkillsDir,
+		GuidelinesDir: pr.GuidelinesDir,
+		AskingClause:  cfg.CompletionAskingClause,
+	})
+	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
+	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:                          cfg.Model,
+		Prompt:                         prompt,
+		SystemPrompt:                   systemPrompt,
+		AdditionalDirs:                 cfg.AdditionalDirs,
+		WritableRoots:                  allowedPaths,
+		PIDDir:                         pidDir,
+		PermHandler:                    permission.Guarded(&permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}),
+		RepoName:                       cfg.RepoName,
+		WorkDir:                        cfg.WorkDir,
+		LogPath:                        cfg.LogPath,
+		EffortLevel:                    cfg.EffortLevel,
+		AgentNames:                     []string{},
+		Phase:                          cfg.Phase,
+		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(cfg.HelperIterDir, PhaseCompleteFile),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("running review helper: building session: %w", err)
+	}
+	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
+		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
+	}
+	if sessOpts != nil {
+		if cfg.Kind != 0 {
+			sessOpts.Kind = cfg.Kind
+		} else {
+			sessOpts.Kind = ports.KindReviewHelper
+		}
+		if cfg.Label != "" {
+			sessOpts.Label = cfg.Label
+		}
+	}
+
+	// requireOutput stays false: the verdict lives in FeedbackPath, not in
+	// chat output, so an empty stdout body is a perfectly valid run.
+	return pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
+		sessionID:        sessionID,
+		featureID:        cfg.FeatureID,
+		phase:            cfg.Phase,
+		label:            "review helper",
+		observerPhase:    "review",
+		model:            cfg.Model,
+		responsePath:     cfg.ResponsePath,
+		repoName:         cfg.RepoName,
+		workDir:          cfg.WorkDir,
+		command:          command,
+		env:              env,
+		sessOpts:         sessOpts,
+		requireOutput:    false,
+		phaseCompleteDir: cfg.HelperIterDir,
+		contractPhase:    cfg.Phase,
+		contractRole:     contractRole,
+		skipValidation:   skipValidation,
+		parentSpanCtx:    cfg.ParentSpanCtx,
+		enableHandoff:    enableHandoff,
+		handoffRole:      spec.SkillName,
+		handoffIteration: cfg.ContextHandoffIteration,
+	})
+}
+
+func reviewHelperContinuationPromptPath(promptPath string, continuation int) string {
+	if strings.TrimSpace(promptPath) == "" || continuation <= 0 {
+		return promptPath
+	}
+	ext := filepath.Ext(promptPath)
+	stem := strings.TrimSuffix(filepath.Base(promptPath), ext)
+	if stem == "" {
+		stem = "continuation-prompt"
+	}
+	return filepath.Join(filepath.Dir(promptPath), fmt.Sprintf("%s-c%02d%s", stem, continuation+1, ext))
+}
+
+func sliceContainsString(values []string, want string) bool {
+	for _, got := range values {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
 func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr error) string {
 	var findings []string
 	if parsed != nil {
@@ -249,6 +344,9 @@ func boundedReviewHelperAllowedPaths(cfg ReviewHelperConfig) []string {
 	allowed := []string{
 		cfg.FeedbackPath,
 		filepath.Join(cfg.HelperIterDir, "phase_complete"),
+	}
+	if cfg.HandoffPath != "" {
+		allowed = append(allowed, cfg.HandoffPath)
 	}
 	allowed = append(allowed, cfg.AllowedPaths...)
 	return allowed

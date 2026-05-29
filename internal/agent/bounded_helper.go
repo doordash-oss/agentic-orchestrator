@@ -59,10 +59,16 @@ type BoundedHelperConfig struct {
 	RequireOutput  bool
 	// PhaseCompleteDir opts this helper into local phase_complete semantics.
 	// Empty preserves markerless bounded-helper behavior.
-	PhaseCompleteDir string
-	ContractPhase    feature.Phase
-	ContractRole     Role
-	ParentSpanCtx    observe.SpanContext
+	PhaseCompleteDir       string
+	ContractPhase          feature.Phase
+	ContractRole           Role
+	SkipContractValidation bool
+	ParentSpanCtx          observe.SpanContext
+	// EnableContextHandoff opts this bounded helper into Smart Zone wind-down.
+	// Most bounded helpers stay unarmed; call-sites opt in one role at a time.
+	EnableContextHandoff    bool
+	ContextHandoffRole      string
+	ContextHandoffIteration int
 }
 
 // BoundedHelperResult captures the output and terminal state of a bounded helper run.
@@ -137,7 +143,11 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		phaseCompleteDir: cfg.PhaseCompleteDir,
 		contractPhase:    cfg.ContractPhase,
 		contractRole:     cfg.ContractRole,
+		skipValidation:   cfg.SkipContractValidation,
 		parentSpanCtx:    cfg.ParentSpanCtx,
+		enableHandoff:    cfg.EnableContextHandoff,
+		handoffRole:      cfg.ContextHandoffRole,
+		handoffIteration: cfg.ContextHandoffIteration,
 	})
 }
 
@@ -158,7 +168,11 @@ type boundedHelperRunConfig struct {
 	phaseCompleteDir string
 	contractPhase    feature.Phase
 	contractRole     Role
+	skipValidation   bool
 	parentSpanCtx    observe.SpanContext
+	enableHandoff    bool
+	handoffRole      string
+	handoffIteration int
 }
 
 func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*BoundedHelperResult, error) {
@@ -174,20 +188,20 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 
 	sessionCtx := observe.SpanContext{}
 	sessionStart := time.Now()
+	providerName := ""
+	if cfg.sessOpts != nil {
+		providerName = cfg.sessOpts.ProviderName
+	}
+	observerPhase := cfg.observerPhase
+	if observerPhase == "" {
+		observerPhase = label
+	}
 	if pr.Observer != nil {
 		if cfg.parentSpanCtx.TraceID != "" || cfg.parentSpanCtx.SpanID != "" || cfg.parentSpanCtx.FeatureID != "" {
 			sessionCtx = cfg.parentSpanCtx.Child()
 		} else {
 			featureCtx := observe.SpanContextForFeature(cfg.featureID, "", "", "")
 			sessionCtx = featureCtx.Child()
-		}
-		providerName := ""
-		if cfg.sessOpts != nil {
-			providerName = cfg.sessOpts.ProviderName
-		}
-		observerPhase := cfg.observerPhase
-		if observerPhase == "" {
-			observerPhase = label
 		}
 		pr.Observer.SessionStarted(sessionCtx, observerPhase, cfg.sessionID, providerName, cfg.model, cfg.repoName)
 		pr.installContextReadTracker(sess, sessionCtx, observerPhase, cfg.sessionID, pr.StateDir)
@@ -209,9 +223,51 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 
 	attachCh := sess.AttachCh()
 	statusCh := sess.StatusCh()
+	var handoffC <-chan time.Time
+	var handoffTicker *time.Ticker
+	thresholdTokens := resolvedContextHandoffThresholdTokens(cfg.sessOpts)
+	if cfg.enableHandoff {
+		handoffTicker = time.NewTicker(currentContextHandoffPollInterval())
+		handoffC = handoffTicker.C
+		defer handoffTicker.Stop()
+	}
+	handoffSent := false
 
 	for {
 		select {
+		case <-handoffC:
+			handoffDisabled := cfg.sessOpts != nil && cfg.sessOpts.ContextHandoffDisabled
+			if handoffDisabled || handoffSent {
+				continue
+			}
+			snap := currentContextSnapshot(sess, thresholdTokens)
+			if snap.TotalTokens < thresholdTokens {
+				continue
+			}
+			role := cfg.handoffRole
+			if role == "" {
+				role = "implement"
+			}
+			if err := sess.SendUserMessage(formatContextHandoffMessageForRole(role, snap)); err == nil {
+				handoffSent = true
+				if pr.Observer != nil {
+					pr.Observer.ContextHandoffTriggered(
+						sessionCtx,
+						observerPhase,
+						cfg.sessionID,
+						cfg.repoName,
+						providerName,
+						cfg.handoffIteration,
+						snap.Pct,
+						snap.ThresholdPct,
+						snap.ThresholdTokens,
+						snap.TotalTokens,
+						snap.WindowTokens,
+						snap.BaselineTokens,
+					)
+				}
+			}
+
 		case <-ctx.Done():
 			result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusTimedOut)
 			return result, fmt.Errorf("running %s: %w", label, ctx.Err())
@@ -232,15 +288,15 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 			return result, fmt.Errorf("running %s: helper requested tool permission for %s", label, msg.ControlRequest.Request.ToolName)
 
 		case <-statusCh:
-			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole, cfg.skipValidation)
 
 		case <-sess.Done():
-			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole, cfg.skipValidation)
 		}
 	}
 }
 
-func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, phaseCompleteDir string, contractPhase feature.Phase, contractRole Role) (*BoundedHelperResult, error) {
+func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, phaseCompleteDir string, contractPhase feature.Phase, contractRole Role, skipValidation bool) (*BoundedHelperResult, error) {
 	if sess.HasPendingAskUserQuestion() {
 		result := boundedHelperSnapshot(responsePath, sess, BoundedHelperStatusAskedUser)
 		return result, fmt.Errorf("running %s: helper asked for user input", label)
@@ -278,7 +334,7 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 			result.Status = BoundedHelperStatusEmptyOutput
 			return result, fmt.Errorf("running %s: helper completed without output", label)
 		}
-		if contractRole != "" {
+		if contractRole != "" && !skipValidation {
 			outcome, violations, err := Validate(contractPhase, contractRole, phaseCompleteDir)
 			if err != nil {
 				result.Status = BoundedHelperStatusFailed

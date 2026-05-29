@@ -2093,7 +2093,7 @@ func IsArtifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile || lower == PlanningHandoffFilename:
+	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile || lower == PlanningHandoffFilename || lower == ReviewProgressHandoffFilename || lower == ProducerProgressHandoffFilename:
 		return true
 	case strings.HasPrefix(lower, ".protocol-retry-") && strings.HasSuffix(lower, ".yaml"):
 		return true

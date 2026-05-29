@@ -32,6 +32,9 @@ const (
 	// ProducerProgressHandoffFilename is the rolling scratch artifact used by
 	// producer-style helpers during Smart Zone continuations.
 	ProducerProgressHandoffFilename = "producer-progress.md"
+	// ResearchProgressHandoffFilename is the rolling scratch artifact used by
+	// Research's blocking loop during Smart Zone continuations.
+	ResearchProgressHandoffFilename = "research-progress.md"
 )
 
 // HelperHandoffState is the continuation routing token parsed from helper
@@ -81,6 +84,13 @@ var (
 		"## Where I Stopped",
 		"## Handoff State",
 	}
+	researchProgressHandoffSections = []string{
+		"## Completed Findings",
+		"## Remaining Areas",
+		"## Where I Stopped",
+		"## Gotchas",
+		"## Handoff State",
+	}
 	validHelperHandoffStateTokens = map[string]HelperHandoffState{
 		"CONTINUE": HelperHandoffContinue,
 		"COMPLETE": HelperHandoffComplete,
@@ -95,6 +105,11 @@ func ParseReviewProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
 // ParseProducerProgressHandoffMd parses producer-progress.md.
 func ParseProducerProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
 	return parseHelperHandoffMd(path, ProducerProgressHandoffFilename, producerProgressHandoffSections)
+}
+
+// ParseResearchProgressHandoffMd parses research-progress.md.
+func ParseResearchProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
+	return parseHelperHandoffMd(path, ResearchProgressHandoffFilename, researchProgressHandoffSections)
 }
 
 func parseHelperHandoffMd(path, filename string, requiredSections []string) (*ParsedHelperHandoff, error) {
@@ -170,6 +185,12 @@ func ReviewProgressHandoffFingerprint(path string) (string, error) {
 // producer helper's progress narrative.
 func ProducerProgressHandoffFingerprint(path string) (string, error) {
 	return helperHandoffFingerprint(path, ParseProducerProgressHandoffMd)
+}
+
+// ResearchProgressHandoffFingerprint computes a stable fingerprint over the
+// research loop's progress narrative.
+func ResearchProgressHandoffFingerprint(path string) (string, error) {
+	return helperHandoffFingerprint(path, ParseResearchProgressHandoffMd)
 }
 
 func helperHandoffFingerprint(path string, parse func(string) (*ParsedHelperHandoff, error)) (string, error) {

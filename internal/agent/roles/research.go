@@ -19,7 +19,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// RoleResearcher is the single-shot Research session.
+// RoleResearcher is the Research blocking-loop session role.
 const RoleResearcher Role = "researcher"
 
 var researcherRoleSpec = RoleSpec{
@@ -34,6 +34,8 @@ var researcherRoleSpec = RoleSpec{
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("research markdown artifact"),
+		researchProgressHandoffRoleArtifact(),
+		iterationMetaRoleArtifact(),
 	},
 }
 

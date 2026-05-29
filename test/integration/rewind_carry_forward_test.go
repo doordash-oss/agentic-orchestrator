@@ -15,6 +15,7 @@
 package integration
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,7 +124,27 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 
 	// Populate Artifacts with absolute paths pointing under run-001/.
 	absInquire := filepath.Join(run1Dir, "inquire", "inquire.md")
-	absResearch := filepath.Join(run1Dir, "research", "research.md")
+	researchIter1 := filepath.Join(run1Dir, "research", "iteration-01")
+	researchIter2 := filepath.Join(run1Dir, "research", "iteration-02")
+	for i, iterDir := range []string{researchIter1, researchIter2} {
+		if err := os.MkdirAll(iterDir, 0o755); err != nil {
+			t.Fatalf("mkdir research iteration: %v", err)
+		}
+		state := "CONTINUE"
+		if i == 1 {
+			state = "COMPLETE"
+		}
+		if err := os.WriteFile(filepath.Join(iterDir, "meta.yaml"), []byte(fmt.Sprintf("iteration: %d\nagent_status: SUCCESS\nreview_status: %s\n", i+1, state)), 0o644); err != nil {
+			t.Fatalf("write research meta: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(researchIter1, "research.md"), []byte("# research\n\niteration 1\n"), 0o644); err != nil {
+		t.Fatalf("write research iter1 markdown: %v", err)
+	}
+	absResearch := filepath.Join(researchIter2, "research.md")
+	if err := os.WriteFile(absResearch, []byte("# research\n\niteration 2 terminal\n"), 0o644); err != nil {
+		t.Fatalf("write terminal research markdown: %v", err)
+	}
 	absDesign := filepath.Join(run1Dir, "design", "design.md")
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Artifacts = map[string]string{
@@ -189,6 +210,19 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	for _, disallowed := range []string{"pr_url"} {
 		if _, ok := freshRun.Artifacts[disallowed]; ok {
 			t.Errorf("run-002 Artifacts must NOT carry %q", disallowed)
+		}
+	}
+	if got, want := freshRun.Artifacts["research"], filepath.Join("research", "iteration-02", "research.md"); got != want {
+		t.Errorf("run-002 Artifacts[research] = %q, want %q", got, want)
+	}
+	for _, rel := range []string{
+		filepath.Join("research", "iteration-01", "meta.yaml"),
+		filepath.Join("research", "iteration-01", "research.md"),
+		filepath.Join("research", "iteration-02", "meta.yaml"),
+		filepath.Join("research", "iteration-02", "research.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(run2Dir, rel)); err != nil {
+			t.Errorf("run-002 missing carried research iteration file %s: %v", rel, err)
 		}
 	}
 

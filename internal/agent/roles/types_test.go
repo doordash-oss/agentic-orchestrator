@@ -26,7 +26,7 @@ func TestNewestPlanMarkdownArtifactExcludesHelperHandoffs(t *testing.T) {
 	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
 		t.Fatalf("write plan.md: %v", err)
 	}
-	for _, name := range []string{"planning-handoff.md", "review-progress.md", "producer-progress.md"} {
+	for _, name := range []string{"planning-handoff.md", "review-progress.md", "producer-progress.md", "research-progress.md"} {
 		path := filepath.Join(dir, name)
 		if err := os.WriteFile(path, []byte("# Handoff\n"), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)

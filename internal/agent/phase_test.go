@@ -961,6 +961,73 @@ func TestRunResearch_SkillReadInstruction(t *testing.T) {
 	}
 }
 
+func TestBuildResearchBlockingLoopConfig(t *testing.T) {
+	stateDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	questionsPath := filepath.Join(stateDir, "feat-research-loop", "runs", "run-001", "inquire", "questions.md")
+	f := &feature.Feature{
+		ID:            "feat-research-loop",
+		Name:          "Research Loop",
+		Description:   "loop config",
+		Status:        feature.StatusResearching,
+		CurrentPhase:  feature.PhaseResearch,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo", Path: workDir}},
+		Models:        config.ModelConfig{Research: "research-model"},
+	}
+	pr := &PhaseRunner{
+		StateDir:       stateDir,
+		SkillsDir:      filepath.Join(stateDir, "skills"),
+		GuidelinesDir:  filepath.Join(stateDir, "guidelines"),
+		FeatureStore:   mocks.NewMockFeatureStore(),
+		BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) { return nil, nil, nil, nil },
+	}
+
+	cfg, err := pr.buildResearchBlockingLoopConfig(f, questionsPath, KBInfo{Name: "repo", IndexPath: "/kb/repo/index.md"})
+	if err != nil {
+		t.Fatalf("buildResearchBlockingLoopConfig() error = %v", err)
+	}
+	if got, want := cfg.ArtifactDir, filepath.Join(ActiveRunDir(stateDir, f), "research"); got != want {
+		t.Fatalf("ArtifactDir = %q, want %q", got, want)
+	}
+	if got := cfg.HandoffFilename; got != ResearchProgressHandoffFilename {
+		t.Fatalf("HandoffFilename = %q, want %q", got, ResearchProgressHandoffFilename)
+	}
+	if cfg.ParseHandoff == nil || cfg.Fingerprint == nil || cfg.CanonicalSelector == nil {
+		t.Fatalf("research loop parser/fingerprint/selector not wired: %#v", cfg)
+	}
+	if got := cfg.TelemetryRole; got != "research" {
+		t.Fatalf("TelemetryRole = %q, want research", got)
+	}
+	if cfg.FeatureStore != pr.FeatureStore {
+		t.Fatal("FeatureStore was not wired into research blocking loop config")
+	}
+	if got := cfg.Spec.MarkerPath(RoleRuntime{IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-02")}); !strings.HasSuffix(got, filepath.Join("iteration-02", PhaseCompleteFile)) {
+		t.Fatalf("research marker path = %q, want iteration-local phase_complete", got)
+	}
+	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:             2,
+		IterationDir:          filepath.Join(cfg.ArtifactDir, "iteration-02"),
+		SeededCanonicalPath:   filepath.Join(cfg.ArtifactDir, "iteration-02", "research.md"),
+		PreviousCanonicalPath: filepath.Join(cfg.ArtifactDir, "iteration-01", "research.md"),
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt() error = %v", err)
+	}
+	if !strings.Contains(prompt, questionsPath) {
+		t.Fatalf("research loop prompt missing questions path %q:\n%s", questionsPath, prompt)
+	}
+	if !strings.Contains(prompt, "Read the seeded research draft at:") ||
+		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "research.md")) {
+		t.Fatalf("research loop prompt missing seeded draft instruction:\n%s", prompt)
+	}
+}
+
 func TestRunKnowledgeBaseForRepo_SkillReadInstruction(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

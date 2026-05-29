@@ -992,6 +992,56 @@ artifacts: {}
 	}
 }
 
+func TestStoreLoadAcceptsSchema6RunWithResearchArtifact(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	const featureID = "schema6-research-001"
+	featureDir := filepath.Join(dir, featureID)
+	runDir := filepath.Join(featureDir, "runs", "run-001")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	featureYAML := fmt.Sprintf(`id: %s
+name: Schema 6 Feature
+slug: schema-6-feature
+description: pre-loop schema
+created: 2026-01-01T00:00:00Z
+status: DesignReady
+current_phase: 0
+models: {}
+exit_criteria: ""
+inquireness: medium
+active_run: 1
+run_count: 1
+schema_version: 6
+`, featureID)
+	if err := os.WriteFile(filepath.Join(featureDir, "feature.yaml"), []byte(featureYAML), 0o644); err != nil {
+		t.Fatalf("write feature.yaml: %v", err)
+	}
+	runYAML := `run_number: 1
+artifacts:
+  research: research/research.md
+`
+	if err := os.WriteFile(filepath.Join(runDir, "run.yaml"), []byte(runYAML), 0o644); err != nil {
+		t.Fatalf("write run.yaml: %v", err)
+	}
+
+	loaded, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("Load() error = %v; want nil for schema 6", err)
+	}
+	if loaded.SchemaVersion != 6 {
+		t.Fatalf("loaded.SchemaVersion = %d, want preserved schema 6", loaded.SchemaVersion)
+	}
+	if got := loaded.Artifacts["research"]; got != filepath.Join("research", "research.md") {
+		t.Fatalf("Artifacts[research] = %q, want research/research.md", got)
+	}
+}
+
 func TestStoreLoadMigratesLegacyBrainstormStatusAndArtifact(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

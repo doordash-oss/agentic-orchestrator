@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -33,6 +34,7 @@ import (
 // Publish dispatch is covered in TestOrchestrator_StartPublish_* tests.
 func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 	planPath := writeTempFile(t, "plan.md", "plan body")
+	inquirePath := writeTempFile(t, "inquire.md", "inquire body")
 	researchPath := writeTempFile(t, "research.md", "research body")
 
 	tests := []struct {
@@ -71,6 +73,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			setupFeature: func(f *feature.Feature) {
 				started := time.Now().Add(-time.Hour)
 				f.StartedAt = &started
+				f.Artifacts = map[string]string{"inquire": inquirePath}
 			},
 			wantTransition:    "StartResearch",
 			wantPhaseStarted:  true,
@@ -161,6 +164,11 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			// error on missing PhaseRunner.
 			if tt.phase == feature.PhaseImplement {
 				o.SetRunMultiRepoImplFn(noopRunMultiRepoImplFn())
+			}
+			if tt.phase == feature.PhaseResearch {
+				o.SetRunResearchLoopFn(func(f *feature.Feature, questionsPath string, kbInfos ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+					return nil, nil
+				})
 			}
 
 			err := o.StartFeature("feat-dispatch")

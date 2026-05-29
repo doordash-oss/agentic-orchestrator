@@ -279,11 +279,50 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		}
 	case roles.ValidatorPlanValidatorAxisApproval:
 		return validatePlanValidatorAxisApprovalArtifact
+	case roles.ValidatorResearchProgressHandoff:
+		return validateResearchProgressHandoffArtifact
+	case roles.ValidatorIterationMeta:
+		return validateIterationMetaArtifact
 	default:
 		return func(_, _ string, _ *Outcome) ([]ProtocolViolation, error) {
 			return []ProtocolViolation{{Artifact: artifact.DisplayPath, Reason: fmt.Sprintf("unknown RoleSpec validator %q", artifact.Validate)}}, nil
 		}
 	}
+}
+
+func validateResearchProgressHandoffArtifact(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []ProtocolViolation{{Artifact: ResearchProgressHandoffFilename, Reason: missingArtifactReason(ResearchProgressHandoffFilename, filepath.Dir(path))}}, nil
+		}
+		return nil, fmt.Errorf("stat research progress handoff: %w", err)
+	}
+	parsed, err := ParseResearchProgressHandoffMd(path)
+	if err != nil {
+		return nil, fmt.Errorf("parsing research progress handoff: %w", err)
+	}
+	if parsed.OK() {
+		return nil, nil
+	}
+	violations := make([]ProtocolViolation, 0, len(parsed.ProtocolViolations))
+	for _, reason := range parsed.ProtocolViolations {
+		violations = append(violations, ProtocolViolation{Artifact: ResearchProgressHandoffFilename, Reason: reason})
+	}
+	return violations, nil
+}
+
+func validateIterationMetaArtifact(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
+	meta, err := NewArtifactManager(filepath.Dir(path)).ReadMeta(filepath.Dir(path))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return []ProtocolViolation{{Artifact: "meta.yaml", Reason: missingArtifactReason("meta.yaml", filepath.Dir(path))}}, nil
+		}
+		return []ProtocolViolation{{Artifact: "meta.yaml", Reason: fmt.Sprintf("meta.yaml is unparseable: %v", err)}}, nil
+	}
+	if meta.Iteration <= 0 {
+		return []ProtocolViolation{{Artifact: "meta.yaml", Reason: "meta.yaml must record a positive iteration"}}, nil
+	}
+	return nil, nil
 }
 
 func conditionForRoleArtifact(artifact RoleArtifactSpec) func(Outcome) bool {

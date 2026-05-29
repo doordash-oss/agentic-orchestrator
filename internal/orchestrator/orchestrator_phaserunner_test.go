@@ -450,36 +450,6 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 			setup:          func(t *testing.T, f *feature.Feature, stateDir string) {},
 		},
 		{
-			name:           "Research",
-			phase:          feature.PhaseResearch,
-			wantTransition: "StartResearch",
-			// PhaseResearch is the iota-0 zero value. For a legitimate
-			// interrupted-in-Research resume, StartedAt must be set
-			// (signals a phase already started). Without it, StartFeature's
-			// fallback reroutes to the pipeline's first phase.
-			//
-			// startResearch also requires an inquire artifact (the questions
-			// file Research consumes), so we seed it on disk and in the
-			// feature's Artifacts map.
-			setup: func(t *testing.T, f *feature.Feature, stateDir string) {
-				started := time.Now().Add(-time.Hour)
-				f.StartedAt = &started
-
-				inquireDir := filepath.Join(stateDir, f.ID, "inquire")
-				if err := os.MkdirAll(inquireDir, 0o755); err != nil {
-					t.Fatalf("mkdir inquire dir: %v", err)
-				}
-				questionsPath := filepath.Join(inquireDir, "questions.md")
-				if err := os.WriteFile(questionsPath, []byte("# Questions\n"), 0o644); err != nil {
-					t.Fatalf("write questions: %v", err)
-				}
-				if f.Artifacts == nil {
-					f.Artifacts = map[string]string{}
-				}
-				f.Artifacts["inquire"] = questionsPath
-			},
-		},
-		{
 			name:           "Design",
 			phase:          feature.PhaseDesign,
 			wantTransition: "StartDesign",
@@ -549,6 +519,69 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOrchestrator_StartResearchDispatchesBlockingLoop(t *testing.T) {
+	stateDir := t.TempDir()
+	inquireDir := filepath.Join(stateDir, "feat-research-loop", "runs", "run-001", "inquire")
+	if err := os.MkdirAll(inquireDir, 0o755); err != nil {
+		t.Fatalf("mkdir inquire dir: %v", err)
+	}
+	questionsPath := filepath.Join(inquireDir, "questions.md")
+	if err := os.WriteFile(questionsPath, []byte("# questions\n"), 0o644); err != nil {
+		t.Fatalf("write questions: %v", err)
+	}
+	f := &feature.Feature{
+		ID:            "feat-research-loop",
+		Status:        feature.StatusInquireReady,
+		CurrentPhase:  feature.PhaseResearch,
+		Pipeline:      feature.PipelineLarge,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Artifacts:     map[string]string{"inquire": questionsPath},
+	}
+	fs := feature.NewStore(stateDir)
+	if err := fs.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	lc := lifecycleForFeature(f)
+	lc.GetFn = fs.Load
+	lc.StartResearchFn = func(id string) error {
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusResearching
+			return nil
+		})
+	}
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
+	}, orchestrator.Hooks{})
+
+	called := make(chan string, 1)
+	o.SetRunResearchLoopFn(func(gotFeature *feature.Feature, gotQuestionsPath string, kbInfos ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+		if gotFeature.ID != f.ID {
+			t.Errorf("research loop feature ID = %q, want %q", gotFeature.ID, f.ID)
+		}
+		ch := make(chan *agent.BlockingLoopResult)
+		close(ch)
+		called <- gotQuestionsPath
+		return ch, nil
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+	select {
+	case got := <-called:
+		if got != questionsPath {
+			t.Fatalf("questions path = %q, want %q", got, questionsPath)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("research loop was not dispatched")
+	}
+	refuteLifecycleCall(t, lc, "CompleteResearch")
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +830,9 @@ func TestOrchestrator_StartFeature_InterruptedMidResearch_HonorsCurrentPhase(t *
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
+	o.SetRunResearchLoopFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+		return nil, nil
+	})
 
 	if err := o.StartFeature(f.ID); err != nil {
 		t.Fatalf("StartFeature: %v", err)

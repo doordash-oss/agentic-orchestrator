@@ -1489,6 +1489,7 @@ func TestIsArtifactExcluded(t *testing.T) {
 		{"planning-handoff.md", true},
 		{"review-progress.md", true},
 		{"producer-progress.md", true},
+		{"research-progress.md", true},
 		{".protocol-retry.yaml", true},
 		{".protocol-retry-feat-abc123.yaml", true},
 		{"protocol-retry.yaml", false},

@@ -1185,6 +1185,7 @@ const (
 	agentStatusAPIError          = "API_ERROR"
 	agentStatusMissingMarker     = "MISSING_PHASE_COMPLETE"
 	agentStatusProtocolViolation = "PROTOCOL_VIOLATION"
+	agentStatusInterrupted       = "INTERRUPTED"
 )
 
 const largeCommandOutputThresholdChars = 20_000

@@ -88,6 +88,7 @@ type PhaseCompletionInput struct {
 	ErrorDetail string
 
 	PlanResult      *agent.PlanLoopResult
+	ResearchResult  *agent.BlockingLoopResult
 	ImplementResult *agent.LoopResult
 	MultiRepoResult *agent.OrchestratorResult
 }
@@ -270,6 +271,15 @@ type Orchestrator struct {
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.LoopResult, error)
 
+	// runResearchLoopFn is a test seam over PhaseRunner.RunResearchLoop.
+	// Production uses the generic blocking loop so per-iteration Research
+	// session-done events never advance the phase by themselves.
+	runResearchLoopFn func(
+		f *feature.Feature,
+		questionsPath string,
+		kbInfos ...agent.KBInfo,
+	) (chan *agent.BlockingLoopResult, error)
+
 	// runRebaseLoopFn is a test seam over agent.RunRebaseLoop. The default
 	// launches the production unified rebase loop; tests override it to
 	// verify rebase gate routing without booting agent sessions.
@@ -284,6 +294,16 @@ func (o *Orchestrator) SetRunImplementationFn(fn func(
 	kbInfos ...agent.KBInfo,
 ) (chan *agent.LoopResult, error)) {
 	o.runImplementationFn = fn
+}
+
+// SetRunResearchLoopFn installs a test seam that intercepts
+// PhaseRunner.RunResearchLoop dispatch. Intended for tests only.
+func (o *Orchestrator) SetRunResearchLoopFn(fn func(
+	f *feature.Feature,
+	questionsPath string,
+	kbInfos ...agent.KBInfo,
+) (chan *agent.BlockingLoopResult, error)) {
+	o.runResearchLoopFn = fn
 }
 
 // New creates an Orchestrator. The eventCh is a bounded buffer (256).
@@ -314,6 +334,16 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 			return nil, errors.New("phase runner not configured")
 		}
 		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
+	}
+	o.runResearchLoopFn = func(
+		f *feature.Feature,
+		questionsPath string,
+		kbInfos ...agent.KBInfo,
+	) (chan *agent.BlockingLoopResult, error) {
+		if o.deps.PhaseRunner == nil {
+			return nil, errors.New("phase runner not configured")
+		}
+		return o.deps.PhaseRunner.RunResearchLoop(f, questionsPath, kbInfos...)
 	}
 	o.runRebaseLoopFn = agent.RunRebaseLoop
 	return o
@@ -823,14 +853,23 @@ func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error)
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		questionsPath := o.resolveArtifactPath(f, "inquire")
-		if questionsPath == "" {
-			return PhaseStartResult{}, errors.New("no inquire artifact found; cannot proceed to research")
+	questionsPath := o.resolveArtifactPath(f, "inquire")
+	if questionsPath == "" {
+		return PhaseStartResult{}, errors.New("no inquire artifact found; cannot proceed to research")
+	}
+	runResearchLoop := o.runResearchLoopFn
+	if runResearchLoop == nil {
+		if o.deps.PhaseRunner == nil {
+			return PhaseStartResult{}, errors.New("phase runner not configured")
 		}
-		if _, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run research from questions: %w", err)
-		}
+		runResearchLoop = o.deps.PhaseRunner.RunResearchLoop
+	}
+	resultCh, err := runResearchLoop(f, questionsPath, kbInfos...)
+	if err != nil {
+		return PhaseStartResult{}, fmt.Errorf("run research loop: %w", err)
+	}
+	if resultCh != nil {
+		go o.dispatchResearchLoopResult(featureID, resultCh)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
@@ -933,6 +972,19 @@ func (o *Orchestrator) dispatchPlanLoopResult(featureID string, resultCh <-chan 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
 		PlanResult: result,
+	}); err != nil {
+		o.surfaceDispatchCompletionError(featureID, err)
+	}
+}
+
+func (o *Orchestrator) dispatchResearchLoopResult(featureID string, resultCh <-chan *agent.BlockingLoopResult) {
+	result, ok := <-resultCh
+	if !ok {
+		return
+	}
+	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
+		Phase:          feature.PhaseResearch,
+		ResearchResult: result,
 	}); err != nil {
 		o.surfaceDispatchCompletionError(featureID, err)
 	}
@@ -1316,7 +1368,10 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 	case feature.PhaseInquire:
 		return o.onArtifactPhaseCompleted(featureID, input, "inquire", o.deps.Lifecycle.CompleteInquire)
 	case feature.PhaseResearch:
-		return o.onArtifactPhaseCompleted(featureID, input, "research", o.deps.Lifecycle.CompleteResearch)
+		if input.ResearchResult == nil {
+			return nil
+		}
+		return o.onResearchLoopDone(featureID, input.ResearchResult)
 	case feature.PhaseDesign:
 		// Validate against the legacy "design" on-disk subdirectory but
 		// persist the canonical Design artifact key so downstream consumers

@@ -217,7 +217,7 @@ type PendingUserInputCycle struct {
 
 // SchemaVersionCurrent is the current durable on-disk schema version stamped
 // onto fresh features at Manager.Create time.
-const SchemaVersionCurrent = 6
+const SchemaVersionCurrent = 7
 
 // CycleState tracks the feature-level active post-publish cycle (rebase,
 // review-comments, refactor, tweak). One cycle is active at a time per

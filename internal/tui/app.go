@@ -6962,7 +6962,7 @@ func phaseArtifactDir(baseDir string, f *feature.Feature, phase feature.Phase, s
 
 func registryOwnedSingleShotPhase(phase feature.Phase) bool {
 	switch phase {
-	case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
+	case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseDesign:
 		return true
 	default:
 		return false

@@ -1602,7 +1602,32 @@ func assertTUIArtifactPhaseRetry(t *testing.T, fm *feature.Manager, f *feature.F
 	}
 }
 
-func TestHandleSDKEvent_ResearchSuccessWithoutArtifactRetriesProtocolViolation(t *testing.T) {
+func assertTUIResearchSessionEventNoOps(t *testing.T, fm *feature.Manager, f *feature.Feature) {
+	t.Helper()
+	updated, err := fm.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get feature: %v", err)
+	}
+	if updated.Status != feature.StatusResearching {
+		t.Fatalf("status = %v, want %v", updated.Status, feature.StatusResearching)
+	}
+	if updated.FailureType != "" {
+		t.Fatalf("FailureType = %q, want empty", updated.FailureType)
+	}
+	if updated.LastError != "" {
+		t.Fatalf("LastError = %q, want empty", updated.LastError)
+	}
+	phaseDir := filepath.Join(agent.ActiveRunDir(fm.Store.BaseDir, updated), feature.PhaseResearch.DirName())
+	sidecar, err := agent.ReadProtocolRetrySidecar(phaseDir)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
+	}
+	if sidecar != nil {
+		t.Fatalf("retry sidecar = %#v, want nil for loop-owned Research session event", sidecar)
+	}
+}
+
+func TestHandleSDKEvent_ResearchSuccessWithoutArtifactNoOps(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.eventCh = make(chan interface{}, 1)
@@ -1649,7 +1674,7 @@ func TestHandleSDKEvent_ResearchSuccessWithoutArtifactRetriesProtocolViolation(t
 
 	_, _ = app.handleSDKEvent(msg)
 
-	assertTUIArtifactPhaseRetry(t, fm, f, feature.PhaseResearch, agent.PhaseCompleteFile)
+	assertTUIResearchSessionEventNoOps(t, fm, f)
 }
 
 func TestPhaseOutputSuggestsQuestion_MultilineAssistantQuestionStillDetected(t *testing.T) {
@@ -1849,7 +1874,7 @@ func TestHandleSessionDone_RegistryOwnedSuccessDoesNotCreateQuestionHelp(t *test
 	assertNoPendingQuestionHelp(t, f)
 }
 
-func TestHandleSessionDone_SuccessWithoutArtifactRetriesProtocolViolation(t *testing.T) {
+func TestHandleSessionDone_ResearchSuccessWithoutArtifactNoOps(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.eventCh = make(chan interface{}, 1)
@@ -1890,7 +1915,7 @@ func TestHandleSessionDone_SuccessWithoutArtifactRetriesProtocolViolation(t *tes
 
 	_, _ = app.handleSessionDone(doneMsg)
 
-	assertTUIArtifactPhaseRetry(t, fm, f, feature.PhaseResearch, agent.PhaseCompleteFile)
+	assertTUIResearchSessionEventNoOps(t, fm, f)
 }
 
 func TestPublishDescGeneratedForwarded(t *testing.T) {
@@ -2901,13 +2926,14 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	_ = fm.Store.Modify(f.ID, func(f *feature.Feature) error {
-		f.Status = feature.StatusResearching
+		f.Status = feature.StatusInquiring
+		f.CurrentPhase = feature.PhaseInquire
 		return nil
 	})
 
 	// Create a session with FAILED in StatusCh (simulates max_turns, error, etc.).
 	sm := session.NewManager(nil)
-	sess := session.NewSession(f.ID+"-research", f.ID, feature.PhaseResearch)
+	sess := session.NewSession(f.ID+"-inquire", f.ID, feature.PhaseInquire)
 	sess.SendStatus("FAILED")
 	sm.RegisterTestSession(sess)
 	app.sessionManager = sm
@@ -2918,16 +2944,16 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 	// PhaseCompletedMsg{Success: false}. Feed that through handlePhaseCompleted.
 	pcm := PhaseCompletedMsg{
 		FeatureID: f.ID,
-		Phase:     feature.PhaseResearch,
-		SessionID: f.ID + "-research",
+		Phase:     feature.PhaseInquire,
+		SessionID: f.ID + "-inquire",
 		Success:   false, // this is what the fixed handleSessionDone produces
 	}
 	app.handlePhaseCompleted(pcm)
 
-	// Feature should be Failed (not advanced to PlanReady).
+	// Feature should be Failed (not advanced past Inquire).
 	updated, _ := fm.Get(f.ID)
 	if updated.Status != feature.StatusFailed {
-		t.Errorf("feature status = %v, want Failed (SDK FAILED should not advance research)", updated.Status)
+		t.Errorf("feature status = %v, want Failed (SDK FAILED should not advance inquire)", updated.Status)
 	}
 
 	// Now verify the positive case: SUCCESS in StatusCh + clean exit = success.
@@ -2936,16 +2962,17 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	_ = fm.Store.Modify(f2.ID, func(f *feature.Feature) error {
-		f.Status = feature.StatusResearching
+		f.Status = feature.StatusInquiring
+		f.CurrentPhase = feature.PhaseInquire
 		return nil
 	})
-	sess2 := session.NewSession(f2.ID+"-research", f2.ID, feature.PhaseResearch)
+	sess2 := session.NewSession(f2.ID+"-inquire", f2.ID, feature.PhaseInquire)
 	sess2.SendStatus("SUCCESS")
 	sm.RegisterTestSession(sess2)
 
 	doneMsg := SessionDoneTUIMsg{
 		Done: session.SessionDoneMsg{
-			SessionID: f2.ID + "-research",
+			SessionID: f2.ID + "-inquire",
 			Status:    session.SessionDone,
 		},
 	}
@@ -2968,14 +2995,15 @@ func TestHandlePhaseCompleted_ErrorDetailInLastError(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	_ = fm.Store.Modify(f.ID, func(f *feature.Feature) error {
-		f.Status = feature.StatusResearching
+		f.Status = feature.StatusInquiring
+		f.CurrentPhase = feature.PhaseInquire
 		return nil
 	})
 
 	pcm := PhaseCompletedMsg{
 		FeatureID:   f.ID,
-		Phase:       feature.PhaseResearch,
-		SessionID:   f.ID + "-research",
+		Phase:       feature.PhaseInquire,
+		SessionID:   f.ID + "-inquire",
 		Success:     false,
 		ErrorDetail: "Request too large (max 20MB). Try with a smaller file.",
 	}
@@ -2988,7 +3016,7 @@ func TestHandlePhaseCompleted_ErrorDetailInLastError(t *testing.T) {
 	if !strings.Contains(updated.LastError, "Request too large") {
 		t.Errorf("LastError = %q, want it to contain the error detail", updated.LastError)
 	}
-	if !strings.Contains(updated.LastError, "Research") {
+	if !strings.Contains(updated.LastError, "Inquire") {
 		t.Errorf("LastError = %q, want it to contain the phase name", updated.LastError)
 	}
 }
@@ -4525,7 +4553,6 @@ type tuiArtifactPhaseCase struct {
 func tuiArtifactPhaseCases() []tuiArtifactPhaseCase {
 	return []tuiArtifactPhaseCase{
 		{"inquire", feature.PhaseInquire},
-		{"research", feature.PhaseResearch},
 		{"design", feature.PhaseDesign},
 	}
 }

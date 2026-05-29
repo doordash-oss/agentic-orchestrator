@@ -424,6 +424,88 @@ func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPat
 	})
 }
 
+// RunResearchLoop starts the Research blocking loop. Each loop iteration runs
+// a fresh Research session in research/iteration-NN and returns the terminal
+// loop result through a buffered channel.
+func (pr *PhaseRunner) RunResearchLoop(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (chan *BlockingLoopResult, error) {
+	cfg, err := pr.buildResearchBlockingLoopConfig(f, questionsPath, kbInfos...)
+	if err != nil {
+		return nil, err
+	}
+	return pr.RunBlockingLoopAsync(context.Background(), cfg)
+}
+
+func (pr *PhaseRunner) buildResearchBlockingLoopConfig(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (BlockingLoopConfig, error) {
+	if f == nil {
+		return BlockingLoopConfig{}, fmt.Errorf("research loop: feature is nil")
+	}
+	if strings.TrimSpace(questionsPath) == "" {
+		return BlockingLoopConfig{}, fmt.Errorf("research loop: questions path is empty")
+	}
+	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
+	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
+	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
+	artifactDir := pr.resolvePhaseArtifactDir(f, feature.PhaseResearch.DirName())
+
+	return BlockingLoopConfig{
+		Label:                      "research",
+		Feature:                    f,
+		FeatureID:                  f.ID,
+		FeatureStore:               pr.FeatureStore,
+		Phase:                      feature.PhaseResearch,
+		Role:                       RoleResearcher,
+		Spec:                       ResearcherRoleSpec(),
+		ArtifactDir:                artifactDir,
+		StateDir:                   filepath.Join(pr.StateDir, f.ID),
+		Model:                      researchModel,
+		WorkDir:                    workDir,
+		AdditionalDirs:             additionalDirs,
+		AgentNames:                 researchAgentNames(),
+		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		SkillsDir:                  pr.SkillsDir,
+		GuidelinesDir:              pr.GuidelinesDir,
+		KBInfos:                    kbInfos,
+		AskingClause:               pr.askingQuestionsClauseForModel(researchModel),
+		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
+		PermissionCache:            pr.PermissionCache,
+		BuildSession:               pr.BuildSession,
+		Observer:                   pr.Observer,
+		HandoffFilename:            ResearchProgressHandoffFilename,
+		ParseHandoff:               ParseResearchProgressHandoffMd,
+		Fingerprint:                ResearchProgressHandoffFingerprint,
+		CanonicalSelector:          SelectNewestNonExcludedMarkdown,
+		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
+			return buildResearchLoopPrompt(f, pr.SkillsDir, questionsPath, in, kbInfos...), nil
+		},
+		MaxConsecNoProgress:         maxNoProgress,
+		MaxConsecFailures:           maxFails,
+		MaxConsecProtocolViolations: DefaultMaxConsecutiveProtocolViolations,
+		SessionIDBase:               f.ID + "-research",
+		TelemetryRole:               "research",
+	}, nil
+}
+
+func buildResearchLoopPrompt(f *feature.Feature, skillsDir, questionsPath string, in BlockingLoopPromptInput, kbInfos ...KBInfo) string {
+	prompt := BuildResearchFromQuestionsPrompt(f, skillsDir, questionsPath, kbInfos...)
+	seededPath := strings.TrimSpace(in.SeededCanonicalPath)
+	if seededPath == "" {
+		return prompt
+	}
+
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\n\n## Existing Research Draft\n\n")
+	b.WriteString("Read the seeded research draft at:\n")
+	b.WriteString(seededPath)
+	b.WriteString("\n\nContinue from that draft in place. Preserve existing findings, add the remaining research, and keep the canonical markdown as the growing deliverable for this iteration.\n")
+	if previousPath := strings.TrimSpace(in.PreviousCanonicalPath); previousPath != "" {
+		b.WriteString("\nIt was copied from the previous completed iteration at:\n")
+		b.WriteString(previousPath)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // researchAgentNames returns the subagents allowed in Research sessions.
 func researchAgentNames() []string {
 	return []string{

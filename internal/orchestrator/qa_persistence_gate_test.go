@@ -105,9 +105,10 @@ func sessionManagerWithQALog(sessionID string) *mocks.MockSessionManager {
 
 // TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPhases is the
 // table-driven persistence-whitelist regression. It calls onArtifactPhaseCompleted
-// directly with each interactive planning phase plus roadmap/phase-plan
-// sentinel keys. Inquire, Research, and Design persist the session Q&A log;
-// Roadmap and Phase-Plan transcripts are owned by the plan loops instead.
+// directly with each single-shot interactive planning phase plus roadmap/
+// phase-plan sentinel keys. Inquire and Design persist the session Q&A log;
+// Research is now owned by the blocking loop, and Roadmap/Phase-Plan
+// transcripts are owned by the plan loops instead.
 func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPhases(t *testing.T) {
 	cases := []struct {
 		phaseKey       string
@@ -126,9 +127,6 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 		}},
 		{"phase-plan", feature.PhaseInquire /* unused */, false, func(lc *mocks.MockFeatureLifecycle) func(string) error {
 			return func(string) error { return nil }
-		}},
-		{"research", feature.PhaseResearch, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
-			return lc.CompleteResearch
 		}},
 	}
 

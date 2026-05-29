@@ -371,7 +371,6 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 		fileName string
 	}{
 		{"inquire", feature.PhaseInquire, RoleInquirer, "2026-05-07-inquire.md"},
-		{"research", feature.PhaseResearch, RoleResearcher, "2026-05-07-research.md"},
 		{"design", feature.PhaseDesign, RoleDesigner, "2026-05-07-design.md"},
 		// Legacy Design role still resolves and validates the same
 		// markdown artifact behavior so older runs continue to complete.
@@ -411,13 +410,42 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 	}
 }
 
+func TestContractRegistryResearchLoopRoleRequiresHandoffAndMeta(t *testing.T) {
+	dir := t.TempDir()
+	artifactPath := filepath.Join(dir, "2026-05-07-research.md")
+	if err := os.WriteFile(artifactPath, []byte("# research\n"), 0o644); err != nil {
+		t.Fatalf("write research artifact: %v", err)
+	}
+	writeHelperHandoff(t, dir, ResearchProgressHandoffFilename, validResearchProgressHandoff("COMPLETE", "answered all questions"))
+	if err := NewArtifactManager(filepath.Dir(dir)).WriteMeta(dir, IterationMeta{
+		Iteration:    1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: HelperHandoffComplete.String(),
+	}); err != nil {
+		t.Fatalf("WriteMeta() error = %v", err)
+	}
+
+	out, violations, err := Validate(feature.PhaseResearch, RoleResearcher, dir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("Validate() violations = %v, want none", violations)
+	}
+	if !out.OK {
+		t.Fatal("Validate() OK = false, want true")
+	}
+	if out.PhaseArtifactPath != artifactPath {
+		t.Fatalf("PhaseArtifactPath = %q, want %q", out.PhaseArtifactPath, artifactPath)
+	}
+}
+
 func TestContractRegistryArtifactPhaseRolesReportMissingMarkdown(t *testing.T) {
 	tests := []struct {
 		phase feature.Phase
 		role  Role
 	}{
 		{feature.PhaseInquire, RoleInquirer},
-		{feature.PhaseResearch, RoleResearcher},
 		{feature.PhaseDesign, RoleDesigner},
 		{feature.PhaseDesign, RoleDesigner},
 	}

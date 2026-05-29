@@ -58,6 +58,8 @@ const (
 	ValidatorRefactorPlanMarkdown          ArtifactValidator = "refactor_plan_markdown"
 	ValidatorReviewFeedback                ArtifactValidator = "review_feedback"
 	ValidatorPlanValidatorAxisApproval     ArtifactValidator = "plan_validator_axis_approval"
+	ValidatorResearchProgressHandoff       ArtifactValidator = "research_progress_handoff"
+	ValidatorIterationMeta                 ArtifactValidator = "iteration_meta"
 )
 
 // ArtifactCondition names the parsed-state predicate that makes a conditional
@@ -292,6 +294,32 @@ func planAttemptMetaRoleArtifact() RoleArtifactSpec {
 	}
 }
 
+func researchProgressHandoffRoleArtifact() RoleArtifactSpec {
+	return RoleArtifactSpec{
+		Name:          "research_progress_handoff",
+		DisplayPath:   "research-progress.md",
+		RootName:      "phase_dir",
+		RelativePath:  "research-progress.md",
+		Presence:      ArtifactRequired,
+		Description:   "harness-read Research loop progress and handoff state",
+		HideFromSkill: true,
+		Validate:      ValidatorResearchProgressHandoff,
+	}
+}
+
+func iterationMetaRoleArtifact() RoleArtifactSpec {
+	return RoleArtifactSpec{
+		Name:          "iteration_meta",
+		DisplayPath:   "meta.yaml",
+		RootName:      "phase_dir",
+		RelativePath:  "meta.yaml",
+		Presence:      ArtifactRequired,
+		Description:   "harness-written blocking-loop iteration metadata",
+		HideFromSkill: true,
+		Validate:      ValidatorIterationMeta,
+	}
+}
+
 func phaseMarkdownRoleArtifact(display string) RoleArtifactSpec {
 	return RoleArtifactSpec{
 		Name:         "phase_markdown_artifact",
@@ -363,7 +391,7 @@ func artifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == "planning-handoff.md" || lower == "review-progress.md" || lower == "producer-progress.md":
+	case lower == "qa-answers.md" || lower == "planning-handoff.md" || lower == "review-progress.md" || lower == "producer-progress.md" || lower == "research-progress.md":
 		return true
 	default:
 		return false

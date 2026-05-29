@@ -724,7 +724,6 @@ type artifactPhaseCase struct {
 func artifactPhaseCases() []artifactPhaseCase {
 	return []artifactPhaseCase{
 		{"inquire", feature.PhaseInquire, "inquire", "inquire", feature.StatusInquiring},
-		{"research", feature.PhaseResearch, "research", "research", feature.StatusResearching},
 		// The Design phase keeps the legacy "design" on-disk subdir for
 		// compat but persists under the canonical Design artifact key.
 		{"design", feature.PhaseDesign, "design", feature.DesignArtifactKey, feature.StatusDesigning},
@@ -1316,6 +1315,9 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.
 		Lifecycle: lc,
 		Store:     fs,
 	}, orchestrator.Hooks{})
+	o.SetRunResearchLoopFn(func(f *feature.Feature, questionsPath string, kbInfos ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+		return nil, nil
+	})
 
 	if err := o.HandlePhaseCompletion("feat-inq", orchestrator.PhaseCompletionInput{
 		Phase:   feature.PhaseInquire,
@@ -1336,26 +1338,99 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.
 	}
 }
 
-// Research success — for PipelineLarge, Research → Plan. We set
-// Pipeline=Medium so the next phase is also Plan but is dispatchable (no
-// plan artifacts required for medium).
-func TestOrchestrator_HandlePhaseCompletion_Research_Success(t *testing.T) {
+func TestOrchestrator_HandlePhaseCompletion_ResearchLoopSuccess(t *testing.T) {
 	stateDir := t.TempDir()
 	f := &feature.Feature{
 		ID:            "feat-res",
 		Status:        feature.StatusResearching,
 		CurrentPhase:  feature.PhaseResearch,
-		Pipeline:      feature.PipelineMedium,
+		Pipeline:      feature.PipelineLarge,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Artifacts:     map[string]string{},
+	}
+	lc := lifecycleForFeature(f)
+	fs := feature.NewStore(stateDir)
+	if err := fs.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	lc.GetFn = fs.Load
+	lc.CompleteResearchFn = func(id string) error {
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusDesignReady
+			return nil
+		})
+	}
+	lc.StartDesignFn = func(id string) error {
+		reloaded, err := fs.Load(id)
+		if err != nil {
+			return err
+		}
+		if reloaded.Artifacts["research"] == "" {
+			return errors.New("start design did not see research artifact")
+		}
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusDesigning
+			return nil
+		})
+	}
+	terminalDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "research", "iteration-02")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
+		t.Fatalf("mkdir terminal dir: %v", err)
+	}
+	terminalMarkdown := filepath.Join(terminalDir, "research.md")
+	if err := os.WriteFile(terminalMarkdown, []byte("# research\n"), 0o644); err != nil {
+		t.Fatalf("write terminal markdown: %v", err)
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+	}, orchestrator.Hooks{})
+
+	if err := o.HandlePhaseCompletion("feat-res", orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseResearch,
+		ResearchResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           2,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        terminalMarkdown,
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	assertLifecycleCall(t, lc, "CompleteResearch")
+	assertLifecycleCall(t, lc, "StartDesign")
+	reloaded := loadStoredFeature(t, fs, f.ID)
+	if got := reloaded.Artifacts["research"]; got != terminalMarkdown {
+		t.Fatalf("Artifacts[research] = %q, want %q", got, terminalMarkdown)
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ResearchSessionDoneNoOp(t *testing.T) {
+	stateDir := t.TempDir()
+	f := &feature.Feature{
+		ID:            "feat-res-session-done",
+		Status:        feature.StatusResearching,
+		CurrentPhase:  feature.PhaseResearch,
+		Pipeline:      feature.PipelineLarge,
 		ActiveRun:     1,
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	lc := lifecycleForFeature(f)
-	lc.CompleteResearchFn = func(id string) error { return nil }
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
 	fs := feature.NewStore(stateDir)
 	if err := fs.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
+	}
+	lc.GetFn = fs.Load
+	lc.CompleteResearchFn = func(id string) error {
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusDesignReady
+			return nil
+		})
 	}
 	writePhaseComplete(t, stateDir, f, "research")
 	writePhaseMarkdown(t, stateDir, f, "research", "research.md")
@@ -1365,14 +1440,81 @@ func TestOrchestrator_HandlePhaseCompletion_Research_Success(t *testing.T) {
 		Store:     fs,
 	}, orchestrator.Hooks{})
 
-	if err := o.HandlePhaseCompletion("feat-res", orchestrator.PhaseCompletionInput{
+	if err := o.HandlePhaseCompletion("feat-res-session-done", orchestrator.PhaseCompletionInput{
 		Phase:   feature.PhaseResearch,
 		Success: true,
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	assertLifecycleCall(t, lc, "CompleteResearch")
+	refuteLifecycleCall(t, lc, "CompleteResearch")
+	reloaded := loadStoredFeature(t, fs, f.ID)
+	if got := reloaded.Artifacts["research"]; got != "" {
+		t.Fatalf("Artifacts[research] = %q, want empty because loop result owns research completion", got)
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ResearchLoopFailures(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		wantType   string
+		wantFailed bool
+	}{
+		{name: "protocol", status: agent.BlockingLoopStatusProtocolViolation, wantType: feature.FailureProtocolViolation, wantFailed: true},
+		{name: "safety", status: agent.BlockingLoopStatusSafetyRail, wantType: feature.FailureSafetyRail, wantFailed: true},
+		{name: "failed", status: agent.BlockingLoopStatusFailed, wantType: feature.FailureInfrastructure, wantFailed: true},
+		{name: "interrupted", status: agent.BlockingLoopStatusInterrupted, wantFailed: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &feature.Feature{
+				ID:            "feat-res-" + tt.name,
+				Status:        feature.StatusResearching,
+				CurrentPhase:  feature.PhaseResearch,
+				Pipeline:      feature.PipelineLarge,
+				ActiveRun:     1,
+				RunCount:      1,
+				SchemaVersion: feature.SchemaVersionCurrent,
+			}
+			fs := feature.NewStore(t.TempDir())
+			if err := fs.Save(f); err != nil {
+				t.Fatalf("save feature: %v", err)
+			}
+			lc := lifecycleForFeature(f)
+			lc.GetFn = fs.Load
+			lc.MarkFailedFn = func(id, ft, msg string) error {
+				return fs.Modify(id, func(ff *feature.Feature) error {
+					ff.Status = feature.StatusFailed
+					ff.FailureType = ft
+					ff.LastError = msg
+					return nil
+				})
+			}
+			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+				Phase: feature.PhaseResearch,
+				ResearchResult: &agent.BlockingLoopResult{
+					FinalStatus: tt.status,
+					LastError:   "loop stopped",
+				},
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion() error = %v", err)
+			}
+
+			reloaded := loadStoredFeature(t, fs, f.ID)
+			if !tt.wantFailed {
+				if reloaded.Status == feature.StatusFailed {
+					t.Fatalf("Status = %s, want non-failed for interrupted loop", reloaded.Status)
+				}
+				return
+			}
+			if reloaded.FailureType != tt.wantType {
+				t.Fatalf("FailureType = %q, want %q", reloaded.FailureType, tt.wantType)
+			}
+		})
+	}
 }
 
 // Artifact phase failure: emits PhaseCompleted(err) and FeatureFailed.

@@ -593,6 +593,74 @@ func (o *Orchestrator) validateArtifactPhaseCompletionContract(
 }
 
 // ---------------------------------------------------------------------------
+// Research blocking-loop completion
+// ---------------------------------------------------------------------------
+
+func (o *Orchestrator) onResearchLoopDone(featureID string, result *agent.BlockingLoopResult) error {
+	f, err := o.deps.Lifecycle.Get(featureID)
+	if err != nil {
+		return fmt.Errorf("load feature: %w", err)
+	}
+	if isTerminalForCompletion(f) {
+		return nil
+	}
+	if result == nil {
+		errMsg := "research loop returned no result"
+		o.emitPhaseCompleted(featureID, feature.PhaseResearch, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+
+	switch result.FinalStatus {
+	case agent.BlockingLoopStatusSuccess:
+		return o.onResearchLoopSuccess(featureID, result)
+	case agent.BlockingLoopStatusInterrupted:
+		return nil
+	case agent.BlockingLoopStatusProtocolViolation:
+		return o.failResearchLoop(featureID, feature.FailureProtocolViolation, result.LastError)
+	case agent.BlockingLoopStatusSafetyRail:
+		return o.failResearchLoop(featureID, feature.FailureSafetyRail, result.LastError)
+	case agent.BlockingLoopStatusFailed:
+		return o.failResearchLoop(featureID, feature.FailureInfrastructure, result.LastError)
+	default:
+		errMsg := fmt.Sprintf("unknown research loop FinalStatus %q", result.FinalStatus)
+		o.emitPhaseCompleted(featureID, feature.PhaseResearch, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+}
+
+func (o *Orchestrator) onResearchLoopSuccess(featureID string, result *agent.BlockingLoopResult) error {
+	canonicalPath := strings.TrimSpace(result.CanonicalPath)
+	if canonicalPath == "" {
+		errMsg := "research loop completed without a canonical markdown artifact"
+		o.emitPhaseCompleted(featureID, feature.PhaseResearch, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+	}
+	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		if ff.Artifacts == nil {
+			ff.Artifacts = make(map[string]string)
+		}
+		ff.Artifacts["research"] = canonicalPath
+		return nil
+	}); err != nil {
+		return fmt.Errorf("record research artifact: %w", err)
+	}
+	if err := o.deps.Lifecycle.CompleteResearch(featureID); err != nil {
+		return fmt.Errorf("complete research: %w", err)
+	}
+	o.emitPhaseCompleted(featureID, feature.PhaseResearch, nil)
+	return o.advanceToNextPhase(featureID, feature.PhaseResearch)
+}
+
+func (o *Orchestrator) failResearchLoop(featureID, failureType, lastError string) error {
+	errMsg := strings.TrimSpace(lastError)
+	if errMsg == "" {
+		errMsg = "research loop failed"
+	}
+	o.emitPhaseCompleted(featureID, feature.PhaseResearch, errors.New(errMsg))
+	return o.markFailedWithEvent(featureID, failureType, errMsg)
+}
+
+// ---------------------------------------------------------------------------
 // Plan loop completion
 // ---------------------------------------------------------------------------
 

@@ -225,7 +225,7 @@ func (c *capturingPhaseRunner) capturedByPhase(want feature.Phase) []agent.Build
 // matches want.
 func (c *capturingPhaseRunner) startSessionsByPhase(want feature.Phase) []mocks.MockStartSessionCall {
 	var out []mocks.MockStartSessionCall
-	for _, call := range c.sm.StartSessionCalls {
+	for _, call := range c.sm.StartSessionCallsSnapshot() {
 		if call.Phase == want {
 			out = append(out, call)
 		}
@@ -433,8 +433,8 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 // the old table-driven test constructed the orchestrator with only
 // Lifecycle+Store, so no PhaseRunner context could be asserted.
 //
-// All three phases delegate to runInteractivePhase which calls BuildSession
-// synchronously; when StartFeature returns, capturedOpts is already populated.
+// Inquire and Design are blocking-loop phases; they dispatch asynchronously
+// and this test waits for the first BuildSession attempt.
 
 func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 	tests := []struct {
@@ -473,6 +473,11 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cpr := newCapturingPhaseRunner(t)
+			cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase,
+				command []string, workdir string, env []string,
+				opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+				return nil, session.ErrShuttingDown
+			}
 			f := &feature.Feature{
 				ID:           "feat-dispatch",
 				Status:       feature.StatusInterrupted,
@@ -481,7 +486,7 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 			}
 			tt.setup(t, f, cpr.stateDir)
 
-			lc := lifecycleForFeature(f)
+			lc := withStatusTransitions(lifecycleForFeature(f), f)
 			fs := newFeatureStore(f)
 			cpr.pr.FeatureStore = fs
 			o := orchestrator.New(orchestrator.Deps{
@@ -500,16 +505,16 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Sync(t *testing.T) {
 				t.Errorf("expected exactly one %s call; got %v", tt.wantTransition, lifecycleCallNames(lc))
 			}
 
-			captured := cpr.capturedByPhase(tt.phase)
+			captured := waitForCapturedPhase(t, cpr, tt.phase, time.Second)
 			if len(captured) == 0 {
 				t.Fatalf("BuildSession was not called with Phase=%v; all captures: %v",
 					tt.phase, cpr.capturedOpts)
 			}
 			// Confirm StartSession dispatch carried the same phase.
-			starts := cpr.startSessionsByPhase(tt.phase)
+			starts := waitForStartSessionPhase(t, cpr, tt.phase, time.Second)
 			if len(starts) == 0 {
 				t.Errorf("StartSession not called with Phase=%v; calls: %v",
-					tt.phase, cpr.sm.StartSessionCalls)
+					tt.phase, cpr.sm.StartSessionCallsSnapshot())
 			}
 			// FeatureID is plumbed end-to-end.
 			for _, s := range starts {
@@ -605,6 +610,18 @@ func waitForCapturedPhase(t *testing.T, cpr *capturingPhaseRunner, want feature.
 		time.Sleep(10 * time.Millisecond)
 	}
 	return cpr.capturedByPhase(want)
+}
+
+func waitForStartSessionPhase(t *testing.T, cpr *capturingPhaseRunner, want feature.Phase, timeout time.Duration) []mocks.MockStartSessionCall {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if got := cpr.startSessionsByPhase(want); len(got) > 0 {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return cpr.startSessionsByPhase(want)
 }
 
 func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Async(t *testing.T) {
@@ -744,6 +761,7 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Implement(t *testing.T) {
 
 func TestOrchestrator_StartFeature_InterruptedWithMissingCurrentPhase_FallsBackToFirstPhase(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
+	cpr.pr.SessionManager = nil
 
 	f := &feature.Feature{
 		ID:     "feat-corrupted",

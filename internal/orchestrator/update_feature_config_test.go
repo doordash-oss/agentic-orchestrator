@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -281,15 +282,18 @@ func TestUpdateFeatureConfig_NextAskUserAutoPickUsesEditedInquireness(t *testing
 		Inquireness:  feature.InquirenessHigh,
 	}
 	fs := newFeatureStore(f)
-	lc := lifecycleForFeature(f)
+	lc := withStatusTransitions(lifecycleForFeature(f), f)
 
-	var captured *session.SessionOpts
+	capturedCh := make(chan *session.SessionOpts, 1)
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		if len(opts) > 0 {
-			captured = opts[0]
+			select {
+			case capturedCh <- opts[0]:
+			default:
+			}
 		}
-		return newStubSessionHandle(id, featureID, phase, ""), nil
+		return nil, session.ErrShuttingDown
 	}
 
 	pr := agent.NewPhaseRunner(sm, fs, t.TempDir())
@@ -316,6 +320,11 @@ func TestUpdateFeatureConfig_NextAskUserAutoPickUsesEditedInquireness(t *testing
 	}
 	if err := o.StartFeature("feat-1"); err != nil {
 		t.Fatalf("StartFeature: %v", err)
+	}
+	var captured *session.SessionOpts
+	select {
+	case captured = <-capturedCh:
+	case <-time.After(time.Second):
 	}
 	if captured == nil || captured.AskUserAutoPick == nil {
 		t.Fatalf("StartFeature did not install AskUserAutoPick config: %+v", captured)

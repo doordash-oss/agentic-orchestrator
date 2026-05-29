@@ -2352,15 +2352,13 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 					artifactDir = filepath.Join(agent.ActiveRunDir(m.featureManager.Store.BaseDir, pf), phase.DirName())
 				}
 
-				// Save session output before stopping
-				if sess != nil && artifactDir != "" {
-					output := sess.MessageLog().Text()
-					_ = os.MkdirAll(artifactDir, 0o755)
-					_ = os.WriteFile(filepath.Join(artifactDir, "output.txt"), []byte(output), 0o644)
-				}
-
 				if registryOwnedSingleShotPhase(phase) {
 					if sess != nil {
+						if artifactDir != "" {
+							output := sess.MessageLog().Text()
+							_ = os.MkdirAll(artifactDir, 0o755)
+							_ = os.WriteFile(filepath.Join(artifactDir, "output.txt"), []byte(output), 0o644)
+						}
 						cost := agent.ExtractSessionCost(sess)
 						if cost.TotalCostUSD > 0 {
 							_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
@@ -2372,36 +2370,26 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 					return m.completeRegistryOwnedSingleShotPhase(fid, phase, evt.SessionID, sess)
 				}
 
-				// Capture cost from session's ResultMessage
-				if sess != nil {
-					cost := agent.ExtractSessionCost(sess)
-					if cost.TotalCostUSD > 0 {
-						_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
-							f.AddPhaseCost(phase.DirName(), cost.TotalCostUSD)
-							return nil
-						})
-					}
-				}
-
-				// Stop session gracefully in background
-				go func() {
+				if loopOwnedArtifactPhase(phase) {
 					if sess != nil {
-						_ = sess.Stop()
-					}
-				}()
-
-				// Directly advance the phase without waiting for session exit
-				return m, tea.Batch(
-					func() tea.Msg {
-						return PhaseCompletedMsg{
-							FeatureID: fid,
-							Phase:     phase,
-							SessionID: evt.SessionID,
-							Success:   true,
+						cost := agent.ExtractSessionCost(sess)
+						if cost.TotalCostUSD > 0 {
+							_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
+								f.AddPhaseCost(phase.DirName(), cost.TotalCostUSD)
+								return nil
+							})
 						}
-					},
-					m.listenForEvents(),
-				)
+					}
+					go func() {
+						if sess != nil {
+							_ = sess.Stop()
+						}
+					}()
+					return m, tea.Batch(
+						func() tea.Msg { return RefreshFeaturesMsg{} },
+						m.listenForEvents(),
+					)
+				}
 			}
 		}
 	}
@@ -2581,6 +2569,15 @@ func writeSessionQAFile(phase feature.Phase, sess session.SessionView, artifactD
 	_, _ = agent.WriteQAFile(sess.QALog(), artifactDir)
 }
 
+func loopOwnedArtifactPhase(phase feature.Phase) bool {
+	switch phase {
+	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
+		return true
+	default:
+		return false
+	}
+}
+
 // handleSessionDone processes session completion.
 func (m AppModel) handleSessionDone(msg SessionDoneTUIMsg) (tea.Model, tea.Cmd) {
 	done := msg.Done
@@ -2620,7 +2617,7 @@ func (m AppModel) handleSessionDone(msg SessionDoneTUIMsg) (tea.Model, tea.Cmd) 
 
 	// Clear any stale "waiting for input" help requests — session is done.
 	needsInput := false
-	if !registryOwnedSuccess {
+	if !registryOwnedSuccess && !(success && loopOwnedArtifactPhase(phase)) {
 		if f, err := m.featureManager.Get(fid); err == nil {
 			needsInput = phaseNeedsUserInput(m.featureManager.Store.BaseDir, f, phase, sess)
 		}
@@ -2655,6 +2652,13 @@ func (m AppModel) handleSessionDone(msg SessionDoneTUIMsg) (tea.Model, tea.Cmd) 
 				return nil
 			})
 		}
+	}
+
+	if loopOwnedArtifactPhase(phase) {
+		return m, tea.Batch(
+			func() tea.Msg { return RefreshFeaturesMsg{} },
+			m.listenForEvents(),
+		)
 	}
 
 	if registryOwnedSuccess {
@@ -6962,7 +6966,7 @@ func phaseArtifactDir(baseDir string, f *feature.Feature, phase feature.Phase, s
 
 func registryOwnedSingleShotPhase(phase feature.Phase) bool {
 	switch phase {
-	case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseDesign:
+	case feature.PhaseKnowledgeBase:
 		return true
 	default:
 		return false

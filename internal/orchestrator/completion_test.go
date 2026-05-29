@@ -170,10 +170,14 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) 
 			{Name: "repo-b", Path: "/tmp/repo-b"},
 		},
 	}
+	fs := feature.NewStore(stateDir)
+	if err := fs.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
 	lc := lifecycleForFeature(f)
+	lc.GetFn = fs.Load
 	lc.AllKBsCompletedFn = func(id string) (bool, error) { return false, nil }
 	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
-	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
@@ -240,11 +244,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 		return newStubSessionHandle(id, featureID, phase, ""), nil
 	}
 	pr := &agent.PhaseRunner{
-		StateDir:       stateDir,
-		SessionManager: sm,
-		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			return nil, nil, &ports.SessionOpts{}, nil
-		},
+		StateDir: stateDir,
 	}
 
 	var phaseCompletedFeatureID string
@@ -722,12 +722,10 @@ type artifactPhaseCase struct {
 }
 
 func artifactPhaseCases() []artifactPhaseCase {
-	return []artifactPhaseCase{
-		{"inquire", feature.PhaseInquire, "inquire", "inquire", feature.StatusInquiring},
-		// The Design phase keeps the legacy "design" on-disk subdir for
-		// compat but persists under the canonical Design artifact key.
-		{"design", feature.PhaseDesign, "design", feature.DesignArtifactKey, feature.StatusDesigning},
-	}
+	// Inquire and Design are blocking-loop phases now. The old single-shot
+	// artifact completion retry path intentionally has no callers left for
+	// these phases.
+	return nil
 }
 
 func newArtifactPhaseOrchestratorFixture(t *testing.T, tc artifactPhaseCase) (*orchestrator.Orchestrator, *feature.Feature, *feature.Store) {
@@ -821,6 +819,19 @@ func writePhaseMarkdown(t *testing.T, stateDir string, f *feature.Feature, phase
 		t.Fatalf("write phase markdown: %v", err)
 	}
 	return path
+}
+
+func writeLoopTerminalMarkdown(t *testing.T, stateDir string, f *feature.Feature, phaseKey, name string) (string, string) {
+	t.Helper()
+	terminalDir := filepath.Join(agent.ActiveRunDir(stateDir, f), phaseKey, "iteration-01")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
+		t.Fatalf("mkdir loop terminal dir: %v", err)
+	}
+	path := filepath.Join(terminalDir, name)
+	if err := os.WriteFile(path, []byte("# "+phaseKey+"\n"), 0o644); err != nil {
+		t.Fatalf("write loop terminal markdown: %v", err)
+	}
+	return terminalDir, path
 }
 
 func setOlderModTime(t *testing.T, path string) {
@@ -1294,22 +1305,36 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
+	fs := feature.NewStore(stateDir)
+	if err := fs.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
 	lc := lifecycleForFeature(f)
+	lc.GetFn = fs.Load
 	// CompleteInquire moves to InquireReady (mirrors real manager.go:262).
 	// StartResearch then transitions to Researching. Having CompleteInquire
 	// skip straight to Researching would cause startResearch's idempotent
 	// guard to bypass the StartResearch transition.
 	lc.CompleteInquireFn = func(id string) error {
-		f.Status = feature.StatusInquireReady
-		return nil
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusInquireReady
+			return nil
+		})
 	}
-	lc.StartResearchFn = func(id string) error { f.Status = feature.StatusResearching; return nil }
-	fs := feature.NewStore(stateDir)
-	if err := fs.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
+	lc.StartResearchFn = func(id string) error {
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusResearching
+			return nil
+		})
 	}
-	writePhaseComplete(t, stateDir, f, "inquire")
-	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
+	terminalDir := filepath.Join(agent.ActiveRunDir(stateDir, f), "inquire", "iteration-01")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
+		t.Fatalf("mkdir terminal dir: %v", err)
+	}
+	terminalMarkdown := filepath.Join(terminalDir, "inquire.md")
+	if err := os.WriteFile(terminalMarkdown, []byte("# inquire\n"), 0o644); err != nil {
+		t.Fatalf("write terminal markdown: %v", err)
+	}
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
@@ -1320,8 +1345,13 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.
 	})
 
 	if err := o.HandlePhaseCompletion("feat-inq", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        terminalMarkdown,
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
@@ -1388,6 +1418,9 @@ func TestOrchestrator_HandlePhaseCompletion_ResearchLoopSuccess(t *testing.T) {
 		Lifecycle: lc,
 		Store:     fs,
 	}, orchestrator.Hooks{})
+	o.SetRunDesignLoopFn(func(*feature.Feature, string, []string, ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+		return nil, nil
+	})
 
 	if err := o.HandlePhaseCompletion("feat-res", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseResearch,
@@ -1517,7 +1550,7 @@ func TestOrchestrator_HandlePhaseCompletion_ResearchLoopFailures(t *testing.T) {
 	}
 }
 
-// Artifact phase failure: emits PhaseCompleted(err) and FeatureFailed.
+// Inquire loop failure: emits PhaseCompleted(err) and FeatureFailed.
 func TestOrchestrator_HandlePhaseCompletion_Inquire_Failure(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-inq-fail",
@@ -1535,15 +1568,17 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Failure(t *testing.T) {
 	})
 
 	if err := o.HandlePhaseCompletion("feat-inq-fail", orchestrator.PhaseCompletionInput{
-		Phase:       feature.PhaseInquire,
-		Success:     false,
-		ErrorDetail: "inquire broke",
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus: agent.BlockingLoopStatusFailed,
+			LastError:   "inquire broke",
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if failureType != feature.FailureSessionCrash {
-		t.Errorf("failure type = %q, want %q", failureType, feature.FailureSessionCrash)
+	if failureType != feature.FailureInfrastructure {
+		t.Errorf("failure type = %q, want %q", failureType, feature.FailureInfrastructure)
 	}
 	events := drainEvents(o)
 	if !hasEventType(events, ports.FeatureFailed) {
@@ -1564,8 +1599,12 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Terminal(t *testing.T) {
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-inq-zmb", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			Iterations:    1,
+			CanonicalPath: "/tmp/inquire.md",
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
@@ -2430,13 +2469,11 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_UnknownStatus_Fails(t *testing.
 }
 
 // ---------------------------------------------------------------------------
-// Smoke: QA file is written by artifact phase completion for inquire/research.
+// Smoke: Inquire loop completion records the terminal iteration artifact.
 // ---------------------------------------------------------------------------
 
 // The test creates the phase state dir under a temp state dir so
-// onArtifactPhaseCompleted's writeQAFile call does not error; we only verify
-// the handler completes without panicking. A full QA write check would need
-// a real session manager with QALog data.
+// the handler completes without panicking.
 func TestOrchestrator_HandlePhaseCompletion_Inquire_PhaseDirCreated(t *testing.T) {
 	tmpStateDir := t.TempDir()
 	featureID := "feat-inq-dir"
@@ -2452,17 +2489,11 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_PhaseDirCreated(t *testing.T
 		// PhaseRunner/model registry).
 		Checkpoints: feature.Checkpoints{InquiryReview: true},
 	}
-	// Route the phase dir through the run-aware path the completion handler
-	// now uses — runs/run-001/inquire/.
-	phaseDir := filepath.Join(agent.ActiveRunDir(tmpStateDir, f), "inquire")
-	if err := os.MkdirAll(phaseDir, 0o755); err != nil {
+	terminalDir := filepath.Join(agent.ActiveRunDir(tmpStateDir, f), "inquire", "iteration-01")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
-	// Write an artifact so registry validation discovers it.
-	artifactPath := filepath.Join(phaseDir, "inquire.md")
+	artifactPath := filepath.Join(terminalDir, "inquire.md")
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
@@ -2476,8 +2507,13 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_PhaseDirCreated(t *testing.T
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        artifactPath,
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}

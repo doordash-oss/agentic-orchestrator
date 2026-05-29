@@ -181,11 +181,10 @@ func TestRunPhasePlanning_HighInquireness_GrillMePromptInvariant(t *testing.T) {
 //	(i) the test pre-writes a stale qa-answers.md at the canonical phase
 //	    directory;
 //	(ii) drives HandlePhaseCompletion with the input shape the production
-//	    code uses for that phase (SessionID-based for Design, PlanResult-
-//	    based for Roadmap and Phase-Plan);
-//	(iii) asserts Design is replaced from the session Q&A log, while
-//	    Roadmap and Phase-Plan preserve transcripts already written by their
-//	    planner loops;
+//	    code uses for that phase (BlockingLoopResult-based for Design,
+//	    PlanResult-based for Roadmap and Phase-Plan);
+//	(iii) asserts all three preserve transcripts already written by their
+//	    producer loops;
 //	(iv) for Design and Roadmap (which have downstream consumers of
 //	    collectQAFilePaths), asserts the path is surfaced to the next phase.
 //
@@ -197,7 +196,7 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 		name             string
 		phaseDirRel      func(stateDir string, f *feature.Feature) string
 		setupFeature     func() *feature.Feature
-		invoke           func(t *testing.T, o *Orchestrator, featureID string)
+		invoke           func(t *testing.T, o *Orchestrator, f *feature.Feature, phaseDir, artifactPath string)
 		wantQAFile       string
 		assertCollectQA  bool
 		expectedQAPathFn func(stateDir string, f *feature.Feature) string
@@ -223,16 +222,21 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 					},
 				}
 			},
-			invoke: func(t *testing.T, o *Orchestrator, featureID string) {
-				if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-					Phase:     feature.PhaseDesign,
-					SessionID: "sess-1",
-					Success:   true,
+			invoke: func(t *testing.T, o *Orchestrator, f *feature.Feature, phaseDir, artifactPath string) {
+				terminalDir := filepath.Dir(artifactPath)
+				if err := o.HandlePhaseCompletion(f.ID, PhaseCompletionInput{
+					Phase: feature.PhaseDesign,
+					DesignResult: &agent.BlockingLoopResult{
+						FinalStatus:          agent.BlockingLoopStatusSuccess,
+						Iterations:           1,
+						TerminalIterationDir: terminalDir,
+						CanonicalPath:        artifactPath,
+					},
 				}); err != nil {
 					t.Fatalf("HandlePhaseCompletion design: %v", err)
 				}
 			},
-			wantQAFile:      sampleHarnessOwnedQA,
+			wantQAFile:      fanoutQAFile,
 			assertCollectQA: true,
 			expectedQAPathFn: func(stateDir string, f *feature.Feature) string {
 				return filepath.Join(agent.ActiveRunDir(stateDir, f), "design", "qa-answers.md")
@@ -260,8 +264,8 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 					},
 				}
 			},
-			invoke: func(t *testing.T, o *Orchestrator, featureID string) {
-				if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
+			invoke: func(t *testing.T, o *Orchestrator, f *feature.Feature, phaseDir, artifactPath string) {
+				if err := o.HandlePhaseCompletion(f.ID, PhaseCompletionInput{
 					Phase:      feature.PhasePlan,
 					PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
 				}); err != nil {
@@ -296,8 +300,8 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 					},
 				}
 			},
-			invoke: func(t *testing.T, o *Orchestrator, featureID string) {
-				if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
+			invoke: func(t *testing.T, o *Orchestrator, f *feature.Feature, phaseDir, artifactPath string) {
+				if err := o.HandlePhaseCompletion(f.ID, PhaseCompletionInput{
 					Phase:      feature.PhasePlan,
 					PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
 				}); err != nil {
@@ -319,7 +323,14 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 				t.Fatalf("mkdir phaseDir: %v", err)
 			}
 			// Drop a stand-in artifact so phase-completion routing finds one.
-			artifactPath := filepath.Join(phaseDir, tc.name+".md")
+			artifactDir := phaseDir
+			if tc.name == "design" {
+				artifactDir = filepath.Join(phaseDir, "iteration-01")
+				if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+					t.Fatalf("mkdir terminal artifact dir: %v", err)
+				}
+			}
+			artifactPath := filepath.Join(artifactDir, tc.name+".md")
 			if err := os.WriteFile(artifactPath, []byte("# "+tc.name+"\n"), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
@@ -338,7 +349,7 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 
 			o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
 
-			tc.invoke(t, o, f.ID)
+			tc.invoke(t, o, f, phaseDir, artifactPath)
 
 			got, err := os.ReadFile(qaPath)
 			if err != nil {
@@ -435,14 +446,11 @@ func TestGrillMeFanout_StartPaths_DriveEntryPath(t *testing.T) {
 				f.Artifacts["research"] = researchPath
 			},
 			invoke: func(t *testing.T, o *Orchestrator, f *feature.Feature) {
-				if _, err := o.startDesign(f.ID); err == nil {
-					// startDesign fans through PhaseRunner.RunDesign,
-					// which returns the BuildSessionFn error. A nil error
-					// means the capture path was not exercised.
-					t.Fatalf("expected startDesign to surface BuildSession ErrShuttingDown")
+				if _, err := o.startDesign(f.ID); err != nil {
+					t.Fatalf("startDesign synchronous failure: %v", err)
 				}
 			},
-			expectDispatchFail: false,
+			expectDispatchFail: true,
 			mustContain: []string{
 				"## Ambiguity Resolution [grill-me]",
 			},

@@ -45,6 +45,7 @@ type BlockingLoopPromptInput struct {
 	IterationDir          string
 	HandoffPath           string
 	SeededCanonicalPath   string
+	SeededQAPath          string
 	PreviousCanonicalPath string
 }
 
@@ -62,6 +63,7 @@ type BlockingLoopRunResult struct {
 	Handoff  contextSnapshot
 	Cost     SessionCost
 	ExitCode int
+	QALog    []ports.QAPair
 }
 
 // BlockingLoopConfig parameterizes a fresh-session blocking phase loop.
@@ -103,6 +105,7 @@ type BlockingLoopConfig struct {
 	MaxConsecNoProgress         int
 	MaxConsecFailures           int
 	MaxConsecProtocolViolations int
+	AccumulateQALog             bool
 
 	SessionIDBase string
 	TelemetryRole string
@@ -117,6 +120,7 @@ type BlockingLoopResult struct {
 	LastError            string
 	TerminalIterationDir string
 	CanonicalPath        string
+	QALog                []ports.QAPair
 }
 
 // SelectNewestNonExcludedMarkdown returns the newest markdown file in dir
@@ -146,15 +150,31 @@ func RunBlockingLoop(ctx context.Context, cfg BlockingLoopConfig, sm ports.Sessi
 	if err != nil {
 		return nil, err
 	}
+	var qaLog []ports.QAPair
+	if cfg.AccumulateQALog {
+		var err error
+		qaLog, err = recoverBlockingLoopQALog(cfg, am, startIter)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if startIter > 0 {
 		iterDir := blockingLoopIterationDir(cfg.ArtifactDir, startIter)
 		if meta, err := am.ReadMeta(iterDir); err == nil && meta.AgentStatus == agentStatusSuccess && meta.ReviewStatus == HelperHandoffComplete.String() {
 			canonical, _ := cfg.CanonicalSelector(iterDir)
+			if cfg.AccumulateQALog {
+				if len(qaLog) > 0 {
+					if _, err := WriteQAFile(qaLog, cfg.ArtifactDir); err != nil {
+						return nil, fmt.Errorf("writing blocking loop phase-root qa file: %w", err)
+					}
+				}
+			}
 			return &BlockingLoopResult{
 				FinalStatus:          BlockingLoopStatusSuccess,
 				Iterations:           startIter,
 				TerminalIterationDir: iterDir,
 				CanonicalPath:        canonical,
+				QALog:                qaLog,
 			}, nil
 		}
 	}
@@ -178,11 +198,21 @@ func RunBlockingLoop(ctx context.Context, cfg BlockingLoopConfig, sm ports.Sessi
 		if err != nil {
 			return nil, err
 		}
+		var seededQAPath string
+		if cfg.AccumulateQALog {
+			if err := seedBlockingLoopQA(iterDir, qaLog); err != nil {
+				return nil, err
+			}
+			if len(qaLog) > 0 {
+				seededQAPath = filepath.Join(iterDir, "qa-answers.md")
+			}
+		}
 		prompt, err := buildBlockingLoopPrompt(cfg, BlockingLoopPromptInput{
 			Iteration:             iteration,
 			IterationDir:          iterDir,
 			HandoffPath:           filepath.Join(iterDir, cfg.HandoffFilename),
 			SeededCanonicalPath:   seededPath,
+			SeededQAPath:          seededQAPath,
 			PreviousCanonicalPath: previousPath,
 		})
 		if err != nil {
@@ -201,6 +231,14 @@ func RunBlockingLoop(ctx context.Context, cfg BlockingLoopConfig, sm ports.Sessi
 				return &BlockingLoopResult{FinalStatus: BlockingLoopStatusInterrupted, Iterations: iteration - 1, LastError: err.Error()}, nil
 			}
 			return nil, err
+		}
+		if cfg.AccumulateQALog {
+			qaLog = appendUniqueQAPairs(qaLog, runResult.QALog...)
+			if len(qaLog) > 0 {
+				if _, err := WriteQAFile(qaLog, iterDir); err != nil {
+					return nil, fmt.Errorf("writing blocking loop iteration qa file: %w", err)
+				}
+			}
 		}
 
 		status := strings.TrimSpace(runResult.Status)
@@ -296,11 +334,17 @@ func RunBlockingLoop(ctx context.Context, cfg BlockingLoopConfig, sm ports.Sessi
 		}
 
 		if parsed.State == HelperHandoffComplete {
+			if cfg.AccumulateQALog && len(qaLog) > 0 {
+				if _, err := WriteQAFile(qaLog, cfg.ArtifactDir); err != nil {
+					return nil, fmt.Errorf("writing blocking loop phase-root qa file: %w", err)
+				}
+			}
 			return &BlockingLoopResult{
 				FinalStatus:          BlockingLoopStatusSuccess,
 				Iterations:           iteration,
 				TerminalIterationDir: iterDir,
 				CanonicalPath:        canonicalPath,
+				QALog:                qaLog,
 			}, nil
 		}
 		if !madeProgress && tracker.NoProgressCount() >= cfg.MaxConsecNoProgress {
@@ -435,6 +479,63 @@ func recoverBlockingLoopCounters(cfg BlockingLoopConfig, am *ArtifactManager, la
 	return consecutiveFailures, consecutiveProtocol, nil
 }
 
+func recoverBlockingLoopQALog(cfg BlockingLoopConfig, am *ArtifactManager, latest int) ([]ports.QAPair, error) {
+	var qaLog []ports.QAPair
+	for i := 1; i <= latest; i++ {
+		iterDir := blockingLoopIterationDir(cfg.ArtifactDir, i)
+		if _, err := am.ReadMeta(iterDir); err != nil {
+			continue
+		}
+		pairs, err := ReadQAFile(filepath.Join(iterDir, "qa-answers.md"))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		qaLog = appendUniqueQAPairs(qaLog, pairs...)
+	}
+	return qaLog, nil
+}
+
+func seedBlockingLoopQA(iterDir string, qaLog []ports.QAPair) error {
+	path := filepath.Join(iterDir, "qa-answers.md")
+	if len(qaLog) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing stale blocking loop qa file: %w", err)
+		}
+		return nil
+	}
+	if _, err := WriteQAFile(qaLog, iterDir); err != nil {
+		return fmt.Errorf("seeding blocking loop qa file: %w", err)
+	}
+	return nil
+}
+
+func appendUniqueQAPairs(existing []ports.QAPair, incoming ...ports.QAPair) []ports.QAPair {
+	if len(incoming) == 0 {
+		return existing
+	}
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	for _, pair := range existing {
+		seen[qaPairKey(pair)] = struct{}{}
+	}
+	out := append([]ports.QAPair(nil), existing...)
+	for _, pair := range incoming {
+		key := qaPairKey(pair)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, pair)
+	}
+	return out
+}
+
+func qaPairKey(pair ports.QAPair) string {
+	return fmt.Sprintf("%s\x00%s\x00%s\x00%t\x00%.12g", pair.Question, pair.Answer, pair.Notes, pair.AutoPicked, pair.Confidence)
+}
+
 func prepareBlockingLoopIteration(cfg BlockingLoopConfig, iterDir string, iteration int) (string, string, error) {
 	RemovePhaseComplete(iterDir)
 	_ = os.Remove(filepath.Join(iterDir, cfg.HandoffFilename))
@@ -537,6 +638,7 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 	if pidDir == "" && cfg.FeatureID != "" {
 		pidDir = filepath.Join(filepath.Dir(cfg.ArtifactDir), cfg.FeatureID)
 	}
+	sessionCtx := blockingLoopSessionContext(cfg)
 	command, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         in.Prompt,
@@ -553,10 +655,23 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 	if err != nil {
 		return BlockingLoopRunResult{}, fmt.Errorf("building %s session: %w", cfg.Label, err)
 	}
+	if sessOpts == nil {
+		sessOpts = &ports.SessionOpts{}
+	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
 	WriteDebugPrompts(in.IterationDir, sessOpts.DebugSystemPrompt, in.Prompt)
 	sessOpts.Iteration = in.Iteration
 	sessOpts.PermCacheScope = ""
+	sessOpts.AskUserAutoPick = askUserAutoPickConfig(
+		cfg.FeatureStore,
+		cfg.Observer,
+		cfg.Feature,
+		interactiveAutoPickPurpose(cfg.Phase),
+		sessionCtx,
+		in.SessionID,
+		"",
+		in.Iteration,
+	)
 
 	sess, err := sm.StartSession(in.SessionID, cfg.FeatureID, cfg.Phase, command, workDir, env, sessOpts)
 	if err != nil {
@@ -567,7 +682,6 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 	}
 
 	sessionStart := time.Now()
-	sessionCtx := blockingLoopSessionContext(cfg)
 	providerName := ""
 	if sessOpts != nil {
 		providerName = sessOpts.ProviderName
@@ -624,6 +738,7 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 		Handoff:  waitResult.Handoff,
 		Cost:     cost,
 		ExitCode: exitCodeFromAgentStatus(waitResult.Status),
+		QALog:    sess.QALog(),
 	}, nil
 }
 

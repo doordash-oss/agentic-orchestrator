@@ -88,7 +88,9 @@ type PhaseCompletionInput struct {
 	ErrorDetail string
 
 	PlanResult      *agent.PlanLoopResult
+	InquireResult   *agent.BlockingLoopResult
 	ResearchResult  *agent.BlockingLoopResult
+	DesignResult    *agent.BlockingLoopResult
 	ImplementResult *agent.LoopResult
 	MultiRepoResult *agent.OrchestratorResult
 }
@@ -271,12 +273,30 @@ type Orchestrator struct {
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.LoopResult, error)
 
+	// runInquireLoopFn is a test seam over PhaseRunner.RunInquireLoop.
+	// Production uses the generic blocking loop so per-iteration Inquire
+	// session-done events never advance the phase by themselves.
+	runInquireLoopFn func(
+		f *feature.Feature,
+		kbInfos ...agent.KBInfo,
+	) (chan *agent.BlockingLoopResult, error)
+
 	// runResearchLoopFn is a test seam over PhaseRunner.RunResearchLoop.
 	// Production uses the generic blocking loop so per-iteration Research
 	// session-done events never advance the phase by themselves.
 	runResearchLoopFn func(
 		f *feature.Feature,
 		questionsPath string,
+		kbInfos ...agent.KBInfo,
+	) (chan *agent.BlockingLoopResult, error)
+
+	// runDesignLoopFn is a test seam over PhaseRunner.RunDesignLoop.
+	// Production uses the generic blocking loop so per-iteration Design
+	// session-done events never advance the phase by themselves.
+	runDesignLoopFn func(
+		f *feature.Feature,
+		researchPath string,
+		qaFilePaths []string,
 		kbInfos ...agent.KBInfo,
 	) (chan *agent.BlockingLoopResult, error)
 
@@ -296,6 +316,15 @@ func (o *Orchestrator) SetRunImplementationFn(fn func(
 	o.runImplementationFn = fn
 }
 
+// SetRunInquireLoopFn installs a test seam that intercepts
+// PhaseRunner.RunInquireLoop dispatch. Intended for tests only.
+func (o *Orchestrator) SetRunInquireLoopFn(fn func(
+	f *feature.Feature,
+	kbInfos ...agent.KBInfo,
+) (chan *agent.BlockingLoopResult, error)) {
+	o.runInquireLoopFn = fn
+}
+
 // SetRunResearchLoopFn installs a test seam that intercepts
 // PhaseRunner.RunResearchLoop dispatch. Intended for tests only.
 func (o *Orchestrator) SetRunResearchLoopFn(fn func(
@@ -304,6 +333,17 @@ func (o *Orchestrator) SetRunResearchLoopFn(fn func(
 	kbInfos ...agent.KBInfo,
 ) (chan *agent.BlockingLoopResult, error)) {
 	o.runResearchLoopFn = fn
+}
+
+// SetRunDesignLoopFn installs a test seam that intercepts
+// PhaseRunner.RunDesignLoop dispatch. Intended for tests only.
+func (o *Orchestrator) SetRunDesignLoopFn(fn func(
+	f *feature.Feature,
+	researchPath string,
+	qaFilePaths []string,
+	kbInfos ...agent.KBInfo,
+) (chan *agent.BlockingLoopResult, error)) {
+	o.runDesignLoopFn = fn
 }
 
 // New creates an Orchestrator. The eventCh is a bounded buffer (256).
@@ -825,10 +865,19 @@ func (o *Orchestrator) startInquire(featureID string) (PhaseStartResult, error) 
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		if _, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run inquire: %w", err)
+	runInquireLoop := o.runInquireLoopFn
+	if runInquireLoop == nil {
+		if o.deps.PhaseRunner == nil || o.deps.PhaseRunner.SessionManager == nil {
+			return PhaseStartResult{Outcome: PhaseStarted}, nil
 		}
+		runInquireLoop = o.deps.PhaseRunner.RunInquireLoop
+	}
+	resultCh, err := runInquireLoop(f, kbInfos...)
+	if err != nil {
+		return PhaseStartResult{}, fmt.Errorf("run inquire loop: %w", err)
+	}
+	if resultCh != nil {
+		go o.dispatchInquireLoopResult(featureID, resultCh)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
@@ -909,10 +958,19 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		if _, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run design: %w", err)
+	runDesignLoop := o.runDesignLoopFn
+	if runDesignLoop == nil {
+		if o.deps.PhaseRunner == nil || o.deps.PhaseRunner.SessionManager == nil {
+			return PhaseStartResult{Outcome: PhaseStarted}, nil
 		}
+		runDesignLoop = o.deps.PhaseRunner.RunDesignLoop
+	}
+	resultCh, err := runDesignLoop(f, researchPath, qaFilePaths, kbInfos...)
+	if err != nil {
+		return PhaseStartResult{}, fmt.Errorf("run design loop: %w", err)
+	}
+	if resultCh != nil {
+		go o.dispatchDesignLoopResult(featureID, resultCh)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
@@ -985,6 +1043,32 @@ func (o *Orchestrator) dispatchResearchLoopResult(featureID string, resultCh <-c
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
 		Phase:          feature.PhaseResearch,
 		ResearchResult: result,
+	}); err != nil {
+		o.surfaceDispatchCompletionError(featureID, err)
+	}
+}
+
+func (o *Orchestrator) dispatchInquireLoopResult(featureID string, resultCh <-chan *agent.BlockingLoopResult) {
+	result, ok := <-resultCh
+	if !ok {
+		return
+	}
+	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
+		Phase:         feature.PhaseInquire,
+		InquireResult: result,
+	}); err != nil {
+		o.surfaceDispatchCompletionError(featureID, err)
+	}
+}
+
+func (o *Orchestrator) dispatchDesignLoopResult(featureID string, resultCh <-chan *agent.BlockingLoopResult) {
+	result, ok := <-resultCh
+	if !ok {
+		return
+	}
+	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
+		Phase:        feature.PhaseDesign,
+		DesignResult: result,
 	}); err != nil {
 		o.surfaceDispatchCompletionError(featureID, err)
 	}
@@ -1366,17 +1450,20 @@ func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseComple
 	case feature.PhaseKnowledgeBase:
 		return o.onKBCompleted(featureID, input)
 	case feature.PhaseInquire:
-		return o.onArtifactPhaseCompleted(featureID, input, "inquire", o.deps.Lifecycle.CompleteInquire)
+		if input.InquireResult == nil {
+			return nil
+		}
+		return o.onInquireLoopDone(featureID, input.InquireResult)
 	case feature.PhaseResearch:
 		if input.ResearchResult == nil {
 			return nil
 		}
 		return o.onResearchLoopDone(featureID, input.ResearchResult)
 	case feature.PhaseDesign:
-		// Validate against the legacy "design" on-disk subdirectory but
-		// persist the canonical Design artifact key so downstream consumers
-		// resolve it through feature.Feature.DesignArtifactPath().
-		return o.onArtifactPhaseCompletedWithKey(featureID, input, "design", feature.DesignArtifactKey, o.deps.Lifecycle.CompleteDesign)
+		if input.DesignResult == nil {
+			return nil
+		}
+		return o.onDesignLoopDone(featureID, input.DesignResult)
 	case feature.PhasePlan:
 		return o.onPlanLoopDone(featureID, input.PlanResult)
 	case feature.PhaseImplement:

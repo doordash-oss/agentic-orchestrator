@@ -1602,14 +1602,14 @@ func assertTUIArtifactPhaseRetry(t *testing.T, fm *feature.Manager, f *feature.F
 	}
 }
 
-func assertTUIResearchSessionEventNoOps(t *testing.T, fm *feature.Manager, f *feature.Feature) {
+func assertTUILoopOwnedArtifactSessionEventNoOps(t *testing.T, fm *feature.Manager, f *feature.Feature, phase feature.Phase) {
 	t.Helper()
 	updated, err := fm.Get(f.ID)
 	if err != nil {
 		t.Fatalf("get feature: %v", err)
 	}
-	if updated.Status != feature.StatusResearching {
-		t.Fatalf("status = %v, want %v", updated.Status, feature.StatusResearching)
+	if updated.Status != statusForPhase(phase) {
+		t.Fatalf("status = %v, want %v", updated.Status, statusForPhase(phase))
 	}
 	if updated.FailureType != "" {
 		t.Fatalf("FailureType = %q, want empty", updated.FailureType)
@@ -1617,13 +1617,13 @@ func assertTUIResearchSessionEventNoOps(t *testing.T, fm *feature.Manager, f *fe
 	if updated.LastError != "" {
 		t.Fatalf("LastError = %q, want empty", updated.LastError)
 	}
-	phaseDir := filepath.Join(agent.ActiveRunDir(fm.Store.BaseDir, updated), feature.PhaseResearch.DirName())
+	phaseDir := filepath.Join(agent.ActiveRunDir(fm.Store.BaseDir, updated), phase.DirName())
 	sidecar, err := agent.ReadProtocolRetrySidecar(phaseDir)
 	if err != nil {
 		t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
 	}
 	if sidecar != nil {
-		t.Fatalf("retry sidecar = %#v, want nil for loop-owned Research session event", sidecar)
+		t.Fatalf("retry sidecar = %#v, want nil for loop-owned %s session event", sidecar, phase)
 	}
 }
 
@@ -1674,7 +1674,7 @@ func TestHandleSDKEvent_ResearchSuccessWithoutArtifactNoOps(t *testing.T) {
 
 	_, _ = app.handleSDKEvent(msg)
 
-	assertTUIResearchSessionEventNoOps(t, fm, f)
+	assertTUILoopOwnedArtifactSessionEventNoOps(t, fm, f, feature.PhaseResearch)
 }
 
 func TestPhaseOutputSuggestsQuestion_MultilineAssistantQuestionStillDetected(t *testing.T) {
@@ -1827,7 +1827,7 @@ func TestHandleTick_PendingAskUserQuestionReplacesGenericWaitingHelp(t *testing.
 	}
 }
 
-func TestHandleSessionDone_RegistryOwnedSuccessDoesNotCreateQuestionHelp(t *testing.T) {
+func TestHandleSessionDone_LoopOwnedInquireSuccessDoesNotCreateQuestionHelp(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.eventCh = make(chan interface{}, 1)
@@ -1870,7 +1870,7 @@ func TestHandleSessionDone_RegistryOwnedSuccessDoesNotCreateQuestionHelp(t *test
 	if f.Status != feature.StatusInquiring {
 		t.Errorf("status = %v, want Inquiring", f.Status)
 	}
-	assertTUIArtifactPhaseRetry(t, fm, f, feature.PhaseInquire, agent.PhaseCompleteFile)
+	assertTUILoopOwnedArtifactSessionEventNoOps(t, fm, f, feature.PhaseInquire)
 	assertNoPendingQuestionHelp(t, f)
 }
 
@@ -1915,7 +1915,7 @@ func TestHandleSessionDone_ResearchSuccessWithoutArtifactNoOps(t *testing.T) {
 
 	_, _ = app.handleSessionDone(doneMsg)
 
-	assertTUIResearchSessionEventNoOps(t, fm, f)
+	assertTUILoopOwnedArtifactSessionEventNoOps(t, fm, f, feature.PhaseResearch)
 }
 
 func TestPublishDescGeneratedForwarded(t *testing.T) {
@@ -2916,8 +2916,8 @@ func TestHelpOverlayBlocksQuit(t *testing.T) {
 
 // TestHandleSessionDone_SDKFailureOverridesCleanExit verifies that a clean
 // process exit (SessionDone) combined with an SDK result indicating failure
-// produces a PhaseCompletedMsg with Success=false, which in turn marks the
-// feature as Failed rather than advancing it.
+// produces a PhaseCompletedMsg with Success=false, which in turn marks a
+// registry-owned single-shot phase as Failed rather than advancing it.
 func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 	app, fm := newTestAppModel(t)
 
@@ -2926,14 +2926,14 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	_ = fm.Store.Modify(f.ID, func(f *feature.Feature) error {
-		f.Status = feature.StatusInquiring
-		f.CurrentPhase = feature.PhaseInquire
+		f.Status = feature.StatusBuildingKB
+		f.CurrentPhase = feature.PhaseKnowledgeBase
 		return nil
 	})
 
 	// Create a session with FAILED in StatusCh (simulates max_turns, error, etc.).
 	sm := session.NewManager(nil)
-	sess := session.NewSession(f.ID+"-inquire", f.ID, feature.PhaseInquire)
+	sess := session.NewSession(f.ID+"-kb", f.ID, feature.PhaseKnowledgeBase)
 	sess.SendStatus("FAILED")
 	sm.RegisterTestSession(sess)
 	app.sessionManager = sm
@@ -2944,8 +2944,8 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 	// PhaseCompletedMsg{Success: false}. Feed that through handlePhaseCompleted.
 	pcm := PhaseCompletedMsg{
 		FeatureID: f.ID,
-		Phase:     feature.PhaseInquire,
-		SessionID: f.ID + "-inquire",
+		Phase:     feature.PhaseKnowledgeBase,
+		SessionID: f.ID + "-kb",
 		Success:   false, // this is what the fixed handleSessionDone produces
 	}
 	app.handlePhaseCompleted(pcm)
@@ -2953,7 +2953,7 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 	// Feature should be Failed (not advanced past Inquire).
 	updated, _ := fm.Get(f.ID)
 	if updated.Status != feature.StatusFailed {
-		t.Errorf("feature status = %v, want Failed (SDK FAILED should not advance inquire)", updated.Status)
+		t.Errorf("feature status = %v, want Failed (SDK FAILED should not advance knowledge base)", updated.Status)
 	}
 
 	// Now verify the positive case: SUCCESS in StatusCh + clean exit = success.
@@ -2962,17 +2962,17 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	_ = fm.Store.Modify(f2.ID, func(f *feature.Feature) error {
-		f.Status = feature.StatusInquiring
-		f.CurrentPhase = feature.PhaseInquire
+		f.Status = feature.StatusBuildingKB
+		f.CurrentPhase = feature.PhaseKnowledgeBase
 		return nil
 	})
-	sess2 := session.NewSession(f2.ID+"-inquire", f2.ID, feature.PhaseInquire)
+	sess2 := session.NewSession(f2.ID+"-kb", f2.ID, feature.PhaseKnowledgeBase)
 	sess2.SendStatus("SUCCESS")
 	sm.RegisterTestSession(sess2)
 
 	doneMsg := SessionDoneTUIMsg{
 		Done: session.SessionDoneMsg{
-			SessionID: f2.ID + "-inquire",
+			SessionID: f2.ID + "-kb",
 			Status:    session.SessionDone,
 		},
 	}
@@ -2995,15 +2995,15 @@ func TestHandlePhaseCompleted_ErrorDetailInLastError(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	_ = fm.Store.Modify(f.ID, func(f *feature.Feature) error {
-		f.Status = feature.StatusInquiring
-		f.CurrentPhase = feature.PhaseInquire
+		f.Status = feature.StatusBuildingKB
+		f.CurrentPhase = feature.PhaseKnowledgeBase
 		return nil
 	})
 
 	pcm := PhaseCompletedMsg{
 		FeatureID:   f.ID,
-		Phase:       feature.PhaseInquire,
-		SessionID:   f.ID + "-inquire",
+		Phase:       feature.PhaseKnowledgeBase,
+		SessionID:   f.ID + "-kb",
 		Success:     false,
 		ErrorDetail: "Request too large (max 20MB). Try with a smaller file.",
 	}
@@ -3015,9 +3015,6 @@ func TestHandlePhaseCompleted_ErrorDetailInLastError(t *testing.T) {
 	}
 	if !strings.Contains(updated.LastError, "Request too large") {
 		t.Errorf("LastError = %q, want it to contain the error detail", updated.LastError)
-	}
-	if !strings.Contains(updated.LastError, "Inquire") {
-		t.Errorf("LastError = %q, want it to contain the phase name", updated.LastError)
 	}
 }
 
@@ -4553,6 +4550,7 @@ type tuiArtifactPhaseCase struct {
 func tuiArtifactPhaseCases() []tuiArtifactPhaseCase {
 	return []tuiArtifactPhaseCase{
 		{"inquire", feature.PhaseInquire},
+		{"research", feature.PhaseResearch},
 		{"design", feature.PhaseDesign},
 	}
 }
@@ -4603,6 +4601,30 @@ func writeTUIPhaseComplete(t *testing.T, baseDir string, f *feature.Feature, pha
 	return path
 }
 
+func writeTUIPhaseRootFile(t *testing.T, baseDir string, f *feature.Feature, phase feature.Phase, name, body string) string {
+	t.Helper()
+	artifactDir := filepath.Join(agent.ActiveRunDir(baseDir, f), phase.DirName())
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	path := filepath.Join(artifactDir, name)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return path
+}
+
+func assertTUIFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if string(got) != want {
+		t.Fatalf("%s = %q, want %q", filepath.Base(path), string(got), want)
+	}
+}
+
 func appendAssistantQuestion(t *testing.T, sess *session.Session) {
 	t.Helper()
 	sess.MessageLog().Append(llm.SDKMessage{
@@ -4627,7 +4649,7 @@ func assertNoPendingQuestionHelp(t *testing.T, f *feature.Feature) {
 	}
 }
 
-func TestHandleSDKEvent_ArtifactPhaseResultSuccessRoutesThroughProtocolValidation(t *testing.T) {
+func TestHandleSDKEvent_LoopOwnedArtifactPhaseResultSuccessNoOps(t *testing.T) {
 	for _, tc := range tuiArtifactPhaseCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			app, fm := newTestAppModel(t)
@@ -4635,6 +4657,7 @@ func TestHandleSDKEvent_ArtifactPhaseResultSuccessRoutesThroughProtocolValidatio
 			app.lastNotifyTime = make(map[notifyKey]time.Time)
 			f := createFeatureInPhase(t, fm, tc.phase)
 			writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, tc.phase, "artifact.md")
+			outputPath := writeTUIPhaseRootFile(t, fm.Store.BaseDir, f, tc.phase, "output.txt", "aggregate loop output\n")
 
 			sm := session.NewManager(nil)
 			sess := session.NewSession(f.ID+"-"+tc.phase.DirName(), f.ID, tc.phase)
@@ -4659,13 +4682,14 @@ func TestHandleSDKEvent_ArtifactPhaseResultSuccessRoutesThroughProtocolValidatio
 			if err != nil {
 				t.Fatalf("get feature: %v", err)
 			}
-			assertTUIArtifactPhaseRetry(t, fm, updated, tc.phase, agent.PhaseCompleteFile)
+			assertTUILoopOwnedArtifactSessionEventNoOps(t, fm, updated, tc.phase)
 			assertNoPendingQuestionHelp(t, updated)
+			assertTUIFileContent(t, outputPath, "aggregate loop output\n")
 		})
 	}
 }
 
-func TestHandleSessionDone_StaleRegistryOwnedCompletionDoesNotRetryReplacement(t *testing.T) {
+func TestHandleSessionDone_StaleLoopOwnedCompletionDoesNotRetryReplacement(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.eventCh = make(chan interface{}, 1)
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
@@ -4718,10 +4742,10 @@ func TestHandleSessionDone_StaleRegistryOwnedCompletionDoesNotRetryReplacement(t
 	if err != nil {
 		t.Fatalf("get feature: %v", err)
 	}
-	assertTUIArtifactPhaseRetry(t, fm, updated, feature.PhaseInquire, agent.PhaseCompleteFile)
+	assertTUILoopOwnedArtifactSessionEventNoOps(t, fm, updated, feature.PhaseInquire)
 }
 
-func TestHandleSessionDone_ArtifactPhaseSuccessRoutesThroughProtocolValidation(t *testing.T) {
+func TestHandleSessionDone_LoopOwnedArtifactPhaseSuccessNoOps(t *testing.T) {
 	for _, tc := range tuiArtifactPhaseCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			app, fm := newTestAppModel(t)
@@ -4729,9 +4753,11 @@ func TestHandleSessionDone_ArtifactPhaseSuccessRoutesThroughProtocolValidation(t
 			app.lastNotifyTime = make(map[notifyKey]time.Time)
 			f := createFeatureInPhase(t, fm, tc.phase)
 			writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, tc.phase, "artifact.md")
+			outputPath := writeTUIPhaseRootFile(t, fm.Store.BaseDir, f, tc.phase, "output.txt", "aggregate loop output\n")
+			qaPath := writeTUIPhaseRootFile(t, fm.Store.BaseDir, f, tc.phase, "qa-answers.md", "Q: Accumulated?\n\nA: Union answer\n")
 
 			sm := session.NewManager(nil)
-			sess := session.NewSession(f.ID+"-"+tc.phase.DirName(), f.ID, tc.phase)
+			sess := makeSessionWithQALog(t, f.ID+"-"+tc.phase.DirName(), f.ID, tc.phase)
 			appendAssistantQuestion(t, sess)
 			sess.SendStatus("SUCCESS")
 			sm.RegisterTestSession(sess)
@@ -4750,8 +4776,10 @@ func TestHandleSessionDone_ArtifactPhaseSuccessRoutesThroughProtocolValidation(t
 			if err != nil {
 				t.Fatalf("get feature: %v", err)
 			}
-			assertTUIArtifactPhaseRetry(t, fm, updated, tc.phase, agent.PhaseCompleteFile)
+			assertTUILoopOwnedArtifactSessionEventNoOps(t, fm, updated, tc.phase)
 			assertNoPendingQuestionHelp(t, updated)
+			assertTUIFileContent(t, outputPath, "aggregate loop output\n")
+			assertTUIFileContent(t, qaPath, "Q: Accumulated?\n\nA: Union answer\n")
 		})
 	}
 }

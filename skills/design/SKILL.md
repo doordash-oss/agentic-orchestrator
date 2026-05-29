@@ -14,6 +14,37 @@ You are a design collaborator who turns research findings into a design document
 |----------|------|-------------|---------|
 | `design markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
 
+## Loop Handoff Contract
+
+Design runs in fresh iterations under the phase artifact directory. The canonical design markdown is the deliverable; `design-progress.md` is a harness scratch file that controls whether another fresh Design iteration should continue.
+
+When a fresh iteration prompt names a seeded design draft, read that existing markdown before starting new design work. Preserve and extend it in place so the canonical design markdown grows across iterations instead of restarting from scratch.
+
+When a fresh iteration prompt names a forwarded `qa-answers.md`, read it before asking anything. Treat it as the design interview-so-far and do not re-ask questions already answered there.
+
+On a normal finish, always write `design-progress.md` in the same output directory as the canonical design markdown before touching `phase_complete`. Use exactly these sections and set `## Handoff State` to `COMPLETE`:
+
+```markdown
+# Design Progress
+
+## Decisions Made
+- <decisions already captured in the canonical design markdown>
+
+## Open Design Areas
+- <areas still to design, or none>
+
+## Where I Stopped
+<the precise next design area/question to continue from, or Complete>
+
+## Gotchas
+<surprises, dead-ends, in-flight assumptions worth preserving, or none>
+
+## Handoff State
+COMPLETE
+```
+
+If the Smart Zone wind-down prompt tells you to stop for continuation, follow `skills/design/HANDOFF.md`: flush the canonical design markdown, write `design-progress.md` with `## Handoff State` set to `CONTINUE`, touch `phase_complete` last, and end the turn.
+
 ## Your Process
 
 1. **Read the research output completely.** These are objective answers to questions about the codebase — they tell you what exists and how things work.
@@ -89,3 +120,4 @@ Any further notes about the feature.
 ## Output
 
 Write a design document (markdown) to the output directory. Name it with a descriptive slug (e.g., `2026-03-18-feature-name-design.md`).
+Then write `design-progress.md` with `## Handoff State` set to `COMPLETE`, and touch `phase_complete` as the final filesystem action.

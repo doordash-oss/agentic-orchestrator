@@ -103,12 +103,10 @@ func sessionManagerWithQALog(sessionID string) *mocks.MockSessionManager {
 	return sm
 }
 
-// TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPhases is the
-// table-driven persistence-whitelist regression. It calls onArtifactPhaseCompleted
-// directly with each single-shot interactive planning phase plus roadmap/
-// phase-plan sentinel keys. Inquire and Design persist the session Q&A log;
-// Research is now owned by the blocking loop, and Roadmap/Phase-Plan
-// transcripts are owned by the plan loops instead.
+// TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPhases
+// covers legacy non-loop callers. Inquire, Research, and Design now persist
+// Q&A through their blocking loops, while Roadmap and Phase-Plan transcripts
+// are owned by the plan loops.
 func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPhases(t *testing.T) {
 	cases := []struct {
 		phaseKey       string
@@ -116,12 +114,6 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 		wantQAFile     bool
 		completionFnFn func(lc *mocks.MockFeatureLifecycle) func(string) error
 	}{
-		{"inquire", feature.PhaseInquire, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
-			return lc.CompleteInquire
-		}},
-		{"design", feature.PhaseDesign, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
-			return lc.CompleteDesign
-		}},
 		{"roadmap", feature.PhaseInquire /* unused */, false, func(lc *mocks.MockFeatureLifecycle) func(string) error {
 			return func(string) error { return nil }
 		}},
@@ -219,9 +211,9 @@ _(auto-picked, confidence: 0.85)_
 
 `
 
-// TestInquirePhase_WritesHarnessOwnedQAFile pre-writes stale qa-answers.md,
-// drives HandlePhaseCompletion through Inquire, and asserts the file is
-// replaced from the session Q&A log. Then asserts
+// TestInquirePhase_WritesHarnessOwnedQAFile pre-writes the phase-root
+// qa-answers.md as the blocking loop would, drives HandlePhaseCompletion
+// through Inquire's loop result, and asserts
 // collectQAFilePaths returns the inquire path so Design consumes it.
 func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 	tmpStateDir := t.TempDir()
@@ -245,29 +237,33 @@ func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 	if err := os.MkdirAll(phaseDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	artifactPath := filepath.Join(phaseDir, "inquire.md")
+	terminalDir := filepath.Join(phaseDir, "iteration-01")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
+		t.Fatalf("mkdir terminal dir: %v", err)
+	}
+	artifactPath := filepath.Join(terminalDir, "inquire.md")
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
-	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
+	if err := os.WriteFile(qaPath, []byte(sampleHarnessOwnedQA), 0o644); err != nil {
 		t.Fatalf("pre-write qa-answers.md: %v", err)
 	}
 
 	lc := newGateLifecycle(f)
 	fs := newGateFeatureStore(f)
-	sm := sessionManagerWithQALog("sess-1")
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+	o := New(Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-		Phase:     feature.PhaseInquire,
-		SessionID: "sess-1",
-		Success:   true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        artifactPath,
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
@@ -316,29 +312,33 @@ func TestInquirePhase_AutoPickAnnotationPreserved(t *testing.T) {
 	if err := os.MkdirAll(phaseDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	artifactPath := filepath.Join(phaseDir, "inquire.md")
+	terminalDir := filepath.Join(phaseDir, "iteration-01")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
+		t.Fatalf("mkdir terminal dir: %v", err)
+	}
+	artifactPath := filepath.Join(terminalDir, "inquire.md")
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
-	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
+	if err := os.WriteFile(qaPath, []byte(sampleHarnessOwnedQA), 0o644); err != nil {
 		t.Fatalf("pre-write qa: %v", err)
 	}
 
 	lc := newGateLifecycle(f)
 	fs := newGateFeatureStore(f)
-	sm := sessionManagerWithQALog("sess-1")
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+	o := New(Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-		Phase:     feature.PhaseInquire,
-		SessionID: "sess-1",
-		Success:   true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        artifactPath,
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
@@ -358,8 +358,8 @@ func TestInquirePhase_AutoPickAnnotationPreserved(t *testing.T) {
 	}
 }
 
-// TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile asserts that when
-// no qa-answers.md exists yet, the orchestrator writes one from the session log.
+// TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile asserts that the
+// loop-owned qa-answers.md remains available after loop completion.
 func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 	tmpStateDir := t.TempDir()
 	featureID := "feat-no-qa"
@@ -381,30 +381,37 @@ func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 	if err := os.MkdirAll(phaseDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	artifactPath := filepath.Join(phaseDir, "inquire.md")
+	terminalDir := filepath.Join(phaseDir, "iteration-01")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
+		t.Fatalf("mkdir terminal dir: %v", err)
+	}
+	artifactPath := filepath.Join(terminalDir, "inquire.md")
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
+	qaPath := filepath.Join(phaseDir, "qa-answers.md")
+	if err := os.WriteFile(qaPath, []byte(sampleHarnessOwnedQA), 0o644); err != nil {
+		t.Fatalf("write qa-answers.md: %v", err)
 	}
 
 	lc := newGateLifecycle(f)
 	fs := newGateFeatureStore(f)
-	sm := sessionManagerWithQALog("sess-1")
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+	o := New(Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-		Phase:     feature.PhaseInquire,
-		SessionID: "sess-1",
-		Success:   true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        artifactPath,
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	qaPath := filepath.Join(phaseDir, "qa-answers.md")
 	got, err := os.ReadFile(qaPath)
 	if err != nil {
 		t.Fatalf("read qa-answers.md: %v", err)
@@ -445,29 +452,33 @@ func TestInquirePhase_RefPrefix_WritesQAFile(t *testing.T) {
 	if err := os.MkdirAll(phaseDir, 0o755); err != nil {
 		t.Fatalf("mkdir refactor phase dir: %v", err)
 	}
-	artifactPath := filepath.Join(phaseDir, "inquire.md")
+	terminalDir := filepath.Join(phaseDir, "iteration-01")
+	if err := os.MkdirAll(terminalDir, 0o755); err != nil {
+		t.Fatalf("mkdir terminal dir: %v", err)
+	}
+	artifactPath := filepath.Join(terminalDir, "inquire.md")
 	if err := os.WriteFile(artifactPath, []byte("# inquire\n"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(phaseDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
-	}
 	qaPath := filepath.Join(phaseDir, "qa-answers.md")
-	if err := os.WriteFile(qaPath, []byte(sampleAgentAuthoredQA), 0o644); err != nil {
+	if err := os.WriteFile(qaPath, []byte(sampleHarnessOwnedQA), 0o644); err != nil {
 		t.Fatalf("pre-write qa: %v", err)
 	}
 
 	lc := newGateLifecycle(f)
 	fs := newGateFeatureStore(f)
-	sm := sessionManagerWithQALog("sess-1")
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+	o := New(Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-		Phase:     feature.PhaseInquire,
-		SessionID: "sess-1",
-		Success:   true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        artifactPath,
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}

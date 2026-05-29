@@ -58,7 +58,9 @@ const (
 	ValidatorRefactorPlanMarkdown          ArtifactValidator = "refactor_plan_markdown"
 	ValidatorReviewFeedback                ArtifactValidator = "review_feedback"
 	ValidatorPlanValidatorAxisApproval     ArtifactValidator = "plan_validator_axis_approval"
+	ValidatorInquireProgressHandoff        ArtifactValidator = "inquire_progress_handoff"
 	ValidatorResearchProgressHandoff       ArtifactValidator = "research_progress_handoff"
+	ValidatorDesignProgressHandoff         ArtifactValidator = "design_progress_handoff"
 	ValidatorIterationMeta                 ArtifactValidator = "iteration_meta"
 )
 
@@ -307,6 +309,32 @@ func researchProgressHandoffRoleArtifact() RoleArtifactSpec {
 	}
 }
 
+func inquireProgressHandoffRoleArtifact() RoleArtifactSpec {
+	return RoleArtifactSpec{
+		Name:          "inquire_progress_handoff",
+		DisplayPath:   "inquire-progress.md",
+		RootName:      "phase_dir",
+		RelativePath:  "inquire-progress.md",
+		Presence:      ArtifactRequired,
+		Description:   "harness-read Inquire loop progress and handoff state",
+		HideFromSkill: true,
+		Validate:      ValidatorInquireProgressHandoff,
+	}
+}
+
+func designProgressHandoffRoleArtifact() RoleArtifactSpec {
+	return RoleArtifactSpec{
+		Name:          "design_progress_handoff",
+		DisplayPath:   "design-progress.md",
+		RootName:      "phase_dir",
+		RelativePath:  "design-progress.md",
+		Presence:      ArtifactRequired,
+		Description:   "harness-read Design loop progress and handoff state",
+		HideFromSkill: true,
+		Validate:      ValidatorDesignProgressHandoff,
+	}
+}
+
 func iterationMetaRoleArtifact() RoleArtifactSpec {
 	return RoleArtifactSpec{
 		Name:          "iteration_meta",
@@ -391,7 +419,7 @@ func artifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == "planning-handoff.md" || lower == "review-progress.md" || lower == "producer-progress.md" || lower == "research-progress.md":
+	case lower == "qa-answers.md" || lower == "planning-handoff.md" || lower == "review-progress.md" || lower == "producer-progress.md" || lower == "inquire-progress.md" || lower == "research-progress.md" || lower == "design-progress.md":
 		return true
 	default:
 		return false

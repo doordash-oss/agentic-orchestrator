@@ -33,6 +33,8 @@ var inquirerRoleSpec = RoleSpec{
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("inquire markdown artifact"),
+		inquireProgressHandoffRoleArtifact(),
+		iterationMetaRoleArtifact(),
 	},
 	ReadOnlyOutsideRoots: true,
 }

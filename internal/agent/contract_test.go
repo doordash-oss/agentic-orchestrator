@@ -384,6 +384,7 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 			if err := os.WriteFile(artifactPath, []byte("# artifact\n"), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
+			writeArtifactPhaseLoopCompanions(t, dir, tt.role)
 
 			contract, ok := Lookup(tt.phase, tt.role)
 			if !ok {
@@ -499,6 +500,7 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 	if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
 		t.Fatalf("chtimes old artifact: %v", err)
 	}
+	writeArtifactPhaseLoopCompanions(t, dir, RoleDesigner)
 
 	out, violations, err := Validate(feature.PhaseDesign, RoleDesigner, dir)
 	if err != nil {
@@ -509,6 +511,32 @@ func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
 	}
 	if out.PhaseArtifactPath != newPath {
 		t.Fatalf("PhaseArtifactPath = %q, want %q", out.PhaseArtifactPath, newPath)
+	}
+}
+
+func writeArtifactPhaseLoopCompanions(t testing.TB, dir string, role Role) {
+	t.Helper()
+	var (
+		filename string
+		body     string
+	)
+	switch role {
+	case RoleInquirer:
+		filename = InquireProgressHandoffFilename
+		body = validInquireProgressHandoff("COMPLETE", "captured requirements")
+	case RoleDesigner:
+		filename = DesignProgressHandoffFilename
+		body = validDesignProgressHandoff("COMPLETE", "selected design")
+	default:
+		return
+	}
+	writeHelperHandoff(t, dir, filename, body)
+	if err := NewArtifactManager(filepath.Dir(dir)).WriteMeta(dir, IterationMeta{
+		Iteration:    1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: HelperHandoffComplete.String(),
+	}); err != nil {
+		t.Fatalf("WriteMeta() error = %v", err)
 	}
 }
 

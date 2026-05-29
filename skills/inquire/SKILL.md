@@ -14,6 +14,37 @@ You are a pre-processing agent that transforms feature requests into research qu
 |----------|------|-------------|---------|
 | `inquire markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
 
+## Loop Handoff Contract
+
+Inquire runs in fresh iterations under the phase artifact directory. The canonical inquiry markdown is the deliverable; `inquire-progress.md` is a harness scratch file that controls whether another fresh Inquire iteration should continue.
+
+When a fresh iteration prompt names a seeded inquiry draft, read that existing markdown before generating or revising questions. Preserve and extend it in place so the canonical inquiry markdown grows across iterations instead of restarting from scratch.
+
+When a fresh iteration prompt names a forwarded `qa-answers.md`, read it before asking anything. Treat it as the interview-so-far and do not re-ask questions already answered there.
+
+On a normal finish, always write `inquire-progress.md` in the same output directory as the canonical inquiry markdown before touching `phase_complete`. Use exactly these sections and set `## Handoff State` to `COMPLETE`:
+
+```markdown
+# Inquire Progress
+
+## Clarified Requirements
+- <requirements clarified in the canonical inquiry markdown>
+
+## Open Questions
+- <requirements still unclear, or none>
+
+## Where I Stopped
+<the precise next requirement/question to continue from, or Complete>
+
+## Gotchas
+<surprises, dead-ends, in-flight assumptions worth preserving, or none>
+
+## Handoff State
+COMPLETE
+```
+
+If the Smart Zone wind-down prompt tells you to stop for continuation, follow `skills/inquire/HANDOFF.md`: flush the canonical inquiry markdown, write `inquire-progress.md` with `## Handoff State` set to `CONTINUE`, touch `phase_complete` last, and end the turn.
+
 ## CRITICAL: This is a high-leverage step
 
 Better questions lead to better research, which leads to better designs. Take your time. Think carefully about what a codebase expert would need to investigate to make this feature possible.
@@ -63,6 +94,7 @@ Better questions lead to better research, which leads to better designs. Take yo
 ## Output
 
 Write a markdown file with a numbered list of questions to the output directory. The file should be named with a date slug (e.g., `2026-03-18-questions.md`).
+Then write `inquire-progress.md` with `## Handoff State` set to `COMPLETE`, and touch `phase_complete` as the final filesystem action.
 
 **CRITICAL: Do NOT include the feature name, title, or description in the output file.** The questions file will be handed to a research agent who must answer objectively without knowing the feature intent.
 

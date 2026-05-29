@@ -215,6 +215,78 @@ func TestParseResearchProgressHandoffMd(t *testing.T) {
 	}
 }
 
+func TestParseInquireProgressHandoffMd(t *testing.T) {
+	path := writeHelperHandoff(t, t.TempDir(), InquireProgressHandoffFilename, validInquireProgressHandoff("CONTINUE", "captured auth requirements"))
+
+	parsed, err := ParseInquireProgressHandoffMd(path)
+	if err != nil {
+		t.Fatalf("ParseInquireProgressHandoffMd() error = %v", err)
+	}
+	if !parsed.OK() {
+		t.Fatalf("ParseInquireProgressHandoffMd() violations = %v", parsed.ProtocolViolations)
+	}
+	if parsed.State != HelperHandoffContinue {
+		t.Fatalf("State = %s, want CONTINUE", parsed.State)
+	}
+	if !strings.Contains(parsed.ProgressRegion, "captured auth requirements") {
+		t.Fatalf("ProgressRegion missing clarified requirements:\n%s", parsed.ProgressRegion)
+	}
+
+	missing := writeHelperHandoff(t, t.TempDir(), InquireProgressHandoffFilename, strings.ReplaceAll(validInquireProgressHandoff("CONTINUE", "x"), "## Open Questions\n- none\n\n", ""))
+	parsed, err = ParseInquireProgressHandoffMd(missing)
+	if err != nil {
+		t.Fatalf("ParseInquireProgressHandoffMd(missing) error = %v", err)
+	}
+	if parsed.OK() || !containsViolation(parsed.ProtocolViolations, "missing required section") {
+		t.Fatalf("missing section parse = OK %v violations %v, want missing-section violation", parsed.OK(), parsed.ProtocolViolations)
+	}
+
+	invalid := writeHelperHandoff(t, t.TempDir(), InquireProgressHandoffFilename, validInquireProgressHandoff("DONE", "x"))
+	parsed, err = ParseInquireProgressHandoffMd(invalid)
+	if err != nil {
+		t.Fatalf("ParseInquireProgressHandoffMd(invalid) error = %v", err)
+	}
+	if parsed.OK() || !containsViolation(parsed.ProtocolViolations, "CONTINUE, COMPLETE") {
+		t.Fatalf("invalid state parse = OK %v violations %v, want state violation", parsed.OK(), parsed.ProtocolViolations)
+	}
+}
+
+func TestParseDesignProgressHandoffMd(t *testing.T) {
+	path := writeHelperHandoff(t, t.TempDir(), DesignProgressHandoffFilename, validDesignProgressHandoff("COMPLETE", "selected adapter boundary"))
+
+	parsed, err := ParseDesignProgressHandoffMd(path)
+	if err != nil {
+		t.Fatalf("ParseDesignProgressHandoffMd() error = %v", err)
+	}
+	if !parsed.OK() {
+		t.Fatalf("ParseDesignProgressHandoffMd() violations = %v", parsed.ProtocolViolations)
+	}
+	if parsed.State != HelperHandoffComplete {
+		t.Fatalf("State = %s, want COMPLETE", parsed.State)
+	}
+	if !strings.Contains(parsed.ProgressRegion, "selected adapter boundary") {
+		t.Fatalf("ProgressRegion missing decisions made:\n%s", parsed.ProgressRegion)
+	}
+
+	missing := writeHelperHandoff(t, t.TempDir(), DesignProgressHandoffFilename, strings.ReplaceAll(validDesignProgressHandoff("CONTINUE", "x"), "## Open Design Areas\n- none\n\n", ""))
+	parsed, err = ParseDesignProgressHandoffMd(missing)
+	if err != nil {
+		t.Fatalf("ParseDesignProgressHandoffMd(missing) error = %v", err)
+	}
+	if parsed.OK() || !containsViolation(parsed.ProtocolViolations, "missing required section") {
+		t.Fatalf("missing section parse = OK %v violations %v, want missing-section violation", parsed.OK(), parsed.ProtocolViolations)
+	}
+
+	invalid := writeHelperHandoff(t, t.TempDir(), DesignProgressHandoffFilename, validDesignProgressHandoff("DONE", "x"))
+	parsed, err = ParseDesignProgressHandoffMd(invalid)
+	if err != nil {
+		t.Fatalf("ParseDesignProgressHandoffMd(invalid) error = %v", err)
+	}
+	if parsed.OK() || !containsViolation(parsed.ProtocolViolations, "CONTINUE, COMPLETE") {
+		t.Fatalf("invalid state parse = OK %v violations %v, want state violation", parsed.OK(), parsed.ProtocolViolations)
+	}
+}
+
 func TestProducerProgressHandoffFingerprint(t *testing.T) {
 	a := writeHelperHandoff(t, filepath.Join(t.TempDir(), "iteration-01"), ProducerProgressHandoffFilename, validProducerProgressHandoff("CONTINUE", "wrote `/tmp/a/iteration-01/verification-report.yaml` at 2026-05-29T10:11:12Z"))
 	b := writeHelperHandoff(t, filepath.Join(t.TempDir(), "iteration-02"), ProducerProgressHandoffFilename, validProducerProgressHandoff("CONTINUE", "wrote `/tmp/b/iteration-02/verification-report.yaml` at 2026-05-30T01:02:03Z"))
@@ -229,6 +301,58 @@ func TestProducerProgressHandoffFingerprint(t *testing.T) {
 	}
 	if fpA != fpB {
 		t.Fatalf("volatile-only fingerprints differ:\n%s\n%s", fpA, fpB)
+	}
+}
+
+func TestInquireProgressHandoffFingerprint(t *testing.T) {
+	a := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-001", "inquire", "iteration-01"), InquireProgressHandoffFilename, validInquireProgressHandoff("CONTINUE", "documented `/tmp/a/run-001/inquire/iteration-01/questions.md` at 2026-05-29T10:11:12Z"))
+	b := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-002", "inquire", "iteration-07"), InquireProgressHandoffFilename, validInquireProgressHandoff("CONTINUE", "documented `/var/folders/x/run-002/inquire/iteration-07/questions.md` at 2026-05-30T01:02:03-07:00"))
+
+	fpA, err := InquireProgressHandoffFingerprint(a)
+	if err != nil {
+		t.Fatalf("InquireProgressHandoffFingerprint(a) error = %v", err)
+	}
+	fpB, err := InquireProgressHandoffFingerprint(b)
+	if err != nil {
+		t.Fatalf("InquireProgressHandoffFingerprint(b) error = %v", err)
+	}
+	if fpA != fpB {
+		t.Fatalf("volatile-only fingerprints differ:\n%s\n%s", fpA, fpB)
+	}
+
+	c := writeHelperHandoff(t, t.TempDir(), InquireProgressHandoffFilename, validInquireProgressHandoff("CONTINUE", "documented a different requirement"))
+	fpC, err := InquireProgressHandoffFingerprint(c)
+	if err != nil {
+		t.Fatalf("InquireProgressHandoffFingerprint(c) error = %v", err)
+	}
+	if fpA == fpC {
+		t.Fatal("fingerprint did not change after clarified requirements changed")
+	}
+}
+
+func TestDesignProgressHandoffFingerprint(t *testing.T) {
+	a := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-001", "design", "iteration-01"), DesignProgressHandoffFilename, validDesignProgressHandoff("CONTINUE", "documented `/tmp/a/run-001/design/iteration-01/design.md` at 2026-05-29T10:11:12Z"))
+	b := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-002", "design", "iteration-07"), DesignProgressHandoffFilename, validDesignProgressHandoff("CONTINUE", "documented `/var/folders/x/run-002/design/iteration-07/design.md` at 2026-05-30T01:02:03-07:00"))
+
+	fpA, err := DesignProgressHandoffFingerprint(a)
+	if err != nil {
+		t.Fatalf("DesignProgressHandoffFingerprint(a) error = %v", err)
+	}
+	fpB, err := DesignProgressHandoffFingerprint(b)
+	if err != nil {
+		t.Fatalf("DesignProgressHandoffFingerprint(b) error = %v", err)
+	}
+	if fpA != fpB {
+		t.Fatalf("volatile-only fingerprints differ:\n%s\n%s", fpA, fpB)
+	}
+
+	c := writeHelperHandoff(t, t.TempDir(), DesignProgressHandoffFilename, validDesignProgressHandoff("CONTINUE", "documented a different decision"))
+	fpC, err := DesignProgressHandoffFingerprint(c)
+	if err != nil {
+		t.Fatalf("DesignProgressHandoffFingerprint(c) error = %v", err)
+	}
+	if fpA == fpC {
+		t.Fatal("fingerprint did not change after decisions changed")
 	}
 }
 
@@ -265,6 +389,69 @@ func TestResearchHandoffAssetMatchesResearchProgressContract(t *testing.T) {
 	}
 	if parsed.State != HelperHandoffContinue {
 		t.Fatalf("State = %s, want CONTINUE", parsed.State)
+	}
+}
+
+func TestInquireAndDesignHandoffAssetsMatchProgressContracts(t *testing.T) {
+	tests := []struct {
+		skill    string
+		filename string
+		sections []string
+		parse    func(string) (*ParsedHelperHandoff, error)
+	}{
+		{
+			skill:    "inquire",
+			filename: InquireProgressHandoffFilename,
+			sections: []string{
+				"## Clarified Requirements",
+				"## Open Questions",
+				"## Where I Stopped",
+				"## Gotchas",
+				"## Handoff State",
+			},
+			parse: ParseInquireProgressHandoffMd,
+		},
+		{
+			skill:    "design",
+			filename: DesignProgressHandoffFilename,
+			sections: []string{
+				"## Decisions Made",
+				"## Open Design Areas",
+				"## Where I Stopped",
+				"## Gotchas",
+				"## Handoff State",
+			},
+			parse: ParseDesignProgressHandoffMd,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.skill, func(t *testing.T) {
+			path := repoRootPath(t, "skills", tt.skill, "HANDOFF.md")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("reading %s: %v", path, err)
+			}
+			text := string(data)
+			for _, want := range append([]string{tt.filename, "CONTINUE", "phase_complete"}, tt.sections...) {
+				if !strings.Contains(text, want) {
+					t.Fatalf("%s HANDOFF.md missing %q", tt.skill, want)
+				}
+			}
+
+			sample := extractFirstMarkdownFence(t, text)
+			handoffPath := writeHelperHandoff(t, t.TempDir(), tt.filename, sample)
+			parsed, err := tt.parse(handoffPath)
+			if err != nil {
+				t.Fatalf("parse %s error = %v", tt.filename, err)
+			}
+			if !parsed.OK() {
+				t.Fatalf("%s HANDOFF.md sample violations = %v", tt.skill, parsed.ProtocolViolations)
+			}
+			if parsed.State != HelperHandoffContinue {
+				t.Fatalf("State = %s, want CONTINUE", parsed.State)
+			}
+		})
 	}
 }
 
@@ -539,6 +726,46 @@ Continue with the next research question.
 ## Handoff State
 %s
 `, completed, state)
+}
+
+func validInquireProgressHandoff(state, clarified string) string {
+	return fmt.Sprintf(`# Inquire Progress
+
+## Clarified Requirements
+- %s
+
+## Open Questions
+- none
+
+## Where I Stopped
+Continue with the next requirement.
+
+## Gotchas
+- no blockers
+
+## Handoff State
+%s
+`, clarified, state)
+}
+
+func validDesignProgressHandoff(state, decisions string) string {
+	return fmt.Sprintf(`# Design Progress
+
+## Decisions Made
+- %s
+
+## Open Design Areas
+- none
+
+## Where I Stopped
+Continue with the next design area.
+
+## Gotchas
+- no blockers
+
+## Handoff State
+%s
+`, decisions, state)
 }
 
 func writeHelperHandoff(t testing.TB, dir, name, body string) string {

@@ -279,8 +279,12 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		}
 	case roles.ValidatorPlanValidatorAxisApproval:
 		return validatePlanValidatorAxisApprovalArtifact
+	case roles.ValidatorInquireProgressHandoff:
+		return validateHelperProgressHandoffArtifact(InquireProgressHandoffFilename, ParseInquireProgressHandoffMd)
 	case roles.ValidatorResearchProgressHandoff:
-		return validateResearchProgressHandoffArtifact
+		return validateHelperProgressHandoffArtifact(ResearchProgressHandoffFilename, ParseResearchProgressHandoffMd)
+	case roles.ValidatorDesignProgressHandoff:
+		return validateHelperProgressHandoffArtifact(DesignProgressHandoffFilename, ParseDesignProgressHandoffMd)
 	case roles.ValidatorIterationMeta:
 		return validateIterationMetaArtifact
 	default:
@@ -290,25 +294,27 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 	}
 }
 
-func validateResearchProgressHandoffArtifact(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []ProtocolViolation{{Artifact: ResearchProgressHandoffFilename, Reason: missingArtifactReason(ResearchProgressHandoffFilename, filepath.Dir(path))}}, nil
+func validateHelperProgressHandoffArtifact(filename string, parse func(string) (*ParsedHelperHandoff, error)) func(string, string, *Outcome) ([]ProtocolViolation, error) {
+	return func(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
+		if _, err := os.Stat(path); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return []ProtocolViolation{{Artifact: filename, Reason: missingArtifactReason(filename, filepath.Dir(path))}}, nil
+			}
+			return nil, fmt.Errorf("stat %s: %w", filename, err)
 		}
-		return nil, fmt.Errorf("stat research progress handoff: %w", err)
+		parsed, err := parse(path)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", filename, err)
+		}
+		if parsed.OK() {
+			return nil, nil
+		}
+		violations := make([]ProtocolViolation, 0, len(parsed.ProtocolViolations))
+		for _, reason := range parsed.ProtocolViolations {
+			violations = append(violations, ProtocolViolation{Artifact: filename, Reason: reason})
+		}
+		return violations, nil
 	}
-	parsed, err := ParseResearchProgressHandoffMd(path)
-	if err != nil {
-		return nil, fmt.Errorf("parsing research progress handoff: %w", err)
-	}
-	if parsed.OK() {
-		return nil, nil
-	}
-	violations := make([]ProtocolViolation, 0, len(parsed.ProtocolViolations))
-	for _, reason := range parsed.ProtocolViolations {
-		violations = append(violations, ProtocolViolation{Artifact: ResearchProgressHandoffFilename, Reason: reason})
-	}
-	return violations, nil
 }
 
 func validateIterationMetaArtifact(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {

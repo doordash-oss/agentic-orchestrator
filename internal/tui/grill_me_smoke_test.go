@@ -40,30 +40,11 @@ const grillMeSmokeStaleQAFile = `# User Q&A — Phase Clarifications
 _(auto-picked, confidence: 0.85)_
 `
 
-const grillMeSmokeHarnessQAFile = `# User Q&A — Phase Clarifications
-
-## Q: Q1
-
-**A:** A1
-
-`
-
-const grillMeAutoPickSmokeHarnessQAFile = `# User Q&A — Phase Clarifications
-
-## Q: Which planning path?
-
-**A:** Focused (Recommended)
-
-_(auto-picked, confidence: 0.85)_
-
-`
-
 // TestInquirePhase_GrillMe_SmokeEndToEnd is the Phase 1 tracer-bullet smoke
 // test. It exercises a single end-to-end path: directive flows through
-// builder → prompt → session Q&A capture → TUI persistence gate
-// (handleSessionDone) → orchestrator persistence gate (HandlePhaseCompletion
-// → onArtifactPhaseCompleted). The gates must write the harness-owned Q&A
-// transcript and surface it to downstream consumers via collectQAFilePaths.
+// builder → prompt → session Q&A capture → TUI session-done handling. Inquire
+// is loop-owned now, so the TUI must not replace the loop-owned phase-root
+// qa-answers.md with a per-session QALog.
 func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -123,9 +104,9 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 				}
 			}
 
-			// (b) Seed a stale qa-answers.md in the inquire phase dir before
-			// the session-done event fires. The harness-owned session log
-			// should replace it.
+			// (b) Seed a loop-owned qa-answers.md in the inquire phase dir
+			// before the session-done event fires. The TUI must leave it
+			// alone; the blocking loop owns the accumulated transcript.
 			phaseDir := filepath.Join(agent.ActiveRunDir(fm.Store.BaseDir, f), "inquire")
 			if err := os.MkdirAll(phaseDir, 0o755); err != nil {
 				t.Fatalf("mkdir phaseDir: %v", err)
@@ -142,15 +123,15 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 				t.Fatalf("pre-write stale qa-answers.md: %v", err)
 			}
 
-			// (c) Wire a session whose QALog is non-empty so both gates'
-			// session-side path is exercised with realistic input.
+			// (c) Wire a session whose QALog is non-empty so the session-side
+			// capture path is exercised with realistic input.
 			sm := session.NewManager(nil)
 			sess := makeSessionWithQALog(t, f.ID+"-inquire", f.ID, feature.PhaseInquire)
 			sess.SendStatus("SUCCESS")
 			sm.RegisterTestSession(sess)
 			app.sessionManager = sm
 
-			// (d) Drive handleSessionDone → TUI gate fires.
+			// (d) Drive handleSessionDone.
 			doneMsg := SessionDoneTUIMsg{
 				Done: session.SessionDoneMsg{
 					SessionID: sess.ID(),
@@ -161,21 +142,18 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 			}
 			_, _ = app.handleSessionDone(doneMsg)
 
-			// (e) Both gates honored: the transcript is written from the
-			// session Q&A log, not from stale agent-authored bytes.
+			// (e) TUI honored loop ownership: the phase-root transcript was
+			// not replaced by this single session's Q&A log.
 			got, err := os.ReadFile(qaPath)
 			if err != nil {
 				t.Fatalf("read qa-answers.md after both gates fired: %v", err)
 			}
-			if string(got) != grillMeSmokeHarnessQAFile {
-				t.Errorf("qa-answers.md was not written from session QALog.\n--- got ---\n%s\n--- want ---\n%s", got, grillMeSmokeHarnessQAFile)
+			if string(got) != grillMeSmokeStaleQAFile {
+				t.Errorf("qa-answers.md was overwritten by session QALog.\n--- got ---\n%s\n--- want ---\n%s", got, grillMeSmokeStaleQAFile)
 			}
 
-			// (g) Downstream Design consumes the path via
-			// collectQAFilePaths (refPrefix is empty for non-refactor
-			// features). HandlePhaseCompletion routed through the
-			// orchestrator's stateDir helper, so the same store/PhaseRunner
-			// wiring the TUI uses must surface the inquire path.
+			// (g) The path remains the canonical phase-root location that the
+			// blocking loop writes and downstream phases probe.
 			//
 			// We re-derive expectations using the same agent.ActiveRunDir
 			// helper the gate uses, so the assertion is robust to non-default
@@ -184,10 +162,7 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 			// We cannot reach the orchestrator's unexported collectQAFilePaths
 			// from this package; instead we confirm the file is at the
 			// canonical path that collectQAFilePaths probes for the inquire
-			// phase. Companion test
-			// orchestrator.TestInquirePhase_WritesHarnessOwnedQAFile
-			// pins the collectQAFilePaths reachability on the orchestrator
-			// side; the smoke test pins the path-derivation contract here.
+			// phase.
 			if _, err := os.Stat(expected); err != nil {
 				t.Fatalf("inquire qa file missing at canonical path %q: %v", expected, err)
 			}
@@ -336,8 +311,8 @@ drained:
 	if err != nil {
 		t.Fatalf("read qa-answers.md: %v", err)
 	}
-	if string(got) != grillMeAutoPickSmokeHarnessQAFile {
-		t.Fatalf("qa-answers.md mismatch\n--- got ---\n%s\n--- want ---\n%s", got, grillMeAutoPickSmokeHarnessQAFile)
+	if string(got) != grillMeSmokeStaleQAFile {
+		t.Fatalf("qa-answers.md mismatch\n--- got ---\n%s\n--- want ---\n%s", got, grillMeSmokeStaleQAFile)
 	}
 }
 

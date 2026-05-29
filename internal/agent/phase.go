@@ -409,6 +409,94 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 	})
 }
 
+// RunInquireLoop starts the Inquire blocking loop. Each loop iteration runs a
+// fresh Inquire session in inquire/iteration-NN and returns the terminal loop
+// result through a buffered channel.
+func (pr *PhaseRunner) RunInquireLoop(f *feature.Feature, kbInfos ...KBInfo) (chan *BlockingLoopResult, error) {
+	cfg, err := pr.buildInquireBlockingLoopConfig(f, kbInfos...)
+	if err != nil {
+		return nil, err
+	}
+	return pr.RunBlockingLoopAsync(context.Background(), cfg)
+}
+
+func (pr *PhaseRunner) buildInquireBlockingLoopConfig(f *feature.Feature, kbInfos ...KBInfo) (BlockingLoopConfig, error) {
+	if f == nil {
+		return BlockingLoopConfig{}, fmt.Errorf("inquire loop: feature is nil")
+	}
+	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
+	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
+	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
+	artifactDir := pr.resolvePhaseArtifactDir(f, feature.PhaseInquire.DirName())
+
+	return BlockingLoopConfig{
+		Label:                      "inquire",
+		Feature:                    f,
+		FeatureID:                  f.ID,
+		FeatureStore:               pr.FeatureStore,
+		Phase:                      feature.PhaseInquire,
+		Role:                       RoleInquirer,
+		Spec:                       InquirerRoleSpec(),
+		ArtifactDir:                artifactDir,
+		StateDir:                   filepath.Join(pr.StateDir, f.ID),
+		Model:                      researchModel,
+		WorkDir:                    workDir,
+		AdditionalDirs:             additionalDirs,
+		AgentNames:                 []string{},
+		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		SkillsDir:                  pr.SkillsDir,
+		GuidelinesDir:              pr.GuidelinesDir,
+		KBInfos:                    kbInfos,
+		AskingClause:               pr.askingQuestionsClauseForModel(researchModel),
+		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
+		PermissionCache:            pr.PermissionCache,
+		BuildSession:               pr.BuildSession,
+		Observer:                   pr.Observer,
+		HandoffFilename:            InquireProgressHandoffFilename,
+		ParseHandoff:               ParseInquireProgressHandoffMd,
+		Fingerprint:                InquireProgressHandoffFingerprint,
+		CanonicalSelector:          SelectNewestNonExcludedMarkdown,
+		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
+			return buildInquireLoopPrompt(f, pr.SkillsDir, in, kbInfos...), nil
+		},
+		MaxConsecNoProgress:         maxNoProgress,
+		MaxConsecFailures:           maxFails,
+		MaxConsecProtocolViolations: DefaultMaxConsecutiveProtocolViolations,
+		AccumulateQALog:             true,
+		SessionIDBase:               f.ID + "-inquire",
+		TelemetryRole:               "inquire",
+	}, nil
+}
+
+func buildInquireLoopPrompt(f *feature.Feature, skillsDir string, in BlockingLoopPromptInput, kbInfos ...KBInfo) string {
+	prompt := BuildInquirePrompt(f, skillsDir, kbInfos...)
+	seededPath := strings.TrimSpace(in.SeededCanonicalPath)
+	qaPath := strings.TrimSpace(in.SeededQAPath)
+	if seededPath == "" && qaPath == "" {
+		return prompt
+	}
+
+	var b strings.Builder
+	b.WriteString(prompt)
+	if seededPath != "" {
+		b.WriteString("\n\n## Existing Inquiry Draft\n\n")
+		b.WriteString("Read the seeded inquiry draft at:\n")
+		b.WriteString(seededPath)
+		b.WriteString("\n\nContinue from that draft in place. Preserve clarified requirements and open questions, add the remaining inquiry notes, and keep the canonical markdown as the growing deliverable for this iteration.\n")
+		if previousPath := strings.TrimSpace(in.PreviousCanonicalPath); previousPath != "" {
+			b.WriteString("\nIt was copied from the previous completed iteration at:\n")
+			b.WriteString(previousPath)
+			b.WriteString("\n")
+		}
+	}
+	if qaPath != "" {
+		b.WriteString("\nRead the forwarded interview-so-far answers at:\n")
+		b.WriteString(qaPath)
+		b.WriteString("\n\nDo not re-ask questions already answered there. Use those answers as prior context and continue only with genuinely unresolved inquiry work.\n")
+	}
+	return b.String()
+}
+
 // RunResearchFromQuestions starts a research session using questions from the Inquire phase.
 // Returns the session ID. The session runs asynchronously.
 func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (string, error) {
@@ -480,6 +568,7 @@ func (pr *PhaseRunner) buildResearchBlockingLoopConfig(f *feature.Feature, quest
 		MaxConsecNoProgress:         maxNoProgress,
 		MaxConsecFailures:           maxFails,
 		MaxConsecProtocolViolations: DefaultMaxConsecutiveProtocolViolations,
+		AccumulateQALog:             true,
 		SessionIDBase:               f.ID + "-research",
 		TelemetryRole:               "research",
 	}, nil
@@ -532,6 +621,97 @@ func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFi
 		GuidelinesDir: pr.GuidelinesDir,
 		KBInfos:       kbInfos,
 	})
+}
+
+// RunDesignLoop starts the Design blocking loop. Each loop iteration runs a
+// fresh Design session in design/iteration-NN and returns the terminal loop
+// result through a buffered channel.
+func (pr *PhaseRunner) RunDesignLoop(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (chan *BlockingLoopResult, error) {
+	cfg, err := pr.buildDesignBlockingLoopConfig(f, researchOutput, qaFilePaths, kbInfos...)
+	if err != nil {
+		return nil, err
+	}
+	return pr.RunBlockingLoopAsync(context.Background(), cfg)
+}
+
+func (pr *PhaseRunner) buildDesignBlockingLoopConfig(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (BlockingLoopConfig, error) {
+	if f == nil {
+		return BlockingLoopConfig{}, fmt.Errorf("design loop: feature is nil")
+	}
+	if strings.TrimSpace(researchOutput) == "" {
+		return BlockingLoopConfig{}, fmt.Errorf("design loop: research output path is empty")
+	}
+	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
+	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
+	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
+	artifactDir := pr.resolvePhaseArtifactDir(f, feature.PhaseDesign.DirName())
+
+	return BlockingLoopConfig{
+		Label:                      "design",
+		Feature:                    f,
+		FeatureID:                  f.ID,
+		FeatureStore:               pr.FeatureStore,
+		Phase:                      feature.PhaseDesign,
+		Role:                       RoleDesigner,
+		Spec:                       DesignerRoleSpec(),
+		ArtifactDir:                artifactDir,
+		StateDir:                   filepath.Join(pr.StateDir, f.ID),
+		Model:                      researchModel,
+		WorkDir:                    workDir,
+		AdditionalDirs:             additionalDirs,
+		AgentNames:                 []string{},
+		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		SkillsDir:                  pr.SkillsDir,
+		GuidelinesDir:              pr.GuidelinesDir,
+		KBInfos:                    kbInfos,
+		AskingClause:               pr.askingQuestionsClauseForModel(researchModel),
+		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
+		PermissionCache:            pr.PermissionCache,
+		BuildSession:               pr.BuildSession,
+		Observer:                   pr.Observer,
+		HandoffFilename:            DesignProgressHandoffFilename,
+		ParseHandoff:               ParseDesignProgressHandoffMd,
+		Fingerprint:                DesignProgressHandoffFingerprint,
+		CanonicalSelector:          SelectNewestNonExcludedMarkdown,
+		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
+			return buildDesignLoopPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, in, kbInfos...), nil
+		},
+		MaxConsecNoProgress:         maxNoProgress,
+		MaxConsecFailures:           maxFails,
+		MaxConsecProtocolViolations: DefaultMaxConsecutiveProtocolViolations,
+		AccumulateQALog:             true,
+		SessionIDBase:               f.ID + "-design",
+		TelemetryRole:               "design",
+	}, nil
+}
+
+func buildDesignLoopPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchOutput string, qaFilePaths []string, in BlockingLoopPromptInput, kbInfos ...KBInfo) string {
+	prompt := BuildDesignPrompt(f, skillsDir, guidelinesDir, researchOutput, qaFilePaths, kbInfos...)
+	seededPath := strings.TrimSpace(in.SeededCanonicalPath)
+	qaPath := strings.TrimSpace(in.SeededQAPath)
+	if seededPath == "" && qaPath == "" {
+		return prompt
+	}
+
+	var b strings.Builder
+	b.WriteString(prompt)
+	if seededPath != "" {
+		b.WriteString("\n\n## Existing Design Draft\n\n")
+		b.WriteString("Read the seeded design draft at:\n")
+		b.WriteString(seededPath)
+		b.WriteString("\n\nContinue from that draft in place. Preserve existing decisions, resolve the remaining design areas, and keep the canonical markdown as the growing deliverable for this iteration.\n")
+		if previousPath := strings.TrimSpace(in.PreviousCanonicalPath); previousPath != "" {
+			b.WriteString("\nIt was copied from the previous completed iteration at:\n")
+			b.WriteString(previousPath)
+			b.WriteString("\n")
+		}
+	}
+	if qaPath != "" {
+		b.WriteString("\nRead the forwarded design interview answers at:\n")
+		b.WriteString(qaPath)
+		b.WriteString("\n\nDo not re-ask design questions already answered there. Use those answers as prior context while continuing this design iteration.\n")
+	}
+	return b.String()
 }
 
 // RunCodebaseIndex builds structural codebase indexes for all repos in a feature.

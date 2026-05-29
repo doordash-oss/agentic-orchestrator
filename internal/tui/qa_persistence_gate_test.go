@@ -77,19 +77,20 @@ func statusForPhase(p feature.Phase) feature.Status {
 	return feature.StatusCreated
 }
 
-// TestTUI_HandleSessionDone_QAWritesForInteractivePlanningPhases drives
+// TestTUI_HandleSessionDone_QASkipsLoopOwnedPlanningPhases drives
 // handleSessionDone for each of {Research, Inquire, Design, KnowledgeBase}
-// and asserts qa-answers.md is written for phases whose completed sessions
-// can carry user Q&A.
-func TestTUI_HandleSessionDone_QAWritesForInteractivePlanningPhases(t *testing.T) {
+// and asserts loop-owned phases do not use the TUI's stale per-session QA
+// persistence path. The blocking loop owns the accumulated phase-root
+// qa-answers.md for Inquire, Research, and Design.
+func TestTUI_HandleSessionDone_QASkipsLoopOwnedPlanningPhases(t *testing.T) {
 	cases := []struct {
 		name       string
 		phase      feature.Phase
 		wantQAFile bool
 	}{
-		{"research_writes", feature.PhaseResearch, true},
-		{"inquire_writes", feature.PhaseInquire, true},
-		{"design_writes", feature.PhaseDesign, true},
+		{"research_skips", feature.PhaseResearch, false},
+		{"inquire_skips", feature.PhaseInquire, false},
+		{"design_skips", feature.PhaseDesign, false},
 		{"knowledge_base_skips", feature.PhaseKnowledgeBase, false},
 	}
 

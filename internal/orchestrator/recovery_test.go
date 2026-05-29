@@ -801,22 +801,13 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 	}
 
 	// PhaseRunner: StateDir + CommandRunner required by startKB's
-	// IsKBFresh path; SessionManager is a mock that never reaches
-	// StartSession (BuildSessionFn returns an error first).
-	//
-	// BuildSessionFn returns a sentinel error so RunInquire short-circuits
-	// *after* Lifecycle.StartInquire has already fired its transition.
-	// That lets us observe "the transitions succeeded" without needing a
-	// live claude CLI to drive RunInquire end-to-end.
+	// IsKBFresh path. Leave SessionManager nil so startInquire applies the
+	// lifecycle transition without launching an async blocking loop; this test
+	// only owns the KB-skip transition bridge.
 	pr := &agent.PhaseRunner{
-		StateDir:       stateDir,
-		CommandRunner:  cmd,
-		FeatureStore:   store,
-		SessionManager: mocks.NewMockSessionManager(),
-	}
-	sentinelBuildErr := errors.New("test-only: build session short-circuited")
-	pr.BuildSessionFn = func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		return nil, nil, nil, sentinelBuildErr
+		StateDir:      stateDir,
+		CommandRunner: cmd,
+		FeatureStore:  store,
 	}
 
 	fakeRec := &fakeRecoveryOp{}
@@ -830,16 +821,13 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 
 	err := o.ExecuteRecovery(context.Background(), items, actions)
 
-	// The error we expect is the test-only BuildSession shutdown propagated
-	// through RunInquire. The error we MUST NOT see is the invalid-transition
-	// message — that would prove finalizeKBForSkip didn't fire.
+	// The error we MUST NOT see is the invalid-transition message — that
+	// would prove finalizeKBForSkip didn't fire.
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid transition from building_kb to inquiring") {
 			t.Fatalf("regression: BuildingKB → Inquiring transition attempted without finalizeKBForSkip bridge: %v", err)
 		}
-		if !strings.Contains(err.Error(), sentinelBuildErr.Error()) {
-			t.Errorf("unexpected error path (not the BuildSession short-circuit): %v", err)
-		}
+		t.Fatalf("ExecuteRecovery: %v", err)
 	}
 
 	// Critical post-condition: both CompleteKnowledgeBase (BuildingKB →

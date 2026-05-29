@@ -32,9 +32,15 @@ const (
 	// ProducerProgressHandoffFilename is the rolling scratch artifact used by
 	// producer-style helpers during Smart Zone continuations.
 	ProducerProgressHandoffFilename = "producer-progress.md"
+	// InquireProgressHandoffFilename is the rolling scratch artifact used by
+	// Inquire's blocking loop during Smart Zone continuations.
+	InquireProgressHandoffFilename = "inquire-progress.md"
 	// ResearchProgressHandoffFilename is the rolling scratch artifact used by
 	// Research's blocking loop during Smart Zone continuations.
 	ResearchProgressHandoffFilename = "research-progress.md"
+	// DesignProgressHandoffFilename is the rolling scratch artifact used by
+	// Design's blocking loop during Smart Zone continuations.
+	DesignProgressHandoffFilename = "design-progress.md"
 )
 
 // HelperHandoffState is the continuation routing token parsed from helper
@@ -84,9 +90,23 @@ var (
 		"## Where I Stopped",
 		"## Handoff State",
 	}
+	inquireProgressHandoffSections = []string{
+		"## Clarified Requirements",
+		"## Open Questions",
+		"## Where I Stopped",
+		"## Gotchas",
+		"## Handoff State",
+	}
 	researchProgressHandoffSections = []string{
 		"## Completed Findings",
 		"## Remaining Areas",
+		"## Where I Stopped",
+		"## Gotchas",
+		"## Handoff State",
+	}
+	designProgressHandoffSections = []string{
+		"## Decisions Made",
+		"## Open Design Areas",
 		"## Where I Stopped",
 		"## Gotchas",
 		"## Handoff State",
@@ -107,9 +127,19 @@ func ParseProducerProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
 	return parseHelperHandoffMd(path, ProducerProgressHandoffFilename, producerProgressHandoffSections)
 }
 
+// ParseInquireProgressHandoffMd parses inquire-progress.md.
+func ParseInquireProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
+	return parseHelperHandoffMd(path, InquireProgressHandoffFilename, inquireProgressHandoffSections)
+}
+
 // ParseResearchProgressHandoffMd parses research-progress.md.
 func ParseResearchProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
 	return parseHelperHandoffMd(path, ResearchProgressHandoffFilename, researchProgressHandoffSections)
+}
+
+// ParseDesignProgressHandoffMd parses design-progress.md.
+func ParseDesignProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
+	return parseHelperHandoffMd(path, DesignProgressHandoffFilename, designProgressHandoffSections)
 }
 
 func parseHelperHandoffMd(path, filename string, requiredSections []string) (*ParsedHelperHandoff, error) {
@@ -187,10 +217,22 @@ func ProducerProgressHandoffFingerprint(path string) (string, error) {
 	return helperHandoffFingerprint(path, ParseProducerProgressHandoffMd)
 }
 
+// InquireProgressHandoffFingerprint computes a stable fingerprint over the
+// inquiry loop's progress narrative.
+func InquireProgressHandoffFingerprint(path string) (string, error) {
+	return helperHandoffFingerprint(path, ParseInquireProgressHandoffMd)
+}
+
 // ResearchProgressHandoffFingerprint computes a stable fingerprint over the
 // research loop's progress narrative.
 func ResearchProgressHandoffFingerprint(path string) (string, error) {
 	return helperHandoffFingerprint(path, ParseResearchProgressHandoffMd)
+}
+
+// DesignProgressHandoffFingerprint computes a stable fingerprint over the
+// design loop's progress narrative.
+func DesignProgressHandoffFingerprint(path string) (string, error) {
+	return helperHandoffFingerprint(path, ParseDesignProgressHandoffMd)
 }
 
 func helperHandoffFingerprint(path string, parse func(string) (*ParsedHelperHandoff, error)) (string, error) {

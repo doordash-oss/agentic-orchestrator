@@ -170,6 +170,16 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 					return nil, nil
 				})
 			}
+			if tt.phase == feature.PhaseInquire {
+				o.SetRunInquireLoopFn(func(f *feature.Feature, kbInfos ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+					return nil, nil
+				})
+			}
+			if tt.phase == feature.PhaseDesign {
+				o.SetRunDesignLoopFn(func(f *feature.Feature, researchPath string, qaFilePaths []string, kbInfos ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+					return nil, nil
+				})
+			}
 
 			err := o.StartFeature("feat-dispatch")
 

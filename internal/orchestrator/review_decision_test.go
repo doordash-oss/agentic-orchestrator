@@ -86,8 +86,7 @@ func TestOrchestrator_AdvanceToNextPhase_Gate_EmitsReviewRequired(t *testing.T) 
 	lc.CompleteInquireFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
-	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
+	terminalDir, terminalMarkdown := writeLoopTerminalMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	var gotPhase feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
@@ -99,8 +98,13 @@ func TestOrchestrator_AdvanceToNextPhase_Gate_EmitsReviewRequired(t *testing.T) 
 	})
 
 	if err := o.HandlePhaseCompletion("feat-adv-gate", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        terminalMarkdown,
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
@@ -1197,8 +1201,12 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 	fsGate := newFeatureStore(fGate)
 	oGate := orchestrator.New(orchestrator.Deps{Lifecycle: lcGate, Store: fsGate}, orchestrator.Hooks{})
 	if err := oGate.HandlePhaseCompletion("feat-gate-nil", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			Iterations:    1,
+			CanonicalPath: "/tmp/inquire.md",
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion gate path with nil hooks: %v", err)
 	}
@@ -1358,8 +1366,7 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t 
 	}
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
-	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
+	terminalDir, terminalMarkdown := writeLoopTerminalMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	var failedCalls []struct{ id, ft, msg string }
 	hooks := orchestrator.Hooks{
@@ -1374,8 +1381,13 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_EmitsFeatureFailed(t 
 	}, hooks)
 
 	err := o.HandlePhaseCompletion("feat-advance-fail", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        terminalMarkdown,
+		},
 	})
 	if err == nil {
 		t.Fatal("HandlePhaseCompletion should surface the starter error")
@@ -1429,8 +1441,7 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_B
 	lc.MarkFailedFn = func(id, ft, msg string) error { return markErr }
 	fs := newFeatureStore(f)
 	stateDir := t.TempDir()
-	writePhaseComplete(t, stateDir, f, "inquire")
-	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
+	terminalDir, terminalMarkdown := writeLoopTerminalMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle:   lc,
@@ -1439,8 +1450,13 @@ func TestOrchestrator_AdvanceToNextPhase_StartPhaseFailure_MarkFailedAlsoFails_B
 	}, orchestrator.Hooks{})
 
 	err := o.HandlePhaseCompletion("feat-advance-double-fail", orchestrator.PhaseCompletionInput{
-		Phase:   feature.PhaseInquire,
-		Success: true,
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:          agent.BlockingLoopStatusSuccess,
+			Iterations:           1,
+			TerminalIterationDir: terminalDir,
+			CanonicalPath:        terminalMarkdown,
+		},
 	})
 	if err == nil {
 		t.Fatal("expected combined error when both starter and MarkFailed fail")

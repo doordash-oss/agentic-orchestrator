@@ -15,6 +15,8 @@
 package mocks
 
 import (
+	"sync"
+
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -30,6 +32,8 @@ type MockStartSessionCall struct {
 // MockSessionManager implements ports.SessionManager with configurable
 // function overrides and call tracking.
 type MockSessionManager struct {
+	mu sync.Mutex
+
 	// Function overrides
 	StartSessionFn func(id, featureID string, phase feature.Phase,
 		command []string, workdir string, env []string,
@@ -62,20 +66,30 @@ func (m *MockSessionManager) StartSession(id, featureID string, phase feature.Ph
 	command []string, workdir string, env []string,
 	opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 
+	m.mu.Lock()
 	m.StartSessionCalls = append(m.StartSessionCalls, MockStartSessionCall{
 		ID:        id,
 		FeatureID: featureID,
 		Phase:     phase,
 		Command:   command,
 	})
+	m.mu.Unlock()
 	if m.StartSessionFn != nil {
 		return m.StartSessionFn(id, featureID, phase, command, workdir, env, opts...)
 	}
 	return nil, m.DefaultError
 }
 
+func (m *MockSessionManager) StartSessionCallsSnapshot() []MockStartSessionCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]MockStartSessionCall(nil), m.StartSessionCalls...)
+}
+
 func (m *MockSessionManager) StopSession(id string) error {
+	m.mu.Lock()
 	m.StopCalls = append(m.StopCalls, id)
+	m.mu.Unlock()
 	if m.StopSessionFn != nil {
 		return m.StopSessionFn(id)
 	}
@@ -97,7 +111,9 @@ func (m *MockSessionManager) ActiveSessions() []session.SessionView {
 }
 
 func (m *MockSessionManager) FeatureSessions(featureID string) []session.SessionView {
+	m.mu.Lock()
 	m.FeatureSessionsCalls = append(m.FeatureSessionsCalls, featureID)
+	m.mu.Unlock()
 	if m.FeatureSessionsFn != nil {
 		return m.FeatureSessionsFn(featureID)
 	}

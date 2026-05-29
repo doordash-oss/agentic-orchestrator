@@ -381,11 +381,7 @@ func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 		return newStubSessionHandle(id, featureID, phase, ""), nil
 	}
 	pr := &agent.PhaseRunner{
-		StateDir:       stateDir,
-		SessionManager: sm,
-		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			return []string{"true"}, nil, &ports.SessionOpts{}, nil
-		},
+		StateDir: stateDir,
 	}
 
 	o := orchestrator.New(orchestrator.Deps{

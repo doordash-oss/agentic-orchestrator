@@ -36,6 +36,8 @@ var designerRoleSpec = RoleSpec{
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
 		phaseMarkdownRoleArtifact("design markdown artifact"),
+		designProgressHandoffRoleArtifact(),
+		iterationMetaRoleArtifact(),
 	},
 	ReadOnlyOutsideRoots: true,
 }

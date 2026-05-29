@@ -152,3 +152,30 @@ func TestWriteQAFileMarkdownFormat(t *testing.T) {
 		t.Error("expected file to start with top-level heading")
 	}
 }
+
+func TestReadQAFilePreservesMultilineAnswerAndNotes(t *testing.T) {
+	dir := t.TempDir()
+	want := ports.QAPair{
+		Question: "What details should continue?",
+		Answer:   "line 1\n\nline 2\n- bullet",
+		Notes:    "note 1\n\nnote 2",
+	}
+	path, err := WriteQAFile([]ports.QAPair{want}, dir)
+	if err != nil {
+		t.Fatalf("WriteQAFile: %v", err)
+	}
+
+	got, err := ReadQAFile(path)
+	if err != nil {
+		t.Fatalf("ReadQAFile: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ReadQAFile() returned %d pairs, want 1", len(got))
+	}
+	if got[0].Answer != want.Answer {
+		t.Errorf("ReadQAFile() answer = %q; want %q", got[0].Answer, want.Answer)
+	}
+	if got[0].Notes != want.Notes {
+		t.Errorf("ReadQAFile() notes = %q; want %q", got[0].Notes, want.Notes)
+	}
+}

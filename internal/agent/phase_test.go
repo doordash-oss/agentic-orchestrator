@@ -1007,6 +1007,9 @@ func TestBuildResearchBlockingLoopConfig(t *testing.T) {
 	if cfg.FeatureStore != pr.FeatureStore {
 		t.Fatal("FeatureStore was not wired into research blocking loop config")
 	}
+	if !cfg.AccumulateQALog {
+		t.Fatal("research loop did not enable QALog accumulation")
+	}
 	if got := cfg.Spec.MarkerPath(RoleRuntime{IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-02")}); !strings.HasSuffix(got, filepath.Join("iteration-02", PhaseCompleteFile)) {
 		t.Fatalf("research marker path = %q, want iteration-local phase_complete", got)
 	}
@@ -1025,6 +1028,155 @@ func TestBuildResearchBlockingLoopConfig(t *testing.T) {
 	if !strings.Contains(prompt, "Read the seeded research draft at:") ||
 		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "research.md")) {
 		t.Fatalf("research loop prompt missing seeded draft instruction:\n%s", prompt)
+	}
+}
+
+func TestBuildInquireBlockingLoopConfig(t *testing.T) {
+	stateDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	f := &feature.Feature{
+		ID:            "feat-inquire-loop",
+		Name:          "Inquire Loop",
+		Description:   "loop config",
+		Status:        feature.StatusInquiring,
+		CurrentPhase:  feature.PhaseInquire,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo", Path: workDir}},
+		Models:        config.ModelConfig{Research: "research-model"},
+	}
+	pr := &PhaseRunner{
+		StateDir:       stateDir,
+		SkillsDir:      filepath.Join(stateDir, "skills"),
+		GuidelinesDir:  filepath.Join(stateDir, "guidelines"),
+		FeatureStore:   mocks.NewMockFeatureStore(),
+		BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) { return nil, nil, nil, nil },
+	}
+
+	cfg, err := pr.buildInquireBlockingLoopConfig(f, KBInfo{Name: "repo", IndexPath: "/kb/repo/index.md"})
+	if err != nil {
+		t.Fatalf("buildInquireBlockingLoopConfig() error = %v", err)
+	}
+	if got, want := cfg.ArtifactDir, filepath.Join(ActiveRunDir(stateDir, f), "inquire"); got != want {
+		t.Fatalf("ArtifactDir = %q, want %q", got, want)
+	}
+	if got := cfg.HandoffFilename; got != InquireProgressHandoffFilename {
+		t.Fatalf("HandoffFilename = %q, want %q", got, InquireProgressHandoffFilename)
+	}
+	if cfg.ParseHandoff == nil || cfg.Fingerprint == nil || cfg.CanonicalSelector == nil {
+		t.Fatalf("inquire loop parser/fingerprint/selector not wired: %#v", cfg)
+	}
+	if got := cfg.TelemetryRole; got != "inquire" {
+		t.Fatalf("TelemetryRole = %q, want inquire", got)
+	}
+	if !cfg.AccumulateQALog {
+		t.Fatal("inquire loop did not enable QALog accumulation")
+	}
+	if got := cfg.Spec.MarkerPath(RoleRuntime{IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-02")}); !strings.HasSuffix(got, filepath.Join("iteration-02", PhaseCompleteFile)) {
+		t.Fatalf("inquire marker path = %q, want iteration-local phase_complete", got)
+	}
+	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:             2,
+		IterationDir:          filepath.Join(cfg.ArtifactDir, "iteration-02"),
+		SeededCanonicalPath:   filepath.Join(cfg.ArtifactDir, "iteration-02", "questions.md"),
+		SeededQAPath:          filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md"),
+		PreviousCanonicalPath: filepath.Join(cfg.ArtifactDir, "iteration-01", "questions.md"),
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt() error = %v", err)
+	}
+	if !strings.Contains(prompt, "Read the seeded inquiry draft at:") ||
+		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "questions.md")) {
+		t.Fatalf("inquire loop prompt missing seeded draft instruction:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Read the forwarded interview-so-far answers at:") ||
+		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md")) ||
+		!strings.Contains(prompt, "Do not re-ask questions already answered there.") {
+		t.Fatalf("inquire loop prompt missing seeded QA instruction:\n%s", prompt)
+	}
+}
+
+func TestBuildDesignBlockingLoopConfig(t *testing.T) {
+	stateDir := t.TempDir()
+	workDir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	researchPath := filepath.Join(stateDir, "feat-design-loop", "runs", "run-001", "research", "iteration-01", "research.md")
+	qaPaths := []string{
+		filepath.Join(stateDir, "feat-design-loop", "runs", "run-001", "inquire", "qa-answers.md"),
+		filepath.Join(stateDir, "feat-design-loop", "runs", "run-001", "research", "qa-answers.md"),
+	}
+	f := &feature.Feature{
+		ID:            "feat-design-loop",
+		Name:          "Design Loop",
+		Description:   "loop config",
+		Status:        feature.StatusDesigning,
+		CurrentPhase:  feature.PhaseDesign,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo", Path: workDir}},
+		Models:        config.ModelConfig{Research: "research-model"},
+	}
+	pr := &PhaseRunner{
+		StateDir:       stateDir,
+		SkillsDir:      filepath.Join(stateDir, "skills"),
+		GuidelinesDir:  filepath.Join(stateDir, "guidelines"),
+		FeatureStore:   mocks.NewMockFeatureStore(),
+		BuildSessionFn: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) { return nil, nil, nil, nil },
+	}
+
+	cfg, err := pr.buildDesignBlockingLoopConfig(f, researchPath, qaPaths, KBInfo{Name: "repo", IndexPath: "/kb/repo/index.md"})
+	if err != nil {
+		t.Fatalf("buildDesignBlockingLoopConfig() error = %v", err)
+	}
+	if got, want := cfg.ArtifactDir, filepath.Join(ActiveRunDir(stateDir, f), "design"); got != want {
+		t.Fatalf("ArtifactDir = %q, want %q", got, want)
+	}
+	if got := cfg.HandoffFilename; got != DesignProgressHandoffFilename {
+		t.Fatalf("HandoffFilename = %q, want %q", got, DesignProgressHandoffFilename)
+	}
+	if cfg.ParseHandoff == nil || cfg.Fingerprint == nil || cfg.CanonicalSelector == nil {
+		t.Fatalf("design loop parser/fingerprint/selector not wired: %#v", cfg)
+	}
+	if got := cfg.TelemetryRole; got != "design" {
+		t.Fatalf("TelemetryRole = %q, want design", got)
+	}
+	if !cfg.AccumulateQALog {
+		t.Fatal("design loop did not enable QALog accumulation")
+	}
+	if got := cfg.Spec.MarkerPath(RoleRuntime{IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-02")}); !strings.HasSuffix(got, filepath.Join("iteration-02", PhaseCompleteFile)) {
+		t.Fatalf("design marker path = %q, want iteration-local phase_complete", got)
+	}
+	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:             2,
+		IterationDir:          filepath.Join(cfg.ArtifactDir, "iteration-02"),
+		SeededCanonicalPath:   filepath.Join(cfg.ArtifactDir, "iteration-02", "design.md"),
+		SeededQAPath:          filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md"),
+		PreviousCanonicalPath: filepath.Join(cfg.ArtifactDir, "iteration-01", "design.md"),
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt() error = %v", err)
+	}
+	if !strings.Contains(prompt, researchPath) {
+		t.Fatalf("design loop prompt missing research path %q:\n%s", researchPath, prompt)
+	}
+	if !strings.Contains(prompt, qaPaths[0]) || !strings.Contains(prompt, qaPaths[1]) {
+		t.Fatalf("design loop prompt missing QA paths %v:\n%s", qaPaths, prompt)
+	}
+	if !strings.Contains(prompt, "Read the seeded design draft at:") ||
+		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "design.md")) {
+		t.Fatalf("design loop prompt missing seeded draft instruction:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Read the forwarded design interview answers at:") ||
+		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md")) ||
+		!strings.Contains(prompt, "Do not re-ask design questions already answered there.") {
+		t.Fatalf("design loop prompt missing seeded QA instruction:\n%s", prompt)
 	}
 }
 

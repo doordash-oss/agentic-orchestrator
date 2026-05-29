@@ -3178,11 +3178,11 @@ func (m AttachModel) renderFinishPromptInline() string {
 	return b.String()
 }
 
-// renderAttachHeader renders the AGENTIC brand header for the attach view.
+// renderAttachHeader renders the AGENTICO brand header for the attach view.
 func (m AttachModel) renderAttachHeader(w int) string {
 	artLines := []string{
-		" \u2584\u2580\u2588 \u2588\u2580\u2580 \u2588\u2580\u2580 \u2588\u2584\u2591\u2588 \u2580\u2588\u2580 \u2588 \u2588\u2580\u2580",
-		" \u2588\u2580\u2588 \u2588\u2584\u2588 \u2588\u2588\u2584 \u2588\u2591\u2580\u2588 \u2591\u2588\u2591 \u2588 \u2588\u2584\u2584",
+		" \u2584\u2580\u2588 \u2588\u2580\u2580 \u2588\u2580\u2580 \u2588\u2584\u2591\u2588 \u2580\u2588\u2580 \u2588 \u2588\u2580\u2580 \u2588\u2580\u2588",
+		" \u2588\u2580\u2588 \u2588\u2584\u2588 \u2588\u2588\u2584 \u2588\u2591\u2580\u2588 \u2591\u2588\u2591 \u2588 \u2588\u2584\u2584 \u2588\u2584\u2588",
 	}
 
 	brandStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)

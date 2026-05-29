@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
@@ -52,5 +53,76 @@ func TestProviderAskingQuestionsClausesIncludeRecommendationConfidenceContract(t
 		if !strings.Contains(clause, "single highest-confidence option") {
 			t.Fatalf("%s AskingQuestionsClause missing highest-confidence recommendation contract:\n%s", name, clause)
 		}
+	}
+}
+
+func TestRegistrySmartZoneThresholdTokens_DefaultCatalog(t *testing.T) {
+	r := llm.NewRegistry()
+	r.Register(&claude.Provider{})
+	r.Register(&codex.Provider{})
+
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		want     int
+	}{
+		{"claude_opus", "claude", "opus", 100_000},
+		{"claude_opus_1m", "claude", "opus[1m]", 100_000},
+		{"claude_sonnet", "claude", "sonnet", 80_000},
+		{"claude_sonnet_1m", "claude", "sonnet[1m]", 80_000},
+		{"claude_haiku", "claude", "haiku", 40_000},
+		{"codex_gpt_5_5", "codex", "gpt-5.5", 100_000},
+		{"codex_gpt_5_4", "codex", "gpt-5.4", 90_000},
+		{"codex_gpt_5_4_mini", "codex", "gpt-5.4-mini", 50_000},
+		{"codex_gpt_5_3_codex", "codex", "gpt-5.3-codex", 80_000},
+		{"codex_alias", "codex", "codex", 80_000},
+		{"codex_gpt_5_2", "codex", "gpt-5.2", 80_000},
+		{"unknown_model", "codex", "unknown-model", 40_000},
+		{"unknown_provider", "unknown", "whatever", 40_000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := r.SmartZoneThresholdTokens(tt.provider, tt.model, config.SmartZoneConfig{})
+			if got != tt.want {
+				t.Errorf("SmartZoneThresholdTokens(%q, %q) = %d, want %d", tt.provider, tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRegistrySmartZoneThresholdTokens_OverridesCanonicalizedAliases(t *testing.T) {
+	r := llm.NewRegistry()
+	claudeProvider := &claude.Provider{}
+	claudeProvider.SetModelCatalog([]llm.ModelInfo{
+		{
+			ID:              "opus[1m]",
+			Aliases:         []string{"claude-opus-4-8[1m]"},
+			SmartZoneTokens: 100_000,
+		},
+	})
+	r.Register(claudeProvider)
+	r.Register(&codex.Provider{})
+
+	smartZone := config.SmartZoneConfig{
+		Thresholds: map[string]map[string]int{
+			"claude": {
+				"claude-opus-4-8[1m]": 123_456,
+			},
+			"codex": {
+				"codex": 77_777,
+			},
+		},
+	}
+
+	if got := r.SmartZoneThresholdTokens("claude", "opus[1m]", smartZone); got != 123_456 {
+		t.Errorf("SmartZoneThresholdTokens() alias override = %d, want 123456", got)
+	}
+	if got := r.SmartZoneThresholdTokens("codex", "gpt-5.3-codex", smartZone); got != 77_777 {
+		t.Errorf("SmartZoneThresholdTokens() codex alias override = %d, want 77777", got)
+	}
+	if got := r.SmartZoneThresholdTokens("codex", "gpt-5.4", smartZone); got != 90_000 {
+		t.Errorf("SmartZoneThresholdTokens() catalog fallback = %d, want 90000", got)
 	}
 }

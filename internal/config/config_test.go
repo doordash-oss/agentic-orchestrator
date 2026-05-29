@@ -1589,3 +1589,73 @@ func TestObservabilityConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestSmartZoneConfig(t *testing.T) {
+	t.Run("absent_gets_defaults", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgPath := filepath.Join(tmpDir, "config.yaml")
+		os.WriteFile(cfgPath, []byte("repos: {}\n"), 0o644)
+
+		cfg, err := Load(cfgPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if !cfg.SmartZone.IsEnabled() {
+			t.Error("expected SmartZone enabled when section is absent")
+		}
+	})
+
+	t.Run("present_but_enabled_omitted", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgPath := filepath.Join(tmpDir, "config.yaml")
+		os.WriteFile(cfgPath, []byte("smart_zone:\n  thresholds:\n    claude:\n      opus: 90000\n"), 0o644)
+
+		cfg, err := Load(cfgPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if !cfg.SmartZone.IsEnabled() {
+			t.Error("expected SmartZone enabled when enabled key is omitted")
+		}
+		if got := cfg.SmartZone.Thresholds["claude"]["opus"]; got != 90_000 {
+			t.Errorf("threshold override = %d, want 90000", got)
+		}
+	})
+
+	t.Run("explicit_enabled_false", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgPath := filepath.Join(tmpDir, "config.yaml")
+		os.WriteFile(cfgPath, []byte("smart_zone:\n  enabled: false\n"), 0o644)
+
+		cfg, err := Load(cfgPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		if cfg.SmartZone.IsEnabled() {
+			t.Error("expected SmartZone disabled when enabled is explicitly false")
+		}
+	})
+
+	t.Run("new_default_and_round_trip", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgPath := filepath.Join(tmpDir, "config.yaml")
+		cfg := NewDefault()
+		cfg.SmartZone.Thresholds = map[string]map[string]int{
+			"codex": {"gpt-5.4": 91_000},
+		}
+		if err := Save(cfgPath, cfg); err != nil {
+			t.Fatalf("Save failed: %v", err)
+		}
+
+		reloaded, err := Load(cfgPath)
+		if err != nil {
+			t.Fatalf("Load after save failed: %v", err)
+		}
+		if !reloaded.SmartZone.IsEnabled() {
+			t.Error("expected SmartZone enabled after round-trip")
+		}
+		if got := reloaded.SmartZone.Thresholds["codex"]["gpt-5.4"]; got != 91_000 {
+			t.Errorf("round-trip threshold = %d, want 91000", got)
+		}
+	})
+}

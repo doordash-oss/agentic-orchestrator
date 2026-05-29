@@ -40,6 +40,7 @@ type Config struct {
 	Notifications   NotificationConfig    `yaml:"notifications,omitempty"`
 	UI              UIConfig              `yaml:"ui,omitempty"`
 	Observability   ObservabilityConfig   `yaml:"observability,omitempty"`
+	SmartZone       SmartZoneConfig       `yaml:"smart_zone,omitempty"`
 }
 
 // ObservabilityConfig controls JSONL event emission and OTel export.
@@ -60,6 +61,33 @@ func (o *ObservabilityConfig) UnmarshalYAML(value *yaml.Node) error {
 	o.parsed = true
 	type plain ObservabilityConfig
 	return value.Decode((*plain)(o))
+}
+
+// SmartZoneConfig controls context handoff threshold behavior.
+type SmartZoneConfig struct {
+	Enabled    bool                      `yaml:"enabled"`
+	Thresholds map[string]map[string]int `yaml:"thresholds,omitempty"`
+
+	parsed bool // set by UnmarshalYAML; not serialized
+}
+
+// UnmarshalYAML defaults Enabled to true so that a present smart_zone section
+// with only threshold overrides still keeps Smart Zone handoffs armed.
+func (s *SmartZoneConfig) UnmarshalYAML(value *yaml.Node) error {
+	s.Enabled = true
+	s.parsed = true
+	type plain SmartZoneConfig
+	return value.Decode((*plain)(s))
+}
+
+// IsEnabled reports whether Smart Zone handoffs are armed. A zero-value
+// SmartZoneConfig represents an omitted config section and therefore defaults
+// to enabled.
+func (s SmartZoneConfig) IsEnabled() bool {
+	if !s.parsed {
+		return true
+	}
+	return s.Enabled
 }
 
 type UIConfig struct {
@@ -293,6 +321,11 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Observability.OTelServiceName == "" {
 		cfg.Observability.OTelServiceName = "agentico"
+	}
+
+	// If the YAML had no smart_zone section, apply the default-true gate.
+	if !cfg.SmartZone.parsed {
+		cfg.SmartZone.Enabled = true
 	}
 
 	// Validate keyboard layout; reset to empty (default) if unrecognised.

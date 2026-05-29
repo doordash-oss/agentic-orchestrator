@@ -47,5 +47,8 @@ func NewDefault() *Config {
 			Events:          true,
 			OTelServiceName: "agentico",
 		},
+		SmartZone: SmartZoneConfig{
+			Enabled: true,
+		},
 	}
 }

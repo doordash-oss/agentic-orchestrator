@@ -300,6 +300,21 @@ func TestReconcileSkills(t *testing.T) {
 		t.Error("reconciled file missing 'description:'")
 	}
 
+	handoffPath := filepath.Join(skillsDir, "implement", "HANDOFF.md")
+	handoff, err := os.ReadFile(handoffPath)
+	if err != nil {
+		t.Fatalf("reading implement HANDOFF.md: %v", err)
+	}
+	handoffText := string(handoff)
+	for _, want := range []string{"## Iteration State", "RETRY", "verification-report.yaml", "phase_complete"} {
+		if !strings.Contains(handoffText, want) {
+			t.Errorf("implement HANDOFF.md missing %q", want)
+		}
+	}
+	if strings.Contains(handoffText, "### Completed this iteration") {
+		t.Error("implement HANDOFF.md should reference the progress.md schema in SKILL.md instead of duplicating it")
+	}
+
 	// Idempotent on second call (modtime unchanged)
 	info, err := os.Stat(skillPath)
 	if err != nil {

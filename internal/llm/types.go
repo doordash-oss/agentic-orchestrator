@@ -18,11 +18,12 @@ package llm
 // Pricing is handled at runtime by each provider's rate table (e.g. codex/rates.go),
 // not stored in discovery metadata.
 type ModelInfo struct {
-	ID            string   `yaml:"id"`                // CLI model name, e.g. "opus", "sonnet", "gpt-5.4"
-	DisplayName   string   `yaml:"display_name"`      // Human-readable name
-	ContextWindow int      `yaml:"context_window"`    // Max tokens
-	Aliases       []string `yaml:"aliases,omitempty"` // Alternative names, e.g. ["opus[1m]"]
-	Category      string   `yaml:"category"`          // "cheap", "balanced", "capable"
+	ID              string   `yaml:"id"`                          // CLI model name, e.g. "opus", "sonnet", "gpt-5.4"
+	DisplayName     string   `yaml:"display_name"`                // Human-readable name
+	ContextWindow   int      `yaml:"context_window"`              // Max tokens
+	SmartZoneTokens int      `yaml:"smart_zone_tokens,omitempty"` // Absolute handoff threshold tokens
+	Aliases         []string `yaml:"aliases,omitempty"`           // Alternative names, e.g. ["opus[1m]"]
+	Category        string   `yaml:"category"`                    // "cheap", "balanced", "capable"
 }
 
 // CatalogEnricher is implemented by providers whose model catalog can be

@@ -30,6 +30,10 @@ type Registry struct {
 	activeProviderFilter map[string]bool
 }
 
+// DefaultSmartZoneThresholdTokens is the absolute handoff threshold for
+// unrecognized providers or models.
+const DefaultSmartZoneThresholdTokens = 40_000
+
 // NewRegistry creates an empty provider registry.
 func NewRegistry() *Registry {
 	return &Registry{}
@@ -229,6 +233,68 @@ func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// SmartZoneThresholdTokens resolves the absolute Smart Zone handoff threshold
+// for a provider/model pair. Config overrides win after provider-catalog alias
+// canonicalization; catalog values win next; unknown models fall back to 40K.
+func (r *Registry) SmartZoneThresholdTokens(providerName, model string, smartZone config.SmartZoneConfig) int {
+	providerName = strings.TrimSpace(providerName)
+	model = strings.TrimSpace(model)
+	p := r.providerByName(providerName)
+	canonicalModel := model
+	if p != nil {
+		if canonical, ok := canonicalModelForProvider(p, model); ok {
+			canonicalModel = canonical
+		}
+	}
+
+	if threshold, ok := smartZoneThresholdOverride(p, smartZone, providerName, model, canonicalModel); ok {
+		return threshold
+	}
+
+	if p != nil {
+		for _, entry := range catalogForProvider(p) {
+			if strings.EqualFold(entry.ID, canonicalModel) && entry.SmartZoneTokens > 0 {
+				return entry.SmartZoneTokens
+			}
+		}
+	}
+	return DefaultSmartZoneThresholdTokens
+}
+
+func (r *Registry) providerByName(name string) LLMProvider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, p := range r.providers {
+		if strings.EqualFold(p.Name(), name) {
+			return p
+		}
+	}
+	return nil
+}
+
+func smartZoneThresholdOverride(p LLMProvider, smartZone config.SmartZoneConfig, providerName, rawModel, canonicalModel string) (int, bool) {
+	for providerKey, models := range smartZone.Thresholds {
+		if !strings.EqualFold(providerKey, providerName) {
+			continue
+		}
+		for modelKey, threshold := range models {
+			if threshold <= 0 {
+				continue
+			}
+			canonicalKey := strings.TrimSpace(modelKey)
+			if p != nil {
+				if canonical, ok := canonicalModelForProvider(p, canonicalKey); ok {
+					canonicalKey = canonical
+				}
+			}
+			if strings.EqualFold(canonicalKey, canonicalModel) || strings.EqualFold(modelKey, rawModel) {
+				return threshold, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // DefaultModels computes the recommended model for each phase role from the

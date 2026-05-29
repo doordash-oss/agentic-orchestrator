@@ -254,14 +254,15 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		}
 
 		var (
-			iterDir      string
-			agentStatus  string
-			duration     time.Duration
-			cost         SessionCost
-			madeProgress bool
-			exitCode     int
-			sess         ports.SessionHandle
-			waitResult   waitForStatusResult
+			iterDir                string
+			agentStatus            string
+			duration               time.Duration
+			cost                   SessionCost
+			madeProgress           bool
+			exitCode               int
+			sess                   ports.SessionHandle
+			waitResult             waitForStatusResult
+			handoffThresholdTokens int
 		)
 
 		if skipImplement {
@@ -384,6 +385,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			handoffThresholdTokens = resolvedContextHandoffThresholdTokens(sessOpts)
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 			// Merge iteration-specific fields into session opts
 			sessOpts.Iteration = i
@@ -456,7 +458,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					// No phase_complete yet — the agent is likely waiting for user input.
 					return false
 				},
-				EnableContextHandoff: true,
+				EnableContextHandoff:          true,
+				ContextHandoffDisabled:        sessOpts.ContextHandoffDisabled,
+				ContextHandoffThresholdTokens: sessOpts.ContextHandoffThresholdTokens,
 				OnContextHandoff: func(snap contextSnapshot) {
 					cfg.Observer.ContextHandoffTriggered(
 						implSessionCtx,
@@ -467,6 +471,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						i,
 						snap.Pct,
 						snap.ThresholdPct,
+						snap.ThresholdTokens,
 						snap.TotalTokens,
 						snap.WindowTokens,
 						snap.BaselineTokens,
@@ -525,7 +530,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			AgentStatus:  agentStatus,
 			MadeProgress: madeProgress,
 			CostUSD:      cost.TotalCostUSD,
-			Context:      iterationContextMeta(sess, waitResult.Handoff),
+			Context:      iterationContextMeta(sess, waitResult.Handoff, handoffThresholdTokens),
 		}
 
 		// Accumulate iteration cost into feature.
@@ -1175,53 +1180,20 @@ const (
 	agentStatusProtocolViolation = "PROTOCOL_VIOLATION"
 )
 
-// defaultContextHandoffThresholdPct is the context-window utilization
-// (percent) at which waitForStatus nudges the agent to wrap up cleanly for
-// providers without a provider-specific override. The default is chosen well
-// below the Claude CLI's auto-compact trigger (~85%) so the agent has headroom
-// to write a handoff and the phase_complete marker before the CLI would
-// otherwise compact and lose working memory.
-const defaultContextHandoffThresholdPct = 60
-
-// codexContextHandoffThresholdPct is higher because Codex reports its own
-// effective active context window via tokenUsage.modelContextWindow; 60% is
-// too early for Codex's current ~258K effective window.
-const codexContextHandoffThresholdPct = 80
-
 const largeCommandOutputThresholdChars = 20_000
 
 // contextHandoffPollInterval is how often the implementation waiter samples
-// session.ContextPercentage() to decide whether to send the handoff message.
+// session token usage to decide whether to send the handoff message.
 // Declared as var (not const) so tests can override it without a flag plumb.
 var contextHandoffPollInterval = 2 * time.Second
 
-// contextHandoffMessageBody is the user-facing instruction injected when the
-// session's context utilization first crosses its provider-specific threshold.
-// A fresh iteration will pick up from the updated progress.md with a clean
-// context, so the agent should stop taking new work and leave a good handoff
-// — and emit `## Iteration State: RETRY` so the harness skips the review
-// gate and routes straight to the next iteration.
-const contextHandoffMessageBody = `Wind this iteration down now so the next iteration can resume with a fresh context; the outer loop will spawn a new session seeded with progress.md.
-
-Do this, in order:
-
-1. Do NOT start new implementation work or new substantial tool calls.
-2. Write progress.md per skills/implement/SKILL.md's section schema:
-   - ` + "`" + `## Iteration Handoff` + "`" + ` (Completed / Remaining / Where I stopped / Gotchas).
-   - ` + "`" + `## Deferrals` + "`" + ` (a fenced YAML block; ` + "`" + `deferrals: []` + "`" + ` and ` + "`" + `closed_deferrals: []` + "`" + ` if you have nothing to declare).
-   - ` + "`" + `## Verification Report` + "`" + ` (cite the runtime path the prompt named).
-   - ` + "`" + `## Iteration State` + "`" + ` set to ` + "`" + `RETRY` + "`" + ` so the harness skips review and starts the next iteration with no reviewer feedback.
-
-   (You are emitting RETRY here, so do NOT include the conditional ` + "`" + `## Questions for User` + "`" + ` section — it is reserved for ` + "`" + `NEED_USER_INPUT` + "`" + ` and must sit between ` + "`" + `## Verification Report` + "`" + ` and ` + "`" + `## Iteration State` + "`" + ` only when used.)
-3. Write verification-report.yaml at the runtime path with whatever results you have run; leave unrun checks as ` + "`" + `not_run` + "`" + `.
-4. Touch the phase_complete marker (per your system prompt) as your very last action and end your turn.`
-
 type contextSnapshot struct {
-	Pct            int
-	ThresholdPct   int
-	TotalTokens    int
-	WindowTokens   int
-	BaselineTokens int
+	Pct             int
+	ThresholdPct    int
+	ThresholdTokens int
+	TotalTokens     int
+	WindowTokens    int
+	BaselineTokens  int
 }
 
 type waitForStatusOptions struct {
@@ -1232,8 +1204,10 @@ type waitForStatusOptions struct {
 	// roadmap, final-review, and refactor sessions produce different
 	// artifacts and have heavy required-reading loads that would trip the
 	// threshold before they could write any output.
-	EnableContextHandoff bool
-	OnContextHandoff     func(contextSnapshot)
+	EnableContextHandoff          bool
+	ContextHandoffDisabled        bool
+	ContextHandoffThresholdTokens int
+	OnContextHandoff              func(contextSnapshot)
 	// ContextHandoffPollHook is a test hook for observing ticker progress
 	// without sleeping. Production callers leave it nil.
 	ContextHandoffPollHook func()
@@ -1244,11 +1218,11 @@ type waitForStatusResult struct {
 	Handoff contextSnapshot
 }
 
-func contextHandoffThresholdForProvider(provider string) int {
-	if strings.EqualFold(provider, "codex") {
-		return codexContextHandoffThresholdPct
+func resolvedContextHandoffThresholdTokens(sessOpts *ports.SessionOpts) int {
+	if sessOpts != nil && sessOpts.ContextHandoffThresholdTokens > 0 {
+		return sessOpts.ContextHandoffThresholdTokens
 	}
-	return defaultContextHandoffThresholdPct
+	return llm.DefaultSmartZoneThresholdTokens
 }
 
 func contextTotalTokens(usage *llm.Usage) int {
@@ -1261,46 +1235,83 @@ func contextTotalTokens(usage *llm.Usage) int {
 	return usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
 }
 
-func currentContextSnapshot(sess ports.SessionView, thresholdPct int) contextSnapshot {
+func contextThresholdPct(thresholdTokens, windowTokens int) int {
+	if thresholdTokens <= 0 || windowTokens <= 0 {
+		return 0
+	}
+	pct := thresholdTokens * 100 / windowTokens
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
+func contextPctFromUsage(usage *llm.Usage) int {
+	if usage == nil || usage.ContextWindow == 0 {
+		return -1
+	}
+	total := contextTotalTokens(usage)
+	baseline := usage.ContextBaseline
+	used := total - baseline
+	if used < 0 {
+		used = 0
+	}
+	window := usage.ContextWindow - baseline
+	if window <= 0 {
+		return -1
+	}
+	pct := (used*100 + window/2) / window
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
+func currentContextSnapshot(sess ports.SessionView, thresholdTokens int) contextSnapshot {
 	if sess == nil {
-		return contextSnapshot{Pct: -1, ThresholdPct: thresholdPct}
+		return contextSnapshot{Pct: -1, ThresholdTokens: thresholdTokens}
 	}
 	usage := sess.LatestUsage()
 	snap := contextSnapshot{
-		Pct:          sess.ContextPercentage(),
-		ThresholdPct: thresholdPct,
+		Pct:             contextPctFromUsage(usage),
+		ThresholdTokens: thresholdTokens,
 	}
 	if usage != nil {
 		snap.TotalTokens = contextTotalTokens(usage)
 		snap.WindowTokens = usage.ContextWindow
 		snap.BaselineTokens = usage.ContextBaseline
+		snap.ThresholdPct = contextThresholdPct(thresholdTokens, snap.WindowTokens)
 	}
 	return snap
 }
 
-func formatContextHandoffMessage(snap contextSnapshot) string {
-	return fmt.Sprintf("Your context window is ~%d%% full, above Agentic's %d%% handoff threshold.\n\n%s",
-		snap.Pct, snap.ThresholdPct, contextHandoffMessageBody)
+func formatContextHandoffMessageForRole(role string, snap contextSnapshot) string {
+	return fmt.Sprintf("Your context is ~%d tokens, above the Smart Zone threshold of %d.\n\nRead and follow skills/%s/HANDOFF.md, then wind this iteration down.",
+		snap.TotalTokens, snap.ThresholdTokens, role)
 }
 
-func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot) *ContextMeta {
+func formatContextHandoffMessage(snap contextSnapshot) string {
+	return formatContextHandoffMessageForRole("implement", snap)
+}
+
+func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot, thresholdTokens int) *ContextMeta {
 	if sess == nil {
 		return nil
 	}
-	threshold := contextHandoffThresholdForProvider(sess.ProviderName())
-	final := currentContextSnapshot(sess, threshold)
+	final := currentContextSnapshot(sess, thresholdTokens)
 	if final.Pct < 0 || final.WindowTokens == 0 {
 		return nil
 	}
 	meta := &ContextMeta{
-		Provider:       sess.ProviderName(),
-		ThresholdPct:   threshold,
-		FinalPct:       final.Pct,
-		TotalTokens:    final.TotalTokens,
-		WindowTokens:   final.WindowTokens,
-		BaselineTokens: final.BaselineTokens,
+		Provider:        sess.ProviderName(),
+		ThresholdTokens: thresholdTokens,
+		ThresholdPct:    final.ThresholdPct,
+		FinalPct:        final.Pct,
+		TotalTokens:     final.TotalTokens,
+		WindowTokens:    final.WindowTokens,
+		BaselineTokens:  final.BaselineTokens,
 	}
-	if handoff.Pct >= threshold {
+	if handoff.ThresholdTokens > 0 && handoff.TotalTokens >= handoff.ThresholdTokens {
 		meta.HandoffTriggered = true
 		meta.HandoffPct = handoff.Pct
 		meta.HandoffTotalTokens = handoff.TotalTokens
@@ -1357,16 +1368,20 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	// its own retry budget.
 	autoResumeAttempts := 0
 
-	// Periodically sample the session's context-window utilization and, on
-	// first crossing of the provider-specific threshold, nudge the agent to
+	// Periodically sample the session's total context-fill tokens and, on
+	// first crossing of the resolved Smart Zone threshold, nudge the agent to
 	// wrap up cleanly. Sending once is enough — the outer loop will restart
 	// a fresh iteration from the updated progress.md.
 	//
 	// Gated on EnableContextHandoff: only Implementation-phase sessions
-	// arm the nudge. When disabled, handoffSent starts true so the ticker
-	// case is a no-op for plan, roadmap, final-review, and refactor.
+	// arm the nudge. A disabled Smart Zone still ticks so tests can observe
+	// the polling loop, but it never sends the pointer message.
 	var handoffC <-chan time.Time
 	var handoffTicker *time.Ticker
+	thresholdTokens := opts.ContextHandoffThresholdTokens
+	if thresholdTokens <= 0 {
+		thresholdTokens = llm.DefaultSmartZoneThresholdTokens
+	}
 	if opts.EnableContextHandoff {
 		handoffTicker = time.NewTicker(contextHandoffPollInterval)
 		handoffC = handoffTicker.C
@@ -1374,8 +1389,8 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	}
 	handoffSent := false
 	handoff := contextSnapshot{
-		Pct:          -1,
-		ThresholdPct: contextHandoffThresholdForProvider(sess.ProviderName()),
+		Pct:             -1,
+		ThresholdTokens: thresholdTokens,
 	}
 
 	handleStatus := func(status string, sessionDone bool) (string, bool) {
@@ -1423,12 +1438,11 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 			if opts.ContextHandoffPollHook != nil {
 				opts.ContextHandoffPollHook()
 			}
-			if handoffSent {
+			if opts.ContextHandoffDisabled || handoffSent {
 				continue
 			}
-			threshold := contextHandoffThresholdForProvider(sess.ProviderName())
-			snap := currentContextSnapshot(sess, threshold)
-			if snap.Pct < threshold {
+			snap := currentContextSnapshot(sess, thresholdTokens)
+			if snap.TotalTokens < thresholdTokens {
 				continue
 			}
 			if err := sess.SendUserMessage(formatContextHandoffMessage(snap)); err == nil {

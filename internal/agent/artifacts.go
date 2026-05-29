@@ -130,6 +130,7 @@ type IterationMeta struct {
 
 type ContextMeta struct {
 	Provider           string `yaml:"provider,omitempty"`
+	ThresholdTokens    int    `yaml:"threshold_tokens,omitempty"`
 	ThresholdPct       int    `yaml:"threshold_pct,omitempty"`
 	FinalPct           int    `yaml:"final_pct,omitempty"`
 	TotalTokens        int    `yaml:"total_tokens,omitempty"`

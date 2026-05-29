@@ -935,7 +935,7 @@ func countContinuationMessages(body string) int {
 // appears in the captured stdin. Uses a stable fragment for the same
 // robustness reason as countContinuationMessages.
 func countHandoffMessages(body string) int {
-	return strings.Count(body, "Wind this iteration down now")
+	return strings.Count(body, "Smart Zone threshold")
 }
 
 type doneFirstStatusSession struct {
@@ -1266,8 +1266,9 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sink := attachCaptureSink(sess)
 
-	// Seed usage at exactly the threshold — 60%, on a 200K window.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 120_000, ContextWindow: 200_000})
+	// Seed usage at exactly the absolute Smart Zone threshold. The large
+	// window keeps this below the former percentage trigger.
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 100_000, ContextWindow: 1_000_000})
 
 	var ready atomic.Bool // stays false until the test flips it.
 	polls := make(chan struct{}, 8)
@@ -1275,9 +1276,10 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	done := make(chan string, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return ready.Load() },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
+			ReadyCheck:                    func() bool { return ready.Load() },
+			EnableContextHandoff:          true,
+			ContextHandoffThresholdTokens: 100_000,
+			ContextHandoffPollHook:        handoffPollHook(polls),
 		}).Status
 	}()
 
@@ -1287,8 +1289,11 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	if got := countHandoffMessages(sink.contents()); got != 1 {
 		t.Errorf("handoff messages = %d, want 1", got)
 	}
-	if !strings.Contains(sink.contents(), "above Agentic's 60% handoff threshold") {
-		t.Errorf("handoff message should include observed threshold, got: %s", sink.contents())
+	if !strings.Contains(sink.contents(), "Your context is ~100000 tokens, above the Smart Zone threshold of 100000") {
+		t.Errorf("handoff message should include token threshold, got: %s", sink.contents())
+	}
+	if !strings.Contains(sink.contents(), "skills/implement/HANDOFF.md") {
+		t.Errorf("handoff message should point at implement HANDOFF.md, got: %s", sink.contents())
 	}
 	if got := countContinuationMessages(sink.contents()); got != 0 {
 		t.Errorf("unexpected auto-resume messages sent alongside handoff: %d", got)
@@ -1315,40 +1320,39 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	}
 }
 
-func TestWaitForStatus_ContextHandoff_CodexUses80PercentThreshold(t *testing.T) {
+func TestWaitForStatus_ContextHandoff_UsesAbsoluteTokensNotProviderPercent(t *testing.T) {
 	withHandoffPollInterval(t, 2*time.Millisecond)
 
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sess.SetProviderName("codex")
 	sink := attachCaptureSink(sess)
 
-	// 60% would trigger the default provider policy, but Codex should wait
-	// for its provider-specific 80% threshold.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 120_000, ContextWindow: 200_000})
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 79_999, ContextWindow: 200_000})
 	polls := make(chan struct{}, 8)
 
 	done := make(chan string, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
+			ReadyCheck:                    func() bool { return true },
+			EnableContextHandoff:          true,
+			ContextHandoffThresholdTokens: 80_000,
+			ContextHandoffPollHook:        handoffPollHook(polls),
 		}).Status
 	}()
 
 	waitForHandoffPolls(t, polls, 3, 2*time.Second)
 	if got := countHandoffMessages(sink.contents()); got != 0 {
-		t.Errorf("handoff messages at 60%% for codex = %d, want 0", got)
+		t.Errorf("handoff messages below absolute threshold = %d, want 0", got)
 	}
 
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 160_000, ContextWindow: 200_000})
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 80_000, ContextWindow: 200_000})
 	sink.waitForWrite(t, 2*time.Second)
 
 	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages at 80%% for codex = %d, want 1", got)
+		t.Errorf("handoff messages at absolute threshold = %d, want 1", got)
 	}
-	if !strings.Contains(sink.contents(), "above Agentic's 80% handoff threshold") {
-		t.Errorf("codex handoff message should include 80%% threshold, got: %s", sink.contents())
+	if !strings.Contains(sink.contents(), "Smart Zone threshold of 80000") {
+		t.Errorf("handoff message should include absolute token threshold, got: %s", sink.contents())
 	}
 
 	sess.SendStatus("SUCCESS")
@@ -1374,8 +1378,9 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 	done := make(chan waitForStatusResult, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:           func() bool { return true },
-			EnableContextHandoff: true,
+			ReadyCheck:                    func() bool { return true },
+			EnableContextHandoff:          true,
+			ContextHandoffThresholdTokens: 80_000,
 		})
 	}()
 
@@ -1384,8 +1389,14 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 
 	select {
 	case got := <-done:
-		if got.Handoff.Pct != 80 {
-			t.Errorf("Handoff.Pct = %d, want 80", got.Handoff.Pct)
+		if got.Handoff.Pct != 81 {
+			t.Errorf("Handoff.Pct = %d, want 81", got.Handoff.Pct)
+		}
+		if got.Handoff.ThresholdPct != 30 {
+			t.Errorf("Handoff.ThresholdPct = %d, want 30", got.Handoff.ThresholdPct)
+		}
+		if got.Handoff.ThresholdTokens != 80_000 {
+			t.Errorf("Handoff.ThresholdTokens = %d, want 80000", got.Handoff.ThresholdTokens)
 		}
 		if got.Handoff.TotalTokens != 211_000 {
 			t.Errorf("Handoff.TotalTokens = %d, want 211000", got.Handoff.TotalTokens)
@@ -1401,22 +1412,193 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 	}
 }
 
+func TestRunImplementationLoop_ContextHandoffPointerWindsDownRetry(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "smart-zone-feat")
+	observeDir := filepath.Join(tmpDir, "observe")
+	for _, d := range []string{workDir, artifactDir, stateDir, filepath.Join(observeDir, "smart-zone-feat")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	planPath := writePlanFile(t, artifactDir, "Smart Zone retry handoff test")
+	f := &feature.Feature{
+		ID:            "smart-zone-feat",
+		Name:          "Smart Zone Feature",
+		Slug:          "smart-zone-feature",
+		Description:   "context handoff retry regression",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		TraceID:       "trace-smart-zone",
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "agentic", Path: workDir}},
+	}
+
+	handoffSeen := make(chan string, 1)
+	writeErr := make(chan error, 1)
+	writeRetryHandoff := func(iterDir string) error {
+		progress := `# Iteration Progress
+
+## Iteration Handoff
+
+### Completed this iteration
+- observed Smart Zone pointer and stopped current work
+
+### Remaining from the plan
+- resume verification in the next iteration
+
+### Where I stopped
+After Smart Zone handoff
+
+### Gotchas / blockers / in-flight decisions
+- none
+
+## Deferrals
+
+` + "```yaml" + `
+deferrals: []
+closed_deferrals: []
+` + "```" + `
+
+## Verification Report
+
+- **Path**: ` + filepath.Join(iterDir, "verification-report.yaml") + `
+- **Summary**: 0 passed, 0 failed, 0 blocked, 1 not_run
+
+## Iteration State
+
+RETRY
+`
+		if err := os.WriteFile(filepath.Join(artifactDir, "progress.md"), []byte(progress), 0o644); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(iterDir, "phase_complete"), []byte("complete\n"), 0o644)
+	}
+
+	cfg := ImplementConfig{
+		Feature:             f,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       1,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "handoff parses",
+		Model:               "gpt-5.3-codex",
+		ReviewModel:         "review-model",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		Observer:            observe.New(true, observeDir, false, "", false, "agentic"),
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			return []string{"mock-agent"}, nil, &session.SessionOpts{
+				PIDDir:                        opts.PIDDir,
+				PermHandler:                   opts.PermHandler,
+				RepoName:                      opts.RepoName,
+				LogPath:                       opts.LogPath,
+				ProviderName:                  "codex",
+				ContextHandoffThresholdTokens: 80_000,
+			}, nil
+		},
+		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+			sess := session.NewSession(id, featureID, phase)
+			sess.SetProviderName("codex")
+			sess.SetLatestUsage(&llm.Usage{
+				ContextInputTokens: 79_900,
+				ContextTotalTokens: 80_000,
+				ContextWindow:      258_400,
+				ContextBaseline:    12_000,
+			})
+			sink := attachCaptureSink(sess)
+			go func() {
+				select {
+				case <-sink.done:
+					msg := sink.contents()
+					handoffSeen <- msg
+					writeErr <- writeRetryHandoff(filepath.Join(artifactDir, "iteration-01"))
+					sess.SendStatus(agentStatusSuccess)
+				case <-time.After(2 * time.Second):
+					handoffSeen <- ""
+					sess.SendStatus(agentStatusFailed)
+				}
+			}()
+			return sess, nil
+		},
+	}
+
+	result, err := RunImplementationLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error = %v", err)
+	}
+	if result.FinalStatus != "max_iterations" {
+		t.Fatalf("FinalStatus = %q, want max_iterations after RETRY", result.FinalStatus)
+	}
+	msg := <-handoffSeen
+	if got := countHandoffMessages(msg); got != 1 {
+		t.Fatalf("handoff messages = %d, want 1; message: %s", got, msg)
+	}
+	if !strings.Contains(msg, "Your context is ~80000 tokens, above the Smart Zone threshold of 80000") {
+		t.Fatalf("handoff message missing token stat: %s", msg)
+	}
+	if !strings.Contains(msg, "skills/implement/HANDOFF.md") {
+		t.Fatalf("handoff message missing HANDOFF.md pointer: %s", msg)
+	}
+	if err := <-writeErr; err != nil {
+		t.Fatalf("write RETRY handoff: %v", err)
+	}
+
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	parsed, err := ParseProgressMd(filepath.Join(artifactDir, "progress.md"), filepath.Join(iterDir, "verification-report.yaml"))
+	if err != nil {
+		t.Fatalf("parse progress.md: %v", err)
+	}
+	if !parsed.OK() || parsed.State != StateRetry {
+		t.Fatalf("progress parse = state %v violations %v, want clean RETRY", parsed.State, parsed.ProtocolViolations)
+	}
+	meta, err := NewArtifactManager(artifactDir).ReadMeta(iterDir)
+	if err != nil {
+		t.Fatalf("read meta: %v", err)
+	}
+	if meta.AgentStatus != "RETRY" || meta.ReviewStatus != "skipped_retry" {
+		t.Fatalf("meta statuses = agent %q review %q, want RETRY/skipped_retry", meta.AgentStatus, meta.ReviewStatus)
+	}
+	if meta.Context == nil || !meta.Context.HandoffTriggered || meta.Context.ThresholdTokens != 80_000 || meta.Context.HandoffTotalTokens != 80_000 {
+		t.Fatalf("context meta = %+v, want threshold and handoff token details", meta.Context)
+	}
+
+	events := filterEventsByType(readObserveEvents(t, observeDir, f.ID), "context.handoff_triggered")
+	if len(events) != 1 {
+		t.Fatalf("context.handoff_triggered events = %d, want 1", len(events))
+	}
+	if got := events[0].Data["threshold_tokens"]; got != float64(80_000) {
+		t.Fatalf("threshold_tokens = %v, want 80000", got)
+	}
+	if got := events[0].Data["threshold_pct"]; got != float64(30) {
+		t.Fatalf("threshold_pct = %v, want 30", got)
+	}
+}
+
 func TestWaitForStatus_ContextHandoff_BelowThreshold_NoSend(t *testing.T) {
 	withHandoffPollInterval(t, 2*time.Millisecond)
 
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sink := attachCaptureSink(sess)
 
-	// 40% usage — comfortably below the 60% threshold.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 80_000, ContextWindow: 200_000})
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 99_999, ContextWindow: 200_000})
 	polls := make(chan struct{}, 8)
 
 	done := make(chan string, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
+			ReadyCheck:                    func() bool { return true },
+			EnableContextHandoff:          true,
+			ContextHandoffThresholdTokens: 100_000,
+			ContextHandoffPollHook:        handoffPollHook(polls),
 		}).Status
 	}()
 
@@ -1449,9 +1631,10 @@ func TestWaitForStatus_ContextHandoff_NotSentBeforeUsageArrives(t *testing.T) {
 	done := make(chan string, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
+			ReadyCheck:                    func() bool { return true },
+			EnableContextHandoff:          true,
+			ContextHandoffThresholdTokens: 40_000,
+			ContextHandoffPollHook:        handoffPollHook(polls),
 		}).Status
 	}()
 
@@ -1459,6 +1642,38 @@ func TestWaitForStatus_ContextHandoff_NotSentBeforeUsageArrives(t *testing.T) {
 
 	if got := countHandoffMessages(sink.contents()); got != 0 {
 		t.Errorf("handoff messages before usage data = %d, want 0", got)
+	}
+
+	sess.SendStatus("SUCCESS")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for waitForStatus to return")
+	}
+}
+
+func TestWaitForStatus_ContextHandoff_DisabledBySmartZoneConfig(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	sess := session.NewSession("test", "feat", feature.PhaseImplement)
+	sink := attachCaptureSink(sess)
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 200_000, ContextWindow: 200_000})
+	polls := make(chan struct{}, 8)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:                    func() bool { return true },
+			EnableContextHandoff:          true,
+			ContextHandoffDisabled:        true,
+			ContextHandoffThresholdTokens: 40_000,
+			ContextHandoffPollHook:        handoffPollHook(polls),
+		}).Status
+	}()
+
+	waitForHandoffPolls(t, polls, 3, 2*time.Second)
+	if got := countHandoffMessages(sink.contents()); got != 0 {
+		t.Errorf("handoff messages when smart zone disabled = %d, want 0", got)
 	}
 
 	sess.SendStatus("SUCCESS")

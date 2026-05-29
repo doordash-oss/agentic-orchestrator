@@ -711,8 +711,8 @@ func (o *Observer) ContextFileRead(sc SpanContext, phase, sessionID, category, f
 
 // ContextHandoffTriggered emits a context.handoff_triggered event when the
 // autonomous loop asks an agent to stop early and write a handoff because the
-// provider-reported context window crossed Agentic's threshold.
-func (o *Observer) ContextHandoffTriggered(sc SpanContext, phase, sessionID, repoName, provider string, iteration int, pct, thresholdPct, totalTokens, windowTokens, baselineTokens int) {
+// provider-reported context-fill tokens crossed Agentic's threshold.
+func (o *Observer) ContextHandoffTriggered(sc SpanContext, phase, sessionID, repoName, provider string, iteration int, pct, thresholdPct, thresholdTokens, totalTokens, windowTokens, baselineTokens int) {
 	if o == nil || !o.enabled {
 		return
 	}
@@ -729,20 +729,22 @@ func (o *Observer) ContextHandoffTriggered(sc SpanContext, phase, sessionID, rep
 		RepoName:     repoName,
 		Iteration:    iteration,
 		Data: map[string]any{
-			"provider":        provider,
-			"context_pct":     pct,
-			"threshold_pct":   thresholdPct,
-			"total_tokens":    totalTokens,
-			"window_tokens":   windowTokens,
-			"baseline_tokens": baselineTokens,
+			"provider":         provider,
+			"context_pct":      pct,
+			"threshold_pct":    thresholdPct,
+			"threshold_tokens": thresholdTokens,
+			"total_tokens":     totalTokens,
+			"window_tokens":    windowTokens,
+			"baseline_tokens":  baselineTokens,
 		},
 	})
 	o.otel.AddSpanEvent(sc.SpanID, "context.handoff_triggered", addRunNumber(sc, map[string]string{
-		"phase":         phase,
-		"session_id":    sessionID,
-		"provider":      provider,
-		"context_pct":   strconv.Itoa(pct),
-		"threshold_pct": strconv.Itoa(thresholdPct),
+		"phase":            phase,
+		"session_id":       sessionID,
+		"provider":         provider,
+		"context_pct":      strconv.Itoa(pct),
+		"threshold_pct":    strconv.Itoa(thresholdPct),
+		"threshold_tokens": strconv.Itoa(thresholdTokens),
 	}))
 }
 

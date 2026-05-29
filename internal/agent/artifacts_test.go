@@ -77,6 +77,7 @@ func TestArtifactManagerWriteSummary(t *testing.T) {
 		MadeProgress: true,
 		Duration:     5 * time.Second,
 		Context: &ContextMeta{
+			ThresholdTokens:  80_000,
 			ThresholdPct:     80,
 			FinalPct:         64,
 			TotalTokens:      171_278,
@@ -335,6 +336,7 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 		Duration:     3 * time.Second,
 		Context: &ContextMeta{
 			Provider:           "codex",
+			ThresholdTokens:    80_000,
 			ThresholdPct:       80,
 			FinalPct:           64,
 			TotalTokens:        171_278,
@@ -356,7 +358,7 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 	if got.Iteration != 1 || got.AgentStatus != "FAILED" || got.ReviewStatus != "CHANGES_REQUESTED" {
 		t.Errorf("read meta mismatch: %+v", got)
 	}
-	if got.Context == nil || got.Context.Provider != "codex" || got.Context.HandoffPct != 81 {
+	if got.Context == nil || got.Context.Provider != "codex" || got.Context.ThresholdTokens != 80_000 || got.Context.HandoffPct != 81 {
 		t.Errorf("read context meta mismatch: %+v", got.Context)
 	}
 

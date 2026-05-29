@@ -213,6 +213,11 @@ type SessionOpts struct {
 	// continuation set this so the continuation is not racing a post-Result
 	// stdin shutdown.
 	KeepAliveOnTruncatedResult bool
+	// ContextHandoffThresholdTokens is the resolved Smart Zone threshold for
+	// sessions whose waiter supports context handoff.
+	ContextHandoffThresholdTokens int
+	// ContextHandoffDisabled disarms Smart Zone handoff for this session.
+	ContextHandoffDisabled bool
 	// Kind classifies the session for TUI/observer purposes. Defaults to
 	// KindPhase when the zero value is used.
 	Kind SessionKind

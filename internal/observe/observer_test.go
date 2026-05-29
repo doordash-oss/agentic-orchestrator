@@ -505,7 +505,7 @@ func TestContextHandoffTriggeredEmitsEvent(t *testing.T) {
 	obs := New(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
-	obs.ContextHandoffTriggered(sc, "implement", "s1", "repo-a", "codex", 2, 81, 80, 211000, 258400, 12000)
+	obs.ContextHandoffTriggered(sc, "implement", "s1", "repo-a", "codex", 2, 81, 30, 80_000, 211000, 258400, 12000)
 
 	events := readEvents(t, stateDir, featureID)
 	if len(events) != 1 {
@@ -521,8 +521,11 @@ func TestContextHandoffTriggeredEmitsEvent(t *testing.T) {
 	if got := evt.Data["context_pct"]; got != float64(81) {
 		t.Errorf("context_pct = %v, want 81", got)
 	}
-	if got := evt.Data["threshold_pct"]; got != float64(80) {
-		t.Errorf("threshold_pct = %v, want 80", got)
+	if got := evt.Data["threshold_pct"]; got != float64(30) {
+		t.Errorf("threshold_pct = %v, want 30", got)
+	}
+	if got := evt.Data["threshold_tokens"]; got != float64(80_000) {
+		t.Errorf("threshold_tokens = %v, want 80000", got)
 	}
 }
 
@@ -1708,7 +1711,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	obs.RecoveryScanned(sc, 2, 1)
 	obs.RecoveryAction(sc, "resume", "implement", true)
 	obs.ContextFileRead(sc, "implement", "s1", "kb", "/path/to/file.md")
-	obs.ContextHandoffTriggered(sc, "implement", "s1", "repo-a", "codex", 1, 81, 80, 211000, 258400, 12000)
+	obs.ContextHandoffTriggered(sc, "implement", "s1", "repo-a", "codex", 1, 81, 80, 80_000, 211000, 258400, 12000)
 	exitCode := 0
 	durationMs := int64(123)
 	obs.ContextLargeOutput(sc, "implement", "s1", "repo-a", "codex", 1, "rg -n foo", 21000, 20000, &exitCode, &durationMs)

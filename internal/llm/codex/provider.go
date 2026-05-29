@@ -317,11 +317,11 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 // not the pricing boundary.
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
-		{ID: "gpt-5.5", DisplayName: "GPT-5.5", ContextWindow: 1_050_000, Category: "capable"},
-		{ID: "gpt-5.4", DisplayName: "GPT-5.4", ContextWindow: 1_050_000, Category: "capable"},
-		{ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 Mini", ContextWindow: 400_000, Category: "balanced"},
-		{ID: "gpt-5.3-codex", DisplayName: "GPT-5.3 Codex", Aliases: []string{"codex"}, ContextWindow: 400_000, Category: "balanced"},
-		{ID: "gpt-5.2", DisplayName: "GPT-5.2", ContextWindow: 400_000},
+		{ID: "gpt-5.5", DisplayName: "GPT-5.5", ContextWindow: 1_050_000, SmartZoneTokens: 100_000, Category: "capable"},
+		{ID: "gpt-5.4", DisplayName: "GPT-5.4", ContextWindow: 1_050_000, SmartZoneTokens: 90_000, Category: "capable"},
+		{ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 Mini", ContextWindow: 400_000, SmartZoneTokens: 50_000, Category: "balanced"},
+		{ID: "gpt-5.3-codex", DisplayName: "GPT-5.3 Codex", Aliases: []string{"codex"}, ContextWindow: 400_000, SmartZoneTokens: 80_000, Category: "balanced"},
+		{ID: "gpt-5.2", DisplayName: "GPT-5.2", ContextWindow: 400_000, SmartZoneTokens: 80_000},
 	}
 }
 

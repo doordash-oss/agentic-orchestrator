@@ -674,7 +674,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		FeatureStore:               pr.FeatureStore,
 		StateDir:                   pr.StateDir,
 		ResearchArtifactPath:       researchArtifactPath,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		QAFilePaths:                qaFilePaths,
 		KBInfos:                    kbInfos,
 		WorkDir:                    workDir,
@@ -736,7 +736,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			Feature:                    f,
 			FeatureStore:               pr.FeatureStore,
 			StateDir:                   pr.StateDir,
-			DesignArtifactPath:     f.DesignArtifactPath(),
+			DesignArtifactPath:         f.DesignArtifactPath(),
 			QAFilePaths:                qaFilePaths,
 			KBInfos:                    kbInfos,
 			WorkDir:                    workDir,
@@ -813,7 +813,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
 		PhaseType:                  phaseType,
 		RoadmapPath:                roadmapPath,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		BuildSession:               pr.BuildSession,
@@ -1262,6 +1262,14 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	if cc, ok := prov.(llm.CostCalculator); ok {
 		contextWindow = cc.ContextWindowForModel(bareModel)
 	}
+	smartZone := config.SmartZoneConfig{}
+	if pr.Config != nil {
+		smartZone = pr.Config.SmartZone
+	}
+	contextHandoffThresholdTokens := llm.DefaultSmartZoneThresholdTokens
+	if pr.Registry != nil {
+		contextHandoffThresholdTokens = pr.Registry.SmartZoneThresholdTokens(prov.Name(), bareModel, smartZone)
+	}
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
 		Model:         bareModel,
@@ -1276,15 +1284,17 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	})
 
 	sessOpts = &ports.SessionOpts{
-		PIDDir:            opts.PIDDir,
-		PermHandler:       opts.PermHandler,
-		InitialPrompt:     opts.Prompt,
-		RepoName:          opts.RepoName,
-		LogPath:           opts.LogPath,
-		ProviderName:      prov.Name(),
-		Protocol:          protocol,
-		DebugSystemPrompt: opts.SystemPrompt,
-		TurnMode:          opts.TurnMode,
+		PIDDir:                        opts.PIDDir,
+		PermHandler:                   opts.PermHandler,
+		InitialPrompt:                 opts.Prompt,
+		RepoName:                      opts.RepoName,
+		LogPath:                       opts.LogPath,
+		ProviderName:                  prov.Name(),
+		Protocol:                      protocol,
+		DebugSystemPrompt:             opts.SystemPrompt,
+		TurnMode:                      opts.TurnMode,
+		ContextHandoffThresholdTokens: contextHandoffThresholdTokens,
+		ContextHandoffDisabled:        !smartZone.IsEnabled(),
 	}
 	return cmd, env, sessOpts, nil
 }

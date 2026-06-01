@@ -1675,7 +1675,7 @@ func isFeatureInterrupted(store ports.FeatureStore, featureID string) bool {
 		return false
 	}
 	f, err := store.Load(featureID)
-	if err != nil {
+	if err != nil || f == nil {
 		return false
 	}
 	return f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed

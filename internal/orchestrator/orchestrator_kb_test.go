@@ -15,6 +15,7 @@
 package orchestrator_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -237,8 +238,8 @@ func TestOrchestrator_StartKB_LockHeldByOther_SetsWaitMessage(t *testing.T) {
 // ---------------------------------------------------------------------------
 //
 // Verifies the wakeup half: once the lock is gone, re-running startKB on the
-// same parked feature acquires the lock and dispatches a KB session. This is
-// the path that wakeKBWaiters drives from onKBCompleted.
+// same parked feature acquires the lock and dispatches a KB loop. This is the
+// path that wakeKBWaiters drives after a holder releases kb.lock.
 func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 
@@ -277,13 +278,23 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
+	var loopRepos []string
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopRepos = append(loopRepos, repo.Name)
+		return nil, nil
+	})
+	t.Cleanup(func() {
+		for _, repoName := range loopRepos {
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), waiter.ID)
+		}
+	})
 
-	// First attempt: lock held → no session, KBWaitMessage set.
+	// First attempt: lock held -> no loop, KBWaitMessage set.
 	if err := o.StartFeature("feat-waiter"); err != nil {
 		t.Fatalf("StartFeature (locked): %v", err)
 	}
-	if got := len(cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)); got != 0 {
-		t.Fatalf("KB StartSession calls (locked) = %d, want 0", got)
+	if got := len(loopRepos); got != 0 {
+		t.Fatalf("KB loop starts (locked) = %d, want 0", got)
 	}
 	if waiter.KBWaitMessage == "" {
 		t.Fatal("KBWaitMessage not set after lock-blocked attempt")
@@ -299,16 +310,601 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 	if err := o.StartFeature("feat-waiter"); err != nil {
 		t.Fatalf("StartFeature (after release): %v", err)
 	}
-	kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)
-	if len(kbSessions) != 1 {
-		t.Fatalf("KB StartSession calls (after release) = %d, want 1", len(kbSessions))
+	if len(loopRepos) != 1 {
+		t.Fatalf("KB loop starts (after release) = %d, want 1", len(loopRepos))
 	}
-	if kbSessions[0].ID != "feat-waiter-kb-repo-locked" {
-		t.Errorf("session ID = %q, want feat-waiter-kb-repo-locked", kbSessions[0].ID)
+	if loopRepos[0] != "repo-locked" {
+		t.Errorf("KB loop repo = %q, want repo-locked", loopRepos[0])
 	}
 	if waiter.KBWaitMessage != "" {
 		t.Errorf("KBWaitMessage = %q, want cleared after successful start", waiter.KBWaitMessage)
 	}
+}
+
+func TestOrchestrator_StartKB_AllFreshSkipsLoopAndReusesPersistentKB(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	repo := feature.FeatureRepo{Name: "repo-fresh", Path: "/tmp/repo-fresh-main", WorktreePath: "/tmp/repo-fresh-worktree"}
+	cpr.cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
+		if opts.Dir == repo.WorktreePath {
+			return []byte("worktree-head\n"), nil
+		}
+		return []byte("main-head\n"), nil
+	}
+	kbDir := agent.KBStateDir(cpr.stateDir, repo.Name)
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
+	}
+	if err := os.WriteFile(agent.KBPath(kbDir), []byte("# Fresh KB\n"), 0o644); err != nil {
+		t.Fatalf("write KB index: %v", err)
+	}
+	if err := agent.SaveKBState(kbDir, &agent.KBState{HeadCommit: "worktree-head"}); err != nil {
+		t.Fatalf("SaveKBState: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-kb-all-fresh",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		ActiveRun:    1,
+		Repos:        []feature.FeatureRepo{repo},
+	}
+	lc := lifecycleForFeature(f)
+	lc.StartInquireFn = func(id string) error {
+		f.Status = feature.StatusInquiring
+		return nil
+	}
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir:      cpr.stateDir,
+			CommandRunner: cpr.cmd,
+		},
+		CmdRunner: cpr.cmd,
+	}, orchestrator.Hooks{})
+	var loopRepos []string
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopRepos = append(loopRepos, repo.Name)
+		return nil, nil
+	})
+	o.SetRunInquireLoopFn(func(f *feature.Feature, kbInfos ...agent.KBInfo) (chan *agent.BlockingLoopResult, error) {
+		return nil, nil
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+	if len(loopRepos) != 0 {
+		t.Fatalf("KB loop repos = %v, want none for fresh repo", loopRepos)
+	}
+	refuteLifecycleCall(t, lc, "StartKnowledgeBase")
+	assertLifecycleCall(t, lc, "StartInquire")
+	if _, err := os.Stat(filepath.Join(cpr.stateDir, f.ID, "runs", "run-001", "knowledge-base")); !os.IsNotExist(err) {
+		t.Fatalf("run-dir KB bookkeeping stat err = %v, want not exist for all-fresh skip", err)
+	}
+}
+
+func TestOrchestrator_StartKB_ResumeSkipsFreshCompletedRepo(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	repos := []feature.FeatureRepo{
+		{Name: "repo-complete", Path: "/tmp/repo-complete"},
+		{Name: "repo-inflight", Path: "/tmp/repo-inflight"},
+	}
+	kbDir := agent.KBStateDir(cpr.stateDir, "repo-complete")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
+	}
+	if err := os.WriteFile(agent.KBPath(kbDir), []byte("# Completed KB\n"), 0o644); err != nil {
+		t.Fatalf("write KB index: %v", err)
+	}
+	if err := agent.SaveKBState(kbDir, &agent.KBState{HeadCommit: "deadbeef"}); err != nil {
+		t.Fatalf("SaveKBState: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-kb-resume",
+		Status:       feature.StatusBuildingKB,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		ActiveRun:    1,
+		Repos:        repos,
+		KBStatus: map[string]string{
+			"repo-complete": "completed",
+			"repo-inflight": "running",
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+	var loopRepos []string
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopRepos = append(loopRepos, repo.Name)
+		return nil, nil
+	})
+	t.Cleanup(func() {
+		for _, repoName := range loopRepos {
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), f.ID)
+		}
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+	refuteLifecycleCall(t, lc, "StartKnowledgeBase")
+	refuteLifecycleCall(t, lc, "InitKBStatus")
+	if !slices.Equal(loopRepos, []string{"repo-inflight"}) {
+		t.Fatalf("KB loop repos = %v, want only repo-inflight", loopRepos)
+	}
+}
+
+func TestOrchestrator_StartKB_ForcedResumeSkipsCompletedRepo(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	repos := []feature.FeatureRepo{
+		{Name: "repo-complete", Path: "/tmp/repo-complete"},
+		{Name: "repo-inflight", Path: "/tmp/repo-inflight"},
+	}
+	kbDir := agent.KBStateDir(cpr.stateDir, "repo-complete")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
+	}
+	if err := os.WriteFile(agent.KBPath(kbDir), []byte("# Completed KB\n"), 0o644); err != nil {
+		t.Fatalf("write KB index: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:             "feat-kb-forced-resume",
+		Status:         feature.StatusBuildingKB,
+		CurrentPhase:   feature.PhaseKnowledgeBase,
+		Pipeline:       feature.PipelineLarge,
+		ActiveRun:      1,
+		ForceKBRebuild: true,
+		Repos:          repos,
+		KBStatus: map[string]string{
+			"repo-complete": "completed",
+			"repo-inflight": "running",
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+	var loopRepos []string
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopRepos = append(loopRepos, repo.Name)
+		return nil, nil
+	})
+	t.Cleanup(func() {
+		for _, repoName := range loopRepos {
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), f.ID)
+		}
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+	refuteLifecycleCall(t, lc, "StartKnowledgeBase")
+	refuteLifecycleCall(t, lc, "InitKBStatus")
+	refuteLifecycleCall(t, lc, "MarkRepoKBCompleted")
+	if !slices.Equal(loopRepos, []string{"repo-inflight"}) {
+		t.Fatalf("KB loop repos = %v, want only repo-inflight", loopRepos)
+	}
+}
+
+func TestOrchestrator_StartKB_ForcedAllCompletedResumeClearsForceBeforeCreatedResume(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	repo := feature.FeatureRepo{Name: "repo-complete", Path: "/tmp/repo-complete"}
+	seedFreshKB(t, cpr.stateDir, repo.Name, "deadbeef")
+
+	f := &feature.Feature{
+		ID:             "feat-kb-forced-all-complete",
+		Status:         feature.StatusBuildingKB,
+		CurrentPhase:   feature.PhaseKnowledgeBase,
+		Pipeline:       feature.PipelineLarge,
+		ActiveRun:      1,
+		ForceKBRebuild: true,
+		Repos:          []feature.FeatureRepo{repo},
+		KBStatus: map[string]string{
+			repo.Name: "completed",
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	stopAfterKBSkip := errors.New("stop after KB skip")
+	startInquireCalls := 0
+	lc.CompleteKnowledgeBaseFn = func(id string) error {
+		return f.Transition(feature.StatusCreated)
+	}
+	lc.StartKnowledgeBaseFn = func(id string) error {
+		return f.Transition(feature.StatusBuildingKB)
+	}
+	lc.StartInquireFn = func(id string) error {
+		startInquireCalls++
+		if startInquireCalls == 1 {
+			return stopAfterKBSkip
+		}
+		return f.Transition(feature.StatusInquiring)
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir:      cpr.stateDir,
+			CommandRunner: cpr.cmd,
+		},
+		CmdRunner: cpr.cmd,
+	}, orchestrator.Hooks{})
+	var loopRepos []string
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopRepos = append(loopRepos, repo.Name)
+		return nil, nil
+	})
+
+	err := o.StartFeature(f.ID)
+	if !errors.Is(err, stopAfterKBSkip) {
+		t.Fatalf("StartFeature first error = %v, want %v", err, stopAfterKBSkip)
+	}
+	if f.Status != feature.StatusCreated {
+		t.Fatalf("status after first resume = %v, want StatusCreated", f.Status)
+	}
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature created-state resume: %v", err)
+	}
+	if f.ForceKBRebuild {
+		t.Error("ForceKBRebuild should be cleared before the Created-state resume")
+	}
+	if countLifecycleCalls(lc, "StartKnowledgeBase") != 0 {
+		t.Errorf("StartKnowledgeBase calls = %d, want 0", countLifecycleCalls(lc, "StartKnowledgeBase"))
+	}
+	if len(loopRepos) != 0 {
+		t.Fatalf("KB loop repos after Created-state resume = %v, want none", loopRepos)
+	}
+	if f.Status != feature.StatusInquiring {
+		t.Errorf("status after Created-state resume = %v, want StatusInquiring", f.Status)
+	}
+}
+
+func TestOrchestrator_StartKB_ResumeSkipsInProcessLoopWithoutActiveSession(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	repo := feature.FeatureRepo{Name: "repo-inflight", Path: "/tmp/repo-inflight"}
+	f := &feature.Feature{
+		ID:           "feat-kb-inprocess",
+		Status:       feature.StatusBuildingKB,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		ActiveRun:    1,
+		Repos:        []feature.FeatureRepo{repo},
+		KBStatus: map[string]string{
+			repo.Name: "running",
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	resultCh := make(chan *agent.BlockingLoopResult)
+	var loopRepos []string
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopRepos = append(loopRepos, repo.Name)
+		return resultCh, nil
+	})
+	t.Cleanup(func() {
+		if agent.ReadKBLockOwner(agent.KBStateDir(cpr.stateDir, repo.Name)) == f.ID {
+			select {
+			case resultCh <- &agent.BlockingLoopResult{FinalStatus: agent.BlockingLoopStatusInterrupted}:
+			case <-time.After(time.Second):
+				t.Fatal("timed out stopping KB loop dispatcher")
+			}
+			waitForKBLockReleased(t, cpr.stateDir, repo.Name)
+		}
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature (initial): %v", err)
+	}
+	if len(loopRepos) != 1 {
+		t.Fatalf("KB loop starts after initial start = %d, want 1", len(loopRepos))
+	}
+
+	// Simulate a Smart Zone handoff gap: the per-repo blocking loop is still
+	// alive, but there is no active provider session for activeKBSessionRepos
+	// to see. startKB must still treat the repo as already owned in-process.
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature (resume while loop alive): %v", err)
+	}
+	if len(loopRepos) != 1 {
+		t.Fatalf("KB loop starts after resume = %d, want 1; repos=%v", len(loopRepos), loopRepos)
+	}
+}
+
+func TestOrchestrator_KBLoopFailureCancelsSiblingLoopWithoutActiveSession(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	repos := []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a"},
+		{Name: "repo-b", Path: "/tmp/repo-b"},
+	}
+	f := &feature.Feature{
+		ID:           "feat-kb-cancel-sibling",
+		Status:       feature.StatusBuildingKB,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		ActiveRun:    1,
+		Repos:        repos,
+		KBStatus: map[string]string{
+			"repo-a": "running",
+			"repo-b": "running",
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+	lc.GetFn = fs.Load
+	repoAFinalized := make(chan struct{}, 1)
+	lc.ListFn = func() ([]*feature.Feature, error) {
+		features, err := fs.List()
+		select {
+		case repoAFinalized <- struct{}{}:
+		default:
+		}
+		return features, err
+	}
+	lc.MarkFailedFn = func(id, ft, msg string) error {
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusFailed
+			ff.FailureType = ft
+			ff.LastError = msg
+			return nil
+		})
+	}
+	lc.MarkRepoKBFailedFn = func(id, repoName, msg string) error {
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.KBStatus[repoName] = "failed: " + msg
+			return nil
+		})
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	loopContexts := make(map[string]context.Context)
+	resultChans := make(map[string]chan *agent.BlockingLoopResult)
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopContexts[repo.Name] = ctx
+		ch := make(chan *agent.BlockingLoopResult, 1)
+		resultChans[repo.Name] = ch
+		return ch, nil
+	})
+	t.Cleanup(func() {
+		for repoName, ch := range resultChans {
+			select {
+			case ch <- &agent.BlockingLoopResult{FinalStatus: agent.BlockingLoopStatusInterrupted}:
+			default:
+			}
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), f.ID)
+		}
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if loopContexts[repo] == nil {
+			t.Fatalf("missing loop context for %s; contexts=%v", repo, loopContexts)
+		}
+	}
+
+	resultChans["repo-a"] <- &agent.BlockingLoopResult{
+		FinalStatus: agent.BlockingLoopStatusProtocolViolation,
+		LastError:   "repo-a protocol violation",
+	}
+
+	select {
+	case <-loopContexts["repo-b"].Done():
+	case <-time.After(time.Second):
+		t.Fatal("repo-b KB loop context was not canceled after repo-a failed")
+	}
+
+	waitForKBLockReleased(t, cpr.stateDir, "repo-a")
+	select {
+	case <-repoAFinalized:
+	case <-time.After(time.Second):
+		t.Fatal("repo-a KB failure handler did not finish waiter wakeup")
+	}
+	resultChans["repo-b"] <- &agent.BlockingLoopResult{FinalStatus: agent.BlockingLoopStatusInterrupted}
+	waitForKBLockReleased(t, cpr.stateDir, "repo-b")
+}
+
+func TestOrchestrator_KBLoopSuccessFinalizationErrorCancelsSiblingLoop(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	repos := []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a"},
+		{Name: "repo-b", Path: "/tmp/repo-b"},
+	}
+	kbDir := agent.KBStateDir(cpr.stateDir, "repo-a")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", kbDir, err)
+	}
+	if err := os.WriteFile(agent.KBPath(kbDir), []byte("# Repo A KB\n"), 0o644); err != nil {
+		t.Fatalf("write KB index: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-kb-finalization-error",
+		Status:       feature.StatusBuildingKB,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		ActiveRun:    1,
+		Repos:        repos,
+		KBStatus: map[string]string{
+			"repo-a": "running",
+			"repo-b": "running",
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+	lc.GetFn = fs.Load
+	wakeDone := make(chan struct{}, 2)
+	lc.ListFn = func() ([]*feature.Feature, error) {
+		features, err := fs.List()
+		select {
+		case wakeDone <- struct{}{}:
+		default:
+		}
+		return features, err
+	}
+	lc.MarkRepoKBCompletedFn = func(id, repoName string) error {
+		if repoName == "repo-a" {
+			return errors.New("persist repo completion")
+		}
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.KBStatus[repoName] = "completed"
+			return nil
+		})
+	}
+	lc.MarkRepoKBFailedFn = func(id, repoName, msg string) error {
+		return fs.Modify(id, func(ff *feature.Feature) error {
+			ff.KBStatus[repoName] = "failed: " + msg
+			return nil
+		})
+	}
+	markFailedDone := make(chan struct{}, 1)
+	lc.MarkFailedFn = func(id, ft, msg string) error {
+		err := fs.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusFailed
+			ff.FailureType = ft
+			ff.LastError = msg
+			return nil
+		})
+		select {
+		case markFailedDone <- struct{}{}:
+		default:
+		}
+		return err
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	loopContexts := make(map[string]context.Context)
+	resultChans := make(map[string]chan *agent.BlockingLoopResult)
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopContexts[repo.Name] = ctx
+		ch := make(chan *agent.BlockingLoopResult, 1)
+		resultChans[repo.Name] = ch
+		return ch, nil
+	})
+	t.Cleanup(func() {
+		for repoName, ch := range resultChans {
+			select {
+			case ch <- &agent.BlockingLoopResult{FinalStatus: agent.BlockingLoopStatusInterrupted}:
+			default:
+			}
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), f.ID)
+		}
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if loopContexts[repo] == nil {
+			t.Fatalf("missing loop context for %s; contexts=%v", repo, loopContexts)
+		}
+	}
+
+	resultChans["repo-a"] <- &agent.BlockingLoopResult{
+		FinalStatus:   agent.BlockingLoopStatusSuccess,
+		CanonicalPath: agent.KBPath(kbDir),
+	}
+
+	select {
+	case <-loopContexts["repo-b"].Done():
+	case <-time.After(time.Second):
+		t.Fatal("repo-b KB loop context was not canceled after repo-a completion finalization failed")
+	}
+	select {
+	case <-markFailedDone:
+	case <-time.After(time.Second):
+		t.Fatal("KB finalization error did not fail the feature")
+	}
+	waitForKBLockReleased(t, cpr.stateDir, "repo-a")
+	select {
+	case <-wakeDone:
+	case <-time.After(time.Second):
+		t.Fatal("repo-a KB finalization failure did not finish waiter wakeup")
+	}
+
+	reloaded, err := fs.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", f.ID, err)
+	}
+	if reloaded.FailureType != feature.FailureInfrastructure {
+		t.Fatalf("FailureType = %q, want %q", reloaded.FailureType, feature.FailureInfrastructure)
+	}
+	if got := reloaded.KBStatus["repo-a"]; !strings.Contains(got, "mark repo KB completed") {
+		t.Fatalf("KBStatus[repo-a] = %q, want finalization failure", got)
+	}
+
+	resultChans["repo-b"] <- &agent.BlockingLoopResult{FinalStatus: agent.BlockingLoopStatusInterrupted}
+	waitForKBLockReleased(t, cpr.stateDir, "repo-b")
+	select {
+	case <-wakeDone:
+	case <-time.After(time.Second):
+		t.Fatal("repo-b KB interruption did not finish waiter wakeup")
+	}
+}
+
+func waitForKBLockReleased(t *testing.T, stateDir, repoName string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if owner := agent.ReadKBLockOwner(agent.KBStateDir(stateDir, repoName)); owner == "" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("kb.lock for repo %s was not released", repoName)
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +919,7 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 // did load are still re-dispatched.
 func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 	stateDir := t.TempDir()
-	writeKBCompletionArtifacts(t, stateDir, "repo-shared", true, true)
+	kbDir := writeKBCompletionArtifacts(t, stateDir, "repo-shared", false, true)
 
 	holder := &feature.Feature{
 		ID:           "feat-holder",
@@ -392,12 +988,15 @@ func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 		CmdRunner:   mocks.NewMockCommandRunner(),
 	}, orchestrator.Hooks{})
 
-	// Holder's KB session for repo-shared completed. wakeKBWaiters fires from
-	// onKBCompleted's success branch (line 169). The waiter must be advanced.
+	// Holder's KB loop for repo-shared completed. wakeKBWaiters fires after
+	// the loop completion releases kb.lock. The waiter must be advanced.
 	err := o.HandlePhaseCompletion("feat-holder", orchestrator.PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: "feat-holder-kb-repo-shared",
-		Success:   true,
+		Phase:    feature.PhaseKnowledgeBase,
+		RepoName: "repo-shared",
+		KnowledgeBaseResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			CanonicalPath: agent.KBPath(kbDir),
+		},
 	})
 	if err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
@@ -431,6 +1030,9 @@ func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 // This test pins the fix: routing via startPhase recurses into Inquire,
 // emitting a PhaseStarted{Inquire} event and invoking StartInquire.
 func TestOrchestrator_wakeKBWaiters_AdvancesPastSkippedKB(t *testing.T) {
+	stateDir := t.TempDir()
+	kbDir := writeKBCompletionArtifacts(t, stateDir, "repo-shared", false, true)
+
 	holder := &feature.Feature{
 		ID:           "feat-holder",
 		Status:       feature.StatusBuildingKB,
@@ -486,9 +1088,10 @@ func TestOrchestrator_wakeKBWaiters_AdvancesPastSkippedKB(t *testing.T) {
 
 	var startedPhases []feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		CmdRunner: mocks.NewMockCommandRunner(),
+		Lifecycle:   lc,
+		Store:       fs,
+		CmdRunner:   mocks.NewMockCommandRunner(),
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) {
 			if id == "feat-waiter" {
@@ -498,9 +1101,12 @@ func TestOrchestrator_wakeKBWaiters_AdvancesPastSkippedKB(t *testing.T) {
 	})
 
 	err := o.HandlePhaseCompletion("feat-holder", orchestrator.PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: "feat-holder-kb-repo-shared",
-		Success:   true,
+		Phase:    feature.PhaseKnowledgeBase,
+		RepoName: "repo-shared",
+		KnowledgeBaseResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			CanonicalPath: agent.KBPath(kbDir),
+		},
 	})
 	if err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
@@ -521,24 +1127,13 @@ func TestOrchestrator_wakeKBWaiters_AdvancesPastSkippedKB(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestOrchestrator_OnKBCompleted_FailureOnInterruptedFeature_DoesNotMarkFailed
+// TestOrchestrator_KBSessionDoneOnInterruptedFeature_NoOps
 // ---------------------------------------------------------------------------
 //
-// Regression for the user-pressed-Stop-during-KB-build crash. When the user
-// hits "s" mid-KB-build, InterruptFeature transitions the feature to
-// StatusInterrupted and stops sessions. Each killed session asynchronously
-// fires a SessionDoneMsg with success=false (process didn't exit cleanly) and
-// an error string built from the agent's last assistant text (the CLI never
-// emitted a result message before SIGINT). That message routes through
-// HandlePhaseCompletion → onKBCompleted's failure branch.
-//
-// Pre-fix: onKBCompleted unconditionally called markFailedWithEvent with
-// FailureSessionCrash, emitting feature.failed *before* InterruptFeature
-// finished emitting feature.interrupted, and stamping last_error with the
-// agent's mid-flight reasoning. The fix adds a terminal-state guard so when
-// the feature is already at StatusInterrupted (or Failed), the failure branch
-// short-circuits and lets InterruptFeature own the terminal transition.
-func TestOrchestrator_OnKBCompleted_FailureOnInterruptedFeature_DoesNotMarkFailed(t *testing.T) {
+// KB is loop-owned now: per-iteration SessionDone messages do not mutate the
+// feature at all. This preserves the original interrupt invariant without
+// reviving the retired single-shot KB completion path.
+func TestOrchestrator_KBSessionDoneOnInterruptedFeature_NoOps(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-int-kb",
 		Status:       feature.StatusInterrupted,
@@ -590,10 +1185,9 @@ func TestOrchestrator_OnKBCompleted_FailureOnInterruptedFeature_DoesNotMarkFaile
 // ---------------------------------------------------------------------------
 //
 // Pins the ordering invariant: Lifecycle.Transition(StatusInterrupted) must
-// run BEFORE StopSession. Otherwise a racing SessionDoneMsg → onKBCompleted
-// reads the pre-Interrupted Status and the terminal-state guard misses,
-// dropping the feature into Failed. The mock StopSession asserts the transition
-// already landed by the time it's invoked.
+// run BEFORE StopSession. Racing completion handlers rely on seeing the
+// terminal status. The mock StopSession asserts the transition already landed
+// by the time it's invoked.
 func TestOrchestrator_InterruptFeature_TransitionBeforeStopSession(t *testing.T) {
 	f := &feature.Feature{
 		ID:     "feat-order",
@@ -623,6 +1217,6 @@ func TestOrchestrator_InterruptFeature_TransitionBeforeStopSession(t *testing.T)
 	}
 
 	if statusAtStop != feature.StatusInterrupted {
-		t.Errorf("Status at StopSession time = %v, want StatusInterrupted (transition must run first so racing onKBCompleted sees zombie)", statusAtStop)
+		t.Errorf("Status at StopSession time = %v, want StatusInterrupted (transition must run first so racing completion handlers see terminal status)", statusAtStop)
 	}
 }

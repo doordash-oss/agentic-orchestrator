@@ -285,6 +285,8 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		return validateHelperProgressHandoffArtifact(ResearchProgressHandoffFilename, ParseResearchProgressHandoffMd)
 	case roles.ValidatorDesignProgressHandoff:
 		return validateHelperProgressHandoffArtifact(DesignProgressHandoffFilename, ParseDesignProgressHandoffMd)
+	case roles.ValidatorKBProgressHandoff:
+		return validateHelperProgressHandoffArtifact(KBProgressHandoffFilename, ParseKBProgressHandoffMd)
 	case roles.ValidatorIterationMeta:
 		return validateIterationMetaArtifact
 	default:

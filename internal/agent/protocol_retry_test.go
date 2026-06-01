@@ -60,49 +60,10 @@ func TestProtocolRetrySidecarRoundTrip(t *testing.T) {
 	}
 }
 
-func TestKBProtocolRetrySidecarFilename(t *testing.T) {
-	got := KBProtocolRetrySidecarFilename("feat-abc123")
-	want := ".protocol-retry-feat-abc123.yaml"
-	if got != want {
-		t.Fatalf("KBProtocolRetrySidecarFilename() = %q, want %q", got, want)
-	}
-	if got2 := KBProtocolRetrySidecarFilename("feat-abc123"); got2 != got {
-		t.Fatalf("KBProtocolRetrySidecarFilename() second call = %q, want deterministic %q", got2, got)
-	}
-}
-
-func TestProtocolRetrySidecarRoundTripAtKBFilename(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "knowledge-base", "repo-a")
-	filename := KBProtocolRetrySidecarFilename("feat-kb")
-	want := ProtocolRetrySidecar{
-		Role:          RoleKnowledgeBaseBuilder,
-		ActiveRun:     3,
-		Consecutive:   2,
-		LastViolation: "index.md: required artifact missing",
-		UpdatedAt:     time.Date(2026, 5, 18, 12, 34, 56, 0, time.UTC),
-	}
-
-	if err := WriteProtocolRetrySidecarAt(dir, filename, want); err != nil {
-		t.Fatalf("WriteProtocolRetrySidecarAt() error = %v", err)
-	}
-
-	got, err := ReadProtocolRetrySidecarAt(dir, filename)
-	if err != nil {
-		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
-	}
-	if got == nil {
-		t.Fatal("ReadProtocolRetrySidecarAt() = nil, want sidecar")
-	}
-	if got.Role != want.Role || got.ActiveRun != want.ActiveRun || got.Consecutive != want.Consecutive ||
-		got.LastViolation != want.LastViolation || !got.UpdatedAt.Equal(want.UpdatedAt) {
-		t.Fatalf("sidecar = %#v, want %#v", got, want)
-	}
-}
-
-func TestProtocolRetrySidecarAtFeatureIsolation(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "knowledge-base", "repo-a")
-	current := KBProtocolRetrySidecarFilename("feat-current")
-	other := KBProtocolRetrySidecarFilename("feat-other")
+func TestProtocolRetrySidecarAtCustomFilenameIsolation(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "phase-dir")
+	current := ".protocol-retry-current.yaml"
+	other := ".protocol-retry-other.yaml"
 
 	otherSidecar := ProtocolRetrySidecar{
 		Role:          RoleKnowledgeBaseBuilder,

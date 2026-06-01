@@ -29,11 +29,6 @@ const (
 	DefaultMaxConsecutiveProtocolViolations = 3
 )
 
-// KBProtocolRetrySidecarFilename returns the feature-scoped KB retry sidecar filename.
-func KBProtocolRetrySidecarFilename(featureID string) string {
-	return ".protocol-retry-" + featureID + ".yaml"
-}
-
 // ProtocolRetryAction is the bounded retry decision returned after contract validation.
 type ProtocolRetryAction int
 

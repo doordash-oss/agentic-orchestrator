@@ -13,6 +13,44 @@ The KB is a structured directory of focused documents — NOT a single monolithi
 |----------|------|-------------|---------|
 | `index.md` | `{phase_dir}/index.md` | required | top-level knowledge-base graph index markdown |
 
+## Blocking Loop Handoff
+
+Every KB build runs inside a per-repo blocking loop. The canonical deliverable
+is still the persistent KB tree under `{phase_dir}`; `{iteration_dir}` is only
+for harness bookkeeping.
+
+On every normal finish:
+- Ensure `{phase_dir}/index.md` exists and reflects the current KB tree.
+- Write `{iteration_dir}/kb-progress.md` with the full parser-valid structure
+  below and `## Handoff State` set to `COMPLETE`.
+- Touch `{iteration_dir}/phase_complete` last.
+
+Use exactly this structure for a normal completion:
+
+```markdown
+# Knowledge Base Progress
+
+## Completed Categories
+- <category>: <leaf files written / "index.md only"> - already in the persistent KB tree
+
+## Remaining Categories
+- none
+
+## Where I Stopped
+Complete
+
+## Gotchas
+- none
+
+## Handoff State
+COMPLETE
+```
+
+When Smart Zone wind-down is triggered, follow `HANDOFF.md` in this skill
+directory. It defines the `CONTINUE` handoff format. A resumed agent continues
+the in-flight build in place from `## Remaining Categories`; it must not restart
+completed categories or re-run the full-vs-incremental decision.
+
 ## CRITICAL: YOUR ONLY JOB IS TO DOCUMENT THE CODEBASE
 
 - DO NOT edit or modify any code files — you are a documenter, not an implementer
@@ -144,6 +182,12 @@ Include file paths and code references where helpful.
    category, organize the corresponding researcher's output into an `index.md`
    and focused leaf files.
 4. Write the top-level index.md LAST (so it accurately reflects what you created)
+5. Write `{iteration_dir}/kb-progress.md` with the full normal completion
+   structure from "Blocking Loop Handoff": all categories listed under
+   Completed Categories, Remaining Categories set to `none`, Where I Stopped
+   set to `Complete`, Gotchas filled with `none` or real notes, and
+   `## Handoff State` set to `COMPLETE`
+6. Touch `{iteration_dir}/phase_complete` last
 
 ## For INCREMENTAL UPDATES (existing KB provided):
 
@@ -162,6 +206,12 @@ Include file paths and code references where helpful.
 7. If any standard category doesn't exist yet, create it (run its researcher)
 8. Update the top-level index.md if the structure changed
 9. Preserve unchanged files verbatim — do NOT rewrite them
+10. Write `{iteration_dir}/kb-progress.md` with the full normal completion
+    structure from "Blocking Loop Handoff": affected categories listed under
+    Completed Categories, Remaining Categories set to `none`, Where I Stopped
+    set to `Complete`, Gotchas filled with `none` or real notes, and
+    `## Handoff State` set to `COMPLETE`
+11. Touch `{iteration_dir}/phase_complete` last
 
 ## Important Rules
 

@@ -29,8 +29,9 @@ var knowledgeBaseBuilderRoleSpec = RoleSpec{
 	UserTemplate: "kb_build.user",
 	OutputRoots: []OutputRootSpec{
 		singleShotPhaseDirOutputRoot("Repository-scoped knowledge-base root. The KB graph entrypoint is written here."),
+		iterationDirOutputRoot("Active Knowledge Base loop iteration directory for harness handoff artifacts."),
 	},
-	MarkerRoot: "phase_dir",
+	MarkerRoot: "iteration_dir",
 	Artifacts: []RoleArtifactSpec{
 		{
 			Name:         "knowledge_base_index",
@@ -41,6 +42,8 @@ var knowledgeBaseBuilderRoleSpec = RoleSpec{
 			Description:  "top-level knowledge-base graph index markdown",
 			Validate:     ValidatorKnowledgeBaseIndex,
 		},
+		kbProgressHandoffRoleArtifact(),
+		knowledgeBaseIterationMetaRoleArtifact(),
 	},
 }
 

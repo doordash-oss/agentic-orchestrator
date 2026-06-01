@@ -215,6 +215,51 @@ func TestParseResearchProgressHandoffMd(t *testing.T) {
 	}
 }
 
+func TestParseKnowledgeBaseProgressHandoffMd(t *testing.T) {
+	path := writeHelperHandoff(t, t.TempDir(), KBProgressHandoffFilename, validKBProgressHandoff("CONTINUE", "architecture: index.md, data-flow.md"))
+
+	parsed, err := ParseKBProgressHandoffMd(path)
+	if err != nil {
+		t.Fatalf("ParseKBProgressHandoffMd() error = %v", err)
+	}
+	if !parsed.OK() {
+		t.Fatalf("ParseKBProgressHandoffMd() violations = %v", parsed.ProtocolViolations)
+	}
+	if parsed.State != HelperHandoffContinue {
+		t.Fatalf("State = %s, want CONTINUE", parsed.State)
+	}
+	if !strings.Contains(parsed.ProgressRegion, "architecture: index.md, data-flow.md") {
+		t.Fatalf("ProgressRegion missing completed category:\n%s", parsed.ProgressRegion)
+	}
+
+	complete := writeHelperHandoff(t, t.TempDir(), KBProgressHandoffFilename, validKBProgressHandoff("COMPLETE", "verification: index.md"))
+	parsed, err = ParseKBProgressHandoffMd(complete)
+	if err != nil {
+		t.Fatalf("ParseKBProgressHandoffMd(complete) error = %v", err)
+	}
+	if !parsed.OK() || parsed.State != HelperHandoffComplete {
+		t.Fatalf("complete parse = state %s OK %v violations %v, want COMPLETE without violations", parsed.State, parsed.OK(), parsed.ProtocolViolations)
+	}
+
+	missing := writeHelperHandoff(t, t.TempDir(), KBProgressHandoffFilename, strings.ReplaceAll(validKBProgressHandoff("CONTINUE", "x"), "## Remaining Categories\n- none\n\n", ""))
+	parsed, err = ParseKBProgressHandoffMd(missing)
+	if err != nil {
+		t.Fatalf("ParseKBProgressHandoffMd(missing) error = %v", err)
+	}
+	if parsed.OK() || !containsViolation(parsed.ProtocolViolations, "missing required section") {
+		t.Fatalf("missing section parse = OK %v violations %v, want missing-section violation", parsed.OK(), parsed.ProtocolViolations)
+	}
+
+	invalid := writeHelperHandoff(t, t.TempDir(), KBProgressHandoffFilename, validKBProgressHandoff("DONE", "x"))
+	parsed, err = ParseKBProgressHandoffMd(invalid)
+	if err != nil {
+		t.Fatalf("ParseKBProgressHandoffMd(invalid) error = %v", err)
+	}
+	if parsed.OK() || !containsViolation(parsed.ProtocolViolations, "CONTINUE, COMPLETE") {
+		t.Fatalf("invalid state parse = OK %v violations %v, want state violation", parsed.OK(), parsed.ProtocolViolations)
+	}
+}
+
 func TestParseInquireProgressHandoffMd(t *testing.T) {
 	path := writeHelperHandoff(t, t.TempDir(), InquireProgressHandoffFilename, validInquireProgressHandoff("CONTINUE", "captured auth requirements"))
 
@@ -455,6 +500,42 @@ func TestInquireAndDesignHandoffAssetsMatchProgressContracts(t *testing.T) {
 	}
 }
 
+func TestBuildKnowledgeBaseSkillDocumentsParserValidCompleteProgress(t *testing.T) {
+	path := repoRootPath(t, "skills", "build-knowledge-base", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		KBProgressHandoffFilename,
+		"## Completed Categories",
+		"## Remaining Categories",
+		"## Where I Stopped",
+		"## Gotchas",
+		"## Handoff State",
+		"COMPLETE",
+		"phase_complete",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("build-knowledge-base SKILL.md missing %q", want)
+		}
+	}
+
+	sample := extractMarkdownFenceContaining(t, text, "COMPLETE")
+	handoffPath := writeHelperHandoff(t, t.TempDir(), KBProgressHandoffFilename, sample)
+	parsed, err := ParseKBProgressHandoffMd(handoffPath)
+	if err != nil {
+		t.Fatalf("ParseKBProgressHandoffMd() error = %v", err)
+	}
+	if !parsed.OK() {
+		t.Fatalf("build-knowledge-base SKILL.md COMPLETE sample violations = %v", parsed.ProtocolViolations)
+	}
+	if parsed.State != HelperHandoffComplete {
+		t.Fatalf("State = %s, want COMPLETE", parsed.State)
+	}
+}
+
 func TestResearchProgressHandoffFingerprint(t *testing.T) {
 	a := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-001", "research", "iteration-01"), ResearchProgressHandoffFilename, validResearchProgressHandoff("CONTINUE", "documented `/tmp/a/run-001/research/iteration-01/service.md` at 2026-05-29T10:11:12Z"))
 	b := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-002", "research", "iteration-07"), ResearchProgressHandoffFilename, validResearchProgressHandoff("CONTINUE", "documented `/var/folders/x/run-002/research/iteration-07/service.md` at 2026-05-30T01:02:03-07:00"))
@@ -478,6 +559,32 @@ func TestResearchProgressHandoffFingerprint(t *testing.T) {
 	}
 	if fpA == fpC {
 		t.Fatal("fingerprint did not change after completed findings changed")
+	}
+}
+
+func TestKBProgressHandoffFingerprint(t *testing.T) {
+	a := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-001", "knowledge-base", "repo", "iteration-01"), KBProgressHandoffFilename, validKBProgressHandoff("CONTINUE", "architecture: `/tmp/a/run-001/knowledge-base/repo/iteration-01/index.md` at 2026-05-29T10:11:12Z"))
+	b := writeHelperHandoff(t, filepath.Join(t.TempDir(), "run-002", "knowledge-base", "repo", "iteration-07"), KBProgressHandoffFilename, validKBProgressHandoff("CONTINUE", "architecture: `/var/folders/x/run-002/knowledge-base/repo/iteration-07/index.md` at 2026-05-30T01:02:03-07:00"))
+
+	fpA, err := KBProgressHandoffFingerprint(a)
+	if err != nil {
+		t.Fatalf("KBProgressHandoffFingerprint(a) error = %v", err)
+	}
+	fpB, err := KBProgressHandoffFingerprint(b)
+	if err != nil {
+		t.Fatalf("KBProgressHandoffFingerprint(b) error = %v", err)
+	}
+	if fpA != fpB {
+		t.Fatalf("volatile-only fingerprints differ:\n%s\n%s", fpA, fpB)
+	}
+
+	c := writeHelperHandoff(t, t.TempDir(), KBProgressHandoffFilename, validKBProgressHandoff("CONTINUE", "verification: index.md, test-suites.md"))
+	fpC, err := KBProgressHandoffFingerprint(c)
+	if err != nil {
+		t.Fatalf("KBProgressHandoffFingerprint(c) error = %v", err)
+	}
+	if fpA == fpC {
+		t.Fatal("fingerprint did not change after category progress changed")
 	}
 }
 
@@ -768,6 +875,26 @@ Continue with the next design area.
 `, decisions, state)
 }
 
+func validKBProgressHandoff(state, completed string) string {
+	return fmt.Sprintf(`# Knowledge Base Progress
+
+## Completed Categories
+- %s
+
+## Remaining Categories
+- none
+
+## Where I Stopped
+Continue with the next category.
+
+## Gotchas
+- no blockers
+
+## Handoff State
+%s
+`, completed, state)
+}
+
 func writeHelperHandoff(t testing.TB, dir, name, body string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -792,6 +919,27 @@ func extractFirstMarkdownFence(t testing.TB, body string) string {
 		t.Fatal("unterminated markdown fence")
 	}
 	return body[start : start+end]
+}
+
+func extractMarkdownFenceContaining(t testing.TB, body, want string) string {
+	t.Helper()
+	remaining := body
+	for {
+		start := strings.Index(remaining, "```markdown\n")
+		if start < 0 {
+			t.Fatalf("missing markdown fence containing %q", want)
+		}
+		start += len("```markdown\n")
+		end := strings.Index(remaining[start:], "\n```")
+		if end < 0 {
+			t.Fatal("unterminated markdown fence")
+		}
+		fence := remaining[start : start+end]
+		if strings.Contains(fence, want) {
+			return fence
+		}
+		remaining = remaining[start+end+len("\n```"):]
+	}
 }
 
 func containsViolation(violations []string, want string) bool {

@@ -2571,7 +2571,7 @@ func writeSessionQAFile(phase feature.Phase, sess session.SessionView, artifactD
 
 func loopOwnedArtifactPhase(phase feature.Phase) bool {
 	switch phase {
-	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
+	case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
 		return true
 	default:
 		return false
@@ -6810,14 +6810,11 @@ func stripPhaseSuffix(s string) string {
 }
 
 // repoNameFromKBSession extracts the repo name from a per-repo KB session ID.
-// Format: "<featureID>-kb-<repoName>" → "<repoName>"
+// Formats: "<featureID>-kb-<repoName>" and
+// "<featureID>-kb-<repoName>-NN" → "<repoName>".
 // Returns "" if not a per-repo KB session (legacy "<featureID>-kb" format).
 func repoNameFromKBSession(sessionID string) string {
-	idx := strings.Index(sessionID, "-kb-")
-	if idx < 0 {
-		return ""
-	}
-	return sessionID[idx+4:]
+	return agent.RepoNameFromKBSession(sessionID)
 }
 
 // FALLBACK ONLY. phaseFromSessionID determines the feature phase from a
@@ -6965,12 +6962,7 @@ func phaseArtifactDir(baseDir string, f *feature.Feature, phase feature.Phase, s
 }
 
 func registryOwnedSingleShotPhase(phase feature.Phase) bool {
-	switch phase {
-	case feature.PhaseKnowledgeBase:
-		return true
-	default:
-		return false
-	}
+	return false
 }
 
 func phaseOutputSuggestsQuestion(output string) bool {

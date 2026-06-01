@@ -617,6 +617,7 @@ func TestRunCodebaseIndexForRepo_FreshKBStaleIndex(t *testing.T) {
 	// structural index is always up-to-date.
 
 	repoPath := testutil.InitGitRepo(t)
+	originalRepoPath := t.TempDir()
 	// Add a Go file so the codebase indexer has something to index
 	testutil.CommitFile(t, repoPath, "main.go", "package main\nfunc main() {}\n", "add main.go")
 
@@ -651,7 +652,7 @@ func TestRunCodebaseIndexForRepo_FreshKBStaleIndex(t *testing.T) {
 		StateDir:       stateDir,
 	}
 
-	repo := feature.FeatureRepo{Name: "index-test-repo", Path: repoPath}
+	repo := feature.FeatureRepo{Name: "index-test-repo", Path: originalRepoPath, WorktreePath: repoPath}
 	err := pr.RunCodebaseIndexForRepo(repo)
 	if err != nil {
 		t.Fatalf("RunCodebaseIndexForRepo error: %v", err)

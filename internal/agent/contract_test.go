@@ -306,6 +306,7 @@ func TestContractKnowledgeBaseBuilderRequiresIndexPresence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(kbDir, "index.md"), []byte("# repo kb\n"), 0o644); err != nil {
 		t.Fatalf("write index.md: %v", err)
 	}
+	writeKBLoopContractArtifacts(t, kbDir)
 
 	contract, ok := Lookup(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder)
 	if !ok {
@@ -329,6 +330,7 @@ func TestContractKnowledgeBaseBuilderRequiresIndexPresence(t *testing.T) {
 
 func TestContractKnowledgeBaseBuilderReportsMissingIndex(t *testing.T) {
 	kbDir := t.TempDir()
+	writeKBLoopContractArtifacts(t, kbDir)
 
 	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
 	if err != nil {
@@ -353,6 +355,7 @@ func TestContractKnowledgeBaseBuilderIndexPresenceOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(kbDir, "index.md"), nil, 0o644); err != nil {
 		t.Fatalf("write empty index.md: %v", err)
 	}
+	writeKBLoopContractArtifacts(t, kbDir)
 
 	out, violations, err := Validate(feature.PhaseKnowledgeBase, RoleKnowledgeBaseBuilder, kbDir)
 	if err != nil {
@@ -360,6 +363,18 @@ func TestContractKnowledgeBaseBuilderIndexPresenceOnly(t *testing.T) {
 	}
 	if !out.OK || len(violations) != 0 {
 		t.Fatalf("Validate() = outcome=%#v violations=%#v, want presence-only success", out, violations)
+	}
+}
+
+func writeKBLoopContractArtifacts(t *testing.T, dir string) {
+	t.Helper()
+	writeHelperHandoff(t, dir, KBProgressHandoffFilename, validKBProgressHandoff("COMPLETE", "verification: index.md"))
+	if err := NewArtifactManager(filepath.Dir(dir)).WriteMeta(dir, IterationMeta{
+		Iteration:    1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: HelperHandoffComplete.String(),
+	}); err != nil {
+		t.Fatalf("WriteMeta() error = %v", err)
 	}
 }
 

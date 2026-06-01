@@ -119,22 +119,11 @@ func TestArtifactPhaseCompletionValidationInfraErrorBubbles(t *testing.T) {
 	}
 }
 
-func TestKBCompletionValidationInfraErrorBubbles(t *testing.T) {
-	oldValidate := validateAgentContract
-	validateAgentContract = func(feature.Phase, agent.Role, string) (agent.Outcome, []agent.ProtocolViolation, error) {
-		return agent.Outcome{}, nil, errors.New("kb parser exploded")
-	}
-	t.Cleanup(func() {
-		validateAgentContract = oldValidate
-	})
-
+func TestKBLoopMissingIndexFailsWithoutSidecar(t *testing.T) {
 	stateDir := t.TempDir()
 	kbDir := agent.KBStateDir(stateDir, "repo-a")
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
 		t.Fatalf("mkdir kb dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(kbDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("write phase_complete: %v", err)
 	}
 
 	f := &feature.Feature{
@@ -152,6 +141,15 @@ func TestKBCompletionValidationInfraErrorBubbles(t *testing.T) {
 	}
 	lc := mocks.NewMockFeatureLifecycle()
 	lc.GetFn = store.Load
+	lc.MarkRepoKBFailedFn = func(id, repo, msg string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			if ff.KBStatus == nil {
+				ff.KBStatus = map[string]string{}
+			}
+			ff.KBStatus[repo] = "failed: " + msg
+			return nil
+		})
+	}
 	lc.MarkFailedFn = func(id, ft, msg string) error {
 		return store.Modify(id, func(ff *feature.Feature) error {
 			ff.Status = feature.StatusFailed
@@ -165,59 +163,35 @@ func TestKBCompletionValidationInfraErrorBubbles(t *testing.T) {
 		Lifecycle: lc,
 		Store:     store,
 		Sessions:  sm,
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir: stateDir,
+		},
 	}, Hooks{})
 
-	err := o.onKBCompleted(f.ID, PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: f.ID + "-kb-repo-a",
-		Success:   true,
-	})
-	if err == nil {
-		t.Fatal("onKBCompleted() error = nil, want validation error")
-	}
-	if !strings.Contains(err.Error(), "validating knowledge base contract") || !strings.Contains(err.Error(), "kb parser exploded") {
-		t.Fatalf("onKBCompleted() error = %v, want wrapped validation error", err)
+	if err := o.onKnowledgeBaseLoopDone(f.ID, "repo-a", &agent.BlockingLoopResult{
+		FinalStatus: agent.BlockingLoopStatusSuccess,
+	}); err != nil {
+		t.Fatalf("onKnowledgeBaseLoopDone() error = %v", err)
 	}
 	reloaded, err := store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("load feature: %v", err)
 	}
-	if reloaded.FailureType != "" || reloaded.LastError != "" {
-		t.Fatalf("FailureType/LastError = %q/%q, want empty", reloaded.FailureType, reloaded.LastError)
+	if reloaded.FailureType != feature.FailureProtocolViolation {
+		t.Fatalf("FailureType = %q, want %q", reloaded.FailureType, feature.FailureProtocolViolation)
 	}
-	if _, err := os.Stat(filepath.Join(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))); !os.IsNotExist(err) {
-		t.Fatalf("sidecar stat err = %v, want not exist", err)
+	if !strings.Contains(reloaded.LastError, "index.md is missing") {
+		t.Fatalf("LastError = %q, want missing index.md", reloaded.LastError)
 	}
-	for _, call := range lc.Calls {
-		switch call.Method {
-		case "MarkRepoKBFailed", "MarkFailed":
-			t.Fatalf("%s called on infra validation error; calls=%#v", call.Method, lc.Calls)
-		}
+	if matches, err := filepath.Glob(filepath.Join(kbDir, ".protocol-retry-*.yaml")); err != nil || len(matches) != 0 {
+		t.Fatalf("KB protocol retry sidecars = %v, %v; want none", matches, err)
 	}
 	if got := len(sm.StopCalls); got != 0 {
 		t.Fatalf("StopSession calls = %d, want 0", got)
 	}
-	select {
-	case ev := <-o.Events():
-		if ev.Type == ports.PhaseCompleted {
-			t.Fatalf("PhaseCompleted emitted on infra validation error: %#v", ev)
-		}
-	default:
-	}
 }
 
-func TestKBCompletionRetryPreservesIndexAndState(t *testing.T) {
-	oldValidate := validateAgentContract
-	validateAgentContract = func(feature.Phase, agent.Role, string) (agent.Outcome, []agent.ProtocolViolation, error) {
-		return agent.Outcome{}, []agent.ProtocolViolation{{
-			Artifact: "index.md",
-			Reason:   "synthetic validator violation",
-		}}, nil
-	}
-	t.Cleanup(func() {
-		validateAgentContract = oldValidate
-	})
-
+func TestKBLoopProtocolViolationPreservesIndexAndState(t *testing.T) {
 	stateDir := t.TempDir()
 	kbDir := agent.KBStateDir(stateDir, "repo-a")
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
@@ -260,18 +234,27 @@ func TestKBCompletionRetryPreservesIndexAndState(t *testing.T) {
 	lc := mocks.NewMockFeatureLifecycle()
 	lc.GetFn = store.Load
 	lc.ListFn = func() ([]*feature.Feature, error) { return []*feature.Feature{f}, nil }
+	lc.MarkRepoKBFailedFn = func(id, repo, msg string) error { return nil }
+	lc.MarkFailedFn = func(id, ft, msg string) error {
+		return store.Modify(id, func(ff *feature.Feature) error {
+			ff.Status = feature.StatusFailed
+			ff.FailureType = ft
+			ff.LastError = msg
+			return nil
+		})
+	}
 	o := New(Deps{
-		Lifecycle: lc,
-		Store:     store,
-		CmdRunner: mocks.NewMockCommandRunner(),
+		Lifecycle:   lc,
+		Store:       store,
+		CmdRunner:   mocks.NewMockCommandRunner(),
+		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
 	}, Hooks{})
 
-	if err := o.onKBCompleted(f.ID, PhaseCompletionInput{
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: f.ID + "-kb-repo-a",
-		Success:   true,
+	if err := o.onKnowledgeBaseLoopDone(f.ID, "repo-a", &agent.BlockingLoopResult{
+		FinalStatus: agent.BlockingLoopStatusProtocolViolation,
+		LastError:   "synthetic validator violation",
 	}); err != nil {
-		t.Fatalf("onKBCompleted() error = %v", err)
+		t.Fatalf("onKnowledgeBaseLoopDone() error = %v", err)
 	}
 
 	gotIndex, err := os.ReadFile(indexPath)
@@ -288,14 +271,7 @@ func TestKBCompletionRetryPreservesIndexAndState(t *testing.T) {
 	if string(gotState) != string(stateBytes) {
 		t.Fatalf("state.json changed: got %q, want %q", gotState, stateBytes)
 	}
-	if _, err := os.Stat(filepath.Join(kbDir, agent.PhaseCompleteFile)); !os.IsNotExist(err) {
-		t.Fatalf("phase_complete stat err = %v, want removed", err)
-	}
-	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))
-	if err != nil {
-		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
-	}
-	if sidecar == nil || sidecar.Consecutive != 1 {
-		t.Fatalf("sidecar = %#v, want consecutive=1", sidecar)
+	if matches, err := filepath.Glob(filepath.Join(kbDir, ".protocol-retry-*.yaml")); err != nil || len(matches) != 0 {
+		t.Fatalf("KB protocol retry sidecars = %v, %v; want none", matches, err)
 	}
 }

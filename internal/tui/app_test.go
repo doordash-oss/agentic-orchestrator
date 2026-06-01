@@ -2914,11 +2914,12 @@ func TestHelpOverlayBlocksQuit(t *testing.T) {
 	}
 }
 
-// TestHandleSessionDone_SDKFailureOverridesCleanExit verifies that a clean
+// TestHandleSessionDone_KBSDKFailureIsLoopOwnedNoOp verifies that a clean
 // process exit (SessionDone) combined with an SDK result indicating failure
-// produces a PhaseCompletedMsg with Success=false, which in turn marks a
-// registry-owned single-shot phase as Failed rather than advancing it.
-func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
+// does not mutate KB feature state. KB per-iteration session completion is
+// loop-owned; only the aggregate KnowledgeBaseResult advances or fails the
+// phase.
+func TestHandleSessionDone_KBSDKFailureIsLoopOwnedNoOp(t *testing.T) {
 	app, fm := newTestAppModel(t)
 
 	f, err := fm.Create("sdk-fail-test", "desc", nil, fm.Config.Defaults.Models, "", "", nil)
@@ -2940,8 +2941,7 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 	app.lastNotifyTime = make(map[notifyKey]time.Time)
 	app.eventCh = make(chan interface{}, 1) // prevent listenForEvents from blocking
 
-	// handleSessionDone with clean exit but FAILED SDK status should produce
-	// PhaseCompletedMsg{Success: false}. Feed that through handlePhaseCompleted.
+	// A stale per-iteration failure message must not fail the KB phase.
 	pcm := PhaseCompletedMsg{
 		FeatureID: f.ID,
 		Phase:     feature.PhaseKnowledgeBase,
@@ -2950,13 +2950,16 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 	}
 	app.handlePhaseCompleted(pcm)
 
-	// Feature should be Failed (not advanced past Inquire).
 	updated, _ := fm.Get(f.ID)
-	if updated.Status != feature.StatusFailed {
-		t.Errorf("feature status = %v, want Failed (SDK FAILED should not advance knowledge base)", updated.Status)
+	if updated.Status != feature.StatusBuildingKB {
+		t.Errorf("feature status = %v, want BuildingKB unchanged", updated.Status)
+	}
+	if updated.FailureType != "" || updated.LastError != "" {
+		t.Errorf("failure fields = %q/%q, want empty", updated.FailureType, updated.LastError)
 	}
 
-	// Now verify the positive case: SUCCESS in StatusCh + clean exit = success.
+	// Now verify the positive case: SUCCESS in StatusCh + clean exit is also
+	// loop-owned and does not advance by itself.
 	f2, err := fm.Create("sdk-success-test", "desc", nil, fm.Config.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -2978,16 +2981,16 @@ func TestHandleSessionDone_SDKFailureOverridesCleanExit(t *testing.T) {
 	}
 	result, _ := app.handleSessionDone(doneMsg)
 	app = result.(AppModel)
-	// The event ch will receive a listenForEvents; ignore it.
-	// Verify the session's StatusCh was consumed to set success.
-	// We can't easily execute the full batch, but the key validation is
-	// that the feature should NOT be Failed. The PhaseCompletedMsg will
-	// carry Success=true.
+	updated2, _ := fm.Get(f2.ID)
+	if updated2.Status != feature.StatusBuildingKB {
+		t.Errorf("success status = %v, want BuildingKB unchanged", updated2.Status)
+	}
 }
 
-// TestHandlePhaseCompleted_ErrorDetailInLastError verifies that ErrorDetail
-// from the session is included in the feature's LastError when a phase fails.
-func TestHandlePhaseCompleted_ErrorDetailInLastError(t *testing.T) {
+// TestHandlePhaseCompleted_KBErrorDetailIsLoopOwnedNoOp verifies that
+// ErrorDetail from a per-iteration KB session does not stamp LastError. The
+// aggregate KB loop result owns failure attribution.
+func TestHandlePhaseCompleted_KBErrorDetailIsLoopOwnedNoOp(t *testing.T) {
 	app, fm := newTestAppModel(t)
 
 	f, err := fm.Create("error-detail-test", "desc", nil, fm.Config.Defaults.Models, "", "", nil)
@@ -3010,11 +3013,11 @@ func TestHandlePhaseCompleted_ErrorDetailInLastError(t *testing.T) {
 	app.handlePhaseCompleted(pcm)
 
 	updated, _ := fm.Get(f.ID)
-	if updated.Status != feature.StatusFailed {
-		t.Errorf("feature status = %v, want Failed", updated.Status)
+	if updated.Status != feature.StatusBuildingKB {
+		t.Errorf("feature status = %v, want BuildingKB unchanged", updated.Status)
 	}
-	if !strings.Contains(updated.LastError, "Request too large") {
-		t.Errorf("LastError = %q, want it to contain the error detail", updated.LastError)
+	if updated.LastError != "" {
+		t.Errorf("LastError = %q, want empty", updated.LastError)
 	}
 }
 
@@ -4339,6 +4342,7 @@ func TestRepoNameFromKBSession(t *testing.T) {
 		want      string
 	}{
 		{"per-repo KB", "abc123-kb-my-service", "my-service"},
+		{"per-repo KB loop iteration", "abc123-kb-my-service-02", "my-service"},
 		{"legacy KB", "abc123-kb", ""},
 		{"per-repo KB with dashes", "abc123-kb-my-repo-with-dashes", "my-repo-with-dashes"},
 		{"KB repo name contains research", "abc123-kb-data-research", "data-research"},
@@ -4415,7 +4419,7 @@ func TestLateKBCompletionIgnoredAfterFailure(t *testing.T) {
 	}
 }
 
-func TestHandleSDKEvent_KBResultSuccessRoutesThroughProtocolValidation(t *testing.T) {
+func TestHandleSDKEvent_KBResultSuccessIsLoopOwnedNoOp(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.eventCh = make(chan interface{}, 1)
 
@@ -4463,24 +4467,20 @@ func TestHandleSDKEvent_KBResultSuccessRoutesThroughProtocolValidation(t *testin
 		t.Fatalf("get feature: %v", err)
 	}
 	if updated.Status != feature.StatusBuildingKB {
-		t.Fatalf("status = %v, want BuildingKB first retry", updated.Status)
+		t.Fatalf("status = %v, want BuildingKB unchanged", updated.Status)
 	}
 	if updated.FailureType != "" {
-		t.Fatalf("failure type = %q, want empty on first retry", updated.FailureType)
+		t.Fatalf("failure type = %q, want empty", updated.FailureType)
 	}
 	if updated.LastError != "" {
-		t.Fatalf("LastError = %q, want empty on first retry", updated.LastError)
+		t.Fatalf("LastError = %q, want empty", updated.LastError)
 	}
-	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))
-	if err != nil {
-		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
-	}
-	if sidecar == nil || sidecar.Consecutive != 1 || !strings.Contains(sidecar.LastViolation, agent.PhaseCompleteFile) {
-		t.Fatalf("sidecar = %#v, want first phase_complete retry", sidecar)
+	if matches, err := filepath.Glob(filepath.Join(kbDir, ".protocol-retry-*.yaml")); err != nil || len(matches) != 0 {
+		t.Fatalf("KB protocol retry sidecars = %v, %v; want none", matches, err)
 	}
 }
 
-func TestHandleSessionDone_KBSuccessRoutesThroughProtocolValidation(t *testing.T) {
+func TestHandleSessionDone_KBSuccessIsLoopOwnedNoOp(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	app.eventCh = make(chan interface{}, 1)
 
@@ -4525,20 +4525,16 @@ func TestHandleSessionDone_KBSuccessRoutesThroughProtocolValidation(t *testing.T
 		t.Fatalf("get feature: %v", err)
 	}
 	if updated.Status != feature.StatusBuildingKB {
-		t.Fatalf("status = %v, want BuildingKB first retry", updated.Status)
+		t.Fatalf("status = %v, want BuildingKB unchanged", updated.Status)
 	}
 	if updated.FailureType != "" {
-		t.Fatalf("failure type = %q, want empty on first retry", updated.FailureType)
+		t.Fatalf("failure type = %q, want empty", updated.FailureType)
 	}
 	if updated.LastError != "" {
-		t.Fatalf("LastError = %q, want empty on first retry", updated.LastError)
+		t.Fatalf("LastError = %q, want empty", updated.LastError)
 	}
-	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, agent.KBProtocolRetrySidecarFilename(f.ID))
-	if err != nil {
-		t.Fatalf("ReadProtocolRetrySidecarAt() error = %v", err)
-	}
-	if sidecar == nil || sidecar.Consecutive != 1 || !strings.Contains(sidecar.LastViolation, agent.PhaseCompleteFile) {
-		t.Fatalf("sidecar = %#v, want first phase_complete retry", sidecar)
+	if matches, err := filepath.Glob(filepath.Join(kbDir, ".protocol-retry-*.yaml")); err != nil || len(matches) != 0 {
+		t.Fatalf("KB protocol retry sidecars = %v, %v; want none", matches, err)
 	}
 }
 

@@ -106,9 +106,11 @@ type BlockingLoopConfig struct {
 	MaxConsecFailures           int
 	MaxConsecProtocolViolations int
 	AccumulateQALog             bool
+	InPlaceCanonical            bool
 
 	SessionIDBase string
 	TelemetryRole string
+	RepoName      string
 
 	RunSession func(context.Context, BlockingLoopRunInput) (BlockingLoopRunResult, error)
 }
@@ -162,6 +164,14 @@ func RunBlockingLoop(ctx context.Context, cfg BlockingLoopConfig, sm ports.Sessi
 		iterDir := blockingLoopIterationDir(cfg.ArtifactDir, startIter)
 		if meta, err := am.ReadMeta(iterDir); err == nil && meta.AgentStatus == agentStatusSuccess && meta.ReviewStatus == HelperHandoffComplete.String() {
 			canonical, _ := cfg.CanonicalSelector(iterDir)
+			if reason := validateBlockingLoopCanonical(canonical); reason != "" {
+				return &BlockingLoopResult{
+					FinalStatus:          BlockingLoopStatusProtocolViolation,
+					Iterations:           startIter,
+					LastError:            reason,
+					TerminalIterationDir: iterDir,
+				}, nil
+			}
 			if cfg.AccumulateQALog {
 				if len(qaLog) > 0 {
 					if _, err := WriteQAFile(qaLog, cfg.ArtifactDir); err != nil {
@@ -309,6 +319,14 @@ func RunBlockingLoop(ctx context.Context, cfg BlockingLoopConfig, sm ports.Sessi
 		}
 		if strings.TrimSpace(canonicalPath) == "" {
 			done, err := recordBlockingLoopProtocolViolation(am, iterDir, meta, iteration, &consecutiveProtocol, cfg.MaxConsecProtocolViolations, "canonical markdown artifact is missing")
+			if err != nil || done != nil {
+				return done, err
+			}
+			consecutiveFailures = 0
+			continue
+		}
+		if reason := validateBlockingLoopCanonical(canonicalPath); reason != "" {
+			done, err := recordBlockingLoopProtocolViolation(am, iterDir, meta, iteration, &consecutiveProtocol, cfg.MaxConsecProtocolViolations, reason)
 			if err != nil || done != nil {
 				return done, err
 			}
@@ -539,6 +557,9 @@ func qaPairKey(pair ports.QAPair) string {
 func prepareBlockingLoopIteration(cfg BlockingLoopConfig, iterDir string, iteration int) (string, string, error) {
 	RemovePhaseComplete(iterDir)
 	_ = os.Remove(filepath.Join(iterDir, cfg.HandoffFilename))
+	if cfg.InPlaceCanonical {
+		return "", "", nil
+	}
 	if err := removeBlockingLoopCanonicalCandidates(iterDir); err != nil {
 		return "", "", err
 	}
@@ -601,6 +622,26 @@ func copyBlockingLoopFile(src, dst string) error {
 	return nil
 }
 
+func validateBlockingLoopCanonical(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "canonical markdown artifact is missing"
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Sprintf("canonical markdown artifact %s is missing", path)
+		}
+		return fmt.Sprintf("canonical markdown artifact %s could not be inspected: %v", path, err)
+	}
+	if info.IsDir() {
+		return fmt.Sprintf("canonical markdown artifact %s is a directory", path)
+	}
+	if info.Size() == 0 {
+		return fmt.Sprintf("canonical markdown artifact %s is empty", path)
+	}
+	return ""
+}
+
 func buildBlockingLoopPrompt(cfg BlockingLoopConfig, in BlockingLoopPromptInput) (string, error) {
 	if cfg.BuildPrompt != nil {
 		return cfg.BuildPrompt(in)
@@ -639,14 +680,19 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 		pidDir = filepath.Join(filepath.Dir(cfg.ArtifactDir), cfg.FeatureID)
 	}
 	sessionCtx := blockingLoopSessionContext(cfg)
+	additionalDirs := append([]string(nil), cfg.AdditionalDirs...)
+	if cfg.InPlaceCanonical && strings.TrimSpace(in.IterationDir) != "" {
+		additionalDirs = append(additionalDirs, in.IterationDir)
+	}
 	command, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         in.Prompt,
 		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 cfg.AdditionalDirs,
+		AdditionalDirs:                 additionalDirs,
 		AgentNames:                     append([]string(nil), cfg.AgentNames...),
 		PIDDir:                         pidDir,
-		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
+		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
+		RepoName:                       cfg.RepoName,
 		WorkDir:                        workDir,
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          cfg.Phase,
@@ -661,7 +707,7 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
 	WriteDebugPrompts(in.IterationDir, sessOpts.DebugSystemPrompt, in.Prompt)
 	sessOpts.Iteration = in.Iteration
-	sessOpts.PermCacheScope = ""
+	sessOpts.PermCacheScope = cfg.RepoName
 	sessOpts.AskUserAutoPick = askUserAutoPickConfig(
 		cfg.FeatureStore,
 		cfg.Observer,
@@ -669,9 +715,18 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 		interactiveAutoPickPurpose(cfg.Phase),
 		sessionCtx,
 		in.SessionID,
-		"",
+		cfg.RepoName,
 		in.Iteration,
 	)
+
+	select {
+	case <-ctx.Done():
+		return BlockingLoopRunResult{Status: agentStatusInterrupted}, nil
+	default:
+	}
+	if isBlockingLoopFeatureInterrupted(cfg) {
+		return BlockingLoopRunResult{Status: agentStatusInterrupted}, nil
+	}
 
 	sess, err := sm.StartSession(in.SessionID, cfg.FeatureID, cfg.Phase, command, workDir, env, sessOpts)
 	if err != nil {
@@ -686,7 +741,7 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 	if sessOpts != nil {
 		providerName = sessOpts.ProviderName
 	}
-	cfg.Observer.SessionStarted(sessionCtx, cfg.TelemetryRole, in.SessionID, providerName, cfg.Model, "")
+	cfg.Observer.SessionStarted(sessionCtx, cfg.TelemetryRole, in.SessionID, providerName, cfg.Model, cfg.RepoName)
 	if cfg.Observer != nil {
 		tracker := &ContextReadTracker{
 			KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
@@ -719,7 +774,7 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 				sessionCtx,
 				cfg.TelemetryRole,
 				in.SessionID,
-				"",
+				cfg.RepoName,
 				sess.ProviderName(),
 				in.Iteration,
 				snap.Pct,
@@ -732,7 +787,7 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 		},
 	})
 	cost := ExtractSessionCost(sess)
-	cfg.Observer.SessionEnded(sessionCtx, cfg.TelemetryRole, in.SessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromLogicalAgentStatus(waitResult.Status, sess))
+	cfg.Observer.SessionEnded(sessionCtx, cfg.TelemetryRole, in.SessionID, cfg.RepoName, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromLogicalAgentStatus(waitResult.Status, sess))
 	return BlockingLoopRunResult{
 		Status:   waitResult.Status,
 		Handoff:  waitResult.Handoff,

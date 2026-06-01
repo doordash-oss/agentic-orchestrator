@@ -314,12 +314,10 @@ func writeRoadmap(t *testing.T, path string) {
 //   - transition via StartKnowledgeBase + InitKBStatus exactly once
 //   - NOT call RunKnowledgeBaseForRepo for the fresh repo — instead
 //     MarkRepoKBCompleted is recorded for that repo
-//   - call RunKnowledgeBaseForRepo for each non-fresh repo, which propagates
-//     to MockSessionManager.StartSession with phase=PhaseKnowledgeBase and
-//     session IDs of the form "<featureID>-kb-<repoName>"
+//   - call the per-repo KB blocking loop for each non-fresh repo
 //
-// This exercises the per-repo fan-out through a real PhaseRunner instead of
-// the "not observable" path called out in iteration-01 review feedback.
+// The PhaseRunner owns the loop-to-session details; this test stays at the
+// orchestrator layer and verifies stale-repo fan-out.
 
 func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
@@ -357,6 +355,16 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 			startedPhases = append(startedPhases, p)
 		},
 	})
+	var loopRepos []string
+	o.SetRunKnowledgeBaseLoopFn(func(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *agent.BlockingLoopResult, error) {
+		loopRepos = append(loopRepos, repo.Name)
+		return nil, nil
+	})
+	t.Cleanup(func() {
+		for _, repoName := range loopRepos {
+			_ = agent.ReleaseKBLock(agent.KBStateDir(cpr.stateDir, repoName), f.ID)
+		}
+	})
 
 	if err := o.StartFeature("feat-mixed"); err != nil {
 		t.Fatalf("StartFeature: %v", err)
@@ -380,41 +388,21 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 		}
 	}
 
-	// Two KB sessions started — one per non-fresh repo.
-	kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)
-	if len(kbSessions) != 2 {
-		t.Fatalf("KB StartSession calls = %d, want 2", len(kbSessions))
-	}
-	gotRepoIDs := map[string]bool{}
-	for _, call := range kbSessions {
-		if call.FeatureID != "feat-mixed" {
-			t.Errorf("KB session featureID = %q, want feat-mixed", call.FeatureID)
-		}
-		gotRepoIDs[call.ID] = true
-	}
-	for _, want := range []string{"feat-mixed-kb-repo-stale", "feat-mixed-kb-repo-dirty"} {
-		if !gotRepoIDs[want] {
-			t.Errorf("missing KB session with ID %q; got %v", want, gotRepoIDs)
-		}
-	}
-	if gotRepoIDs["feat-mixed-kb-repo-fresh"] {
-		t.Error("fresh repo should NOT get a KB StartSession call")
-	}
-
-	// BuildSession should have been invoked twice for phase=KB, once per
-	// non-fresh repo, with distinct RepoName values.
-	kbBuilds := cpr.capturedByPhase(feature.PhaseKnowledgeBase)
-	if len(kbBuilds) != 2 {
-		t.Fatalf("BuildSession calls for KB = %d, want 2", len(kbBuilds))
+	// Two KB loops started — one per non-fresh repo.
+	if len(loopRepos) != 2 {
+		t.Fatalf("KB loop starts = %d, want 2", len(loopRepos))
 	}
 	buildRepos := map[string]bool{}
-	for _, b := range kbBuilds {
-		buildRepos[b.RepoName] = true
+	for _, repoName := range loopRepos {
+		buildRepos[repoName] = true
 	}
 	for _, want := range []string{"repo-stale", "repo-dirty"} {
 		if !buildRepos[want] {
-			t.Errorf("BuildSession(KB) missing RepoName %q; got %v", want, buildRepos)
+			t.Errorf("KB loop missing RepoName %q; got %v", want, buildRepos)
 		}
+	}
+	if buildRepos["repo-fresh"] {
+		t.Error("fresh repo should NOT get a KB loop")
 	}
 
 	// PhaseStarted hook fired exactly once for KB.

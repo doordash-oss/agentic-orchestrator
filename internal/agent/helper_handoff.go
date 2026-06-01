@@ -41,6 +41,9 @@ const (
 	// DesignProgressHandoffFilename is the rolling scratch artifact used by
 	// Design's blocking loop during Smart Zone continuations.
 	DesignProgressHandoffFilename = "design-progress.md"
+	// KBProgressHandoffFilename is the rolling scratch artifact used by
+	// Knowledge Base's per-repo blocking loop during Smart Zone continuations.
+	KBProgressHandoffFilename = "kb-progress.md"
 )
 
 // HelperHandoffState is the continuation routing token parsed from helper
@@ -111,6 +114,13 @@ var (
 		"## Gotchas",
 		"## Handoff State",
 	}
+	kbProgressHandoffSections = []string{
+		"## Completed Categories",
+		"## Remaining Categories",
+		"## Where I Stopped",
+		"## Gotchas",
+		"## Handoff State",
+	}
 	validHelperHandoffStateTokens = map[string]HelperHandoffState{
 		"CONTINUE": HelperHandoffContinue,
 		"COMPLETE": HelperHandoffComplete,
@@ -140,6 +150,11 @@ func ParseResearchProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
 // ParseDesignProgressHandoffMd parses design-progress.md.
 func ParseDesignProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
 	return parseHelperHandoffMd(path, DesignProgressHandoffFilename, designProgressHandoffSections)
+}
+
+// ParseKBProgressHandoffMd parses kb-progress.md.
+func ParseKBProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
+	return parseHelperHandoffMd(path, KBProgressHandoffFilename, kbProgressHandoffSections)
 }
 
 func parseHelperHandoffMd(path, filename string, requiredSections []string) (*ParsedHelperHandoff, error) {
@@ -233,6 +248,12 @@ func ResearchProgressHandoffFingerprint(path string) (string, error) {
 // design loop's progress narrative.
 func DesignProgressHandoffFingerprint(path string) (string, error) {
 	return helperHandoffFingerprint(path, ParseDesignProgressHandoffMd)
+}
+
+// KBProgressHandoffFingerprint computes a stable fingerprint over the
+// Knowledge Base loop's completed/remaining category progress narrative.
+func KBProgressHandoffFingerprint(path string) (string, error) {
+	return helperHandoffFingerprint(path, ParseKBProgressHandoffMd)
 }
 
 func helperHandoffFingerprint(path string, parse func(string) (*ParsedHelperHandoff, error)) (string, error) {

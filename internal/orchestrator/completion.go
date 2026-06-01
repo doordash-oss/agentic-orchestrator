@@ -142,168 +142,83 @@ func (o *Orchestrator) MarkFailed(featureID, failureType, errMsg string) error {
 // KB completion
 // ---------------------------------------------------------------------------
 
-// onKBCompleted handles a per-repo KB completion signal. Mirrors
-// app.go:2816-2860 for success and app.go:2748-2806 for failure.
-//
-// Success path:
-//  1. Stale-completion guard on feature status != StatusBuildingKB.
-//  2. Validate phase_complete and the KnowledgeBase role contract.
-//  3. MarkKBFresh (best-effort).
-//  4. MarkRepoKBCompleted(featureID, repoName).
-//  5. When AllKBsCompleted → clear ForceKBRebuild, CompleteKnowledgeBase,
-//     emit PhaseCompleted, advance.
-//
-// Failure path:
-//  1. MarkRepoKBFailed(featureID, repoName, errMsg).
-//  2. Stop sibling KB sessions for this feature.
-//  3. emit PhaseCompleted with err.
-//  4. markFailedWithEvent(FailureSessionCrash).
-func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInput) error {
-	repoName := agent.RepoNameFromKBSession(input.SessionID)
-
-	if !input.Success {
-		errMsg := input.ErrorDetail
-		if errMsg == "" {
-			errMsg = "knowledge base generation failed"
-		}
-		// When InterruptFeature has already transitioned the feature to
-		// StatusInterrupted (user pressed Stop), the SessionDoneMsg from each
-		// killed session races into onKBCompleted and would otherwise mark
-		// the feature Failed with failure_type=session_crash, masking the
-		// interrupt. The session "error" in that case is the agent's last
-		// in-flight narration, not a real crash. Short-circuit here and let
-		// InterruptFeature own the terminal transition. Still wake KB
-		// waiters since session cleanup released this feature's kb.lock.
-		if f, _ := o.deps.Lifecycle.Get(featureID); isTerminalForCompletion(f) {
-			o.wakeKBWaiters(featureID)
-			return nil
-		}
-		if repoName != "" {
-			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
-		}
-		// Stop any sibling sessions still running for this feature so the
-		// whole KB phase aborts cleanly.
-		if o.deps.Sessions != nil {
-			sessions := o.deps.Sessions.FeatureSessions(featureID)
-			for _, s := range sessions {
-				_ = o.deps.Sessions.StopSession(s.ID())
-			}
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, feature.FailureSessionCrash, errMsg)
-		// The session-cleanup func released this feature's kb.lock before
-		// onKBCompleted was dispatched. Wake any waiters parked on that lock
-		// regardless of whether the failure-mark itself succeeded.
-		o.wakeKBWaiters(featureID)
-		return err
-	}
+func (o *Orchestrator) onKnowledgeBaseLoopDone(featureID, repoName string, result *agent.BlockingLoopResult) error {
+	defer o.releaseKnowledgeBaseLoopLockAndWake(featureID, repoName)
 
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
-	// Ignore late completion signals once the phase has already advanced.
-	if f.Status != feature.StatusBuildingKB {
+	if isTerminalForCompletion(f) {
 		return nil
 	}
-
-	_, kbDir, violations, err := o.validateKBCompletionContract(repoName)
-	if err != nil {
-		return err
+	if result == nil {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureInfrastructure, "knowledge base loop returned no result")
 	}
 
-	if kbDir == "" && len(violations) > 0 {
-		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
-		if repoName != "" {
-			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
-		}
-		if o.deps.Sessions != nil {
-			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-				_ = o.deps.Sessions.StopSession(s.ID())
-			}
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
-		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
-		o.wakeKBWaiters(featureID)
-		return err
-	}
-
-	sidecarFilename := agent.KBProtocolRetrySidecarFilename(featureID)
-	sidecar, err := agent.ReadProtocolRetrySidecarAt(kbDir, sidecarFilename)
-	if err != nil {
-		return fmt.Errorf("read knowledge base retry sidecar: %w", err)
-	}
-	decision := agent.DecideProtocolRetry(
-		agent.RoleKnowledgeBaseBuilder,
-		kbDir,
-		f.ActiveRun,
-		sidecar,
-		violations,
-		agent.DefaultMaxConsecutiveProtocolViolations,
-	)
-	switch decision.Action {
-	case agent.ProtocolRetryActionSucceed:
-		if err := agent.DeleteProtocolRetrySidecarAt(kbDir, sidecarFilename); err != nil {
-			return fmt.Errorf("delete knowledge base retry sidecar: %w", err)
-		}
-	case agent.ProtocolRetryActionRetry:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write knowledge base retry sidecar: %w", err)
-			}
-		}
-		if err := agent.RemovePhaseCompleteMarker(kbDir); err != nil {
-			return fmt.Errorf("remove knowledge base phase_complete marker: %w", err)
-		}
-		if _, err := o.startKB(featureID); err != nil {
-			return fmt.Errorf("retry knowledge base: %w", err)
-		}
+	switch result.FinalStatus {
+	case agent.BlockingLoopStatusSuccess:
+		return o.onKnowledgeBaseLoopSuccess(featureID, repoName, f, result)
+	case agent.BlockingLoopStatusInterrupted:
 		return nil
-	case agent.ProtocolRetryActionTerminal:
-		if decision.NewSidecar != nil {
-			if err := agent.WriteProtocolRetrySidecarAt(kbDir, sidecarFilename, *decision.NewSidecar); err != nil {
-				return fmt.Errorf("write terminal knowledge base retry sidecar: %w", err)
-			}
-		}
-		if repoName != "" {
-			_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, decision.FormattedError)
-		}
-		if o.deps.Sessions != nil {
-			for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
-				_ = o.deps.Sessions.StopSession(s.ID())
-			}
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(decision.FormattedError))
-		err := o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, decision.FormattedError)
-		o.wakeKBWaiters(featureID)
-		return err
+	case agent.BlockingLoopStatusProtocolViolation:
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureProtocolViolation, result.LastError)
+	case agent.BlockingLoopStatusSafetyRail:
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureSafetyRail, result.LastError)
+	case agent.BlockingLoopStatusFailed:
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureInfrastructure, result.LastError)
 	default:
-		return fmt.Errorf("unknown knowledge base protocol retry action %d", decision.Action)
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureInfrastructure, fmt.Sprintf("unknown knowledge base loop FinalStatus %q", result.FinalStatus))
+	}
+}
+
+func (o *Orchestrator) releaseKnowledgeBaseLoopLockAndWake(featureID, repoName string) {
+	baseDir := o.stateDir()
+	o.clearKnowledgeBaseLoop(featureID, repoName)
+	if strings.TrimSpace(featureID) == "" || strings.TrimSpace(repoName) == "" || strings.TrimSpace(baseDir) == "" {
+		return
+	}
+	_ = agent.ReleaseKBLock(agent.KBStateDir(baseDir, repoName), featureID)
+	o.wakeKBWaiters(featureID)
+}
+
+func (o *Orchestrator) onKnowledgeBaseLoopSuccess(featureID, repoName string, f *feature.Feature, result *agent.BlockingLoopResult) error {
+	if strings.TrimSpace(repoName) == "" {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureProtocolViolation, "knowledge base loop completed without a repo name")
+	}
+	repo, ok := findRepo(f, repoName)
+	if !ok {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureProtocolViolation, fmt.Sprintf("knowledge base loop completed for unknown repo %q", repoName))
+	}
+	baseDir := o.stateDir()
+	if strings.TrimSpace(baseDir) == "" {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureProtocolViolation, "state directory is empty")
+	}
+	kbDir := agent.KBStateDir(baseDir, repoName)
+	indexPath := agent.KBPath(kbDir)
+	if result.CanonicalPath != "" && result.CanonicalPath != indexPath {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureProtocolViolation, fmt.Sprintf("knowledge base loop returned canonical %q, want %q", result.CanonicalPath, indexPath))
 	}
 
-	// Mark KB fresh on disk — best-effort, failures don't block the phase.
-	// Skipped when stateDir is unresolved (tests without a PhaseRunner/Store):
-	// without a base dir, agent.KBStateDir would resolve relative to CWD and
-	// scribble a state.json into the test's working directory.
-	if repoName != "" {
-		if repo, ok := findRepo(f, repoName); ok {
-			if baseDir := o.stateDir(); baseDir != "" {
-				kbDir := agent.KBStateDir(baseDir, repo.Name)
-				_ = agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repo.Path)
-			}
-		}
-		if err := o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repoName); err != nil {
-			return fmt.Errorf("mark repo KB completed: %w", err)
-		}
-		// This repo's kb.lock was released by session cleanup before
-		// onKBCompleted ran. Wake any feature parked on that lock so it
-		// can retry its own KB build for this repo.
-		o.wakeKBWaiters(featureID)
+	info, err := os.Stat(indexPath)
+	if err != nil {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureProtocolViolation, fmt.Sprintf("knowledge base index.md is missing at %s", indexPath))
+	}
+	if info.IsDir() || info.Size() == 0 {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureProtocolViolation, fmt.Sprintf("knowledge base index.md is empty or not a file at %s", indexPath))
+	}
+
+	repoPath := effectiveRepoPath(repo)
+	if err := agent.MarkKBFresh(context.Background(), o.deps.CmdRunner, kbDir, repoPath); err != nil {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureInfrastructure, fmt.Sprintf("mark KB fresh for %s: %v", repoName, err))
+	}
+	if err := o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repoName); err != nil {
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureInfrastructure, fmt.Sprintf("mark repo KB completed: %v", err))
 	}
 
 	allDone, err := o.deps.Lifecycle.AllKBsCompleted(featureID)
 	if err != nil {
-		return fmt.Errorf("check all KBs completed: %w", err)
+		return o.failKnowledgeBaseLoop(featureID, repoName, feature.FailureInfrastructure, fmt.Sprintf("check all KBs completed: %v", err))
 	}
 	if !allDone {
 		return nil
@@ -322,46 +237,25 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	return o.advanceToNextPhase(featureID, feature.PhaseKnowledgeBase)
 }
 
-func (o *Orchestrator) validateKBCompletionContract(repoName string) (agent.Outcome, string, []agent.ProtocolViolation, error) {
-	var violations []agent.ProtocolViolation
-	var outcome agent.Outcome
-	kbDir := ""
-
-	baseDir := o.stateDir()
-	switch {
-	case repoName == "":
-		violations = append(violations, agent.ProtocolViolation{
-			Artifact: "knowledge-base",
-			Reason:   "repo name could not be resolved from session id",
-		})
-	case baseDir == "":
-		violations = append(violations, agent.ProtocolViolation{
-			Artifact: "knowledge-base",
-			Reason:   "state directory is empty",
-		})
-	default:
-		kbDir = agent.KBStateDir(baseDir, repoName)
-		if !agent.HasPhaseComplete(kbDir) {
-			violations = append(violations, agent.ProtocolViolation{
-				Artifact: agent.PhaseCompleteFile,
-				Reason:   "SDK reported success but phase_complete was not present",
-			})
-		}
-
-		var contractViolations []agent.ProtocolViolation
-		var err error
-		outcome, contractViolations, err = validateAgentContract(
-			feature.PhaseKnowledgeBase,
-			agent.RoleKnowledgeBaseBuilder,
-			kbDir,
-		)
-		if err != nil {
-			return agent.Outcome{}, kbDir, nil, fmt.Errorf("validating knowledge base contract: %w", err)
-		}
-		violations = append(violations, contractViolations...)
+func (o *Orchestrator) failKnowledgeBaseLoop(featureID, repoName, failureType, lastError string) error {
+	errMsg := strings.TrimSpace(lastError)
+	if errMsg == "" {
+		errMsg = "knowledge base loop failed"
 	}
-
-	return outcome, kbDir, violations, nil
+	if repoName != "" {
+		_ = o.deps.Lifecycle.MarkRepoKBFailed(featureID, repoName, errMsg)
+	}
+	o.cancelSiblingKnowledgeBaseLoops(featureID, repoName)
+	if o.deps.Sessions != nil {
+		for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
+			if s == nil || s.Phase() != feature.PhaseKnowledgeBase {
+				continue
+			}
+			_ = o.deps.Sessions.StopSession(s.ID())
+		}
+	}
+	o.emitPhaseCompleted(featureID, feature.PhaseKnowledgeBase, errors.New(errMsg))
+	return o.markFailedWithEvent(featureID, failureType, errMsg)
 }
 
 // findRepo returns the FeatureRepo with the given name.

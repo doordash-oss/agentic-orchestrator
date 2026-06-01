@@ -369,8 +369,8 @@ func (o *Orchestrator) handleFeatureNeedUserInputDecision(featureID string, d Ne
 		// Abort is the gate's terminal exit — the implement phase ends in
 		// failure, so emit PhaseCompleted(err) before markFailedWithEvent.
 		// This matches every other orchestrator failure handler
-		// (onKBCompleted on KB failure, onArtifactPhaseCompleted on session
-		// crash, onPlanLoopDone on missing result) so downstream observers
+		// (onKnowledgeBaseLoopDone on KB failure, onArtifactPhaseCompleted on
+		// session crash, onPlanLoopDone on missing result) so downstream observers
 		// that listen for PhaseCompleted as the implement-phase boundary
 		// (observe-summary, lifecycle hooks) see a consistent end-of-phase
 		// signal across every terminal failure mode. Gate ENTRY (the pause

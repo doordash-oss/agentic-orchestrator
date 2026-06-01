@@ -50,14 +50,32 @@ func BuildKBSessionID(featureID, repoName string) string {
 }
 
 // RepoNameFromKBSession extracts the repo name from a per-repo KB session ID.
-// Format: "<featureID>-kb-<repoName>" → "<repoName>". Returns "" when the
-// session ID does not contain the "-kb-" separator (legacy "<featureID>-kb").
+// Formats: "<featureID>-kb-<repoName>" and
+// "<featureID>-kb-<repoName>-NN" → "<repoName>". Returns "" when the session
+// ID does not contain the "-kb-" separator (legacy "<featureID>-kb").
 func RepoNameFromKBSession(sessionID string) string {
 	idx := strings.Index(sessionID, "-kb-")
 	if idx < 0 {
 		return ""
 	}
-	return sessionID[idx+4:]
+	return trimKBIterationSuffix(sessionID[idx+4:])
+}
+
+func trimKBIterationSuffix(repoName string) string {
+	idx := strings.LastIndex(repoName, "-")
+	if idx < 0 || idx == len(repoName)-1 {
+		return repoName
+	}
+	suffix := repoName[idx+1:]
+	if len(suffix) != 2 {
+		return repoName
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return repoName
+		}
+	}
+	return repoName[:idx]
 }
 
 // KBPath returns the path to the knowledge base index document.

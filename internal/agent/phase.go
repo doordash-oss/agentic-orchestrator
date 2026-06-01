@@ -733,12 +733,16 @@ func (pr *PhaseRunner) RunCodebaseIndex(f *feature.Feature) error {
 // RunCodebaseIndexForRepo builds a codebase index for a single repo.
 func (pr *PhaseRunner) RunCodebaseIndexForRepo(repo feature.FeatureRepo) error {
 	kbDir := KBStateDir(pr.StateDir, repo.Name)
+	repoPath := repo.Path
+	if repo.WorktreePath != "" {
+		repoPath = repo.WorktreePath
+	}
 
-	if IsCodebaseIndexFresh(context.Background(), pr.CommandRunner, kbDir, repo.Path) {
+	if IsCodebaseIndexFresh(context.Background(), pr.CommandRunner, kbDir, repoPath) {
 		return nil
 	}
 
-	index, err := BuildCodebaseIndex(repo.Path, 10*time.Second)
+	index, err := BuildCodebaseIndex(repoPath, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("building codebase index for %s: %w", repo.Name, err)
 	}
@@ -747,7 +751,7 @@ func (pr *PhaseRunner) RunCodebaseIndexForRepo(repo feature.FeatureRepo) error {
 		return fmt.Errorf("saving codebase index for %s: %w", repo.Name, err)
 	}
 
-	return MarkCodebaseIndexFresh(context.Background(), pr.CommandRunner, kbDir, repo.Path, len(index.Symbols), len(index.Summaries))
+	return MarkCodebaseIndexFresh(context.Background(), pr.CommandRunner, kbDir, repoPath, len(index.Symbols), len(index.Summaries))
 }
 
 // RunKnowledgeBase starts a knowledge base build session for a feature's primary repo.
@@ -883,6 +887,140 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	}
 
 	return sessionID, nil
+}
+
+// RunKnowledgeBaseLoopForRepo starts the per-repo Knowledge Base blocking
+// loop. The persistent KB tree is the canonical deliverable; the run-scoped
+// iteration directories hold only loop bookkeeping and kb-progress.md.
+func (pr *PhaseRunner) RunKnowledgeBaseLoopForRepo(f *feature.Feature, repo feature.FeatureRepo) (chan *BlockingLoopResult, error) {
+	return pr.RunKnowledgeBaseLoopForRepoContext(context.Background(), f, repo)
+}
+
+// RunKnowledgeBaseLoopForRepoContext starts the per-repo Knowledge Base
+// blocking loop with an orchestrator-owned cancellation context.
+func (pr *PhaseRunner) RunKnowledgeBaseLoopForRepoContext(ctx context.Context, f *feature.Feature, repo feature.FeatureRepo) (chan *BlockingLoopResult, error) {
+	cfg, err := pr.buildKnowledgeBaseBlockingLoopConfig(f, repo)
+	if err != nil {
+		return nil, err
+	}
+	return pr.RunBlockingLoopAsync(ctx, cfg)
+}
+
+func (pr *PhaseRunner) buildKnowledgeBaseBlockingLoopConfig(f *feature.Feature, repo feature.FeatureRepo) (BlockingLoopConfig, error) {
+	if f == nil {
+		return BlockingLoopConfig{}, fmt.Errorf("knowledge base loop: feature is nil")
+	}
+	if strings.TrimSpace(repo.Name) == "" {
+		return BlockingLoopConfig{}, fmt.Errorf("knowledge base loop: repo name is empty")
+	}
+
+	repoPath := repo.Path
+	if repo.WorktreePath != "" {
+		repoPath = repo.WorktreePath
+	}
+	if strings.TrimSpace(repoPath) == "" {
+		return BlockingLoopConfig{}, fmt.Errorf("knowledge base loop for %s: repo path is empty", repo.Name)
+	}
+
+	kbDir := KBStateDir(pr.StateDir, repo.Name)
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		return BlockingLoopConfig{}, fmt.Errorf("creating KB dir for %s: %w", repo.Name, err)
+	}
+	for _, cat := range kbStandardCategories {
+		if err := os.MkdirAll(filepath.Join(kbDir, cat), 0o755); err != nil {
+			return BlockingLoopConfig{}, fmt.Errorf("creating KB category %s for %s: %w", cat, repo.Name, err)
+		}
+	}
+
+	var existingKBPath, lastCommit string
+	if state, _ := LoadKBState(kbDir); state != nil {
+		kbPath := KBPath(kbDir)
+		if info, err := os.Stat(kbPath); err == nil && !info.IsDir() && info.Size() > 0 {
+			existingKBPath = kbPath
+			lastCommit = state.HeadCommit
+		}
+	}
+
+	kbModel := pr.modelForRole(f.Models.KBBuild, llm.PhaseKBBuild)
+	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
+	artifactDir := filepath.Join(ActiveRunDir(pr.StateDir, f), "knowledge-base", repo.Name)
+	spec := KnowledgeBaseBuilderRoleSpec()
+	spec.OutputRoots = []OutputRootSpec{
+		{
+			Name:        "phase_dir",
+			Description: "Repository-scoped persistent knowledge-base root. The KB graph entrypoint is written here.",
+			ResolvePath: func(RoleRuntime) string {
+				return kbDir
+			},
+		},
+		{
+			Name:        "iteration_dir",
+			Description: "Active Knowledge Base loop iteration directory for harness handoff artifacts.",
+			ResolvePath: func(rt RoleRuntime) string {
+				return rt.IterationDir
+			},
+		},
+	}
+	spec.MarkerRoot = "iteration_dir"
+
+	return BlockingLoopConfig{
+		Label:                      "knowledge-base",
+		Feature:                    f,
+		FeatureID:                  f.ID,
+		FeatureStore:               pr.FeatureStore,
+		Phase:                      feature.PhaseKnowledgeBase,
+		Role:                       RoleKnowledgeBaseBuilder,
+		Spec:                       spec,
+		ArtifactDir:                artifactDir,
+		StateDir:                   filepath.Join(pr.StateDir, f.ID),
+		Model:                      kbModel,
+		WorkDir:                    repoPath,
+		AdditionalDirs:             []string{pr.StateDir, KBRootDir(kbDir)},
+		AgentNames:                 knowledgeBaseAgentNames(),
+		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		SkillsDir:                  pr.SkillsDir,
+		GuidelinesDir:              pr.GuidelinesDir,
+		AskingClause:               pr.askingQuestionsClauseForModel(kbModel),
+		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
+		PermissionCache:            pr.PermissionCache,
+		BuildSession:               pr.BuildSession,
+		Observer:                   pr.Observer,
+		HandoffFilename:            KBProgressHandoffFilename,
+		ParseHandoff:               ParseKBProgressHandoffMd,
+		Fingerprint:                KBProgressHandoffFingerprint,
+		CanonicalSelector: func(string) (string, error) {
+			return KBPath(kbDir), nil
+		},
+		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
+			return buildKnowledgeBaseLoopPrompt(repo.Name, repoPath, kbDir, existingKBPath, lastCommit, in), nil
+		},
+		MaxConsecNoProgress:         maxNoProgress,
+		MaxConsecFailures:           maxFails,
+		MaxConsecProtocolViolations: DefaultMaxConsecutiveProtocolViolations,
+		InPlaceCanonical:            true,
+		SessionIDBase:               BuildKBSessionID(f.ID, repo.Name),
+		TelemetryRole:               "knowledge-base",
+		RepoName:                    repo.Name,
+	}, nil
+}
+
+func buildKnowledgeBaseLoopPrompt(repoName, repoPath, kbDir, existingKBPath, lastCommit string, in BlockingLoopPromptInput) string {
+	prompt := BuildKBPrompt(repoName, repoPath, kbDir, existingKBPath, lastCommit)
+	if in.Iteration <= 1 {
+		return prompt
+	}
+
+	previousHandoffPath := filepath.Join(filepath.Dir(in.IterationDir), fmt.Sprintf("iteration-%02d", in.Iteration-1), KBProgressHandoffFilename)
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString("\n\n## Knowledge Base Continuation\n\n")
+	b.WriteString("A previous Knowledge Base iteration wound down before the per-repo KB was complete; continue the in-flight build in place from the Remaining Categories listed in the previous handoff. Do not restart completed categories and do not re-run the full-vs-incremental decision.\n\n")
+	b.WriteString("Read the previous handoff first:\n")
+	fmt.Fprintf(&b, "- `%s`\n\n", previousHandoffPath)
+	b.WriteString("Continue updating the persistent KB tree in place:\n")
+	fmt.Fprintf(&b, "- `%s`\n\n", KBRootDir(kbDir))
+	fmt.Fprintf(&b, "Keep `%s` present and current before writing `%s` in this iteration directory. When all Remaining Categories are complete, set `## Handoff State` to `COMPLETE`; if another continuation is needed, set it to `CONTINUE`. Touch `phase_complete` last.", KBPath(kbDir), KBProgressHandoffFilename)
+	return b.String()
 }
 
 // RunAllKnowledgeBuilds starts KB builds for all repos in a feature.

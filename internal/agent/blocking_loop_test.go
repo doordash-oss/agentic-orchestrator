@@ -105,6 +105,204 @@ func TestRunBlockingLoop_ContinueSeedsPriorCanonical(t *testing.T) {
 	}
 }
 
+func TestRunBlockingLoop_InPlaceCanonicalSkipsSeedForward(t *testing.T) {
+	artifactDir := t.TempDir()
+	kbDir := filepath.Join(t.TempDir(), "knowledge-base", "repo")
+	indexPath := filepath.Join(kbDir, "index.md")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", kbDir, err)
+	}
+	if err := os.WriteFile(indexPath, []byte("# Repo KB\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.md): %v", err)
+	}
+
+	cfg := blockingLoopTestConfig(artifactDir, func(_ context.Context, in BlockingLoopRunInput) (BlockingLoopRunResult, error) {
+		if _, err := os.Stat(filepath.Join(in.IterationDir, "index.md")); !os.IsNotExist(err) {
+			t.Fatalf("iteration %d has in-place canonical copy, stat err = %v", in.Iteration, err)
+		}
+		state := "CONTINUE"
+		if in.Iteration == 2 {
+			state = "COMPLETE"
+		}
+		writeHelperHandoff(t, in.IterationDir, KBProgressHandoffFilename, validKBProgressHandoff(state, fmt.Sprintf("architecture: pass %d", in.Iteration)))
+		writePhaseComplete(t, in.IterationDir)
+		return BlockingLoopRunResult{Status: agentStatusSuccess}, nil
+	})
+	cfg.HandoffFilename = KBProgressHandoffFilename
+	cfg.ParseHandoff = ParseKBProgressHandoffMd
+	cfg.Fingerprint = KBProgressHandoffFingerprint
+	cfg.CanonicalSelector = func(string) (string, error) { return indexPath, nil }
+	cfg.InPlaceCanonical = true
+
+	result, err := RunBlockingLoop(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatalf("RunBlockingLoop() error = %v", err)
+	}
+	if result.FinalStatus != BlockingLoopStatusSuccess || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want success after 2 iterations", result)
+	}
+	if result.CanonicalPath != indexPath {
+		t.Fatalf("CanonicalPath = %q, want %q", result.CanonicalPath, indexPath)
+	}
+	entries, err := os.ReadDir(filepath.Join(artifactDir, "iteration-02"))
+	if err != nil {
+		t.Fatalf("ReadDir(iteration-02): %v", err)
+	}
+	names := make(map[string]bool)
+	for _, entry := range entries {
+		names[entry.Name()] = true
+	}
+	for _, want := range []string{KBProgressHandoffFilename, PhaseCompleteFile, "meta.yaml"} {
+		if !names[want] {
+			t.Fatalf("iteration-02 entries = %v, want %s", names, want)
+		}
+	}
+	if names["index.md"] {
+		t.Fatalf("iteration-02 entries = %v, did not expect copied index.md", names)
+	}
+}
+
+func TestRunBlockingLoop_InPlaceCanonicalMissingIsProtocolViolation(t *testing.T) {
+	artifactDir := t.TempDir()
+	missingIndex := filepath.Join(t.TempDir(), "knowledge-base", "repo", "index.md")
+	cfg := blockingLoopTestConfig(artifactDir, func(_ context.Context, in BlockingLoopRunInput) (BlockingLoopRunResult, error) {
+		writeHelperHandoff(t, in.IterationDir, KBProgressHandoffFilename, validKBProgressHandoff("COMPLETE", "architecture: index.md"))
+		writePhaseComplete(t, in.IterationDir)
+		return BlockingLoopRunResult{Status: agentStatusSuccess}, nil
+	})
+	cfg.HandoffFilename = KBProgressHandoffFilename
+	cfg.ParseHandoff = ParseKBProgressHandoffMd
+	cfg.Fingerprint = KBProgressHandoffFingerprint
+	cfg.CanonicalSelector = func(string) (string, error) { return missingIndex, nil }
+	cfg.InPlaceCanonical = true
+	cfg.MaxConsecProtocolViolations = 1
+
+	result, err := RunBlockingLoop(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatalf("RunBlockingLoop() error = %v", err)
+	}
+	if result.FinalStatus != BlockingLoopStatusProtocolViolation {
+		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, BlockingLoopStatusProtocolViolation)
+	}
+	if !strings.Contains(result.LastError, "canonical") {
+		t.Fatalf("LastError = %q, want canonical validation error", result.LastError)
+	}
+}
+
+func TestRunBlockingLoop_InPlaceCanonicalResumeReplaysIncompleteIteration(t *testing.T) {
+	artifactDir := t.TempDir()
+	kbDir := filepath.Join(t.TempDir(), "knowledge-base", "repo")
+	indexPath := filepath.Join(kbDir, "index.md")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", kbDir, err)
+	}
+	if err := os.WriteFile(indexPath, []byte("# Repo KB\n\npartial tree from interrupted run\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.md): %v", err)
+	}
+
+	am := NewArtifactManager(artifactDir)
+	iter1, err := am.CreateIterationDir(1)
+	if err != nil {
+		t.Fatalf("CreateIterationDir(1): %v", err)
+	}
+	writeHelperHandoff(t, iter1, KBProgressHandoffFilename, validKBProgressHandoff("CONTINUE", "architecture: index.md"))
+	if err := am.WriteMeta(iter1, IterationMeta{
+		Iteration:    1,
+		StartedAt:    time.Now(),
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: HelperHandoffContinue.String(),
+		MadeProgress: true,
+	}); err != nil {
+		t.Fatalf("WriteMeta(iter1): %v", err)
+	}
+	iter2, err := am.CreateIterationDir(2)
+	if err != nil {
+		t.Fatalf("CreateIterationDir(2): %v", err)
+	}
+	writeHelperHandoff(t, iter2, KBProgressHandoffFilename, validKBProgressHandoff("CONTINUE", "stale interrupted handoff"))
+
+	var seen []int
+	cfg := blockingLoopTestConfig(artifactDir, func(_ context.Context, in BlockingLoopRunInput) (BlockingLoopRunResult, error) {
+		seen = append(seen, in.Iteration)
+		if in.Iteration != 2 {
+			t.Fatalf("Iteration = %d, want replay of incomplete iteration 2", in.Iteration)
+		}
+		if _, err := os.Stat(filepath.Join(in.IterationDir, "index.md")); !os.IsNotExist(err) {
+			t.Fatalf("iteration dir has copied index.md, stat err = %v", err)
+		}
+		got, err := os.ReadFile(indexPath)
+		if err != nil {
+			t.Fatalf("read persistent index.md: %v", err)
+		}
+		if !strings.Contains(string(got), "partial tree from interrupted run") {
+			t.Fatalf("persistent index.md = %q, want interrupted partial tree reused", string(got))
+		}
+		if err := os.WriteFile(indexPath, append(got, []byte("finalized in replay\n")...), 0o644); err != nil {
+			t.Fatalf("append persistent index.md: %v", err)
+		}
+		writeHelperHandoff(t, in.IterationDir, KBProgressHandoffFilename, validKBProgressHandoff("COMPLETE", "architecture: index.md; conventions: index.md"))
+		writePhaseComplete(t, in.IterationDir)
+		return BlockingLoopRunResult{Status: agentStatusSuccess}, nil
+	})
+	cfg.HandoffFilename = KBProgressHandoffFilename
+	cfg.ParseHandoff = ParseKBProgressHandoffMd
+	cfg.Fingerprint = KBProgressHandoffFingerprint
+	cfg.CanonicalSelector = func(string) (string, error) { return indexPath, nil }
+	cfg.InPlaceCanonical = true
+
+	result, err := RunBlockingLoop(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatalf("RunBlockingLoop() error = %v", err)
+	}
+	if result.FinalStatus != BlockingLoopStatusSuccess || result.Iterations != 2 {
+		t.Fatalf("result = %+v, want success at replayed iteration 2", result)
+	}
+	if fmt.Sprint(seen) != "[2]" {
+		t.Fatalf("seen iterations = %v, want [2]", seen)
+	}
+	if result.CanonicalPath != indexPath {
+		t.Fatalf("CanonicalPath = %q, want %q", result.CanonicalPath, indexPath)
+	}
+}
+
+func TestRunBlockingLoop_KBRepeatedProgressTripsSafetyRail(t *testing.T) {
+	artifactDir := t.TempDir()
+	kbDir := filepath.Join(t.TempDir(), "knowledge-base", "repo")
+	indexPath := filepath.Join(kbDir, "index.md")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", kbDir, err)
+	}
+	if err := os.WriteFile(indexPath, []byte("# Repo KB\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.md): %v", err)
+	}
+
+	cfg := blockingLoopTestConfig(artifactDir, func(_ context.Context, in BlockingLoopRunInput) (BlockingLoopRunResult, error) {
+		writeHelperHandoff(t, in.IterationDir, KBProgressHandoffFilename, validKBProgressHandoff("CONTINUE", "architecture: index.md"))
+		writePhaseComplete(t, in.IterationDir)
+		return BlockingLoopRunResult{Status: agentStatusSuccess}, nil
+	})
+	cfg.HandoffFilename = KBProgressHandoffFilename
+	cfg.ParseHandoff = ParseKBProgressHandoffMd
+	cfg.Fingerprint = KBProgressHandoffFingerprint
+	cfg.CanonicalSelector = func(string) (string, error) { return indexPath, nil }
+	cfg.InPlaceCanonical = true
+	cfg.MaxConsecNoProgress = 2
+
+	result, err := RunBlockingLoop(context.Background(), cfg, nil)
+	if err != nil {
+		t.Fatalf("RunBlockingLoop() error = %v", err)
+	}
+	if result.FinalStatus != BlockingLoopStatusSafetyRail {
+		t.Fatalf("FinalStatus = %q, want %q", result.FinalStatus, BlockingLoopStatusSafetyRail)
+	}
+	if result.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3", result.Iterations)
+	}
+	if !strings.Contains(result.LastError, "no progress") {
+		t.Fatalf("LastError = %q, want no-progress safety rail", result.LastError)
+	}
+}
+
 func TestRunBlockingLoop_QALogAccumulationWritesPhaseRoot(t *testing.T) {
 	artifactDir := t.TempDir()
 
@@ -352,7 +550,8 @@ func TestRunBlockingLoopForcedHandoffBehaviorEvidence(t *testing.T) {
 		})
 	}
 
-	t.Log(runBlockingLoopNoProgressSafetyEvidence(t, root))
+	t.Log(runKnowledgeBaseForcedBlockingLoopEvidence(t, root))
+	t.Log(runKnowledgeBaseNoProgressSafetyEvidence(t, root))
 }
 
 type blockingLoopEvidenceCase struct {
@@ -543,26 +742,238 @@ func runForcedBlockingLoopEvidence(t *testing.T, root string, tc blockingLoopEvi
 %s`, tc.role, eventJSON, meta1.Context.ThresholdTokens, filepath.Join(iter1, tc.canonicalName), result.CanonicalPath, qa)
 }
 
-func runBlockingLoopNoProgressSafetyEvidence(t *testing.T, root string) string {
+func runKnowledgeBaseForcedBlockingLoopEvidence(t *testing.T, root string) string {
 	t.Helper()
 
-	artifactDir := filepath.Join(root, "safety-rail")
+	const repoName = "repo-a"
+	featureID := "forced-handoff-knowledge-base"
+	artifactDir := filepath.Join(root, "knowledge-base-loop")
+	stateDir := filepath.Join(root, "state", "knowledge-base")
+	workDir := filepath.Join(root, "work", "knowledge-base")
+	observeDir := filepath.Join(root, "observe", "knowledge-base")
+	kbDir := filepath.Join(root, "persistent-kb", repoName)
+	indexPath := filepath.Join(kbDir, "index.md")
+	for _, dir := range []string{artifactDir, stateDir, workDir, kbDir, filepath.Join(observeDir, featureID)} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	f := &feature.Feature{
+		ID:            featureID,
+		Name:          "Forced Handoff Knowledge Base",
+		Slug:          featureID,
+		Description:   "KB blocking loop forced handoff evidence",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		TraceID:       "trace-" + featureID,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: repoName, Path: workDir}},
+	}
+
+	spec := KnowledgeBaseBuilderRoleSpec()
+	spec.OutputRoots = []OutputRootSpec{
+		{
+			Name:        "phase_dir",
+			Description: "persistent KB root",
+			ResolvePath: func(RoleRuntime) string {
+				return kbDir
+			},
+		},
+		{
+			Name:        "iteration_dir",
+			Description: "KB loop iteration root",
+			ResolvePath: func(rt RoleRuntime) string {
+				return rt.IterationDir
+			},
+		},
+	}
+	spec.MarkerRoot = "iteration_dir"
+
+	writeErrs := make(chan error, 2)
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, _ []string, _ string, _ []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+		iter := 0
+		if len(opts) > 0 && opts[0] != nil {
+			iter = opts[0].Iteration
+		}
+		iterDir := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", iter))
+		sess := session.NewSession(id, featureID, phase)
+		sess.SetProviderName("codex")
+		sess.SetIteration(iter)
+		sess.SetRepoName(repoName)
+
+		switch iter {
+		case 1:
+			sess.SetLatestUsage(&llm.Usage{ContextTotalTokens: 80_000, ContextWindow: 200_000})
+			sink := attachCaptureSink(sess)
+			go func() {
+				select {
+				case <-sink.done:
+					if err := os.WriteFile(indexPath, []byte("# Repo KB\n\niteration-01 partial tree\n"), 0o644); err != nil {
+						writeErrs <- err
+						sess.SendStatus(agentStatusFailed)
+						return
+					}
+					writeHelperHandoff(t, iterDir, KBProgressHandoffFilename, knowledgeBaseEvidenceHandoff("CONTINUE", "architecture: index.md", "verification: index.md"))
+					writePhaseComplete(t, iterDir)
+					writeErrs <- nil
+					sess.SendStatus(agentStatusSuccess)
+				case <-time.After(2 * time.Second):
+					writeErrs <- fmt.Errorf("knowledge-base iteration-01 did not receive context handoff message")
+					sess.SendStatus(agentStatusFailed)
+				}
+			}()
+		case 2:
+			if _, err := os.Stat(filepath.Join(iterDir, "index.md")); !os.IsNotExist(err) {
+				t.Fatalf("knowledge-base iteration-02 has copied index.md, stat err = %v", err)
+			}
+			partial, err := os.ReadFile(indexPath)
+			if err != nil {
+				t.Fatalf("knowledge-base iteration-02 read persistent index.md: %v", err)
+			}
+			if !strings.Contains(string(partial), "iteration-01 partial tree") {
+				t.Fatalf("knowledge-base persistent index missing iteration-01 content:\n%s", partial)
+			}
+			sess.SetLatestUsage(&llm.Usage{ContextTotalTokens: 10_000, ContextWindow: 200_000})
+			go func() {
+				if err := os.WriteFile(indexPath, append(partial, []byte("iteration-02 final tree\n")...), 0o644); err != nil {
+					writeErrs <- err
+					sess.SendStatus(agentStatusFailed)
+					return
+				}
+				writeHelperHandoff(t, iterDir, KBProgressHandoffFilename, knowledgeBaseEvidenceHandoff("COMPLETE", "architecture: index.md; verification: index.md", "none"))
+				writePhaseComplete(t, iterDir)
+				writeErrs <- nil
+				sess.SendStatus(agentStatusSuccess)
+			}()
+		default:
+			return nil, fmt.Errorf("unexpected knowledge-base iteration %d", iter)
+		}
+		return sess, nil
+	}
+
+	cfg := BlockingLoopConfig{
+		Label:                       "knowledge-base",
+		Feature:                     f,
+		FeatureID:                   f.ID,
+		Phase:                       feature.PhaseKnowledgeBase,
+		Role:                        RoleKnowledgeBaseBuilder,
+		Spec:                        spec,
+		ArtifactDir:                 artifactDir,
+		StateDir:                    stateDir,
+		WorkDir:                     workDir,
+		SkillsDir:                   "skills",
+		GuidelinesDir:               "guidelines",
+		Model:                       "gpt-5.3-codex",
+		BuildSession:                evidenceBuildSession,
+		Observer:                    observe.New(true, observeDir, false, "", false, "agentic"),
+		HandoffFilename:             KBProgressHandoffFilename,
+		ParseHandoff:                ParseKBProgressHandoffMd,
+		Fingerprint:                 KBProgressHandoffFingerprint,
+		CanonicalSelector:           func(string) (string, error) { return indexPath, nil },
+		MaxConsecNoProgress:         3,
+		MaxConsecFailures:           1,
+		MaxConsecProtocolViolations: 3,
+		InPlaceCanonical:            true,
+		SessionIDBase:               BuildKBSessionID(featureID, repoName),
+		TelemetryRole:               "knowledge-base",
+		RepoName:                    repoName,
+		InitialPrompt:               "forced KB handoff evidence",
+	}
+
+	result, err := RunBlockingLoop(context.Background(), cfg, sm)
+	if err != nil {
+		t.Fatalf("RunBlockingLoop(knowledge-base): %v", err)
+	}
+	for i := 0; i < result.Iterations; i++ {
+		select {
+		case err := <-writeErrs:
+			if err != nil {
+				t.Fatalf("knowledge-base session write error: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("knowledge-base timed out waiting for session write result %d/%d", i+1, result.Iterations)
+		}
+	}
+	if result.FinalStatus != BlockingLoopStatusSuccess || result.Iterations != 2 {
+		t.Fatalf("knowledge-base result = %+v, want success after two iterations", result)
+	}
+	if result.CanonicalPath != indexPath {
+		t.Fatalf("knowledge-base CanonicalPath = %q, want %q", result.CanonicalPath, indexPath)
+	}
+
+	iter1 := filepath.Join(artifactDir, "iteration-01")
+	iter2 := filepath.Join(artifactDir, "iteration-02")
+	meta1 := readBlockingLoopMeta(t, iter1)
+	meta2 := readBlockingLoopMeta(t, iter2)
+	if meta1.ReviewStatus != HelperHandoffContinue.String() || meta2.ReviewStatus != HelperHandoffComplete.String() {
+		t.Fatalf("knowledge-base meta review statuses = %q/%q, want CONTINUE/COMPLETE", meta1.ReviewStatus, meta2.ReviewStatus)
+	}
+	if meta1.Context == nil || !meta1.Context.HandoffTriggered || meta1.Context.ThresholdTokens != 80_000 {
+		t.Fatalf("knowledge-base iteration-01 context meta = %+v, want handoff threshold", meta1.Context)
+	}
+	finalIndex, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("knowledge-base read final index.md: %v", err)
+	}
+	if !strings.Contains(string(finalIndex), "iteration-01 partial tree") || !strings.Contains(string(finalIndex), "iteration-02 final tree") {
+		t.Fatalf("knowledge-base final persistent index missing in-place updates:\n%s", finalIndex)
+	}
+
+	events := filterEventsByType(readObserveEvents(t, observeDir, f.ID), "context.handoff_triggered")
+	if len(events) != 1 {
+		t.Fatalf("knowledge-base context.handoff_triggered events = %d, want 1", len(events))
+	}
+	if events[0].Phase != "knowledge-base" || events[0].RepoName != repoName {
+		t.Fatalf("knowledge-base event phase/repo = %q/%q, want knowledge-base/%s", events[0].Phase, events[0].RepoName, repoName)
+	}
+	if got := events[0].Data["threshold_tokens"]; got != float64(80_000) {
+		t.Fatalf("knowledge-base threshold_tokens = %v, want 80000", got)
+	}
+	eventJSON, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatalf("knowledge-base marshal event: %v", err)
+	}
+
+	return fmt.Sprintf(`knowledge-base forced-handoff transcript
+- event log: %s
+- iteration-01: handoff=CONTINUE persistent_index=%s context.handoff_triggered=true threshold_tokens=%d repo=%s
+- iteration-02: handoff=COMPLETE seeded_iteration_02=false canonical=%s
+- persistent index.md:
+%s`, eventJSON, indexPath, meta1.Context.ThresholdTokens, repoName, result.CanonicalPath, string(finalIndex))
+}
+
+func runKnowledgeBaseNoProgressSafetyEvidence(t *testing.T, root string) string {
+	t.Helper()
+
+	artifactDir := filepath.Join(root, "kb-safety-rail")
+	kbDir := filepath.Join(root, "persistent-kb-safety", "repo-a")
+	indexPath := filepath.Join(kbDir, "index.md")
+	if err := os.MkdirAll(kbDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", kbDir, err)
+	}
+	if err := os.WriteFile(indexPath, []byte("# Repo KB\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.md): %v", err)
+	}
 	calls := 0
 	cfg := BlockingLoopConfig{
-		Label:                       "inquire",
-		FeatureID:                   "forced-handoff-safety-rail",
+		Label:                       "knowledge-base",
+		FeatureID:                   "forced-handoff-kb-safety-rail",
 		ArtifactDir:                 artifactDir,
-		HandoffFilename:             InquireProgressHandoffFilename,
-		ParseHandoff:                ParseInquireProgressHandoffMd,
-		Fingerprint:                 InquireProgressHandoffFingerprint,
-		CanonicalSelector:           SelectNewestNonExcludedMarkdown,
+		HandoffFilename:             KBProgressHandoffFilename,
+		ParseHandoff:                ParseKBProgressHandoffMd,
+		Fingerprint:                 KBProgressHandoffFingerprint,
+		CanonicalSelector:           func(string) (string, error) { return indexPath, nil },
 		MaxConsecNoProgress:         1,
 		MaxConsecFailures:           3,
 		MaxConsecProtocolViolations: 3,
+		InPlaceCanonical:            true,
 		RunSession: func(_ context.Context, in BlockingLoopRunInput) (BlockingLoopRunResult, error) {
 			calls++
-			writeBlockingLoopCanonical(t, in.IterationDir, "inquiry.md", "# Inquiry\n\nsame producer output\n")
-			writeHelperHandoff(t, in.IterationDir, InquireProgressHandoffFilename, validInquireProgressHandoff("CONTINUE", "same clarified requirement"))
+			writeHelperHandoff(t, in.IterationDir, KBProgressHandoffFilename, knowledgeBaseEvidenceHandoff("CONTINUE", "architecture: index.md", "verification: index.md"))
 			writePhaseComplete(t, in.IterationDir)
 			return BlockingLoopRunResult{Status: agentStatusSuccess}, nil
 		},
@@ -583,11 +994,31 @@ func runBlockingLoopNoProgressSafetyEvidence(t *testing.T, root string) string {
 		t.Fatalf("safety rail iteration-02 MadeProgress = true, want false")
 	}
 
-	return fmt.Sprintf(`no-progress safety rail transcript
+	return fmt.Sprintf(`knowledge-base no-progress safety rail transcript
 - repeated producer handoff: %s
 - iteration-01: handoff=CONTINUE made_progress=true
 - iteration-02: handoff=CONTINUE made_progress=false
-- terminal: final_status=%s iterations=%d last_error=%q`, filepath.Join(artifactDir, "iteration-02", InquireProgressHandoffFilename), result.FinalStatus, result.Iterations, result.LastError)
+- terminal: final_status=%s iterations=%d last_error=%q`, filepath.Join(artifactDir, "iteration-02", KBProgressHandoffFilename), result.FinalStatus, result.Iterations, result.LastError)
+}
+
+func knowledgeBaseEvidenceHandoff(state, completed, remaining string) string {
+	return fmt.Sprintf(`# Knowledge Base Progress
+
+## Completed Categories
+- %s
+
+## Remaining Categories
+- %s
+
+## Where I Stopped
+Continue with the next KB category in place.
+
+## Gotchas
+- no blockers
+
+## Handoff State
+%s
+`, completed, remaining, state)
 }
 
 func evidenceBuildSession(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {

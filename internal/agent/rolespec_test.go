@@ -267,88 +267,103 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 	base := t.TempDir()
 
 	tests := []struct {
-		name         string
-		spec         RoleSpec
-		phaseDir     string
-		wantPhase    feature.Phase
-		wantRole     Role
-		wantSkill    string
-		wantArtifact string
-		wantPath     string
-		wantMarker   string
-		wantHidden   []string
+		name           string
+		spec           RoleSpec
+		phaseDir       string
+		wantPhase      feature.Phase
+		wantRole       Role
+		wantSkill      string
+		wantArtifact   string
+		wantPath       string
+		wantMarker     string
+		wantHidden     []string
+		wantMarkerRoot string
+		wantRoots      []string
 	}{
 		{
-			name:         "knowledge base",
-			spec:         KnowledgeBaseBuilderRoleSpec(),
-			phaseDir:     filepath.Join(base, "knowledge-base", "agentic"),
-			wantPhase:    feature.PhaseKnowledgeBase,
-			wantRole:     RoleKnowledgeBaseBuilder,
-			wantSkill:    "build-knowledge-base",
-			wantArtifact: "knowledge_base_index",
-			wantPath:     filepath.Join(base, "knowledge-base", "agentic", "index.md"),
-			wantMarker:   filepath.Join(base, "knowledge-base", "agentic", "phase_complete"),
+			name:           "knowledge base",
+			spec:           KnowledgeBaseBuilderRoleSpec(),
+			phaseDir:       filepath.Join(base, "knowledge-base", "agentic"),
+			wantPhase:      feature.PhaseKnowledgeBase,
+			wantRole:       RoleKnowledgeBaseBuilder,
+			wantSkill:      "build-knowledge-base",
+			wantArtifact:   "knowledge_base_index",
+			wantPath:       filepath.Join(base, "knowledge-base", "agentic", "index.md"),
+			wantMarker:     filepath.Join(base, "knowledge-base", "agentic", "phase_complete"),
+			wantHidden:     []string{"kb_progress_handoff", "iteration_meta"},
+			wantMarkerRoot: "iteration_dir",
+			wantRoots:      []string{"phase_dir", "iteration_dir"},
 		},
 		{
-			name:         "inquire",
-			spec:         InquirerRoleSpec(),
-			phaseDir:     filepath.Join(base, "runs", "run-001", "inquire", "iteration-02"),
-			wantPhase:    feature.PhaseInquire,
-			wantRole:     RoleInquirer,
-			wantSkill:    "inquire",
-			wantArtifact: "phase_markdown_artifact",
-			wantPath:     filepath.Join(base, "runs", "run-001", "inquire", "iteration-02"),
-			wantMarker:   filepath.Join(base, "runs", "run-001", "inquire", "iteration-02", "phase_complete"),
-			wantHidden:   []string{"inquire_progress_handoff", "iteration_meta"},
+			name:           "inquire",
+			spec:           InquirerRoleSpec(),
+			phaseDir:       filepath.Join(base, "runs", "run-001", "inquire", "iteration-02"),
+			wantPhase:      feature.PhaseInquire,
+			wantRole:       RoleInquirer,
+			wantSkill:      "inquire",
+			wantArtifact:   "phase_markdown_artifact",
+			wantPath:       filepath.Join(base, "runs", "run-001", "inquire", "iteration-02"),
+			wantMarker:     filepath.Join(base, "runs", "run-001", "inquire", "iteration-02", "phase_complete"),
+			wantHidden:     []string{"inquire_progress_handoff", "iteration_meta"},
+			wantMarkerRoot: "phase_dir",
+			wantRoots:      []string{"phase_dir"},
 		},
 		{
-			name:         "research",
-			spec:         ResearcherRoleSpec(),
-			phaseDir:     filepath.Join(base, "runs", "run-001", "research", "iteration-02"),
-			wantPhase:    feature.PhaseResearch,
-			wantRole:     RoleResearcher,
-			wantSkill:    "research-codebase",
-			wantArtifact: "phase_markdown_artifact",
-			wantPath:     filepath.Join(base, "runs", "run-001", "research", "iteration-02"),
-			wantMarker:   filepath.Join(base, "runs", "run-001", "research", "iteration-02", "phase_complete"),
-			wantHidden:   []string{"research_progress_handoff", "iteration_meta"},
+			name:           "research",
+			spec:           ResearcherRoleSpec(),
+			phaseDir:       filepath.Join(base, "runs", "run-001", "research", "iteration-02"),
+			wantPhase:      feature.PhaseResearch,
+			wantRole:       RoleResearcher,
+			wantSkill:      "research-codebase",
+			wantArtifact:   "phase_markdown_artifact",
+			wantPath:       filepath.Join(base, "runs", "run-001", "research", "iteration-02"),
+			wantMarker:     filepath.Join(base, "runs", "run-001", "research", "iteration-02", "phase_complete"),
+			wantHidden:     []string{"research_progress_handoff", "iteration_meta"},
+			wantMarkerRoot: "phase_dir",
+			wantRoots:      []string{"phase_dir"},
 		},
 		{
-			name:         "design",
-			spec:         DesignerRoleSpec(),
-			phaseDir:     filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
-			wantPhase:    feature.PhaseDesign,
-			wantRole:     RoleDesigner,
-			wantSkill:    "design",
-			wantArtifact: "phase_markdown_artifact",
-			wantPath:     filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
-			wantMarker:   filepath.Join(base, "runs", "run-001", "design", "iteration-02", "phase_complete"),
-			wantHidden:   []string{"design_progress_handoff", "iteration_meta"},
+			name:           "design",
+			spec:           DesignerRoleSpec(),
+			phaseDir:       filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
+			wantPhase:      feature.PhaseDesign,
+			wantRole:       RoleDesigner,
+			wantSkill:      "design",
+			wantArtifact:   "phase_markdown_artifact",
+			wantPath:       filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
+			wantMarker:     filepath.Join(base, "runs", "run-001", "design", "iteration-02", "phase_complete"),
+			wantHidden:     []string{"design_progress_handoff", "iteration_meta"},
+			wantMarkerRoot: "phase_dir",
+			wantRoots:      []string{"phase_dir"},
 		},
 		{
 			// Repeated lookup protects clone stability for the canonical
 			// Design role.
-			name:         "design",
-			spec:         DesignerRoleSpec(),
-			phaseDir:     filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
-			wantPhase:    feature.PhaseDesign,
-			wantRole:     RoleDesigner,
-			wantSkill:    "design",
-			wantArtifact: "phase_markdown_artifact",
-			wantPath:     filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
-			wantMarker:   filepath.Join(base, "runs", "run-001", "design", "iteration-02", "phase_complete"),
-			wantHidden:   []string{"design_progress_handoff", "iteration_meta"},
+			name:           "design",
+			spec:           DesignerRoleSpec(),
+			phaseDir:       filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
+			wantPhase:      feature.PhaseDesign,
+			wantRole:       RoleDesigner,
+			wantSkill:      "design",
+			wantArtifact:   "phase_markdown_artifact",
+			wantPath:       filepath.Join(base, "runs", "run-001", "design", "iteration-02"),
+			wantMarker:     filepath.Join(base, "runs", "run-001", "design", "iteration-02", "phase_complete"),
+			wantHidden:     []string{"design_progress_handoff", "iteration_meta"},
+			wantMarkerRoot: "phase_dir",
+			wantRoots:      []string{"phase_dir"},
 		},
 		{
-			name:         "refactor plan",
-			spec:         RefactorPlanRoleSpec(),
-			phaseDir:     filepath.Join(base, "runs", "run-001", "refactor-1"),
-			wantPhase:    feature.PhasePlan,
-			wantRole:     RoleRefactorPlanStep,
-			wantSkill:    "refactor",
-			wantArtifact: "refactor_plan_markdown",
-			wantPath:     filepath.Join(base, "runs", "run-001", "refactor-1", "refactor-plan.md"),
-			wantMarker:   filepath.Join(base, "runs", "run-001", "refactor-1", "phase_complete"),
+			name:           "refactor plan",
+			spec:           RefactorPlanRoleSpec(),
+			phaseDir:       filepath.Join(base, "runs", "run-001", "refactor-1"),
+			wantPhase:      feature.PhasePlan,
+			wantRole:       RoleRefactorPlanStep,
+			wantSkill:      "refactor",
+			wantArtifact:   "refactor_plan_markdown",
+			wantPath:       filepath.Join(base, "runs", "run-001", "refactor-1", "refactor-plan.md"),
+			wantMarker:     filepath.Join(base, "runs", "run-001", "refactor-1", "phase_complete"),
+			wantMarkerRoot: "phase_dir",
+			wantRoots:      []string{"phase_dir"},
 		},
 	}
 
@@ -363,11 +378,11 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 			if tt.spec.SkillName != tt.wantSkill {
 				t.Fatalf("%s SkillName = %q, want %q", tt.name, tt.spec.SkillName, tt.wantSkill)
 			}
-			if tt.spec.MarkerRoot != "phase_dir" {
-				t.Fatalf("%s MarkerRoot = %q, want phase_dir", tt.name, tt.spec.MarkerRoot)
+			if tt.spec.MarkerRoot != tt.wantMarkerRoot {
+				t.Fatalf("%s MarkerRoot = %q, want %s", tt.name, tt.spec.MarkerRoot, tt.wantMarkerRoot)
 			}
-			if got := rootNames(tt.spec); !slices.Equal(got, []string{"phase_dir"}) {
-				t.Fatalf("%s output roots = %v, want [phase_dir]", tt.name, got)
+			if got := rootNames(tt.spec); !slices.Equal(got, tt.wantRoots) {
+				t.Fatalf("%s output roots = %v, want %v", tt.name, got, tt.wantRoots)
 			}
 
 			contract := tt.spec.Contract()
@@ -399,7 +414,7 @@ func TestSingleShotProducerRoleSpecsDeriveContractPaths(t *testing.T) {
 			}
 			if section := RenderRoleSpecOutputFilesSection(tt.spec); !strings.Contains(section, "{phase_dir}/") {
 				t.Fatalf("%s generated section missing phase_dir path:\n%s", tt.name, section)
-			} else if strings.Contains(section, "research-progress.md") || strings.Contains(section, "inquire-progress.md") || strings.Contains(section, "design-progress.md") || strings.Contains(section, "meta.yaml") {
+			} else if strings.Contains(section, "research-progress.md") || strings.Contains(section, "inquire-progress.md") || strings.Contains(section, "design-progress.md") || strings.Contains(section, "kb-progress.md") || strings.Contains(section, "meta.yaml") {
 				t.Fatalf("%s generated section exposes harness-hidden research artifacts:\n%s", tt.name, section)
 			}
 		})

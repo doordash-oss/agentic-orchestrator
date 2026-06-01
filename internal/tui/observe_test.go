@@ -34,6 +34,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 // readObserveEvents reads all JSONL events for a given feature from the observer output directory.
@@ -443,20 +444,21 @@ func TestHandlePhaseCompletedKBEmitsPhaseCompletedWhenAllDone(t *testing.T) {
 	m.kbStaleWarnings = make(map[string]string)
 	fID := "feat-hpc-knowbase"
 	now := time.Now()
+	repoPath := testutil.InitGitRepo(t)
 	f := &feature.Feature{
 		ID:           fID,
 		Name:         "kb-phase-test",
 		Status:       feature.StatusBuildingKB,
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		TraceID:      "trace-hpc-knowbase",
-		Repos:        []feature.FeatureRepo{{Name: "my-repo", Path: "/tmp/my-repo"}},
+		Repos:        []feature.FeatureRepo{{Name: "my-repo", Path: repoPath}},
 		KBStatus:     map[string]string{"my-repo": "pending"},
 		StartedAt:    &now,
 	}
 	createTestFeature(t, fm, observeDir, f)
 
-	// Pre-create the KB contract artifacts required before a KnowledgeBase
-	// SDK success can advance.
+	// Pre-create the persistent KB artifact that the per-repo loop validates
+	// before advancing.
 	kbDir := agent.KBStateDir(fm.Store.BaseDir, "my-repo")
 	if err := os.MkdirAll(kbDir, 0755); err != nil {
 		t.Fatalf("failed to create KB state dir: %v", err)
@@ -464,18 +466,17 @@ func TestHandlePhaseCompletedKBEmitsPhaseCompletedWhenAllDone(t *testing.T) {
 	if err := os.WriteFile(agent.KBPath(kbDir), []byte("# kb\n"), 0o644); err != nil {
 		t.Fatalf("failed to write KB index: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(kbDir, agent.PhaseCompleteFile), nil, 0o644); err != nil {
-		t.Fatalf("failed to write KB phase_complete: %v", err)
-	}
 
-	// Session ID format: <featureID>-kb-<repoName>
-	msg := PhaseCompletedMsg{
-		FeatureID: fID,
-		Phase:     feature.PhaseKnowledgeBase,
-		SessionID: fID + "-kb-my-repo",
-		Success:   true,
+	if err := m.orchestrator.HandlePhaseCompletion(fID, orchestrator.PhaseCompletionInput{
+		Phase:    feature.PhaseKnowledgeBase,
+		RepoName: "my-repo",
+		KnowledgeBaseResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			CanonicalPath: agent.KBPath(kbDir),
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(KB loop result): %v", err)
 	}
-	m.handlePhaseCompleted(msg)
 
 	events := readObserveEvents(t, observeDir, fID)
 	found := false

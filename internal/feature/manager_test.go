@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -1237,11 +1238,11 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 		f.Status = feature.StatusImplementing
 		f.CurrentPhase = feature.PhaseImplement
 		f.Artifacts = map[string]string{
-			"inquire":    "/path/to/inquire.md",
-			"research":   "/path/to/research.md",
-			"design": "/path/to/design.md",
-			"plan":       "/path/to/plan.md",
-			"implement":  "/path/to/impl.md",
+			"inquire":   "/path/to/inquire.md",
+			"research":  "/path/to/research.md",
+			"design":    "/path/to/design.md",
+			"plan":      "/path/to/plan.md",
+			"implement": "/path/to/impl.md",
 		}
 		return nil
 	})
@@ -4611,7 +4612,7 @@ func seedCarryForwardFixtures(t *testing.T, run1Dir string) {
 	files := map[string]string{
 		filepath.Join("inquire", "marker.txt"):            "inquire",
 		filepath.Join("research", "marker.txt"):           "research",
-		filepath.Join("design", "marker.txt"):         "design",
+		filepath.Join("design", "marker.txt"):             "design",
 		filepath.Join("plan", "plan.md"):                  "plan",
 		filepath.Join("roadmap", "roadmap.md"):            "roadmap",
 		filepath.Join("phase-01", "plan", "plan.md"):      "phase-01-plan",
@@ -4735,6 +4736,58 @@ func TestRewindToPhase_CarriesForwardCorrectPhases(t *testing.T) {
 				t.Errorf("CarriedPhases = %v, want %v", gotCarried, want)
 			}
 		})
+	}
+}
+
+func TestRewindToPhase_DoesNotCarryKnowledgeBaseRunBookkeeping(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	f, run1Dir := seedRewindableFeature(t, mgr)
+
+	bookkeepingDir := filepath.Join(run1Dir, "knowledge-base", "test-repo", "iteration-01")
+	if err := os.MkdirAll(bookkeepingDir, 0o755); err != nil {
+		t.Fatalf("mkdir KB bookkeeping dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bookkeepingDir, agent.KBProgressHandoffFilename), []byte("# Knowledge Base Progress\n"), 0o644); err != nil {
+		t.Fatalf("write kb-progress.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bookkeepingDir, "meta.yaml"), []byte("iteration: 1\n"), 0o644); err != nil {
+		t.Fatalf("write meta.yaml: %v", err)
+	}
+	persistentKBDir := agent.KBStateDir(mgr.Store.BaseDir, "test-repo")
+	if err := os.MkdirAll(persistentKBDir, 0o755); err != nil {
+		t.Fatalf("mkdir persistent KB dir: %v", err)
+	}
+	persistentIndex := agent.KBPath(persistentKBDir)
+	if err := os.WriteFile(persistentIndex, []byte("# Persistent KB\n"), 0o644); err != nil {
+		t.Fatalf("write persistent KB index: %v", err)
+	}
+
+	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseInquire); err != nil {
+		t.Fatalf("RewindToPhase(Inquire): %v", err)
+	}
+
+	run2Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-002")
+	if _, err := os.Stat(filepath.Join(run2Dir, "knowledge-base")); !os.IsNotExist(err) {
+		t.Fatalf("run-002 knowledge-base bookkeeping stat err = %v, want not carried", err)
+	}
+	gotPersistent, err := os.ReadFile(persistentIndex)
+	if err != nil {
+		t.Fatalf("read persistent KB index after rewind: %v", err)
+	}
+	if string(gotPersistent) != "# Persistent KB\n" {
+		t.Fatalf("persistent KB index changed to %q", gotPersistent)
+	}
+	reloaded, err := mgr.Store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature after rewind: %v", err)
+	}
+	if reloaded.SchemaVersion != feature.SchemaVersionCurrent {
+		t.Fatalf("SchemaVersion = %d, want %d", reloaded.SchemaVersion, feature.SchemaVersionCurrent)
+	}
+	if feature.SchemaVersionCurrent != 7 {
+		t.Fatalf("SchemaVersionCurrent = %d, want unchanged 7", feature.SchemaVersionCurrent)
 	}
 }
 
@@ -5502,12 +5555,12 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 
 		if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 			ff.Artifacts = map[string]string{
-				"inquire":    absInquire,
-				"research":   absResearch,
-				"design": absDesign,
-				"plan":       absPlan,
-				"implement":  absImpl,
-				"pr_url":     "https://github.com/o/r/pull/1",
+				"inquire":   absInquire,
+				"research":  absResearch,
+				"design":    absDesign,
+				"plan":      absPlan,
+				"implement": absImpl,
+				"pr_url":    "https://github.com/o/r/pull/1",
 			}
 			return nil
 		}); err != nil {
@@ -5523,9 +5576,9 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 			t.Fatalf("Get: %v", err)
 		}
 		wantRel := map[string]string{
-			"inquire":    filepath.Join("inquire", "inquire.md"),
-			"research":   filepath.Join("research", "research.md"),
-			"design": filepath.Join("design", "design.md"),
+			"inquire":  filepath.Join("inquire", "inquire.md"),
+			"research": filepath.Join("research", "research.md"),
+			"design":   filepath.Join("design", "design.md"),
 		}
 		if len(got.Artifacts) != len(wantRel) {
 			t.Errorf("new run Artifacts len = %d, want %d: %v", len(got.Artifacts), len(wantRel), got.Artifacts)
@@ -5572,7 +5625,7 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 		absMap := map[string]string{
 			"inquire":      filepath.Join(run1Dir, "inquire", "inquire.md"),
 			"research":     filepath.Join(run1Dir, "research", "research.md"),
-			"design":   filepath.Join(run1Dir, "design", "design.md"),
+			"design":       filepath.Join(run1Dir, "design", "design.md"),
 			"plan":         filepath.Join(run1Dir, "plan", "plan.md"),
 			"roadmap":      filepath.Join(run1Dir, "roadmap", "roadmap.md"),
 			"phase-1-plan": filepath.Join(run1Dir, "phase-01", "plan", "plan.md"),

@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1266,6 +1267,165 @@ func TestRunKnowledgeBaseForRepo_SkillReadInstruction(t *testing.T) {
 	}
 	if strings.Contains(cap.Prompt, "# Useful Resources") {
 		t.Errorf("prompt contains RoleSpec-owned Useful Resources section:\n%s", cap.Prompt)
+	}
+}
+
+func TestBuildKnowledgeBaseBlockingLoopConfig(t *testing.T) {
+	stateDir := t.TempDir()
+	repo := feature.FeatureRepo{Name: "repo-a", Path: filepath.Join(t.TempDir(), "repo-a")}
+	f := &feature.Feature{
+		ID:        "feat-kb-loop",
+		ActiveRun: 1,
+		Models: config.ModelConfig{
+			KBBuild: "custom-kb-model",
+		},
+		Repos: []feature.FeatureRepo{repo},
+	}
+	pr := NewPhaseRunner(nil, nil, stateDir)
+	pr.SkillsDir = filepath.Join(stateDir, "skills")
+	pr.GuidelinesDir = filepath.Join(stateDir, "guidelines")
+
+	cfg, err := pr.buildKnowledgeBaseBlockingLoopConfig(f, repo)
+	if err != nil {
+		t.Fatalf("buildKnowledgeBaseBlockingLoopConfig() error = %v", err)
+	}
+	kbDir := KBStateDir(stateDir, repo.Name)
+	if got, want := cfg.ArtifactDir, filepath.Join(ActiveRunDir(stateDir, f), "knowledge-base", repo.Name); got != want {
+		t.Fatalf("ArtifactDir = %q, want %q", got, want)
+	}
+	if cfg.HandoffFilename != KBProgressHandoffFilename {
+		t.Fatalf("HandoffFilename = %q, want %q", cfg.HandoffFilename, KBProgressHandoffFilename)
+	}
+	if !cfg.InPlaceCanonical {
+		t.Fatal("InPlaceCanonical = false, want true")
+	}
+	if cfg.AccumulateQALog {
+		t.Fatal("AccumulateQALog = true, want false")
+	}
+	if cfg.SessionIDBase != BuildKBSessionID(f.ID, repo.Name) {
+		t.Fatalf("SessionIDBase = %q, want %q", cfg.SessionIDBase, BuildKBSessionID(f.ID, repo.Name))
+	}
+	if cfg.RepoName != repo.Name {
+		t.Fatalf("RepoName = %q, want %q", cfg.RepoName, repo.Name)
+	}
+	if !slices.Contains(cfg.AdditionalDirs, kbDir) {
+		t.Fatalf("AdditionalDirs = %v, want persistent KB root %q", cfg.AdditionalDirs, kbDir)
+	}
+	canonical, err := cfg.CanonicalSelector(filepath.Join(cfg.ArtifactDir, "iteration-01"))
+	if err != nil {
+		t.Fatalf("CanonicalSelector() error = %v", err)
+	}
+	if canonical != KBPath(kbDir) {
+		t.Fatalf("CanonicalSelector() = %q, want %q", canonical, KBPath(kbDir))
+	}
+
+	iterDir := filepath.Join(cfg.ArtifactDir, "iteration-02")
+	roots := cfg.Spec.OutputRootPaths(RoleRuntime{IterationDir: iterDir})
+	if roots["phase_dir"] != kbDir {
+		t.Fatalf("phase_dir root = %q, want %q", roots["phase_dir"], kbDir)
+	}
+	if roots["iteration_dir"] != iterDir {
+		t.Fatalf("iteration_dir root = %q, want %q", roots["iteration_dir"], iterDir)
+	}
+	if cfg.Spec.MarkerPath(RoleRuntime{IterationDir: iterDir}) != filepath.Join(iterDir, PhaseCompleteFile) {
+		t.Fatalf("MarkerPath = %q, want iteration marker", cfg.Spec.MarkerPath(RoleRuntime{IterationDir: iterDir}))
+	}
+
+	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:    2,
+		IterationDir: iterDir,
+		HandoffPath:  filepath.Join(iterDir, KBProgressHandoffFilename),
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt() error = %v", err)
+	}
+	for _, want := range []string{
+		"continue the in-flight build in place",
+		"Remaining Categories",
+		KBPath(kbDir),
+		filepath.Join(cfg.ArtifactDir, "iteration-01", KBProgressHandoffFilename),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("KB continuation prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestRunKnowledgeBaseBlockingLoopBuildSessionMountsIterationAndPersistentKBRoots(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	workDir := filepath.Join(root, "work", "repo-a")
+	for _, dir := range []string{stateDir, workDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	repo := feature.FeatureRepo{Name: "repo-a", Path: workDir}
+	f := &feature.Feature{
+		ID:            "feat-kb-session-roots",
+		Name:          "KB Session Roots",
+		Status:        feature.StatusBuildingKB,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{repo},
+		Models:        config.ModelConfig{KBBuild: "kb-model"},
+	}
+
+	var captured []BuildSessionOpts
+	sm := mocks.NewMockSessionManager()
+	pr := NewPhaseRunner(sm, nil, stateDir)
+	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		optsCopy := opts
+		optsCopy.AdditionalDirs = append([]string(nil), opts.AdditionalDirs...)
+		captured = append(captured, optsCopy)
+		return []string{"mock-kb"}, nil, &session.SessionOpts{ProviderName: "codex"}, nil
+	}
+
+	cfg, err := pr.buildKnowledgeBaseBlockingLoopConfig(f, repo)
+	if err != nil {
+		t.Fatalf("buildKnowledgeBaseBlockingLoopConfig() error = %v", err)
+	}
+	kbDir := KBStateDir(stateDir, repo.Name)
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, _ []string, _ string, _ []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		iter := 0
+		if len(opts) > 0 && opts[0] != nil {
+			iter = opts[0].Iteration
+		}
+		if iter != 1 {
+			return nil, fmt.Errorf("iteration = %d, want 1", iter)
+		}
+		iterDir := filepath.Join(cfg.ArtifactDir, "iteration-01")
+		if err := os.WriteFile(KBPath(kbDir), []byte("# Repo KB\n"), 0o644); err != nil {
+			return nil, err
+		}
+		writeHelperHandoff(t, iterDir, KBProgressHandoffFilename, validKBProgressHandoff("COMPLETE", "architecture: index.md"))
+		writePhaseComplete(t, iterDir)
+		sess := session.NewSession(id, featureID, phase)
+		sess.SetProviderName("codex")
+		sess.SendStatus(agentStatusSuccess)
+		return sess, nil
+	}
+
+	result, err := RunBlockingLoop(context.Background(), cfg, sm)
+	if err != nil {
+		t.Fatalf("RunBlockingLoop() error = %v", err)
+	}
+	if result.FinalStatus != BlockingLoopStatusSuccess {
+		t.Fatalf("FinalStatus = %s, want %s", result.FinalStatus, BlockingLoopStatusSuccess)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("BuildSession calls = %d, want 1", len(captured))
+	}
+
+	iterDir := filepath.Join(cfg.ArtifactDir, "iteration-01")
+	gotDirs := captured[0].AdditionalDirs
+	for _, want := range []string{iterDir, kbDir} {
+		if !slices.Contains(gotDirs, want) {
+			t.Fatalf("BuildSession AdditionalDirs = %v, want mounted root %q", gotDirs, want)
+		}
 	}
 }
 

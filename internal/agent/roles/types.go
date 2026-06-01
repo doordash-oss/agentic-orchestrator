@@ -61,6 +61,7 @@ const (
 	ValidatorInquireProgressHandoff        ArtifactValidator = "inquire_progress_handoff"
 	ValidatorResearchProgressHandoff       ArtifactValidator = "research_progress_handoff"
 	ValidatorDesignProgressHandoff         ArtifactValidator = "design_progress_handoff"
+	ValidatorKBProgressHandoff             ArtifactValidator = "kb_progress_handoff"
 	ValidatorIterationMeta                 ArtifactValidator = "iteration_meta"
 )
 
@@ -335,6 +336,19 @@ func designProgressHandoffRoleArtifact() RoleArtifactSpec {
 	}
 }
 
+func kbProgressHandoffRoleArtifact() RoleArtifactSpec {
+	return RoleArtifactSpec{
+		Name:          "kb_progress_handoff",
+		DisplayPath:   "kb-progress.md",
+		RootName:      "iteration_dir",
+		RelativePath:  "kb-progress.md",
+		Presence:      ArtifactRequired,
+		Description:   "harness-read Knowledge Base loop progress and handoff state",
+		HideFromSkill: true,
+		Validate:      ValidatorKBProgressHandoff,
+	}
+}
+
 func iterationMetaRoleArtifact() RoleArtifactSpec {
 	return RoleArtifactSpec{
 		Name:          "iteration_meta",
@@ -346,6 +360,12 @@ func iterationMetaRoleArtifact() RoleArtifactSpec {
 		HideFromSkill: true,
 		Validate:      ValidatorIterationMeta,
 	}
+}
+
+func knowledgeBaseIterationMetaRoleArtifact() RoleArtifactSpec {
+	artifact := iterationMetaRoleArtifact()
+	artifact.RootName = "iteration_dir"
+	return artifact
 }
 
 func phaseMarkdownRoleArtifact(display string) RoleArtifactSpec {
@@ -419,7 +439,7 @@ func artifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == "planning-handoff.md" || lower == "review-progress.md" || lower == "producer-progress.md" || lower == "inquire-progress.md" || lower == "research-progress.md" || lower == "design-progress.md":
+	case lower == "qa-answers.md" || lower == "planning-handoff.md" || lower == "review-progress.md" || lower == "producer-progress.md" || lower == "inquire-progress.md" || lower == "research-progress.md" || lower == "design-progress.md" || lower == "kb-progress.md":
 		return true
 	default:
 		return false

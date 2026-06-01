@@ -1285,6 +1285,43 @@ func TestRestartFromFailedPlanPhase(t *testing.T) {
 	}
 }
 
+func TestResumeAllRestartsFailedFinalReviewProtocolViolation(t *testing.T) {
+	app, fm := newTestAppModel(t)
+
+	f, err := fm.Create("Failed Final Review", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := fm.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusFailed
+		ff.CurrentPhase = feature.PhaseFinalReview
+		ff.LastError = "protocol violation"
+		ff.FailureType = feature.FailureProtocolViolation
+		return nil
+	}); err != nil {
+		t.Fatalf("modify feature: %v", err)
+	}
+
+	msg := app.resumeAllCmd()()
+	if _, ok := msg.(RefreshFeaturesMsg); !ok {
+		t.Fatalf("expected RefreshFeaturesMsg, got %T", msg)
+	}
+
+	f, err = fm.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if f.Status != feature.StatusReviewPassed {
+		t.Errorf("feature status = %v, want StatusReviewPassed after resume-all final review restart", f.Status)
+	}
+	if f.CurrentPhase != feature.PhaseFinalReview {
+		t.Errorf("current phase = %v, want PhaseFinalReview", f.CurrentPhase)
+	}
+	if f.LastError != "" || f.FailureType != "" {
+		t.Errorf("failure context = (%q, %q), want cleared", f.LastError, f.FailureType)
+	}
+}
+
 func TestRestartFromFailedClearsFailureContext(t *testing.T) {
 	app, fm := newTestAppModel(t)
 

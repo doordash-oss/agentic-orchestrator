@@ -131,6 +131,29 @@ func featureHasFailedRepos(f *feature.Feature) bool {
 	return false
 }
 
+func featureHasDisplayFailure(f *feature.Feature) bool {
+	return f != nil && f.HasTerminalFailure()
+}
+
+func effectiveCurrentPhaseForDisplay(f *feature.Feature) feature.Phase {
+	if f == nil {
+		return 0
+	}
+	if featureHasDisplayFailure(f) && f.CurrentPhase == feature.PhasePublish && looksLikeFinalReviewFailureForDisplay(f.LastError) {
+		return feature.PhaseFinalReview
+	}
+	return f.CurrentPhase
+}
+
+func looksLikeFinalReviewFailureForDisplay(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "final_review") || strings.Contains(msg, "final review")
+}
+
+func phaseMatchesCurrentForDisplay(row, current feature.Phase) bool {
+	return row == current || (row == feature.PhaseReview && current == feature.PhaseFinalReview)
+}
+
 func (m DetailModel) View() string {
 	if m.feature == nil {
 		return "No feature selected\n"
@@ -197,8 +220,8 @@ func (m DetailModel) View() string {
 	phaseBox = renderBorderTitle(phaseBox, "Phase Progress", MutedStyle)
 	b.WriteString(" " + phaseBox + "\n")
 
-	// Failure info box (only for failed features)
-	if f.Status == feature.StatusFailed && (f.LastError != "" || f.FailureType != "") {
+	// Failure info box.
+	if featureHasDisplayFailure(f) {
 		failureContent := m.renderFailureInfo(f)
 		failureBox := panelStyle(false).
 			BorderForeground(colorError).
@@ -255,7 +278,7 @@ func (m DetailModel) View() string {
 		actionParts = append(actionParts, "[r] Restart")
 	}
 	actionParts = append(actionParts, "[ctrl+r] Rewind")
-	if f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted {
+	if f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted || featureHasDisplayFailure(f) {
 		actionParts = append(actionParts, "[l] Logs")
 	}
 	if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
@@ -546,22 +569,30 @@ func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
 		}
 	}
 
+	currentPhase := effectiveCurrentPhaseForDisplay(f)
 	for i, p := range phases {
-		done := p.phase.LogicalOrder() < f.CurrentPhase.LogicalOrder()
+		done := p.phase.LogicalOrder() < currentPhase.LogicalOrder()
 		// PhaseReview and PhaseFinalReview share logical order 6 — the row is
 		// labelled "Final Review" with phase enum PhaseReview, but f.CurrentPhase
 		// becomes PhaseFinalReview when the deferred end-of-feature FR pass is
 		// active. Treat them as equivalent here so the row highlights correctly.
-		current := p.phase == f.CurrentPhase ||
-			(p.phase == feature.PhaseReview && f.CurrentPhase == feature.PhaseFinalReview)
+		current := phaseMatchesCurrentForDisplay(p.phase, currentPhase)
+		failed := current && featureHasDisplayFailure(f)
+		if failed {
+			done = false
+		}
 
 		icon := phaseIcon(done, current)
 		if current && isRunningStatus(f.Status) {
 			icon = m.activeProgressIcon()
+		} else if failed {
+			icon = ErrorStyle.Render("✗")
 		}
 
 		status := MutedStyle.Render("pending")
-		if done {
+		if failed {
+			status = ErrorStyle.Render("failed")
+		} else if done {
 			status = SuccessStyle.Render("complete")
 		} else if current {
 			status = formatPhaseStatus(f)
@@ -728,8 +759,8 @@ func (m DetailModel) ViewCompact(width int) string {
 	b.WriteString(phaseBox)
 	b.WriteString("\n")
 
-	// Failure info box (only for failed features)
-	if f.Status == feature.StatusFailed && (f.LastError != "" || f.FailureType != "") {
+	// Failure info box.
+	if featureHasDisplayFailure(f) {
 		failureContent := m.renderFailureInfo(f)
 		failureBox := panelStyle(false).
 			BorderForeground(colorError).
@@ -849,22 +880,30 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 		}
 	}
 
+	currentPhase := effectiveCurrentPhaseForDisplay(f)
 	for i, p := range phases {
-		done := p.phase.LogicalOrder() < f.CurrentPhase.LogicalOrder()
+		done := p.phase.LogicalOrder() < currentPhase.LogicalOrder()
 		// PhaseReview and PhaseFinalReview share logical order 6 — the row is
 		// labelled "Final Review" with phase enum PhaseReview, but f.CurrentPhase
 		// becomes PhaseFinalReview when the deferred end-of-feature FR pass is
 		// active. Treat them as equivalent here so the row highlights correctly.
-		current := p.phase == f.CurrentPhase ||
-			(p.phase == feature.PhaseReview && f.CurrentPhase == feature.PhaseFinalReview)
+		current := phaseMatchesCurrentForDisplay(p.phase, currentPhase)
+		failed := current && featureHasDisplayFailure(f)
+		if failed {
+			done = false
+		}
 
 		icon := phaseIcon(done, current)
 		if current && isRunningStatus(f.Status) {
 			icon = m.activeProgressIcon()
+		} else if failed {
+			icon = ErrorStyle.Render("✗")
 		}
 
 		status := MutedStyle.Render("pending")
-		if done {
+		if failed {
+			status = ErrorStyle.Render("failed")
+		} else if done {
 			status = SuccessStyle.Render("complete")
 		} else if current {
 			status = formatPhaseStatus(f)
@@ -1222,6 +1261,13 @@ func finalReviewStatusText(f *feature.Feature) string {
 }
 
 func formatDetailStatus(f *feature.Feature) string {
+	if featureHasDisplayFailure(f) && f.Status != feature.StatusFailed && !isRunningStatus(f.Status) {
+		msg := "Failed"
+		if f.FailureType != "" {
+			msg = "Failed (" + formatFailureType(f.FailureType) + ")"
+		}
+		return ErrorStyle.Render(msg + " — press [r] to restart, [l] logs")
+	}
 	switch f.Status {
 	case feature.StatusImplementing:
 		var label string

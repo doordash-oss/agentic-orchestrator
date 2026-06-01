@@ -260,6 +260,41 @@ func TestStoreFailureFieldsPersistence(t *testing.T) {
 	}
 }
 
+func TestStoreLoadReconcilesSuccessfulStatusWithTerminalFinalReviewFailure(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+
+	f := &Feature{
+		ID:            "corrupt-fr-001",
+		Name:          "Corrupt Final Review",
+		Slug:          "corrupt-final-review",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		LastError:     "protocol violation: final_review_reviewer @ /tmp/iter: verification-report.yaml is malformed",
+		FailureType:   FailureProtocolViolation,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load("corrupt-fr-001")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Status != StatusFailed {
+		t.Fatalf("Status = %s, want Failed", loaded.Status)
+	}
+	if loaded.CurrentPhase != PhaseFinalReview {
+		t.Fatalf("CurrentPhase = %s, want FinalReview", loaded.CurrentPhase)
+	}
+	if loaded.FailureType != FailureProtocolViolation {
+		t.Fatalf("FailureType = %q, want %q", loaded.FailureType, FailureProtocolViolation)
+	}
+}
+
 func TestStoreMuteInputNotificationsPersistence(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

@@ -21,6 +21,21 @@ You are the fix agent for one final-review iteration. Your job is to address the
 5. Update `verification-report.yaml` with structured pass/fail/blocked evidence for the checks you ran and for any contract rows the reviewer explicitly called out.
 6. Create the `phase_complete` marker named by the system prompt as the last action.
 
+## Verification Report Contract
+
+When `verification-report.yaml` has a non-empty `contract_path`, read the bound testing contract before updating the report. The report's `results:` rows are contract-backed: each `item_id` must already exist in that testing contract.
+
+- Do not rename item IDs or add rows under `results:`.
+- Put extra checks you run during the fix under `additional_checks:`, not `results:`.
+- Preserve every pre-seeded contract row, updating only its status and evidence.
+- Use YAML block scalars for evidence text that includes command output, file locations, colons, or multiple sentences:
+
+```yaml
+evidence:
+  summary: |-
+    git diff --check main failed with path/to/file.go:11: trailing whitespace.
+```
+
 ## Boundaries
 
 - Address only the requested final-review changes and directly necessary mechanical follow-ons.

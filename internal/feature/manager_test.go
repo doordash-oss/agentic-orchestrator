@@ -465,6 +465,43 @@ func TestManagerMarkFailed(t *testing.T) {
 	}
 }
 
+func TestManagerMarkCodeReadyRefusesTerminalFailure(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Failed Final Review", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusFailed
+		ff.CurrentPhase = feature.PhaseFinalReview
+		ff.LastError = "protocol violation: final_review_reviewer @ /tmp/iter: invalid report"
+		ff.FailureType = feature.FailureProtocolViolation
+		return nil
+	}); err != nil {
+		t.Fatalf("seed failed final review: %v", err)
+	}
+
+	if err := mgr.MarkCodeReady(f.ID); err == nil {
+		t.Fatal("MarkCodeReady succeeded, want terminal failure guard")
+	}
+	got, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status != feature.StatusFailed {
+		t.Fatalf("Status = %s, want Failed", got.Status)
+	}
+	if got.CurrentPhase != feature.PhaseFinalReview {
+		t.Fatalf("CurrentPhase = %s, want FinalReview", got.CurrentPhase)
+	}
+	if got.FailureType != feature.FailureProtocolViolation {
+		t.Fatalf("FailureType = %q, want %q", got.FailureType, feature.FailureProtocolViolation)
+	}
+}
+
 func TestManagerCreateWithImages(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

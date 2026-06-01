@@ -95,10 +95,14 @@ func (s *stubSessionHandle) LastControlRequest() *llm.ControlRequestMessage     
 func (s *stubSessionHandle) PendingControlRequests() []*llm.ControlRequestMessage { return nil }
 func (s *stubSessionHandle) QALog() []session.QAPair                              { return nil }
 func (s *stubSessionHandle) LogFilePath() string                                  { return "" }
-func (s *stubSessionHandle) ContextPercentage() int                               { return 0 }
-func (s *stubSessionHandle) ErrorDetail() string                                  { return "" }
-func (s *stubSessionHandle) ExitCodeDetail() string                               { return "" }
-func (s *stubSessionHandle) LastStdoutAt() time.Time                              { return time.Time{} }
+func (s *stubSessionHandle) ContextHandoffThresholdTokens() int {
+	return llm.DefaultSmartZoneThresholdTokens
+}
+func (s *stubSessionHandle) ContextFillTokens() int  { return -1 }
+func (s *stubSessionHandle) ContextPercentage() int  { return 0 }
+func (s *stubSessionHandle) ErrorDetail() string     { return "" }
+func (s *stubSessionHandle) ExitCodeDetail() string  { return "" }
+func (s *stubSessionHandle) LastStdoutAt() time.Time { return time.Time{} }
 
 // SessionView channels.
 func (s *stubSessionHandle) StatusCh() <-chan string         { return s.statusCh }

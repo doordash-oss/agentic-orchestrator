@@ -38,6 +38,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"gopkg.in/yaml.v3"
 )
 
 func TestPhaseRunnerGetPhaseOutput(t *testing.T) {
@@ -1646,6 +1647,78 @@ func TestBuildSession_ClaudeSeedsProtocolContextWindow(t *testing.T) {
 	}
 	if got := msgs[0].Assistant.Message.Usage.ContextWindow; got != 1_000_000 {
 		t.Errorf("assistant usage contextWindow = %d, want %d", got, 1_000_000)
+	}
+}
+
+func TestBuildSession_ResolvesContextHandoffThresholdTokens(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		configYAML   string
+		wantTokens   int
+		wantDisabled bool
+	}{
+		{
+			name:       "catalog value",
+			model:      "opus",
+			wantTokens: 100_000,
+		},
+		{
+			name:       "unrecognized model fallback",
+			model:      "claude:unknown-model",
+			wantTokens: llm.DefaultSmartZoneThresholdTokens,
+		},
+		{
+			name:  "override wins while disabled",
+			model: "opus",
+			configYAML: `
+smart_zone:
+  enabled: false
+  thresholds:
+    claude:
+      opus: 123456
+`,
+			wantTokens:   123_456,
+			wantDisabled: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			eventCh := make(chan any, 100)
+			sm := session.NewManager(eventCh)
+			store := feature.NewStore(dir)
+			pr := NewPhaseRunner(sm, store, dir)
+			reg := llm.NewRegistry()
+			reg.Register(&claude.Provider{})
+			reg.Register(&codex.Provider{})
+			pr.Registry = reg
+			if tt.configYAML != "" {
+				var cfg config.Config
+				if err := yaml.Unmarshal([]byte(tt.configYAML), &cfg); err != nil {
+					t.Fatalf("yaml.Unmarshal() error = %v", err)
+				}
+				pr.Config = &cfg
+			}
+
+			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+				Model:        tt.model,
+				Prompt:       "research this",
+				SystemPrompt: "you are a researcher",
+				PIDDir:       filepath.Join(dir, "pid"),
+				PermHandler:  permHandlerFor(false, nil, ""),
+				WorkDir:      dir,
+			})
+			if err != nil {
+				t.Fatalf("BuildSession() error: %v", err)
+			}
+			if got := sessOpts.ContextHandoffThresholdTokens; got != tt.wantTokens {
+				t.Errorf("ContextHandoffThresholdTokens = %d, want %d", got, tt.wantTokens)
+			}
+			if got := sessOpts.ContextHandoffDisabled; got != tt.wantDisabled {
+				t.Errorf("ContextHandoffDisabled = %v, want %v", got, tt.wantDisabled)
+			}
+		})
 	}
 }
 

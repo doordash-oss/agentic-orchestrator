@@ -155,6 +155,9 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.kind = opts[0].Kind
 		s.turnMode = opts[0].TurnMode
 		s.label = opts[0].Label
+		if opts[0].ContextHandoffThresholdTokens > 0 {
+			s.contextHandoffThresholdTokens = opts[0].ContextHandoffThresholdTokens
+		}
 		s.askUserAutoPick = opts[0].AskUserAutoPick
 		// Set log file before Start() so the read goroutine can write from
 		// the first line. This avoids a race with fast sessions (codex)

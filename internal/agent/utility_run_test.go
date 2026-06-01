@@ -42,14 +42,18 @@ type utilityTestSession struct {
 	usage       llm.Usage
 	lastControl *llm.ControlRequestMessage
 	pendingAsk  bool
+	contextFill int
+	threshold   int
 }
 
 func newUtilityTestSession() *utilityTestSession {
 	return &utilityTestSession{
-		done:     make(chan struct{}),
-		statusCh: make(chan string, 1),
-		attachCh: make(chan llm.SDKMessage, 1),
-		msgLog:   session.NewMessageLog(),
+		done:        make(chan struct{}),
+		statusCh:    make(chan string, 1),
+		attachCh:    make(chan llm.SDKMessage, 1),
+		msgLog:      session.NewMessageLog(),
+		contextFill: -1,
+		threshold:   llm.DefaultSmartZoneThresholdTokens,
 	}
 }
 
@@ -85,15 +89,17 @@ func (s *utilityTestSession) PendingControlRequests() []*llm.ControlRequestMessa
 	}
 	return []*llm.ControlRequestMessage{s.lastControl}
 }
-func (s *utilityTestSession) QALog() []session.QAPair         { return nil }
-func (s *utilityTestSession) LogFilePath() string             { return "" }
-func (s *utilityTestSession) ContextPercentage() int          { return 0 }
-func (s *utilityTestSession) ErrorDetail() string             { return "" }
-func (s *utilityTestSession) ExitCodeDetail() string          { return "" }
-func (s *utilityTestSession) LastStdoutAt() time.Time         { return time.Time{} }
-func (s *utilityTestSession) StatusCh() <-chan string         { return s.statusCh }
-func (s *utilityTestSession) AttachCh() <-chan llm.SDKMessage { return s.attachCh }
-func (s *utilityTestSession) Done() <-chan struct{}           { return s.done }
+func (s *utilityTestSession) QALog() []session.QAPair            { return nil }
+func (s *utilityTestSession) LogFilePath() string                { return "" }
+func (s *utilityTestSession) ContextHandoffThresholdTokens() int { return s.threshold }
+func (s *utilityTestSession) ContextFillTokens() int             { return s.contextFill }
+func (s *utilityTestSession) ContextPercentage() int             { return 0 }
+func (s *utilityTestSession) ErrorDetail() string                { return "" }
+func (s *utilityTestSession) ExitCodeDetail() string             { return "" }
+func (s *utilityTestSession) LastStdoutAt() time.Time            { return time.Time{} }
+func (s *utilityTestSession) StatusCh() <-chan string            { return s.statusCh }
+func (s *utilityTestSession) AttachCh() <-chan llm.SDKMessage    { return s.attachCh }
+func (s *utilityTestSession) Done() <-chan struct{}              { return s.done }
 func (s *utilityTestSession) HasPendingAskUserQuestion() bool {
 	return s.pendingAsk
 }

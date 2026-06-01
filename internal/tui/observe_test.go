@@ -325,13 +325,15 @@ func TestHandlePhaseCompletedInquireEmitsPhaseCompleted(t *testing.T) {
 	writeTUIPhaseComplete(t, fm.Store.BaseDir, f, feature.PhaseInquire)
 	writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, feature.PhaseInquire, "inquire.md")
 
-	msg := PhaseCompletedMsg{
-		FeatureID: fID,
-		Phase:     feature.PhaseInquire,
-		SessionID: "sess-inquire-1",
-		Success:   true,
+	if err := m.orchestrator.HandlePhaseCompletion(fID, orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseInquire,
+		InquireResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			CanonicalPath: filepath.Join(fm.Store.BaseDir, fID, "runs", "run-001", "inquire", "inquire.md"),
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(Inquire): %v", err)
 	}
-	m.handlePhaseCompleted(msg)
 
 	events := readObserveEvents(t, observeDir, fID)
 	found := false
@@ -368,13 +370,15 @@ func TestHandlePhaseCompletedResearchEmitsPhaseCompleted(t *testing.T) {
 	writeTUIPhaseComplete(t, fm.Store.BaseDir, f, feature.PhaseResearch)
 	writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, feature.PhaseResearch, "research.md")
 
-	msg := PhaseCompletedMsg{
-		FeatureID: fID,
-		Phase:     feature.PhaseResearch,
-		SessionID: "sess-research-1",
-		Success:   true,
+	if err := m.orchestrator.HandlePhaseCompletion(fID, orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseResearch,
+		ResearchResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			CanonicalPath: filepath.Join(fm.Store.BaseDir, fID, "runs", "run-001", "research", "research.md"),
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(Research): %v", err)
 	}
-	m.handlePhaseCompleted(msg)
 
 	events := readObserveEvents(t, observeDir, fID)
 	found := false
@@ -412,13 +416,15 @@ func TestHandlePhaseCompletedDesignEmitsPhaseCompleted(t *testing.T) {
 	writeTUIPhaseComplete(t, fm.Store.BaseDir, f, feature.PhaseDesign)
 	writeTUIPhaseMarkdown(t, fm.Store.BaseDir, f, feature.PhaseDesign, "design.md")
 
-	msg := PhaseCompletedMsg{
-		FeatureID: fID,
-		Phase:     feature.PhaseDesign,
-		SessionID: "sess-design-1",
-		Success:   true,
+	if err := m.orchestrator.HandlePhaseCompletion(fID, orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseDesign,
+		DesignResult: &agent.BlockingLoopResult{
+			FinalStatus:   agent.BlockingLoopStatusSuccess,
+			CanonicalPath: filepath.Join(fm.Store.BaseDir, fID, "runs", "run-001", "design", "design.md"),
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(Design): %v", err)
 	}
-	m.handlePhaseCompleted(msg)
 
 	events := readObserveEvents(t, observeDir, fID)
 	found := false
@@ -511,14 +517,15 @@ func TestHandlePhaseCompletedFailureEmitsPhaseFailed(t *testing.T) {
 	}
 	createTestFeature(t, fm, observeDir, f)
 
-	msg := PhaseCompletedMsg{
-		FeatureID:   fID,
-		Phase:       feature.PhaseResearch,
-		SessionID:   "sess-research-1",
-		Success:     false,
-		ErrorDetail: "agent crashed",
+	if err := m.orchestrator.HandlePhaseCompletion(fID, orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseResearch,
+		ResearchResult: &agent.BlockingLoopResult{
+			FinalStatus: agent.BlockingLoopStatusFailed,
+			LastError:   "agent crashed",
+		},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion(Research failure): %v", err)
 	}
-	m.handlePhaseCompleted(msg)
 
 	events := readObserveEvents(t, observeDir, fID)
 	foundPhaseFailed := false

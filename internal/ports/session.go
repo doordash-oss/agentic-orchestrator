@@ -283,6 +283,8 @@ type SessionView interface {
 	PendingControlRequests() []*llm.ControlRequestMessage
 	QALog() []QAPair
 	LogFilePath() string
+	ContextHandoffThresholdTokens() int
+	ContextFillTokens() int
 	ContextPercentage() int
 	ErrorDetail() string
 	ExitCodeDetail() string

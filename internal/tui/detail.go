@@ -30,7 +30,7 @@ type DetailModel struct {
 	feature        *feature.Feature
 	stateDir       string // base state dir for computing artifact paths
 	spinnerView    string // set by parent from app-level spinner
-	contextPct     int    // context window usage percentage for active session; -1 = no data
+	contextUsage   smartZoneContextUsage
 	kbStaleWarning string // yellow warning text when KB is outdated or missing
 	width          int
 	height         int
@@ -49,7 +49,7 @@ type DetailModel struct {
 }
 
 func NewDetailModel(f *feature.Feature, stateDir string) DetailModel {
-	return DetailModel{feature: f, stateDir: stateDir}
+	return DetailModel{feature: f, stateDir: stateDir, contextUsage: emptySmartZoneContextUsage()}
 }
 
 func (m DetailModel) Init() tea.Cmd {
@@ -522,19 +522,11 @@ func (m DetailModel) activeProgressIcon() string {
 	return MutedStyle.Render("\u27F3")
 }
 
-func formatContextUsage(contextPct int) string {
-	if contextPct < 0 {
-		return MutedStyle.Render(" context window: calculating\u2026")
+func formatContextUsage(contextUsage smartZoneContextUsage) string {
+	if !contextUsage.available() {
+		return MutedStyle.Render(" context: calculating\u2026")
 	}
-	pctStr := fmt.Sprintf(" context window: %d%%", contextPct)
-	switch {
-	case contextPct >= 80:
-		return ErrorStyle.Render(pctStr)
-	case contextPct >= 60:
-		return WarningStyle.Render(pctStr)
-	default:
-		return SuccessStyle.Render(pctStr)
-	}
+	return smartZoneContextUsageStyle(contextUsage).Render(" " + formatSmartZoneContextUsage(contextUsage))
 }
 
 func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
@@ -619,9 +611,9 @@ func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
 			}
 		}
 
-		// Context usage percentage (active phase only, full-screen view)
+		// Smart Zone context usage (active phase only, full-screen view)
 		if current && isRunningStatus(f.Status) {
-			timing += formatContextUsage(m.contextPct)
+			timing += formatContextUsage(m.contextUsage)
 		}
 
 		nameStr := p.name
@@ -678,7 +670,7 @@ func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
 					cycleTiming += MutedStyle.Render(" " + formatCost(g.totalCost))
 				}
 				if g.active {
-					cycleTiming += formatContextUsage(m.contextPct)
+					cycleTiming += formatContextUsage(m.contextUsage)
 				}
 				// Post-publish cycles (rebase/tweak/refactor/review-comments) keep
 				// the feature at StatusPublished/StatusCodeReady while the cycle
@@ -930,9 +922,9 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 			}
 		}
 
-		// Context usage percentage (active phase only)
+		// Smart Zone context usage (active phase only)
 		if current && isRunningStatus(f.Status) {
-			timing += formatContextUsage(m.contextPct)
+			timing += formatContextUsage(m.contextUsage)
 		}
 
 		// KB stale warning (shown when phase is pending or running). When the
@@ -982,7 +974,7 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 					cycleTiming += MutedStyle.Render(" " + formatCost(g.totalCost))
 				}
 				if g.active {
-					cycleTiming += formatContextUsage(m.contextPct)
+					cycleTiming += formatContextUsage(m.contextUsage)
 				}
 				// Post-publish cycles (rebase/tweak/refactor/review-comments) keep
 				// the feature at StatusPublished/StatusCodeReady while the cycle

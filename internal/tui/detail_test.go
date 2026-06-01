@@ -658,7 +658,7 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	m := NewDetailModel(f, "")
 	const sentinelSpinner = "##SPIN##"
 	m.spinnerView = sentinelSpinner
-	m.contextPct = 42
+	m.contextUsage = smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}
 	view := m.ViewCompact(80)
 
 	// phaseTimingKeys collapses multiple cycles of the same type into a single
@@ -686,8 +686,8 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	if !strings.Contains(rebaseLine, sentinelSpinner) {
 		t.Errorf("expected in-flight rebase row to render the live spinner; got: %q", rebaseLine)
 	}
-	if !strings.Contains(rebaseLine, "42%") {
-		t.Errorf("expected in-flight rebase row to render context percentage; got: %q", rebaseLine)
+	if !strings.Contains(rebaseLine, "42K / 100K (42%)") {
+		t.Errorf("expected in-flight rebase row to render Smart Zone context; got: %q", rebaseLine)
 	}
 	if !strings.Contains(view, "Tweak #1") {
 		t.Error("expected completed Tweak #1 sub-item in view")
@@ -846,21 +846,22 @@ func TestDetailViewTerminalFinalReviewFailureOverridesCodeReadyProjection(t *tes
 	}
 }
 
-func TestDetailViewContextPercentage(t *testing.T) {
+func TestDetailViewSmartZoneContext(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name       string
-		contextPct int
-		status     feature.Status
-		wantStr    string
-		wantAbsent string
+		name         string
+		contextUsage smartZoneContextUsage
+		status       feature.Status
+		wantStr      string
+		wantAbsent   string
 	}{
-		{"no data shows calculating", -1, feature.StatusImplementing, "calculating", ""},
-		{"green 42%", 42, feature.StatusImplementing, "42%", "calculating"},
-		{"yellow 70%", 70, feature.StatusImplementing, "70%", "calculating"},
-		{"red 85%", 85, feature.StatusImplementing, "85%", "calculating"},
-		{"not shown for completed", 42, feature.StatusCodeReady, "", "42%"},
-		{"calculating not shown for completed", -1, feature.StatusCodeReady, "", "calculating"},
+		{"no data shows calculating", emptySmartZoneContextUsage(), feature.StatusImplementing, "calculating", ""},
+		{"green below 75", smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}, feature.StatusImplementing, "42K / 100K (42%)", "calculating"},
+		{"yellow starts at 75", smartZoneContextUsage{fillTokens: 75_000, thresholdTokens: 100_000, pct: 75}, feature.StatusImplementing, "75K / 100K (75%)", "calculating"},
+		{"red starts at 90", smartZoneContextUsage{fillTokens: 90_000, thresholdTokens: 100_000, pct: 90}, feature.StatusImplementing, "90K / 100K (90%)", "calculating"},
+		{"red over threshold uncapped", smartZoneContextUsage{fillTokens: 125_000, thresholdTokens: 100_000, pct: 125}, feature.StatusImplementing, "125K / 100K (125%)", "calculating"},
+		{"not shown for completed", smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}, feature.StatusCodeReady, "", "42K / 100K (42%)"},
+		{"calculating not shown for completed", emptySmartZoneContextUsage(), feature.StatusCodeReady, "", "calculating"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -873,7 +874,7 @@ func TestDetailViewContextPercentage(t *testing.T) {
 				Models:           config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 			}
 			m := NewDetailModel(f, "")
-			m.contextPct = tt.contextPct
+			m.contextUsage = tt.contextUsage
 			view := m.View()
 			if tt.wantStr != "" && !strings.Contains(view, tt.wantStr) {
 				t.Errorf("expected %q in view, not found", tt.wantStr)
@@ -885,7 +886,7 @@ func TestDetailViewContextPercentage(t *testing.T) {
 	}
 }
 
-func TestDetailViewContextPctInCompact(t *testing.T) {
+func TestDetailViewSmartZoneContextInCompact(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		ID:               "feat-compact",
@@ -896,10 +897,10 @@ func TestDetailViewContextPctInCompact(t *testing.T) {
 		Models:           config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
-	m.contextPct = 42
+	m.contextUsage = smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}
 	compact := m.ViewCompact(80)
-	if !strings.Contains(compact, "42%") {
-		t.Error("context percentage should appear in compact view for active implementing feature")
+	if !strings.Contains(compact, "42K / 100K (42%)") {
+		t.Error("Smart Zone context should appear in compact view for active implementing feature")
 	}
 }
 

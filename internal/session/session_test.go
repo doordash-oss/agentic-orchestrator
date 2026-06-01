@@ -1252,6 +1252,41 @@ func TestContextPercentage(t *testing.T) {
 	}
 }
 
+func TestContextFillTokens(t *testing.T) {
+	tests := []struct {
+		name  string
+		usage *llm.Usage
+		want  int
+	}{
+		{"no usage data", nil, -1},
+		{"prefers provider total tokens", &llm.Usage{
+			ContextTotalTokens:       87_000,
+			InputTokens:              999_999,
+			CacheCreationInputTokens: 999_999,
+			CacheReadInputTokens:     999_999,
+		}, 87_000},
+		{"falls back to no-baseline bucket sum", &llm.Usage{
+			InputTokens:              10_000,
+			CacheCreationInputTokens: 25_000,
+			CacheReadInputTokens:     40_000,
+			ContextBaseline:          12_000,
+		}, 75_000},
+		{"zero usage snapshot is data", &llm.Usage{}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Session{
+				latestUsage: tt.usage,
+				done:        make(chan struct{}),
+			}
+			got := s.ContextFillTokens()
+			if got != tt.want {
+				t.Errorf("ContextFillTokens() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSessionCapturesModelAndUsage(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test session state.

@@ -1763,31 +1763,32 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// contextPctForFeature returns the context window usage percentage for the
+// smartZoneContextForFeature returns the Smart Zone context usage for the
 // given feature while its normal lifecycle or a post-publish cycle is running.
 // When multiple sessions are active in parallel (e.g., several plan-validation
-// gates running concurrently), returns the MAX across them so the displayed
-// bar reflects the session closest to its limit — the one most likely to trip
-// the handoff threshold first. Returns -1 if no active session has reported
-// usage yet — callers render "Calculating…" rather than bleeding through a
-// prior phase's last reading.
-func (m AppModel) contextPctForFeature(f *feature.Feature) int {
+// gates running concurrently), returns the session closest to its own threshold
+// so the displayed indicator reflects the one most likely to trip the handoff
+// threshold first. Returns empty usage if no active session has reported usage
+// yet — callers render "Calculating…" rather than bleeding through a prior
+// phase's last reading.
+func (m AppModel) smartZoneContextForFeature(f *feature.Feature) smartZoneContextUsage {
 	if f == nil || m.sessionManager == nil {
-		return -1
+		return emptySmartZoneContextUsage()
 	}
 	if !f.Status.IsRunning() && !featureHasRunningCycle(f) {
-		return -1
+		return emptySmartZoneContextUsage()
 	}
-	maxActivePct := -1
+	best := emptySmartZoneContextUsage()
 	for _, s := range m.sessionManager.FeatureSessions(f.ID) {
 		if !isGenericFeatureSession(s) || !s.IsActive() {
 			continue
 		}
-		if pct := s.ContextPercentage(); pct > maxActivePct {
-			maxActivePct = pct
+		usage := smartZoneContextUsageForSession(s)
+		if usage.closerThan(best) {
+			best = usage
 		}
 	}
-	return maxActivePct
+	return best
 }
 
 func featureHasRunningCycle(f *feature.Feature) bool {
@@ -1868,10 +1869,11 @@ func firstTabWithPendingAskUser(tabs []repoTab) int {
 	return -1
 }
 
-// activeSessionContextPct returns the context window usage percentage for the
-// active session of the currently viewed feature. Returns -1 if unavailable.
-func (m AppModel) activeSessionContextPct() int {
-	return m.contextPctForFeature(m.detail.feature)
+// activeSessionSmartZoneContext returns the Smart Zone context usage for the
+// active session of the currently viewed feature. Returns empty usage if
+// unavailable.
+func (m AppModel) activeSessionSmartZoneContext() smartZoneContextUsage {
+	return m.smartZoneContextForFeature(m.detail.feature)
 }
 
 // kbStaleWarningFor returns the cached KB stale warning for the given feature.
@@ -1934,16 +1936,16 @@ func (m AppModel) View() tea.View {
 	m.dashboard.preview.spinnerView = sv
 	m.dashboard.livePreview.spinnerView = sv
 	m.detail.spinnerView = sv
-	m.detail.contextPct = m.activeSessionContextPct()
+	m.detail.contextUsage = m.activeSessionSmartZoneContext()
 	m.detail.kbStaleWarning = m.kbStaleWarningFor(m.detail.feature)
 	if sel := m.dashboard.SelectedFeature(); sel != nil {
-		contextPct := m.contextPctForFeature(sel)
-		m.dashboard.preview.contextPct = contextPct
+		contextUsage := m.smartZoneContextForFeature(sel)
+		m.dashboard.preview.contextUsage = contextUsage
 		m.dashboard.preview.kbStaleWarning = m.kbStaleWarningFor(sel)
-		m.dashboard.livePreview.contextPct = contextPct
+		m.dashboard.livePreview.contextUsage = contextUsage
 		m.dashboard.livePreview.session = m.livePreviewSessionForFeature(sel)
 	} else {
-		m.dashboard.livePreview.contextPct = -1
+		m.dashboard.livePreview.contextUsage = emptySmartZoneContextUsage()
 		m.dashboard.livePreview.session = nil
 	}
 	m.publish.spinnerView = sv

@@ -62,6 +62,43 @@ func TestSessionImplementsSessionView(t *testing.T) {
 	}
 }
 
+func TestSessionViewContextHandoffThresholdTokens(t *testing.T) {
+	var sv SessionView = &Session{contextHandoffThresholdTokens: 123_456}
+	if got := sv.ContextHandoffThresholdTokens(); got != 123_456 {
+		t.Errorf("ContextHandoffThresholdTokens() = %d, want %d", got, 123_456)
+	}
+
+	var fallback SessionView = NewSession("id", "fid", feature.PhaseImplement)
+	if got := fallback.ContextHandoffThresholdTokens(); got != llm.DefaultSmartZoneThresholdTokens {
+		t.Errorf("ContextHandoffThresholdTokens() fallback = %d, want %d", got, llm.DefaultSmartZoneThresholdTokens)
+	}
+}
+
+func TestStartSessionExposesContextHandoffThresholdWhenDisabled(t *testing.T) {
+	eventCh := make(chan any, 10)
+	m := NewManager(eventCh)
+	sess, err := m.StartSession(
+		"id",
+		"fid",
+		feature.PhaseImplement,
+		[]string{"sh", "-c", `printf '{"type":"result","result":{"type":"result","subtype":"success","session_id":"sid"}}\n'`},
+		t.TempDir(),
+		nil,
+		&SessionOpts{
+			ContextHandoffThresholdTokens: 222_000,
+			ContextHandoffDisabled:        true,
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+	defer sess.Wait()
+
+	if got := sess.ContextHandoffThresholdTokens(); got != 222_000 {
+		t.Errorf("ContextHandoffThresholdTokens() = %d, want %d", got, 222_000)
+	}
+}
+
 func TestSessionAccessors(t *testing.T) {
 	s := NewSession("id", "fid", feature.PhaseImplement)
 

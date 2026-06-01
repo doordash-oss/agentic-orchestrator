@@ -528,8 +528,12 @@ func (s *publishDescriptionSessionHandle) PendingControlRequests() []*llm.Contro
 	}
 	return []*llm.ControlRequestMessage{s.lastControl}
 }
-func (s *publishDescriptionSessionHandle) QALog() []session.QAPair         { return nil }
-func (s *publishDescriptionSessionHandle) LogFilePath() string             { return "" }
+func (s *publishDescriptionSessionHandle) QALog() []session.QAPair { return nil }
+func (s *publishDescriptionSessionHandle) LogFilePath() string     { return "" }
+func (s *publishDescriptionSessionHandle) ContextHandoffThresholdTokens() int {
+	return llm.DefaultSmartZoneThresholdTokens
+}
+func (s *publishDescriptionSessionHandle) ContextFillTokens() int          { return -1 }
 func (s *publishDescriptionSessionHandle) ContextPercentage() int          { return 0 }
 func (s *publishDescriptionSessionHandle) ErrorDetail() string             { return "" }
 func (s *publishDescriptionSessionHandle) ExitCodeDetail() string          { return "" }

@@ -3474,12 +3474,12 @@ func TestStopFeatureCmdClearsPendingHelp(t *testing.T) {
 	}
 }
 
-// TestActiveSessionContextPctClearsWhenNoActiveSession verifies that the
-// context % clears as soon as no active session is producing usage data,
+// TestActiveSessionSmartZoneContextClearsWhenNoActiveSession verifies that the
+// context indicator clears as soon as no active session is producing usage data,
 // rather than bleeding through a prior session's last reading. The renderer
-// surfaces -1 as "calculating…" so a freshly-started phase never inherits
-// the previous phase's final fill.
-func TestActiveSessionContextPctClearsWhenNoActiveSession(t *testing.T) {
+// surfaces empty usage as "calculating…" so a freshly-started phase never
+// inherits the previous phase's final fill.
+func TestActiveSessionSmartZoneContextClearsWhenNoActiveSession(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	f, err := fm.Create("ctx-clears", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -3499,12 +3499,12 @@ func TestActiveSessionContextPctClearsWhenNoActiveSession(t *testing.T) {
 	sm.RegisterTestSession(sess)
 
 	app.detail.feature = f
-	if pct := app.activeSessionContextPct(); pct != -1 {
-		t.Errorf("expected -1 (no active session), got %d", pct)
+	if got := app.activeSessionSmartZoneContext(); got != emptySmartZoneContextUsage() {
+		t.Errorf("activeSessionSmartZoneContext() = %+v, want empty", got)
 	}
 }
 
-func TestContextPctForFeature(t *testing.T) {
+func TestSmartZoneContextForFeature(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	f, err := fm.Create("ctx-for-feat", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -3518,23 +3518,28 @@ func TestContextPctForFeature(t *testing.T) {
 
 	sess := session.NewSession(f.ID+"-research", f.ID, feature.PhaseResearch)
 	sess.SetModel("sonnet")
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 60_000, ContextWindow: 200_000})
+	sess.SetContextHandoffThresholdTokens(100_000)
+	sess.SetLatestUsage(&llm.Usage{
+		ContextTotalTokens:       60_000,
+		InputTokens:              999_999,
+		CacheCreationInputTokens: 999_999,
+		CacheReadInputTokens:     999_999,
+		ContextWindow:            200_000,
+	})
 	sess.SetStatus(session.SessionRunning)
 	sm.RegisterTestSession(sess)
 
-	// contextPctForFeature should return 30 (60_000/200_000*100)
-	pct := app.contextPctForFeature(f)
-	if pct != 30 {
-		t.Errorf("contextPctForFeature = %d, want 30", pct)
+	want := smartZoneContextUsage{fillTokens: 60_000, thresholdTokens: 100_000, pct: 60}
+	if got := app.smartZoneContextForFeature(f); got != want {
+		t.Errorf("smartZoneContextForFeature() = %+v, want %+v", got, want)
 	}
 
-	// nil feature → -1
-	if got := app.contextPctForFeature(nil); got != -1 {
-		t.Errorf("contextPctForFeature(nil) = %d, want -1", got)
+	if got := app.smartZoneContextForFeature(nil); got != emptySmartZoneContextUsage() {
+		t.Errorf("smartZoneContextForFeature(nil) = %+v, want empty", got)
 	}
 }
 
-func TestContextPctForFeature_ReturnsMaxAcrossParallelActiveSessions(t *testing.T) {
+func TestSmartZoneContextForFeature_ReturnsClosestAcrossParallelActiveSessions(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	f, err := fm.Create("ctx-parallel-max", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -3547,31 +3552,34 @@ func TestContextPctForFeature_ReturnsMaxAcrossParallelActiveSessions(t *testing.
 	app.sessionManager = sm
 
 	// Simulates three plan-validation gates running in parallel (Struct,
-	// Ground, Scope). Each has its own independent ContextPercentage; the
+	// Ground, Scope). Each has its own independent threshold proximity; the
 	// dashboard should surface the one closest to its limit, not whichever
 	// happens to have started most recently.
 	cases := []struct {
-		name   string
-		tokens int
+		name      string
+		fill      int
+		threshold int
 	}{
-		{"struct", 40_000}, // 20%
-		{"ground", 90_000}, // 45% — highest
-		{"scope", 60_000},  // 30%
+		{"struct", 90_000, 200_000}, // 45%
+		{"ground", 70_000, 80_000},  // 87% — highest proximity
+		{"scope", 60_000, 100_000},  // 60%
 	}
 	for _, c := range cases {
 		s := session.NewSession(f.ID+"-validator-"+c.name, f.ID, feature.PhasePlan)
 		s.SetModel("sonnet")
-		s.SetLatestUsage(&llm.Usage{InputTokens: c.tokens, ContextWindow: 200_000})
+		s.SetContextHandoffThresholdTokens(c.threshold)
+		s.SetLatestUsage(&llm.Usage{ContextTotalTokens: c.fill, ContextWindow: 200_000})
 		s.SetStatus(session.SessionRunning)
 		sm.RegisterTestSession(s)
 	}
 
-	if pct := app.contextPctForFeature(f); pct != 45 {
-		t.Errorf("contextPctForFeature() = %d, want 45 (max across parallel sessions)", pct)
+	want := smartZoneContextUsage{fillTokens: 70_000, thresholdTokens: 80_000, pct: 87}
+	if got := app.smartZoneContextForFeature(f); got != want {
+		t.Errorf("smartZoneContextForFeature() = %+v, want %+v (closest session triple)", got, want)
 	}
 }
 
-func TestContextPctForFeature_PostPublishCycle(t *testing.T) {
+func TestSmartZoneContextForFeature_PostPublishCycle(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	f, err := fm.Create("ctx-cycle", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -3596,21 +3604,23 @@ func TestContextPctForFeature_PostPublishCycle(t *testing.T) {
 
 	sess := session.NewSession(f.ID+"-rebase-1", f.ID, feature.PhaseImplement)
 	sess.SetModel("sonnet")
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 80_000, ContextWindow: 200_000})
+	sess.SetContextHandoffThresholdTokens(100_000)
+	sess.SetLatestUsage(&llm.Usage{ContextTotalTokens: 80_000, ContextWindow: 200_000})
 	sess.SetStatus(session.SessionRunning)
 	sm.RegisterTestSession(sess)
 
-	if pct := app.contextPctForFeature(f); pct != 40 {
-		t.Errorf("contextPctForFeature() = %d, want 40 for running post-publish cycle", pct)
+	want := smartZoneContextUsage{fillTokens: 80_000, thresholdTokens: 100_000, pct: 80}
+	if got := app.smartZoneContextForFeature(f); got != want {
+		t.Errorf("smartZoneContextForFeature() = %+v, want %+v for running post-publish cycle", got, want)
 	}
 }
 
-// TestContextPctForFeature_NoFallbackToPriorSession verifies that when the
-// active session has no usage data yet, contextPctForFeature returns -1
+// TestSmartZoneContextForFeature_NoFallbackToPriorSession verifies that when the
+// active session has no usage data yet, smartZoneContextForFeature returns empty
 // instead of bleeding through a prior session's reading. The renderer maps
-// -1 to "calculating…" so a freshly-started phase never inherits the
+// empty usage to "calculating…" so a freshly-started phase never inherits the
 // previous phase's final fill (the bug that motivated this design).
-func TestContextPctForFeature_NoFallbackToPriorSession(t *testing.T) {
+func TestSmartZoneContextForFeature_NoFallbackToPriorSession(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	f, err := fm.Create("ctx-no-fallback", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -3633,12 +3643,12 @@ func TestContextPctForFeature_NoFallbackToPriorSession(t *testing.T) {
 	done.SetStatus(session.SessionDone)
 	sm.RegisterTestSession(done)
 
-	if pct := app.contextPctForFeature(f); pct != -1 {
-		t.Errorf("contextPctForFeature() = %d, want -1 (no fallback to prior session)", pct)
+	if got := app.smartZoneContextForFeature(f); got != emptySmartZoneContextUsage() {
+		t.Errorf("smartZoneContextForFeature() = %+v, want empty (no fallback to prior session)", got)
 	}
 }
 
-func TestDashboardPreviewContextPct(t *testing.T) {
+func TestDashboardPreviewSmartZoneContext(t *testing.T) {
 	app, fm := newTestAppModel(t)
 	f, err := fm.Create("ctx-preview", "desc", []string{"test-repo"}, fm.Config.Defaults.Models, "", "", nil)
 	if err != nil {
@@ -3652,23 +3662,28 @@ func TestDashboardPreviewContextPct(t *testing.T) {
 
 	sess := session.NewSession(f.ID+"-research", f.ID, feature.PhaseResearch)
 	sess.SetModel("opus")
+	sess.SetContextHandoffThresholdTokens(100_000)
 	sess.SetLatestUsage(&llm.Usage{InputTokens: 50_000, ContextWindow: 200_000})
 	sess.SetStatus(session.SessionRunning)
 	sm.RegisterTestSession(sess)
 
-	// contextPctForFeature should return 25 (50_000/200_000*100).
-	pct := app.contextPctForFeature(f)
-	if pct != 25 {
-		t.Errorf("contextPctForFeature = %d, want 25", pct)
+	want := smartZoneContextUsage{fillTokens: 50_000, thresholdTokens: 100_000, pct: 50}
+	got := app.smartZoneContextForFeature(f)
+	if got != want {
+		t.Errorf("smartZoneContextForFeature = %+v, want %+v", got, want)
 	}
 
-	// The compact view should render "25%" when contextPct is set on the model.
+	// The compact view should render the token threshold triple when context
+	// usage is set on the model.
 	// This verifies the full rendering path from session usage → compact preview.
 	dm := NewDetailModel(f, "")
-	dm.contextPct = pct
+	dm.contextUsage = got
 	compact := dm.ViewCompact(80)
-	if !strings.Contains(compact, "25%") {
-		t.Errorf("expected 25%% in compact view for running feature (contextPct=%d)", pct)
+	if !strings.Contains(compact, "50K / 100K (50%)") {
+		t.Errorf("expected Smart Zone context in compact view, got:\n%s", compact)
+	}
+	if strings.Contains(compact, "25%") {
+		t.Errorf("raw window percentage should not appear in compact view, got:\n%s", compact)
 	}
 
 	app.dashboard.SetFeatures([]*feature.Feature{f})
@@ -3676,8 +3691,11 @@ func TestDashboardPreviewContextPct(t *testing.T) {
 	app.dashboard.syncPreview()
 	app.dashboard.focusPanel = 1
 	view := stripANSI(app.View().Content)
-	if !strings.Contains(view, "Context") || !strings.Contains(view, "25%") {
-		t.Errorf("expected live preview top box to include context 25%%, got:\n%s", view)
+	if !strings.Contains(view, "Context") || !strings.Contains(view, "50K / 100K (50%)") {
+		t.Errorf("expected live preview top box to include Smart Zone context, got:\n%s", view)
+	}
+	if strings.Contains(view, "25%") {
+		t.Errorf("raw window percentage should not appear in live preview, got:\n%s", view)
 	}
 }
 

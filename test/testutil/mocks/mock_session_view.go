@@ -62,6 +62,8 @@ type MockSessionView struct {
 	MessageLogVal        *session.MessageLog
 	QALogVal             []session.QAPair
 	LogFilePathVal       string
+	ContextFillTokensVal int
+	ContextThresholdVal  int
 	ContextPercentageVal int
 	ErrorDetailVal       string
 	ExitCodeDetailVal    string
@@ -107,15 +109,17 @@ type AskUserResponseCall struct {
 // (running status, initialized channels, empty message log).
 func NewMockSessionView(id, featureID string) *MockSessionView {
 	return &MockSessionView{
-		IDVal:         id,
-		FeatureIDVal:  featureID,
-		StatusVal:     session.SessionRunning,
-		IsActiveVal:   true,
-		StartedAtVal:  time.Now(),
-		MessageLogVal: session.NewMessageLog(),
-		StatusChVal:   make(chan string, 10),
-		AttachChVal:   make(chan llm.SDKMessage, 10),
-		DoneChVal:     make(chan struct{}),
+		IDVal:                id,
+		FeatureIDVal:         featureID,
+		StatusVal:            session.SessionRunning,
+		IsActiveVal:          true,
+		StartedAtVal:         time.Now(),
+		MessageLogVal:        session.NewMessageLog(),
+		ContextFillTokensVal: -1,
+		ContextThresholdVal:  40_000,
+		StatusChVal:          make(chan string, 10),
+		AttachChVal:          make(chan llm.SDKMessage, 10),
+		DoneChVal:            make(chan struct{}),
 	}
 }
 
@@ -169,6 +173,10 @@ func (m *MockSessionView) PendingControlRequests() []*llm.ControlRequestMessage 
 }
 func (m *MockSessionView) QALog() []session.QAPair { return m.QALogVal }
 func (m *MockSessionView) LogFilePath() string     { return m.LogFilePathVal }
+func (m *MockSessionView) ContextHandoffThresholdTokens() int {
+	return m.ContextThresholdVal
+}
+func (m *MockSessionView) ContextFillTokens() int  { return m.ContextFillTokensVal }
 func (m *MockSessionView) ContextPercentage() int  { return m.ContextPercentageVal }
 func (m *MockSessionView) ErrorDetail() string     { return m.ErrorDetailVal }
 func (m *MockSessionView) ExitCodeDetail() string  { return m.ExitCodeDetailVal }

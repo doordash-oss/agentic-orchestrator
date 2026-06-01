@@ -75,24 +75,25 @@ var resultShutdownGrace = 5 * time.Second
 // Session manages a CLI subprocess using the JSON stdin/stdout protocol.
 // Provider-specific wire protocol logic is delegated to the Protocol interface.
 type Session struct {
-	id             string
-	featureID      string
-	phase          feature.Phase
-	process        *exec.Cmd
-	logFile        *os.File
-	status         SessionStatus
-	startedAt      time.Time
-	workDir        string
-	repoName       string            // repo name for multi-repo features (set via SessionOpts)
-	permCacheScope string            // repo scope used by CachingHandler ("" = global)
-	pidDir         string            // directory for PID file management
-	iteration      int               // current iteration (for implementation phase)
-	initialPrompt  string            // the user prompt that started this session (for display in attach view)
-	providerName   string            // "claude" or "codex" (for display/logging)
-	stderrPath     string            // optional: capture stderr to this file
-	kind           ports.SessionKind // informational classification; zero value = KindPhase
-	turnMode       ports.SessionTurnMode
-	label          string // context-specific sub-label (validator domain, helper target, …)
+	id                            string
+	featureID                     string
+	phase                         feature.Phase
+	process                       *exec.Cmd
+	logFile                       *os.File
+	status                        SessionStatus
+	startedAt                     time.Time
+	workDir                       string
+	repoName                      string            // repo name for multi-repo features (set via SessionOpts)
+	permCacheScope                string            // repo scope used by CachingHandler ("" = global)
+	pidDir                        string            // directory for PID file management
+	iteration                     int               // current iteration (for implementation phase)
+	initialPrompt                 string            // the user prompt that started this session (for display in attach view)
+	providerName                  string            // "claude" or "codex" (for display/logging)
+	stderrPath                    string            // optional: capture stderr to this file
+	kind                          ports.SessionKind // informational classification; zero value = KindPhase
+	turnMode                      ports.SessionTurnMode
+	label                         string // context-specific sub-label (validator domain, helper target, …)
+	contextHandoffThresholdTokens int
 
 	// Provider protocol — handles all wire-level communication.
 	// Set before Start() via SessionOpts.Protocol.
@@ -429,6 +430,11 @@ func (s *Session) LastStdoutAt() time.Time {
 
 func (s *Session) SetModel(m string)           { s.model = m }
 func (s *Session) SetProviderName(name string) { s.providerName = name }
+func (s *Session) SetContextHandoffThresholdTokens(tokens int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.contextHandoffThresholdTokens = tokens
+}
 func (s *Session) SetLatestUsage(u *llm.Usage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -497,22 +503,23 @@ func (s *Session) SetAttachDropReporter(r AttachDropReporter) {
 
 func NewSession(id, featureID string, phase feature.Phase) *Session {
 	return &Session{
-		id:                        id,
-		featureID:                 featureID,
-		phase:                     phase,
-		startedAt:                 time.Now(),
-		messageLog:                NewMessageLog(),
-		status:                    SessionRunning,
-		statusCh:                  make(chan string, 1),
-		attachCh:                  make(chan llm.SDKMessage, 100),
-		criticalAttachSendTimeout: criticalAttachSendTimeout,
-		controlCh:                 make(chan llm.SDKMessage, 1024),
-		streamRing:                newStreamRing(streamRingCap),
-		drainerDone:               make(chan struct{}),
-		controlForwarderDone:      make(chan struct{}),
-		closing:                   make(chan struct{}),
-		done:                      make(chan struct{}),
-		resultShutdownGrace:       resultShutdownGrace,
+		id:                            id,
+		featureID:                     featureID,
+		phase:                         phase,
+		startedAt:                     time.Now(),
+		messageLog:                    NewMessageLog(),
+		status:                        SessionRunning,
+		statusCh:                      make(chan string, 1),
+		attachCh:                      make(chan llm.SDKMessage, 100),
+		criticalAttachSendTimeout:     criticalAttachSendTimeout,
+		controlCh:                     make(chan llm.SDKMessage, 1024),
+		streamRing:                    newStreamRing(streamRingCap),
+		drainerDone:                   make(chan struct{}),
+		controlForwarderDone:          make(chan struct{}),
+		closing:                       make(chan struct{}),
+		done:                          make(chan struct{}),
+		resultShutdownGrace:           resultShutdownGrace,
+		contextHandoffThresholdTokens: llm.DefaultSmartZoneThresholdTokens,
 	}
 }
 
@@ -1776,6 +1783,45 @@ func (s *Session) ContextPercentage() int {
 		pct = 100
 	}
 	return pct
+}
+
+// ContextHandoffThresholdTokens returns the resolved Smart Zone threshold for
+// this session. The threshold is resolved before session start and remains
+// available even when Smart Zone handoff is disabled.
+func (s *Session) ContextHandoffThresholdTokens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.contextHandoffThresholdTokens > 0 {
+		return s.contextHandoffThresholdTokens
+	}
+	return llm.DefaultSmartZoneThresholdTokens
+}
+
+// ContextFillTokens returns the live no-baseline context-fill token count used
+// by Smart Zone handoff. Returns -1 before any usage snapshot has arrived.
+func (s *Session) ContextFillTokens() int {
+	s.mu.Lock()
+	var usage *llm.Usage
+	if s.latestUsage != nil {
+		usageCopy := *s.latestUsage
+		usage = &usageCopy
+	}
+	s.mu.Unlock()
+
+	if usage == nil {
+		return -1
+	}
+	return contextFillTokens(usage)
+}
+
+func contextFillTokens(usage *llm.Usage) int {
+	if usage == nil {
+		return -1
+	}
+	if usage.ContextTotalTokens > 0 {
+		return usage.ContextTotalTokens
+	}
+	return usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
 }
 
 // ResetWaitingStatus transitions the session out of a waiting state.

@@ -1308,6 +1308,24 @@ func TestBlockingLoopContextHandoffRoleUsesSkillName(t *testing.T) {
 	}
 }
 
+func TestNormalizeBlockingLoopConfigKeepsEmptyHandoffFilename(t *testing.T) {
+	cfg := normalizeBlockingLoopConfig(BlockingLoopConfig{})
+
+	if cfg.HandoffFilename != "" {
+		t.Fatalf("HandoffFilename = %q, want empty", cfg.HandoffFilename)
+	}
+}
+
+func TestNormalizeBlockingLoopConfigBasenamesHandoffFilename(t *testing.T) {
+	cfg := normalizeBlockingLoopConfig(BlockingLoopConfig{
+		HandoffFilename: filepath.Join("nested", ResearchProgressHandoffFilename),
+	})
+
+	if cfg.HandoffFilename != ResearchProgressHandoffFilename {
+		t.Fatalf("HandoffFilename = %q, want %q", cfg.HandoffFilename, ResearchProgressHandoffFilename)
+	}
+}
+
 func blockingLoopTestConfig(artifactDir string, run func(context.Context, BlockingLoopRunInput) (BlockingLoopRunResult, error)) BlockingLoopConfig {
 	return BlockingLoopConfig{
 		Label:                       "research",

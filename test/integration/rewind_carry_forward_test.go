@@ -148,10 +148,10 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	absDesign := filepath.Join(run1Dir, "design", "design.md")
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Artifacts = map[string]string{
-			"inquire":    absInquire,
-			"research":   absResearch,
-			"design": absDesign,
-			"pr_url":     "https://github.com/o/r/pull/99",
+			"inquire":  absInquire,
+			"research": absResearch,
+			"design":   absDesign,
+			"pr_url":   "https://github.com/o/r/pull/99",
 		}
 		// Advance to implementing state so rewind to Plan is valid.
 		ff.Status = feature.StatusImplementing

@@ -417,7 +417,7 @@ func normalizeBlockingLoopConfig(cfg BlockingLoopConfig) BlockingLoopConfig {
 	if cfg.FeatureID == "" && cfg.Feature != nil {
 		cfg.FeatureID = cfg.Feature.ID
 	}
-	if cfg.HandoffFilename == "" {
+	if cfg.HandoffFilename != "" {
 		cfg.HandoffFilename = filepath.Base(cfg.HandoffFilename)
 	}
 	if cfg.CanonicalSelector == nil {

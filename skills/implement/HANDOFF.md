@@ -8,4 +8,3 @@ You are above the Smart Zone threshold. Wind this iteration down so the next ite
 4. Do not include `## Questions for User`; that section is only for `NEED_USER_INPUT`.
 5. Write `verification-report.yaml` at the runtime path with every result you have actually run. Leave checks you have not run as `not_run`.
 6. Touch the `phase_complete` marker as the very last action, then end the turn.
-

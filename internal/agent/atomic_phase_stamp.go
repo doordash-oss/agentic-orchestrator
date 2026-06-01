@@ -120,11 +120,15 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 			// feature for the harness to surface.
 			f.PendingNeedUserInputPath = in.GatePath
 		case PhaseOutcomeFinalReviewPassed:
-			// No per-repo state mutation on FR pass (feature-level Status
-			// carries the verdict). PR URL writes are mirrored when supplied.
+			// FR pass is feature-level, but stale per-repo errors from an
+			// earlier failed FR attempt must not keep rendering as repo
+			// failures after the feature has advanced.
 			for _, name := range repos {
+				ns := f.RepoStates[name]
+				if ns != nil {
+					ns.LastError = ""
+				}
 				if pr, ok := in.PRURLs[name]; ok && pr != "" {
-					ns := f.RepoStates[name]
 					if ns == nil {
 						ns = &feature.RepoState{}
 						f.RepoStates[name] = ns

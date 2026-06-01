@@ -1133,6 +1133,11 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 			if err := o.TransitionTo(featureID, feature.StatusImplementReady); err != nil {
 				return RestartOutcome{}, err
 			}
+		case feature.PhaseReview, feature.PhaseFinalReview:
+			if err := o.resetFailedFinalReviewForRestart(featureID); err != nil {
+				return RestartOutcome{}, err
+			}
+			phase = feature.PhaseFinalReview
 		case feature.PhasePublish:
 			if err := o.TransitionTo(featureID, feature.StatusCodeReady); err != nil {
 				return RestartOutcome{}, err
@@ -1158,6 +1163,25 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 	}
 
 	return RestartOutcome{Action: RestartDispatchPhase, Phase: phase}, nil
+}
+
+func (o *Orchestrator) resetFailedFinalReviewForRestart(featureID string) error {
+	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		f.Status = feature.StatusReviewPassed
+		f.CurrentPhase = feature.PhaseFinalReview
+		f.LastError = ""
+		f.FailureType = ""
+		f.CurrentPhaseStatus = ""
+		f.ReviewFixing = false
+		f.ReviewingGate = false
+		for _, r := range f.Repos {
+			if st := f.RepoStates[r.Name]; st != nil {
+				st.LastError = ""
+			}
+		}
+		clearPendingFeatureAttention(f)
+		return nil
+	})
 }
 
 func isArtifactReviewSession(s ports.SessionView) bool {

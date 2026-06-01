@@ -485,6 +485,53 @@ func TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches(t *test
 	}
 }
 
+func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-fr",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseFinalReview,
+		FailureType:  feature.FailureProtocolViolation,
+		LastError:    "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
+		Repos:        []feature.FeatureRepo{{Name: "agentic"}},
+		RepoStates: map[string]*feature.RepoState{
+			"agentic": {
+				Touched:   true,
+				LastError: "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
+			},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+	}, orchestrator.Hooks{})
+
+	outcome, err := o.RestartPhase("feat-fr", 10, 2)
+	if err != nil {
+		t.Fatalf("RestartPhase: %v", err)
+	}
+	if outcome.Action != orchestrator.RestartDispatchPhase {
+		t.Fatalf("Action = %v, want RestartDispatchPhase", outcome.Action)
+	}
+	if outcome.Phase != feature.PhaseFinalReview {
+		t.Fatalf("Phase = %v, want PhaseFinalReview", outcome.Phase)
+	}
+	if f.Status != feature.StatusReviewPassed {
+		t.Fatalf("Status = %v, want ReviewPassed so startFinalReview can re-enter", f.Status)
+	}
+	if f.CurrentPhase != feature.PhaseFinalReview {
+		t.Fatalf("CurrentPhase = %v, want PhaseFinalReview", f.CurrentPhase)
+	}
+	if f.LastError != "" || f.FailureType != "" {
+		t.Fatalf("failure fields should be cleared: LastError=%q FailureType=%q", f.LastError, f.FailureType)
+	}
+	if st := f.RepoStates["agentic"]; st == nil || st.LastError != "" {
+		t.Fatalf("RepoStates[agentic] = %+v, want LastError cleared", st)
+	}
+}
+
 // TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList
 // ---------------------------------------------------------------------------
 // For a Published feature with RepoCycles, RestartPhase clears the cycles

@@ -242,8 +242,7 @@ func (s *Store) loadUnlocked(id string) (*Feature, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading active run for feature %s: %w", id, err)
 	}
-	f.run = run
-	f.syncRunToShadows()
+	f.SetRun(run)
 	return &f, nil
 }
 

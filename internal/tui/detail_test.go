@@ -806,6 +806,46 @@ func TestDetailViewFinalReviewShowsSubphaseAndIteration(t *testing.T) {
 	}
 }
 
+func TestDetailViewTerminalFinalReviewFailureOverridesCodeReadyProjection(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-fr-corrupt",
+		Slug:         "fr-corrupt",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		FailureType:  feature.FailureProtocolViolation,
+		LastError:    "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
+		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+	}
+	m := NewDetailModel(f, "")
+	m.width = 100
+	m.height = 40
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "Failed (protocol violation) — press [r] to restart") {
+		t.Fatalf("View() = %q, want failed restart status", view)
+	}
+	frLine := ""
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Final Review") && !strings.Contains(line, "Status") {
+			frLine = line
+			break
+		}
+	}
+	if frLine == "" {
+		t.Fatalf("could not locate Final Review line in view:\n%s", view)
+	}
+	if !strings.Contains(frLine, "failed") {
+		t.Fatalf("Final Review line = %q, want failed", frLine)
+	}
+	if strings.Contains(frLine, "complete") {
+		t.Fatalf("Final Review line = %q, must not render complete", frLine)
+	}
+	if !strings.Contains(view, "[r] Restart") || !strings.Contains(view, "[l] Logs") {
+		t.Fatalf("View() = %q, want restart and logs actions", view)
+	}
+}
+
 func TestDetailViewContextPercentage(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

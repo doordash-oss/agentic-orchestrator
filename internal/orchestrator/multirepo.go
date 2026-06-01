@@ -142,6 +142,10 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 		// the TUI owns routing that into the rebase-resolution cycle.
 		return
 	}
+	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
+		f.Status == feature.StatusFailed && f.HasTerminalFailure() {
+		return
+	}
 	errMsg := fmt.Sprintf("handle phase completion: %v", cause)
 	if markErr := o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg); markErr != nil {
 		o.emitEventBlocking(ports.Event{

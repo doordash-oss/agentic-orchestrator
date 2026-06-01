@@ -592,6 +592,9 @@ func (m *Manager) CompleteImplementation(featureID string) error {
 // MarkCodeReady transitions a feature to CodeReady and sets CurrentPhase to Publish.
 func (m *Manager) MarkCodeReady(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
+		if f.Status == StatusFailed || f.HasTerminalFailure() {
+			return fmt.Errorf("cannot mark code ready for feature %s with terminal failure", featureID)
+		}
 		if err := f.Transition(StatusCodeReady); err != nil {
 			return err
 		}

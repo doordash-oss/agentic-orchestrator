@@ -950,7 +950,18 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
+	lc.MarkFinalReviewReadyFn = func(id string) error {
+		f.Status = feature.StatusFinalReviewing
+		f.CurrentPhase = feature.PhaseFinalReview
+		return nil
+	}
+	var markCodeReadyCalled int
+	lc.MarkCodeReadyFn = func(id string) error {
+		markCodeReadyCalled++
+		f.Status = feature.StatusCodeReady
+		f.CurrentPhase = feature.PhasePublish
+		return nil
+	}
 	var gotFailureType string
 	var gotLastError string
 	lc.MarkFailedFn = func(id, failureType, lastError string) error {
@@ -976,11 +987,15 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		return ch, nil
 	})
 
-	if err := o.HandlePhaseCompletion("feat-fr-protocol", orchestrator.PhaseCompletionInput{
+	err := o.HandlePhaseCompletion("feat-fr-protocol", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion() error = %v", err)
+	})
+	if err == nil {
+		t.Fatal("HandlePhaseCompletion() error = nil, want final review failure")
+	}
+	if !strings.Contains(err.Error(), "final_review_fixer") {
+		t.Fatalf("HandlePhaseCompletion() error = %v, want final_review_fixer context", err)
 	}
 
 	if gotFailureType != feature.FailureProtocolViolation {
@@ -988,5 +1003,14 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 	}
 	if !strings.Contains(gotLastError, "final_review_fixer") {
 		t.Fatalf("last error = %q, want final_review_fixer context", gotLastError)
+	}
+	if markCodeReadyCalled != 0 {
+		t.Fatalf("MarkCodeReady called %d times, want 0 after final review failure", markCodeReadyCalled)
+	}
+	if f.Status != feature.StatusFailed {
+		t.Fatalf("Status = %s, want Failed", f.Status)
+	}
+	if f.CurrentPhase != feature.PhaseFinalReview {
+		t.Fatalf("CurrentPhase = %s, want FinalReview", f.CurrentPhase)
 	}
 }

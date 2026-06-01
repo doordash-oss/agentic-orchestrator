@@ -1097,6 +1097,13 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 	if err != nil {
 		return fmt.Errorf("reload after final review: %w", err)
 	}
+	if f.Status == feature.StatusFailed || f.HasTerminalFailure() {
+		errMsg := strings.TrimSpace(f.LastError)
+		if errMsg == "" {
+			errMsg = "final review did not complete successfully"
+		}
+		return fmt.Errorf("final review did not complete successfully: %s", errMsg)
+	}
 
 	if !f.IsPublishable() || !f.Checkpoints.AutoPublish() {
 		if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
@@ -1337,19 +1344,19 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 	if runFn == nil {
 		errMsg := "runMultiRepoFinalReviewFn not configured"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	resultCh, err := runFn(f, o.computeKBInfos(f)...)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	res, ok := <-resultCh
 	if !ok || res == nil {
 		errMsg := "final review returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	switch res.FinalStatus {
 	case "all_passed":
@@ -1401,10 +1408,17 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 			}
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, failureType, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, failureType, errMsg)
 	default:
 		errMsg := fmt.Sprintf("unknown final review FinalStatus %q", res.FinalStatus)
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
+}
+
+func (o *Orchestrator) markFinalReviewFailedWithEvent(featureID, failureType, errMsg string) error {
+	if err := o.markFailedWithEvent(featureID, failureType, errMsg); err != nil {
+		return err
+	}
+	return errors.New(errMsg)
 }

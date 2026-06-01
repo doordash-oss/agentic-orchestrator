@@ -35,6 +35,22 @@ You are read-only on repository worktrees. The only writes allowed for this role
 
 Final Review runs **review first, then fix** in the same iterDir (inverted vs phase implement, where the implementer runs first). So the current iteration's fix artifacts are empty when you run; look one iteration back (`iteration-(N-1)/`) for prior fix output. N=1 has no prior — absent artifacts are expected.
 
+## Verification Report Contract
+
+The iteration-local `verification-report.yaml` is pre-seeded from the final-review testing contract. When its `contract_path` field is non-empty, read that testing contract before updating the report. The report's `results:` rows are contract-backed: each `item_id` must already exist in the bound testing contract.
+
+- Do not rename item IDs or add rows under `results:`.
+- Do not add visual or behavioral rows to the final-review PlanLess testing contract.
+- Put reviewer-authored spot checks and extra verification under `additional_checks:`, not `results:`.
+- Preserve every pre-seeded contract row, updating only its status and evidence.
+- Use YAML block scalars for evidence text that includes command output, file locations, colons, or multiple sentences:
+
+```yaml
+evidence:
+  summary: |-
+    git diff --check main failed with path/to/file.go:11: trailing whitespace.
+```
+
 ## Scope Guidance
 
 - One verdict gates the whole feature — APPROVED ships every repo together (atomic transition to `RepoImplReviewPassed`), CHANGES_REQUESTED keeps every repo at `RepoImplAwaitingFinalReview` for the fix iteration.

@@ -53,19 +53,34 @@ func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint str
 	pruneCmd := exec.Command("git", "-C", repoPath, "worktree", "prune")
 	_ = pruneCmd.Run()
 
+	// A repository with no commits has an unborn HEAD, so git cannot branch a
+	// worktree from it. Surface a clear, actionable error instead of git's
+	// opaque "invalid reference" message (which otherwise leaks from the
+	// existing-branch fallback below).
+	if !hasCommits(repoPath) {
+		return "", fmt.Errorf("repository %q has no commits yet; create an initial commit before starting a feature", repoName)
+	}
+
 	// Try creating with a new branch first
 	cmd := exec.Command("git", "-C", repoPath, "worktree", "add", wtPath, "-b", branch, startPoint)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// Branch may already exist from a previous run; try using it
-		cmd = exec.Command("git", "-C", repoPath, "worktree", "add", wtPath, branch)
-		out, err = cmd.CombinedOutput()
-		if err != nil {
+		// Branch may already exist from a previous run; try using it. If that
+		// also fails, report the original error so the real cause isn't masked.
+		fbCmd := exec.Command("git", "-C", repoPath, "worktree", "add", wtPath, branch)
+		if _, fbErr := fbCmd.CombinedOutput(); fbErr != nil {
 			return "", fmt.Errorf("creating worktree: %s: %w", strings.TrimSpace(string(out)), err)
 		}
 	}
 
 	return wtPath, nil
+}
+
+// hasCommits reports whether the repository has at least one commit (a born
+// HEAD). A freshly initialized repo returns false.
+func hasCommits(repoPath string) bool {
+	cmd := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", "--quiet", "HEAD")
+	return cmd.Run() == nil
 }
 
 // DefaultBranch returns the default branch for a repo by checking the remote

@@ -52,7 +52,7 @@ On first launch, Agentic Orchestrator walks you through a welcome flow to select
 | **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
 | **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
 
-After installing provider CLIs, run `claude --version`, `codex --version`, and `gh auth status` before launching `agentico`.
+After installing provider CLIs, run `claude auth status`, `codex login status`, and `gh auth status` before launching `agentico`.
 
 ## How It Works
 

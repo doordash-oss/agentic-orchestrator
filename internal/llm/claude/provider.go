@@ -16,6 +16,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -156,6 +157,63 @@ func (p *Provider) VersionInfo() (string, error) {
 func (p *Provider) MinVersion() [3]int { return [3]int{2, 1, 81} }
 
 func (p *Provider) EnvVarsToExclude() []string { return []string{"CLAUDECODE"} }
+
+type authStatus struct {
+	LoggedIn     bool   `json:"loggedIn"`
+	AuthMethod   string `json:"authMethod"`
+	APIProvider  string `json:"apiProvider"`
+	Email        string `json:"email"`
+	APIKeySource string `json:"apiKeySource"`
+}
+
+func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
+	runner := p.runner
+	if runner == nil {
+		runner = clirun.DefaultRunner()
+	}
+	out, err := runner(ctx, "claude", []string{"auth", "status", "--json"}, nil)
+
+	var status authStatus
+	if parseErr := json.Unmarshal(out, &status); parseErr == nil {
+		if status.LoggedIn {
+			return llm.ProviderReadiness{
+				Ready:  true,
+				Detail: formatReadyAuthDetail(status),
+			}
+		}
+		return llm.ProviderReadiness{
+			Ready:  false,
+			Detail: "not authenticated",
+			Remedy: "Run 'claude auth login' or set ANTHROPIC_API_KEY",
+		}
+	}
+
+	if err != nil {
+		return llm.ProviderReadiness{
+			Ready:  false,
+			Detail: fmt.Sprintf("could not check authentication: %v", err),
+			Remedy: "Run 'claude auth status' to inspect Claude Code authentication",
+		}
+	}
+	return llm.ProviderReadiness{
+		Ready:  false,
+		Detail: fmt.Sprintf("could not parse 'claude auth status --json' output: %q", strings.TrimSpace(string(out))),
+		Remedy: "Run 'claude auth login'",
+	}
+}
+
+func formatReadyAuthDetail(status authStatus) string {
+	switch {
+	case status.AuthMethod == "api_key" && status.APIKeySource != "":
+		return "authenticated with API key from " + status.APIKeySource
+	case status.Email != "":
+		return "authenticated as " + status.Email
+	case status.AuthMethod != "":
+		return "authenticated with " + status.AuthMethod
+	default:
+		return "authenticated"
+	}
+}
 
 // PhaseDefaults returns Claude's recommended models per phase.
 // SetModelCatalog sets the discovered model catalog.

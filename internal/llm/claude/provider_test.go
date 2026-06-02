@@ -15,7 +15,10 @@
 package claude
 
 import (
+	"context"
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -26,6 +29,68 @@ func TestClaudeProvider_EnvVarsToExclude(t *testing.T) {
 	got := p.EnvVarsToExclude()
 	if len(got) != 1 || got[0] != "CLAUDECODE" {
 		t.Errorf("EnvVarsToExclude() = %v, want [CLAUDECODE]", got)
+	}
+}
+
+func TestClaudeProvider_CheckReadinessAuthenticated(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			assertCommand(t, name, args, "claude", []string{"auth", "status", "--json"})
+			return []byte(`{"loggedIn":true,"authMethod":"claude.ai","email":"user@example.com"}`), nil
+		},
+	}
+
+	status := p.CheckReadiness(context.Background())
+	if !status.Ready {
+		t.Fatalf("CheckReadiness().Ready = false, detail=%q remedy=%q", status.Detail, status.Remedy)
+	}
+	if !strings.Contains(status.Detail, "user@example.com") {
+		t.Fatalf("CheckReadiness().Detail = %q, want authenticated email", status.Detail)
+	}
+}
+
+func TestClaudeProvider_CheckReadinessNotAuthenticated(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte(`{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}`), errors.New("exit status 1")
+		},
+	}
+
+	status := p.CheckReadiness(context.Background())
+	if status.Ready {
+		t.Fatal("CheckReadiness().Ready = true, want false")
+	}
+	if !strings.Contains(status.Detail, "not authenticated") {
+		t.Fatalf("CheckReadiness().Detail = %q, want not authenticated", status.Detail)
+	}
+	if !strings.Contains(status.Remedy, "claude auth login") {
+		t.Fatalf("CheckReadiness().Remedy = %q, want claude auth login", status.Remedy)
+	}
+}
+
+func TestClaudeProvider_CheckReadinessAPIKey(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte(`{"loggedIn":true,"authMethod":"api_key","apiKeySource":"ANTHROPIC_API_KEY"}`), nil
+		},
+	}
+
+	status := p.CheckReadiness(context.Background())
+	if !status.Ready {
+		t.Fatalf("CheckReadiness().Ready = false, detail=%q remedy=%q", status.Detail, status.Remedy)
+	}
+	if !strings.Contains(status.Detail, "ANTHROPIC_API_KEY") {
+		t.Fatalf("CheckReadiness().Detail = %q, want API key source", status.Detail)
+	}
+}
+
+func assertCommand(t *testing.T, gotName string, gotArgs []string, wantName string, wantArgs []string) {
+	t.Helper()
+	if gotName != wantName {
+		t.Fatalf("command name = %q, want %q", gotName, wantName)
+	}
+	if !slices.Equal(gotArgs, wantArgs) {
+		t.Fatalf("command args = %v, want %v", gotArgs, wantArgs)
 	}
 }
 

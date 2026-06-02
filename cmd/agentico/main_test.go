@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -31,10 +32,12 @@ import (
 
 // stubProvider is a minimal LLMProvider for testing checkRequiredProviders.
 type stubProvider struct {
-	name        string
-	models      []string
-	hasCLI      bool
-	installHint string
+	name         string
+	models       []string
+	hasCLI       bool
+	installHint  string
+	readiness    llm.ProviderReadiness
+	hasReadiness bool
 }
 
 func (s *stubProvider) Name() string { return s.name }
@@ -51,6 +54,12 @@ func (s *stubProvider) InstallHint() string                         { return s.i
 func (s *stubProvider) VersionInfo() (string, error)                { return "1.0.0", nil }
 func (s *stubProvider) MinVersion() [3]int                          { return [3]int{0, 0, 0} }
 func (s *stubProvider) EnvVarsToExclude() []string                  { return nil }
+func (s *stubProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	if s.hasReadiness {
+		return s.readiness
+	}
+	return llm.ProviderReadiness{Ready: true}
+}
 
 func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -221,9 +230,15 @@ func TestCheckRequiredProviders_AllDetected(t *testing.T) {
 	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude"})
 	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true, installHint: "install codex"})
 
-	detected, warnings, err := checkRequiredProviders(r)
+	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notices) != 0 {
+		t.Fatalf("expected no startup notices, got %v", notices)
+	}
+	if filtered {
+		t.Fatal("filtered = true, want false")
 	}
 	if len(warnings) != 0 {
 		t.Errorf("expected no warnings, got %v", warnings)
@@ -238,12 +253,21 @@ func TestCheckRequiredProviders_OneDetected(t *testing.T) {
 	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude"})
 	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: false, installHint: "install codex"})
 
-	detected, warnings, err := checkRequiredProviders(r)
+	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+	if !filtered {
+		t.Fatal("filtered = false, want true when a registered provider is unavailable")
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no immediate warnings, got %d: %v", len(warnings), warnings)
+	}
+	if len(notices) != 1 {
+		t.Fatalf("expected 1 startup notice, got %d: %v", len(notices), notices)
+	}
+	if !strings.Contains(notices[0], "Provider codex CLI was not found") || !strings.Contains(notices[0], "Starting with claude only") {
+		t.Fatalf("startup notice = %q, want missing codex/start claude", notices[0])
 	}
 	if len(detected) != 1 {
 		t.Errorf("expected 1 detected provider, got %d", len(detected))
@@ -336,9 +360,89 @@ func TestCheckRequiredProviders_NoneDetected(t *testing.T) {
 	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: false, installHint: "install claude"})
 	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: false, installHint: "install codex"})
 
-	_, _, err := checkRequiredProviders(r)
+	_, _, _, _, err := checkRequiredProviders(context.Background(), r)
 	if err == nil {
 		t.Fatal("expected error when no providers detected")
+	}
+}
+
+func TestCheckRequiredProviders_UnreadyProviderWarnsAndFiltersRegistry(t *testing.T) {
+	r := llm.NewRegistry()
+	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude", hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
+	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true, installHint: "install codex", readiness: llm.ProviderReadiness{
+		Ready:  false,
+		Detail: "not logged in",
+		Remedy: "run 'codex login'",
+	}, hasReadiness: true})
+
+	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !filtered {
+		t.Fatal("filtered = false, want true")
+	}
+	if len(detected) != 1 || detected[0].Name() != "claude" {
+		t.Fatalf("detected = %v, want only claude", providerNames(detected))
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want no immediate warnings", warnings)
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "Provider codex is not configured") || !strings.Contains(notices[0], "codex login") || !strings.Contains(notices[0], "Starting with claude only") {
+		t.Fatalf("notices = %v, want codex startup notice", notices)
+	}
+	if _, _, err := r.ResolveModel("codex:gpt-5.4"); err == nil {
+		t.Fatal("ResolveModel(codex:gpt-5.4) succeeded after codex was filtered")
+	}
+	if got := r.AvailableModels(); !slices.Equal(got, []string{"opus"}) {
+		t.Fatalf("AvailableModels() = %v, want [opus]", got)
+	}
+}
+
+func TestCheckRequiredProviders_NoneReadyReportsProviderSpecificFix(t *testing.T) {
+	r := llm.NewRegistry()
+	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude", readiness: llm.ProviderReadiness{
+		Ready:  false,
+		Detail: "not authenticated",
+		Remedy: "run 'claude auth login'",
+	}, hasReadiness: true})
+	r.Register(&stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: false, installHint: "install codex"})
+
+	_, _, _, filtered, err := checkRequiredProviders(context.Background(), r)
+	if err == nil {
+		t.Fatal("expected error when no providers are ready")
+	}
+	if !filtered {
+		t.Fatal("filtered = false, want true")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"No ready AI coding assistant providers detected",
+		"claude",
+		"not authenticated",
+		"claude auth login",
+		"Missing provider CLIs",
+		"codex",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+func providerNames(providers []llm.LLMProvider) []string {
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		names = append(names, p.Name())
+	}
+	return names
+}
+
+func TestShowProviderStartupNoticesWritesBeforeTUIWithoutForcedDelayInTests(t *testing.T) {
+	var out bytes.Buffer
+	showProviderStartupNotices(&out, []string{"Provider codex is not configured: not logged in. Starting with claude only."}, 0)
+	if got := out.String(); got != "Provider codex is not configured: not logged in. Starting with claude only.\n" {
+		t.Fatalf("startup notice output = %q", got)
 	}
 }
 

@@ -193,23 +193,148 @@ When no explicit paths are passed, an existing ~/.agentic-workflow/
 runtime parent is used in place so legacy installs remain discoverable.`)
 }
 
-// checkRequiredProviders uses the registry to verify provider CLIs are available.
-// Returns (detected providers, warnings, error): errors when none are available.
-func checkRequiredProviders(registry *llm.Registry) ([]llm.LLMProvider, []string, error) {
-	detected := registry.DetectedProviders()
+const providerReadinessTimeout = 5 * time.Second
+const providerReadinessNoticeDelay = 3 * time.Second
+
+type providerReadinessIssue struct {
+	provider llm.LLMProvider
+	status   llm.ProviderReadiness
+}
+
+// checkRequiredProviders uses the registry to verify provider CLIs are
+// available and ready. Returns (ready providers, warnings, startup notices,
+// availabilityFiltered, error): errors when no provider is ready.
+func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.LLMProvider, []string, []string, bool, error) {
 	all := registry.All()
-	if len(detected) == 0 {
-		return nil, nil, fmt.Errorf("%s", agent.FormatNoCLIMessage(all))
-	}
 	var warnings []string
-	if len(detected) < len(all) {
-		for _, p := range all {
-			if !p.DetectCLI() {
-				warnings = append(warnings, fmt.Sprintf("Warning: %s CLI not found. Install with: %s", p.Name(), p.InstallHint()))
-			}
+	var missing []llm.LLMProvider
+	var detected []llm.LLMProvider
+	for _, p := range all {
+		if p.DetectCLI() {
+			detected = append(detected, p)
+			continue
+		}
+		missing = append(missing, p)
+	}
+	if len(detected) == 0 {
+		return nil, nil, nil, true, fmt.Errorf("%s", agent.FormatNoCLIMessage(all))
+	}
+
+	var ready []llm.LLMProvider
+	var unready []providerReadinessIssue
+	for _, p := range detected {
+		status := checkProviderReadiness(ctx, p)
+		if status.Ready {
+			ready = append(ready, p)
+			continue
+		}
+		unready = append(unready, providerReadinessIssue{provider: p, status: status})
+	}
+	if len(ready) == 0 {
+		return nil, nil, nil, true, fmt.Errorf("%s", formatNoReadyProviderMessage(all, unready))
+	}
+	startupNotices := formatProviderStartupNotices(ready, missing, unready)
+	registry.RestrictToProviders(ready)
+	return ready, warnings, startupNotices, len(ready) < len(all), nil
+}
+
+func checkProviderReadiness(ctx context.Context, p llm.LLMProvider) llm.ProviderReadiness {
+	checker, ok := p.(llm.ReadinessChecker)
+	if !ok {
+		return llm.ProviderReadiness{Ready: true}
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, providerReadinessTimeout)
+	defer cancel()
+	status := checker.CheckReadiness(checkCtx)
+	if status.Detail == "" && !status.Ready {
+		status.Detail = "not ready"
+	}
+	return status
+}
+
+func formatReadinessProblem(status llm.ProviderReadiness) string {
+	detail := strings.TrimSpace(status.Detail)
+	if detail == "" {
+		detail = "not ready"
+	}
+	remedy := strings.TrimSpace(status.Remedy)
+	if remedy == "" {
+		return detail
+	}
+	return detail + ". " + remedy + "."
+}
+
+func formatProviderStartupNotices(ready []llm.LLMProvider, missing []llm.LLMProvider, unready []providerReadinessIssue) []string {
+	if len(ready) == 0 || (len(missing) == 0 && len(unready) == 0) {
+		return nil
+	}
+	readyText := formatProviderNameList(ready)
+	var notices []string
+	for _, p := range missing {
+		notices = append(notices, fmt.Sprintf(
+			"Provider %s CLI was not found. Install with: %s. Starting with %s only.",
+			p.Name(),
+			p.InstallHint(),
+			readyText,
+		))
+	}
+	for _, issue := range unready {
+		notices = append(notices, fmt.Sprintf(
+			"Provider %s is not configured: %s Starting with %s only.",
+			issue.provider.Name(),
+			formatReadinessProblem(issue.status),
+			readyText,
+		))
+	}
+	return notices
+}
+
+func formatProviderNameList(providers []llm.LLMProvider) string {
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		names = append(names, p.Name())
+	}
+	return strings.Join(names, ", ")
+}
+
+func showProviderStartupNotices(w io.Writer, notices []string, delay time.Duration) {
+	if len(notices) == 0 {
+		return
+	}
+	for _, notice := range notices {
+		fmt.Fprintln(w, notice)
+	}
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+}
+
+func formatNoReadyProviderMessage(all []llm.LLMProvider, issues []providerReadinessIssue) string {
+	var b strings.Builder
+	b.WriteString("No ready AI coding assistant providers detected.\n\n")
+	b.WriteString("Agentic Orchestrator requires at least one provider CLI to be installed and authenticated.\n\n")
+	if len(issues) > 0 {
+		b.WriteString("Installed provider CLIs that need setup:\n\n")
+		for _, issue := range issues {
+			fmt.Fprintf(&b, "  %-8s %s\n", issue.provider.Name(), formatReadinessProblem(issue.status))
+		}
+		b.WriteString("\n")
+	}
+	var missing []llm.LLMProvider
+	for _, p := range all {
+		if !p.DetectCLI() {
+			missing = append(missing, p)
 		}
 	}
-	return detected, warnings, nil
+	if len(missing) > 0 {
+		b.WriteString("Missing provider CLIs:\n\n")
+		for _, p := range missing {
+			fmt.Fprintf(&b, "  %-8s %s\n", p.Name(), p.InstallHint())
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Fix one provider and run 'agentico' again.")
+	return b.String()
 }
 
 func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) {
@@ -290,7 +415,7 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	}
 
 	// Check provider CLIs after fx initialization (registry is now populated)
-	detected, warnings, err := checkRequiredProviders(registry)
+	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(context.Background(), registry)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -364,9 +489,16 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	// don't persist provider-filtered defaults to the config file.
 	if enabledProviders != nil {
 		remapUnresolvableModels(cfg, registry)
+	} else if availabilityFiltered {
+		remapUnresolvableModels(cfg, registry)
+		if configIsNew && changed {
+			_ = config.Save(configPath, cfg)
+		}
 	} else if changed {
 		_ = config.Save(configPath, cfg)
 	}
+
+	showProviderStartupNotices(os.Stderr, startupNotices, providerReadinessNoticeDelay)
 
 	// Redirect stderr and Go's default logger to a file before the TUI takes
 	// over the terminal. Any write to stderr (from OTEL, gRPC, net/http, etc.)

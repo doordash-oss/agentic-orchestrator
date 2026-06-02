@@ -42,6 +42,19 @@ func DefaultRunner() CommandRunner {
 	}
 }
 
+// CombinedRunner returns a CommandRunner that captures stdout and stderr
+// together. Use it for CLIs that report human-readable status (e.g. login
+// state) on stderr rather than stdout, where DefaultRunner would drop it.
+func CombinedRunner() CommandRunner {
+	return func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, name, args...)
+		if len(env) > 0 {
+			cmd.Env = append(os.Environ(), env...)
+		}
+		return cmd.CombinedOutput()
+	}
+}
+
 var versionRe = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
 
 // ParseVersionOutput extracts a semver string from CLI version output.

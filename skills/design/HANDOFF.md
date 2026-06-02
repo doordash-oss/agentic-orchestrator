@@ -21,12 +21,23 @@ Write the rolling handoff scratch at `design-progress.md` in this iteration dire
 ## Gotchas
 <surprises, dead-ends, in-flight assumptions worth preserving>
 
+## Ledger
+```yaml
+units:
+  - id: data-model
+    status: done
+    decision: "chosen option + the load-bearing interface/contract/section (<=2 sentences)"
+  - id: retry-policy
+    status: pending
+```
+
 ## Handoff State
 CONTINUE
 ```
 
 Rules:
-- Preserve the canonical design markdown and update it in place before the handoff.
-- Use `CONTINUE` when another fresh Design agent should resume.
-- Use `COMPLETE` only when the design is fully done and the canonical markdown is ready for validation.
+- Preserve the persistent design markdown and update it in place before the handoff.
+- Update the `## Ledger`: flip every decision you settled to `done` and fill its `decision` field (chosen option + load-bearing interface/contract/section, ≤2 sentences). Keep slug ids stable.
+- Use `CONTINUE` when any unit is still `pending`. Use `COMPLETE` only when every unit is `done` (the harness also auto-completes on zero pending).
+- The next iteration receives your decision summaries, not the full design prose — keep them precise. Do not re-include resolved design areas verbatim.
 - Touch `phase_complete` last.

@@ -138,6 +138,9 @@ func assertPolicyFreeGrillMePrompt(t *testing.T, prompt string) {
 	if !strings.Contains(prompt, "## Ambiguity Resolution [grill-me]") {
 		t.Fatalf("prompt missing [grill-me] header:\n%s", prompt)
 	}
+	if !strings.Contains(prompt, "follow the question-formatting rules in the system prompt") {
+		t.Fatalf("prompt missing system prompt question-formatting rule reference:\n%s", prompt)
+	}
 	if strings.Contains(prompt, "[grill-me]:") {
 		t.Errorf("prompt contains bracketed-tag with stray colon `[grill-me]:`")
 	}

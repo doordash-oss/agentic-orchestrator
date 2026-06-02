@@ -414,6 +414,7 @@ func TestResearchHandoffAssetMatchesResearchProgressContract(t *testing.T) {
 		"## Remaining Areas",
 		"## Where I Stopped",
 		"## Gotchas",
+		"## Ledger",
 		"## Handoff State",
 		"CONTINUE",
 		"phase_complete",
@@ -452,6 +453,7 @@ func TestInquireAndDesignHandoffAssetsMatchProgressContracts(t *testing.T) {
 				"## Open Questions",
 				"## Where I Stopped",
 				"## Gotchas",
+				"## Ledger",
 				"## Handoff State",
 			},
 			parse: ParseInquireProgressHandoffMd,
@@ -464,6 +466,7 @@ func TestInquireAndDesignHandoffAssetsMatchProgressContracts(t *testing.T) {
 				"## Open Design Areas",
 				"## Where I Stopped",
 				"## Gotchas",
+				"## Ledger",
 				"## Handoff State",
 			},
 			parse: ParseDesignProgressHandoffMd,
@@ -500,8 +503,8 @@ func TestInquireAndDesignHandoffAssetsMatchProgressContracts(t *testing.T) {
 	}
 }
 
-func TestBuildKnowledgeBaseSkillDocumentsParserValidCompleteProgress(t *testing.T) {
-	path := repoRootPath(t, "skills", "build-knowledge-base", "SKILL.md")
+func TestBuildKnowledgeBaseHandoffAssetMatchesProgressContract(t *testing.T) {
+	path := repoRootPath(t, "skills", "build-knowledge-base", "HANDOFF.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
@@ -513,26 +516,28 @@ func TestBuildKnowledgeBaseSkillDocumentsParserValidCompleteProgress(t *testing.
 		"## Remaining Categories",
 		"## Where I Stopped",
 		"## Gotchas",
+		"## Ledger",
 		"## Handoff State",
+		"CONTINUE",
 		"COMPLETE",
 		"phase_complete",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("build-knowledge-base SKILL.md missing %q", want)
+			t.Fatalf("build-knowledge-base HANDOFF.md missing %q", want)
 		}
 	}
 
-	sample := extractMarkdownFenceContaining(t, text, "COMPLETE")
+	sample := extractFirstMarkdownFence(t, text)
 	handoffPath := writeHelperHandoff(t, t.TempDir(), KBProgressHandoffFilename, sample)
 	parsed, err := ParseKBProgressHandoffMd(handoffPath)
 	if err != nil {
 		t.Fatalf("ParseKBProgressHandoffMd() error = %v", err)
 	}
 	if !parsed.OK() {
-		t.Fatalf("build-knowledge-base SKILL.md COMPLETE sample violations = %v", parsed.ProtocolViolations)
+		t.Fatalf("build-knowledge-base HANDOFF.md sample violations = %v", parsed.ProtocolViolations)
 	}
-	if parsed.State != HelperHandoffComplete {
-		t.Fatalf("State = %s, want COMPLETE", parsed.State)
+	if parsed.State != HelperHandoffContinue {
+		t.Fatalf("State = %s, want CONTINUE", parsed.State)
 	}
 }
 
@@ -815,6 +820,21 @@ At verification.
 `, completed, state)
 }
 
+// testLedgerBlock renders a `## Ledger` section consistent with state: a
+// COMPLETE handoff has zero pending units; any other state carries one pending
+// unit so net-pending progress is meaningful. requireDecision (design/plan)
+// adds the required decision field to done units.
+func testLedgerBlock(state string, requireDecision bool) string {
+	doneDecision := ""
+	if requireDecision {
+		doneDecision = "\n    decision: \"chose option A via FooAdapter; load-bearing: ## Tasks\""
+	}
+	if state == "COMPLETE" {
+		return fmt.Sprintf("## Ledger\n```yaml\nunits:\n  - id: u-001\n    status: done%s\n```", doneDecision)
+	}
+	return fmt.Sprintf("## Ledger\n```yaml\nunits:\n  - id: u-001\n    status: done%s\n  - id: u-002\n    status: pending\n```", doneDecision)
+}
+
 func validResearchProgressHandoff(state, completed string) string {
 	return fmt.Sprintf(`# Research Progress
 
@@ -830,9 +850,11 @@ Continue with the next research question.
 ## Gotchas
 - no blockers
 
+%s
+
 ## Handoff State
 %s
-`, completed, state)
+`, completed, testLedgerBlock(state, false), state)
 }
 
 func validInquireProgressHandoff(state, clarified string) string {
@@ -850,9 +872,11 @@ Continue with the next requirement.
 ## Gotchas
 - no blockers
 
+%s
+
 ## Handoff State
 %s
-`, clarified, state)
+`, clarified, testLedgerBlock(state, false), state)
 }
 
 func validDesignProgressHandoff(state, decisions string) string {
@@ -870,9 +894,11 @@ Continue with the next design area.
 ## Gotchas
 - no blockers
 
+%s
+
 ## Handoff State
 %s
-`, decisions, state)
+`, decisions, testLedgerBlock(state, true), state)
 }
 
 func validKBProgressHandoff(state, completed string) string {
@@ -890,9 +916,11 @@ Continue with the next category.
 ## Gotchas
 - no blockers
 
+%s
+
 ## Handoff State
 %s
-`, completed, state)
+`, completed, testLedgerBlock(state, false), state)
 }
 
 func writeHelperHandoff(t testing.TB, dir, name, body string) string {
@@ -907,38 +935,62 @@ func writeHelperHandoff(t testing.TB, dir, name, body string) string {
 	return path
 }
 
+// markdownFenceAt extracts the body of the ```markdown fence opening at or after
+// offset, returning the body and the index just past the fence's closing ```.
+// It is nest-aware: an inner fence opened with a language tag (e.g. ```yaml, as
+// the `## Ledger` block uses) is balanced against its bare ``` close, so the
+// markdown block terminates only on the bare ``` that is not closing an inner
+// fence. ok is false when no opening fence is found.
+func markdownFenceAt(body string, offset int) (fence string, nextOffset int, ok bool) {
+	idx := strings.Index(body[offset:], "```markdown\n")
+	if idx < 0 {
+		return "", 0, false
+	}
+	start := offset + idx + len("```markdown\n")
+	lines := strings.Split(body[start:], "\n")
+	var out []string
+	consumed := start
+	innerOpen := false
+	for _, line := range lines {
+		trimmed := strings.TrimRight(line, " \t")
+		if strings.HasPrefix(trimmed, "```") {
+			if trimmed == "```" {
+				if innerOpen {
+					innerOpen = false
+				} else {
+					return strings.Join(out, "\n"), consumed + len("```"), true
+				}
+			} else {
+				innerOpen = true
+			}
+		}
+		out = append(out, line)
+		consumed += len(line) + 1
+	}
+	return "", 0, false
+}
+
 func extractFirstMarkdownFence(t testing.TB, body string) string {
 	t.Helper()
-	start := strings.Index(body, "```markdown\n")
-	if start < 0 {
-		t.Fatal("missing markdown fence")
+	fence, _, ok := markdownFenceAt(body, 0)
+	if !ok {
+		t.Fatal("missing or unterminated markdown fence")
 	}
-	start += len("```markdown\n")
-	end := strings.Index(body[start:], "\n```")
-	if end < 0 {
-		t.Fatal("unterminated markdown fence")
-	}
-	return body[start : start+end]
+	return fence
 }
 
 func extractMarkdownFenceContaining(t testing.TB, body, want string) string {
 	t.Helper()
-	remaining := body
+	offset := 0
 	for {
-		start := strings.Index(remaining, "```markdown\n")
-		if start < 0 {
+		fence, next, ok := markdownFenceAt(body, offset)
+		if !ok {
 			t.Fatalf("missing markdown fence containing %q", want)
 		}
-		start += len("```markdown\n")
-		end := strings.Index(remaining[start:], "\n```")
-		if end < 0 {
-			t.Fatal("unterminated markdown fence")
-		}
-		fence := remaining[start : start+end]
 		if strings.Contains(fence, want) {
 			return fence
 		}
-		remaining = remaining[start+end+len("\n```"):]
+		offset = next
 	}
 }
 

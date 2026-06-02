@@ -29,11 +29,12 @@ var researcherRoleSpec = RoleSpec{
 	UserTemplate: "research_from_questions.user",
 	Required:     []feature.Phase{feature.PhaseInquire},
 	OutputRoots: []OutputRootSpec{
-		singleShotPhaseDirOutputRoot("Research phase artifact directory."),
+		artifactDirOutputRoot("Shared Research artifact root. research.md is written here and edited in place across iterations."),
+		singleShotPhaseDirOutputRoot("Active Research iteration directory. research-progress.md, meta.yaml, and phase_complete are written here."),
 	},
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("research markdown artifact"),
+		persistentMarkdownRoleArtifact("research_markdown_artifact", "research markdown artifact", "research.md"),
 		researchProgressHandoffRoleArtifact(),
 		iterationMetaRoleArtifact(),
 	},

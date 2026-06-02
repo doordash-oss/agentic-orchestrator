@@ -28,11 +28,12 @@ var inquirerRoleSpec = RoleSpec{
 	SkillName:    "inquire",
 	UserTemplate: "inquire.user",
 	OutputRoots: []OutputRootSpec{
-		singleShotPhaseDirOutputRoot("Inquire phase artifact directory."),
+		artifactDirOutputRoot("Shared Inquire artifact root. inquire.md is written here and edited in place across iterations."),
+		singleShotPhaseDirOutputRoot("Active Inquire iteration directory. inquire-progress.md, meta.yaml, and phase_complete are written here."),
 	},
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("inquire markdown artifact"),
+		persistentMarkdownRoleArtifact("inquire_markdown_artifact", "inquire markdown artifact", "inquire.md"),
 		inquireProgressHandoffRoleArtifact(),
 		iterationMetaRoleArtifact(),
 	},

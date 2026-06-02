@@ -386,6 +386,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			sessOpts.TurnMode = ports.TurnModeInteractive
 			handoffThresholdTokens = resolvedContextHandoffThresholdTokens(sessOpts)
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 			// Merge iteration-specific fields into session opts
@@ -462,6 +463,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				EnableContextHandoff:          true,
 				ContextHandoffDisabled:        sessOpts.ContextHandoffDisabled,
 				ContextHandoffThresholdTokens: sessOpts.ContextHandoffThresholdTokens,
+				ContinueAfterQATurn:           true,
 				OnContextHandoff: func(snap contextSnapshot) {
 					cfg.Observer.ContextHandoffTriggered(
 						implSessionCtx,
@@ -1179,6 +1181,12 @@ const maxAutoResumeAttempts = 3
 // the completion protocol so a genuinely-finished agent can exit cleanly.
 const autoResumeMessage = "Continue where you left off. If you have already finished the task, write the phase_complete marker file now."
 
+// qaTurnResumeMessage is sent when a Q&A-capable session ends a turn after
+// receiving an AskUserQuestion answer but before writing phase_complete. The
+// answer is already in the provider conversation, so this keeps the same
+// session moving without starting a fresh full prompt.
+const qaTurnResumeMessage = "Continue with the answer just provided. Ask the next genuinely unresolved question, or write the required artifacts and touch phase_complete if this phase is complete."
+
 const (
 	agentStatusSuccess           = "SUCCESS"
 	agentStatusFailed            = "FAILED"
@@ -1229,6 +1237,10 @@ type waitForStatusOptions struct {
 	// ContextHandoffPollHook is a test hook for observing ticker progress
 	// without sleeping. Production callers leave it nil.
 	ContextHandoffPollHook func()
+	// ContinueAfterQATurn keeps Q&A-capable sessions alive when an answered
+	// AskUserQuestion turn returns SUCCESS before phase_complete exists.
+	ContinueAfterQATurn bool
+	QATurnResumeMessage string
 }
 
 type waitForStatusResult struct {
@@ -1380,6 +1392,7 @@ func enableTruncatedTurnAutoResume(sessOpts *ports.SessionOpts) *ports.SessionOp
 
 func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ string, opts waitForStatusOptions) waitForStatusResult {
 	isReady := opts.ReadyCheck
+	qaCountAtLastResume := 0
 
 	// Counts consecutive auto-resumes triggered by CLI truncation. Resets
 	// whenever we observe a non-truncated result, so each fresh stall has
@@ -1423,6 +1436,22 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 		// so CLI-truncated invocations are auto-resumed instead of
 		// escalating to the user.
 		if status == agentStatusSuccess && isReady != nil && !isReady() {
+			if opts.ContinueAfterQATurn {
+				qaCount := len(sess.QALog())
+				if qaCount > qaCountAtLastResume {
+					qaCountAtLastResume = qaCount
+					autoResumeAttempts = 0
+					message := strings.TrimSpace(opts.QATurnResumeMessage)
+					if message == "" {
+						message = qaTurnResumeMessage
+					}
+					if err := sess.SendUserMessage(message); err != nil {
+						_ = sess.Stop()
+						return agentStatusMissingMarker, true
+					}
+					return "", false
+				}
+			}
 			inputs := llm.TerminationInputs{
 				Result:                 sess.Cost(),
 				PhaseCompleteExists:    false, // isReady just returned false

@@ -67,11 +67,17 @@ func ProgressFingerprint(path string) (string, error) {
 	return fmt.Sprintf("%x", h), nil
 }
 
-// ProgressTracker tracks consecutive no-progress iterations.
+// ProgressTracker tracks consecutive no-progress iterations. It supports two
+// progress signals that share the same noProgressCount so the safety rail fires
+// uniformly: the legacy prose fingerprint (CheckWithFingerprint) and the
+// unit-based net-pending count (CheckPendingCount).
 type ProgressTracker struct {
 	lastFingerprint string
 	hasChecked      bool
 	noProgressCount int
+
+	lastPendingCount int
+	hasPendingCount  bool
 }
 
 func NewProgressTracker() *ProgressTracker {
@@ -112,6 +118,38 @@ func (pt *ProgressTracker) CheckWithFingerprint(progressPath string, fingerprint
 	pt.lastFingerprint = fp
 	pt.noProgressCount = 0
 	return true, nil
+}
+
+// CheckPendingCount records the current pending-unit count and returns true iff
+// it strictly decreased vs the previous call (net progress). It shares
+// noProgressCount with CheckWithFingerprint so the existing safety rail applies.
+//
+// The first real call seeds the baseline and returns true. A LedgerAbsent (-1)
+// count — a fresh or legacy handoff with no ledger — never poisons the baseline:
+// it returns true without recording, so the first real ledger count seeds fresh
+// rather than being compared against the sentinel (which would spuriously read
+// as "did not decrease" and trip the stall rail after a legacy resume).
+func (pt *ProgressTracker) CheckPendingCount(pending int) bool {
+	if pending < 0 {
+		// LedgerAbsent: no real accounting; treat as progress and do NOT record a
+		// baseline. The next real count seeds fresh rather than being compared
+		// against the sentinel (which would spuriously read as "did not decrease"
+		// and trip the stall rail after a legacy resume).
+		return true
+	}
+	if !pt.hasPendingCount {
+		pt.lastPendingCount = pending
+		pt.hasPendingCount = true
+		pt.noProgressCount = 0
+		return true
+	}
+	if pending < pt.lastPendingCount {
+		pt.lastPendingCount = pending
+		pt.noProgressCount = 0
+		return true
+	}
+	pt.noProgressCount++
+	return false
 }
 
 // NoProgressCount returns the number of consecutive no-progress iterations.

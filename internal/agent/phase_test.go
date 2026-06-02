@@ -1015,21 +1015,39 @@ func TestBuildResearchBlockingLoopConfig(t *testing.T) {
 	if got := cfg.Spec.MarkerPath(RoleRuntime{IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-02")}); !strings.HasSuffix(got, filepath.Join("iteration-02", PhaseCompleteFile)) {
 		t.Fatalf("research marker path = %q, want iteration-local phase_complete", got)
 	}
-	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
-		Iteration:             2,
-		IterationDir:          filepath.Join(cfg.ArtifactDir, "iteration-02"),
-		SeededCanonicalPath:   filepath.Join(cfg.ArtifactDir, "iteration-02", "research.md"),
-		PreviousCanonicalPath: filepath.Join(cfg.ArtifactDir, "iteration-01", "research.md"),
+	if cfg.ProgressStrategy == nil || cfg.ResumeStrategy == nil {
+		t.Fatalf("research loop ProgressStrategy/ResumeStrategy not wired: %#v", cfg)
+	}
+	wantDeliverable := filepath.Join(cfg.ArtifactDir, "research.md")
+	if cfg.PersistentDeliverablePath != wantDeliverable {
+		t.Fatalf("PersistentDeliverablePath = %q, want %q", cfg.PersistentDeliverablePath, wantDeliverable)
+	}
+	canonical, err := cfg.CanonicalSelector(filepath.Join(cfg.ArtifactDir, "iteration-02"))
+	if err != nil || canonical != wantDeliverable {
+		t.Fatalf("CanonicalSelector = (%q, %v), want %q (fixed persistent path)", canonical, err, wantDeliverable)
+	}
+	firstPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:    1,
+		IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-01"),
 	})
 	if err != nil {
-		t.Fatalf("BuildPrompt() error = %v", err)
+		t.Fatalf("BuildPrompt(iteration=1) error = %v", err)
 	}
-	if !strings.Contains(prompt, questionsPath) {
-		t.Fatalf("research loop prompt missing questions path %q:\n%s", questionsPath, prompt)
+	if !strings.Contains(firstPrompt, questionsPath) {
+		t.Fatalf("research loop prompt missing questions path %q:\n%s", questionsPath, firstPrompt)
 	}
-	if !strings.Contains(prompt, "Read the seeded research draft at:") ||
-		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "research.md")) {
-		t.Fatalf("research loop prompt missing seeded draft instruction:\n%s", prompt)
+	// Per-iteration resume hints are deliberately not woven into the user
+	// prompt; continuation iterations reuse the same base prompt as the first.
+	continuationPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:     2,
+		IterationDir:  filepath.Join(cfg.ArtifactDir, "iteration-02"),
+		ResumeContext: "## Resume Context\n\nPending units: Q-002\n",
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt(iteration=2) error = %v", err)
+	}
+	if firstPrompt != continuationPrompt {
+		t.Fatalf("research continuation prompt diverged from initial prompt:\nfirst:\n%s\n\ncontinuation:\n%s", firstPrompt, continuationPrompt)
 	}
 }
 
@@ -1069,8 +1087,15 @@ func TestBuildInquireBlockingLoopConfig(t *testing.T) {
 	if got := cfg.HandoffFilename; got != InquireProgressHandoffFilename {
 		t.Fatalf("HandoffFilename = %q, want %q", got, InquireProgressHandoffFilename)
 	}
-	if cfg.ParseHandoff == nil || cfg.Fingerprint == nil || cfg.CanonicalSelector == nil {
-		t.Fatalf("inquire loop parser/fingerprint/selector not wired: %#v", cfg)
+	if cfg.ParseHandoff == nil || cfg.CanonicalSelector == nil {
+		t.Fatalf("inquire loop parser/selector not wired: %#v", cfg)
+	}
+	if cfg.ProgressStrategy == nil || cfg.ResumeStrategy == nil {
+		t.Fatalf("inquire loop ProgressStrategy/ResumeStrategy not wired: %#v", cfg)
+	}
+	wantDeliverable := filepath.Join(cfg.ArtifactDir, "inquire.md")
+	if cfg.PersistentDeliverablePath != wantDeliverable {
+		t.Fatalf("PersistentDeliverablePath = %q, want %q", cfg.PersistentDeliverablePath, wantDeliverable)
 	}
 	if got := cfg.TelemetryRole; got != "inquire" {
 		t.Fatalf("TelemetryRole = %q, want inquire", got)
@@ -1081,24 +1106,27 @@ func TestBuildInquireBlockingLoopConfig(t *testing.T) {
 	if got := cfg.Spec.MarkerPath(RoleRuntime{IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-02")}); !strings.HasSuffix(got, filepath.Join("iteration-02", PhaseCompleteFile)) {
 		t.Fatalf("inquire marker path = %q, want iteration-local phase_complete", got)
 	}
-	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
-		Iteration:             2,
-		IterationDir:          filepath.Join(cfg.ArtifactDir, "iteration-02"),
-		SeededCanonicalPath:   filepath.Join(cfg.ArtifactDir, "iteration-02", "questions.md"),
-		SeededQAPath:          filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md"),
-		PreviousCanonicalPath: filepath.Join(cfg.ArtifactDir, "iteration-01", "questions.md"),
+	firstPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:    1,
+		IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-01"),
 	})
 	if err != nil {
-		t.Fatalf("BuildPrompt() error = %v", err)
+		t.Fatalf("BuildPrompt(iteration=1) error = %v", err)
 	}
-	if !strings.Contains(prompt, "Read the seeded inquiry draft at:") ||
-		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "questions.md")) {
-		t.Fatalf("inquire loop prompt missing seeded draft instruction:\n%s", prompt)
+	// Per-iteration resume hints (deliverable pointer, pending ids, seeded QA
+	// path) are deliberately not woven into the user prompt; continuation
+	// iterations reuse the same base prompt as the first.
+	continuationPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:     2,
+		IterationDir:  filepath.Join(cfg.ArtifactDir, "iteration-02"),
+		SeededQAPath:  filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md"),
+		ResumeContext: "## Resume Context\n\nPending units: C-002\n",
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt(iteration=2) error = %v", err)
 	}
-	if !strings.Contains(prompt, "Read the forwarded interview-so-far answers at:") ||
-		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md")) ||
-		!strings.Contains(prompt, "Do not re-ask questions already answered there.") {
-		t.Fatalf("inquire loop prompt missing seeded QA instruction:\n%s", prompt)
+	if firstPrompt != continuationPrompt {
+		t.Fatalf("inquire continuation prompt diverged from initial prompt:\nfirst:\n%s\n\ncontinuation:\n%s", firstPrompt, continuationPrompt)
 	}
 }
 
@@ -1143,8 +1171,15 @@ func TestBuildDesignBlockingLoopConfig(t *testing.T) {
 	if got := cfg.HandoffFilename; got != DesignProgressHandoffFilename {
 		t.Fatalf("HandoffFilename = %q, want %q", got, DesignProgressHandoffFilename)
 	}
-	if cfg.ParseHandoff == nil || cfg.Fingerprint == nil || cfg.CanonicalSelector == nil {
-		t.Fatalf("design loop parser/fingerprint/selector not wired: %#v", cfg)
+	if cfg.ParseHandoff == nil || cfg.CanonicalSelector == nil {
+		t.Fatalf("design loop parser/selector not wired: %#v", cfg)
+	}
+	if cfg.ProgressStrategy == nil || cfg.ResumeStrategy == nil {
+		t.Fatalf("design loop ProgressStrategy/ResumeStrategy not wired: %#v", cfg)
+	}
+	wantDeliverable := filepath.Join(cfg.ArtifactDir, "design.md")
+	if cfg.PersistentDeliverablePath != wantDeliverable {
+		t.Fatalf("PersistentDeliverablePath = %q, want %q", cfg.PersistentDeliverablePath, wantDeliverable)
 	}
 	if got := cfg.TelemetryRole; got != "design" {
 		t.Fatalf("TelemetryRole = %q, want design", got)
@@ -1155,30 +1190,33 @@ func TestBuildDesignBlockingLoopConfig(t *testing.T) {
 	if got := cfg.Spec.MarkerPath(RoleRuntime{IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-02")}); !strings.HasSuffix(got, filepath.Join("iteration-02", PhaseCompleteFile)) {
 		t.Fatalf("design marker path = %q, want iteration-local phase_complete", got)
 	}
-	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
-		Iteration:             2,
-		IterationDir:          filepath.Join(cfg.ArtifactDir, "iteration-02"),
-		SeededCanonicalPath:   filepath.Join(cfg.ArtifactDir, "iteration-02", "design.md"),
-		SeededQAPath:          filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md"),
-		PreviousCanonicalPath: filepath.Join(cfg.ArtifactDir, "iteration-01", "design.md"),
+	firstPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:    1,
+		IterationDir: filepath.Join(cfg.ArtifactDir, "iteration-01"),
 	})
 	if err != nil {
-		t.Fatalf("BuildPrompt() error = %v", err)
+		t.Fatalf("BuildPrompt(iteration=1) error = %v", err)
 	}
-	if !strings.Contains(prompt, researchPath) {
-		t.Fatalf("design loop prompt missing research path %q:\n%s", researchPath, prompt)
+	if !strings.Contains(firstPrompt, researchPath) {
+		t.Fatalf("design loop prompt missing research path %q:\n%s", researchPath, firstPrompt)
 	}
-	if !strings.Contains(prompt, qaPaths[0]) || !strings.Contains(prompt, qaPaths[1]) {
-		t.Fatalf("design loop prompt missing QA paths %v:\n%s", qaPaths, prompt)
+	if !strings.Contains(firstPrompt, qaPaths[0]) || !strings.Contains(firstPrompt, qaPaths[1]) {
+		t.Fatalf("design loop prompt missing QA paths %v:\n%s", qaPaths, firstPrompt)
 	}
-	if !strings.Contains(prompt, "Read the seeded design draft at:") ||
-		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "design.md")) {
-		t.Fatalf("design loop prompt missing seeded draft instruction:\n%s", prompt)
+	// Per-iteration resume hints (deliverable pointer, pending ids, decisions
+	// summary, seeded QA path) are deliberately not woven into the user
+	// prompt; continuation iterations reuse the same base prompt as the first.
+	continuationPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:     2,
+		IterationDir:  filepath.Join(cfg.ArtifactDir, "iteration-02"),
+		SeededQAPath:  filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md"),
+		ResumeContext: "## Resume Context\n\nPending units: retry-policy\n\nDecisions so far (binding; do not relitigate):\n[data-model] chose X\n",
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt(iteration=2) error = %v", err)
 	}
-	if !strings.Contains(prompt, "Read the forwarded design interview answers at:") ||
-		!strings.Contains(prompt, filepath.Join(cfg.ArtifactDir, "iteration-02", "qa-answers.md")) ||
-		!strings.Contains(prompt, "Do not re-ask design questions already answered there.") {
-		t.Fatalf("design loop prompt missing seeded QA instruction:\n%s", prompt)
+	if firstPrompt != continuationPrompt {
+		t.Fatalf("design continuation prompt diverged from initial prompt:\nfirst:\n%s\n\ncontinuation:\n%s", firstPrompt, continuationPrompt)
 	}
 }
 
@@ -1332,22 +1370,38 @@ func TestBuildKnowledgeBaseBlockingLoopConfig(t *testing.T) {
 		t.Fatalf("MarkerPath = %q, want iteration marker", cfg.Spec.MarkerPath(RoleRuntime{IterationDir: iterDir}))
 	}
 
-	prompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
-		Iteration:    2,
+	if cfg.ProgressStrategy == nil || cfg.ResumeStrategy == nil {
+		t.Fatalf("KB loop ProgressStrategy/ResumeStrategy not wired: %#v", cfg)
+	}
+	firstPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:    1,
 		IterationDir: iterDir,
 		HandoffPath:  filepath.Join(iterDir, KBProgressHandoffFilename),
 	})
 	if err != nil {
-		t.Fatalf("BuildPrompt() error = %v", err)
+		t.Fatalf("BuildPrompt(iteration=1) error = %v", err)
+	}
+	// Continuation iterations use the same base KB prompt as the first
+	// iteration; per-iteration resume hints are deliberately not injected
+	// into the user prompt.
+	continuationPrompt, err := cfg.BuildPrompt(BlockingLoopPromptInput{
+		Iteration:     2,
+		IterationDir:  iterDir,
+		HandoffPath:   filepath.Join(iterDir, KBProgressHandoffFilename),
+		ResumeContext: "## Resume Context\n\nPending units: conventions, dependencies, verification\n",
+	})
+	if err != nil {
+		t.Fatalf("BuildPrompt(iteration=2) error = %v", err)
+	}
+	if firstPrompt != continuationPrompt {
+		t.Fatalf("KB continuation prompt diverged from initial prompt:\nfirst:\n%s\n\ncontinuation:\n%s", firstPrompt, continuationPrompt)
 	}
 	for _, want := range []string{
-		"continue the in-flight build in place",
-		"Remaining Categories",
 		KBPath(kbDir),
-		filepath.Join(cfg.ArtifactDir, "iteration-01", KBProgressHandoffFilename),
+		KBRootDir(kbDir),
 	} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("KB continuation prompt missing %q:\n%s", want, prompt)
+		if !strings.Contains(firstPrompt, want) {
+			t.Fatalf("KB prompt missing %q:\n%s", want, firstPrompt)
 		}
 	}
 }

@@ -217,19 +217,19 @@ func TestInquirenessBranches(t *testing.T) {
 		{
 			name:         "grillme_none_uses_policy_free_directive",
 			got:          grillMeNone,
-			wantContains: []string{"Ambiguity Resolution [grill-me]", "Ask the questions one at a time"},
+			wantContains: []string{"Ambiguity Resolution [grill-me]", "Ask the questions one at a time", "follow the question-formatting rules in the system prompt"},
 			wantOmit:     []string{"strictly greater than", "auto-pick", "auto-resolve", "silent", "qa-answers.md", "threshold"},
 		},
 		{
 			name:         "grillme_medium_uses_policy_free_directive",
 			got:          grillMeMedium,
-			wantContains: []string{"Ambiguity Resolution [grill-me]", "Ask the questions one at a time"},
+			wantContains: []string{"Ambiguity Resolution [grill-me]", "Ask the questions one at a time", "follow the question-formatting rules in the system prompt"},
 			wantOmit:     []string{"strictly greater than", "auto-pick", "auto-resolve", "silent", "qa-answers.md", "threshold"},
 		},
 		{
 			name:         "grillme_high_uses_policy_free_directive",
 			got:          grillMeHigh,
-			wantContains: []string{"Ambiguity Resolution [grill-me]", "Ask the questions one at a time"},
+			wantContains: []string{"Ambiguity Resolution [grill-me]", "Ask the questions one at a time", "follow the question-formatting rules in the system prompt"},
 			wantOmit:     []string{"strictly greater than", "auto-pick", "auto-resolve", "silent", "qa-answers.md", "threshold"},
 		},
 		{

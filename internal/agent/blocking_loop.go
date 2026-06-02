@@ -44,9 +44,14 @@ type BlockingLoopPromptInput struct {
 	Iteration             int
 	IterationDir          string
 	HandoffPath           string
-	SeededCanonicalPath   string
+	SeededCanonicalPath   string // "" for persistent-deliverable phases
 	SeededQAPath          string
-	PreviousCanonicalPath string
+	PreviousCanonicalPath string // "" for persistent-deliverable phases
+	// ResumeContext is the output of ResumeStrategy.Build for iterations > 1
+	// (pending unit IDs + decisions-so-far + a deliverable path pointer). It is
+	// "" on iteration 1 and for loops without a ResumeStrategy. Phase BuildPrompt
+	// closures embed it verbatim when non-empty.
+	ResumeContext string
 }
 
 // BlockingLoopRunInput is passed to a test seam or production session runner.
@@ -105,8 +110,28 @@ type BlockingLoopConfig struct {
 	MaxConsecNoProgress         int
 	MaxConsecFailures           int
 	MaxConsecProtocolViolations int
-	AccumulateQALog             bool
-	InPlaceCanonical            bool
+
+	// ProgressStrategy, when non-nil, replaces fingerprint-of-prose progress
+	// detection with net-pending-unit reduction parsed from the handoff's
+	// `## Ledger` block. It also drives auto-completion: a CONTINUE handoff that
+	// reports zero pending units is overridden to COMPLETE (the engine, not the
+	// agent, is the authority on termination). When nil, the engine falls back
+	// to Fingerprint.
+	ProgressStrategy ProgressStrategy
+
+	// ResumeStrategy, when non-nil, builds BlockingLoopPromptInput.ResumeContext
+	// for iterations > 1 — the compact pending-IDs + decisions-so-far + a
+	// deliverable path pointer. When nil, no resume context is injected.
+	ResumeStrategy ResumeStrategy
+
+	// PersistentDeliverablePath, when non-empty, declares the deliverable is a
+	// single file edited in place across iterations (like InPlaceCanonical).
+	// prepareBlockingLoopIteration will NOT copy it forward into each iteration
+	// dir — this is what eliminates the re-read-the-whole-draft context blowup.
+	PersistentDeliverablePath string
+
+	AccumulateQALog  bool
+	InPlaceCanonical bool
 
 	SessionIDBase string
 	TelemetryRole string
@@ -336,9 +361,29 @@ func RunBlockingLoop(ctx context.Context, cfg BlockingLoopConfig, sm ports.Sessi
 
 		consecutiveFailures = 0
 		consecutiveProtocol = 0
+
+		// Auto-complete: when a ProgressStrategy reports zero pending units, the
+		// engine — not the agent — declares the phase done, overriding a CONTINUE
+		// handoff. LedgerAbsent (-1) does NOT trigger this. (A COMPLETE handoff
+		// that still reports pending units is rejected earlier by the ledger
+		// parser as a protocol violation, so it never reaches here.)
+		if cfg.ProgressStrategy != nil && parsed.State == HelperHandoffContinue {
+			pending, perr := cfg.ProgressStrategy.CountPending(handoffPath)
+			if perr != nil {
+				return nil, perr
+			}
+			if pending == 0 {
+				parsed.State = HelperHandoffComplete
+			}
+		}
+
 		madeProgress := true
 		if parsed.State == HelperHandoffContinue {
-			madeProgress, err = tracker.CheckWithFingerprint(handoffPath, cfg.Fingerprint)
+			if cfg.ProgressStrategy != nil {
+				madeProgress, err = checkNetPendingProgress(handoffPath, cfg.ProgressStrategy, tracker)
+			} else {
+				madeProgress, err = tracker.CheckWithFingerprint(handoffPath, cfg.Fingerprint)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -452,8 +497,8 @@ func validateBlockingLoopConfig(cfg BlockingLoopConfig, sm ports.SessionManager)
 	if cfg.ParseHandoff == nil {
 		return fmt.Errorf("blocking loop %s: handoff parser is nil", cfg.Label)
 	}
-	if cfg.Fingerprint == nil {
-		return fmt.Errorf("blocking loop %s: fingerprint function is nil", cfg.Label)
+	if cfg.Fingerprint == nil && cfg.ProgressStrategy == nil {
+		return fmt.Errorf("blocking loop %s: fingerprint function or progress strategy is required", cfg.Label)
 	}
 	if cfg.RunSession == nil {
 		if cfg.BuildSession == nil {
@@ -464,6 +509,18 @@ func validateBlockingLoopConfig(cfg BlockingLoopConfig, sm ports.SessionManager)
 		}
 	}
 	return nil
+}
+
+// checkNetPendingProgress counts pending units in the current handoff via the
+// ProgressStrategy and records them on the tracker. Returns true iff the count
+// strictly decreased vs the prior iteration (net progress). A LedgerAbsent (-1)
+// count never trips the stall rail by itself (see ProgressTracker.CheckPendingCount).
+func checkNetPendingProgress(handoffPath string, ps ProgressStrategy, tracker *ProgressTracker) (bool, error) {
+	pending, err := ps.CountPending(handoffPath)
+	if err != nil {
+		return false, err
+	}
+	return tracker.CheckPendingCount(pending), nil
 }
 
 func recoverBlockingLoopCounters(cfg BlockingLoopConfig, am *ArtifactManager, latest int, tracker *ProgressTracker) (int, int, error) {
@@ -489,7 +546,17 @@ func recoverBlockingLoopCounters(cfg BlockingLoopConfig, am *ArtifactManager, la
 			consecutiveProtocol = 0
 		}
 		if meta.AgentStatus == agentStatusSuccess && meta.ReviewStatus == HelperHandoffContinue.String() {
-			if _, err := tracker.CheckWithFingerprint(filepath.Join(iterDir, cfg.HandoffFilename), cfg.Fingerprint); err != nil {
+			handoffPath := filepath.Join(iterDir, cfg.HandoffFilename)
+			// Replay the SAME progress predicate the live loop used, so the
+			// no-progress counter survives a restart identically (Decision 1
+			// invariant). Net-pending for migrated phases; fingerprint otherwise.
+			if cfg.ProgressStrategy != nil {
+				pending, perr := cfg.ProgressStrategy.CountPending(handoffPath)
+				if perr != nil {
+					return 0, 0, perr
+				}
+				_ = tracker.CheckPendingCount(pending)
+			} else if _, err := tracker.CheckWithFingerprint(handoffPath, cfg.Fingerprint); err != nil {
 				return 0, 0, err
 			}
 		}
@@ -557,7 +624,9 @@ func qaPairKey(pair ports.QAPair) string {
 func prepareBlockingLoopIteration(cfg BlockingLoopConfig, iterDir string, iteration int) (string, string, error) {
 	RemovePhaseComplete(iterDir)
 	_ = os.Remove(filepath.Join(iterDir, cfg.HandoffFilename))
-	if cfg.InPlaceCanonical {
+	if cfg.InPlaceCanonical || cfg.PersistentDeliverablePath != "" {
+		// Persistent-deliverable phases edit a single file in place; never copy
+		// the (potentially huge) prior deliverable into the new iteration dir.
 		return "", "", nil
 	}
 	if err := removeBlockingLoopCanonicalCandidates(iterDir); err != nil {
@@ -644,9 +713,43 @@ func validateBlockingLoopCanonical(path string) string {
 
 func buildBlockingLoopPrompt(cfg BlockingLoopConfig, in BlockingLoopPromptInput) (string, error) {
 	if cfg.BuildPrompt != nil {
+		if in.Iteration > 1 && cfg.ResumeStrategy != nil {
+			// Resume from the most recent PRIOR iteration that left a valid ledger
+			// handoff — not blindly iteration N-1, which may have been a protocol
+			// violation or failure that left no parseable ledger. Skipping straight
+			// to N-1 there would silently drop the pending-unit list.
+			if priorHandoff := latestPriorLedgerHandoff(cfg, in.Iteration-1); priorHandoff != "" {
+				rc, rerr := cfg.ResumeStrategy.Build(in.Iteration, priorHandoff, cfg.PersistentDeliverablePath)
+				if rerr != nil {
+					return "", rerr
+				}
+				in.ResumeContext = rc
+			}
+		}
 		return cfg.BuildPrompt(in)
 	}
 	return cfg.InitialPrompt, nil
+}
+
+// latestPriorLedgerHandoff walks iterations backward from fromIteration to 1 and
+// returns the path of the most recent handoff that parses to a non-nil ledger,
+// or "" when none exists (e.g. only protocol-violation iterations so far).
+func latestPriorLedgerHandoff(cfg BlockingLoopConfig, fromIteration int) string {
+	if cfg.ParseHandoff == nil {
+		return ""
+	}
+	for i := fromIteration; i >= 1; i-- {
+		handoffPath := filepath.Join(blockingLoopIterationDir(cfg.ArtifactDir, i), cfg.HandoffFilename)
+		if _, err := os.Stat(handoffPath); err != nil {
+			continue
+		}
+		parsed, err := cfg.ParseHandoff(handoffPath)
+		if err != nil || parsed == nil || parsed.Ledger == nil {
+			continue
+		}
+		return handoffPath
+	}
+	return ""
 }
 
 func runBlockingLoopIteration(ctx context.Context, cfg BlockingLoopConfig, sm ports.SessionManager, in BlockingLoopRunInput) (BlockingLoopRunResult, error) {

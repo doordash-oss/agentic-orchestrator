@@ -93,6 +93,7 @@ func runPlanningSessionWithContinuations(in planningContinuationInput) (planning
 	handoffPath := filepath.Join(in.AttemptDir, PlanningHandoffFilename)
 	_ = os.Remove(handoffPath)
 	tracker := NewProgressTracker()
+	progress := PlanningLedgerProgressStrategy{}
 	maxNoProgress := cfg.MaxConsecNoProgress
 	if maxNoProgress <= 0 {
 		maxNoProgress = defaultPlanningMaxConsecutiveNoProgress
@@ -103,16 +104,9 @@ func runPlanningSessionWithContinuations(in planningContinuationInput) (planning
 	}
 
 	var allQA []ports.QAPair
-	var nextPrompt string
 	consecutiveHandoffFailures := 0
 	for continuation := 0; ; continuation++ {
 		prompt := in.Prompt
-		if nextPrompt != "" {
-			prompt = nextPrompt
-			nextPrompt = ""
-		} else if continuation > 0 {
-			prompt = buildPlanningContinuationPrompt(handoffPath, in.CanonicalPath)
-		}
 
 		RemovePhaseComplete(in.AttemptDir)
 		cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
@@ -133,6 +127,7 @@ func runPlanningSessionWithContinuations(in planningContinuationInput) (planning
 			return planningContinuationOutcome{}, fmt.Errorf("building planning session (attempt %d): %w", in.Attempt, err)
 		}
 		sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+		sessOpts.TurnMode = ports.TurnModeInteractive
 		WriteDebugPrompts(in.AttemptDir, sessOpts.DebugSystemPrompt, prompt)
 		sessOpts.PermCacheScope = cfg.RepoName
 
@@ -200,6 +195,7 @@ func runPlanningSessionWithContinuations(in planningContinuationInput) (planning
 			ContextHandoffDisabled:        sessOpts.ContextHandoffDisabled,
 			ContextHandoffThresholdTokens: sessOpts.ContextHandoffThresholdTokens,
 			ContextHandoffRole:            in.PlannerSpec.SkillName,
+			ContinueAfterQATurn:           true,
 			OnContextHandoff: func(snap contextSnapshot) {
 				cfg.Observer.ContextHandoffTriggered(
 					planSessionCtx,
@@ -261,10 +257,16 @@ func runPlanningSessionWithContinuations(in planningContinuationInput) (planning
 					QALog:             allQA,
 				}, nil
 			}
-			nextPrompt = buildPlanningHandoffRepairPrompt(handoffPath, in.CanonicalPath, violations)
 			continue
 		}
 		consecutiveHandoffFailures = 0
+		// Auto-complete: a CONTINUE handoff whose ledger reports zero pending
+		// units ends this planning unit (the engine is the authority on done).
+		if parsed.State == PlanningHandoffContinue {
+			if pending, perr := progress.CountPending(handoffPath); perr == nil && pending == 0 {
+				parsed.State = PlanningHandoffComplete
+			}
+		}
 		if parsed.State == PlanningHandoffComplete {
 			return planningContinuationOutcome{
 				AgentStatus: agentStatusSuccess,
@@ -272,7 +274,9 @@ func runPlanningSessionWithContinuations(in planningContinuationInput) (planning
 			}, nil
 		}
 
-		progressMade, err := tracker.CheckWithFingerprint(handoffPath, PlanningHandoffFingerprint)
+		// Progress is net pending-unit reduction parsed from the `## Ledger`,
+		// replacing the prose-fingerprint that never converged.
+		progressMade, err := checkNetPendingProgress(handoffPath, progress, tracker)
 		if err != nil {
 			return planningContinuationOutcome{}, err
 		}
@@ -295,38 +299,3 @@ func additionalDirsOrState(cfg PlanLoopConfig) []string {
 	return addDirs
 }
 
-func buildPlanningContinuationPrompt(handoffPath, canonicalPath string) string {
-	var b strings.Builder
-	b.WriteString("# Planning Smart Zone Continuation\n\n")
-	b.WriteString("A previous planning agent wound down inside this same planning unit. Continue the same role inside the same attempt; do not restart validation, advance the attempt counter, or discard the existing canonical artifact.\n\n")
-	b.WriteString("Read the rolling handoff scratch first:\n")
-	fmt.Fprintf(&b, "- `%s`\n\n", handoffPath)
-	if canonicalPath != "" {
-		b.WriteString("Then read the canonical plan artifact so far and continue editing it in place:\n")
-		fmt.Fprintf(&b, "- `%s`\n\n", canonicalPath)
-	}
-	b.WriteString("Resume from `### Where I stopped`. When you need another Smart Zone continuation, overwrite `planning-handoff.md` with `CONTINUE`; when the canonical plan is ready for validation, overwrite `planning-handoff.md` with `COMPLETE`. Touch `phase_complete` last.")
-	return b.String()
-}
-
-func buildPlanningHandoffRepairPrompt(handoffPath, canonicalPath string, violations []string) string {
-	var b strings.Builder
-	b.WriteString("# Planning Smart Zone Continuation Repair\n\n")
-	b.WriteString("The previous planning handoff did not satisfy the continuation contract. Stay inside the same planning attempt; do not run validation, advance the attempt counter, or discard the canonical artifact.\n\n")
-	b.WriteString("Fix these handoff contract violations:\n")
-	if len(violations) == 0 {
-		b.WriteString("- planning-handoff.md did not satisfy the continuation contract\n")
-	} else {
-		for _, violation := range violations {
-			fmt.Fprintf(&b, "- %s\n", violation)
-		}
-	}
-	b.WriteString("\nRead the current rolling handoff scratch:\n")
-	fmt.Fprintf(&b, "- `%s`\n\n", handoffPath)
-	if canonicalPath != "" {
-		b.WriteString("Then read the canonical plan artifact so far and continue editing it in place:\n")
-		fmt.Fprintf(&b, "- `%s`\n\n", canonicalPath)
-	}
-	b.WriteString("Overwrite `planning-handoff.md` with the required sections and a `CONTINUE` or `COMPLETE` state. Touch `phase_complete` last.")
-	return b.String()
-}

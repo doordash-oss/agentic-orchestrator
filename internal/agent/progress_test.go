@@ -91,3 +91,66 @@ func TestProgressTracker(t *testing.T) {
 		t.Errorf("expected no-progress count reset to 0, got %d", pt.NoProgressCount())
 	}
 }
+
+func TestCheckPendingCount(t *testing.T) {
+	pt := NewProgressTracker()
+
+	// First real call seeds the baseline and counts as progress.
+	if !pt.CheckPendingCount(5) {
+		t.Fatal("first CheckPendingCount(5) = false, want true (baseline seed)")
+	}
+	if pt.NoProgressCount() != 0 {
+		t.Fatalf("noProgressCount = %d after seed, want 0", pt.NoProgressCount())
+	}
+
+	// Strict decrease = progress, resets the counter.
+	if !pt.CheckPendingCount(3) {
+		t.Fatal("CheckPendingCount(3) after 5 = false, want true (decreased)")
+	}
+
+	// No decrease (same) = no progress, increments.
+	if pt.CheckPendingCount(3) {
+		t.Fatal("CheckPendingCount(3) after 3 = true, want false (no decrease)")
+	}
+	if pt.NoProgressCount() != 1 {
+		t.Fatalf("noProgressCount = %d, want 1", pt.NoProgressCount())
+	}
+
+	// Increase = no progress, increments again.
+	if pt.CheckPendingCount(4) {
+		t.Fatal("CheckPendingCount(4) after 3 = true, want false (increased)")
+	}
+	if pt.NoProgressCount() != 2 {
+		t.Fatalf("noProgressCount = %d, want 2", pt.NoProgressCount())
+	}
+
+	// A real decrease resets again.
+	if !pt.CheckPendingCount(2) {
+		t.Fatal("CheckPendingCount(2) = false, want true (decreased)")
+	}
+	if pt.NoProgressCount() != 0 {
+		t.Fatalf("noProgressCount = %d, want 0 after decrease", pt.NoProgressCount())
+	}
+}
+
+func TestCheckPendingCount_LedgerAbsentDoesNotPoisonBaseline(t *testing.T) {
+	pt := NewProgressTracker()
+
+	// A legacy/absent ledger seeds the baseline with LedgerAbsent during
+	// recovery replay; it must count as progress and NOT poison the baseline.
+	if !pt.CheckPendingCount(LedgerAbsent) {
+		t.Fatal("CheckPendingCount(LedgerAbsent) = false, want true")
+	}
+	// The first REAL ledger count must seed fresh (not be compared against the
+	// sentinel, which would spuriously read as 'did not decrease').
+	if !pt.CheckPendingCount(8) {
+		t.Fatal("first real CheckPendingCount(8) after LedgerAbsent = false, want true (fresh seed)")
+	}
+	if pt.NoProgressCount() != 0 {
+		t.Fatalf("noProgressCount = %d, want 0 (no spurious stall after legacy resume)", pt.NoProgressCount())
+	}
+	// And it then behaves normally.
+	if !pt.CheckPendingCount(7) {
+		t.Fatal("CheckPendingCount(7) after 8 = false, want true (decreased)")
+	}
+}

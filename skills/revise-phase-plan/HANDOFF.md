@@ -21,6 +21,16 @@ You are above the Smart Zone threshold. Wind this phase-plan revision attempt do
 ### Where I stopped
 - <the exact next step for the continuation>
 
+## Ledger
+```yaml
+units:
+  - id: <stable-slug>      # one plan section / decision per unit; never renumber
+    status: done           # or "pending"
+    decision: "chosen approach + load-bearing section/contract, <=2 sentences (required when done)"
+  - id: <another-unit>
+    status: pending
+```
+
 ## Handoff State
 CONTINUE
 ```

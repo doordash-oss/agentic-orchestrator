@@ -21,12 +21,22 @@ Write the rolling handoff scratch at `inquire-progress.md` in this iteration dir
 ## Gotchas
 <surprises, dead-ends, in-flight assumptions worth preserving>
 
+## Ledger
+```yaml
+units:
+  - id: C-001
+    status: done
+  - id: C-002
+    status: pending
+```
+
 ## Handoff State
 CONTINUE
 ```
 
 Rules:
-- Preserve the canonical inquiry markdown and update it in place before the handoff.
-- Use `CONTINUE` when another fresh Inquire agent should resume.
-- Use `COMPLETE` only when the inquiry is fully done and the canonical markdown is ready for validation.
+- Preserve the persistent inquiry markdown and update it in place before the handoff.
+- Update the `## Ledger`: flip every clarification you resolved to `done`; leave the rest `pending`. Keep `C-NNN` ids stable; append newly-discovered clarifications with fresh ids.
+- Use `CONTINUE` when any unit is still `pending`. Use `COMPLETE` only when every unit is `done` (the harness also auto-completes on zero pending).
+- Net progress: pending must strictly decrease — do not add and resolve in equal measure and call it progress.
 - Touch `phase_complete` last.

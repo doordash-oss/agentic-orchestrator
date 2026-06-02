@@ -12,38 +12,11 @@ You are a pre-processing agent that transforms feature requests into research qu
 
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
-| `inquire markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
+| `inquire markdown artifact` | `{artifact_dir}/inquire.md` | required | persistent phase deliverable, edited in place across iterations |
 
-## Loop Handoff Contract
+## Resuming
 
-Inquire runs in fresh iterations under the phase artifact directory. The canonical inquiry markdown is the deliverable; `inquire-progress.md` is a harness scratch file that controls whether another fresh Inquire iteration should continue.
-
-When a fresh iteration prompt names a seeded inquiry draft, read that existing markdown before generating or revising questions. Preserve and extend it in place so the canonical inquiry markdown grows across iterations instead of restarting from scratch.
-
-When a fresh iteration prompt names a forwarded `qa-answers.md`, read it before asking anything. Treat it as the interview-so-far and do not re-ask questions already answered there.
-
-On a normal finish, always write `inquire-progress.md` in the same output directory as the canonical inquiry markdown before touching `phase_complete`. Use exactly these sections and set `## Handoff State` to `COMPLETE`:
-
-```markdown
-# Inquire Progress
-
-## Clarified Requirements
-- <requirements clarified in the canonical inquiry markdown>
-
-## Open Questions
-- <requirements still unclear, or none>
-
-## Where I Stopped
-<the precise next requirement/question to continue from, or Complete>
-
-## Gotchas
-<surprises, dead-ends, in-flight assumptions worth preserving, or none>
-
-## Handoff State
-COMPLETE
-```
-
-If the Smart Zone wind-down prompt tells you to stop for continuation, follow `skills/inquire/HANDOFF.md`: flush the canonical inquiry markdown, write `inquire-progress.md` with `## Handoff State` set to `CONTINUE`, touch `phase_complete` last, and end the turn.
+If `{iteration_dir}/inquire-progress.md` exists from a prior iteration, read it first and resume in place from its `## Resume Context` — work only the still-pending `C-NNN` clarifications, never renumber, and do not re-ask resolved ones. If the prompt names a forwarded `qa-answers.md`, read it before asking anything; do not re-ask questions already answered there. See `HANDOFF.md` in this skill directory for the handoff format and ledger discipline (including the `COMPLETE` form used on a normal finish).
 
 ## CRITICAL: This is a high-leverage step
 

@@ -303,11 +303,19 @@ func planningHandoffText(state string) string {
 }
 
 func planningHandoffTextWithContent(state, understanding, drafted string) string {
+	// Planning is design-like: done units carry a decision. CONTINUE keeps one
+	// pending unit so net-pending progress is meaningful; COMPLETE has none.
+	ledger := "## Ledger\n```yaml\nunits:\n  - id: tasks-section\n    status: done\n    decision: \"chose 3-phase task decomposition; load-bearing: ## Tasks\"\n"
+	if state != "COMPLETE" {
+		ledger += "  - id: milestones\n    status: pending\n"
+	}
+	ledger += "```\n"
 	return "# Planning Handoff\n\n" +
 		"## Understanding\n" + understanding + "\n" +
 		"## Plan Progress\n" +
 		"### Drafted\n" + drafted + "\n" +
 		"### Remaining\n- finish verification\n\n" +
 		"### Where I stopped\n- resume at next task\n\n" +
+		ledger + "\n" +
 		"## Handoff State\n" + state + "\n"
 }

@@ -1016,9 +1016,11 @@ Continue with the next KB category in place.
 ## Gotchas
 - no blockers
 
+%s
+
 ## Handoff State
 %s
-`, completed, remaining, state)
+`, completed, remaining, testLedgerBlock(state, false), state)
 }
 
 func evidenceBuildSession(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {

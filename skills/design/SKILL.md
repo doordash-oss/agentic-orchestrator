@@ -12,23 +12,31 @@ You are a design collaborator who turns research findings into a design document
 
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
-| `design markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
+| `design markdown artifact` | `{artifact_dir}/design.md` | required | persistent phase deliverable, edited in place across iterations |
 
 ## Loop Handoff Contract
 
-Design runs in fresh iterations under the phase artifact directory. The canonical design markdown is the deliverable; `design-progress.md` is a harness scratch file that controls whether another fresh Design iteration should continue.
+Design runs in fresh iterations. The **persistent design markdown** named in the prompt (`design.md` at the phase artifact root) is the deliverable, edited in place; `design-progress.md` is a harness scratch file that controls progress and continuation.
 
-When a fresh iteration prompt names a seeded design draft, read that existing markdown before starting new design work. Preserve and extend it in place so the canonical design markdown grows across iterations instead of restarting from scratch.
+### Units and the ledger
 
-When a fresh iteration prompt names a forwarded `qa-answers.md`, read it before asking anything. Treat it as the design interview-so-far and do not re-ask questions already answered there.
+Each open design decision is a **unit** with a stable slug id (e.g. `data-model`, `auth-flow`). Track them in the `## Ledger`. When you mark a decision `done`, you MUST fill its `decision` field with the chosen option plus the load-bearing interface/contract/section name (≤2 sentences). **The next iteration receives those decision summaries instead of the full design prose**, so make each precise and self-contained.
 
-On a normal finish, always write `design-progress.md` in the same output directory as the canonical design markdown before touching `phase_complete`. Use exactly these sections and set `## Handoff State` to `COMPLETE`:
+The harness reads the ledger mechanically (violations trigger a retry):
+1. **Stable ids**, assigned once; a unit may be reopened (`done`→`pending`) if a later decision invalidates it.
+2. **Decision required** on every `done` unit.
+3. **Net progress** — the count of `pending` units must strictly decrease each iteration.
+4. **Auto-complete** — when every unit is `done`, the harness ends the phase even if you wrote CONTINUE.
+
+When a fresh iteration prompt names a forwarded `qa-answers.md`, read it before asking anything; do not re-ask answered questions. On continuation, the `## Resume Context` carries the pending decision ids plus the decisions-so-far summary — you do not re-read the full design prose (read `design.md` on demand only if you must append to existing prose).
+
+On a normal finish, write `design-progress.md` before touching `phase_complete` with `## Handoff State` set to `COMPLETE` (all units done):
 
 ```markdown
 # Design Progress
 
 ## Decisions Made
-- <decisions already captured in the canonical design markdown>
+- <decisions captured in the persistent design markdown>
 
 ## Open Design Areas
 - <areas still to design, or none>
@@ -39,11 +47,19 @@ On a normal finish, always write `design-progress.md` in the same output directo
 ## Gotchas
 <surprises, dead-ends, in-flight assumptions worth preserving, or none>
 
+## Ledger
+```yaml
+units:
+  - id: data-model
+    status: done
+    decision: "chosen option + the load-bearing interface/contract/section (<=2 sentences)"
+```
+
 ## Handoff State
 COMPLETE
 ```
 
-If the Smart Zone wind-down prompt tells you to stop for continuation, follow `skills/design/HANDOFF.md`: flush the canonical design markdown, write `design-progress.md` with `## Handoff State` set to `CONTINUE`, touch `phase_complete` last, and end the turn.
+If the Smart Zone wind-down prompt tells you to stop for continuation, follow `skills/design/HANDOFF.md`: flush the persistent design markdown, write `design-progress.md` with the updated `## Ledger` (each `done` unit carrying its `decision`) and `## Handoff State` set to `CONTINUE`, touch `phase_complete` last, and end the turn.
 
 ## Your Process
 

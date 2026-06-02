@@ -16,6 +16,7 @@ package agent
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -903,6 +904,18 @@ func (c *captureSink) waitForWrite(t *testing.T, timeout time.Duration) {
 	}
 }
 
+func waitForSinkText(t *testing.T, sink *captureSink, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if strings.Contains(sink.contents(), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("stdin = %q, want text %q", sink.contents(), want)
+}
+
 // attachCaptureSink installs a captureSink as the session's stdin. Returns
 // the sink plus the pipe reader so tests can optionally drain it.
 func attachCaptureSink(sess *session.Session) *captureSink {
@@ -1156,6 +1169,46 @@ func TestWaitForStatus_TurnTruncated_AutoResumes(t *testing.T) {
 	case got := <-done:
 		if got != "SUCCESS" {
 			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for final SUCCESS")
+	}
+}
+
+func TestWaitForStatus_QATurnAutoResumesSameSession(t *testing.T) {
+	sess := session.NewSession("test", "feat", feature.PhaseInquire)
+	sink := attachCaptureSink(sess)
+
+	var ready atomic.Bool
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:          func() bool { return ready.Load() },
+			ContinueAfterQATurn: true,
+		}).Status
+	}()
+
+	question := "Which launch mode?"
+	questions := json.RawMessage(`[{"question":"Which launch mode?"}]`)
+	if err := sess.RespondToAskUser("req-1", questions, map[string]string{question: "Browser tab"}, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	sess.SetCost(newEndedAfterTextResult())
+	sess.SendStatus(agentStatusSuccess)
+	waitForSinkText(t, sink, qaTurnResumeMessage, 2*time.Second)
+	select {
+	case got := <-done:
+		t.Fatalf("waitForStatus returned %q; expected same-session continuation", got)
+	default:
+	}
+
+	ready.Store(true)
+	sess.SendStatus(agentStatusSuccess)
+	select {
+	case got := <-done:
+		if got != agentStatusSuccess {
+			t.Fatalf("waitForStatus = %q, want SUCCESS", got)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for final SUCCESS")

@@ -320,8 +320,8 @@ func TestRoadmapPlanningLoopMissingRoadmapAfterPhaseCompleteTripsProtocolViolati
 	if result.FinalStatus != "protocol_violation" {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if result.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2", result.Iterations)
+	if result.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3", result.Iterations)
 	}
 	if !strings.Contains(result.LastError, string(RolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "roadmap markdown") {
 		t.Fatalf("LastError = %q, want roadmap reviser contract violation", result.LastError)
@@ -446,8 +446,8 @@ func TestRoadmapPlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testin
 	if result.FinalStatus != "protocol_violation" {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if result.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2", result.Iterations)
+	if result.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3", result.Iterations)
 	}
 	if !strings.Contains(result.LastError, string(RolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "phase_complete") {
 		t.Fatalf("LastError = %q, want roadmap reviser missing-marker violation", result.LastError)
@@ -590,8 +590,8 @@ func TestPhasePlanningLoopMissingPlanMarkdownTripsProtocolViolation(t *testing.T
 	if result.FinalStatus != "protocol_violation" {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if result.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2", result.Iterations)
+	if result.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3", result.Iterations)
 	}
 	if !strings.Contains(result.LastError, string(RolePlanPhaseReviser)) ||
 		!strings.Contains(result.LastError, "phase plan markdown") {
@@ -742,8 +742,13 @@ func TestPhasePlanningLoopSmartZoneContinuationStaysInSameAttempt(t *testing.T) 
 	if gotStarts != 2 {
 		t.Fatalf("planning sessions started = %d, want 2", gotStarts)
 	}
-	if len(gotPrompts) != 2 || !strings.Contains(gotPrompts[1], PlanningHandoffFilename) {
-		t.Fatalf("continuation prompt missing %s: %#v", PlanningHandoffFilename, gotPrompts)
+	if len(gotPrompts) != 2 {
+		t.Fatalf("planning prompts captured = %d, want 2: %#v", len(gotPrompts), gotPrompts)
+	}
+	// Smart-Zone continuations reuse the same base planning prompt; no
+	// per-continuation framing is injected into the user prompt.
+	if gotPrompts[0] != gotPrompts[1] {
+		t.Fatalf("continuation prompt diverged from initial prompt:\nfirst:\n%s\n\ncontinuation:\n%s", gotPrompts[0], gotPrompts[1])
 	}
 	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
 		t.Fatalf("attempt-02 exists or stat failed unexpectedly: %v", err)
@@ -1051,8 +1056,13 @@ func TestPhasePlanningLoopInvalidPlanningHandoffStaysInContinuation(t *testing.T
 	if gotStarts != 2 {
 		t.Fatalf("planning sessions started = %d, want 2", gotStarts)
 	}
-	if len(gotPrompts) != 2 || !strings.Contains(gotPrompts[1], "planning handoff did not satisfy") {
-		t.Fatalf("repair prompt missing handoff violation context: %#v", gotPrompts)
+	if len(gotPrompts) != 2 {
+		t.Fatalf("planning prompts captured = %d, want 2: %#v", len(gotPrompts), gotPrompts)
+	}
+	// Repair iterations reuse the same base planning prompt; the deterministic
+	// failure counter still guards against repeated handoff violations.
+	if gotPrompts[0] != gotPrompts[1] {
+		t.Fatalf("repair prompt diverged from initial prompt:\nfirst:\n%s\n\nrepair:\n%s", gotPrompts[0], gotPrompts[1])
 	}
 	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
 		t.Fatalf("attempt-02 exists or stat failed unexpectedly: %v", err)
@@ -1068,12 +1078,20 @@ func writePlanningHandoffFiles(attemptDir, state, planText string) error {
 			return err
 		}
 	}
+	// Planning is design-like: done units carry a decision. CONTINUE keeps one
+	// pending unit so net-pending progress is meaningful; COMPLETE has none.
+	ledger := "## Ledger\n```yaml\nunits:\n  - id: tasks-section\n    status: done\n    decision: \"chose 3-phase task decomposition; load-bearing: ## Tasks\"\n"
+	if state != "COMPLETE" {
+		ledger += "  - id: milestones\n    status: pending\n"
+	}
+	ledger += "```\n"
 	body := "# Planning Handoff\n\n" +
 		"## Understanding\n- read the phase context and prior decisions\n\n" +
 		"## Plan Progress\n" +
 		"### Drafted\n- drafted the canonical artifact so far\n\n" +
 		"### Remaining\n- finish validation handoff\n\n" +
 		"### Where I stopped\n- continue with the next acceptance criterion\n\n" +
+		ledger + "\n" +
 		"## Handoff State\n" + state + "\n"
 	if err := os.WriteFile(filepath.Join(attemptDir, PlanningHandoffFilename), []byte(body), 0o644); err != nil {
 		return err
@@ -1270,8 +1288,8 @@ func TestPhasePlanningLoopMissingPhaseCompleteTripsProtocolViolation(t *testing.
 	if result.FinalStatus != "protocol_violation" {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if result.Iterations != 2 {
-		t.Fatalf("Iterations = %d, want 2", result.Iterations)
+	if result.Iterations != 3 {
+		t.Fatalf("Iterations = %d, want 3", result.Iterations)
 	}
 	if !strings.Contains(result.LastError, string(RolePlanPhaseReviser)) || !strings.Contains(result.LastError, "phase_complete") {
 		t.Fatalf("LastError = %q, want phase-plan reviser missing-marker violation", result.LastError)

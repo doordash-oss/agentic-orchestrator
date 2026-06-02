@@ -394,8 +394,14 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			artifactPath := filepath.Join(dir, tt.fileName)
+			artifactDir := t.TempDir()
+			dir := filepath.Join(artifactDir, "iteration-01")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatalf("mkdir iteration dir: %v", err)
+			}
+			// Persistent deliverable lives at the artifact root (parent of the
+			// iteration dir), not inside the iteration dir.
+			artifactPath := filepath.Join(artifactDir, tt.fileName)
 			if err := os.WriteFile(artifactPath, []byte("# artifact\n"), 0o644); err != nil {
 				t.Fatalf("write artifact: %v", err)
 			}
@@ -427,13 +433,19 @@ func TestContractRegistryArtifactPhaseRolesRequireMarkdown(t *testing.T) {
 }
 
 func TestContractRegistryResearchLoopRoleRequiresHandoffAndMeta(t *testing.T) {
-	dir := t.TempDir()
-	artifactPath := filepath.Join(dir, "2026-05-07-research.md")
+	artifactDir := t.TempDir()
+	dir := filepath.Join(artifactDir, "iteration-01")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration dir: %v", err)
+	}
+	// The research deliverable is now a persistent file at the artifact root,
+	// edited in place across iterations (not a dated file in the iteration dir).
+	artifactPath := filepath.Join(artifactDir, "research.md")
 	if err := os.WriteFile(artifactPath, []byte("# research\n"), 0o644); err != nil {
 		t.Fatalf("write research artifact: %v", err)
 	}
 	writeHelperHandoff(t, dir, ResearchProgressHandoffFilename, validResearchProgressHandoff("COMPLETE", "answered all questions"))
-	if err := NewArtifactManager(filepath.Dir(dir)).WriteMeta(dir, IterationMeta{
+	if err := NewArtifactManager(artifactDir).WriteMeta(dir, IterationMeta{
 		Iteration:    1,
 		AgentStatus:  agentStatusSuccess,
 		ReviewStatus: HelperHandoffComplete.String(),
@@ -502,9 +514,15 @@ func TestContractRegistryArtifactPhaseRolesIgnoreExcludedMarkdown(t *testing.T) 
 }
 
 func TestContractRegistryArtifactPhaseRolesSelectNewestMarkdown(t *testing.T) {
-	dir := t.TempDir()
-	oldPath := filepath.Join(dir, "old.md")
-	newPath := filepath.Join(dir, "new.md")
+	artifactDir := t.TempDir()
+	dir := filepath.Join(artifactDir, "iteration-01")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir iteration dir: %v", err)
+	}
+	// Candidate deliverables live at the artifact root; the validator selects
+	// the newest non-excluded markdown there.
+	oldPath := filepath.Join(artifactDir, "old.md")
+	newPath := filepath.Join(artifactDir, "new.md")
 	if err := os.WriteFile(oldPath, []byte("# old\n"), 0o644); err != nil {
 		t.Fatalf("write old artifact: %v", err)
 	}

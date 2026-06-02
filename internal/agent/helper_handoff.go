@@ -72,6 +72,7 @@ func (s HelperHandoffState) String() string {
 type ParsedHelperHandoff struct {
 	State              HelperHandoffState
 	ProgressRegion     string
+	Ledger             *ParsedLedger // nil when the `## Ledger` block is absent
 	ProtocolViolations []string
 }
 
@@ -98,6 +99,7 @@ var (
 		"## Open Questions",
 		"## Where I Stopped",
 		"## Gotchas",
+		"## Ledger",
 		"## Handoff State",
 	}
 	researchProgressHandoffSections = []string{
@@ -105,6 +107,7 @@ var (
 		"## Remaining Areas",
 		"## Where I Stopped",
 		"## Gotchas",
+		"## Ledger",
 		"## Handoff State",
 	}
 	designProgressHandoffSections = []string{
@@ -112,6 +115,7 @@ var (
 		"## Open Design Areas",
 		"## Where I Stopped",
 		"## Gotchas",
+		"## Ledger",
 		"## Handoff State",
 	}
 	kbProgressHandoffSections = []string{
@@ -119,6 +123,7 @@ var (
 		"## Remaining Categories",
 		"## Where I Stopped",
 		"## Gotchas",
+		"## Ledger",
 		"## Handoff State",
 	}
 	validHelperHandoffStateTokens = map[string]HelperHandoffState{
@@ -129,35 +134,41 @@ var (
 
 // ParseReviewProgressHandoffMd parses review-progress.md.
 func ParseReviewProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
-	return parseHelperHandoffMd(path, ReviewProgressHandoffFilename, reviewProgressHandoffSections)
+	return parseHelperHandoffMd(path, ReviewProgressHandoffFilename, reviewProgressHandoffSections, false)
 }
 
 // ParseProducerProgressHandoffMd parses producer-progress.md.
 func ParseProducerProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
-	return parseHelperHandoffMd(path, ProducerProgressHandoffFilename, producerProgressHandoffSections)
+	return parseHelperHandoffMd(path, ProducerProgressHandoffFilename, producerProgressHandoffSections, false)
 }
 
 // ParseInquireProgressHandoffMd parses inquire-progress.md.
 func ParseInquireProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
-	return parseHelperHandoffMd(path, InquireProgressHandoffFilename, inquireProgressHandoffSections)
+	return parseHelperHandoffMd(path, InquireProgressHandoffFilename, inquireProgressHandoffSections, false)
 }
 
 // ParseResearchProgressHandoffMd parses research-progress.md.
 func ParseResearchProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
-	return parseHelperHandoffMd(path, ResearchProgressHandoffFilename, researchProgressHandoffSections)
+	return parseHelperHandoffMd(path, ResearchProgressHandoffFilename, researchProgressHandoffSections, false)
 }
 
-// ParseDesignProgressHandoffMd parses design-progress.md.
+// ParseDesignProgressHandoffMd parses design-progress.md. Design is the one
+// blocking-loop phase whose ledger requires a `decision` on every done unit
+// (the decisions-so-far summary carried forward on resume).
 func ParseDesignProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
-	return parseHelperHandoffMd(path, DesignProgressHandoffFilename, designProgressHandoffSections)
+	return parseHelperHandoffMd(path, DesignProgressHandoffFilename, designProgressHandoffSections, true)
 }
 
 // ParseKBProgressHandoffMd parses kb-progress.md.
 func ParseKBProgressHandoffMd(path string) (*ParsedHelperHandoff, error) {
-	return parseHelperHandoffMd(path, KBProgressHandoffFilename, kbProgressHandoffSections)
+	return parseHelperHandoffMd(path, KBProgressHandoffFilename, kbProgressHandoffSections, false)
 }
 
-func parseHelperHandoffMd(path, filename string, requiredSections []string) (*ParsedHelperHandoff, error) {
+// parseHelperHandoffMd parses a helper Smart Zone handoff. requireDecision is
+// true for phases whose `## Ledger` requires a decision on each done unit
+// (design/plan). When the required-sections list includes `## Ledger`, the block
+// is parsed into parsed.Ledger and its validation feeds ProtocolViolations.
+func parseHelperHandoffMd(path, filename string, requiredSections []string, requireDecision bool) (*ParsedHelperHandoff, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("parse %s: empty path", filename)
 	}
@@ -193,6 +204,8 @@ func parseHelperHandoffMd(path, filename string, requiredSections []string) (*Pa
 		lastPos = pos
 	}
 
+	// Pass 1: the handoff state must be known before the ledger so the
+	// COMPLETE-implies-zero-pending rule can be checked.
 	if stateBody := extractMarkdownSection(body, "## Handoff State"); stateBody != "" {
 		token, _ := splitStateTokenAndNote(stateBody)
 		if state, ok := validHelperHandoffStateTokens[token]; ok {
@@ -207,9 +220,31 @@ func parseHelperHandoffMd(path, filename string, requiredSections []string) (*Pa
 			fmt.Sprintf("%s `## Handoff State` section is empty; emit CONTINUE or COMPLETE", filename))
 	}
 
+	// Pass 2: parse the `## Ledger` block when this phase declares one. The
+	// per-unit validations and the COMPLETE/pending cross-check append to
+	// ProtocolViolations in the existing style. Phases without a `## Ledger`
+	// section (review/producer) skip this entirely.
+	if sectionRequired(requiredSections, "## Ledger") {
+		ledgerBody := extractMarkdownSection(body, "## Ledger")
+		ledger, ledgerViolations := parseLedgerBlock(ledgerBody, requireDecision, parsed.State == HelperHandoffComplete)
+		parsed.Ledger = ledger
+		for _, v := range ledgerViolations {
+			parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf("%s %s", filename, v))
+		}
+		// A present `## Ledger` heading with an empty body parses to (nil, nil).
+		// Treat that as a protocol violation rather than a silent LedgerAbsent —
+		// otherwise the engine never auto-completes or trips the stall rail (the
+		// "no silent fallback" rule). A genuinely-absent heading is already
+		// flagged by the required-section presence check above.
+		if _, present := positions["## Ledger"]; present && ledger == nil && len(ledgerViolations) == 0 {
+			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
+				fmt.Sprintf("%s `## Ledger` section is empty; emit a fenced YAML block with a `units:` list", filename))
+		}
+	}
+
 	var progress []string
 	for _, heading := range requiredSections {
-		if heading == "## Handoff State" {
+		if heading == "## Handoff State" || heading == "## Ledger" {
 			continue
 		}
 		if section := extractMarkdownSection(body, heading); section != "" {
@@ -218,6 +253,16 @@ func parseHelperHandoffMd(path, filename string, requiredSections []string) (*Pa
 	}
 	parsed.ProgressRegion = strings.TrimSpace(strings.Join(progress, "\n\n"))
 	return parsed, nil
+}
+
+// sectionRequired reports whether heading is in the required-sections list.
+func sectionRequired(sections []string, heading string) bool {
+	for _, s := range sections {
+		if s == heading {
+			return true
+		}
+	}
+	return false
 }
 
 // ReviewProgressHandoffFingerprint computes a stable fingerprint over the

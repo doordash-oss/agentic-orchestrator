@@ -404,10 +404,37 @@ func frozenSectionsDigest(planPath string, frozen []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// maxPlanValidationAttempts / DefaultMaxPlanAttempts are retained as the TUI
+// baseline for the "iterate more" affordance. They are NO LONGER a loop
+// terminator: under the unified "no backstops" model the planning loops run
+// until the plan is approved or the across-attempt stall rail (planLoopStalled)
+// fires. See RunRoadmapPlanningLoop / RunPhasePlanningLoop.
 const maxPlanValidationAttempts = 10
 
 // DefaultMaxPlanAttempts is the exported default for TUI use (e.g. extending iterations).
 const DefaultMaxPlanAttempts = maxPlanValidationAttempts
+
+// planLoopStalled reports whether the canonical plan artifact has gone unchanged
+// for axisStallLimit consecutive attempts — the across-attempt stall signal that
+// replaces a fixed iteration cap (Decision: "no backstops"). Progress is defined
+// as the reviser actually changing the plan deliverable in response to feedback;
+// when it stops changing, the loop escalates to human review. The first call
+// seeds the baseline and returns false (never an immediate stall).
+//
+// Known limitation: the tracker is per-process-run and is NOT rebuilt from disk
+// on resume (unlike axisStallState, which loadAxisStallState reconstructs). A
+// system that interrupts and restarts the planning loop on a cadence shorter
+// than axisStallLimit identical-plan attempts could therefore avoid the stall.
+// Accepted under "no backstops": the within-run case (the churn this redesign
+// targets) is bounded; the phase-plan loop additionally has restart-resilient
+// axisStallState; and protocol violations are bounded by consecutiveProtocol.
+func planLoopStalled(tracker *ProgressTracker, planPath string) bool {
+	made, err := tracker.CheckWithFingerprint(planPath, Fingerprint)
+	if err != nil {
+		return false
+	}
+	return !made && tracker.NoProgressCount() >= axisStallLimit
+}
 
 // PlanLoopConfig holds configuration for the planning loop with validation.
 type PlanLoopConfig struct {
@@ -1377,11 +1404,6 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 	}
 	_ = os.MkdirAll(artifactDir, 0o755)
 
-	maxAttempts := cfg.MaxAttempts
-	if maxAttempts == 0 {
-		maxAttempts = maxPlanValidationAttempts
-	}
-
 	startAttempt := LatestCompletedPlanAttempt(artifactDir)
 	resumeValidation := false
 	var criticFeedback string
@@ -1417,9 +1439,27 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 		loopStart = startAttempt
 	}
 
-	for attempt := loopStart; attempt <= maxAttempts; attempt++ {
+	// Across-attempt progress is semantic, not a fixed cap (Decision: "no
+	// backstops"): the loop runs until the roadmap is approved, the reviser
+	// stops changing the canonical plan for axisStallLimit consecutive attempts
+	// (planLoopStalled → needs_human_review), or the planner emits
+	// DefaultMaxConsecutiveProtocolViolations consecutive contract violations
+	// (consecutiveProtocol → protocol_violation — the same protocol rail the
+	// blocking loop keeps; only the iteration cap was removed).
+	planProgress := NewProgressTracker()
+	canonicalPlanPath := filepath.Join(artifactDir, "roadmap.md")
+	consecutiveProtocol := 0
+
+	for attempt := loopStart; ; attempt++ {
 		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 			return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
+		}
+		if planLoopStalled(planProgress, canonicalPlanPath) {
+			return &PlanLoopResult{
+				FinalStatus: "needs_human_review",
+				Iterations:  attempt - 1,
+				LastError:   fmt.Sprintf("roadmap not approved and unchanged for %d consecutive attempts — escalating for human review", axisStallLimit),
+			}, nil
 		}
 
 		// Create per-attempt directory for debug prompts, logs, and validation files.
@@ -1501,7 +1541,6 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				}
 				if agentStatus == agentStatusMissingMarker {
 					violations := missingPhaseCompleteViolations()
-					lastErr := formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)
 					criticFeedback = formatPlanContractViolationFeedback(plannerSpec.Role, violations)
 					_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
@@ -1509,8 +1548,9 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 						AgentStatus:  "SUCCESS",
 						ReviewStatus: "CHANGES_REQUESTED",
 					})
-					if attempt >= maxAttempts {
-						return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
+					consecutiveProtocol++
+					if consecutiveProtocol >= DefaultMaxConsecutiveProtocolViolations {
+						return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)}, nil
 					}
 					continue
 				}
@@ -1538,7 +1578,6 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 			return nil, fmt.Errorf("validating roadmap planner contract (attempt %d): %w", attempt, validateErr)
 		}
 		if !outcome.OK {
-			lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)
 			criticFeedback = formatPlanContractViolationFeedback(plannerRole, violations)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
@@ -1546,8 +1585,9 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				AgentStatus:  "SUCCESS",
 				ReviewStatus: "CHANGES_REQUESTED",
 			})
-			if attempt >= maxAttempts {
-				return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
+			consecutiveProtocol++
+			if consecutiveProtocol >= DefaultMaxConsecutiveProtocolViolations {
+				return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: formatProtocolViolationError(plannerRole, attemptDir, violations)}, nil
 			}
 			continue
 		}
@@ -1600,16 +1640,24 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 					criticFeedback = fmt.Sprintf("Roadmap validation failed: %v", reviewErr)
 				}
 				_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-				if attempt >= maxAttempts {
+				consecutiveProtocol++
+				if consecutiveProtocol >= DefaultMaxConsecutiveProtocolViolations {
 					return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: reviewErr.Error()}, nil
 				}
 				continue
 			}
+			// A non-protocol validator (infra) error is orthogonal to the planner's
+			// protocol-violation streak — leave consecutiveProtocol unchanged so a
+			// transient validator failure can't silently disable the protocol rail.
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "FAILED"})
 			criticFeedback = fmt.Sprintf("Roadmap validation failed: %v", reviewErr)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			continue
 		}
+
+		// A contract-valid plan reached review: the protocol-violation streak is
+		// broken regardless of the review verdict.
+		consecutiveProtocol = 0
 
 		switch reviewStatus {
 		case ReviewApproved:
@@ -1637,23 +1685,6 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 			continue
 		}
 	}
-
-	planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-	if cfg.FeatureStore != nil && planArtifactPath != "" {
-		_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-			if f.Artifacts == nil {
-				f.Artifacts = make(map[string]string)
-			}
-			f.Artifacts["roadmap"] = planArtifactPath
-			return nil
-		})
-	}
-
-	return &PlanLoopResult{
-		FinalStatus: "needs_human_review",
-		Iterations:  maxAttempts,
-		LastError:   fmt.Sprintf("roadmap not approved after %d attempts", maxAttempts),
-	}, nil
 }
 
 // RunPhasePlanningLoop creates and validates a per-phase plan.
@@ -1681,11 +1712,6 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 		artifactDir = filepath.Join(baseDir, fmt.Sprintf("phase-%02d", cfg.Phase.Number), "plan")
 	}
 	_ = os.MkdirAll(artifactDir, 0o755)
-
-	maxAttempts := cfg.MaxAttempts
-	if maxAttempts == 0 {
-		maxAttempts = 2
-	}
 
 	startAttempt := LatestCompletedPlanAttempt(artifactDir)
 	resumeValidation := false
@@ -1728,9 +1754,27 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 	// being interrupted after attempt N-1.
 	axisStallTracker := loadAxisStallState(artifactDir)
 
-	for attempt := loopStart; attempt <= maxAttempts; attempt++ {
+	// No fixed attempt cap (Decision: "no backstops"). The loop runs until the
+	// plan is approved, the per-axis stall tracker escalates, the plan
+	// deliverable stops changing for axisStallLimit consecutive attempts
+	// (planLoopStalled → needs_human_review), or the planner emits
+	// DefaultMaxConsecutiveProtocolViolations consecutive contract violations
+	// (consecutiveProtocol → protocol_violation — the protocol rail kept from
+	// the blocking loop; only the iteration cap was removed).
+	planProgress := NewProgressTracker()
+	canonicalPlanPath := filepath.Join(artifactDir, "plan.md")
+	consecutiveProtocol := 0
+
+	for attempt := loopStart; ; attempt++ {
 		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 			return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, nil
+		}
+		if planLoopStalled(planProgress, canonicalPlanPath) {
+			return &PlanLoopResult{
+				FinalStatus: "needs_human_review",
+				Iterations:  attempt - 1,
+				LastError:   fmt.Sprintf("phase plan not approved and unchanged for %d consecutive attempts — escalating for human review", axisStallLimit),
+			}, nil
 		}
 
 		// Create per-attempt directory for debug prompts, logs, and validation files.
@@ -1812,7 +1856,6 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				}
 				if agentStatus == agentStatusMissingMarker {
 					violations := missingPhaseCompleteViolations()
-					lastErr := formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)
 					criticFeedback = formatPlanContractViolationFeedback(plannerSpec.Role, violations)
 					_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
@@ -1820,8 +1863,9 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 						AgentStatus:  "SUCCESS",
 						ReviewStatus: "CHANGES_REQUESTED",
 					})
-					if attempt >= maxAttempts {
-						return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
+					consecutiveProtocol++
+					if consecutiveProtocol >= DefaultMaxConsecutiveProtocolViolations {
+						return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: formatProtocolViolationError(plannerSpec.Role, attemptDir, violations)}, nil
 					}
 					continue
 				}
@@ -1849,7 +1893,6 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 			return nil, fmt.Errorf("validating phase planner contract (attempt %d): %w", attempt, validateErr)
 		}
 		if !outcome.OK {
-			lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)
 			criticFeedback = formatPlanContractViolationFeedback(plannerRole, violations)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
@@ -1857,8 +1900,9 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				AgentStatus:  "SUCCESS",
 				ReviewStatus: "CHANGES_REQUESTED",
 			})
-			if attempt >= maxAttempts {
-				return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: lastErr}, nil
+			consecutiveProtocol++
+			if consecutiveProtocol >= DefaultMaxConsecutiveProtocolViolations {
+				return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: formatProtocolViolationError(plannerRole, attemptDir, violations)}, nil
 			}
 			continue
 		}
@@ -1917,16 +1961,24 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 					criticFeedback = fmt.Sprintf("Phase plan validation failed: %v", reviewErr)
 				}
 				_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
-				if attempt >= maxAttempts {
+				consecutiveProtocol++
+				if consecutiveProtocol >= DefaultMaxConsecutiveProtocolViolations {
 					return &PlanLoopResult{FinalStatus: "protocol_violation", Iterations: attempt, LastError: reviewErr.Error()}, nil
 				}
 				continue
 			}
+			// A non-protocol validator (infra) error is orthogonal to the planner's
+			// protocol-violation streak — leave consecutiveProtocol unchanged so a
+			// transient validator failure can't silently disable the protocol rail.
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "SUCCESS", ReviewStatus: "FAILED"})
 			criticFeedback = fmt.Sprintf("Phase plan validation failed: %v", reviewErr)
 			_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
 			continue
 		}
+
+		// A contract-valid plan reached review: the protocol-violation streak is
+		// broken regardless of the review verdict.
+		consecutiveProtocol = 0
 
 		switch reviewStatus {
 		case ReviewApproved:
@@ -1977,24 +2029,6 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 			continue
 		}
 	}
-
-	planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-	if cfg.FeatureStore != nil && planArtifactPath != "" {
-		artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
-		_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-			if f.Artifacts == nil {
-				f.Artifacts = make(map[string]string)
-			}
-			f.Artifacts[artifactKey] = planArtifactPath
-			return nil
-		})
-	}
-
-	return &PlanLoopResult{
-		FinalStatus: "needs_human_review",
-		Iterations:  maxAttempts,
-		LastError:   fmt.Sprintf("phase plan not approved after %d attempts", maxAttempts),
-	}, nil
 }
 
 // setValidatingPlan persists the ValidatingPlan flag on the feature.

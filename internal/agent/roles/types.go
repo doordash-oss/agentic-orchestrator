@@ -368,16 +368,25 @@ func knowledgeBaseIterationMetaRoleArtifact() RoleArtifactSpec {
 	return artifact
 }
 
-func phaseMarkdownRoleArtifact(display string) RoleArtifactSpec {
+// persistentMarkdownRoleArtifact declares a phase deliverable that lives at a
+// fixed path in the shared artifact_dir (the parent of the iteration dirs) and
+// is edited in place across iterations, like the roadmap/plan markdown. This is
+// the persistent-deliverable model that replaces per-iteration copy-forward:
+// the agent appends to one stable file, so resume needs only a path pointer
+// rather than the whole prior draft.
+func persistentMarkdownRoleArtifact(name, display, filename string) RoleArtifactSpec {
 	return RoleArtifactSpec{
-		Name:         "phase_markdown_artifact",
+		Name:         name,
 		DisplayPath:  display,
-		RootName:     "phase_dir",
-		RelativePath: "<newest non-excluded *.md>",
+		RootName:     "artifact_dir",
+		RelativePath: filename,
 		Presence:     ArtifactRequired,
-		Description:  "newest non-excluded markdown artifact in the phase directory",
+		Description:  "persistent phase deliverable, edited in place across iterations",
+		// ValidatorPhaseMarkdown scans a directory for the newest non-excluded
+		// markdown, so resolve to the artifact_dir (where the persistent file
+		// lives), not the file path itself.
 		ResolvePath: func(rt RoleRuntime, _ RoleArtifactSpec) string {
-			return rt.IterationDir
+			return artifactDirOutputRoot("").ResolvePath(rt)
 		},
 		Validate: ValidatorPhaseMarkdown,
 	}

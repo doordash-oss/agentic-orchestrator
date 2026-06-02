@@ -21,12 +21,27 @@ Write the rolling handoff scratch at `kb-progress.md` in this iteration director
 ## Gotchas
 <surprises, dead-ends, in-flight findings worth preserving>
 
+## Ledger
+```yaml
+units:
+  - id: architecture
+    status: done
+  - id: conventions
+    status: pending
+  - id: api-surface
+    status: pending
+  - id: dependencies
+    status: pending
+  - id: verification
+    status: pending
+```
+
 ## Handoff State
 CONTINUE
 ```
 
 Rules:
 - Update the persistent KB tree before writing the handoff, including a current top-level `index.md`.
-- Use `CONTINUE` when another fresh Knowledge Base agent should resume.
-- Use `COMPLETE` only when the KB is fully done and the persistent `index.md` is ready for validation.
+- Maintain the `## Ledger` over the five fixed category ids (`architecture`, `conventions`, `api-surface`, `dependencies`, `verification`): mark each finished category `done`, leave the rest `pending`. Do not add or rename units.
+- Use `CONTINUE` when any category is still `pending`. Use `COMPLETE` only when all five are `done` (the harness also auto-completes on zero pending).
 - Touch `phase_complete` in the iteration directory last.

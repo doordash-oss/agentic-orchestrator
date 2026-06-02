@@ -24,4 +24,6 @@ Interview me relentlessly about every aspect of this plan until we reach a share
 
 Ask the questions one at a time, waiting for feedback on each question before continuing.
 
+When you ask a question, follow the question-formatting rules in the system prompt; never ask a clarification as a prose-only question.
+
 If a question can be answered by exploring the codebase, explore the codebase instead.

@@ -31,11 +31,12 @@ var designerRoleSpec = RoleSpec{
 	UserTemplate: "design.user",
 	Required:     []feature.Phase{feature.PhaseResearch},
 	OutputRoots: []OutputRootSpec{
-		singleShotPhaseDirOutputRoot("Design phase artifact directory."),
+		artifactDirOutputRoot("Shared Design artifact root. design.md is written here and edited in place across iterations."),
+		singleShotPhaseDirOutputRoot("Active Design iteration directory. design-progress.md, meta.yaml, and phase_complete are written here."),
 	},
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("design markdown artifact"),
+		persistentMarkdownRoleArtifact("design_markdown_artifact", "design markdown artifact", "design.md"),
 		designProgressHandoffRoleArtifact(),
 		iterationMetaRoleArtifact(),
 	},

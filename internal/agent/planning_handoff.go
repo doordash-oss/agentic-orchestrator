@@ -52,6 +52,7 @@ func (s PlanningHandoffState) String() string {
 type ParsedPlanningHandoff struct {
 	State              PlanningHandoffState
 	ProgressRegion     string
+	Ledger             *ParsedLedger // nil when the `## Ledger` block is absent
 	ProtocolViolations []string
 }
 
@@ -63,6 +64,7 @@ func (p *ParsedPlanningHandoff) OK() bool {
 var planningHandoffRequiredSections = []string{
 	"## Understanding",
 	"## Plan Progress",
+	"## Ledger",
 	"## Handoff State",
 }
 
@@ -138,6 +140,19 @@ func ParsePlanningHandoffMd(path string) (*ParsedPlanningHandoff, error) {
 			parsed.ProtocolViolations = append(parsed.ProtocolViolations,
 				fmt.Sprintf("%s `## Handoff State` section is empty; emit CONTINUE or COMPLETE", PlanningHandoffFilename))
 		}
+	}
+
+	// Parse the agent-maintained `## Ledger` (planning is design-like, so a done
+	// unit must carry a decision). Mirrors the helper-handoff ledger contract.
+	ledgerBody := extractMarkdownSection(body, "## Ledger")
+	ledger, ledgerViolations := parseLedgerBlock(ledgerBody, true, parsed.State == PlanningHandoffComplete)
+	parsed.Ledger = ledger
+	for _, v := range ledgerViolations {
+		parsed.ProtocolViolations = append(parsed.ProtocolViolations, fmt.Sprintf("%s %s", PlanningHandoffFilename, v))
+	}
+	if _, present := positions["## Ledger"]; present && ledger == nil && len(ledgerViolations) == 0 {
+		parsed.ProtocolViolations = append(parsed.ProtocolViolations,
+			fmt.Sprintf("%s `## Ledger` section is empty; emit a fenced YAML block with a `units:` list", PlanningHandoffFilename))
 	}
 
 	understanding := extractMarkdownSection(body, "## Understanding")

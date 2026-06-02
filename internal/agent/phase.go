@@ -428,6 +428,8 @@ func (pr *PhaseRunner) buildInquireBlockingLoopConfig(f *feature.Feature, kbInfo
 	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
 	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
 	artifactDir := pr.resolvePhaseArtifactDir(f, feature.PhaseInquire.DirName())
+	deliverable := filepath.Join(artifactDir, "inquire.md")
+	inquireProgress := &LedgerProgressStrategy{Parse: ParseInquireProgressHandoffMd}
 
 	return BlockingLoopConfig{
 		Label:                      "inquire",
@@ -454,10 +456,14 @@ func (pr *PhaseRunner) buildInquireBlockingLoopConfig(f *feature.Feature, kbInfo
 		Observer:                   pr.Observer,
 		HandoffFilename:            InquireProgressHandoffFilename,
 		ParseHandoff:               ParseInquireProgressHandoffMd,
-		Fingerprint:                InquireProgressHandoffFingerprint,
-		CanonicalSelector:          SelectNewestNonExcludedMarkdown,
-		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
-			return buildInquireLoopPrompt(f, pr.SkillsDir, in, kbInfos...), nil
+		// Fingerprint is retained but inert: ProgressStrategy supersedes it.
+		Fingerprint:               InquireProgressHandoffFingerprint,
+		ProgressStrategy:          inquireProgress,
+		ResumeStrategy:            &LedgerResumeStrategy{Progress: inquireProgress, WithDecisions: false},
+		PersistentDeliverablePath: deliverable,
+		CanonicalSelector:         func(string) (string, error) { return deliverable, nil },
+		BuildPrompt: func(BlockingLoopPromptInput) (string, error) {
+			return BuildInquirePrompt(f, pr.SkillsDir, kbInfos...), nil
 		},
 		MaxConsecNoProgress:         maxNoProgress,
 		MaxConsecFailures:           maxFails,
@@ -466,35 +472,6 @@ func (pr *PhaseRunner) buildInquireBlockingLoopConfig(f *feature.Feature, kbInfo
 		SessionIDBase:               f.ID + "-inquire",
 		TelemetryRole:               "inquire",
 	}, nil
-}
-
-func buildInquireLoopPrompt(f *feature.Feature, skillsDir string, in BlockingLoopPromptInput, kbInfos ...KBInfo) string {
-	prompt := BuildInquirePrompt(f, skillsDir, kbInfos...)
-	seededPath := strings.TrimSpace(in.SeededCanonicalPath)
-	qaPath := strings.TrimSpace(in.SeededQAPath)
-	if seededPath == "" && qaPath == "" {
-		return prompt
-	}
-
-	var b strings.Builder
-	b.WriteString(prompt)
-	if seededPath != "" {
-		b.WriteString("\n\n## Existing Inquiry Draft\n\n")
-		b.WriteString("Read the seeded inquiry draft at:\n")
-		b.WriteString(seededPath)
-		b.WriteString("\n\nContinue from that draft in place. Preserve clarified requirements and open questions, add the remaining inquiry notes, and keep the canonical markdown as the growing deliverable for this iteration.\n")
-		if previousPath := strings.TrimSpace(in.PreviousCanonicalPath); previousPath != "" {
-			b.WriteString("\nIt was copied from the previous completed iteration at:\n")
-			b.WriteString(previousPath)
-			b.WriteString("\n")
-		}
-	}
-	if qaPath != "" {
-		b.WriteString("\nRead the forwarded interview-so-far answers at:\n")
-		b.WriteString(qaPath)
-		b.WriteString("\n\nDo not re-ask questions already answered there. Use those answers as prior context and continue only with genuinely unresolved inquiry work.\n")
-	}
-	return b.String()
 }
 
 // RunResearchFromQuestions starts a research session using questions from the Inquire phase.
@@ -534,6 +511,8 @@ func (pr *PhaseRunner) buildResearchBlockingLoopConfig(f *feature.Feature, quest
 	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
 	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
 	artifactDir := pr.resolvePhaseArtifactDir(f, feature.PhaseResearch.DirName())
+	deliverable := filepath.Join(artifactDir, "research.md")
+	researchProgress := &LedgerProgressStrategy{Parse: ParseResearchProgressHandoffMd}
 
 	return BlockingLoopConfig{
 		Label:                      "research",
@@ -560,10 +539,14 @@ func (pr *PhaseRunner) buildResearchBlockingLoopConfig(f *feature.Feature, quest
 		Observer:                   pr.Observer,
 		HandoffFilename:            ResearchProgressHandoffFilename,
 		ParseHandoff:               ParseResearchProgressHandoffMd,
-		Fingerprint:                ResearchProgressHandoffFingerprint,
-		CanonicalSelector:          SelectNewestNonExcludedMarkdown,
-		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
-			return buildResearchLoopPrompt(f, pr.SkillsDir, questionsPath, in, kbInfos...), nil
+		// Fingerprint is retained but inert: ProgressStrategy supersedes it.
+		Fingerprint:               ResearchProgressHandoffFingerprint,
+		ProgressStrategy:          researchProgress,
+		ResumeStrategy:            &LedgerResumeStrategy{Progress: researchProgress, WithDecisions: false},
+		PersistentDeliverablePath: deliverable,
+		CanonicalSelector:         func(string) (string, error) { return deliverable, nil },
+		BuildPrompt: func(BlockingLoopPromptInput) (string, error) {
+			return BuildResearchFromQuestionsPrompt(f, pr.SkillsDir, questionsPath, kbInfos...), nil
 		},
 		MaxConsecNoProgress:         maxNoProgress,
 		MaxConsecFailures:           maxFails,
@@ -572,27 +555,6 @@ func (pr *PhaseRunner) buildResearchBlockingLoopConfig(f *feature.Feature, quest
 		SessionIDBase:               f.ID + "-research",
 		TelemetryRole:               "research",
 	}, nil
-}
-
-func buildResearchLoopPrompt(f *feature.Feature, skillsDir, questionsPath string, in BlockingLoopPromptInput, kbInfos ...KBInfo) string {
-	prompt := BuildResearchFromQuestionsPrompt(f, skillsDir, questionsPath, kbInfos...)
-	seededPath := strings.TrimSpace(in.SeededCanonicalPath)
-	if seededPath == "" {
-		return prompt
-	}
-
-	var b strings.Builder
-	b.WriteString(prompt)
-	b.WriteString("\n\n## Existing Research Draft\n\n")
-	b.WriteString("Read the seeded research draft at:\n")
-	b.WriteString(seededPath)
-	b.WriteString("\n\nContinue from that draft in place. Preserve existing findings, add the remaining research, and keep the canonical markdown as the growing deliverable for this iteration.\n")
-	if previousPath := strings.TrimSpace(in.PreviousCanonicalPath); previousPath != "" {
-		b.WriteString("\nIt was copied from the previous completed iteration at:\n")
-		b.WriteString(previousPath)
-		b.WriteString("\n")
-	}
-	return b.String()
 }
 
 // researchAgentNames returns the subagents allowed in Research sessions.
@@ -645,6 +607,8 @@ func (pr *PhaseRunner) buildDesignBlockingLoopConfig(f *feature.Feature, researc
 	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
 	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
 	artifactDir := pr.resolvePhaseArtifactDir(f, feature.PhaseDesign.DirName())
+	deliverable := filepath.Join(artifactDir, "design.md")
+	designProgress := &LedgerProgressStrategy{Parse: ParseDesignProgressHandoffMd}
 
 	return BlockingLoopConfig{
 		Label:                      "design",
@@ -671,10 +635,15 @@ func (pr *PhaseRunner) buildDesignBlockingLoopConfig(f *feature.Feature, researc
 		Observer:                   pr.Observer,
 		HandoffFilename:            DesignProgressHandoffFilename,
 		ParseHandoff:               ParseDesignProgressHandoffMd,
-		Fingerprint:                DesignProgressHandoffFingerprint,
-		CanonicalSelector:          SelectNewestNonExcludedMarkdown,
-		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
-			return buildDesignLoopPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, in, kbInfos...), nil
+		// Fingerprint is retained but inert: ProgressStrategy supersedes it.
+		// WithDecisions=true: design carries the decisions-so-far summary forward.
+		Fingerprint:               DesignProgressHandoffFingerprint,
+		ProgressStrategy:          designProgress,
+		ResumeStrategy:            &LedgerResumeStrategy{Progress: designProgress, WithDecisions: true},
+		PersistentDeliverablePath: deliverable,
+		CanonicalSelector:         func(string) (string, error) { return deliverable, nil },
+		BuildPrompt: func(BlockingLoopPromptInput) (string, error) {
+			return BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...), nil
 		},
 		MaxConsecNoProgress:         maxNoProgress,
 		MaxConsecFailures:           maxFails,
@@ -683,35 +652,6 @@ func (pr *PhaseRunner) buildDesignBlockingLoopConfig(f *feature.Feature, researc
 		SessionIDBase:               f.ID + "-design",
 		TelemetryRole:               "design",
 	}, nil
-}
-
-func buildDesignLoopPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchOutput string, qaFilePaths []string, in BlockingLoopPromptInput, kbInfos ...KBInfo) string {
-	prompt := BuildDesignPrompt(f, skillsDir, guidelinesDir, researchOutput, qaFilePaths, kbInfos...)
-	seededPath := strings.TrimSpace(in.SeededCanonicalPath)
-	qaPath := strings.TrimSpace(in.SeededQAPath)
-	if seededPath == "" && qaPath == "" {
-		return prompt
-	}
-
-	var b strings.Builder
-	b.WriteString(prompt)
-	if seededPath != "" {
-		b.WriteString("\n\n## Existing Design Draft\n\n")
-		b.WriteString("Read the seeded design draft at:\n")
-		b.WriteString(seededPath)
-		b.WriteString("\n\nContinue from that draft in place. Preserve existing decisions, resolve the remaining design areas, and keep the canonical markdown as the growing deliverable for this iteration.\n")
-		if previousPath := strings.TrimSpace(in.PreviousCanonicalPath); previousPath != "" {
-			b.WriteString("\nIt was copied from the previous completed iteration at:\n")
-			b.WriteString(previousPath)
-			b.WriteString("\n")
-		}
-	}
-	if qaPath != "" {
-		b.WriteString("\nRead the forwarded design interview answers at:\n")
-		b.WriteString(qaPath)
-		b.WriteString("\n\nDo not re-ask design questions already answered there. Use those answers as prior context while continuing this design iteration.\n")
-	}
-	return b.String()
 }
 
 // RunCodebaseIndex builds structural codebase indexes for all repos in a feature.
@@ -943,6 +883,7 @@ func (pr *PhaseRunner) buildKnowledgeBaseBlockingLoopConfig(f *feature.Feature, 
 
 	kbModel := pr.modelForRole(f.Models.KBBuild, llm.PhaseKBBuild)
 	_, maxFails, maxNoProgress := pr.resolveLoopLimits(f)
+	kbProgress := &LedgerProgressStrategy{Parse: ParseKBProgressHandoffMd}
 	artifactDir := filepath.Join(ActiveRunDir(pr.StateDir, f), "knowledge-base", repo.Name)
 	spec := KnowledgeBaseBuilderRoleSpec()
 	spec.OutputRoots = []OutputRootSpec{
@@ -987,12 +928,16 @@ func (pr *PhaseRunner) buildKnowledgeBaseBlockingLoopConfig(f *feature.Feature, 
 		Observer:                   pr.Observer,
 		HandoffFilename:            KBProgressHandoffFilename,
 		ParseHandoff:               ParseKBProgressHandoffMd,
-		Fingerprint:                KBProgressHandoffFingerprint,
+		// Fingerprint is retained but inert: ProgressStrategy supersedes it. KB
+		// units are the 5 fixed categories; net-pending + auto-complete apply.
+		Fingerprint:      KBProgressHandoffFingerprint,
+		ProgressStrategy: kbProgress,
+		ResumeStrategy:   &LedgerResumeStrategy{Progress: kbProgress, WithDecisions: false},
 		CanonicalSelector: func(string) (string, error) {
 			return KBPath(kbDir), nil
 		},
-		BuildPrompt: func(in BlockingLoopPromptInput) (string, error) {
-			return buildKnowledgeBaseLoopPrompt(repo.Name, repoPath, kbDir, existingKBPath, lastCommit, in), nil
+		BuildPrompt: func(BlockingLoopPromptInput) (string, error) {
+			return BuildKBPrompt(repo.Name, repoPath, kbDir, existingKBPath, lastCommit), nil
 		},
 		MaxConsecNoProgress:         maxNoProgress,
 		MaxConsecFailures:           maxFails,
@@ -1002,25 +947,6 @@ func (pr *PhaseRunner) buildKnowledgeBaseBlockingLoopConfig(f *feature.Feature, 
 		TelemetryRole:               "knowledge-base",
 		RepoName:                    repo.Name,
 	}, nil
-}
-
-func buildKnowledgeBaseLoopPrompt(repoName, repoPath, kbDir, existingKBPath, lastCommit string, in BlockingLoopPromptInput) string {
-	prompt := BuildKBPrompt(repoName, repoPath, kbDir, existingKBPath, lastCommit)
-	if in.Iteration <= 1 {
-		return prompt
-	}
-
-	previousHandoffPath := filepath.Join(filepath.Dir(in.IterationDir), fmt.Sprintf("iteration-%02d", in.Iteration-1), KBProgressHandoffFilename)
-	var b strings.Builder
-	b.WriteString(prompt)
-	b.WriteString("\n\n## Knowledge Base Continuation\n\n")
-	b.WriteString("A previous Knowledge Base iteration wound down before the per-repo KB was complete; continue the in-flight build in place from the Remaining Categories listed in the previous handoff. Do not restart completed categories and do not re-run the full-vs-incremental decision.\n\n")
-	b.WriteString("Read the previous handoff first:\n")
-	fmt.Fprintf(&b, "- `%s`\n\n", previousHandoffPath)
-	b.WriteString("Continue updating the persistent KB tree in place:\n")
-	fmt.Fprintf(&b, "- `%s`\n\n", KBRootDir(kbDir))
-	fmt.Fprintf(&b, "Keep `%s` present and current before writing `%s` in this iteration directory. When all Remaining Categories are complete, set `## Handoff State` to `COMPLETE`; if another continuation is needed, set it to `CONTINUE`. Touch `phase_complete` last.", KBPath(kbDir), KBProgressHandoffFilename)
-	return b.String()
 }
 
 // RunAllKnowledgeBuilds starts KB builds for all repos in a feature.

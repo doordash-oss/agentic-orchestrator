@@ -21,12 +21,22 @@ Write the rolling handoff scratch at `research-progress.md` in this iteration di
 ## Gotchas
 <surprises, dead-ends, in-flight hypotheses worth preserving>
 
+## Ledger
+```yaml
+units:
+  - id: Q-001
+    status: done
+  - id: Q-002
+    status: pending
+```
+
 ## Handoff State
 CONTINUE
 ```
 
 Rules:
-- Preserve the canonical research markdown and update it in place before the handoff.
-- Use `CONTINUE` when another fresh Research agent should resume.
-- Use `COMPLETE` only when the research is fully done and the canonical markdown is ready for validation.
+- Preserve the persistent research markdown and update it in place before the handoff.
+- Update the `## Ledger`: flip every question you answered this session to `done`; leave the rest `pending`. Keep `Q-NNN` ids stable — never renumber.
+- Use `CONTINUE` when any unit is still `pending`. Use `COMPLETE` only when every unit is `done` (the harness also auto-completes on zero pending). COMPLETE with a pending unit is rejected.
+- Do not re-include answered `## Q-NNN` sections; the next iteration receives only the pending ids and a path pointer.
 - Touch `phase_complete` last.

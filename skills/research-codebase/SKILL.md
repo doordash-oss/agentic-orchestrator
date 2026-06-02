@@ -10,36 +10,11 @@ You are tasked with conducting comprehensive research across the codebase to ans
 
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
-| `research markdown artifact` | `{phase_dir}/<newest non-excluded *.md>` | required | newest non-excluded markdown artifact in the phase directory |
+| `research markdown artifact` | `{artifact_dir}/research.md` | required | persistent phase deliverable, edited in place across iterations |
 
-## Loop Handoff Contract
+## Resuming
 
-Research runs in fresh iterations under the phase artifact directory. The canonical research markdown is the deliverable; `research-progress.md` is a harness scratch file that controls whether another fresh research iteration should continue.
-
-When a fresh iteration prompt names a seeded research draft, read that existing markdown before starting new research. Preserve and extend it in place so the canonical research markdown grows across iterations instead of restarting from scratch.
-
-On a normal finish, always write `research-progress.md` in the same output directory as the canonical research markdown before touching `phase_complete`. Use exactly these sections and set `## Handoff State` to `COMPLETE`:
-
-```markdown
-# Research Progress
-
-## Completed Findings
-- <areas/questions already documented in the canonical research markdown>
-
-## Remaining Areas
-- <areas/questions still to research, or none>
-
-## Where I Stopped
-<the precise next area/question/file to continue from, or Complete>
-
-## Gotchas
-<surprises, dead-ends, in-flight hypotheses worth preserving, or none>
-
-## Handoff State
-COMPLETE
-```
-
-If the Smart Zone wind-down prompt tells you to stop for continuation, follow `skills/research-codebase/HANDOFF.md`: flush the canonical research markdown, write `research-progress.md` with `## Handoff State` set to `CONTINUE`, touch `phase_complete` last, and end the turn.
+If `{iteration_dir}/research-progress.md` exists from a prior iteration, read it first and resume in place from its `## Resume Context` — work only the still-pending `Q-NNN` questions, never renumber, and never re-read or rewrite already-answered `## Q-NNN:` sections in the persistent research markdown. On the first iteration, read the questions file, assign `Q-NNN` ids by position (Q-001 = first question), and seed the `## Ledger` with every question as `pending`. See `HANDOFF.md` in this skill directory for the handoff format and ledger discipline (including the `COMPLETE` form used on a normal finish).
 
 ## CRITICAL: YOUR ONLY JOB IS TO DOCUMENT AND EXPLAIN THE CODEBASE AS IT EXISTS TODAY
 - DO NOT edit or modify any code files — you are a researcher, not an implementer

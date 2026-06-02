@@ -1112,6 +1112,12 @@ func TestTurnCompleted_LooseQuestionAfterToolUse_WithMarker_EmitsSuccess(t *test
 	}
 }
 
+// TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder verifies that
+// every answer envelope re-anchors Codex on the question-format contract.
+// The reminder is intentionally a short pointer back to the system prompt
+// (the full spec lives there); this test pins the [Reminder] marker, the
+// pointer phrasing, and the post-answer ordering — not specific format
+// rules, which belong with the system prompt.
 func TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder(t *testing.T) {
 	questions := json.RawMessage(`{"questions":[{
 		"question":"Replace or add alongside?",
@@ -1124,16 +1130,11 @@ func TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder(t *testing.T) {
 
 	got := buildAskUserAnswerEnvelope(questions, answers)
 
-	mustContain := []string{
-		"[Reminder]",
-		"exactly 3 mutually exclusive numbered options",
-		`prefix the question with "FREE_FORM:"`,
-		"Open-ended confirmation prose",
+	if !strings.Contains(got, "[Reminder]") {
+		t.Errorf("envelope missing [Reminder] marker\n--- got ---\n%s", got)
 	}
-	for _, want := range mustContain {
-		if !strings.Contains(got, want) {
-			t.Errorf("envelope missing reminder fragment %q\n--- got ---\n%s", want, got)
-		}
+	if !strings.Contains(got, "asking-questions format from your system prompt") {
+		t.Errorf("envelope missing pointer back to system prompt\n--- got ---\n%s", got)
 	}
 	// The reminder must come AFTER the answer block so the agent reads the
 	// answer first and the format rule last (most-recent-wins anchoring).

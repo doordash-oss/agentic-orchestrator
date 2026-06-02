@@ -1303,12 +1303,7 @@ func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]st
 	return strings.TrimSpace(sb.String())
 }
 
-const askingFormatReminder = `[Reminder] When you ask your next question, follow the asking-questions format from your system prompt:
-- Phrase one decision as a question stem ending with "?".
-- Provide exactly 3 mutually exclusive numbered options, each ending with "[confidence: 0.00]".
-- Mark exactly one option "(Recommended)" — and that option must be the highest-confidence one.
-- Or, when the answer is inherently unconstrained (an exact version string, free-form name, arbitrary identifier), prefix the question with "FREE_FORM:" and skip the options.
-Open-ended confirmation prose ("Is that the X you want?", "Sound good?", "Shall I proceed?") is not a valid question and may end the phase. If you want to confirm a recommendation, restructure as a 3-option choice where one option is "Yes, proceed (Recommended)" and the others are concrete alternatives.`
+const askingFormatReminder = `[Reminder] When you ask your next question, follow the asking-questions format from your system prompt.`
 
 func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
 	if len(raw) == 0 {

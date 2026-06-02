@@ -377,6 +377,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhaseImplement,
 				SystemPromptHasUsefulResources: true,
+				MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
 			})
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)

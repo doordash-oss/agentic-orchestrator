@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -1004,9 +1005,9 @@ func TestTurnCompleted_FreeFormSentinelAfterToolUse(t *testing.T) {
 // false-positive guard. A tool-heavy turn whose final text merely contains
 // '?' without numbered options or a FREE_FORM sentinel — e.g., narrating
 // intent like "Wrote the file. Is that what you wanted?" — must NOT be
-// reclassified as a question. Without the no-tool-use gate on the loose
-// path, every mid-turn rhetorical '?' would synthesize an AskUser and
-// stall the session.
+// reclassified as a question when no MarkerPath is configured (legacy /
+// test paths). Without the no-tool-use gate on the loose path, every mid-
+// turn rhetorical '?' would synthesize an AskUser and stall the session.
 func TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
@@ -1030,5 +1031,128 @@ func TestTurnCompleted_LooseQuestionAfterToolUseEmitsSuccess(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Errorf("unexpected reformat follow-up written to stdin: %s", buf.String())
+	}
+}
+
+func TestTurnCompleted_LooseQuestionAfterToolUse_NoMarker_TriggersReformat(t *testing.T) {
+	tmp := t.TempDir()
+	markerPath := tmp + "/phase_complete"
+
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{
+		WorkDir:    "/tmp/test",
+		Model:      "codex",
+		MarkerPath: markerPath,
+	})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.turnHadToolUse = true
+	p.lastAssistantText = "I'd recommend keeping the no-subcommand launch contract. Is that the startup contract you want for the web replacement?"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if ok {
+		t.Fatalf("parseNotification ok = true (msg=%+v); want false (reformat-retry suppresses the message)", msg)
+	}
+	if buf.Len() == 0 {
+		t.Fatal("expected a reformat follow-up turn to be written to stdin")
+	}
+	if !strings.Contains(buf.String(), "not in the required question format") {
+		t.Errorf("reformat reminder missing format-violation language; payload=%s", buf.String())
+	}
+	p.mu.Lock()
+	retry := p.formatRetryCount
+	p.mu.Unlock()
+	if retry != 1 {
+		t.Errorf("formatRetryCount = %d, want 1 after first marker-absent loose-question turn", retry)
+	}
+}
+
+// TestTurnCompleted_LooseQuestionAfterToolUse_WithMarker_EmitsSuccess
+// covers the legitimate completion path. The agent did tool use, the
+// marker file IS present on disk (i.e., the agent executed the
+// completion contract), and the trailing "?" is rhetorical narration.
+// Marker presence is the authoritative completion signal, so we emit a
+// SUCCESS Result without sending a reformat reminder.
+func TestTurnCompleted_LooseQuestionAfterToolUse_WithMarker_EmitsSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	markerPath := tmp + "/phase_complete"
+	if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{
+		WorkDir:    "/tmp/test",
+		Model:      "codex",
+		MarkerPath: markerPath,
+	})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	p.mu.Lock()
+	p.turnHadToolUse = true
+	p.lastAssistantText = "Wrote the README and touched phase_complete. Is that what you wanted?"
+	p.mu.Unlock()
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("parseNotification ok = false, want true")
+	}
+	if msg.Type != "result" || msg.Subtype != "success" {
+		t.Fatalf("got Type=%q Subtype=%q, want result/success when marker is present", msg.Type, msg.Subtype)
+	}
+	if msg.ControlRequest != nil {
+		t.Errorf("unexpected ControlRequest when marker is present: %+v", msg.ControlRequest)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected reformat follow-up written to stdin when marker is present: %s", buf.String())
+	}
+}
+
+func TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder(t *testing.T) {
+	questions := json.RawMessage(`{"questions":[{
+		"question":"Replace or add alongside?",
+		"options":[
+			{"label":"Replace (Recommended)","description":"matches the literal request"},
+			{"label":"Add alongside","description":"preserves the original"}
+		]
+	}]}`)
+	answers := map[string]string{"Replace or add alongside?": "Replace (Recommended)"}
+
+	got := buildAskUserAnswerEnvelope(questions, answers)
+
+	mustContain := []string{
+		"[Reminder]",
+		"exactly 3 mutually exclusive numbered options",
+		`prefix the question with "FREE_FORM:"`,
+		"Open-ended confirmation prose",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Errorf("envelope missing reminder fragment %q\n--- got ---\n%s", want, got)
+		}
+	}
+	// The reminder must come AFTER the answer block so the agent reads the
+	// answer first and the format rule last (most-recent-wins anchoring).
+	idxAnswer := strings.Index(got, "User's selected answer:")
+	idxReminder := strings.Index(got, "[Reminder]")
+	if idxAnswer == -1 || idxReminder == -1 || idxReminder < idxAnswer {
+		t.Errorf("reminder must follow the answer block; got idxAnswer=%d idxReminder=%d in:\n%s", idxAnswer, idxReminder, got)
+	}
+}
+
+func TestCodexAskingQuestionsClause_CallsOutConfirmationTrap(t *testing.T) {
+	clause := (&Provider{}).AskingQuestionsClause()
+	for _, want := range []string{
+		"Confirmation traps to avoid",
+		"every turn of an interview",
+		"Yes, do X (Recommended)",
+	} {
+		if !strings.Contains(clause, want) {
+			t.Errorf("AskingQuestionsClause missing %q\n--- got ---\n%s", want, clause)
+		}
 	}
 }

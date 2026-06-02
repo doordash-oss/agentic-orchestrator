@@ -166,6 +166,14 @@ type CommandBuildOpts struct {
 }
 
 // ProtocolOpts contains all parameters needed to create a Protocol instance.
+//
+// MarkerPath, when non-empty, is the absolute path to the role's
+// `phase_complete` marker file. Providers that synthesize completion vs
+// question signals from end-of-turn text (e.g. Codex) consult this path to
+// disambiguate "agent finished and narrated 'all done?'" (marker present →
+// success) from "agent ended with an open-ended question after tool use"
+// (marker absent → reformat-retry). Empty preserves the legacy heuristic
+// for paths that don't have a marker contract.
 type ProtocolOpts struct {
 	Model          string
 	ContextWindow  int
@@ -176,6 +184,7 @@ type ProtocolOpts struct {
 	WritableRoots  []string
 	DSP            bool
 	StateDir       string
+	MarkerPath     string
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider

@@ -1468,6 +1468,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,
 				SystemPromptHasUsefulResources: true,
+				MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
@@ -1842,6 +1843,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,
 				SystemPromptHasUsefulResources: true,
+				MarkerPath:                     filepath.Join(attemptDir, PhaseCompleteFile),
 			})
 			if err != nil {
 				return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)

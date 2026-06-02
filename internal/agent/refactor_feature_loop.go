@@ -667,6 +667,7 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		EffortLevel:                    in.EffortLevel,
 		Phase:                          feature.PhasePlan,
 		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(in.ArtifactDir, PhaseCompleteFile),
 	})
 	if err != nil {
 		return "", fmt.Errorf("building refactor-plan session: %w", err)

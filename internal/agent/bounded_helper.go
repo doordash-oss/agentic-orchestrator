@@ -96,6 +96,10 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
 	}
 
+	markerPath := ""
+	if cfg.PhaseCompleteDir != "" {
+		markerPath = filepath.Join(cfg.PhaseCompleteDir, PhaseCompleteFile)
+	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:          cfg.Model,
 		Prompt:         cfg.Prompt,
@@ -110,6 +114,7 @@ func (pr *PhaseRunner) RunBoundedHelper(ctx context.Context, cfg BoundedHelperCo
 		EffortLevel:    cfg.EffortLevel,
 		AgentNames:     []string{},
 		Phase:          cfg.Phase,
+		MarkerPath:     markerPath,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running bounded helper: building session: %w", err)

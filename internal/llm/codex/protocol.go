@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -763,12 +764,27 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				}
 
 				// Free-form text that merely contains "?" is a weaker
-				// signal — the agent may be narrating intent at the tail
-				// of a tool-heavy completion turn ("Wrote the file. Done?"
-				// is a completion, not a question). Only the no-tool-use
-				// path goes through the reformat-retry / synthesize-without-
-				// options fallback.
-				if !hadToolUse && textLooksLikeQuestion(lastText) {
+				// signal than a numbered list or FREE_FORM sentinel —
+				// the agent may be narrating intent at the tail of a
+				// tool-heavy completion turn ("Wrote the file. Done?"
+				// is a completion, not a question). The disambiguator:
+				// did the agent create the phase_complete marker? When
+				// MarkerPath is configured we consult it directly; the
+				// presence of the marker is the authoritative completion
+				// signal. With no marker path we fall back to the
+				// historical !hadToolUse heuristic so existing test
+				// fixtures and provider call sites that don't yet plumb
+				// MarkerPath retain their behavior.
+				//
+				// The marker-aware path matters for grill-me phases,
+				// which explicitly tell the agent to "explore the
+				// codebase before asking a question". Tool use before a
+				// question is the desired behavior there, not a signal
+				// of completion — without the marker check, every
+				// codebase-grounded follow-up question would slip
+				// through to a SUCCESS Result and trigger a phase-level
+				// protocol-violation retry.
+				if textLooksLikeQuestion(lastText) && p.shouldReformatRetryLoose(hadToolUse) {
 					p.mu.Lock()
 					retry := p.formatRetryCount
 					p.mu.Unlock()
@@ -1275,19 +1291,6 @@ type askUserQuestionView struct {
 	Options  []askUserOptionView `json:"options,omitempty"`
 }
 
-// buildAskUserAnswerEnvelope wraps the user's AskUserQuestion answers in a
-// framed follow-up turn that restates the original question and option set.
-// On the synthetic ask-user path the response is delivered to Codex as a plain
-// user turn — without framing, an option label like "Replace README.md
-// (Recommended)" is indistinguishable from a fresh directive, and the agent
-// has been observed to act on it by jumping out of its current planning role
-// and into implementation work.
-//
-// The envelope keeps the agent inside its current task and role: it labels the
-// payload as an AskUserQuestion answer, restates the question and options for
-// context, and reminds the agent that the reply refines the existing task
-// rather than introducing a new one. The wire format remains a single user
-// turn — only the rendered text changes.
 func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]string) string {
 	parsed := parseAskUserQuestions(questions)
 	byText := make(map[string]askUserQuestionView, len(parsed))
@@ -1324,8 +1327,22 @@ func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]st
 		sb.WriteString(answers[q])
 		sb.WriteString("\n")
 	}
+	sb.WriteString("\n")
+	sb.WriteString(askingFormatReminder)
 	return strings.TrimSpace(sb.String())
 }
+
+// askingFormatReminder is the per-answer restatement of the question-format
+// contract. Appended to every AskUserQuestion answer envelope so Codex
+// re-anchors on the "exactly 3 numbered options OR FREE_FORM:" rule on each
+// turn instead of relying solely on the system prompt that was delivered
+// once at session start.
+const askingFormatReminder = `[Reminder] When you ask your next question, follow the asking-questions format from your system prompt:
+- Phrase one decision as a question stem ending with "?".
+- Provide exactly 3 mutually exclusive numbered options, each ending with "[confidence: 0.00]".
+- Mark exactly one option "(Recommended)" — and that option must be the highest-confidence one.
+- Or, when the answer is inherently unconstrained (an exact version string, free-form name, arbitrary identifier), prefix the question with "FREE_FORM:" and skip the options.
+Open-ended confirmation prose ("Is that the X you want?", "Sound good?", "Shall I proceed?") is not a valid question and may end the phase. If you want to confirm a recommendation, restructure as a 3-option choice where one option is "Yes, proceed (Recommended)" and the others are concrete alternatives.`
 
 // parseAskUserQuestions extracts the question entries from an AskUserQuestion
 // input payload. Production callers pass the envelope `{"questions":[...]}`,
@@ -1354,6 +1371,14 @@ func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
 // options format. The cap ensures the user is never stuck if Codex genuinely
 // needs a free-form answer (e.g. a version string, arbitrary name, identifier).
 const maxQuestionFormatRetries = 2
+
+func (p *Protocol) shouldReformatRetryLoose(hadToolUse bool) bool {
+	if p.opts.MarkerPath == "" {
+		return !hadToolUse
+	}
+	_, err := os.Stat(p.opts.MarkerPath)
+	return err != nil
+}
 
 // parsedOption holds one numbered alternative extracted from a Codex question.
 type parsedOption struct {

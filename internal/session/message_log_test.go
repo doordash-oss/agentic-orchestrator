@@ -390,6 +390,109 @@ func TestMessageLog_UpdateLastAssistantPartial(t *testing.T) {
 			t.Fatalf("Len() = %d, want 1", log.Len())
 		}
 	})
+
+	// Regression: Codex emits accumulated agentMessage text in every partial,
+	// and `item/commandExecution/outputDelta` notifications arrive as
+	// tool_progress events between successive text deltas while Bash is
+	// running. Without coalescing across passive notifications each new
+	// partial would be appended as a fresh entry, leaving stacked
+	// growing-prefix copies of the same paragraph in the attach view.
+	t.Run("coalesces partial across interleaved tool_progress", func(t *testing.T) {
+		log := NewMessageLog()
+		partial := func(text string) llm.SDKMessage {
+			return llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{
+				Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: text}}},
+			}}
+		}
+		toolProgress := func(data string) llm.SDKMessage {
+			return llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{
+				Type: "tool_progress", ToolName: "Bash", Data: data,
+			}}
+		}
+		log.UpdateLastAssistantPartial(partial("The main binary"))
+		log.UpdateLastAssistantPartial(partial("The main binary is flag-only"))
+		log.Append(toolProgress("running rg ..."))
+		log.UpdateLastAssistantPartial(partial("The main binary is flag-only, then runs Bubble Tea"))
+		log.Append(toolProgress("more output"))
+		log.UpdateLastAssistantPartial(partial("The main binary is flag-only, then runs Bubble Tea. orchestrator actions."))
+
+		msgs := log.Messages()
+		var partials []string
+		for _, m := range msgs {
+			if m.Assistant != nil && m.Subtype == "partial" {
+				partials = append(partials, m.Assistant.Message.Content[0].Text)
+			}
+		}
+		if len(partials) != 1 {
+			t.Fatalf("want exactly 1 in-flight partial after coalescing, got %d: %v", len(partials), partials)
+		}
+		if got, want := partials[0], "The main binary is flag-only, then runs Bubble Tea. orchestrator actions."; got != want {
+			t.Errorf("partial text = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("final assistant replaces coalesced partial across tool_progress", func(t *testing.T) {
+		log := NewMessageLog()
+		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "draft"}}},
+		}})
+		log.Append(llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash"}})
+		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "final"}}},
+		}})
+		msgs := log.Messages()
+		assistants := 0
+		for _, m := range msgs {
+			if m.Assistant != nil {
+				assistants++
+				if m.Subtype == "partial" {
+					t.Errorf("stale partial survived final coalesce: %+v", m)
+				}
+				if got := m.Assistant.Message.Content[0].Text; got != "final" {
+					t.Errorf("assistant text = %q, want %q", got, "final")
+				}
+			}
+		}
+		if assistants != 1 {
+			t.Errorf("want 1 assistant entry, got %d", assistants)
+		}
+	})
+
+	t.Run("partial appended after finalized assistant boundary", func(t *testing.T) {
+		log := NewMessageLog()
+		log.Append(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "turn1 final"}}},
+		}})
+		log.Append(llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash"}})
+		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "turn2 partial"}}},
+		}})
+		if log.Len() != 3 {
+			t.Fatalf("Len() = %d, want 3 (finalized assistant must close the partial window)", log.Len())
+		}
+		if log.Messages()[0].Assistant.Message.Content[0].Text != "turn1 final" {
+			t.Error("turn-1 finalized assistant was overwritten across the boundary")
+		}
+	})
+
+	t.Run("partial appended after user message boundary", func(t *testing.T) {
+		log := NewMessageLog()
+		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "stale"}}},
+		}})
+		log.Append(llm.SDKMessage{Type: "user", User: &llm.UserMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "new prompt"}}},
+		}})
+		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "new partial"}}},
+		}})
+		if log.Len() != 3 {
+			t.Fatalf("Len() = %d, want 3 (user message must close the partial window)", log.Len())
+		}
+		if log.Messages()[0].Assistant.Message.Content[0].Text != "stale" {
+			t.Error("pre-user partial was overwritten across the user boundary")
+		}
+	})
 }
 
 func TestMessageLog_ConcurrentAccess(t *testing.T) {

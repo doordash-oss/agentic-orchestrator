@@ -556,6 +556,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          feature.PhaseReview,
 		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
 	})
 	if buildErr != nil {
 		return ReviewFailed, "", fmt.Errorf("building feature final review session: %w", buildErr)
@@ -673,6 +674,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          feature.PhaseReview,
 		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(iterDir, PhaseCompleteFile),
 	})
 	if buildErr != nil {
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)

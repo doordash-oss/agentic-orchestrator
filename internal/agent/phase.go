@@ -178,6 +178,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(artifactDir, PhaseCompleteFile),
 	})
 	if err != nil {
 		return "", fmt.Errorf("building inquire session: %w", err)
@@ -582,6 +583,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
 		Phase:                          feature.PhaseKnowledgeBase,
 		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(kbDir, PhaseCompleteFile),
 	})
 	if err != nil {
 		return "", fmt.Errorf("building KB session: %w", err)
@@ -1155,6 +1157,13 @@ type BuildSessionOpts struct {
 	// that still pass ad-hoc prompts leave this false so BuildSession can
 	// append the guideline preamble when needed.
 	SystemPromptHasUsefulResources bool
+	// MarkerPath, when set, is the absolute path to the role's
+	// `phase_complete` marker file. Forwarded to llm.ProtocolOpts so providers
+	// that synthesize completion-vs-question signals from end-of-turn text
+	// (Codex) can use marker existence as the authoritative completion signal.
+	// Leave empty for paths that don't have a marker contract (e.g. tweak
+	// PTY sessions); the provider falls back to its legacy heuristic.
+	MarkerPath string
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1263,6 +1272,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		WritableRoots: writableRoots,
 		DSP:           pr.DangerouslySkipPermissions,
 		StateDir:      pr.StateDir,
+		MarkerPath:    opts.MarkerPath,
 	})
 
 	sessOpts = &ports.SessionOpts{

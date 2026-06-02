@@ -144,6 +144,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		AgentNames:                     []string{},
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(cfg.HelperIterDir, PhaseCompleteFile),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("running review helper: building session: %w", err)

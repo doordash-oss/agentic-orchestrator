@@ -135,11 +135,18 @@ Which files should I document?
 
 Free-form exception (rare): ask a free-form question without numbered options ONLY when the answer is inherently unconstrained — e.g. an exact version string, a free-form name, or an arbitrary identifier. "I'm not sure what they prefer" is NOT a valid reason — if you can imagine 3 plausible answers, list them.
 
+Confirmation traps to avoid. Open-ended confirmation prose disguised as a question is the most common failure mode and ends the phase as a protocol violation. NEVER end a turn with patterns like:
+- "Is that the X you want?" / "Sound good?" / "Does that work for you?"
+- "Shall I proceed with Y?" / "Want me to do Z?"
+- "Let me know if this looks right."
+If you want the user to confirm a recommendation, restructure as a 3-option choice where one option is "Yes, do X (Recommended)" and the other options are concrete alternatives (e.g. a different scope, a different approach, a stop-and-discuss option). The same rule applies on every turn of an interview — not just the first question. After the user answers one question and you do follow-up tool exploration, your next question still needs the full numbered-options format.
+
 Self-check before sending every question. If any answer is "no" and the free-form exception above does not apply, rewrite before sending:
 1. Does the stem end with a single "?" and ask one decision?
 2. Are there exactly 3 numbered options, each formatted "Label: short tradeoff description [confidence: 0.00]"?
 3. Is exactly one option marked "(Recommended)" in its label?
-4. Are the options mutually exclusive and cover the realistic answer space?`
+4. Are the options mutually exclusive and cover the realistic answer space?
+5. Is the question a real choice between alternatives, not a confirmation of a single direction you already proposed?`
 }
 
 func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {

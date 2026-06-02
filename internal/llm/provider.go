@@ -176,6 +176,7 @@ type ProtocolOpts struct {
 	WritableRoots  []string
 	DSP            bool
 	StateDir       string
+	MarkerPath     string
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider

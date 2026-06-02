@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -740,14 +741,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.mu.Unlock()
 
 			if !textContainsVerdictSentinel(lastText) {
-				// Well-formed numbered-options or free-form-sentinel questions
-				// are unambiguously questions regardless of whether the agent
-				// used tools earlier in the turn (e.g., a roadmap turn that
-				// explores the codebase via rg/cat and then asks the one
-				// ambiguity that exploration could not resolve). Convert
-				// these to AskUserQuestion so the session stays alive for
-				// the user's reply instead of emitting a SUCCESS Result that
-				// triggers session shutdown without a phase_complete.
 				if stripped, ok := trimFreeFormSentinel(lastText); ok {
 					p.mu.Lock()
 					p.formatRetryCount = 0
@@ -762,13 +755,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					return p.synthesizeAskUser(stem, options), true
 				}
 
-				// Free-form text that merely contains "?" is a weaker
-				// signal — the agent may be narrating intent at the tail
-				// of a tool-heavy completion turn ("Wrote the file. Done?"
-				// is a completion, not a question). Only the no-tool-use
-				// path goes through the reformat-retry / synthesize-without-
-				// options fallback.
-				if !hadToolUse && textLooksLikeQuestion(lastText) {
+				if textLooksLikeQuestion(lastText) && p.shouldReformatRetryLoose(hadToolUse) {
 					p.mu.Lock()
 					retry := p.formatRetryCount
 					p.mu.Unlock()
@@ -1275,19 +1262,6 @@ type askUserQuestionView struct {
 	Options  []askUserOptionView `json:"options,omitempty"`
 }
 
-// buildAskUserAnswerEnvelope wraps the user's AskUserQuestion answers in a
-// framed follow-up turn that restates the original question and option set.
-// On the synthetic ask-user path the response is delivered to Codex as a plain
-// user turn — without framing, an option label like "Replace README.md
-// (Recommended)" is indistinguishable from a fresh directive, and the agent
-// has been observed to act on it by jumping out of its current planning role
-// and into implementation work.
-//
-// The envelope keeps the agent inside its current task and role: it labels the
-// payload as an AskUserQuestion answer, restates the question and options for
-// context, and reminds the agent that the reply refines the existing task
-// rather than introducing a new one. The wire format remains a single user
-// turn — only the rendered text changes.
 func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]string) string {
 	parsed := parseAskUserQuestions(questions)
 	byText := make(map[string]askUserQuestionView, len(parsed))
@@ -1324,14 +1298,13 @@ func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]st
 		sb.WriteString(answers[q])
 		sb.WriteString("\n")
 	}
+	sb.WriteString("\n")
+	sb.WriteString(askingFormatReminder)
 	return strings.TrimSpace(sb.String())
 }
 
-// parseAskUserQuestions extracts the question entries from an AskUserQuestion
-// input payload. Production callers pass the envelope `{"questions":[...]}`,
-// but some test paths pass the inner array directly, so both shapes are
-// accepted. Returns nil on any parse failure — the caller falls back to a
-// no-options framing.
+const askingFormatReminder = `[Reminder] When you ask your next question, follow the asking-questions format from your system prompt.`
+
 func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
 	if len(raw) == 0 {
 		return nil
@@ -1349,11 +1322,15 @@ func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
 	return nil
 }
 
-// maxQuestionFormatRetries caps the number of automatic reminders we send back
-// to Codex when it emits a free-form question instead of the required numbered
-// options format. The cap ensures the user is never stuck if Codex genuinely
-// needs a free-form answer (e.g. a version string, arbitrary name, identifier).
 const maxQuestionFormatRetries = 2
+
+func (p *Protocol) shouldReformatRetryLoose(hadToolUse bool) bool {
+	if p.opts.MarkerPath == "" {
+		return !hadToolUse
+	}
+	_, err := os.Stat(p.opts.MarkerPath)
+	return err != nil
+}
 
 // parsedOption holds one numbered alternative extracted from a Codex question.
 type parsedOption struct {
@@ -1365,15 +1342,6 @@ type parsedOption struct {
 var numberedOptionRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)
 var confidenceSuffixRe = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
 
-// parseNumberedOptions scans Codex final-answer text for a "question stem +
-// numbered alternatives" layout. It mirrors the inference logic the TUI runs on
-// AskUserQuestion tool input but executes earlier in the pipeline so we can
-// (a) populate the tool-call options directly and (b) detect violations before
-// the user ever sees them.
-//
-// Returns the cleaned question stem, the parsed options, and ok=true only when
-// at least two well-formed options are found and the block does not look like
-// a bundle of multiple questions.
 func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	stem := make([]string, 0, len(lines))

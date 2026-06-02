@@ -16,6 +16,8 @@ Never end a turn with soft-confirmation prose such as "if this looks right, I'll
 
 For large output artifacts, prefer editing an existing skeleton over rewriting the whole file. Keep individual write/edit payloads below roughly 20KB.
 
+You may spawn sub-agents (via your CLI's Task / sub-agent tooling, when available) as needed — for example, to parallelize exploration, isolate large reads, or run independent checks.
+
 ## Output Roots
 
 {{ range .OutputRoots }}- `{{ .Name }}`: {{ .Path }}{{ if .Description }} — {{ .Description }}{{ end }}

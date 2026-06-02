@@ -202,6 +202,60 @@ func (p *Provider) MinVersion() [3]int { return [3]int{0, 116, 0} }
 
 func (p *Provider) EnvVarsToExclude() []string { return nil }
 
+func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
+	if _, err := p.ensureCodexHomeForStatus(); err != nil {
+		return llm.ProviderReadiness{
+			Ready:  false,
+			Detail: fmt.Sprintf("could not prepare Codex home: %v", err),
+			Remedy: "Fix CODEX_HOME or run 'codex login'",
+		}
+	}
+
+	runner := p.runner
+	if runner == nil {
+		// codex login status prints "Logged in using ..." to stderr, so
+		// capture combined output; DefaultRunner would drop it and make a
+		// logged-in account look like empty status.
+		runner = clirun.CombinedRunner()
+	}
+	out, err := runner(ctx, "codex", []string{"login", "status"}, nil)
+	text := strings.TrimSpace(string(out))
+	lower := strings.ToLower(text)
+
+	if err == nil && strings.Contains(lower, "logged in") && !strings.Contains(lower, "not logged in") {
+		return llm.ProviderReadiness{
+			Ready:  true,
+			Detail: text,
+		}
+	}
+	if strings.Contains(lower, "not logged in") {
+		return llm.ProviderReadiness{
+			Ready:  false,
+			Detail: "not logged in",
+			Remedy: "Run 'codex login'",
+		}
+	}
+	if err != nil {
+		detail := fmt.Sprintf("could not check login status: %v", err)
+		if text != "" {
+			detail = fmt.Sprintf("could not check login status: %s", text)
+		}
+		return llm.ProviderReadiness{
+			Ready:  false,
+			Detail: detail,
+			Remedy: "Run 'codex login status' to inspect Codex authentication",
+		}
+	}
+	if text == "" {
+		text = "<empty output>"
+	}
+	return llm.ProviderReadiness{
+		Ready:  false,
+		Detail: fmt.Sprintf("login status did not report a logged-in account: %s", text),
+		Remedy: "Run 'codex login'",
+	}
+}
+
 // SetModelCatalog sets the discovered model catalog.
 func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
 	p.mu.Lock()
@@ -329,6 +383,17 @@ func (p *Provider) prepareRealHome() error {
 		return err
 	}
 	return p.reconcileAgenticAgents(codexHome)
+}
+
+func (p *Provider) ensureCodexHomeForStatus() (string, error) {
+	codexHome, err := p.resolveCodexHome()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		return "", fmt.Errorf("creating codex home: %w", err)
+	}
+	return codexHome, nil
 }
 
 func defaultCodexHome() string {

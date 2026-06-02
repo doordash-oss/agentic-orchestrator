@@ -25,8 +25,9 @@ import (
 // Registry holds all registered LLM providers and routes model strings
 // to the appropriate provider.
 type Registry struct {
-	mu        sync.RWMutex
-	providers []LLMProvider
+	mu                   sync.RWMutex
+	providers            []LLMProvider
+	activeProviderFilter map[string]bool
 }
 
 // NewRegistry creates an empty provider registry.
@@ -42,12 +43,38 @@ func (r *Registry) Register(p LLMProvider) {
 	r.providers = append(r.providers, p)
 }
 
+// RestrictToProviders limits active model routing and detected-provider lists
+// to the supplied providers. Startup uses this after readiness checks so
+// installed-but-unauthenticated CLIs do not appear in defaults or model
+// selection.
+func (r *Registry) RestrictToProviders(providers []LLMProvider) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	filter := make(map[string]bool, len(providers))
+	for _, p := range providers {
+		if p != nil {
+			filter[p.Name()] = true
+		}
+	}
+	r.activeProviderFilter = filter
+}
+
+func (r *Registry) providerActiveLocked(p LLMProvider) bool {
+	if r.activeProviderFilter == nil {
+		return true
+	}
+	return r.activeProviderFilter[p.Name()]
+}
+
 // ForModel returns the provider that handles the given model string.
 // Returns an error if no provider matches.
 func (r *Registry) ForModel(model string) (LLMProvider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, p := range r.providers {
+		if !r.providerActiveLocked(p) {
+			continue
+		}
 		if p.MatchesModel(model) {
 			return p, nil
 		}
@@ -82,7 +109,7 @@ func (r *Registry) AvailableModels() []string {
 	defer r.mu.RUnlock()
 	var models []string
 	for _, p := range r.providers {
-		if p.DetectCLI() {
+		if p.DetectCLI() && r.providerActiveLocked(p) {
 			models = append(models, p.AvailableModels()...)
 		}
 	}
@@ -95,7 +122,7 @@ func (r *Registry) DetectedProviders() []LLMProvider {
 	defer r.mu.RUnlock()
 	var detected []LLMProvider
 	for _, p := range r.providers {
-		if p.DetectCLI() {
+		if p.DetectCLI() && r.providerActiveLocked(p) {
 			detected = append(detected, p)
 		}
 	}
@@ -147,6 +174,9 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 		bareModel := model[idx+1:]
 		for _, p := range r.providers {
 			if p.Name() == providerName {
+				if !r.providerActiveLocked(p) {
+					return nil, "", fmt.Errorf("provider %q is not available", providerName)
+				}
 				if bareModel == "" {
 					return p, "", nil
 				}
@@ -161,6 +191,9 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 
 	// Bare model name — search providers in registration order via MatchesModel
 	for _, p := range r.providers {
+		if !r.providerActiveLocked(p) {
+			continue
+		}
 		if canonical, ok := canonicalModelForProvider(p, model); ok {
 			return p, canonical, nil
 		}
@@ -262,7 +295,10 @@ func (r *Registry) AllModels() []ModelInfo {
 // Returns nil if the provider is not found or not detected.
 func (r *Registry) ModelsForProvider(name string) []ModelInfo {
 	p := r.ByName(name)
-	if p == nil || !p.DetectCLI() {
+	r.mu.RLock()
+	active := p != nil && r.providerActiveLocked(p)
+	r.mu.RUnlock()
+	if p == nil || !p.DetectCLI() || !active {
 		return nil
 	}
 	return catalogForProvider(p)

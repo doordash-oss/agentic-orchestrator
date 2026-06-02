@@ -121,6 +121,33 @@ func TestRegistry_AvailableModels(t *testing.T) {
 	}
 }
 
+func TestRegistry_RestrictToProvidersFiltersDetectedModelsAndRouting(t *testing.T) {
+	r := llm.NewRegistry()
+	claude := &stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true}
+	codex := &stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true}
+	r.Register(claude)
+	r.Register(codex)
+
+	r.RestrictToProviders([]llm.LLMProvider{claude})
+
+	detected := r.DetectedProviders()
+	if len(detected) != 1 || detected[0].Name() != "claude" {
+		t.Fatalf("DetectedProviders() = %v, want only claude", detected)
+	}
+	if got := r.AvailableModels(); !slices.Equal(got, []string{"opus"}) {
+		t.Fatalf("AvailableModels() = %v, want [opus]", got)
+	}
+	if _, err := r.ForModel("gpt-5.4"); err == nil {
+		t.Fatal("ForModel(gpt-5.4) succeeded after codex was filtered")
+	}
+	if _, _, err := r.ResolveModel("codex:gpt-5.4"); err == nil || !strings.Contains(err.Error(), "not available") {
+		t.Fatalf("ResolveModel(codex:gpt-5.4) error = %v, want not available", err)
+	}
+	if got := r.ModelsForProvider("codex"); got != nil {
+		t.Fatalf("ModelsForProvider(codex) = %v, want nil", got)
+	}
+}
+
 func TestRegistry_ByName(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubProvider{name: "claude", models: []string{"opus"}})

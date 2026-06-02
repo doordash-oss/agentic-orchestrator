@@ -741,14 +741,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.mu.Unlock()
 
 			if !textContainsVerdictSentinel(lastText) {
-				// Well-formed numbered-options or free-form-sentinel questions
-				// are unambiguously questions regardless of whether the agent
-				// used tools earlier in the turn (e.g., a roadmap turn that
-				// explores the codebase via rg/cat and then asks the one
-				// ambiguity that exploration could not resolve). Convert
-				// these to AskUserQuestion so the session stays alive for
-				// the user's reply instead of emitting a SUCCESS Result that
-				// triggers session shutdown without a phase_complete.
 				if stripped, ok := trimFreeFormSentinel(lastText); ok {
 					p.mu.Lock()
 					p.formatRetryCount = 0
@@ -763,27 +755,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					return p.synthesizeAskUser(stem, options), true
 				}
 
-				// Free-form text that merely contains "?" is a weaker
-				// signal than a numbered list or FREE_FORM sentinel —
-				// the agent may be narrating intent at the tail of a
-				// tool-heavy completion turn ("Wrote the file. Done?"
-				// is a completion, not a question). The disambiguator:
-				// did the agent create the phase_complete marker? When
-				// MarkerPath is configured we consult it directly; the
-				// presence of the marker is the authoritative completion
-				// signal. With no marker path we fall back to the
-				// historical !hadToolUse heuristic so existing test
-				// fixtures and provider call sites that don't yet plumb
-				// MarkerPath retain their behavior.
-				//
-				// The marker-aware path matters for grill-me phases,
-				// which explicitly tell the agent to "explore the
-				// codebase before asking a question". Tool use before a
-				// question is the desired behavior there, not a signal
-				// of completion — without the marker check, every
-				// codebase-grounded follow-up question would slip
-				// through to a SUCCESS Result and trigger a phase-level
-				// protocol-violation retry.
 				if textLooksLikeQuestion(lastText) && p.shouldReformatRetryLoose(hadToolUse) {
 					p.mu.Lock()
 					retry := p.formatRetryCount
@@ -1332,11 +1303,6 @@ func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]st
 	return strings.TrimSpace(sb.String())
 }
 
-// askingFormatReminder is the per-answer restatement of the question-format
-// contract. Appended to every AskUserQuestion answer envelope so Codex
-// re-anchors on the "exactly 3 numbered options OR FREE_FORM:" rule on each
-// turn instead of relying solely on the system prompt that was delivered
-// once at session start.
 const askingFormatReminder = `[Reminder] When you ask your next question, follow the asking-questions format from your system prompt:
 - Phrase one decision as a question stem ending with "?".
 - Provide exactly 3 mutually exclusive numbered options, each ending with "[confidence: 0.00]".
@@ -1344,11 +1310,6 @@ const askingFormatReminder = `[Reminder] When you ask your next question, follow
 - Or, when the answer is inherently unconstrained (an exact version string, free-form name, arbitrary identifier), prefix the question with "FREE_FORM:" and skip the options.
 Open-ended confirmation prose ("Is that the X you want?", "Sound good?", "Shall I proceed?") is not a valid question and may end the phase. If you want to confirm a recommendation, restructure as a 3-option choice where one option is "Yes, proceed (Recommended)" and the others are concrete alternatives.`
 
-// parseAskUserQuestions extracts the question entries from an AskUserQuestion
-// input payload. Production callers pass the envelope `{"questions":[...]}`,
-// but some test paths pass the inner array directly, so both shapes are
-// accepted. Returns nil on any parse failure — the caller falls back to a
-// no-options framing.
 func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
 	if len(raw) == 0 {
 		return nil
@@ -1366,10 +1327,6 @@ func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
 	return nil
 }
 
-// maxQuestionFormatRetries caps the number of automatic reminders we send back
-// to Codex when it emits a free-form question instead of the required numbered
-// options format. The cap ensures the user is never stuck if Codex genuinely
-// needs a free-form answer (e.g. a version string, arbitrary name, identifier).
 const maxQuestionFormatRetries = 2
 
 func (p *Protocol) shouldReformatRetryLoose(hadToolUse bool) bool {
@@ -1390,15 +1347,6 @@ type parsedOption struct {
 var numberedOptionRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)
 var confidenceSuffixRe = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
 
-// parseNumberedOptions scans Codex final-answer text for a "question stem +
-// numbered alternatives" layout. It mirrors the inference logic the TUI runs on
-// AskUserQuestion tool input but executes earlier in the pipeline so we can
-// (a) populate the tool-call options directly and (b) detect violations before
-// the user ever sees them.
-//
-// Returns the cleaned question stem, the parsed options, and ok=true only when
-// at least two well-formed options are found and the block does not look like
-// a bundle of multiple questions.
 func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	stem := make([]string, 0, len(lines))

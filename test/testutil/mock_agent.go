@@ -183,6 +183,15 @@ func WriteImplementNeedUserInputWithoutGate(artifactDir, note string, questions 
 	return writeImplArtifactsWithOptionalGate(artifactDir, "NEED_USER_INPUT", note, nil, questions...)
 }
 
+// WriteImplementNeedUserInputStubGate returns a NEED_USER_INPUT handoff whose
+// progress.md carries the real note + numbered questions but whose
+// need-user-input.yaml is a parseable blank stub (empty summary, one empty
+// prompt), reproducing the agent behaviour the gate reconciliation backfills.
+func WriteImplementNeedUserInputStubGate(artifactDir, note string, questions ...string) string {
+	gateBody := "summary: \"\"\nquestions:\n  - index: 0\n    prompt: \"\"\n    answer: \"\"\niteration: 1"
+	return writeImplArtifactsWithOptionalGate(artifactDir, "NEED_USER_INPUT", note, &gateBody, questions...)
+}
+
 // WriteImplementNeedUserInputMalformedGate returns a NEED_USER_INPUT handoff
 // with corrupt need-user-input.yaml content.
 func WriteImplementNeedUserInputMalformedGate(artifactDir, note string, questions ...string) string {

@@ -368,6 +368,77 @@ func TestImplementLoop_Routing_NEED_USER_INPUT_MalformedGateTripsProtocolViolati
 	}
 }
 
+// TestImplementLoop_Routing_NEED_USER_INPUT_StubGateBackfilledFromProgress
+// reproduces the real-world failure where the implementer emits a rich
+// progress.md (state note + numbered questions) but a blank need-user-input.yaml
+// stub. The persisted gate must be backfilled from progress.md so the TUI
+// renders the actual summary and questions rather than an empty form.
+func TestImplementLoop_Routing_NEED_USER_INPUT_StubGateBackfilledFromProgress(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-stub-gate")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		_ = os.MkdirAll(d, 0o755)
+	}
+
+	const note = "Plan contradicts the worktree; the owner must choose an ordering."
+	questions := []string{
+		"Should the pre-flight run before or after the latest-release fetch?",
+		"Is aborting an already-current install under an unwritable dir acceptable?",
+	}
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteImplementNeedUserInputStubGate(artifactDir, note, questions...)+"\n"+
+			testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	planPath := writePlanFile(t, artifactDir, "Stub gate backfill test")
+	result, err := RunImplementationLoop(ImplementConfig{
+		Feature: f, WorkDir: workDir, PlanPath: planPath, MaxIterations: 5,
+		MaxConsecFails: 3, MaxConsecNoProgress: 3, ExitCriteria: "Relevant tests pass",
+		Model: "agent", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+		BuildSession: mockBuildSession(agentScript, reviewScript),
+	}, sm)
+	if err != nil {
+		t.Fatalf("loop error: %v", err)
+	}
+	if result.FinalStatus != "need_user_input" {
+		t.Fatalf("FinalStatus = %q, want need_user_input (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if result.NeedUserInputPath == "" {
+		t.Fatalf("NeedUserInputPath should be set when a gate is persisted")
+	}
+	rec, readErr := ReadNeedUserInputRecord(result.NeedUserInputPath)
+	if readErr != nil {
+		t.Fatalf("read gate: %v", readErr)
+	}
+	if rec.Summary != note {
+		t.Errorf("gate summary = %q, want backfilled progress note %q", rec.Summary, note)
+	}
+	if len(rec.Questions) != len(questions) {
+		t.Fatalf("gate questions = %d, want %d backfilled from progress.md", len(rec.Questions), len(questions))
+	}
+	for i, want := range questions {
+		if rec.Questions[i].Prompt != want {
+			t.Errorf("gate Q%d prompt = %q, want %q", i+1, rec.Questions[i].Prompt, want)
+		}
+		if rec.Questions[i].Index != i+1 {
+			t.Errorf("gate Q%d index = %d, want %d", i+1, rec.Questions[i].Index, i+1)
+		}
+	}
+}
+
 // TestImplementLoop_Routing_MisplacedQuestionsStayOnProtocolViolationPath
 // locks in the conditional ordering rule: even when the agent emits a
 // `## Questions for User` section with valid numbered prompts, placing it

@@ -67,14 +67,12 @@ On first launch, Agentic Orchestrator walks you through a welcome flow to select
 
 ### Provider CLIs — install at least one
 
-Agentic Orchestrator needs **at least one** AI provider CLI. You can install just one and run everything on it, or install both to split work across providers (Claude for context/planning/implementation, Codex for independent review).
+Agentic Orchestrator needs **at least one** AI provider CLI.
 
 | Tool | Role | Install |
 |------|------|---------|
 | **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
 | **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
-
-If you install only one provider, point the per-phase model defaults at it (see [Configuration](#configuration)) and restrict the orchestrator with `--providers` (e.g. `--providers claude` or `--providers codex`) so it never routes work to a CLI you don't have.
 
 ### Optional
 

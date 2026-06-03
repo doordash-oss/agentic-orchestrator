@@ -175,6 +175,15 @@ Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agen
 | `--help`, `-h` | Print usage | - |
 | `--version`, `-v` | Print version | - |
 
+## Updating
+
+Run `agentico update` to upgrade to the latest stable release, or `agentico update [--check|-n]` to report the current and latest available versions without installing. The `--check` form (alias `-n`) exits `0` and prints an already-up-to-date message when you are already on the newest release.
+
+| Invocation | Description |
+|------------|-------------|
+| `agentico update` | Upgrade to the latest stable release |
+| `agentico update --check` / `agentico update -n` | Check for a newer release without installing |
+
 ## State Directory Layout
 
 ```

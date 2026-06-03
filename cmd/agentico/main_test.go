@@ -79,7 +79,7 @@ func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
 		if enabledProviders != nil {
 			t.Errorf("enabledProviders = %v, want nil", enabledProviders)
 		}
-	})
+	}, failingUpdater(t))
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
 	}
@@ -106,6 +106,7 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 			gotDangerouslySkipPerms = dangerouslySkipPerms
 			gotProviders = enabledProviders
 		},
+		failingUpdater(t),
 	)
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)

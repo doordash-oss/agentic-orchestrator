@@ -84,6 +84,10 @@ func TestUserFacingDocsDescribeTUIOnlyLaunchSurface(t *testing.T) {
 			"--dangerously-skip-permissions",
 			"--help",
 			"--version",
+			// Phase 1 update surface: docs must advertise the new subcommand
+			// and its check-only flag alongside the retained launch flags.
+			"agentico update",
+			"--check",
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing retained launch guidance %q", rel, want)

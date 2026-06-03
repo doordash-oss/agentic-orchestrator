@@ -70,6 +70,7 @@ const (
 	launchModeTUI launchMode = iota
 	launchModeHelp
 	launchModeVersion
+	launchModeUpdate
 )
 
 type launchOptions struct {
@@ -78,9 +79,18 @@ type launchOptions struct {
 	dangerouslySkipPerms bool
 	enabledProviders     []string
 	mode                 launchMode
+	// updateCheck is set when update mode was selected with --check / -n,
+	// requesting a check-only run that never attempts to install.
+	updateCheck bool
 }
 
 type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string)
+
+// updater is the injectable update seam. It mirrors tuiLauncher: production
+// wiring passes the real updater, tests pass a fake. It returns the process
+// exit code the router propagates verbatim. The update path deliberately never
+// acquires the instance lock, starts the fx container, or reconciles assets.
+type updater func(checkOnly bool, stdout, stderr io.Writer) int
 
 func defaultLaunchOptions() launchOptions {
 	parent := pickRuntimeParent(os.Stat)
@@ -108,10 +118,10 @@ func pickRuntimeParent(stat func(string) (os.FileInfo, error)) string {
 }
 
 func run() {
-	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runTUI))
+	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runTUI, runUpdate))
 }
 
-func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher) int {
+func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update updater) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -124,6 +134,12 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher) int {
 	case launchModeVersion:
 		fmt.Fprintf(stdout, "agentico v%s\n", tui.GetVersion())
 		return 0
+	case launchModeUpdate:
+		// Dispatch through the updater seam ahead of the TUI branch, early
+		// returning its exit code — exactly as help/version early-return.
+		// The update path never reaches the TUI launcher below, so it takes
+		// no instance lock, builds no fx container, and reconciles no assets.
+		return update(opts.updateCheck, stdout, stderr)
 	default:
 		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders)
 		return 0
@@ -132,6 +148,14 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher) int {
 
 func parseLaunchArgs(args []string) (launchOptions, error) {
 	opts := defaultLaunchOptions()
+	// `update` is a standalone subcommand recognized only as the first
+	// argument. Its sub-flags (--check / -n) are valid only in this context;
+	// elsewhere they fall through to the launch-flag loop and reject as
+	// unknown flags, and every other bare word still rejects as an unknown
+	// command.
+	if len(args) > 0 && args[0] == "update" {
+		return parseUpdateArgs(opts, args[1:])
+	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
@@ -177,8 +201,11 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
 Usage: agentico [flags]
+       agentico update [--check|-n]
 
 Launches the Bubble Tea TUI dashboard.
+Run 'agentico update' to upgrade the binary, or 'agentico update --check'
+(alias -n) to report the latest available release without installing.
 
 Flags:
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
@@ -186,6 +213,7 @@ Flags:
   --providers <list>               Comma-separated provider list (default: all)
                                    Available: claude, codex
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
+  --check, -n                      With 'update': check for a newer release without installing
   --help, -h                       Show this help
   --version, -v                    Show version
 

@@ -46,6 +46,55 @@ type NeedUserInputQuestion struct {
 // inside an iteration directory.
 const NeedUserInputArtifactName = "need-user-input.yaml"
 
+// reconcileNeedUserInputGate returns the gate questionnaire to persist for a
+// paused NEED_USER_INPUT iteration. The implementer-authored agentRec is
+// authoritative, but each empty field falls back to the validated progress.md
+// handoff (state note for the summary, numbered questions for the prompts) so a
+// blank stub never surfaces as an empty gate. Surviving questions are
+// re-indexed 1-based.
+func reconcileNeedUserInputGate(agentRec *NeedUserInputRecord, progress *ParsedProgress, iteration int) NeedUserInputRecord {
+	var rec NeedUserInputRecord
+	if agentRec != nil {
+		rec = *agentRec
+	}
+	rec.Iteration = iteration
+	rec.Summary = strings.TrimSpace(rec.Summary)
+
+	questions := make([]NeedUserInputQuestion, 0, len(rec.Questions))
+	for _, q := range rec.Questions {
+		prompt := strings.TrimSpace(q.Prompt)
+		if prompt == "" {
+			continue
+		}
+		questions = append(questions, NeedUserInputQuestion{
+			Index:  len(questions) + 1,
+			Prompt: prompt,
+			Answer: q.Answer,
+		})
+	}
+
+	if progress != nil {
+		if rec.Summary == "" {
+			rec.Summary = strings.TrimSpace(progress.StateNote)
+		}
+		if len(questions) == 0 {
+			for _, p := range progress.Questions {
+				prompt := strings.TrimSpace(p)
+				if prompt == "" {
+					continue
+				}
+				questions = append(questions, NeedUserInputQuestion{
+					Index:  len(questions) + 1,
+					Prompt: prompt,
+				})
+			}
+		}
+	}
+
+	rec.Questions = questions
+	return rec
+}
+
 // NeedUserInputPath returns the absolute path of the gate artifact for the
 // supplied iteration directory.
 func NeedUserInputPath(iterDir string) string {

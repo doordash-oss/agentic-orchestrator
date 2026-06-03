@@ -600,9 +600,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// later resume runs iteration N+1.
 			if parsed.State == StateNeedUserInput {
 				gatePath := NeedUserInputPath(iterDir)
-				rec := outcome.NeedUserInput
-				if rec == nil {
-					return nil, fmt.Errorf("validating implementer contract: need-user-input payload missing after successful validation")
+				rec := reconcileNeedUserInputGate(outcome.NeedUserInput, parsed, i)
+				if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+					return nil, fmt.Errorf("persisting need-user-input gate: %w", err)
 				}
 				meta.AgentStatus = "NEED_USER_INPUT"
 				meta.ReviewStatus = "skipped_need_user_input"

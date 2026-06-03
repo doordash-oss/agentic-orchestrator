@@ -39,8 +39,6 @@ curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/downlo
 ~/.local/bin/agentico
 ```
 
-If `~/.local/bin` isn't on your `PATH`, add `export PATH="$HOME/.local/bin:$PATH"` to your shell profile (`~/.zshrc`, `~/.bashrc`). Prefer a system-wide install instead? Move the binary into `/usr/local/bin` (`sudo mv ~/.local/bin/agentico /usr/local/bin/`), or just pick the archive matching your OS and architecture from the [releases page](https://github.com/doordash-oss/agentic-orchestrator/releases/latest) and extract it wherever you like.
-
 <details>
 <summary>Build from source (requires Go 1.25+)</summary>
 

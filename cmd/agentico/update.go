@@ -78,6 +78,22 @@ const (
 	// rather than touching the binary or the network.
 	updateFromSourceGuidance = "agentico was built from source; development builds are not updated automatically.\n" +
 		"Update from source instead: pull the latest changes and rebuild (for example, `git pull` then `make install`)."
+
+	// updateNotWritableMsg is printed to stderr when the tarball pre-flight finds
+	// the swap's target directory unwritable. It names the directory and points
+	// the user at re-running with elevated privileges. It is intentionally
+	// distinct from the generic tarball-failure error so the remedy is
+	// unambiguous, and the command never self-escalates — it only instructs.
+	updateNotWritableMsg = "Error: cannot update agentico because the install directory %[1]s is not writable.\n" +
+		"Re-run with elevated privileges, for example: sudo agentico update"
+
+	// updateResignWarning is printed to stderr when the best-effort macOS ad-hoc
+	// re-sign of the freshly swapped binary fails (codesign missing or a signing
+	// error). The update has already succeeded and is not rolled back; the warning
+	// tells the user how to recover if the binary will not launch.
+	updateResignWarning = "Warning: agentico was updated but could not be ad-hoc re-signed (%[1]v); " +
+		"on Apple Silicon it may fail to launch (\"killed: 9\").\n" +
+		"If so, sign it manually: codesign -s - %[2]s"
 )
 
 // errNoStableRelease signals that a repository has no published non-draft,
@@ -144,6 +160,26 @@ type updateDeps struct {
 	// runTarball is the injectable seam for the release-tarball branch: it
 	// downloads, verifies, extracts, and atomically swaps the binary in place.
 	runTarball tarballUpdater
+
+	// binaryPath is the symlink-resolved path of the running binary — the swap's
+	// target. The tarball pre-flight derives the directory to probe from it, and
+	// the darwin re-sign step signs exactly this path. Empty when the executable
+	// path could not be resolved.
+	binaryPath string
+	// goos is the target operating system for OS-gated post-swap steps
+	// (production: runtime.GOOS). It is a field rather than a direct runtime.GOOS
+	// read so the darwin re-sign gate is deterministically testable on any host.
+	goos string
+	// checkWritable reports whether the swap's target directory admits the
+	// temp-create + rename the swap performs. It is injected so the pre-flight is
+	// deterministic regardless of the test process's uid (a root process bypasses
+	// real permission bits). Nil disables the pre-flight on unit paths that do not
+	// exercise it.
+	checkWritable func(dir string) error
+	// runCodesign is the injectable command-runner seam for the macOS ad-hoc
+	// re-sign subprocess — the same commandRunner kind the go-install branch uses,
+	// so no real codesign runs in the unit suite.
+	runCodesign commandRunner
 }
 
 // runUpdate is the production updater seam wired into the router. It resolves
@@ -152,6 +188,9 @@ type updateDeps struct {
 func runUpdate(checkOnly bool, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
 	defer cancel()
+	// Resolve the running binary's path once so the tarball swap, the pre-flight
+	// writability probe, and the darwin re-sign all target the same path.
+	binPath := resolveBinaryPath()
 	return runUpdateWith(ctx, checkOnly, stdout, stderr, updateDeps{
 		currentVersion: tui.GetVersion(),
 		method:         gatherInstallMethod,
@@ -159,8 +198,12 @@ func runUpdate(checkOnly bool, stdout, stderr io.Writer) int {
 		fetchLatest:    githubFetchLatestStableTag(http.DefaultClient, githubBaseURL()),
 		mainPackage:    mainPackagePath,
 		binaryDir:      resolveBinaryDir,
-		runInstall:     execGoInstall,
-		runTarball:     newTarballUpdater(http.DefaultClient, githubBaseURL(), resolveBinaryPath(), runtime.GOOS, runtime.GOARCH),
+		runInstall:     execCommand,
+		runTarball:     newTarballUpdater(http.DefaultClient, githubBaseURL(), binPath, runtime.GOOS, runtime.GOARCH),
+		binaryPath:     binPath,
+		goos:           runtime.GOOS,
+		checkWritable:  checkDirWritable,
+		runCodesign:    execCommand,
 	})
 }
 
@@ -183,6 +226,19 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 	method := deps.method()
 	if method == installMethodDevBuild {
 		return reportDevBuild(checkOnly, stdout, stderr, deps.currentVersion)
+	}
+
+	// Pre-flight the swap's target directory on the one path that will actually
+	// mutate the binary: a bare (non --check) tarball update. It sits ahead of
+	// every network request — the latest-release lookup below and the tarball
+	// download/swap seam — so an unwritable, root-owned install aborts here with
+	// elevated-privilege guidance and no GitHub request or binary change occurs.
+	// --check, the go-install branch, and the dev-build refusal never reach this
+	// gate, so their behavior is unchanged.
+	if !checkOnly && method == installMethodTarball {
+		if !preflightTarballWritable(stderr, deps) {
+			return 1
+		}
 	}
 
 	fmt.Fprintln(stdout, updateCheckingNarrative)
@@ -283,6 +339,9 @@ func performGoInstall(stdout, stderr io.Writer, deps updateDeps, current, latest
 // extraction failure — is surfaced to stderr with a non-zero exit and no success
 // transition, leaving the existing binary untouched.
 func performTarballUpdate(stdout, stderr io.Writer, deps updateDeps, slug, current, latest string) int {
+	// The swap's target directory was already verified writable by the pre-flight
+	// in runUpdateWith, ahead of the latest-release fetch — so this branch is
+	// reached only once the directory admits the temp-create + rename swap.
 	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout)
 	defer cancel()
 
@@ -291,8 +350,59 @@ func performTarballUpdate(stdout, stderr io.Writer, deps updateDeps, slug, curre
 		return 1
 	}
 
+	// Best-effort macOS ad-hoc re-sign of the freshly swapped binary. It is
+	// strictly non-fatal: the swap has already succeeded, so any failure is
+	// downgraded to a warning and the update still reports success.
+	resignDarwinBinary(ctx, stderr, deps)
+
 	fmt.Fprintf(stdout, "Updated agentico %s → %s\n", normalizeVersion(current), normalizeVersion(latest))
 	return 0
+}
+
+// preflightTarballWritable verifies the swap's target directory — the directory
+// containing the resolved running binary — is writable before any network
+// request. It returns true to proceed and false to abort; on a failed check it
+// prints directory-naming, elevated-privilege guidance to stderr. It never
+// self-escalates: it only instructs. The check is skipped (proceed) when no seam
+// is wired, mirroring goInstallEnv's nil handling for unit paths that do not
+// exercise the pre-flight.
+func preflightTarballWritable(stderr io.Writer, deps updateDeps) bool {
+	if deps.checkWritable == nil {
+		return true
+	}
+	dir := tarballSwapDir(deps.binaryPath)
+	if err := deps.checkWritable(dir); err != nil {
+		fmt.Fprintf(stderr, updateNotWritableMsg+"\n", dir)
+		return false
+	}
+	return true
+}
+
+// tarballSwapDir returns the directory the swap writes into — the directory
+// containing the resolved running binary — or "" when the binary path is
+// unresolved (which checkDirWritable then reports as an error).
+func tarballSwapDir(binaryPath string) string {
+	if strings.TrimSpace(binaryPath) == "" {
+		return ""
+	}
+	return filepath.Dir(binaryPath)
+}
+
+// resignDarwinBinary ad-hoc re-signs the freshly swapped binary on macOS,
+// mirroring the system-install step (codesign -s -). It is gated to darwin (a
+// literal no-op elsewhere, on both Apple Silicon and Intel) and strictly
+// non-fatal: a missing codesign tool or a signing failure is downgraded to a
+// stderr warning while the update still reports success — the swap has already
+// happened and is not rolled back. The subprocess runs through the injected
+// command-runner seam under the caller's update context, so no real codesign
+// runs in the unit suite; a nil runner is likewise a no-op.
+func resignDarwinBinary(ctx context.Context, stderr io.Writer, deps updateDeps) {
+	if deps.goos != "darwin" || deps.runCodesign == nil {
+		return
+	}
+	if _, err := deps.runCodesign(ctx, "codesign", []string{"-s", "-", deps.binaryPath}, nil); err != nil {
+		fmt.Fprintf(stderr, updateResignWarning+"\n", err, deps.binaryPath)
+	}
 }
 
 // goInstallEnv returns the environment for the `go install` subprocess: the
@@ -339,10 +449,11 @@ func writeCapturedOutput(stderr io.Writer, out []byte) {
 	}
 }
 
-// execGoInstall is the production command-runner seam: it runs the command
-// under ctx with the augmented environment and returns the combined
-// stdout+stderr output. Tests swap in a fake so no real install runs.
-func execGoInstall(ctx context.Context, name string, args, env []string) ([]byte, error) {
+// execCommand is the production command-runner seam shared by the go-install
+// re-install and the macOS ad-hoc re-sign: it runs the command under ctx with
+// the given environment and returns the combined stdout+stderr output. Tests
+// swap in a fake so neither a real `go install` nor a real `codesign` runs.
+func execCommand(ctx context.Context, name string, args, env []string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = env
 	return cmd.CombinedOutput()
@@ -686,6 +797,27 @@ func extractAgenticoBinary(archive []byte) ([]byte, error) {
 		}
 	}
 	return nil, fmt.Errorf("archive does not contain an %q binary", innerBinaryName)
+}
+
+// checkDirWritable reports whether dir admits the tarball swap's temp-create +
+// rename by performing that same first step: it creates, then immediately
+// removes, a temp entry in dir. Modeling the swap's real operation — rather than
+// inspecting permission bits, which misjudge root and ACLs — means a read-only or
+// root-owned directory fails here exactly as the later rename would. An empty
+// dir (the running binary's directory could not be resolved) is reported as an
+// error so the caller aborts cleanly rather than probing the process's temp dir.
+func checkDirWritable(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return errors.New("the running binary's directory could not be resolved")
+	}
+	f, err := os.CreateTemp(dir, ".agentico-preflight-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return nil
 }
 
 // swapBinary performs the atomic, non-destructive in-place swap: it writes the

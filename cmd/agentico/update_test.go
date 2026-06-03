@@ -1292,3 +1292,273 @@ func TestSwapBinaryFailsClosedOnBadDir(t *testing.T) {
 		t.Errorf("target must not exist after a failed swap; stat err = %v", err)
 	}
 }
+
+// --- Phase 5: tarball robustness — pre-flight writability + macOS re-sign ----
+
+// failingTarball returns a tarballUpdater that fails the test if invoked. It
+// guards the pre-flight: an unwritable target must abort before the download
+// seam (which issues the GitHub requests and mutates the binary) is ever
+// reached.
+func failingTarball(t *testing.T) tarballUpdater {
+	t.Helper()
+	return func(context.Context, string, string) error {
+		t.Fatal("tarball download seam invoked after a pre-flight that must have aborted")
+		return nil
+	}
+}
+
+// newTarballSuccessDeps wires a hermetic release server, a writable temp target
+// binary, and the base updateDeps for a successful tarball swap through
+// runUpdateWith (current 1.0.0 → latest 2.0.0). Callers set the Phase-5 seams
+// (goos, binaryPath, runCodesign, checkWritable) on the returned deps before
+// invoking runUpdateWith. The returned target is the swapped-in-place path.
+func newTarballSuccessDeps(t *testing.T) (updateDeps, string) {
+	t.Helper()
+	const slug = "doordash-oss/agentic-orchestrator"
+	archiveName := fmt.Sprintf("agentic-orchestrator_2.0.0_%s_%s.tar.gz", testTarballGOOS, testTarballGOARCH)
+	archive := makeTarGz(t, map[string]string{"agentico": "NEW-AGENTICO-BINARY-BYTES"})
+	checksums := fmt.Appendf(nil, "%s  %s\n", sha256Hex(archive), archiveName)
+	srv := newTarballServer(t, slug, "v2.0.0", archiveName, archive, checksums)
+	target, _ := writeTargetBinary(t, "OLD-AGENTICO-BINARY")
+	deps := updateDeps{
+		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           func() (string, error) { return slug, nil },
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runTarball:     newTarballUpdater(srv.srv.Client(), srv.srv.URL, target, testTarballGOOS, testTarballGOARCH),
+	}
+	return deps, target
+}
+
+// --- Task 1: pre-flight writability check -----------------------------------
+
+// checkDirWritable performs the swap's own temp-create + rename probe: a
+// writable directory succeeds, a nonexistent one fails, and an empty path (the
+// binary directory could not be resolved) is reported as an error — all
+// independent of the test process's uid.
+func TestCheckDirWritable(t *testing.T) {
+	t.Run("writable directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := checkDirWritable(dir); err != nil {
+			t.Errorf("checkDirWritable(writable temp dir) = %v, want nil", err)
+		}
+		// Inspect the same directory that was probed: the temp-create + remove
+		// must leave nothing behind.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("reading probed dir: %v", err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("probe must leave no temp entry behind; found %d", len(entries))
+		}
+	})
+	t.Run("nonexistent directory", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "no-such-subdir")
+		if err := checkDirWritable(dir); err == nil {
+			t.Error("checkDirWritable(nonexistent dir) = nil, want error")
+		}
+	})
+	t.Run("empty path", func(t *testing.T) {
+		if err := checkDirWritable(""); err == nil {
+			t.Error("checkDirWritable(\"\") = nil, want error")
+		}
+	})
+}
+
+// On the real tarball update path, an unwritable target directory aborts before
+// any download: the command exits non-zero, prints stderr guidance naming the
+// directory and pointing at elevated privileges (sudo), prints no old → new
+// line, and never reaches the download seam. The verdict is driven by an
+// injected check, so it is deterministic regardless of the test process's uid.
+func TestRunUpdateWithTarballPreflightUnwritableAborts(t *testing.T) {
+	const dir = "/usr/local/bin"
+	var checkedDir string
+	var fetchCalled bool
+	deps := updateDeps{
+		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           okSlug,
+		// The latest-release lookup is the first GitHub request. An unwritable
+		// target must abort the pre-flight ahead of it, so this must never run.
+		fetchLatest: func(context.Context, string) (string, error) {
+			fetchCalled = true
+			t.Error("latest-release fetch must not run when the pre-flight aborts an unwritable tarball update")
+			return "v2.0.0", nil
+		},
+		binaryPath: dir + "/agentico",
+		checkWritable: func(d string) error {
+			checkedDir = d
+			return errors.New("permission denied")
+		},
+		runTarball: failingTarball(t), // the download/swap seam must never be reached
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+
+	t.Logf("exit=%d fetchCalled=%v\nstdout:\n%s\nstderr:\n%s", code, fetchCalled, stdout.String(), stderr.String())
+	if code == 0 {
+		t.Fatalf("unwritable target must exit non-zero, got %d", code)
+	}
+	if fetchCalled {
+		t.Error("the pre-flight must abort before the latest-release GitHub fetch (no network request occurs)")
+	}
+	if checkedDir != dir {
+		t.Errorf("pre-flight probed %q, want the binary's directory %q", checkedDir, dir)
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, dir) {
+		t.Errorf("stderr must name the unwritable directory %q\nfull:\n%s", dir, errOut)
+	}
+	if !strings.Contains(strings.ToLower(errOut), "sudo") {
+		t.Errorf("stderr must point the user at elevated privileges (sudo)\nfull:\n%s", errOut)
+	}
+	if strings.Contains(errOut, "could not update from the release tarball") {
+		t.Errorf("the pre-flight message must be distinct from the generic tarball-failure error\nfull:\n%s", errOut)
+	}
+	if strings.Contains(stdout.String(), "→") {
+		t.Errorf("no old → new line may print when the pre-flight aborts\nfull:\n%s", stdout.String())
+	}
+}
+
+// A writable target directory lets the flow proceed unchanged into the existing
+// fetch → verify → swap path: the swap happens, the old → new line prints, and
+// the command exits 0.
+func TestRunUpdateWithTarballPreflightWritableProceeds(t *testing.T) {
+	deps, target := newTarballSuccessDeps(t)
+	var checked bool
+	deps.binaryPath = target
+	deps.checkWritable = func(string) error { checked = true; return nil }
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !checked {
+		t.Error("the pre-flight writability check must run on the tarball path")
+	}
+	if !strings.Contains(stdout.String(), "1.0.0 → 2.0.0") {
+		t.Errorf("a writable target must proceed to the swap and print the transition\nfull:\n%s", stdout.String())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading swapped target: %v", err)
+	}
+	if string(got) != "NEW-AGENTICO-BINARY-BYTES" {
+		t.Errorf("target content = %q, want the swapped-in bytes", got)
+	}
+}
+
+// --- Task 2: best-effort macOS ad-hoc re-sign -------------------------------
+
+// After a successful darwin swap, codesign -s - is invoked against the resolved
+// binary path through the runner seam, mirroring the system-install step; the
+// success line still prints, no warning is emitted, and the command exits 0.
+func TestRunUpdateWithTarballResignsDarwin(t *testing.T) {
+	deps, target := newTarballSuccessDeps(t)
+	var rec recordedInstall
+	deps.goos = "darwin"
+	deps.binaryPath = target
+	deps.runCodesign = fakeRunner(&rec, nil, nil)
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+
+	t.Logf("exit=%d codesign=%v %v\nstdout:\n%s\nstderr:\n%s", code, rec.name, rec.args, stdout.String(), stderr.String())
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !rec.called {
+		t.Fatal("codesign runner was not invoked after a darwin swap")
+	}
+	if rec.name != "codesign" {
+		t.Errorf("command name = %q, want %q", rec.name, "codesign")
+	}
+	wantArgs := []string{"-s", "-", target}
+	if !slices.Equal(rec.args, wantArgs) {
+		t.Errorf("codesign args = %v, want %v (mirroring the system-install step)", rec.args, wantArgs)
+	}
+	if !strings.Contains(stdout.String(), "1.0.0 → 2.0.0") {
+		t.Errorf("stdout missing old → new transition\nfull:\n%s", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("a successful re-sign must emit no warning; stderr = %q", stderr.String())
+	}
+}
+
+// A missing codesign tool is non-fatal: a stderr warning is printed, the old →
+// new success line still prints on stdout, and the command exits 0 (the swap is
+// not undone).
+func TestRunUpdateWithTarballResignMissingToolNonFatal(t *testing.T) {
+	deps, target := newTarballSuccessDeps(t)
+	var rec recordedInstall
+	deps.goos = "darwin"
+	deps.binaryPath = target
+	deps.runCodesign = fakeRunner(&rec, nil, &exec.Error{Name: "codesign", Err: exec.ErrNotFound})
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	if code != 0 {
+		t.Fatalf("a missing codesign tool must stay non-fatal (exit 0), got %d\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1.0.0 → 2.0.0") {
+		t.Errorf("the success line must still print when re-sign is skipped\nfull:\n%s", stdout.String())
+	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "warning") {
+		t.Errorf("a missing codesign tool must emit a non-fatal warning\nfull:\n%s", stderr.String())
+	}
+}
+
+// A codesign invocation failure (non-zero exit) is non-fatal: a stderr warning
+// is printed, the success line still prints, and the command exits 0 — the swap
+// is not rolled back.
+func TestRunUpdateWithTarballResignFailureNonFatal(t *testing.T) {
+	deps, target := newTarballSuccessDeps(t)
+	var rec recordedInstall
+	deps.goos = "darwin"
+	deps.binaryPath = target
+	deps.runCodesign = fakeRunner(&rec, []byte("codesign: some signing error"), errors.New("exit status 1"))
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	if code != 0 {
+		t.Fatalf("a codesign failure must stay non-fatal (exit 0), got %d\nstderr: %s", code, stderr.String())
+	}
+	if !rec.called {
+		t.Fatal("codesign runner was not invoked")
+	}
+	if !strings.Contains(stdout.String(), "1.0.0 → 2.0.0") {
+		t.Errorf("the success line must still print on a re-sign failure\nfull:\n%s", stdout.String())
+	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "warning") {
+		t.Errorf("a codesign failure must emit a non-fatal warning\nfull:\n%s", stderr.String())
+	}
+}
+
+// Off darwin the re-sign is a literal no-op: the runner is never invoked, no
+// warning prints, the success line prints, and the command exits 0.
+func TestRunUpdateWithTarballNoResignOffDarwin(t *testing.T) {
+	deps, target := newTarballSuccessDeps(t)
+	deps.goos = "linux"
+	deps.binaryPath = target
+	deps.runCodesign = failingRunner(t) // must never be invoked off darwin
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1.0.0 → 2.0.0") {
+		t.Errorf("stdout missing old → new transition\nfull:\n%s", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("off-darwin must emit no re-sign warning; stderr = %q", stderr.String())
+	}
+}

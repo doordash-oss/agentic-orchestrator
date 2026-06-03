@@ -52,21 +52,35 @@ func (l *MessageLog) UpdateLast(msg llm.SDKMessage) {
 	l.messages[len(l.messages)-1] = msg
 }
 
-// UpdateLastAssistantPartial replaces the last message only if it is also an
-// assistant partial. Otherwise it appends the message as a new entry. This
-// prevents partial updates from overwriting unrelated messages (e.g. tool
-// results or user messages that arrived between partials).
+// UpdateLastAssistantPartial coalesces an incoming assistant message into the
+// most recent in-flight streaming partial.
 func (l *MessageLog) UpdateLastAssistantPartial(msg llm.SDKMessage) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.messages) > 0 {
-		last := l.messages[len(l.messages)-1]
-		if last.Assistant != nil && last.Subtype == "partial" {
-			l.messages[len(l.messages)-1] = msg
+	for i := len(l.messages) - 1; i >= 0; i-- {
+		existing := l.messages[i]
+		if existing.Assistant != nil && existing.Subtype == "partial" {
+			l.messages[i] = msg
 			return
+		}
+		if isPartialCoalesceBoundary(existing) {
+			break
 		}
 	}
 	l.messages = append(l.messages, msg)
+}
+
+// isPartialCoalesceBoundary reports whether msg closes the streaming-partial
+// window for UpdateLastAssistantPartial. Boundary events represent real
+// state transitions (turn end, new user input, permission gate, etc.) that
+// must not be skipped when coalescing partials.
+func isPartialCoalesceBoundary(msg llm.SDKMessage) bool {
+	return msg.Assistant != nil ||
+		msg.Result != nil ||
+		msg.User != nil ||
+		msg.Init != nil ||
+		msg.ControlRequest != nil ||
+		msg.Compact != nil
 }
 
 // Messages returns a copy of all messages.

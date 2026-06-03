@@ -668,6 +668,7 @@ func (f *Feature) SetRun(r *Run) {
 	f.run = r
 	if r != nil {
 		f.syncRunToShadows()
+		f.reconcileTerminalRunFailure()
 	}
 }
 
@@ -752,6 +753,35 @@ func (f *Feature) syncRunToShadows() {
 	f.MaxPlanIterations = r.MaxPlanIterations
 	f.PendingNeedUserInputPath = r.PendingNeedUserInputPath
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus
+}
+
+// HasTerminalFailure reports whether the active run carries terminal failure
+// context. These fields are run-scoped shadows, so a feature in a successful
+// terminal status with either value set is inconsistent and should be treated
+// as failed by status projections and recovery paths.
+func (f *Feature) HasTerminalFailure() bool {
+	if f == nil {
+		return false
+	}
+	return strings.TrimSpace(f.FailureType) != "" || strings.TrimSpace(f.LastError) != ""
+}
+
+func (f *Feature) reconcileTerminalRunFailure() {
+	if !f.HasTerminalFailure() {
+		return
+	}
+	switch f.Status {
+	case StatusCodeReady, StatusPublished, StatusDone:
+		f.Status = StatusFailed
+		if f.CurrentPhase == PhasePublish && looksLikeFinalReviewFailure(f.LastError) {
+			f.CurrentPhase = PhaseFinalReview
+		}
+	}
+}
+
+func looksLikeFinalReviewFailure(msg string) bool {
+	msg = strings.ToLower(msg)
+	return strings.Contains(msg, "final_review") || strings.Contains(msg, "final review")
 }
 
 func normalizeLegacyArtifactAliases(artifacts map[string]string) {

@@ -198,14 +198,14 @@ func TestAtomicPhaseStamp_PRURLsApplied(t *testing.T) {
 	}
 }
 
-// TestAtomicPhaseStamp_FinalReviewPassedNoStateMutation asserts the FR
-// success outcome leaves per-repo state untouched (feature-level Status
-// carries the verdict) but still mirrors PR URL writes when supplied.
-func TestAtomicPhaseStamp_FinalReviewPassedNoStateMutation(t *testing.T) {
+// TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors asserts the FR
+// success outcome clears stale per-repo error text left by earlier failed FR
+// attempts while preserving monotonic repo state and PR URL mirroring.
+func TestAtomicPhaseStamp_FinalReviewPassedClearsStaleRepoErrors(t *testing.T) {
 	repos := []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}
 	prior := map[string]*feature.RepoState{
-		"api": {Touched: true},
-		"web": {Touched: true},
+		"api": {Touched: true, LastError: "protocol violation"},
+		"web": {Touched: true, LastError: "final review failed"},
 	}
 	store, id := newTestStoreWithFeature(t, repos, prior)
 
@@ -226,6 +226,9 @@ func TestAtomicPhaseStamp_FinalReviewPassedNoStateMutation(t *testing.T) {
 		// Touched flag must remain set (monotonic).
 		if !got.RepoStates[name].Touched {
 			t.Errorf("repo %s lost Touched=true after FR pass", name)
+		}
+		if got.RepoStates[name].LastError != "" {
+			t.Errorf("repo %s LastError = %q, want cleared after FR pass", name, got.RepoStates[name].LastError)
 		}
 	}
 	if got.RepoStates["api"].PRURL != "https://example.com/api/pr/1" {

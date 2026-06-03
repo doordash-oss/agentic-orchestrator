@@ -17,9 +17,11 @@ package codex
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -114,6 +116,16 @@ func assertConfigOverride(t *testing.T, cmd []string, want string) {
 	t.Fatalf("command %v missing -c %s", cmd, want)
 }
 
+func assertProviderCommand(t *testing.T, gotName string, gotArgs []string, wantName string, wantArgs []string) {
+	t.Helper()
+	if gotName != wantName {
+		t.Fatalf("command name = %q, want %q", gotName, wantName)
+	}
+	if !slices.Equal(gotArgs, wantArgs) {
+		t.Fatalf("command args = %v, want %v", gotArgs, wantArgs)
+	}
+}
+
 func snapshotAgentModTimes(t *testing.T, codexHome string) map[string]time.Time {
 	t.Helper()
 
@@ -163,6 +175,78 @@ func TestProviderResolveCodexHome_FallsBackToDefaultHome(t *testing.T) {
 	want := filepath.Join(homeDir, ".codex")
 	if got != want {
 		t.Fatalf("resolveCodexHome() = %q, want %q", got, want)
+	}
+}
+
+func TestProviderCheckReadinessLoggedIn(t *testing.T) {
+	homeDir := t.TempDir()
+	codexHome := filepath.Join(homeDir, "codex-home")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			assertProviderCommand(t, name, args, "codex", []string{"login", "status"})
+			return []byte("Logged in using ChatGPT\n"), nil
+		},
+	}
+
+	status := p.CheckReadiness(context.Background())
+	if !status.Ready {
+		t.Fatalf("CheckReadiness().Ready = false, detail=%q remedy=%q", status.Detail, status.Remedy)
+	}
+	if !strings.Contains(status.Detail, "Logged in") {
+		t.Fatalf("CheckReadiness().Detail = %q, want login status text", status.Detail)
+	}
+	if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
+		t.Fatalf("CheckReadiness() did not create CODEX_HOME: info=%v err=%v", info, err)
+	}
+}
+
+func TestProviderCheckReadinessNotLoggedIn(t *testing.T) {
+	homeDir := t.TempDir()
+	codexHome := filepath.Join(homeDir, "codex-home")
+	t.Setenv("HOME", homeDir)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return []byte("Not logged in\n"), errors.New("exit status 1")
+		},
+	}
+
+	status := p.CheckReadiness(context.Background())
+	if status.Ready {
+		t.Fatal("CheckReadiness().Ready = true, want false")
+	}
+	if !strings.Contains(status.Detail, "not logged in") {
+		t.Fatalf("CheckReadiness().Detail = %q, want not logged in", status.Detail)
+	}
+	if !strings.Contains(status.Remedy, "codex login") {
+		t.Fatalf("CheckReadiness().Remedy = %q, want codex login", status.Remedy)
+	}
+}
+
+func TestProviderCheckReadinessHomePreparationFailure(t *testing.T) {
+	blockingFile := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", blockingFile, err)
+	}
+	t.Setenv("CODEX_HOME", blockingFile)
+
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			t.Fatal("runner should not be called when Codex home cannot be prepared")
+			return nil, nil
+		},
+	}
+
+	status := p.CheckReadiness(context.Background())
+	if status.Ready {
+		t.Fatal("CheckReadiness().Ready = true, want false")
+	}
+	if !strings.Contains(status.Detail, "could not prepare Codex home") {
+		t.Fatalf("CheckReadiness().Detail = %q, want home preparation failure", status.Detail)
 	}
 }
 

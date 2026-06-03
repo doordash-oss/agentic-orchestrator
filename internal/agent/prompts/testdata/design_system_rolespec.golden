@@ -9,6 +9,8 @@ Never end a turn with soft-confirmation prose such as "if this looks right, I'll
 
 For large output artifacts, prefer editing an existing skeleton over rewriting the whole file. Keep individual write/edit payloads below roughly 20KB.
 
+Sub-agents are available. Sub-agents MUST be used when requested by the SKILL instructions. For broad independent work, delegate focused tracks to sub-agents, wait for them, then synthesize. If spawning hits a limit, wait for and close active sub-agents, then retry remaining tracks.
+
 ## Output Roots
 
 - `phase_dir`: /state/feat-x/run-1/design — Design phase artifact directory.

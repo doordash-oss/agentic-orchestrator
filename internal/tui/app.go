@@ -4451,40 +4451,17 @@ func (m AppModel) resumeAllCmd() tea.Cmd {
 			return RefreshFeaturesMsg{}
 		}
 
+		maxIterationsDelta, maxPlanIterationsDelta := m.restartBudgetDeltas()
 		for _, f := range features {
 			if f.Status != feature.StatusInterrupted && f.Status != feature.StatusFailed {
 				continue
 			}
-			fID := f.ID
-			phase := f.CurrentPhase
 
-			sessions := m.sessionManager.ActiveSessions()
-			for _, s := range sessions {
-				if s.FeatureID() == fID {
-					_ = m.sessionManager.StopSession(s.ID())
-				}
+			outcome, err := m.orchestrator.RestartPhase(f.ID, maxIterationsDelta, maxPlanIterationsDelta)
+			if err != nil {
+				continue
 			}
-
-			if f.Status == feature.StatusFailed {
-				switch phase {
-				case feature.PhaseKnowledgeBase, feature.PhaseInquire, feature.PhaseResearch:
-					_ = m.orchestrator.TransitionTo(fID, feature.StatusCreated)
-				case feature.PhaseDesign:
-					// Route Failed→DesignReady so StartDesign can proceed
-					_ = m.orchestrator.SetDesignReady(fID)
-				case feature.PhasePlan:
-					_ = m.orchestrator.TransitionTo(fID, feature.StatusResearching)
-					_ = m.orchestrator.TransitionTo(fID, feature.StatusPlanReady)
-				case feature.PhaseImplement:
-					_ = m.orchestrator.TransitionTo(fID, feature.StatusImplementReady)
-				default:
-					continue
-				}
-			}
-
-			if m.programRef != nil && m.programRef.P != nil {
-				m.programRef.P.Send(StartPhaseMsg{FeatureID: fID, Phase: phase})
-			}
+			m.sendRestartOutcome(f.ID, outcome)
 		}
 
 		return RefreshFeaturesMsg{}
@@ -5624,6 +5601,50 @@ func (m AppModel) buildChatContext() string {
 	return b.String()
 }
 
+func (m AppModel) restartBudgetDeltas() (int, int) {
+	// Config defaults drive the iteration budget bump for failed phases. The
+	// orchestrator's ports.FeatureLifecycle surface does not carry config, so
+	// the TUI reads Defaults and passes them through.
+	maxIterationsDelta := 10
+	maxPlanIterationsDelta := 2
+	if cfg := m.featureManager.Config; cfg != nil {
+		if cfg.Defaults.MaxIterations > 0 {
+			maxIterationsDelta = cfg.Defaults.MaxIterations
+		}
+		if cfg.Defaults.MaxPhasePlanIterations > 0 {
+			maxPlanIterationsDelta = cfg.Defaults.MaxPhasePlanIterations
+		}
+	}
+	return maxIterationsDelta, maxPlanIterationsDelta
+}
+
+func (m AppModel) sendRestartOutcome(featureID string, outcome orchestrator.RestartOutcome) {
+	if m.programRef == nil || m.programRef.P == nil {
+		return
+	}
+
+	switch outcome.Action {
+	case orchestrator.RestartDispatchPhase:
+		m.programRef.P.Send(StartPhaseMsg{FeatureID: featureID, Phase: outcome.Phase})
+	case orchestrator.RestartDispatchRepoCycles:
+		for _, r := range outcome.RepoCycleRestarts {
+			m.programRef.P.Send(restartRepoCycleMsg{
+				FeatureID:   featureID,
+				RepoName:    r.RepoName,
+				CycleType:   r.CycleType,
+				PlanContent: r.PlanContent,
+			})
+		}
+		if outcome.RefactorRestart != nil {
+			m.programRef.P.Send(restartRefactorCycleMsg{
+				FeatureID: featureID,
+				RepoName:  outcome.RefactorRestart.RepoName,
+				Prompt:    outcome.RefactorRestart.Prompt,
+			})
+		}
+	}
+}
+
 // restartPhaseCmd is a thin delegate over orchestrator.RestartPhase. The
 // orchestrator owns the full restart decision tree: session-stop, tweak-cycle
 // reset, failed-phase budget extension, Published + repo-cycles fan-out, and
@@ -5632,19 +5653,7 @@ func (m AppModel) buildChatContext() string {
 // to the program event loop.
 func (m AppModel) restartPhaseCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		// Config defaults drive the iteration budget bump for failed phases.
-		// The orchestrator's ports.FeatureLifecycle surface does not carry
-		// config, so the TUI reads Defaults and passes them through.
-		maxIterationsDelta := 10
-		maxPlanIterationsDelta := 2
-		if cfg := m.featureManager.Config; cfg != nil {
-			if cfg.Defaults.MaxIterations > 0 {
-				maxIterationsDelta = cfg.Defaults.MaxIterations
-			}
-			if cfg.Defaults.MaxPhasePlanIterations > 0 {
-				maxPlanIterationsDelta = cfg.Defaults.MaxPhasePlanIterations
-			}
-		}
+		maxIterationsDelta, maxPlanIterationsDelta := m.restartBudgetDeltas()
 
 		outcome, err := m.orchestrator.RestartPhase(featureID, maxIterationsDelta, maxPlanIterationsDelta)
 		if err != nil {
@@ -5655,29 +5664,7 @@ func (m AppModel) restartPhaseCmd(featureID string) tea.Cmd {
 		}
 
 		// Dispatch the follow-up work the orchestrator asked for.
-		if m.programRef != nil && m.programRef.P != nil {
-			switch outcome.Action {
-			case orchestrator.RestartDispatchPhase:
-				m.programRef.P.Send(StartPhaseMsg{FeatureID: featureID, Phase: outcome.Phase})
-			case orchestrator.RestartDispatchRepoCycles:
-				for _, r := range outcome.RepoCycleRestarts {
-					m.programRef.P.Send(restartRepoCycleMsg{
-						FeatureID:   featureID,
-						RepoName:    r.RepoName,
-						CycleType:   r.CycleType,
-						PlanContent: r.PlanContent,
-					})
-				}
-				if outcome.RefactorRestart != nil {
-					m.programRef.P.Send(restartRefactorCycleMsg{
-						FeatureID: featureID,
-						RepoName:  outcome.RefactorRestart.RepoName,
-						Prompt:    outcome.RefactorRestart.Prompt,
-					})
-				}
-			}
-		}
-
+		m.sendRestartOutcome(featureID, outcome)
 		return RefreshFeaturesMsg{}
 	}
 }

@@ -62,6 +62,22 @@ type LLMProvider interface {
 	EnvVarsToExclude() []string
 }
 
+// ProviderReadiness reports whether an installed provider CLI is actually
+// usable for Agentic startup. This is deliberately separate from DetectCLI:
+// a binary can be present in PATH but still be unusable because the user has
+// not completed the provider's authentication flow.
+type ProviderReadiness struct {
+	Ready  bool
+	Detail string
+	Remedy string
+}
+
+// ReadinessChecker is implemented by providers that can run a provider-specific
+// non-interactive readiness probe.
+type ReadinessChecker interface {
+	CheckReadiness(ctx context.Context) ProviderReadiness
+}
+
 // PromptAdapter provides provider-specific prompt content.
 type PromptAdapter interface {
 	AskingQuestionsClause() string
@@ -176,6 +192,7 @@ type ProtocolOpts struct {
 	WritableRoots  []string
 	DSP            bool
 	StateDir       string
+	MarkerPath     string
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider

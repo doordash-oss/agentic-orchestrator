@@ -800,6 +800,7 @@ func runBlockingLoopProviderSession(ctx context.Context, cfg BlockingLoopConfig,
 		EffortLevel:                    cfg.EffortLevel,
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
+		MarkerPath:                     filepath.Join(in.IterationDir, PhaseCompleteFile),
 	})
 	if err != nil {
 		return BlockingLoopRunResult{}, fmt.Errorf("building %s session: %w", cfg.Label, err)

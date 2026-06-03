@@ -38,6 +38,7 @@ CONTINUE
 Rules:
 - Preserve the persistent design markdown and update it in place before the handoff.
 - Update the `## Ledger`: flip every decision you settled to `done` and fill its `decision` field (chosen option + load-bearing interface/contract/section, ≤2 sentences). Keep slug ids stable.
+- Each ledger unit has only the `id`, `status`, and `decision` keys — add no other fields (no `topic`, `note`, `summary`, etc.).
 - Use `CONTINUE` when any unit is still `pending`. Use `COMPLETE` only when every unit is `done` (the harness also auto-completes on zero pending).
 - The next iteration receives your decision summaries, not the full design prose — keep them precise. Do not re-include resolved design areas verbatim.
 - Touch `phase_complete` last.

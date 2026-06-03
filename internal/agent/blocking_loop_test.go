@@ -1298,6 +1298,37 @@ func TestRunBlockingLoop_ShutdownFailedStatusLeavesNoMeta(t *testing.T) {
 	}
 }
 
+// TestRunBlockingLoop_PassesMarkerPathToBuildSession guards the PR #30 fix:
+// the blocking-loop session must point MarkerPath at the iteration's
+// phase_complete so the Codex protocol uses marker existence for completion.
+func TestRunBlockingLoop_PassesMarkerPathToBuildSession(t *testing.T) {
+	artifactDir := t.TempDir()
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+		return nil, ports.ErrSessionShuttingDown
+	}
+
+	var gotMarkerPath string
+	cfg := blockingLoopTestConfig(artifactDir, nil)
+	cfg.RunSession = nil
+	cfg.Phase = feature.PhaseResearch
+	cfg.Spec = ResearcherRoleSpec()
+	cfg.StateDir = t.TempDir()
+	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		gotMarkerPath = opts.MarkerPath
+		return []string{"agent"}, nil, &ports.SessionOpts{}, nil
+	}
+
+	if _, err := RunBlockingLoop(context.Background(), cfg, sm); err != nil {
+		t.Fatalf("RunBlockingLoop() error = %v", err)
+	}
+
+	want := filepath.Join(artifactDir, "iteration-01", PhaseCompleteFile)
+	if gotMarkerPath != want {
+		t.Fatalf("BuildSession MarkerPath = %q, want %q", gotMarkerPath, want)
+	}
+}
+
 func TestBlockingLoopContextHandoffRoleUsesSkillName(t *testing.T) {
 	cfg := normalizeBlockingLoopConfig(BlockingLoopConfig{
 		Label:         "research",

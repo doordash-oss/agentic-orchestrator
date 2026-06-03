@@ -125,7 +125,13 @@ func parseLedgerBlock(sectionBody string, requireDecision, completeState bool) (
 
 	var doc ledgerYAMLDoc
 	dec := yaml.NewDecoder(strings.NewReader(yamlBody))
-	dec.KnownFields(true)
+	// Intentionally NOT strict (no KnownFields(true)): models reliably add
+	// benign annotations to ledger units (e.g. a `topic:` field) and rejecting
+	// the whole handoff over an unrecognized key is too brittle — an otherwise
+	// complete, correct ledger should not hard-fail the phase. The real
+	// contract (id slug, valid status, uniqueness, decision rules, pending
+	// counts) is enforced explicitly below, so typos in known fields still
+	// surface as violations rather than passing silently.
 	if err := dec.Decode(&doc); err != nil && err != io.EOF {
 		return nil, []string{fmt.Sprintf("`## Ledger` YAML failed to parse: %v", err)}
 	}

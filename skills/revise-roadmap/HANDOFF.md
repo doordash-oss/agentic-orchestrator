@@ -29,6 +29,7 @@ units:
     decision: "chosen approach + load-bearing section/contract, <=2 sentences (required when done)"
   - id: <another-unit>
     status: pending
+# Each unit has only the id, status, and decision keys — add no other fields.
 ```
 
 ## Handoff State

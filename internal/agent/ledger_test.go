@@ -68,14 +68,24 @@ func TestParseLedgerBlock_MissingUnitsKeyIsViolation(t *testing.T) {
 	}
 }
 
-func TestParseLedgerBlock_UnknownFieldIsViolation(t *testing.T) {
-	body := ledgerSection("notunits: []")
+// TestParseLedgerBlock_UnknownUnitFieldTolerated reproduces the run-018 failure
+// mode: the model added a `topic:` annotation to every ledger unit. Unknown
+// fields must be ignored, not hard-fail the handoff, while the known fields are
+// still parsed and validated.
+func TestParseLedgerBlock_UnknownUnitFieldTolerated(t *testing.T) {
+	body := ledgerSection("units:\n  - id: Q-001\n    status: done\n    topic: startup entry point\n  - id: Q-002\n    status: pending\n    topic: shutdown behavior")
 	parsed, violations := parseLedgerBlock(body, false, false)
-	if parsed != nil {
-		t.Fatalf("parsed = %v, want nil", parsed)
+	if len(violations) != 0 {
+		t.Fatalf("violations = %v, want none (unknown unit field should be tolerated)", violations)
 	}
-	if len(violations) == 0 || !strings.Contains(violations[0], "failed to parse") {
-		t.Fatalf("violations = %v, want a parse-failure violation for the unknown field", violations)
+	if parsed == nil {
+		t.Fatal("parsed == nil")
+	}
+	if got := parsed.PendingCount(); got != 1 {
+		t.Fatalf("PendingCount = %d, want 1", got)
+	}
+	if ids := parsed.PendingIDs(); len(ids) != 1 || ids[0] != "Q-002" {
+		t.Fatalf("PendingIDs = %v, want [Q-002]", ids)
 	}
 }
 

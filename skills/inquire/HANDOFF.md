@@ -37,6 +37,7 @@ CONTINUE
 Rules:
 - Preserve the persistent inquiry markdown and update it in place before the handoff.
 - Update the `## Ledger`: flip every clarification you resolved to `done`; leave the rest `pending`. Keep `C-NNN` ids stable; append newly-discovered clarifications with fresh ids.
+- Each ledger unit has only the `id` and `status` keys — add no other fields (no `topic`, `note`, `summary`, etc.).
 - Use `CONTINUE` when any unit is still `pending`. Use `COMPLETE` only when every unit is `done` (the harness also auto-completes on zero pending).
 - Net progress: pending must strictly decrease — do not add and resolve in equal measure and call it progress.
 - Touch `phase_complete` last.

@@ -37,6 +37,7 @@ CONTINUE
 Rules:
 - Preserve the persistent research markdown and update it in place before the handoff.
 - Update the `## Ledger`: flip every question you answered this session to `done`; leave the rest `pending`. Keep `Q-NNN` ids stable — never renumber.
+- Each ledger unit has only the `id` and `status` keys — add no other fields (no `topic`, `note`, `summary`, etc.).
 - Use `CONTINUE` when any unit is still `pending`. Use `COMPLETE` only when every unit is `done` (the harness also auto-completes on zero pending). COMPLETE with a pending unit is rejected.
 - Do not re-include answered `## Q-NNN` sections; the next iteration receives only the pending ids and a path pointer.
 - Touch `phase_complete` last.

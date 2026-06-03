@@ -43,5 +43,6 @@ CONTINUE
 Rules:
 - Update the persistent KB tree before writing the handoff, including a current top-level `index.md`.
 - Maintain the `## Ledger` over the five fixed category ids (`architecture`, `conventions`, `api-surface`, `dependencies`, `verification`): mark each finished category `done`, leave the rest `pending`. Do not add or rename units.
+- Each ledger unit has only the `id` and `status` keys — add no other fields (no `topic`, `note`, `summary`, etc.).
 - Use `CONTINUE` when any category is still `pending`. Use `COMPLETE` only when all five are `done` (the harness also auto-completes on zero pending).
 - Touch `phase_complete` in the iteration directory last.

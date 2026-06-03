@@ -19,9 +19,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -567,37 +569,31 @@ func TestRunUpdateWithCheckReportsMethodAndAction(t *testing.T) {
 	}
 }
 
-func TestRunUpdateWithBareNamesDetectedMethod(t *testing.T) {
-	for _, tt := range []struct {
-		name      string
-		method    installMethod
-		wantLabel string
-	}{
-		{name: "go-install", method: installMethodGoInstall, wantLabel: "go install"},
-		{name: "tarball", method: installMethodTarball, wantLabel: "release tarball"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			var stdout, stderr bytes.Buffer
-			code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
-				currentVersion: "1.2.3",
-				method:         fixedMethod(tt.method),
-				slug:           okSlug,
-				fetchLatest:    fakeFetch("v2.0.0", nil),
-			})
-			if code != 1 {
-				t.Fatalf("code = %d, want 1", code)
-			}
-			if !strings.Contains(stdout.String(), "→") {
-				t.Errorf("stdout missing old → new skeleton\nfull:\n%s", stdout.String())
-			}
-			errOut := stderr.String()
-			if !strings.Contains(errOut, updateNotImplementedMsg) {
-				t.Errorf("stderr missing not-yet-wired stub\nfull:\n%s", errOut)
-			}
-			if !strings.Contains(errOut, tt.wantLabel) {
-				t.Errorf("stderr must name the detected method %q\nfull:\n%s", tt.wantLabel, errOut)
-			}
-		})
+// The tarball method is still the not-yet-implemented placeholder (Phase 4):
+// bare update prints the old → new skeleton to stdout and the not-yet-wired
+// stub naming the detected method to stderr, then exits non-zero. (The
+// go-install method is now wired to a real re-install; see the GoInstall tests
+// below.)
+func TestRunUpdateWithBareTarballNamesDetectedMethod(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "1.2.3",
+		method:         fixedMethod(installMethodTarball),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+	})
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(stdout.String(), "→") {
+		t.Errorf("stdout missing old → new skeleton\nfull:\n%s", stdout.String())
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, updateNotImplementedMsg) {
+		t.Errorf("stderr missing not-yet-wired stub\nfull:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, "release tarball") {
+		t.Errorf("stderr must name the detected tarball method\nfull:\n%s", errOut)
 	}
 }
 
@@ -631,5 +627,238 @@ func TestModuleSlugDerivedFromBuildInfo(t *testing.T) {
 	}
 	if slug != "doordash-oss/agentic-orchestrator" {
 		t.Errorf("moduleSlug() = %q, want doordash-oss/agentic-orchestrator", slug)
+	}
+}
+
+// --- Phase 3: real go-install re-install behind the runner seam -------------
+
+const testMainPkg = "github.com/doordash-oss/agentic-orchestrator/cmd/agentico"
+
+// recordedInstall captures the single invocation a fake runner saw so a test can
+// assert the command name, argument slice, and the GOBIN-augmented environment.
+type recordedInstall struct {
+	called bool
+	name   string
+	args   []string
+	env    []string
+}
+
+// fakeRunner returns a commandRunner that records its invocation into rec and
+// then yields the supplied combined output and error — so no real `go install`
+// ever runs in the unit suite.
+func fakeRunner(rec *recordedInstall, out []byte, err error) commandRunner {
+	return func(_ context.Context, name string, args, env []string) ([]byte, error) {
+		rec.called = true
+		rec.name = name
+		rec.args = append([]string(nil), args...)
+		rec.env = append([]string(nil), env...)
+		return out, err
+	}
+}
+
+// failingRunner returns a commandRunner that fails the test if invoked. It
+// guards control-flow paths that must never reach the subprocess (e.g. the
+// main-package derivation failing first).
+func failingRunner(t *testing.T) commandRunner {
+	t.Helper()
+	return func(context.Context, string, []string, []string) ([]byte, error) {
+		t.Fatal("install runner invoked on a path that must not reach the subprocess")
+		return nil, nil
+	}
+}
+
+// lastEnvValue returns the last value bound to key in an os/exec-style env
+// slice (last write wins, matching exec semantics), and whether key was present.
+func lastEnvValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	val, ok := "", false
+	for _, kv := range env {
+		if after, found := strings.CutPrefix(kv, prefix); found {
+			val, ok = after, true
+		}
+	}
+	return val, ok
+}
+
+// goInstallDeps builds an updateDeps wired for the bare go-install branch with a
+// fake runner, an injected main-package path, and a fixed resolved binary dir.
+func goInstallDeps(rec *recordedInstall, out []byte, runErr error, binDir string) updateDeps {
+	return updateDeps{
+		currentVersion: "1.2.3",
+		method:         fixedMethod(installMethodGoInstall),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		mainPackage:    func() (string, error) { return testMainPkg, nil },
+		binaryDir:      func() string { return binDir },
+		runInstall:     fakeRunner(rec, out, runErr),
+	}
+}
+
+// Task 1: bare go-install with an update available re-runs `go install` of the
+// command's own main package pinned to the resolved tag, augments GOBIN to the
+// running binary's directory, prints the old → new transition, and exits 0.
+func TestRunUpdateWithGoInstallSuccess(t *testing.T) {
+	const binDir = "/home/user/go/bin"
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		goInstallDeps(&rec, []byte("ok"), nil, binDir))
+
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !rec.called {
+		t.Fatal("install runner was not invoked")
+	}
+	if rec.name != "go" {
+		t.Errorf("command name = %q, want %q", rec.name, "go")
+	}
+	wantArgs := []string{"install", testMainPkg + "@v2.0.0"}
+	if len(rec.args) != len(wantArgs) {
+		t.Fatalf("args = %v, want %v", rec.args, wantArgs)
+	}
+	for i := range wantArgs {
+		if rec.args[i] != wantArgs[i] {
+			t.Fatalf("args = %v, want %v (pinned at the resolved tag)", rec.args, wantArgs)
+		}
+	}
+	if got, ok := lastEnvValue(rec.env, "GOBIN"); !ok || got != binDir {
+		t.Errorf("GOBIN = %q (present=%v), want %q (running binary's dir)", got, ok, binDir)
+	}
+	if !strings.Contains(stdout.String(), "1.2.3 → 2.0.0") {
+		t.Errorf("stdout missing old → new transition\nfull:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), updateCheckingNarrative) {
+		t.Errorf("stdout missing the %q narrative\nfull:\n%s", updateCheckingNarrative, stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty on success", stderr.String())
+	}
+}
+
+// When the running binary's directory cannot be resolved, GOBIN is not forced
+// and the toolchain default applies — the install still runs.
+func TestRunUpdateWithGoInstallNoBinaryDirOmitsGOBIN(t *testing.T) {
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		goInstallDeps(&rec, []byte("ok"), nil, ""))
+
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if _, ok := lastEnvValue(rec.env, "GOBIN"); ok {
+		t.Errorf("GOBIN must not be forced when the binary dir is unresolved; env = %v", rec.env)
+	}
+}
+
+// The main-package derivation failing short-circuits before any subprocess runs.
+func TestRunUpdateWithGoInstallMainPackageError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	deps := updateDeps{
+		currentVersion: "1.2.3",
+		method:         fixedMethod(installMethodGoInstall),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		mainPackage:    func() (string, error) { return "", errors.New("no main package") },
+		binaryDir:      func() string { return "/home/user/go/bin" },
+		runInstall:     failingRunner(t),
+	}
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+	if code == 0 {
+		t.Fatal("main-package derivation failure must exit non-zero")
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected an error message on stderr")
+	}
+	if strings.Contains(stdout.String(), "→") {
+		t.Errorf("no old → new success line may be printed on failure\nfull:\n%s", stdout.String())
+	}
+}
+
+// mainPackagePath derives the command's own main-package import path from the
+// test binary's build info — proving the package is derived at runtime (not the
+// bare module path) and is testable like moduleSlug.
+func TestMainPackagePathDerivedFromBuildInfo(t *testing.T) {
+	pkg, err := mainPackagePath()
+	if err != nil {
+		t.Fatalf("mainPackagePath() error: %v", err)
+	}
+	if pkg != testMainPkg {
+		t.Errorf("mainPackagePath() = %q, want %q", pkg, testMainPkg)
+	}
+}
+
+// --- Phase 3 / Task 2: clear failure surfacing through the runner seam ------
+
+// Toolchain absent (the runner surfaces exec.ErrNotFound): a clear
+// toolchain-not-found message to stderr, non-zero exit, and no success line.
+func TestRunUpdateWithGoInstallToolchainMissing(t *testing.T) {
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+
+	notFound := &exec.Error{Name: "go", Err: exec.ErrNotFound}
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		goInstallDeps(&rec, nil, notFound, "/home/user/go/bin"))
+
+	if code == 0 {
+		t.Fatal("toolchain-absent path must exit non-zero")
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, "Go toolchain") || !strings.Contains(errOut, "PATH") {
+		t.Errorf("stderr missing a clear toolchain-not-found message\nfull:\n%s", errOut)
+	}
+	if strings.Contains(stdout.String(), "→") {
+		t.Errorf("no old → new success line may be printed when the toolchain is absent\nfull:\n%s", stdout.String())
+	}
+}
+
+// `go install` exits non-zero: the captured combined output is wrapped into the
+// stderr error message and the command exits non-zero.
+func TestRunUpdateWithGoInstallExitsNonZero(t *testing.T) {
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+
+	const failOutput = "go: downloading module: 404 Not Found"
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		goInstallDeps(&rec, []byte(failOutput), errors.New("exit status 1"), "/home/user/go/bin"))
+
+	if code == 0 {
+		t.Fatal("install failure must exit non-zero")
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, failOutput) {
+		t.Errorf("stderr must include the captured combined output\nfull:\n%s", errOut)
+	}
+	if strings.Contains(stdout.String(), "→") {
+		t.Errorf("no old → new success line may be printed on install failure\nfull:\n%s", stdout.String())
+	}
+}
+
+// The install context times out (the runner surfaces context.DeadlineExceeded):
+// a clear timeout error including the captured output, and a non-zero exit.
+func TestRunUpdateWithGoInstallTimeout(t *testing.T) {
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+
+	const partial = "go: downloading a very large dependency graph"
+	timeoutErr := fmt.Errorf("running go install: %w", context.DeadlineExceeded)
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		goInstallDeps(&rec, []byte(partial), timeoutErr, "/home/user/go/bin"))
+
+	if code == 0 {
+		t.Fatal("install timeout must exit non-zero")
+	}
+	errOut := stderr.String()
+	if !strings.Contains(strings.ToLower(errOut), "timed out") && !strings.Contains(strings.ToLower(errOut), "timeout") {
+		t.Errorf("stderr missing a clear timeout error\nfull:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, partial) {
+		t.Errorf("stderr must include the captured output on timeout\nfull:\n%s", errOut)
+	}
+	if strings.Contains(stdout.String(), "→") {
+		t.Errorf("no old → new success line may be printed on timeout\nfull:\n%s", stdout.String())
 	}
 }

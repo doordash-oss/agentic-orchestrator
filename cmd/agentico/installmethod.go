@@ -163,18 +163,29 @@ func buildInfoMainVersion() string {
 	return ""
 }
 
-// resolveBinaryDir returns the directory containing the running executable,
-// resolving symlinks first so a binary reached through a symlink is compared on
-// its real location. It returns "" when the executable path cannot be resolved.
-func resolveBinaryDir() string {
+// resolveBinaryPath returns the symlink-resolved path of the running
+// executable — the file the tarball swap replaces in place. It returns "" when
+// the executable path cannot be resolved, which the caller surfaces as a clear
+// error that leaves the binary untouched.
+func resolveBinaryPath() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
+		return resolved
 	}
-	return filepath.Dir(exe)
+	return exe
+}
+
+// resolveBinaryDir returns the directory containing the running executable,
+// resolving symlinks first so a binary reached through a symlink is compared on
+// its real location. It returns "" when the executable path cannot be resolved.
+func resolveBinaryDir() string {
+	if p := resolveBinaryPath(); p != "" {
+		return filepath.Dir(p)
+	}
+	return ""
 }
 
 // resolveGoBinDir resolves the Go bin directory from the environment without

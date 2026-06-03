@@ -15,7 +15,13 @@
 package main
 
 import (
+	"archive/tar"
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +29,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -42,10 +50,22 @@ const (
 	// stalled install cannot hang forever. It is rooted at a fresh context, not
 	// derived from the 15s check context, so the install gets its full budget.
 	updateInstallTimeout = 5 * time.Minute
+	// updateDownloadTimeout bounds the tarball download → verify → extract → swap
+	// flow. Like the install timeout it is rooted at a fresh context, not derived
+	// from the 15s check context, so a release-archive download has room to
+	// complete while a stalled transfer still cannot hang forever.
+	updateDownloadTimeout = 5 * time.Minute
 
 	// User-facing narrative strings.
 	updateCheckingNarrative = "Checking for updates…"
-	updateNotImplementedMsg = "Update execution is not yet implemented."
+
+	// checksumsAssetName is the goreleaser-published manifest of per-asset
+	// SHA-256 digests the tarball branch verifies the archive against.
+	checksumsAssetName = "checksums.txt"
+	// innerBinaryName is the executable packaged inside the release archive. The
+	// archive carries the project name while the binary inside is agentico, so
+	// the two are matched separately.
+	innerBinaryName = "agentico"
 
 	// updateGoToolchainMissingMsg is printed to stderr when the go-install
 	// branch cannot find the Go toolchain on PATH. The existing binary is left
@@ -90,6 +110,15 @@ func parseUpdateArgs(opts launchOptions, rest []string) (launchOptions, error) {
 // `go install` ever runs in the unit suite.
 type commandRunner func(ctx context.Context, name string, args, env []string) ([]byte, error)
 
+// tarballUpdater performs the verified, non-destructive in-place tarball swap
+// for a resolved release. It is the injectable seam for the tarball branch,
+// mirroring runInstall: production wires an implementation closing over an HTTP
+// client, the GitHub base URL, the running binary's path, and the target
+// GOOS/GOARCH (see newTarballUpdater); tests inject one backed by an httptest
+// server and a real temp target. It returns nil only after the swap succeeds;
+// any error leaves the existing binary untouched.
+type tarballUpdater func(ctx context.Context, slug, version string) error
+
 // updateDeps bundles the injectable dependencies of the update flow so the
 // resolution logic can be exercised hermetically: tests supply a controllable
 // install-method detector, slug, an httptest-backed (or canned) latest-release
@@ -112,6 +141,9 @@ type updateDeps struct {
 	// runInstall is the injectable command-runner seam for the `go install`
 	// subprocess.
 	runInstall commandRunner
+	// runTarball is the injectable seam for the release-tarball branch: it
+	// downloads, verifies, extracts, and atomically swaps the binary in place.
+	runTarball tarballUpdater
 }
 
 // runUpdate is the production updater seam wired into the router. It resolves
@@ -128,6 +160,7 @@ func runUpdate(checkOnly bool, stdout, stderr io.Writer) int {
 		mainPackage:    mainPackagePath,
 		binaryDir:      resolveBinaryDir,
 		runInstall:     execGoInstall,
+		runTarball:     newTarballUpdater(http.DefaultClient, githubBaseURL(), resolveBinaryPath(), runtime.GOOS, runtime.GOARCH),
 	})
 }
 
@@ -185,17 +218,18 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 	}
 
 	// Bare `update` with an update available: dispatch on the detected install
-	// method. The go-install branch performs a real in-place re-install; the
-	// tarball branch is still the not-yet-implemented placeholder (Phase 4).
-	if method == installMethodGoInstall {
+	// method. Each branch performs a real in-place update for its method; the
+	// dev-build case was already handled (and refused) above.
+	switch method {
+	case installMethodGoInstall:
 		return performGoInstall(stdout, stderr, deps, current, latest)
+	case installMethodTarball:
+		return performTarballUpdate(stdout, stderr, deps, slug, current, latest)
 	}
 
-	// Print the conventional old → new skeleton to stdout, then report that
-	// execution for the detected method is not yet wired on stderr and exit
-	// non-zero. Naming the method proves the classifier ran on this branch.
-	fmt.Fprintf(stdout, "Update available: %s → %s\n", normalizeVersion(current), normalizeVersion(latest))
-	fmt.Fprintf(stderr, "%s (detected install method: %s)\n", updateNotImplementedMsg, method.label())
+	// No execution branch is wired for this method; report and exit non-zero
+	// without touching the binary.
+	fmt.Fprintf(stderr, "Error: automatic update is not supported for the %s install method.\n", method.label())
 	return 1
 }
 
@@ -230,6 +264,31 @@ func performGoInstall(stdout, stderr io.Writer, deps updateDeps, current, latest
 	out, err := deps.runInstall(ctx, "go", args, goInstallEnv(deps.binaryDir))
 	if err != nil {
 		return reportGoInstallFailure(ctx, stderr, err, out)
+	}
+
+	fmt.Fprintf(stdout, "Updated agentico %s → %s\n", normalizeVersion(current), normalizeVersion(latest))
+	return 0
+}
+
+// performTarballUpdate runs the verified, non-destructive in-place tarball swap
+// for the resolved release through the injectable runTarball seam. It is reached
+// only in bare (non --check) mode when the detected install method is a release
+// tarball and an update is available.
+//
+// The download → verify → extract → swap runs under its own generous, bounded
+// context (distinct from the 15s check timeout) so a release archive has room
+// to download but a stalled transfer cannot hang forever. On success it prints
+// the old → new transition to stdout and returns 0. Every failure — a failed or
+// partial download, a checksum mismatch, a missing per-OS/arch asset, or an
+// extraction failure — is surfaced to stderr with a non-zero exit and no success
+// transition, leaving the existing binary untouched.
+func performTarballUpdate(stdout, stderr io.Writer, deps updateDeps, slug, current, latest string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout)
+	defer cancel()
+
+	if err := deps.runTarball(ctx, slug, latest); err != nil {
+		fmt.Fprintf(stderr, "Error: could not update from the release tarball: %v\n", err)
+		return 1
 	}
 
 	fmt.Fprintf(stdout, "Updated agentico %s → %s\n", normalizeVersion(current), normalizeVersion(latest))
@@ -361,42 +420,68 @@ func slugFromModulePath(path string) (string, error) {
 	return parts[0] + "/" + parts[1], nil
 }
 
-// githubRelease is the subset of the GitHub release object this phase reads.
+// githubRelease is the subset of the GitHub release object this command reads.
+// The published asset list (also carried by the /releases response) lets the
+// tarball branch resolve the per-platform archive and the checksums manifest.
 type githubRelease struct {
-	TagName    string `json:"tag_name"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
+	TagName    string        `json:"tag_name"`
+	Draft      bool          `json:"draft"`
+	Prerelease bool          `json:"prerelease"`
+	Assets     []githubAsset `json:"assets"`
+}
+
+// githubAsset is the subset of a release asset this command reads: its name (to
+// match the per-platform archive and checksums.txt) and its download URL.
+type githubAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+// listReleases lists a repository's releases — including each release's
+// published assets — over the injected client and base URL. The base URL and
+// HTTP client are injected so the resolution logic can be unit-tested against an
+// in-process httptest server. When authenticated is true and GITHUB_TOKEN is
+// set, the request carries an Authorization header; the check-mode caller passes
+// false to stay unauthenticated, while the tarball download flow passes true.
+func listReleases(ctx context.Context, client *http.Client, baseURL, slug string, authenticated bool) ([]githubRelease, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases", strings.TrimRight(baseURL, "/"), slug)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building release request: %w", err)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if authenticated {
+		authorizeGitHub(req)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("requesting releases: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github returned status %s", resp.Status)
+	}
+
+	var releases []githubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return nil, fmt.Errorf("decoding releases: %w", err)
+	}
+	return releases, nil
 }
 
 // githubFetchLatestStableTag returns a fetcher that lists a repository's
 // releases and yields the tag of the most recent non-draft, non-pre-release
-// entry. The base URL and HTTP client are injected so the resolution logic can
-// be unit-tested against an in-process httptest server. The call is
-// unauthenticated; GITHUB_TOKEN consumption is deferred to a later phase.
+// entry. The call is unauthenticated by design — it is the lightweight check
+// that runs under the 15s timeout; the GITHUB_TOKEN-consuming requests live in
+// the tarball download flow.
 func githubFetchLatestStableTag(client *http.Client, baseURL string) func(ctx context.Context, slug string) (string, error) {
 	return func(ctx context.Context, slug string) (string, error) {
-		url := fmt.Sprintf("%s/repos/%s/releases", strings.TrimRight(baseURL, "/"), slug)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		releases, err := listReleases(ctx, client, baseURL, slug, false)
 		if err != nil {
-			return "", fmt.Errorf("building release request: %w", err)
+			return "", err
 		}
-		req.Header.Set("Accept", "application/vnd.github+json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return "", fmt.Errorf("requesting latest release: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("github returned status %s", resp.Status)
-		}
-
-		var releases []githubRelease
-		if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
-			return "", fmt.Errorf("decoding releases: %w", err)
-		}
-
 		for _, rel := range releases {
 			if rel.Draft || rel.Prerelease {
 				continue
@@ -407,4 +492,237 @@ func githubFetchLatestStableTag(client *http.Client, baseURL string) func(ctx co
 		}
 		return "", errNoStableRelease
 	}
+}
+
+// githubToken returns the GITHUB_TOKEN environment value, trimmed, or "".
+func githubToken() string {
+	return strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+}
+
+// authorizeGitHub adds an Authorization: Bearer header when a GITHUB_TOKEN is
+// set so the tarball flow can reach private-repo assets and lift rate limits; an
+// unset token leaves the request unauthenticated.
+func authorizeGitHub(req *http.Request) {
+	if tok := githubToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+// newTarballUpdater builds the production tarball-update seam. It closes over an
+// HTTP client, the GitHub base URL, the resolved target binary path, and the
+// running GOOS/GOARCH so the whole download → verify → extract → swap chain is
+// exercised hermetically in tests against an httptest server and a temp target.
+// All GitHub requests it issues consume GITHUB_TOKEN when set.
+func newTarballUpdater(client *http.Client, baseURL, targetPath, goos, goarch string) tarballUpdater {
+	return func(ctx context.Context, slug, version string) error {
+		if targetPath == "" {
+			return errors.New("could not resolve the running binary's path")
+		}
+
+		archiveAsset, checksumsAsset, err := resolveTarballAssets(ctx, client, baseURL, slug, version, goos, goarch)
+		if err != nil {
+			return err
+		}
+
+		archive, err := downloadAsset(ctx, client, archiveAsset.BrowserDownloadURL)
+		if err != nil {
+			return fmt.Errorf("downloading %s: %w", archiveAsset.Name, err)
+		}
+		checksums, err := downloadAsset(ctx, client, checksumsAsset.BrowserDownloadURL)
+		if err != nil {
+			return fmt.Errorf("downloading %s: %w", checksumsAsset.Name, err)
+		}
+
+		if err := verifyChecksum(archive, checksums, archiveAsset.Name); err != nil {
+			return err
+		}
+
+		binary, err := extractAgenticoBinary(archive)
+		if err != nil {
+			return err
+		}
+
+		return swapBinary(targetPath, binary)
+	}
+}
+
+// resolveTarballAssets lists the chosen release's published assets and selects
+// the per-platform archive (matched by the project-name prefix and the
+// _<GOOS>_<GOARCH>.tar.gz suffix) and the checksums.txt manifest. A missing
+// archive for the running platform is a clear, non-destructive error.
+func resolveTarballAssets(ctx context.Context, client *http.Client, baseURL, slug, version, goos, goarch string) (archive, checksums githubAsset, err error) {
+	releases, err := listReleases(ctx, client, baseURL, slug, true)
+	if err != nil {
+		return githubAsset{}, githubAsset{}, err
+	}
+
+	rel, ok := findReleaseByTag(releases, version)
+	if !ok {
+		return githubAsset{}, githubAsset{}, fmt.Errorf("release %s not found among the published releases", version)
+	}
+
+	prefix := projectNameFromSlug(slug) + "_"
+	suffix := fmt.Sprintf("_%s_%s.tar.gz", goos, goarch)
+	var haveArchive, haveChecksums bool
+	for _, a := range rel.Assets {
+		switch {
+		case a.Name == checksumsAssetName:
+			checksums, haveChecksums = a, true
+		case strings.HasPrefix(a.Name, prefix) && strings.HasSuffix(a.Name, suffix):
+			archive, haveArchive = a, true
+		}
+	}
+	if !haveArchive {
+		return githubAsset{}, githubAsset{}, fmt.Errorf("no release archive for %s/%s in release %s", goos, goarch, version)
+	}
+	if !haveChecksums {
+		return githubAsset{}, githubAsset{}, fmt.Errorf("%s not found in release %s", checksumsAssetName, version)
+	}
+	return archive, checksums, nil
+}
+
+// findReleaseByTag returns the release whose tag matches version (compared after
+// version normalization, so "v2.0.0" and "2.0.0" are equal).
+func findReleaseByTag(releases []githubRelease, version string) (githubRelease, bool) {
+	for _, rel := range releases {
+		if sameVersion(rel.TagName, version) {
+			return rel, true
+		}
+	}
+	return githubRelease{}, false
+}
+
+// projectNameFromSlug returns the repository name from an owner/repo slug, which
+// is the goreleaser project name and therefore the release archive's name
+// prefix (the archive carries the project name; the binary inside is agentico).
+func projectNameFromSlug(slug string) string {
+	if i := strings.LastIndex(slug, "/"); i >= 0 {
+		return slug[i+1:]
+	}
+	return slug
+}
+
+// downloadAsset fetches an asset's bytes over the injected client, consuming
+// GITHUB_TOKEN when set. A non-200 response is an error so a partial or failed
+// download never reaches verification.
+func downloadAsset(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("building download request: %w", err)
+	}
+	authorizeGitHub(req)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github returned status %s", resp.Status)
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// verifyChecksum computes the archive's SHA-256 and compares it to the entry for
+// archiveName in a sha256sum-style checksums manifest. Any mismatch — or a
+// missing entry — is an error, so verification fails closed before anything
+// touches the binary.
+func verifyChecksum(archive, checksums []byte, archiveName string) error {
+	want, ok := checksumFor(checksums, archiveName)
+	if !ok {
+		return fmt.Errorf("no checksum entry for %s in %s", archiveName, checksumsAssetName)
+	}
+	sum := sha256.Sum256(archive)
+	got := hex.EncodeToString(sum[:])
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("checksum mismatch for %s: computed %s, expected %s", archiveName, got, want)
+	}
+	return nil
+}
+
+// checksumFor parses sha256sum-style "DIGEST␠␠FILENAME" lines and returns the
+// digest whose filename matches name. goreleaser writes the bare asset name, so
+// the comparison is on the entry's base name.
+func checksumFor(checksums []byte, name string) (string, bool) {
+	sc := bufio.NewScanner(bytes.NewReader(checksums))
+	for sc.Scan() {
+		fields := strings.Fields(sc.Text())
+		if len(fields) != 2 {
+			continue
+		}
+		if filepath.Base(fields[1]) == name {
+			return fields[0], true
+		}
+	}
+	return "", false
+}
+
+// extractAgenticoBinary reads the inner agentico executable out of a gzip-
+// compressed tar archive. It returns an error when the archive is unreadable or
+// carries no agentico entry, so a malformed archive never reaches the swap.
+func extractAgenticoBinary(archive []byte) ([]byte, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return nil, fmt.Errorf("opening gzip archive: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading archive: %w", err)
+		}
+		if hdr.Typeflag == tar.TypeReg && filepath.Base(hdr.Name) == innerBinaryName {
+			data, err := io.ReadAll(tr)
+			if err != nil {
+				return nil, fmt.Errorf("extracting %s: %w", innerBinaryName, err)
+			}
+			return data, nil
+		}
+	}
+	return nil, fmt.Errorf("archive does not contain an %q binary", innerBinaryName)
+}
+
+// swapBinary performs the atomic, non-destructive in-place swap: it writes the
+// new binary to a temp file in the target's own directory, sets the executable
+// mode, then renames it over the target. Writing into the target directory keeps
+// the rename on one filesystem so it is atomic, and the rename gives the path a
+// new inode while the running process keeps executing the original — a partial
+// or failed write can never replace the live binary. On any error before the
+// rename the temp file is removed and the target is left untouched.
+func swapBinary(targetPath string, binary []byte) error {
+	dir := filepath.Dir(targetPath)
+	tmp, err := os.CreateTemp(dir, ".agentico-update-*")
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := tmp.Write(binary); err != nil {
+		tmp.Close()
+		return fmt.Errorf("writing new binary: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing new binary: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0o755); err != nil {
+		return fmt.Errorf("setting executable mode: %w", err)
+	}
+	if err := os.Rename(tmpName, targetPath); err != nil {
+		return fmt.Errorf("replacing %s: %w", targetPath, err)
+	}
+	renamed = true
+	return nil
 }

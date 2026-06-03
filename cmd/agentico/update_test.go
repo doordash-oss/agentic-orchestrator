@@ -15,15 +15,22 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -569,34 +576,6 @@ func TestRunUpdateWithCheckReportsMethodAndAction(t *testing.T) {
 	}
 }
 
-// The tarball method is still the not-yet-implemented placeholder (Phase 4):
-// bare update prints the old → new skeleton to stdout and the not-yet-wired
-// stub naming the detected method to stderr, then exits non-zero. (The
-// go-install method is now wired to a real re-install; see the GoInstall tests
-// below.)
-func TestRunUpdateWithBareTarballNamesDetectedMethod(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
-		currentVersion: "1.2.3",
-		method:         fixedMethod(installMethodTarball),
-		slug:           okSlug,
-		fetchLatest:    fakeFetch("v2.0.0", nil),
-	})
-	if code != 1 {
-		t.Fatalf("code = %d, want 1", code)
-	}
-	if !strings.Contains(stdout.String(), "→") {
-		t.Errorf("stdout missing old → new skeleton\nfull:\n%s", stdout.String())
-	}
-	errOut := stderr.String()
-	if !strings.Contains(errOut, updateNotImplementedMsg) {
-		t.Errorf("stderr missing not-yet-wired stub\nfull:\n%s", errOut)
-	}
-	if !strings.Contains(errOut, "release tarball") {
-		t.Errorf("stderr must name the detected tarball method\nfull:\n%s", errOut)
-	}
-}
-
 // Exercises the real fetch path end-to-end through runUpdateWith and httptest,
 // confirming the whole resolution chain stays hermetic.
 func TestRunUpdateWithRealFetchHermetic(t *testing.T) {
@@ -860,5 +839,456 @@ func TestRunUpdateWithGoInstallTimeout(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "→") {
 		t.Errorf("no old → new success line may be printed on timeout\nfull:\n%s", stdout.String())
+	}
+}
+
+// --- Phase 4: tarball update — fetch, verify, extract, atomic swap ----------
+
+// makeTarGz builds an in-memory .tar.gz containing the given name→content files
+// as regular 0755 entries, fabricating a goreleaser-style release archive
+// (typically with an inner "agentico" binary alongside LICENSE/README).
+func makeTarGz(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	for name, content := range files {
+		hdr := &tar.Header{Name: name, Mode: 0o755, Size: int64(len(content)), Typeflag: tar.TypeReg}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("writing tar header for %q: %v", name, err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("writing tar body for %q: %v", name, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("closing tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("closing gzip writer: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// sha256Hex returns the lowercase hex SHA-256 of b, matching checksums.txt.
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// tarballServer is an httptest server that serves a single release's listing
+// (with assets whose download URLs point back at itself) plus the asset bytes,
+// recording the Authorization header seen on every request so a test can assert
+// the unauthenticated default and the GITHUB_TOKEN-authenticated behavior.
+type tarballServer struct {
+	srv         *httptest.Server
+	authHeaders []string
+}
+
+// newTarballServer wires a hermetic release+asset server. slug/tag identify the
+// release; archiveName is the archive asset's name; archive and checksums are
+// the served asset bytes. A checksums.txt asset is always advertised.
+func newTarballServer(t *testing.T, slug, tag, archiveName string, archive, checksums []byte) *tarballServer {
+	t.Helper()
+	ts := &tarballServer{}
+	releasesPath := "/repos/" + slug + "/releases"
+	const archivePath = "/dl/archive"
+	const checksumsPath = "/dl/checksums.txt"
+	ts.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ts.authHeaders = append(ts.authHeaders, r.Header.Get("Authorization"))
+		base := "http://" + r.Host
+		switch r.URL.Path {
+		case releasesPath:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"tag_name": tag,
+					"assets": []map[string]any{
+						{"name": archiveName, "browser_download_url": base + archivePath},
+						{"name": "checksums.txt", "browser_download_url": base + checksumsPath},
+					},
+				},
+			})
+		case archivePath:
+			_, _ = w.Write(archive)
+		case checksumsPath:
+			_, _ = w.Write(checksums)
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(ts.srv.Close)
+	return ts
+}
+
+// sawAuthHeader reports whether any recorded request carried the given exact
+// Authorization header value.
+func (ts *tarballServer) sawAuthHeader(value string) bool {
+	return slices.Contains(ts.authHeaders, value)
+}
+
+// sawAnyAuthHeader reports whether any recorded request carried a non-empty
+// Authorization header.
+func (ts *tarballServer) sawAnyAuthHeader() bool {
+	for _, h := range ts.authHeaders {
+		if h != "" {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	testTarballGOOS   = "linux"
+	testTarballGOARCH = "amd64"
+)
+
+// writeTargetBinary creates a stand-in installed binary under a fresh temp dir
+// with the given content and returns its path and pre-swap FileInfo.
+func writeTargetBinary(t *testing.T, content string) (string, os.FileInfo) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "agentico")
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("writing target binary: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat target binary: %v", err)
+	}
+	return path, info
+}
+
+// Success path through runUpdateWith: the matching archive and checksums.txt
+// assets are resolved from the release, downloaded, the archive SHA-256 is
+// verified, the inner agentico binary is extracted and atomically swapped into
+// the target, the old → new transition is printed, and the process exits 0. The
+// target is replaced via rename (a new file identity), preserving any open
+// handle to the original — the non-destructive swap guarantee.
+func TestRunUpdateWithTarballSuccess(t *testing.T) {
+	const slug = "doordash-oss/agentic-orchestrator"
+	const newContent = "NEW-AGENTICO-BINARY-BYTES"
+	archiveName := fmt.Sprintf("agentic-orchestrator_2.0.0_%s_%s.tar.gz", testTarballGOOS, testTarballGOARCH)
+	archive := makeTarGz(t, map[string]string{"agentico": newContent, "LICENSE": "Apache-2.0"})
+	checksums := fmt.Appendf(nil, "%s  %s\n%s  some-other-asset.tar.gz\n", sha256Hex(archive), archiveName, sha256Hex([]byte("other")))
+
+	srv := newTarballServer(t, slug, "v2.0.0", archiveName, archive, checksums)
+	target, origInfo := writeTargetBinary(t, "OLD-AGENTICO-BINARY")
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           func() (string, error) { return slug, nil },
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runTarball:     newTarballUpdater(srv.srv.Client(), srv.srv.URL, target, testTarballGOOS, testTarballGOARCH),
+	})
+
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "1.0.0 → 2.0.0") {
+		t.Errorf("stdout missing old → new transition\nfull:\n%s", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty on success", stderr.String())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading swapped target: %v", err)
+	}
+	if string(got) != newContent {
+		t.Errorf("target content = %q, want %q", got, newContent)
+	}
+	newInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat swapped target: %v", err)
+	}
+	if os.SameFile(origInfo, newInfo) {
+		t.Error("swap must replace the target via rename (new file identity), preserving the original inode for any process holding it open")
+	}
+	if newInfo.Mode().Perm()&0o100 == 0 {
+		t.Errorf("swapped target is not executable: mode %v", newInfo.Mode())
+	}
+}
+
+// Checksum mismatch is non-destructive: the swap aborts before touching the
+// binary, a clear error reaches stderr, the process exits non-zero, no old → new
+// line is printed, and the original binary is byte-for-byte unchanged.
+func TestRunUpdateWithTarballChecksumMismatch(t *testing.T) {
+	const slug = "doordash-oss/agentic-orchestrator"
+	archiveName := fmt.Sprintf("agentic-orchestrator_2.0.0_%s_%s.tar.gz", testTarballGOOS, testTarballGOARCH)
+	archive := makeTarGz(t, map[string]string{"agentico": "NEW"})
+	// A digest that does not match the archive bytes.
+	checksums := fmt.Appendf(nil, "%s  %s\n", sha256Hex([]byte("WRONG")), archiveName)
+
+	srv := newTarballServer(t, slug, "v2.0.0", archiveName, archive, checksums)
+	const original = "ORIGINAL-UNTOUCHED"
+	target, origInfo := writeTargetBinary(t, original)
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           func() (string, error) { return slug, nil },
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runTarball:     newTarballUpdater(srv.srv.Client(), srv.srv.URL, target, testTarballGOOS, testTarballGOARCH),
+	})
+
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	if code == 0 {
+		t.Fatal("checksum mismatch must exit non-zero")
+	}
+	if strings.Contains(stdout.String(), "→") {
+		t.Errorf("no old → new line may print on checksum mismatch\nfull:\n%s", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected a clear checksum error on stderr")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading target: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("target content = %q, want it left untouched as %q", got, original)
+	}
+	newInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat target: %v", err)
+	}
+	if !os.SameFile(origInfo, newInfo) {
+		t.Error("the original binary file must be left untouched (same identity) on a failed swap")
+	}
+}
+
+// Missing per-OS/arch asset is non-destructive: when the release carries no
+// archive matching the running platform, the update errors clearly, exits
+// non-zero, prints no transition, and leaves the binary unchanged.
+func TestRunUpdateWithTarballMissingAsset(t *testing.T) {
+	const slug = "doordash-oss/agentic-orchestrator"
+	// The only published archive targets darwin/arm64, not the linux/amd64 we ask for.
+	archiveName := "agentic-orchestrator_2.0.0_darwin_arm64.tar.gz"
+	archive := makeTarGz(t, map[string]string{"agentico": "NEW"})
+	checksums := fmt.Appendf(nil, "%s  %s\n", sha256Hex(archive), archiveName)
+
+	srv := newTarballServer(t, slug, "v2.0.0", archiveName, archive, checksums)
+	const original = "ORIGINAL-UNTOUCHED"
+	target, origInfo := writeTargetBinary(t, original)
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           func() (string, error) { return slug, nil },
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runTarball:     newTarballUpdater(srv.srv.Client(), srv.srv.URL, target, testTarballGOOS, testTarballGOARCH),
+	})
+
+	if code == 0 {
+		t.Fatal("missing per-platform asset must exit non-zero")
+	}
+	if strings.Contains(stdout.String(), "→") {
+		t.Errorf("no old → new line may print when the asset is missing\nfull:\n%s", stdout.String())
+	}
+	if stderr.Len() == 0 {
+		t.Error("expected a clear missing-asset error on stderr")
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading target: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("target content = %q, want it left untouched as %q", got, original)
+	}
+	newInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat target: %v", err)
+	}
+	if !os.SameFile(origInfo, newInfo) {
+		t.Error("the original binary file must be left untouched on a missing-asset error")
+	}
+}
+
+// The tarball flow is unauthenticated by default and adds an Authorization:
+// Bearer header to every GitHub request only when GITHUB_TOKEN is set.
+func TestTarballUpdaterGithubTokenAuth(t *testing.T) {
+	const slug = "doordash-oss/agentic-orchestrator"
+	archiveName := fmt.Sprintf("agentic-orchestrator_2.0.0_%s_%s.tar.gz", testTarballGOOS, testTarballGOARCH)
+	archive := makeTarGz(t, map[string]string{"agentico": "NEW"})
+	checksums := fmt.Appendf(nil, "%s  %s\n", sha256Hex(archive), archiveName)
+
+	runOnce := func(t *testing.T) *tarballServer {
+		t.Helper()
+		srv := newTarballServer(t, slug, "v2.0.0", archiveName, archive, checksums)
+		target, _ := writeTargetBinary(t, "OLD")
+		update := newTarballUpdater(srv.srv.Client(), srv.srv.URL, target, testTarballGOOS, testTarballGOARCH)
+		if err := update(context.Background(), slug, "v2.0.0"); err != nil {
+			t.Fatalf("tarball update failed: %v", err)
+		}
+		return srv
+	}
+
+	t.Run("unauthenticated by default", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "")
+		srv := runOnce(t)
+		if srv.sawAnyAuthHeader() {
+			t.Errorf("no Authorization header expected without GITHUB_TOKEN; saw %v", srv.authHeaders)
+		}
+	})
+
+	t.Run("adds Bearer token when GITHUB_TOKEN set", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "secret-token")
+		srv := runOnce(t)
+		if !srv.sawAuthHeader("Bearer secret-token") {
+			t.Errorf("expected Bearer token on requests; saw %v", srv.authHeaders)
+		}
+	})
+}
+
+// --- Phase 4: tarball update helper units -----------------------------------
+
+func TestProjectNameFromSlug(t *testing.T) {
+	cases := map[string]string{
+		"doordash-oss/agentic-orchestrator": "agentic-orchestrator",
+		"owner/repo":                        "repo",
+		"single":                            "single",
+	}
+	for in, want := range cases {
+		if got := projectNameFromSlug(in); got != want {
+			t.Errorf("projectNameFromSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestChecksumFor(t *testing.T) {
+	checksums := []byte("aaa  first.tar.gz\nbbb  second.tar.gz\n\nccc  dist/third.tar.gz\n")
+	t.Run("exact name match", func(t *testing.T) {
+		got, ok := checksumFor(checksums, "second.tar.gz")
+		if !ok || got != "bbb" {
+			t.Errorf("checksumFor(second) = %q,%v want bbb,true", got, ok)
+		}
+	})
+	t.Run("matches on base name", func(t *testing.T) {
+		got, ok := checksumFor(checksums, "third.tar.gz")
+		if !ok || got != "ccc" {
+			t.Errorf("checksumFor(third) = %q,%v want ccc,true", got, ok)
+		}
+	})
+	t.Run("missing entry", func(t *testing.T) {
+		if _, ok := checksumFor(checksums, "absent.tar.gz"); ok {
+			t.Error("checksumFor(absent) ok = true, want false")
+		}
+	})
+}
+
+func TestVerifyChecksum(t *testing.T) {
+	archive := []byte("the-archive-bytes")
+	name := "agentic.tar.gz"
+	good := fmt.Appendf(nil, "%s  %s\n", sha256Hex(archive), name)
+	t.Run("match", func(t *testing.T) {
+		if err := verifyChecksum(archive, good, name); err != nil {
+			t.Errorf("verifyChecksum match error: %v", err)
+		}
+	})
+	t.Run("case-insensitive digest", func(t *testing.T) {
+		upper := fmt.Appendf(nil, "%s  %s\n", strings.ToUpper(sha256Hex(archive)), name)
+		if err := verifyChecksum(archive, upper, name); err != nil {
+			t.Errorf("verifyChecksum should accept upper-case digest: %v", err)
+		}
+	})
+	t.Run("mismatch", func(t *testing.T) {
+		bad := fmt.Appendf(nil, "%s  %s\n", sha256Hex([]byte("other")), name)
+		if err := verifyChecksum(archive, bad, name); err == nil {
+			t.Error("verifyChecksum mismatch error = nil, want error")
+		}
+	})
+	t.Run("no entry for archive", func(t *testing.T) {
+		if err := verifyChecksum(archive, []byte("zzz  unrelated.tar.gz\n"), name); err == nil {
+			t.Error("verifyChecksum with no matching entry error = nil, want error")
+		}
+	})
+}
+
+func TestExtractAgenticoBinary(t *testing.T) {
+	t.Run("extracts inner agentico binary", func(t *testing.T) {
+		const want = "BINARY-CONTENT"
+		archive := makeTarGz(t, map[string]string{"LICENSE": "x", "agentico": want, "README.md": "y"})
+		got, err := extractAgenticoBinary(archive)
+		if err != nil {
+			t.Fatalf("extractAgenticoBinary error: %v", err)
+		}
+		if string(got) != want {
+			t.Errorf("extracted content = %q, want %q", got, want)
+		}
+	})
+	t.Run("errors when agentico entry absent", func(t *testing.T) {
+		archive := makeTarGz(t, map[string]string{"LICENSE": "x", "README.md": "y"})
+		if _, err := extractAgenticoBinary(archive); err == nil {
+			t.Error("expected error when archive lacks an agentico entry")
+		}
+	})
+	t.Run("errors on non-gzip input", func(t *testing.T) {
+		if _, err := extractAgenticoBinary([]byte("not a gzip stream")); err == nil {
+			t.Error("expected error on a corrupt archive")
+		}
+	})
+}
+
+// swapBinary writes a temp file in the target directory and renames it over the
+// target: the swapped target has new content, an executable mode, and a new
+// file identity (rename), so the original inode survives for any open handle.
+func TestSwapBinaryAtomicRename(t *testing.T) {
+	const newContent = "REPLACEMENT"
+	target, origInfo := writeTargetBinary(t, "ORIGINAL")
+
+	// Hold the original file open to model the running process; reading from the
+	// handle after the swap must still return the original bytes.
+	orig, err := os.Open(target)
+	if err != nil {
+		t.Fatalf("opening original: %v", err)
+	}
+	defer orig.Close()
+
+	if err := swapBinary(target, []byte(newContent)); err != nil {
+		t.Fatalf("swapBinary error: %v", err)
+	}
+
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("reading swapped target: %v", err)
+	}
+	if string(got) != newContent {
+		t.Errorf("target content = %q, want %q", got, newContent)
+	}
+	newInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("stat swapped target: %v", err)
+	}
+	if os.SameFile(origInfo, newInfo) {
+		t.Error("swapBinary must rename a fresh file over the target (new identity)")
+	}
+	if newInfo.Mode().Perm()&0o100 == 0 {
+		t.Errorf("swapped target not executable: %v", newInfo.Mode())
+	}
+	fromHandle, err := io.ReadAll(orig)
+	if err != nil {
+		t.Fatalf("reading original handle: %v", err)
+	}
+	if string(fromHandle) != "ORIGINAL" {
+		t.Errorf("original handle content = %q, want it preserved as %q", fromHandle, "ORIGINAL")
+	}
+}
+
+// swapBinary leaves nothing behind when the target directory is unwritable: the
+// temp-file creation fails and the (absent) target is not created.
+func TestSwapBinaryFailsClosedOnBadDir(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "no-such-subdir", "agentico")
+	if err := swapBinary(target, []byte("X")); err == nil {
+		t.Fatal("swapBinary into a nonexistent directory must error")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("target must not exist after a failed swap; stat err = %v", err)
 	}
 }

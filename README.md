@@ -19,23 +19,38 @@ That is the real "oneshot" value: an engineer can describe a large feature once,
 - **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
 - **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
 - **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
-- **Provider orchestration is explicit** — Claude can be used for context gathering, planning, and implementation; Codex for independent review. Models can be overridden per phase and swapped at runtime.
+- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add a second to split the work. By default Claude handles context gathering, planning, and implementation while Codex handles independent review, but models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
 
 The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
 ## Quick Start
 
+The fastest way to install is to download a prebuilt binary from the [latest release](https://github.com/doordash-oss/agentic-orchestrator/releases/latest) — no Go toolchain required. Prebuilt binaries are published for macOS and Linux on both amd64 and arm64.
+
 ```bash
-# Install (requires Go 1.25+)
+# Install the latest prebuilt binary into ~/.local/bin (no sudo, macOS/Linux, amd64/arm64)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/doordash-oss/agentic-orchestrator/releases/latest | sed 's@.*/@@')
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/download/${TAG}/agentic-orchestrator_${TAG#v}_${OS}_${ARCH}.tar.gz" | tar -xz -C ~/.local/bin agentico
+
+# Launch (add ~/.local/bin to your PATH first if it isn't already)
+~/.local/bin/agentico
+```
+
+<details>
+<summary>Build from source (requires Go 1.25+)</summary>
+
+```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 
 # Or clone and build
 git clone https://github.com/doordash-oss/agentic-orchestrator.git
 cd agentic-orchestrator && make install
-
-# Launch
-agentico
 ```
+
+</details>
 
 On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
 
@@ -43,16 +58,30 @@ On first launch, Agentic Orchestrator walks you through a welcome flow to select
 
 ## Prerequisites
 
+### Required
+
 | Tool | Purpose | Install |
 |------|---------|---------|
-| **Go 1.25+** | Build or install `agentico` from source | [go.dev](https://go.dev/dl/) |
 | **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
+| **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
+
+### Provider CLIs — install at least one
+
+Agentic Orchestrator needs **at least one** AI provider CLI.
+
+| Tool | Role | Install |
+|------|------|---------|
 | **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
 | **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
-| **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
+
+### Optional
+
+| Tool | Purpose | Install |
+|------|---------|---------|
+| **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
 | **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
 
-After installing provider CLIs, run `claude auth status`, `codex login status`, and `gh auth status` before launching `agentico`.
+After installing your provider CLI(s), run `claude auth status` and/or `codex login status`, plus `gh auth status`, before launching `agentico`.
 
 ## How It Works
 

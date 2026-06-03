@@ -36,11 +36,15 @@ const (
 	// updateCheckTimeout bounds the single outbound GitHub call.
 	updateCheckTimeout = 15 * time.Second
 
-	// User-facing narrative strings. The placeholder action line is a Phase 1
-	// stand-in; real install-method classification lands in Phase 2.
+	// User-facing narrative strings.
 	updateCheckingNarrative = "Checking for updates…"
-	updatePlaceholderAction = "Install method: not yet detected — automatic install is coming in a future release. Re-run your original install command to upgrade for now."
 	updateNotImplementedMsg = "Update execution is not yet implemented."
+
+	// updateFromSourceGuidance is printed to stderr when a development build
+	// refuses to self-update. It points the user back at their source checkout
+	// rather than touching the binary or the network.
+	updateFromSourceGuidance = "agentico was built from source; development builds are not updated automatically.\n" +
+		"Update from source instead: pull the latest changes and rebuild (for example, `git pull` then `make install`)."
 )
 
 // errNoStableRelease signals that a repository has no published non-draft,
@@ -69,11 +73,15 @@ func parseUpdateArgs(opts launchOptions, rest []string) (launchOptions, error) {
 
 // updateDeps bundles the injectable dependencies of the update flow so the
 // resolution logic can be exercised hermetically: tests supply a controllable
-// slug and an httptest-backed (or canned) latest-release fetcher.
+// install-method detector, slug, and an httptest-backed (or canned)
+// latest-release fetcher.
 type updateDeps struct {
 	currentVersion string
-	slug           func() (string, error)
-	fetchLatest    func(ctx context.Context, slug string) (string, error)
+	// method detects how the running binary was installed. It is consulted
+	// before any network call so a development build can be refused offline.
+	method      func() installMethod
+	slug        func() (string, error)
+	fetchLatest func(ctx context.Context, slug string) (string, error)
 }
 
 // runUpdate is the production updater seam wired into the router. It resolves
@@ -84,6 +92,7 @@ func runUpdate(checkOnly bool, stdout, stderr io.Writer) int {
 	defer cancel()
 	return runUpdateWith(ctx, checkOnly, stdout, stderr, updateDeps{
 		currentVersion: tui.GetVersion(),
+		method:         gatherInstallMethod,
 		slug:           moduleSlug,
 		fetchLatest:    githubFetchLatestStableTag(http.DefaultClient, githubBaseURL()),
 	})
@@ -103,6 +112,13 @@ func githubBaseURL() string {
 // runUpdateWith implements the --check / bare-update behavior against injected
 // dependencies and returns the process exit code.
 func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer, deps updateDeps) int {
+	// Classify the install method before any network call. A development build
+	// is refused entirely offline — no GitHub request, no binary touched.
+	method := deps.method()
+	if method == installMethodDevBuild {
+		return reportDevBuild(checkOnly, stdout, stderr, deps.currentVersion)
+	}
+
 	fmt.Fprintln(stdout, updateCheckingNarrative)
 
 	slug, err := deps.slug()
@@ -130,15 +146,34 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 	if checkOnly {
 		fmt.Fprintf(stdout, "Current version: %s\n", normalizeVersion(current))
 		fmt.Fprintf(stdout, "Latest version:  %s\n", normalizeVersion(latest))
-		fmt.Fprintln(stdout, updatePlaceholderAction)
+		fmt.Fprintf(stdout, "Install method:  %s\n", method.label())
+		fmt.Fprintln(stdout, method.wouldDoAction())
 		return 0
 	}
 
 	// Bare `update` with an update available: print the conventional old → new
-	// skeleton to stdout, then report that execution is not yet wired on
-	// stderr and exit non-zero (real execution lands in Phases 2-4).
+	// skeleton to stdout, then report that execution for the detected method is
+	// not yet wired on stderr and exit non-zero (real execution lands in
+	// Phases 3-4). Naming the method proves the classifier ran on this branch.
 	fmt.Fprintf(stdout, "Update available: %s → %s\n", normalizeVersion(current), normalizeVersion(latest))
-	fmt.Fprintln(stderr, updateNotImplementedMsg)
+	fmt.Fprintf(stderr, "%s (detected install method: %s)\n", updateNotImplementedMsg, method.label())
+	return 1
+}
+
+// reportDevBuild handles the development-build case for both modes without any
+// network call or binary mutation. In --check mode it reports the current
+// version, the detected method, and the would-do action to stdout and exits 0
+// (a non-destructive report). In bare mode it prints update-from-source
+// guidance to stderr and exits non-zero (the refusal — the first real action
+// the update command takes).
+func reportDevBuild(checkOnly bool, stdout, stderr io.Writer, current string) int {
+	if checkOnly {
+		fmt.Fprintf(stdout, "Current version: %s\n", normalizeVersion(current))
+		fmt.Fprintf(stdout, "Install method:  %s\n", installMethodDevBuild.label())
+		fmt.Fprintln(stdout, installMethodDevBuild.wouldDoAction())
+		return 0
+	}
+	fmt.Fprintln(stderr, updateFromSourceGuidance)
 	return 1
 }
 

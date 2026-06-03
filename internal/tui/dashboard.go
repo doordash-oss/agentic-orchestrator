@@ -51,6 +51,17 @@ func GetVersion() string {
 	return "dev"
 }
 
+// InjectedVersion returns the raw build-time ldflags version exactly as
+// injected ("" when unset), without the build-info/"dev" fallbacks GetVersion
+// layers on. The update command's install-method classifier needs this raw
+// signal kept separate from the collapsed GetVersion accessor: a clean injected
+// version implies a release tarball, whereas a build-info module version
+// implies a `go install`. Collapsing the two (as GetVersion does) loses that
+// distinction.
+func InjectedVersion() string {
+	return version
+}
+
 // listItemKind distinguishes section headers from feature rows in the virtual list.
 type listItemKind int
 

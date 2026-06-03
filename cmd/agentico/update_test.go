@@ -344,33 +344,38 @@ func fakeFetch(tag string, err error) func(context.Context, string) (string, err
 
 func okSlug() (string, error) { return "doordash-oss/agentic-orchestrator", nil }
 
-func TestRunUpdateWith(t *testing.T) {
-	t.Run("check prints versions and placeholder, exits 0", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
-			currentVersion: "1.2.3",
-			slug:           okSlug,
-			fetchLatest:    fakeFetch("v2.0.0", nil),
-		})
-		if code != 0 {
-			t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
-		}
-		out := stdout.String()
-		for _, want := range []string{"Checking for updates", "1.2.3", "2.0.0", updatePlaceholderAction} {
-			if !strings.Contains(out, want) {
-				t.Errorf("stdout missing %q\nfull:\n%s", want, out)
-			}
-		}
-		if stderr.Len() != 0 {
-			t.Errorf("stderr = %q, want empty", stderr.String())
-		}
-	})
+// fixedMethod returns a detector that always reports m. The non-dev branches of
+// runUpdateWith reach the network, so most tests pin a concrete non-dev method.
+func fixedMethod(m installMethod) func() installMethod {
+	return func() installMethod { return m }
+}
 
+// failingSlugFn / failingFetchFn fail the test if invoked. They guard the
+// classify-first control flow: a dev build must never reach the slug resolver
+// or the latest-release fetcher.
+func failingSlugFn(t *testing.T) func() (string, error) {
+	t.Helper()
+	return func() (string, error) {
+		t.Fatal("slug resolver called on a network-free (dev-build) path")
+		return "", nil
+	}
+}
+
+func failingFetchFn(t *testing.T) func(context.Context, string) (string, error) {
+	t.Helper()
+	return func(context.Context, string) (string, error) {
+		t.Fatal("fetchLatest called on a network-free (dev-build) path")
+		return "", nil
+	}
+}
+
+func TestRunUpdateWith(t *testing.T) {
 	t.Run("already up to date short-circuits, exits 0", func(t *testing.T) {
 		for _, checkOnly := range []bool{true, false} {
 			var stdout, stderr bytes.Buffer
 			code := runUpdateWith(context.Background(), checkOnly, &stdout, &stderr, updateDeps{
 				currentVersion: "2.0.0",
+				method:         fixedMethod(installMethodTarball),
 				slug:           okSlug,
 				fetchLatest:    fakeFetch("v2.0.0", nil),
 			})
@@ -381,16 +386,20 @@ func TestRunUpdateWith(t *testing.T) {
 			if !strings.Contains(out, "up to date") {
 				t.Errorf("checkOnly=%v stdout missing up-to-date message\nfull:\n%s", checkOnly, out)
 			}
-			if strings.Contains(out, updatePlaceholderAction) {
-				t.Errorf("checkOnly=%v up-to-date path must not print placeholder action", checkOnly)
+			if strings.Contains(out, "Would update") {
+				t.Errorf("checkOnly=%v up-to-date path must not print a would-do action", checkOnly)
 			}
 		}
 	})
 
-	t.Run("dev current never claims up to date, check exits 0", func(t *testing.T) {
+	t.Run("dev version string with non-dev method still prints latest, check exits 0", func(t *testing.T) {
+		// The injected method decides the branch; the version string only
+		// decides up-to-date. A "dev" version on a go-install method must not
+		// claim up to date and must still resolve the latest release.
 		var stdout, stderr bytes.Buffer
 		code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
 			currentVersion: "dev",
+			method:         fixedMethod(installMethodGoInstall),
 			slug:           okSlug,
 			fetchLatest:    fakeFetch("v2.0.0", nil),
 		})
@@ -406,28 +415,11 @@ func TestRunUpdateWith(t *testing.T) {
 		}
 	})
 
-	t.Run("bare update available prints skeleton + stderr stub, exits 1", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
-			currentVersion: "1.2.3",
-			slug:           okSlug,
-			fetchLatest:    fakeFetch("v2.0.0", nil),
-		})
-		if code != 1 {
-			t.Fatalf("code = %d, want 1", code)
-		}
-		if !strings.Contains(stdout.String(), "→") {
-			t.Errorf("stdout missing old → new skeleton\nfull:\n%s", stdout.String())
-		}
-		if !strings.Contains(stderr.String(), updateNotImplementedMsg) {
-			t.Errorf("stderr missing not-yet-wired stub\nfull:\n%s", stderr.String())
-		}
-	})
-
 	t.Run("fetch error exits 1 with stderr message", func(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
 			currentVersion: "1.2.3",
+			method:         fixedMethod(installMethodTarball),
 			slug:           okSlug,
 			fetchLatest:    fakeFetch("", errors.New("boom")),
 		})
@@ -443,6 +435,7 @@ func TestRunUpdateWith(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
 			currentVersion: "1.2.3",
+			method:         fixedMethod(installMethodTarball),
 			slug:           okSlug,
 			fetchLatest:    fakeFetch("", errNoStableRelease),
 		})
@@ -459,6 +452,7 @@ func TestRunUpdateWith(t *testing.T) {
 		fetchCalled := false
 		code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
 			currentVersion: "1.2.3",
+			method:         fixedMethod(installMethodTarball),
 			slug:           func() (string, error) { return "", errors.New("no module path") },
 			fetchLatest: func(context.Context, string) (string, error) {
 				fetchCalled = true
@@ -477,6 +471,136 @@ func TestRunUpdateWith(t *testing.T) {
 	})
 }
 
+// --- Task 2: dev-build refusal (network-free) -------------------------------
+
+func TestRunUpdateWithDevBuildBareRefuses(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "dev",
+		method:         fixedMethod(installMethodDevBuild),
+		slug:           failingSlugFn(t),  // must not be reached
+		fetchLatest:    failingFetchFn(t), // must not be reached
+	})
+	if code == 0 {
+		t.Fatalf("bare dev-build update must exit non-zero, got %d", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("bare dev-build refusal must keep stdout empty, got %q", stdout.String())
+	}
+	errOut := stderr.String()
+	for _, want := range []string{"built from source", "Update from source"} {
+		if !strings.Contains(errOut, want) {
+			t.Errorf("stderr missing guidance %q\nfull:\n%s", want, errOut)
+		}
+	}
+}
+
+func TestRunUpdateWithDevBuildCheckReports(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
+		currentVersion: "dev",
+		method:         fixedMethod(installMethodDevBuild),
+		slug:           failingSlugFn(t),  // must not be reached
+		fetchLatest:    failingFetchFn(t), // must not be reached
+	})
+	if code != 0 {
+		t.Fatalf("dev-build --check must exit 0 (non-destructive report), got %d\nstderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"Current version", "dev", installMethodDevBuild.label(), installMethodDevBuild.wouldDoAction()} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nfull:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "Latest version") {
+		t.Errorf("dev-build --check must not print a latest version (no network)\nfull:\n%s", out)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("dev-build --check stderr = %q, want empty", stderr.String())
+	}
+}
+
+// --- Task 3: real method + would-do-action reporting for non-dev branches ---
+
+func TestRunUpdateWithCheckReportsMethodAndAction(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     installMethod
+		wantLabel  string
+		wantAction string
+	}{
+		{
+			name:       "go-install",
+			method:     installMethodGoInstall,
+			wantLabel:  "go install",
+			wantAction: "re-running the Go install",
+		},
+		{
+			name:       "tarball",
+			method:     installMethodTarball,
+			wantLabel:  "release tarball",
+			wantAction: "downloading the latest release and replacing the binary",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
+				currentVersion: "1.2.3",
+				method:         fixedMethod(tt.method),
+				slug:           okSlug,
+				fetchLatest:    fakeFetch("v2.0.0", nil),
+			})
+			if code != 0 {
+				t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+			}
+			out := stdout.String()
+			for _, want := range []string{"Current version", "1.2.3", "Latest version", "2.0.0", tt.wantLabel, tt.wantAction} {
+				if !strings.Contains(out, want) {
+					t.Errorf("stdout missing %q\nfull:\n%s", want, out)
+				}
+			}
+			if stderr.Len() != 0 {
+				t.Errorf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunUpdateWithBareNamesDetectedMethod(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		method    installMethod
+		wantLabel string
+	}{
+		{name: "go-install", method: installMethodGoInstall, wantLabel: "go install"},
+		{name: "tarball", method: installMethodTarball, wantLabel: "release tarball"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+				currentVersion: "1.2.3",
+				method:         fixedMethod(tt.method),
+				slug:           okSlug,
+				fetchLatest:    fakeFetch("v2.0.0", nil),
+			})
+			if code != 1 {
+				t.Fatalf("code = %d, want 1", code)
+			}
+			if !strings.Contains(stdout.String(), "→") {
+				t.Errorf("stdout missing old → new skeleton\nfull:\n%s", stdout.String())
+			}
+			errOut := stderr.String()
+			if !strings.Contains(errOut, updateNotImplementedMsg) {
+				t.Errorf("stderr missing not-yet-wired stub\nfull:\n%s", errOut)
+			}
+			if !strings.Contains(errOut, tt.wantLabel) {
+				t.Errorf("stderr must name the detected method %q\nfull:\n%s", tt.wantLabel, errOut)
+			}
+		})
+	}
+}
+
 // Exercises the real fetch path end-to-end through runUpdateWith and httptest,
 // confirming the whole resolution chain stays hermetic.
 func TestRunUpdateWithRealFetchHermetic(t *testing.T) {
@@ -485,6 +609,7 @@ func TestRunUpdateWithRealFetchHermetic(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
 		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
 		slug:           func() (string, error) { return slug, nil },
 		fetchLatest:    githubFetchLatestStableTag(srv.Client(), srv.URL),
 	})

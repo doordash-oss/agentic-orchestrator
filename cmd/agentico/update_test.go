@@ -1793,3 +1793,91 @@ func TestRunUpdateWithCheckModeSkipsPreflight(t *testing.T) {
 		t.Errorf("--check must report the would-do action, got:\n%s", stdout.String())
 	}
 }
+
+// --- rate-limit handling on the check path ----------------------------------
+
+func TestRateLimitMessage(t *testing.T) {
+	resp := func(status int, remaining, reset string) *http.Response {
+		h := http.Header{}
+		if remaining != "" {
+			h.Set("X-RateLimit-Remaining", remaining)
+		}
+		if reset != "" {
+			h.Set("X-RateLimit-Reset", reset)
+		}
+		return &http.Response{StatusCode: status, Header: h}
+	}
+
+	t.Run("unauthenticated 403 points at GITHUB_TOKEN and the reset time", func(t *testing.T) {
+		msg := rateLimitMessage(resp(http.StatusForbidden, "0", "1780506343"), false)
+		if !strings.Contains(msg, "GITHUB_TOKEN") || !strings.Contains(msg, "60/hour") {
+			t.Errorf("message must name GITHUB_TOKEN and the 60/hour limit, got %q", msg)
+		}
+		if !strings.Contains(msg, "Try again after") {
+			t.Errorf("message must include the reset time, got %q", msg)
+		}
+	})
+	t.Run("429 is also treated as rate limiting", func(t *testing.T) {
+		if rateLimitMessage(resp(http.StatusTooManyRequests, "0", ""), false) == "" {
+			t.Error("429 with remaining 0 must be reported as rate limiting")
+		}
+	})
+	t.Run("authenticated token gets a token-specific message, no GITHUB_TOKEN hint", func(t *testing.T) {
+		msg := rateLimitMessage(resp(http.StatusForbidden, "0", ""), true)
+		if msg == "" || strings.Contains(msg, "GITHUB_TOKEN") {
+			t.Errorf("an authenticated rate-limit must not suggest setting GITHUB_TOKEN, got %q", msg)
+		}
+	})
+	t.Run("403 with remaining left is not a rate limit", func(t *testing.T) {
+		if got := rateLimitMessage(resp(http.StatusForbidden, "12", ""), false); got != "" {
+			t.Errorf("a 403 with quota remaining is some other error, got %q", got)
+		}
+	})
+	t.Run("non-error status is not a rate limit", func(t *testing.T) {
+		if got := rateLimitMessage(resp(http.StatusOK, "0", ""), false); got != "" {
+			t.Errorf("a 200 is never a rate limit, got %q", got)
+		}
+	})
+	t.Run("missing reset header omits the retry hint", func(t *testing.T) {
+		if got := rateLimitMessage(resp(http.StatusForbidden, "0", ""), false); strings.Contains(got, "Try again") {
+			t.Errorf("no reset header means no retry hint, got %q", got)
+		}
+	})
+}
+
+// The latest-release check honors GITHUB_TOKEN: it sends an Authorization
+// header when the token is set (lifting the unauthenticated rate limit) and
+// none when it is unset.
+func TestGithubFetchLatestStableTagUsesGithubToken(t *testing.T) {
+	const slug = "doordash-oss/agentic-orchestrator"
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"tag_name": "v1.0.0"}})
+	}))
+	t.Cleanup(srv.Close)
+
+	t.Run("sends Bearer token when GITHUB_TOKEN is set", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "secret-token")
+		gotAuth = "unset"
+		fetch := githubFetchLatestStableTag(srv.Client(), srv.URL)
+		if _, err := fetch(context.Background(), slug); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if gotAuth != "Bearer secret-token" {
+			t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer secret-token")
+		}
+	})
+	t.Run("no Authorization header without GITHUB_TOKEN", func(t *testing.T) {
+		t.Setenv("GITHUB_TOKEN", "")
+		gotAuth = "unset"
+		fetch := githubFetchLatestStableTag(srv.Client(), srv.URL)
+		if _, err := fetch(context.Background(), slug); err != nil {
+			t.Fatalf("fetch: %v", err)
+		}
+		if gotAuth != "" {
+			t.Errorf("Authorization = %q, want empty without GITHUB_TOKEN", gotAuth)
+		}
+	})
+}

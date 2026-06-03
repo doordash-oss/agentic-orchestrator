@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -564,9 +565,10 @@ type githubAsset struct {
 // listReleases lists a repository's releases — including each release's
 // published assets — over the injected client and base URL. The base URL and
 // HTTP client are injected so the resolution logic can be unit-tested against an
-// in-process httptest server. When authenticated is true and GITHUB_TOKEN is
-// set, the request carries an Authorization header; the check-mode caller passes
-// false to stay unauthenticated, while the tarball download flow passes true.
+// in-process httptest server. When authenticated is true the request carries an
+// Authorization header if GITHUB_TOKEN is set (and is a no-op otherwise); both
+// the check and the tarball download flow pass true so a token, when present,
+// lifts the 60/hour unauthenticated rate limit on every request.
 func listReleases(ctx context.Context, client *http.Client, baseURL, slug string, authenticated bool) ([]githubRelease, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases", strings.TrimRight(baseURL, "/"), slug)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -585,6 +587,9 @@ func listReleases(ctx context.Context, client *http.Client, baseURL, slug string
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if msg := rateLimitMessage(resp, githubToken() != ""); msg != "" {
+			return nil, errors.New(msg)
+		}
 		return nil, fmt.Errorf("github returned status %s", resp.Status)
 	}
 
@@ -595,14 +600,41 @@ func listReleases(ctx context.Context, client *http.Client, baseURL, slug string
 	return releases, nil
 }
 
+// rateLimitMessage returns a clear, actionable error message when resp is a
+// GitHub primary rate-limit rejection — a 403/429 carrying X-RateLimit-Remaining: 0
+// — or "" when resp is some other failure. The unauthenticated limit is only
+// 60/hour per IP (easily exhausted behind a shared NAT egress), so the message
+// points an unauthenticated caller at GITHUB_TOKEN, names the authenticated
+// limit, and includes the reset time when the header is parseable.
+func rateLimitMessage(resp *http.Response, tokenSet bool) string {
+	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusTooManyRequests {
+		return ""
+	}
+	if resp.Header.Get("X-RateLimit-Remaining") != "0" {
+		return ""
+	}
+	var when string
+	if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+		if secs, err := strconv.ParseInt(reset, 10, 64); err == nil {
+			when = fmt.Sprintf(" Try again after %s.", time.Unix(secs, 0).Format("15:04 MST"))
+		}
+	}
+	if tokenSet {
+		return "GitHub API rate limit exceeded for the authenticated token." + when
+	}
+	return "GitHub API rate limit exceeded (unauthenticated requests are capped at 60/hour per IP). " +
+		"Set GITHUB_TOKEN to a personal access token to raise the limit to 5000/hour." + when
+}
+
 // githubFetchLatestStableTag returns a fetcher that lists a repository's
 // releases and yields the tag of the most recent non-draft, non-pre-release
-// entry. The call is unauthenticated by design — it is the lightweight check
-// that runs under the 15s timeout; the GITHUB_TOKEN-consuming requests live in
-// the tarball download flow.
+// entry. It consumes GITHUB_TOKEN when one is set (and stays unauthenticated
+// otherwise), so a caller behind a shared egress IP can lift the 60/hour
+// unauthenticated rate limit on the check — the same token the tarball download
+// flow already uses — and so private/Enterprise repositories can be checked.
 func githubFetchLatestStableTag(client *http.Client, baseURL string) func(ctx context.Context, slug string) (string, error) {
 	return func(ctx context.Context, slug string) (string, error) {
-		releases, err := listReleases(ctx, client, baseURL, slug, false)
+		releases, err := listReleases(ctx, client, baseURL, slug, true)
 		if err != nil {
 			return "", err
 		}

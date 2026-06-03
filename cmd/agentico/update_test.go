@@ -1047,6 +1047,9 @@ func TestRunUpdateWithTarballChecksumMismatch(t *testing.T) {
 	if stderr.Len() == 0 {
 		t.Error("expected a clear checksum error on stderr")
 	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "checksum") {
+		t.Errorf("the error must name the checksum so the user can diagnose it\nfull:\n%s", stderr.String())
+	}
 	got, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("reading target: %v", err)
@@ -1365,11 +1368,13 @@ func TestCheckDirWritable(t *testing.T) {
 	})
 }
 
-// On the real tarball update path, an unwritable target directory aborts before
-// any download: the command exits non-zero, prints stderr guidance naming the
-// directory and pointing at elevated privileges (sudo), prints no old → new
-// line, and never reaches the download seam. The verdict is driven by an
-// injected check, so it is deterministic regardless of the test process's uid.
+// On the real tarball update path, when an update IS warranted but the target
+// directory is unwritable, the command aborts before any download: it exits
+// non-zero, prints stderr guidance naming the directory and pointing at elevated
+// privileges (sudo), prints no old → new line, and never reaches the download
+// seam. The pre-flight runs only after the version check confirms an update is
+// needed, so the fetch does run here. The verdict is driven by an injected
+// check, so it is deterministic regardless of the test process's uid.
 func TestRunUpdateWithTarballPreflightUnwritableAborts(t *testing.T) {
 	const dir = "/usr/local/bin"
 	var checkedDir string
@@ -1378,11 +1383,10 @@ func TestRunUpdateWithTarballPreflightUnwritableAborts(t *testing.T) {
 		currentVersion: "1.0.0",
 		method:         fixedMethod(installMethodTarball),
 		slug:           okSlug,
-		// The latest-release lookup is the first GitHub request. An unwritable
-		// target must abort the pre-flight ahead of it, so this must never run.
+		// An update is available (2.0.0 > 1.0.0), so the version check falls
+		// through to the pre-flight, which then aborts on the unwritable dir.
 		fetchLatest: func(context.Context, string) (string, error) {
 			fetchCalled = true
-			t.Error("latest-release fetch must not run when the pre-flight aborts an unwritable tarball update")
 			return "v2.0.0", nil
 		},
 		binaryPath: dir + "/agentico",
@@ -1400,8 +1404,8 @@ func TestRunUpdateWithTarballPreflightUnwritableAborts(t *testing.T) {
 	if code == 0 {
 		t.Fatalf("unwritable target must exit non-zero, got %d", code)
 	}
-	if fetchCalled {
-		t.Error("the pre-flight must abort before the latest-release GitHub fetch (no network request occurs)")
+	if !fetchCalled {
+		t.Error("the version check (and its fetch) must run before the pre-flight, so an up-to-date binary is not nagged about writability")
 	}
 	if checkedDir != dir {
 		t.Errorf("pre-flight probed %q, want the binary's directory %q", checkedDir, dir)
@@ -1560,5 +1564,232 @@ func TestRunUpdateWithTarballNoResignOffDarwin(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Errorf("off-darwin must emit no re-sign warning; stderr = %q", stderr.String())
+	}
+}
+
+// --- downgrade guard --------------------------------------------------------
+
+// When the running version is newer than the latest published release, a bare
+// tarball update must NOT downgrade: it reports "already up to date" (noting the
+// running version is ahead), exits 0, and never reaches the download/swap seam.
+func TestRunUpdateWithTarballDoesNotDowngrade(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "2.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v1.0.0", nil),
+		runTarball:     failingTarball(t), // the swap must never run when no update is warranted
+	})
+
+	t.Logf("exit=%d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	if code != 0 {
+		t.Fatalf("a current version newer than latest must exit 0 (no downgrade), got %d", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "already up to date") || !strings.Contains(out, "newer than") {
+		t.Errorf("expected an up-to-date/ahead message, got:\n%s", out)
+	}
+	if strings.Contains(out, "→") {
+		t.Errorf("no old → new transition may print when no update is warranted\n%s", out)
+	}
+}
+
+// Numerically-equal versions that differ only in formatting (leading v) are
+// treated as up to date — the swap does not run.
+func TestRunUpdateWithTarballEqualVersionNoUpdate(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "v2.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("2.0.0", nil),
+		runTarball:     failingTarball(t),
+	})
+	if code != 0 {
+		t.Fatalf("equal versions must exit 0, got %d\nstderr:%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "already up to date") {
+		t.Errorf("expected already-up-to-date message, got:\n%s", stdout.String())
+	}
+}
+
+// --- forgiving asset matching -----------------------------------------------
+
+func TestMatchArchiveAsset(t *testing.T) {
+	const project = "agentic-orchestrator"
+	tests := []struct {
+		name         string
+		goos, goarch string
+		want         bool
+	}{
+		{"agentic-orchestrator_2.0.0_linux_amd64.tar.gz", "linux", "amd64", true},
+		{"agentic-orchestrator_2.0.0_linux_x86_64.tar.gz", "linux", "amd64", true},    // arch alias
+		{"agentic-orchestrator_2.0.0_darwin_aarch64.tar.gz", "darwin", "arm64", true}, // arch alias
+		{"agentic-orchestrator_2.0.0_macos_arm64.tar.gz", "darwin", "arm64", true},    // os alias
+		{"AGENTIC-ORCHESTRATOR_2.0.0_LINUX_AMD64.TAR.GZ", "linux", "amd64", true},     // case-insensitive
+		{"agentic-orchestrator_2.0.0_linux_amd64.tgz", "linux", "amd64", true},        // .tgz
+		{"agentic-orchestrator_2.0.0_linux_arm64.tar.gz", "linux", "amd64", false},    // arch mismatch
+		{"agentic-orchestrator_2.0.0_windows_amd64.tar.gz", "linux", "amd64", false},  // os mismatch
+		{"agentic-orchestrator_2.0.0_linux_amd64.zip", "linux", "amd64", false},       // zip not matched
+		{"other-project_2.0.0_linux_amd64.tar.gz", "linux", "amd64", false},           // wrong project
+		{"checksums.txt", "linux", "amd64", false},                                    // no prefix
+		{"agentic-orchestrator_linux_amd64.tar.gz", "linux", "amd64", false},          // too few fields
+	}
+	for _, tt := range tests {
+		if got := matchArchiveAsset(tt.name, project, tt.goos, tt.goarch); got != tt.want {
+			t.Errorf("matchArchiveAsset(%q, %s/%s) = %v, want %v", tt.name, tt.goos, tt.goarch, got, tt.want)
+		}
+	}
+}
+
+// End-to-end: an archive named with an arch alias (x86_64 for amd64) still
+// resolves and swaps successfully.
+func TestRunUpdateWithTarballMatchesAliasArchive(t *testing.T) {
+	const slug = "doordash-oss/agentic-orchestrator"
+	const newContent = "NEW-AGENTICO-ALIAS"
+	// linux/amd64 binary published under the x86_64 alias name.
+	archiveName := "agentic-orchestrator_2.0.0_linux_x86_64.tar.gz"
+	archive := makeTarGz(t, map[string]string{"agentico": newContent})
+	checksums := fmt.Appendf(nil, "%s  %s\n", sha256Hex(archive), archiveName)
+
+	srv := newTarballServer(t, slug, "v2.0.0", archiveName, archive, checksums)
+	target, _ := writeTargetBinary(t, "OLD")
+
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           func() (string, error) { return slug, nil },
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runTarball:     newTarballUpdater(srv.srv.Client(), srv.srv.URL, target, "linux", "amd64"),
+	})
+
+	if code != 0 {
+		t.Fatalf("alias-named archive must resolve and swap, got %d\nstderr:%s", code, stderr.String())
+	}
+	if got, _ := os.ReadFile(target); string(got) != newContent {
+		t.Errorf("target content = %q, want %q", got, newContent)
+	}
+}
+
+// --- mode preservation ------------------------------------------------------
+
+// swapBinary preserves the existing binary's permission bits across the swap,
+// guaranteeing the result stays executable by its owner.
+func TestSwapBinaryPreservesMode(t *testing.T) {
+	tests := []struct {
+		orig os.FileMode
+		want os.FileMode
+	}{
+		{0o755, 0o755},
+		{0o750, 0o750},
+		{0o640, 0o740}, // no owner-exec bit -> swap guarantees 0o100
+	}
+	for _, tt := range tests {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "agentico")
+		if err := os.WriteFile(target, []byte("OLD"), tt.orig); err != nil {
+			t.Fatalf("writing target: %v", err)
+		}
+		// WriteFile is subject to umask; normalize the starting mode explicitly.
+		if err := os.Chmod(target, tt.orig); err != nil {
+			t.Fatalf("chmod target: %v", err)
+		}
+		if err := swapBinary(target, []byte("NEW")); err != nil {
+			t.Fatalf("swapBinary: %v", err)
+		}
+		info, err := os.Stat(target)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if info.Mode().Perm() != tt.want {
+			t.Errorf("orig %v -> swapped %v, want %v", tt.orig, info.Mode().Perm(), tt.want)
+		}
+		if got, _ := os.ReadFile(target); string(got) != "NEW" {
+			t.Errorf("content = %q, want NEW", got)
+		}
+	}
+}
+
+// --- pre-flight ordering relative to the version check ----------------------
+
+// Regression guard for the reorder: a binary AHEAD of the latest release in an
+// unwritable directory must report "already up to date" and exit 0 — the
+// version check runs before the pre-flight, so no spurious "use sudo" error and
+// no swap. (Before the reorder, the pre-flight fired first and produced a
+// misleading non-zero sudo error.)
+func TestRunUpdateWithTarballAheadInUnwritableDirReportsUpToDate(t *testing.T) {
+	var checkWritableCalled bool
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, updateDeps{
+		currentVersion: "2.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v1.0.0", nil), // latest is OLDER than current
+		binaryPath:     "/usr/local/bin/agentico",
+		checkWritable:  func(string) error { checkWritableCalled = true; return errors.New("permission denied") },
+		runTarball:     failingTarball(t),
+	})
+
+	t.Logf("exit=%d checkWritableCalled=%v\nstdout:\n%s\nstderr:\n%s", code, checkWritableCalled, stdout.String(), stderr.String())
+	if code != 0 {
+		t.Fatalf("an ahead binary must exit 0 even in an unwritable dir, got %d\nstderr:%s", code, stderr.String())
+	}
+	if checkWritableCalled {
+		t.Error("the writability pre-flight must NOT run when no update is warranted (no spurious sudo error)")
+	}
+	if !strings.Contains(stdout.String(), "already up to date") {
+		t.Errorf("expected an up-to-date report, got:\n%s", stdout.String())
+	}
+	if strings.Contains(strings.ToLower(stderr.String()), "sudo") {
+		t.Errorf("no sudo/writability error may print when no update is warranted\nstderr:\n%s", stderr.String())
+	}
+}
+
+// In --check mode the downgrade guard still fires: a binary newer than the
+// latest release reports up-to-date and exits 0 without printing "Would update".
+func TestRunUpdateWithDoesNotDowngradeCheckMode(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), true /*checkOnly*/, &stdout, &stderr, updateDeps{
+		currentVersion: "2.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v1.0.0", nil),
+		runTarball:     failingTarball(t),
+	})
+	if code != 0 {
+		t.Fatalf("check mode with an ahead version must exit 0, got %d", code)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "already up to date") || !strings.Contains(out, "newer than") {
+		t.Errorf("check mode must report up-to-date/ahead, got:\n%s", out)
+	}
+	if strings.Contains(out, "Would update") {
+		t.Errorf("check mode must not claim an update is available for an ahead binary\n%s", out)
+	}
+}
+
+// --check mode never triggers the writability pre-flight, even on a tarball
+// install in an unwritable directory: it reports the would-do action and exits 0.
+func TestRunUpdateWithCheckModeSkipsPreflight(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), true /*checkOnly*/, &stdout, &stderr, updateDeps{
+		currentVersion: "1.0.0",
+		method:         fixedMethod(installMethodTarball),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v2.0.0", nil), // an update IS available
+		binaryPath:     "/usr/local/bin/agentico",
+		checkWritable: func(string) error {
+			t.Error("pre-flight must not run in --check mode")
+			return errors.New("permission denied")
+		},
+		runTarball: failingTarball(t),
+	})
+	if code != 0 {
+		t.Fatalf("--check must exit 0 regardless of writability, got %d\nstderr:%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Would update") {
+		t.Errorf("--check must report the would-do action, got:\n%s", stdout.String())
 	}
 }

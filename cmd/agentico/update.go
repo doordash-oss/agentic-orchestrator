@@ -228,19 +228,6 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 		return reportDevBuild(checkOnly, stdout, stderr, deps.currentVersion)
 	}
 
-	// Pre-flight the swap's target directory on the one path that will actually
-	// mutate the binary: a bare (non --check) tarball update. It sits ahead of
-	// every network request — the latest-release lookup below and the tarball
-	// download/swap seam — so an unwritable, root-owned install aborts here with
-	// elevated-privilege guidance and no GitHub request or binary change occurs.
-	// --check, the go-install branch, and the dev-build refusal never reach this
-	// gate, so their behavior is unchanged.
-	if !checkOnly && method == installMethodTarball {
-		if !preflightTarballWritable(stderr, deps) {
-			return 1
-		}
-	}
-
 	fmt.Fprintln(stdout, updateCheckingNarrative)
 
 	slug, err := deps.slug()
@@ -260,8 +247,20 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 	}
 
 	current := deps.currentVersion
-	if sameVersion(current, latest) {
-		fmt.Fprintf(stdout, "agentico is already up to date (version %s).\n", normalizeVersion(current))
+	// Decide whether an update is actually warranted. Equal versions are up to
+	// date; and when both sides are clean release versions, a current that is
+	// newer than the latest published release is also "up to date" — the command
+	// never downgrades. Only when neither rule applies (the versions differ and
+	// at least one is not a clean release version, e.g. a go-install
+	// pseudo-version) does it fall through to the install-method branches, which
+	// preserves the prior string-inequality behavior for the go-install path.
+	if cmp, ordered := compareReleaseVersions(current, latest); sameVersion(current, latest) || (ordered && cmp >= 0) {
+		if ordered && cmp > 0 {
+			fmt.Fprintf(stdout, "agentico is already up to date (version %s is newer than the latest release %s).\n",
+				normalizeVersion(current), normalizeVersion(latest))
+		} else {
+			fmt.Fprintf(stdout, "agentico is already up to date (version %s).\n", normalizeVersion(current))
+		}
 		return 0
 	}
 
@@ -271,6 +270,20 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 		fmt.Fprintf(stdout, "Install method:  %s\n", method.label())
 		fmt.Fprintln(stdout, method.wouldDoAction())
 		return 0
+	}
+
+	// An update is warranted and this is a real (non --check) run. Pre-flight the
+	// swap's target directory on the one path that mutates the binary — a tarball
+	// update — so an unwritable, root-owned install aborts here with
+	// elevated-privilege guidance and no download or binary change occurs. This
+	// gate sits after the version check on purpose: a binary already up to date or
+	// ahead of the latest release must report that (exit 0), not a spurious "not
+	// writable, use sudo" error. --check (returned above) and the go-install branch
+	// never reach it, so their behavior is unchanged.
+	if method == installMethodTarball {
+		if !preflightTarballWritable(stderr, deps) {
+			return 1
+		}
 	}
 
 	// Bare `update` with an update available: dispatch on the detected install
@@ -340,8 +353,8 @@ func performGoInstall(stdout, stderr io.Writer, deps updateDeps, current, latest
 // transition, leaving the existing binary untouched.
 func performTarballUpdate(stdout, stderr io.Writer, deps updateDeps, slug, current, latest string) int {
 	// The swap's target directory was already verified writable by the pre-flight
-	// in runUpdateWith, ahead of the latest-release fetch — so this branch is
-	// reached only once the directory admits the temp-create + rename swap.
+	// in runUpdateWith (which runs once an update is confirmed warranted) — so this
+	// branch is reached only once the directory admits the temp-create + rename swap.
 	ctx, cancel := context.WithTimeout(context.Background(), updateDownloadTimeout)
 	defer cancel()
 
@@ -658,9 +671,9 @@ func newTarballUpdater(client *http.Client, baseURL, targetPath, goos, goarch st
 }
 
 // resolveTarballAssets lists the chosen release's published assets and selects
-// the per-platform archive (matched by the project-name prefix and the
-// _<GOOS>_<GOARCH>.tar.gz suffix) and the checksums.txt manifest. A missing
-// archive for the running platform is a clear, non-destructive error.
+// the per-platform archive (matched tolerantly by matchArchiveAsset) and the
+// checksums.txt manifest. A missing archive for the running platform or a
+// missing manifest is a clear, non-destructive error.
 func resolveTarballAssets(ctx context.Context, client *http.Client, baseURL, slug, version, goos, goarch string) (archive, checksums githubAsset, err error) {
 	releases, err := listReleases(ctx, client, baseURL, slug, true)
 	if err != nil {
@@ -672,14 +685,13 @@ func resolveTarballAssets(ctx context.Context, client *http.Client, baseURL, slu
 		return githubAsset{}, githubAsset{}, fmt.Errorf("release %s not found among the published releases", version)
 	}
 
-	prefix := projectNameFromSlug(slug) + "_"
-	suffix := fmt.Sprintf("_%s_%s.tar.gz", goos, goarch)
+	project := projectNameFromSlug(slug)
 	var haveArchive, haveChecksums bool
 	for _, a := range rel.Assets {
 		switch {
 		case a.Name == checksumsAssetName:
 			checksums, haveChecksums = a, true
-		case strings.HasPrefix(a.Name, prefix) && strings.HasSuffix(a.Name, suffix):
+		case matchArchiveAsset(a.Name, project, goos, goarch):
 			archive, haveArchive = a, true
 		}
 	}
@@ -711,6 +723,73 @@ func projectNameFromSlug(slug string) string {
 		return slug[i+1:]
 	}
 	return slug
+}
+
+// matchArchiveAsset reports whether assetName is the release archive for the
+// running platform. It is deliberately tolerant of release-naming drift: the
+// match is anchored by the project-name prefix and a .tar.gz/.tgz extension, and
+// a trailing _<os>_<arch> is matched case-insensitively against a small alias
+// set, so x86_64 matches amd64, aarch64 matches arm64, and macos/osx match
+// darwin even if the naming convention changes. The version field between the
+// prefix and the OS token is not inspected. A suffix match (rather than
+// splitting on "_") is used so an arch token that itself contains an underscore,
+// e.g. x86_64, is handled correctly.
+func matchArchiveAsset(assetName, project, goos, goarch string) bool {
+	lower := strings.ToLower(assetName)
+	prefix := strings.ToLower(project) + "_"
+	if !strings.HasPrefix(lower, prefix) {
+		return false
+	}
+	stem := lower[len(prefix):]
+	switch {
+	case strings.HasSuffix(stem, ".tar.gz"):
+		stem = strings.TrimSuffix(stem, ".tar.gz")
+	case strings.HasSuffix(stem, ".tgz"):
+		stem = strings.TrimSuffix(stem, ".tgz")
+	default:
+		return false
+	}
+	for _, osName := range osAliases(goos) {
+		for _, arch := range archAliases(goarch) {
+			// The leading "_" guarantees the OS token is preceded by the version
+			// (or another field), so a name lacking the version field does not
+			// spuriously match.
+			if strings.HasSuffix(stem, "_"+osName+"_"+arch) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// osAliases returns the lowercase OS tokens that may name a release archive for
+// goos, tolerating common goreleaser naming variations. Unknown values map to
+// themselves so the match stays exact rather than failing closed.
+func osAliases(goos string) []string {
+	switch goos {
+	case "darwin":
+		return []string{"darwin", "macos", "osx", "mac"}
+	case "linux":
+		return []string{"linux"}
+	default:
+		return []string{goos}
+	}
+}
+
+// archAliases returns the lowercase architecture tokens that may name a release
+// archive for goarch (amd64↔x86_64↔x64, arm64↔aarch64). Unknown values map to
+// themselves.
+func archAliases(goarch string) []string {
+	switch goarch {
+	case "amd64":
+		return []string{"amd64", "x86_64", "x64"}
+	case "arm64":
+		return []string{"arm64", "aarch64"}
+	case "386":
+		return []string{"386", "i386", "x86"}
+	default:
+		return []string{goarch}
+	}
 }
 
 // downloadAsset fetches an asset's bytes over the injected client, consuming
@@ -821,14 +900,31 @@ func checkDirWritable(dir string) error {
 }
 
 // swapBinary performs the atomic, non-destructive in-place swap: it writes the
-// new binary to a temp file in the target's own directory, sets the executable
-// mode, then renames it over the target. Writing into the target directory keeps
-// the rename on one filesystem so it is atomic, and the rename gives the path a
-// new inode while the running process keeps executing the original — a partial
-// or failed write can never replace the live binary. On any error before the
-// rename the temp file is removed and the target is left untouched.
+// new binary to a temp file in the target's own directory, restores the existing
+// binary's permission bits and ownership, then renames it over the target.
+// Writing into the target directory keeps the rename on one filesystem so it is
+// atomic, and the rename gives the path a new inode while the running process
+// keeps executing the original — a partial or failed write can never replace the
+// live binary. On any error before the rename the temp file is removed and the
+// target is left untouched, so the rollback on failure is inherent.
 func swapBinary(targetPath string, binary []byte) error {
 	dir := filepath.Dir(targetPath)
+
+	// Preserve the existing binary's permission bits and ownership across the
+	// swap rather than imposing a fixed mode/owner. When the target cannot be
+	// stat'd, fall back to a sane executable default.
+	mode := os.FileMode(0o755)
+	var ownerUID, ownerGID int
+	var haveOwner bool
+	if info, err := os.Stat(targetPath); err == nil {
+		// Keep the original perms but guarantee the result is executable by its
+		// owner — a binary that is not runnable would be worse than a mode change.
+		mode = info.Mode().Perm() | 0o100
+		if uid, gid, ok := fileOwnerIDs(info); ok {
+			ownerUID, ownerGID, haveOwner = uid, gid, true
+		}
+	}
+
 	tmp, err := os.CreateTemp(dir, ".agentico-update-*")
 	if err != nil {
 		return fmt.Errorf("creating temp file in %s: %w", dir, err)
@@ -849,8 +945,16 @@ func swapBinary(targetPath string, binary []byte) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing new binary: %w", err)
 	}
-	if err := os.Chmod(tmpName, 0o755); err != nil {
-		return fmt.Errorf("setting executable mode: %w", err)
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return fmt.Errorf("setting file mode: %w", err)
+	}
+	// Best-effort ownership preservation: chown only succeeds when the process
+	// may assign the target owner (typically root replacing a root-owned binary).
+	// A non-root updater keeps the file owned by the invoking user, exactly as
+	// before, so a chown failure is intentionally ignored rather than aborting a
+	// swap that is otherwise complete.
+	if haveOwner {
+		_ = os.Chown(tmpName, ownerUID, ownerGID)
 	}
 	if err := os.Rename(tmpName, targetPath); err != nil {
 		return fmt.Errorf("replacing %s: %w", targetPath, err)

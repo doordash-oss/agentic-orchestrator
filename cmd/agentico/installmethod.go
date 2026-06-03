@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
@@ -83,19 +84,59 @@ func isRealModuleVersion(v string) bool {
 // hand-rolled — no new module dependency — and deliberately conservative: any
 // git-describe suffix (v1.2.3-5-gabc1234), -dirty marker, bare SHA, "dev", or
 // empty string is NOT a release, so the classifier refuses rather than risk a
-// wrong swap.
+// wrong swap. It delegates to parseReleaseVersion so the acceptance set and the
+// downgrade-guard's ordering share one definition of "clean release version".
 func isReleaseVersion(v string) bool {
+	_, ok := parseReleaseVersion(v)
+	return ok
+}
+
+// parseReleaseVersion parses a clean MAJOR.MINOR.PATCH version into its three
+// numeric components after trimming surrounding whitespace and a single leading
+// "v". ok is false for anything that is not exactly three all-digit fields (a
+// git-describe suffix, -dirty marker, bare SHA, "dev", go-install pseudo-version,
+// or empty string) and for a field too large to fit an int, so callers never
+// attempt to order versions they cannot reason about.
+func parseReleaseVersion(v string) (parts [3]int, ok bool) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	parts := strings.Split(v, ".")
-	if len(parts) != 3 {
-		return false
+	fields := strings.Split(v, ".")
+	if len(fields) != 3 {
+		return parts, false
 	}
-	for _, p := range parts {
-		if !isAllDigits(p) {
-			return false
+	for i, f := range fields {
+		if !isAllDigits(f) {
+			return parts, false
+		}
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			return parts, false
+		}
+		parts[i] = n
+	}
+	return parts, true
+}
+
+// compareReleaseVersions orders two release versions numerically. cmp is -1, 0,
+// or 1 for a<b, a==b, a>b, and ordered is true only when BOTH parse as clean
+// MAJOR.MINOR.PATCH versions. When either side is not a clean release version (a
+// go-install pseudo-version, a dev build, an empty string), ordered is false and
+// the caller falls back to plain inequality rather than guessing an order — so
+// the downgrade guard engages only where the comparison is trustworthy.
+func compareReleaseVersions(a, b string) (cmp int, ordered bool) {
+	pa, oka := parseReleaseVersion(a)
+	pb, okb := parseReleaseVersion(b)
+	if !oka || !okb {
+		return 0, false
+	}
+	for i := range 3 {
+		switch {
+		case pa[i] < pb[i]:
+			return -1, true
+		case pa[i] > pb[i]:
+			return 1, true
 		}
 	}
-	return true
+	return 0, true
 }
 
 // isAllDigits reports whether s is a non-empty run of ASCII digits.

@@ -55,6 +55,62 @@ func TestIsReleaseVersion(t *testing.T) {
 	}
 }
 
+// --- downgrade guard: release-version parsing and ordering -----------------
+
+func TestParseReleaseVersion(t *testing.T) {
+	tests := []struct {
+		in        string
+		wantParts [3]int
+		wantOK    bool
+	}{
+		{"1.2.3", [3]int{1, 2, 3}, true},
+		{"v1.2.3", [3]int{1, 2, 3}, true},
+		{" v10.20.30 ", [3]int{10, 20, 30}, true},
+		{"0.0.0", [3]int{0, 0, 0}, true},
+		{"02.0.0", [3]int{2, 0, 0}, true}, // leading zeros parse numerically
+		// Anything not exactly three numeric fields is unparseable.
+		{"1.2", [3]int{}, false},
+		{"1.2.3.4", [3]int{}, false},
+		{"1.2.x", [3]int{}, false},
+		{"v1.2.3-5-gabc1234", [3]int{}, false},
+		{"dev", [3]int{}, false},
+		{"", [3]int{}, false},
+		{"99999999999999999999.0.0", [3]int{}, false}, // overflows int
+	}
+	for _, tt := range tests {
+		parts, ok := parseReleaseVersion(tt.in)
+		if ok != tt.wantOK || (ok && parts != tt.wantParts) {
+			t.Errorf("parseReleaseVersion(%q) = %v,%v want %v,%v", tt.in, parts, ok, tt.wantParts, tt.wantOK)
+		}
+	}
+}
+
+func TestCompareReleaseVersions(t *testing.T) {
+	tests := []struct {
+		a, b        string
+		wantCmp     int
+		wantOrdered bool
+	}{
+		{"1.0.0", "2.0.0", -1, true},
+		{"2.0.0", "1.0.0", 1, true},
+		{"2.0.0", "2.0.0", 0, true},
+		{"v2.0.0", "2.0.0", 0, true}, // leading-v normalized
+		{"1.2.3", "1.3.0", -1, true},
+		{"1.2.3", "1.2.4", -1, true},
+		{"1.10.0", "1.9.0", 1, true}, // numeric, not lexical
+		// Unorderable when either side is not a clean release version.
+		{"dev", "1.0.0", 0, false},
+		{"v0.0.0-20230101000000-abcdef123456", "1.0.0", 0, false},
+		{"1.0.0", "", 0, false},
+	}
+	for _, tt := range tests {
+		cmp, ordered := compareReleaseVersions(tt.a, tt.b)
+		if ordered != tt.wantOrdered || (ordered && cmp != tt.wantCmp) {
+			t.Errorf("compareReleaseVersions(%q,%q) = %d,%v want %d,%v", tt.a, tt.b, cmp, ordered, tt.wantCmp, tt.wantOrdered)
+		}
+	}
+}
+
 // --- Task 1: build-info "real module version" predicate --------------------
 
 func TestIsRealModuleVersion(t *testing.T) {

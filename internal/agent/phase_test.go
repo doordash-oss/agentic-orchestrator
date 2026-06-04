@@ -2066,7 +2066,20 @@ func TestBuildSession_WebSearchAlwaysAllowed(t *testing.T) {
 	}
 }
 
+func stubProviderCLIs(t *testing.T, names ...string) {
+	t.Helper()
+	binDir := t.TempDir()
+	for _, name := range names {
+		p := filepath.Join(binDir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("writing stub %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestKBBuild_FallsBackToOpus(t *testing.T) {
+	stubProviderCLIs(t, "claude", "codex")
 	dir := t.TempDir()
 	eventCh := make(chan any, 10)
 	sm := session.NewManager(eventCh)

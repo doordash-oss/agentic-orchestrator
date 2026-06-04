@@ -36,6 +36,9 @@ const (
 	// installMethodTarball: a released binary distributed as a tarball, carrying
 	// a clean injected release version.
 	installMethodTarball
+	// installMethodHomebrew: installed via the Homebrew tap; updates delegate to
+	// `brew upgrade` rather than swapping the brew-managed binary in place.
+	installMethodHomebrew
 	// installMethodDevBuild: built from source; not safe to auto-update, so the
 	// command refuses and points the user back at their build.
 	installMethodDevBuild
@@ -46,22 +49,30 @@ const (
 var errResolveHome = errors.New("home directory unavailable")
 
 // classifyInstallMethod is the pure decision function at the heart of the
-// update command. Given four already-resolved signals — the build-info module
+// update command. Given five already-resolved signals — the build-info module
 // version, the raw injected ldflags version, the binary's containing directory,
-// and the Go bin directory — it returns the install method. It performs no
-// filesystem, network, or environment access of its own; symlink resolution and
-// path normalization happen in the caller, so this stays hermetic and
+// the Go bin directory, and whether the resolved binary lives inside a Homebrew
+// Cellar — it returns the install method. It performs no filesystem, network, or
+// environment access of its own; symlink resolution, path normalization, and the
+// Homebrew-path check all happen in the caller, so this stays hermetic and
 // table-testable.
 //
-// Precedence (see the phase plan's Overview block):
+// Precedence:
 //
 //  1. go-install  if build info is a real module version, OR the binary sits in
 //     the Go bin dir (which also captures `make install`).
-//  2. tarball     else if the injected version is a clean MAJOR.MINOR.PATCH.
-//  3. dev-refuse  otherwise.
-func classifyInstallMethod(buildInfoVersion, injectedVersion, binaryDir, goBinDir string) installMethod {
+//  2. homebrew    else if the resolved binary lives inside a Homebrew Cellar.
+//     Ordered before tarball because a Homebrew-installed binary also carries a
+//     clean injected release version; without this it would misclassify as a
+//     tarball and the in-place swap would desync Homebrew's bookkeeping.
+//  3. tarball     else if the injected version is a clean MAJOR.MINOR.PATCH.
+//  4. dev-refuse  otherwise.
+func classifyInstallMethod(buildInfoVersion, injectedVersion, binaryDir, goBinDir string, homebrew bool) installMethod {
 	if isRealModuleVersion(buildInfoVersion) || sameDir(binaryDir, goBinDir) {
 		return installMethodGoInstall
+	}
+	if homebrew {
+		return installMethodHomebrew
 	}
 	if isReleaseVersion(injectedVersion) {
 		return installMethodTarball
@@ -164,13 +175,26 @@ func sameDir(binaryDir, goBinDir string) bool {
 	return filepath.Clean(binaryDir) == filepath.Clean(goBinDir)
 }
 
-// installInputs are the four signals classifyInstallMethod consumes for the
+// isHomebrewBinary reports whether the symlink-resolved binary path sits inside a
+// Homebrew Cellar (<prefix>/Cellar/...). The "/Cellar/" segment is prefix-agnostic,
+// covering /opt/homebrew, /usr/local, and Linuxbrew. Symlink resolution happens in
+// the caller, so this stays pure and table-testable.
+func isHomebrewBinary(resolvedBinaryPath string) bool {
+	if resolvedBinaryPath == "" {
+		return false
+	}
+	sep := string(os.PathSeparator)
+	return strings.Contains(resolvedBinaryPath, sep+"Cellar"+sep)
+}
+
+// installInputs are the five signals classifyInstallMethod consumes for the
 // running binary.
 type installInputs struct {
 	buildInfoVersion string
 	injectedVersion  string
 	binaryDir        string
 	goBinDir         string
+	homebrew         bool
 }
 
 // gatherInstallInputs resolves the classifier inputs for the running binary
@@ -185,6 +209,7 @@ func gatherInstallInputs() installInputs {
 		injectedVersion:  tui.InjectedVersion(),
 		binaryDir:        normalizeDir(resolveBinaryDir()),
 		goBinDir:         normalizeDir(resolveGoBinDir(os.Getenv, os.UserHomeDir)),
+		homebrew:         isHomebrewBinary(resolveBinaryPath()),
 	}
 }
 
@@ -192,7 +217,7 @@ func gatherInstallInputs() installInputs {
 // method. It is the production detector wired behind the updater seam.
 func gatherInstallMethod() installMethod {
 	in := gatherInstallInputs()
-	return classifyInstallMethod(in.buildInfoVersion, in.injectedVersion, in.binaryDir, in.goBinDir)
+	return classifyInstallMethod(in.buildInfoVersion, in.injectedVersion, in.binaryDir, in.goBinDir, in.homebrew)
 }
 
 // buildInfoMainVersion returns the build-info Main.Version, or "" when build
@@ -273,6 +298,8 @@ func (m installMethod) label() string {
 		return "go install"
 	case installMethodTarball:
 		return "release tarball"
+	case installMethodHomebrew:
+		return "homebrew"
 	case installMethodDevBuild:
 		return "development build (built from source)"
 	default:
@@ -288,6 +315,8 @@ func (m installMethod) wouldDoAction() string {
 		return "Would update by re-running the Go install of the latest version."
 	case installMethodTarball:
 		return "Would update by downloading the latest release and replacing the binary in place."
+	case installMethodHomebrew:
+		return "Would update via Homebrew by running `brew upgrade agentico`."
 	case installMethodDevBuild:
 		return "Would update from source (development builds are not updated automatically)."
 	default:

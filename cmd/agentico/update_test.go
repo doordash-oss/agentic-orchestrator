@@ -673,6 +673,105 @@ func goInstallDeps(rec *recordedInstall, out []byte, runErr error, binDir string
 	}
 }
 
+// --- Homebrew branch: delegate to `brew upgrade` (Codex dispatcher model) ----
+
+// homebrewDeps wires the bare Homebrew branch with a fake brew runner and an
+// available update.
+func homebrewDeps(rec *recordedInstall, out []byte, runErr error) updateDeps {
+	return updateDeps{
+		currentVersion: "1.2.3",
+		method:         fixedMethod(installMethodHomebrew),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runBrew:        fakeRunner(rec, out, runErr),
+	}
+}
+
+// Bare homebrew update delegates to `brew upgrade agentico` through the runBrew
+// seam and exits 0 without swapping the binary itself.
+func TestRunUpdateWithHomebrewSuccess(t *testing.T) {
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		homebrewDeps(&rec, []byte("==> Upgrading agentico\nPouring agentico"), nil))
+
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	if !rec.called {
+		t.Fatal("brew runner was not invoked")
+	}
+	if rec.name != "brew" {
+		t.Errorf("command name = %q, want %q", rec.name, "brew")
+	}
+	wantArgs := []string{"upgrade", "agentico"}
+	if len(rec.args) != len(wantArgs) {
+		t.Fatalf("args = %v, want %v", rec.args, wantArgs)
+	}
+	for i := range wantArgs {
+		if rec.args[i] != wantArgs[i] {
+			t.Errorf("args[%d] = %q, want %q", i, rec.args[i], wantArgs[i])
+		}
+	}
+	out := stdout.String()
+	for _, want := range []string{"brew upgrade agentico", "Homebrew", "Upgrading agentico"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+// --check on a homebrew install reports the method without invoking brew (the
+// runner must never be reached on the check path).
+func TestRunUpdateWithHomebrewCheckDoesNotRunBrew(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), true, &stdout, &stderr, updateDeps{
+		currentVersion: "1.2.3",
+		method:         fixedMethod(installMethodHomebrew),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runBrew:        failingRunner(t), // must not be invoked in --check mode
+	})
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"Current version", "Latest version", "2.0.0", installMethodHomebrew.label(), "brew upgrade agentico"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout missing %q\nfull:\n%s", want, out)
+		}
+	}
+}
+
+// A missing brew binary is reported with guidance and a non-zero exit.
+func TestRunUpdateWithHomebrewBrewMissing(t *testing.T) {
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		homebrewDeps(&rec, []byte("command not found: brew"), exec.ErrNotFound))
+	if code != 1 {
+		t.Fatalf("code = %d, want 1\nstderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "not found on PATH") {
+		t.Errorf("stderr missing brew-not-found guidance\nfull:\n%s", stderr.String())
+	}
+}
+
+// A non-zero `brew upgrade` exit is reported as a failure.
+func TestRunUpdateWithHomebrewFailure(t *testing.T) {
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
+		homebrewDeps(&rec, []byte("Error: brew blew up"), errors.New("exit status 1")))
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "failed") {
+		t.Errorf("stderr missing failure message\nfull:\n%s", stderr.String())
+	}
+}
+
 // Task 1: bare go-install with an update available re-runs `go install` of the
 // command's own main package pinned to the resolved tag, augments GOBIN to the
 // running binary's directory, prints the old → new transition, and exits 0.

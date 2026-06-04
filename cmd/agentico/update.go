@@ -95,6 +95,16 @@ const (
 	updateResignWarning = "Warning: agentico was updated but could not be ad-hoc re-signed (%[1]v); " +
 		"on Apple Silicon it may fail to launch (\"killed: 9\").\n" +
 		"If so, sign it manually: codesign -s - %[2]s"
+
+	// homebrewFormulaName matches the goreleaser brews block `name:`.
+	homebrewFormulaName = "agentico"
+
+	// updateBrewTimeout bounds the `brew upgrade` subprocess (generous: brew may
+	// refresh taps and download), rooted at a fresh context like the other timeouts.
+	updateBrewTimeout = 10 * time.Minute
+
+	updateBrewMissingMsg = "Error: Homebrew (brew) was not found on PATH. " +
+		"Install it from https://brew.sh, or update manually: brew upgrade " + homebrewFormulaName
 )
 
 // errNoStableRelease signals that a repository has no published non-draft,
@@ -181,6 +191,9 @@ type updateDeps struct {
 	// re-sign subprocess — the same commandRunner kind the go-install branch uses,
 	// so no real codesign runs in the unit suite.
 	runCodesign commandRunner
+	// runBrew is the injectable seam for the `brew upgrade` subprocess; nil makes
+	// the branch print the command as guidance instead of running it.
+	runBrew commandRunner
 }
 
 // runUpdate is the production updater seam wired into the router. It resolves
@@ -205,6 +218,7 @@ func runUpdate(checkOnly bool, stdout, stderr io.Writer) int {
 		goos:           runtime.GOOS,
 		checkWritable:  checkDirWritable,
 		runCodesign:    execCommand,
+		runBrew:        execCommand,
 	})
 }
 
@@ -295,6 +309,8 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 		return performGoInstall(stdout, stderr, deps, current, latest)
 	case installMethodTarball:
 		return performTarballUpdate(stdout, stderr, deps, slug, current, latest)
+	case installMethodHomebrew:
+		return performHomebrewUpdate(stdout, stderr, deps, latest)
 	}
 
 	// No execution branch is wired for this method; report and exit non-zero
@@ -371,6 +387,54 @@ func performTarballUpdate(stdout, stderr io.Writer, deps updateDeps, slug, curre
 
 	fmt.Fprintf(stdout, "Updated agentico %s → %s\n", normalizeVersion(current), normalizeVersion(latest))
 	return 0
+}
+
+// performHomebrewUpdate delegates to `brew upgrade` rather than swapping a
+// brew-managed binary in place (which would desync Homebrew). It prints the
+// command, runs it through the runBrew seam, surfaces brew's output, and maps
+// failures to a non-zero exit. Reached only in bare mode once the check confirms a
+// newer release; a nil runBrew prints the command as guidance instead.
+func performHomebrewUpdate(stdout, stderr io.Writer, deps updateDeps, latest string) int {
+	cmdline := "brew upgrade " + homebrewFormulaName
+	fmt.Fprintf(stdout, "agentico was installed via Homebrew. Updating with: %s\n", cmdline)
+
+	if deps.runBrew == nil {
+		fmt.Fprintf(stdout, "Run `%s` to update.\n", cmdline)
+		return 0
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), updateBrewTimeout)
+	defer cancel()
+
+	fmt.Fprintln(stdout, "(this can take a minute while Homebrew refreshes its taps)")
+	out, err := deps.runBrew(ctx, "brew", []string{"upgrade", homebrewFormulaName}, nil)
+	writeBrewOutput(stdout, out)
+	if err != nil {
+		return reportBrewFailure(ctx, stderr, err)
+	}
+	fmt.Fprintf(stdout, "agentico updated via Homebrew (latest release is %s). Run `agentico --version` to confirm.\n", normalizeVersion(latest))
+	return 0
+}
+
+// writeBrewOutput prints brew's combined output to stdout when non-empty.
+func writeBrewOutput(stdout io.Writer, out []byte) {
+	if trimmed := strings.TrimSpace(string(out)); trimmed != "" {
+		fmt.Fprintln(stdout, trimmed)
+	}
+}
+
+// reportBrewFailure maps a failed `brew upgrade` (missing brew, timeout, or a
+// generic error) to a stderr message and a non-zero exit.
+func reportBrewFailure(ctx context.Context, stderr io.Writer, err error) int {
+	switch {
+	case errors.Is(err, exec.ErrNotFound):
+		fmt.Fprintln(stderr, updateBrewMissingMsg)
+	case errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded:
+		fmt.Fprintf(stderr, "Error: `brew upgrade %s` timed out after %s and was aborted; the existing binary is unchanged.\n", homebrewFormulaName, updateBrewTimeout)
+	default:
+		fmt.Fprintf(stderr, "Error: `brew upgrade %s` failed: %v\n", homebrewFormulaName, err)
+	}
+	return 1
 }
 
 // preflightTarballWritable verifies the swap's target directory — the directory

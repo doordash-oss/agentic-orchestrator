@@ -140,6 +140,7 @@ func TestClassifyInstallMethod(t *testing.T) {
 		injectedVersion  string
 		binaryDir        string
 		goBinDir         string
+		homebrew         bool
 		want             installMethod
 	}{
 		{
@@ -246,15 +247,77 @@ func TestClassifyInstallMethod(t *testing.T) {
 			goBinDir:         "",
 			want:             installMethodDevBuild,
 		},
+		{
+			name:             "homebrew: clean injected, resolved into Cellar, outside go bin dir",
+			buildInfoVersion: "(devel)",
+			injectedVersion:  "0.141.0",
+			binaryDir:        "/opt/homebrew/Cellar/agentico/0.141.0/bin",
+			goBinDir:         goBin,
+			homebrew:         true,
+			want:             installMethodHomebrew,
+		},
+		{
+			name:             "homebrew signal classifies even with an empty injected version",
+			buildInfoVersion: "(devel)",
+			injectedVersion:  "",
+			binaryDir:        "/usr/local/Cellar/agentico/0.141.0/bin",
+			goBinDir:         goBin,
+			homebrew:         true,
+			want:             installMethodHomebrew,
+		},
+		{
+			name:             "go-install precedence: a real module version wins over the homebrew signal",
+			buildInfoVersion: "v1.2.3",
+			injectedVersion:  "1.2.3",
+			binaryDir:        "/opt/homebrew/Cellar/agentico/1.2.3/bin",
+			goBinDir:         goBin,
+			homebrew:         true,
+			want:             installMethodGoInstall,
+		},
+		{
+			name:             "go-install precedence: a binary in the go bin dir wins over the homebrew signal",
+			buildInfoVersion: "(devel)",
+			injectedVersion:  "1.2.3",
+			binaryDir:        goBin,
+			goBinDir:         goBin,
+			homebrew:         true,
+			want:             installMethodGoInstall,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := classifyInstallMethod(tt.buildInfoVersion, tt.injectedVersion, tt.binaryDir, tt.goBinDir)
+			got := classifyInstallMethod(tt.buildInfoVersion, tt.injectedVersion, tt.binaryDir, tt.goBinDir, tt.homebrew)
 			if got != tt.want {
-				t.Errorf("classifyInstallMethod(%q, %q, %q, %q) = %v, want %v",
-					tt.buildInfoVersion, tt.injectedVersion, tt.binaryDir, tt.goBinDir, got, tt.want)
+				t.Errorf("classifyInstallMethod(%q, %q, %q, %q, homebrew=%v) = %v, want %v",
+					tt.buildInfoVersion, tt.injectedVersion, tt.binaryDir, tt.goBinDir, tt.homebrew, got, tt.want)
 			}
 		})
+	}
+}
+
+// --- Homebrew detection: resolved binary inside a Cellar -------------------
+
+func TestIsHomebrewBinary(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		// Resolved Cellar paths across the common Homebrew prefixes.
+		{"/opt/homebrew/Cellar/agentico/0.141.0/bin/agentico", true},            // Apple Silicon
+		{"/usr/local/Cellar/agentico/1.2.3/bin/agentico", true},                 // Intel
+		{"/home/linuxbrew/.linuxbrew/Cellar/agentico/1.0.0/bin/agentico", true}, // Linuxbrew
+		// Non-Homebrew locations.
+		{"/Users/me/.local/bin/agentico", false},
+		{"/usr/local/bin/agentico", false}, // a brew bin symlink dir, not the resolved Cellar target
+		{"/opt/homebrew/bin/agentico", false},
+		{"/home/user/go/bin/agentico", false},
+		{"/CellarSomething/agentico", false}, // substring without the surrounding separators must not match
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := isHomebrewBinary(tt.in); got != tt.want {
+			t.Errorf("isHomebrewBinary(%q) = %v, want %v", tt.in, got, tt.want)
+		}
 	}
 }
 
@@ -345,5 +408,8 @@ func TestGatherInstallInputsReadsRealSignals(t *testing.T) {
 	}
 	if in.buildInfoVersion != "(devel)" {
 		t.Errorf("buildInfoVersion = %q, want %q for the test binary", in.buildInfoVersion, "(devel)")
+	}
+	if in.homebrew {
+		t.Error("gatherInstallInputs() homebrew = true; the test binary is not a Homebrew install")
 	}
 }

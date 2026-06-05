@@ -9,7 +9,7 @@ This product includes software developed at DoorDash, Inc. (https://www.doordash
 Third-Party Software Notices and Information
 ================================================================================
 
-The compiled `agentic` binaries distributed with this project (e.g. via GitHub
+The compiled `agentico` binaries distributed with this project (e.g. via GitHub
 Releases) statically link the third-party Go modules listed below. Each entry
 identifies the upstream module, its copyright holders, and the license under
 which it is redistributed. The full text of each license is available at the

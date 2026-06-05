@@ -343,6 +343,56 @@ func BuildVerificationReportStub(required []RequiredVerificationItem) Verificati
 	return report
 }
 
+// carryForwardVerificationResults overlays the prior report's completed rows
+// (status + evidence) onto a freshly-built stub, matched by item id and falling
+// back to requirement text, so a resumed iteration re-proposes prior evidence
+// instead of re-running unchanged checks. not_run/empty prior rows are skipped.
+func carryForwardVerificationResults(stub VerificationReport, prior VerificationReport) VerificationReport {
+	byID := map[string]VerificationCheckResult{}
+	byReq := map[string]VerificationCheckResult{}
+	index := func(rows []VerificationCheckResult) {
+		for _, r := range rows {
+			if r.Status == "" || NormalizeStatus(r.Status) == VerificationStatusNotRun {
+				continue
+			}
+			if id := strings.TrimSpace(r.ItemID); id != "" {
+				byID[id] = r
+			}
+			if req := strings.TrimSpace(r.Requirement); req != "" {
+				byReq[req] = r
+			}
+		}
+	}
+	index(prior.Results)
+	index(prior.RequiredChecks)
+
+	overlay := func(rows []VerificationCheckResult) {
+		for i := range rows {
+			var p VerificationCheckResult
+			var ok bool
+			if id := strings.TrimSpace(rows[i].ItemID); id != "" {
+				p, ok = byID[id]
+			}
+			if !ok {
+				if req := strings.TrimSpace(rows[i].Requirement); req != "" {
+					p, ok = byReq[req]
+				}
+			}
+			if !ok {
+				continue
+			}
+			rows[i].Status = p.Status
+			rows[i].Evidence = p.Evidence
+			rows[i].EvidenceData = p.EvidenceData
+			rows[i].Notes = p.Notes
+			rows[i].BlockedReason = p.BlockedReason
+		}
+	}
+	overlay(stub.Results)
+	overlay(stub.RequiredChecks)
+	return stub
+}
+
 func BuildContractVerificationReportStub(contract *TestingContract, contractPath string) VerificationReport {
 	report := VerificationReport{
 		Version:          2,

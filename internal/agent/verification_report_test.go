@@ -341,3 +341,73 @@ known_caveats:
 		t.Fatalf("ReadVerificationReport() KnownCaveats = %+v", got.KnownCaveats)
 	}
 }
+
+func TestCarryForwardVerificationResults(t *testing.T) {
+	exit0 := 0
+	stub := VerificationReport{Version: 2, Results: []VerificationCheckResult{
+		{ItemID: "build", Status: VerificationStatusNotRun},
+		{ItemID: "test", Status: VerificationStatusNotRun},
+		{ItemID: "smoke", Status: VerificationStatusNotRun},
+		{ItemID: "new-item", Status: VerificationStatusNotRun},
+	}}
+	prior := VerificationReport{Version: 2, Results: []VerificationCheckResult{
+		{ItemID: "build", Status: VerificationStatusPassed, Evidence: "ok", EvidenceData: VerificationEvidence{Summary: "build ok", ExitCode: &exit0}},
+		{ItemID: "test", Status: VerificationStatusFailed, Evidence: "boom"},
+		{ItemID: "smoke", Status: VerificationStatusNotRun},
+	}}
+	got := carryForwardVerificationResults(stub, prior)
+	byID := map[string]VerificationCheckResult{}
+	for _, r := range got.Results {
+		byID[r.ItemID] = r
+	}
+	if byID["build"].Status != VerificationStatusPassed || byID["build"].EvidenceData.Summary != "build ok" {
+		t.Errorf("build row not carried forward: %+v", byID["build"])
+	}
+	if byID["test"].Status != VerificationStatusFailed {
+		t.Errorf("test row = %q, want failed (carried)", byID["test"].Status)
+	}
+	if byID["smoke"].Status != VerificationStatusNotRun {
+		t.Errorf("smoke (prior not_run) = %q, want not_run", byID["smoke"].Status)
+	}
+	if byID["new-item"].Status != VerificationStatusNotRun {
+		t.Errorf("new-item (no prior match) = %q, want not_run", byID["new-item"].Status)
+	}
+
+	// requirement-text fallback (no item ids, RequiredChecks path)
+	stub2 := VerificationReport{Version: 1, RequiredChecks: []VerificationCheckResult{
+		{Requirement: "go build ./...", Status: VerificationStatusNotRun},
+		{Requirement: "go test ./...", Status: VerificationStatusNotRun},
+	}}
+	prior2 := VerificationReport{Version: 1, RequiredChecks: []VerificationCheckResult{
+		{Requirement: "go build ./...", Status: VerificationStatusPassed, Evidence: "built"},
+	}}
+	got2 := carryForwardVerificationResults(stub2, prior2)
+	if got2.RequiredChecks[0].Status != VerificationStatusPassed {
+		t.Errorf("requirement-matched row should carry passed, got %q", got2.RequiredChecks[0].Status)
+	}
+	if got2.RequiredChecks[1].Status != VerificationStatusNotRun {
+		t.Errorf("unmatched requirement row should stay not_run, got %q", got2.RequiredChecks[1].Status)
+	}
+}
+
+func TestLoadPriorVerificationReport(t *testing.T) {
+	dir := t.TempDir()
+	if got := loadPriorVerificationReport(dir, 1); got != nil {
+		t.Errorf("iter<=1 should return nil, got %+v", got)
+	}
+	if got := loadPriorVerificationReport(dir, 3); got != nil {
+		t.Errorf("missing prior report should return nil, got %+v", got)
+	}
+	iterDir := filepath.Join(dir, "iteration-02")
+	if err := os.MkdirAll(iterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"),
+		VerificationReport{Version: 2, Results: []VerificationCheckResult{{ItemID: "x", Status: VerificationStatusPassed}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := loadPriorVerificationReport(dir, 3)
+	if got == nil || len(got.Results) != 1 || got.Results[0].ItemID != "x" {
+		t.Fatalf("expected prior report with item x, got %+v", got)
+	}
+}

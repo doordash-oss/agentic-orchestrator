@@ -1715,7 +1715,7 @@ func TestBuildSession_ResolvesContextHandoffThresholdTokens(t *testing.T) {
 		{
 			name:       "catalog value",
 			model:      "opus",
-			wantTokens: 100_000,
+			wantTokens: 120_000,
 		},
 		{
 			name:       "unrecognized model fallback",

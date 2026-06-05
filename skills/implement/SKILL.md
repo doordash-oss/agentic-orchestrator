@@ -85,6 +85,8 @@ The system prompt names:
 
 Read `{iteration_dir}/verification-report.yaml` before final verification. When its `contract_path` field is non-empty, read that testing contract before running final verification. Each contract item has a stable `id`, a command or manual check, expected evidence, and policy. The pre-seeded `{iteration_dir}/verification-report.yaml` already has one `results:` row per item. When `contract_path` is empty or no testing contract exists, use the required verification items supplied in the prompt or plan.
 
+On a resumed iteration the report is pre-seeded with the PRIOR iteration's `status` and `evidence` for each row (carried forward). Treat those carried rows as already-run: re-run a check ONLY when code you change this iteration affects it, and update that row with fresh evidence. If you change no code this iteration, do NOT re-run anything — the carried evidence is your report.
+
 For each contract row:
 
 - Run the command or perform the manual check.

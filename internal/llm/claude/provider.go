@@ -269,11 +269,11 @@ func (p *Provider) CLIVersion() (string, error) {
 // (compaction at ~167K on --model opus ≈ 83% of 200K).
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
-		{ID: "opus", DisplayName: "Claude Opus", ContextWindow: 200_000, SmartZoneTokens: 100_000, Category: "capable"},
-		{ID: "opus[1m]", DisplayName: "Claude Opus (1M)", ContextWindow: 1_000_000, SmartZoneTokens: 100_000, Category: "capable"},
-		{ID: "sonnet", DisplayName: "Claude Sonnet", ContextWindow: 200_000, SmartZoneTokens: 80_000, Category: "balanced"},
-		{ID: "sonnet[1m]", DisplayName: "Claude Sonnet (1M)", ContextWindow: 1_000_000, SmartZoneTokens: 80_000, Category: "balanced"},
-		{ID: "haiku", DisplayName: "Claude Haiku", ContextWindow: 200_000, SmartZoneTokens: 40_000, Category: "cheap"},
+		{ID: "opus", DisplayName: "Claude Opus", ContextWindow: 200_000, SmartZoneTokens: 120_000, Category: "capable"},
+		{ID: "opus[1m]", DisplayName: "Claude Opus (1M)", ContextWindow: 1_000_000, SmartZoneTokens: 120_000, Category: "capable"},
+		{ID: "sonnet", DisplayName: "Claude Sonnet", ContextWindow: 200_000, SmartZoneTokens: 100_000, Category: "balanced"},
+		{ID: "sonnet[1m]", DisplayName: "Claude Sonnet (1M)", ContextWindow: 1_000_000, SmartZoneTokens: 100_000, Category: "balanced"},
+		{ID: "haiku", DisplayName: "Claude Haiku", ContextWindow: 200_000, SmartZoneTokens: 100_000, Category: "cheap"},
 	}
 }
 

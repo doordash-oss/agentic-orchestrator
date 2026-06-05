@@ -67,17 +67,17 @@ func TestRegistrySmartZoneThresholdTokens_DefaultCatalog(t *testing.T) {
 		model    string
 		want     int
 	}{
-		{"claude_opus", "claude", "opus", 100_000},
-		{"claude_opus_1m", "claude", "opus[1m]", 100_000},
-		{"claude_sonnet", "claude", "sonnet", 80_000},
-		{"claude_sonnet_1m", "claude", "sonnet[1m]", 80_000},
-		{"claude_haiku", "claude", "haiku", 40_000},
-		{"codex_gpt_5_5", "codex", "gpt-5.5", 100_000},
-		{"codex_gpt_5_4", "codex", "gpt-5.4", 90_000},
-		{"codex_gpt_5_4_mini", "codex", "gpt-5.4-mini", 50_000},
-		{"codex_gpt_5_3_codex", "codex", "gpt-5.3-codex", 80_000},
-		{"codex_alias", "codex", "codex", 80_000},
-		{"codex_gpt_5_2", "codex", "gpt-5.2", 80_000},
+		{"claude_opus", "claude", "opus", 120_000},
+		{"claude_opus_1m", "claude", "opus[1m]", 120_000},
+		{"claude_sonnet", "claude", "sonnet", 100_000},
+		{"claude_sonnet_1m", "claude", "sonnet[1m]", 100_000},
+		{"claude_haiku", "claude", "haiku", 100_000},
+		{"codex_gpt_5_5", "codex", "gpt-5.5", 120_000},
+		{"codex_gpt_5_4", "codex", "gpt-5.4", 100_000},
+		{"codex_gpt_5_4_mini", "codex", "gpt-5.4-mini", 100_000},
+		{"codex_gpt_5_3_codex", "codex", "gpt-5.3-codex", 100_000},
+		{"codex_alias", "codex", "codex", 100_000},
+		{"codex_gpt_5_2", "codex", "gpt-5.2", 100_000},
 		{"unknown_model", "codex", "unknown-model", 40_000},
 		{"unknown_provider", "unknown", "whatever", 40_000},
 	}
@@ -99,7 +99,7 @@ func TestRegistrySmartZoneThresholdTokens_OverridesCanonicalizedAliases(t *testi
 		{
 			ID:              "opus[1m]",
 			Aliases:         []string{"claude-opus-4-8[1m]"},
-			SmartZoneTokens: 100_000,
+			SmartZoneTokens: 120_000,
 		},
 	})
 	r.Register(claudeProvider)
@@ -122,7 +122,7 @@ func TestRegistrySmartZoneThresholdTokens_OverridesCanonicalizedAliases(t *testi
 	if got := r.SmartZoneThresholdTokens("codex", "gpt-5.3-codex", smartZone); got != 77_777 {
 		t.Errorf("SmartZoneThresholdTokens() codex alias override = %d, want 77777", got)
 	}
-	if got := r.SmartZoneThresholdTokens("codex", "gpt-5.4", smartZone); got != 90_000 {
-		t.Errorf("SmartZoneThresholdTokens() catalog fallback = %d, want 90000", got)
+	if got := r.SmartZoneThresholdTokens("codex", "gpt-5.4", smartZone); got != 100_000 {
+		t.Errorf("SmartZoneThresholdTokens() catalog fallback = %d, want 100000", got)
 	}
 }

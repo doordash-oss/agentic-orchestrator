@@ -293,17 +293,24 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			requiredVerification := BuildRequiredVerification(planContent)
 			verificationReportPath := filepath.Join(iterDir, "verification-report.yaml")
 			testingContractPath := ""
+			var stub VerificationReport
 			if contractPath, ok := resolveImplementationContractPath(filepath.Dir(cfg.StateDir), cfg.Feature, cfg.RepoName); ok {
 				testingContractPath = contractPath
 				contract := compileImplementationTestingContract(cfg, planContent)
 				if err := WriteTestingContract(contractPath, contract); err != nil {
 					return nil, fmt.Errorf("writing testing contract: %w", err)
 				}
-				if err := WriteVerificationReportStubFromContract(verificationReportPath, contractPath, &contract); err != nil {
-					return nil, fmt.Errorf("writing contract verification report stub: %w", err)
-				}
-			} else if err := WriteVerificationReportStub(verificationReportPath, requiredVerification); err != nil {
-				return nil, fmt.Errorf("writing verification report stub: %w", err)
+				stub = BuildContractVerificationReportStub(&contract, contractPath)
+			} else {
+				stub = BuildVerificationReportStub(requiredVerification)
+			}
+			// Resume re-proposes the prior iteration's verified rows (the agent
+			// re-runs only checks affected by code it changes this iteration).
+			if prior := loadPriorVerificationReport(cfg.ArtifactDir, i); prior != nil {
+				stub = carryForwardVerificationResults(stub, *prior)
+			}
+			if err := WriteVerificationReport(verificationReportPath, stub); err != nil {
+				return nil, fmt.Errorf("writing verification report: %w", err)
 			}
 			// Build prompt
 			prompt := BuildImplementPrompt(
@@ -1261,6 +1268,23 @@ func resolvedContextHandoffThresholdTokens(sessOpts *ports.SessionOpts) int {
 		return sessOpts.ContextHandoffThresholdTokens
 	}
 	return llm.DefaultSmartZoneThresholdTokens
+}
+
+// loadPriorVerificationReport returns iteration i-1's verification report (for
+// carry-forward on resume), or nil when absent/unreadable.
+func loadPriorVerificationReport(artifactDir string, iter int) *VerificationReport {
+	if iter <= 1 {
+		return nil
+	}
+	path := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", iter-1), "verification-report.yaml")
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	rep, err := ReadVerificationReport(path)
+	if err != nil {
+		return nil
+	}
+	return rep
 }
 
 func contextTotalTokens(usage *llm.Usage) int {

@@ -251,14 +251,16 @@ func (p *Provider) CLIVersion() (string, error) {
 
 // defaultModelInfos returns Agentic's curated Claude Code model catalog.
 //
-// These values replace the former discovery pipeline (Anthropic models API
-// and docs scraper) because that pipeline collapsed each family's base and
-// `[1m]` variants into a single entry, which then hid the fact that
-// `--model opus` (200K) and `--model opus[1m]` (1M) are distinct CLI
-// inputs. Hardcoding keeps the catalog aligned with how the Claude Code
-// CLI actually interprets --model strings.
+// Runtime startup tries to refresh these with DiscoverModelCatalog; they are
+// the offline fallback when probing fails. Entries carry no concrete-version
+// alias (e.g. claude-opus-4-8) because what an alias resolves to is
+// provider-dependent (Anthropic API vs Bedrock/Vertex/Foundry) and drifts over
+// time — a hardcoded version is a frequently-wrong guess. The probe sets the
+// resolved model when it runs. Base and `[1m]` variants stay as separate
+// entries because `--model opus` (200K) and `--model opus[1m]` (1M) are
+// distinct CLI inputs.
 //
-// Sources (verified 2026-04-18):
+// Context-window sources (verified 2026-06-05):
 //   - https://platform.claude.com/docs/en/about-claude/models/overview
 //   - https://code.claude.com/docs/en/model-config
 //
@@ -267,11 +269,11 @@ func (p *Provider) CLIVersion() (string, error) {
 // (compaction at ~167K on --model opus ≈ 83% of 200K).
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
-		{ID: "opus", DisplayName: "Claude Opus", Aliases: []string{"claude-opus-4-7"}, ContextWindow: 200_000, Category: "capable"},
-		{ID: "opus[1m]", DisplayName: "Claude Opus (1M)", Aliases: []string{"claude-opus-4-7[1m]"}, ContextWindow: 1_000_000, Category: "capable"},
-		{ID: "sonnet", DisplayName: "Claude Sonnet", Aliases: []string{"claude-sonnet-4-6"}, ContextWindow: 200_000, Category: "balanced"},
-		{ID: "sonnet[1m]", DisplayName: "Claude Sonnet (1M)", Aliases: []string{"claude-sonnet-4-6[1m]"}, ContextWindow: 1_000_000, Category: "balanced"},
-		{ID: "haiku", DisplayName: "Claude Haiku", Aliases: []string{"claude-haiku-4-5"}, ContextWindow: 200_000, Category: "cheap"},
+		{ID: "opus", DisplayName: "Claude Opus", ContextWindow: 200_000, Category: "capable"},
+		{ID: "opus[1m]", DisplayName: "Claude Opus (1M)", ContextWindow: 1_000_000, Category: "capable"},
+		{ID: "sonnet", DisplayName: "Claude Sonnet", ContextWindow: 200_000, Category: "balanced"},
+		{ID: "sonnet[1m]", DisplayName: "Claude Sonnet (1M)", ContextWindow: 1_000_000, Category: "balanced"},
+		{ID: "haiku", DisplayName: "Claude Haiku", ContextWindow: 200_000, Category: "cheap"},
 	}
 }
 

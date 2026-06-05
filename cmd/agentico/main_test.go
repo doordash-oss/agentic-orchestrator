@@ -17,6 +17,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -59,6 +60,149 @@ func (s *stubProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
 		return s.readiness
 	}
 	return llm.ProviderReadiness{Ready: true}
+}
+
+type stubCatalogDiscoveryProvider struct {
+	stubProvider
+	discovered  []llm.ModelInfo
+	discoverErr error
+	catalog     []llm.ModelInfo
+	versionInfo string
+	versionErr  error
+	discoveries int
+}
+
+func (s *stubCatalogDiscoveryProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	s.discoveries++
+	return s.discovered, s.discoverErr
+}
+
+func (s *stubCatalogDiscoveryProvider) SetModelCatalog(models []llm.ModelInfo) {
+	s.catalog = models
+}
+
+func (s *stubCatalogDiscoveryProvider) VersionInfo() (string, error) {
+	if s.versionErr != nil {
+		return "", s.versionErr
+	}
+	if s.versionInfo != "" {
+		return s.versionInfo, nil
+	}
+	return s.stubProvider.VersionInfo()
+}
+
+func TestDiscoverProviderCatalogsSetsCatalogAndWarnsOnFailure(t *testing.T) {
+	success := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "success", hasCLI: true},
+		discovered: []llm.ModelInfo{
+			{ID: "live-model", DisplayName: "Live Model", ContextWindow: 123_000, Category: "capable"},
+		},
+	}
+	failure := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "failure", hasCLI: true},
+		discoverErr:  errors.New("catalog unavailable"),
+	}
+	plain := &stubProvider{name: "plain", hasCLI: true}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{success, failure, plain}, t.TempDir())
+	if len(success.catalog) != 1 || success.catalog[0].ID != "live-model" {
+		t.Fatalf("success catalog = %+v, want live-model", success.catalog)
+	}
+	if len(failure.catalog) != 0 {
+		t.Fatalf("failure catalog = %+v, want unchanged empty catalog", failure.catalog)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one warning", warnings)
+	}
+	if !strings.Contains(warnings[0], "failure") || !strings.Contains(warnings[0], "catalog unavailable") {
+		t.Fatalf("warning = %q, want provider name and error", warnings[0])
+	}
+}
+
+func TestDiscoverProviderCatalogsLoadsVersionedCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	cachedModels := []llm.ModelInfo{
+		{ID: "cached-model", DisplayName: "Cached Model", ContextWindow: 456_000, Category: "balanced"},
+	}
+	if err := saveProviderCatalogCache(cacheRoot, "cached", "provider 2.0.0", cachedModels); err != nil {
+		t.Fatalf("saveProviderCatalogCache() error: %v", err)
+	}
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "cached", hasCLI: true},
+		versionInfo:  "provider 2.0.0",
+		discoverErr:  errors.New("discovery should not run"),
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if p.discoveries != 0 {
+		t.Fatalf("discovery calls = %d, want 0", p.discoveries)
+	}
+	if len(p.catalog) != 1 || p.catalog[0].ID != "cached-model" {
+		t.Fatalf("catalog = %+v, want cached-model", p.catalog)
+	}
+}
+
+func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
+	cacheRoot := t.TempDir()
+	discovered := []llm.ModelInfo{
+		{ID: "fresh-model", DisplayName: "Fresh Model", ContextWindow: 789_000, Category: "capable"},
+	}
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "fresh", hasCLI: true},
+		versionInfo:  "fresh 3.0.0",
+		discovered:   discovered,
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
+	}
+	cached, err := loadProviderCatalogCache(cacheRoot, "fresh", "fresh 3.0.0")
+	if err != nil {
+		t.Fatalf("loadProviderCatalogCache() error: %v", err)
+	}
+	if len(cached) != 1 || cached[0].ID != "fresh-model" {
+		t.Fatalf("cached models = %+v, want fresh-model", cached)
+	}
+}
+
+func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	path := providerCatalogCachePath(cacheRoot, "corrupt", "corrupt 4.0.0")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{not-json"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "corrupt", hasCLI: true},
+		versionInfo:  "corrupt 4.0.0",
+		discovered: []llm.ModelInfo{
+			{ID: "refreshed-model", DisplayName: "Refreshed Model", ContextWindow: 321_000, Category: "capable"},
+		},
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "ignoring cached corrupt model catalog") {
+		t.Fatalf("warnings = %v, want corrupt cache warning", warnings)
+	}
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
+	}
+	cached, err := loadProviderCatalogCache(cacheRoot, "corrupt", "corrupt 4.0.0")
+	if err != nil {
+		t.Fatalf("loadProviderCatalogCache() error: %v", err)
+	}
+	if len(cached) != 1 || cached[0].ID != "refreshed-model" {
+		t.Fatalf("cached models = %+v, want refreshed-model", cached)
+	}
 }
 
 func TestRunArgsLaunchesTUIByDefault(t *testing.T) {

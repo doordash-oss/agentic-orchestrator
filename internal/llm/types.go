@@ -26,8 +26,7 @@ type ModelInfo struct {
 }
 
 // CatalogEnricher is implemented by providers whose model catalog can be
-// overridden at runtime (e.g. from tests). Production code reads the
-// provider's hardcoded defaults — there is no automated discovery pipeline.
+// overridden at runtime, either from provider CLI discovery or from tests.
 type CatalogEnricher interface {
 	SetModelCatalog(models []ModelInfo)
 }

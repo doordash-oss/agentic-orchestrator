@@ -223,6 +223,7 @@ runtime parent is used in place so legacy installs remain discoverable.`)
 
 const providerReadinessTimeout = 5 * time.Second
 const providerReadinessNoticeDelay = 3 * time.Second
+const providerCatalogDiscoveryTimeout = 45 * time.Second
 
 type providerReadinessIssue struct {
 	provider llm.LLMProvider
@@ -323,6 +324,71 @@ func formatProviderNameList(providers []llm.LLMProvider) string {
 		names = append(names, p.Name())
 	}
 	return strings.Join(names, ", ")
+}
+
+func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string) []string {
+	var warnings []string
+	for _, p := range providers {
+		discoverer, ok := p.(llm.CatalogDiscoverer)
+		if !ok {
+			continue
+		}
+		enricher, ok := p.(llm.CatalogEnricher)
+		if !ok {
+			continue
+		}
+
+		version := ""
+		if cacheRoot != "" {
+			if rawVersion, err := p.VersionInfo(); err == nil {
+				version = strings.TrimSpace(rawVersion)
+			}
+		}
+		if version != "" {
+			models, err := loadProviderCatalogCache(cacheRoot, p.Name(), version)
+			if err == nil {
+				enricher.SetModelCatalog(models)
+				continue
+			}
+			if !os.IsNotExist(err) {
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: ignoring cached %s model catalog; refreshing: %v",
+					p.Name(),
+					err,
+				))
+			}
+		}
+
+		discoveryCtx, cancel := context.WithTimeout(ctx, providerCatalogDiscoveryTimeout)
+		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
+		cancel()
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf(
+				"Warning: could not discover %s model catalog; using built-in fallback: %v",
+				p.Name(),
+				err,
+			))
+			continue
+		}
+		if len(models) == 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"Warning: discovered empty %s model catalog; using built-in fallback",
+				p.Name(),
+			))
+			continue
+		}
+		enricher.SetModelCatalog(models)
+		if version != "" {
+			if err := saveProviderCatalogCache(cacheRoot, p.Name(), version, models); err != nil {
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: could not cache %s model catalog: %v",
+					p.Name(),
+					err,
+				))
+			}
+		}
+	}
+	return warnings
 }
 
 func showProviderStartupNotices(w io.Writer, notices []string, delay time.Duration) {
@@ -500,6 +566,13 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		}
 	}
 
+	stop = startSyncSpinner(os.Stderr, "Discovering models")
+	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir))
+	stop()
+	for _, w := range catalogWarnings {
+		fmt.Fprintln(os.Stderr, w)
+	}
+
 	// First-run setup: when both CLIs are detected and config is new,
 	// prompt user to choose a preferred provider.
 	var preferredProvider string
@@ -569,11 +642,10 @@ func overrideColorProfile() (colorprofile.Profile, bool) {
 	return 0, false
 }
 
-// startSyncSpinner shows a "<msg>..." indicator on w while the embedded
-// skills/guidelines reconcile runs. On a TTY the trailing dots animate so
-// the user can tell the process is still doing work; on a non-TTY (CI,
-// piped output) a single static line is printed instead. The returned
-// stop() blocks until the animation goroutine has cleared its line, so
+// startSyncSpinner shows a "<msg>..." startup indicator on w. On a TTY the
+// trailing dots animate so the user can tell the process is still doing work;
+// on a non-TTY (CI, piped output) a single static line is printed instead. The
+// returned stop() blocks until the animation goroutine has cleared its line, so
 // subsequent writes to w don't collide with the spinner.
 func startSyncSpinner(w io.Writer, msg string) func() {
 	f, _ := w.(*os.File)

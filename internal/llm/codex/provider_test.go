@@ -487,6 +487,88 @@ func TestCodexProvider_EnvVarsToExclude(t *testing.T) {
 	}
 }
 
+func TestParseCodexModelCatalog_FiltersAndMapsVisibleAPIModels(t *testing.T) {
+	catalogJSON := []byte(`{"models":[
+		{"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":272000},
+		{"slug":"codex-auto-review","display_name":"Codex Auto Review","visibility":"hide","supported_in_api":true,"context_window":272000},
+		{"slug":"gpt-5.4-mini","display_name":"GPT-5.4-Mini","visibility":"list","supported_in_api":true,"context_window":272000},
+		{"slug":"gpt-5.3-codex","display_name":"","visibility":"list","supported_in_api":true,"context_window":400000},
+		{"slug":"private-model","display_name":"Private","visibility":"list","supported_in_api":false,"context_window":123000}
+	]}`)
+
+	models, err := parseCodexModelCatalog(catalogJSON)
+	if err != nil {
+		t.Fatalf("parseCodexModelCatalog() error: %v", err)
+	}
+	gotIDs := make([]string, 0, len(models))
+	byID := make(map[string]llm.ModelInfo, len(models))
+	for _, model := range models {
+		gotIDs = append(gotIDs, model.ID)
+		byID[model.ID] = model
+	}
+	wantIDs := []string{"gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex"}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("model IDs = %v, want %v", gotIDs, wantIDs)
+	}
+	if got := byID["gpt-5.5"].Category; got != "capable" {
+		t.Errorf("gpt-5.5 category = %q, want capable", got)
+	}
+	if got := byID["gpt-5.4-mini"].Category; got != "balanced" {
+		t.Errorf("gpt-5.4-mini category = %q, want balanced", got)
+	}
+	codexModel := byID["gpt-5.3-codex"]
+	if got := codexModel.DisplayName; got != "GPT-5.3 Codex" {
+		t.Errorf("gpt-5.3-codex display name = %q, want generated display name", got)
+	}
+	if !slices.Equal(codexModel.Aliases, []string{"codex"}) {
+		t.Errorf("gpt-5.3-codex aliases = %v, want [codex]", codexModel.Aliases)
+	}
+	if got := codexModel.ContextWindow; got != 400_000 {
+		t.Errorf("gpt-5.3-codex context window = %d, want 400000", got)
+	}
+}
+
+func TestProviderDiscoverModelCatalog_FallsBackToBundledCatalog(t *testing.T) {
+	var calls [][]string
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			if name != "codex" {
+				t.Fatalf("command name = %q, want codex", name)
+			}
+			calls = append(calls, slices.Clone(args))
+			switch len(calls) {
+			case 1:
+				return []byte("{not-json"), nil
+			case 2:
+				return []byte(`{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"list","supported_in_api":true,"context_window":272000}]}`), nil
+			default:
+				t.Fatalf("unexpected runner call %d: %v", len(calls), args)
+				return nil, nil
+			}
+		},
+	}
+
+	models, err := p.DiscoverModelCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModelCatalog() error: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "gpt-5.4" {
+		t.Fatalf("DiscoverModelCatalog() = %+v, want gpt-5.4", models)
+	}
+	wantCalls := [][]string{
+		{"debug", "models"},
+		{"debug", "models", "--bundled"},
+	}
+	if len(calls) != len(wantCalls) {
+		t.Fatalf("runner calls = %v, want %v", calls, wantCalls)
+	}
+	for i := range calls {
+		if !slices.Equal(calls[i], wantCalls[i]) {
+			t.Fatalf("runner call %d = %v, want %v", i, calls[i], wantCalls[i])
+		}
+	}
+}
+
 // TestCodexProvider_DefaultCatalog_Invariants locks in the hardcoded
 // Codex catalog that replaced the former discovery pipeline.
 func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {

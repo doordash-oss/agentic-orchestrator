@@ -300,11 +300,10 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 
 // defaultModelInfos returns Agentic's curated Codex/OpenAI model catalog.
 //
-// These values replace the former discovery pipeline (OpenAI models API and
-// codex app-server) because that pipeline never recorded a ContextWindow,
-// leaving the Session.ContextPercentage() signal dead until a runtime
-// tokenUsage event arrived. The handoff ticker and TUI badge need a window
-// from session start, so we hardcode one per model.
+// Runtime startup refreshes these values with `codex debug models`, which
+// exposes Codex's raw catalog including context windows. These values remain
+// as an offline fallback so the Session.ContextPercentage() signal works from
+// session start even when discovery is unavailable.
 //
 // Sources (verified 2026-04-18):
 //   - https://developers.openai.com/api/docs/models/gpt-5.5

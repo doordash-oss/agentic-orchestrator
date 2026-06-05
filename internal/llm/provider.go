@@ -106,6 +106,13 @@ type CatalogProvider interface {
 	ModelCatalog() []ModelInfo
 }
 
+// CatalogDiscoverer is implemented by providers that can refresh their model
+// catalog from the local provider CLI. Discovery is best-effort: callers should
+// fall back to CatalogProvider/default catalogs when it fails.
+type CatalogDiscoverer interface {
+	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
+}
+
 // Protocol handles the wire-level communication with a provider's CLI process.
 // One instance is created per session. Implementations hold provider-specific
 // state (e.g. Codex thread IDs, handshake channels).

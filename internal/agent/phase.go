@@ -214,6 +214,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	// Track reads of KB/skill/guideline files for observability.
 	pr.installContextReadTracker(sess, sessionCtx, cfg.Phase.String(), sessionID, pr.StateDir)
 	pr.installSubagentProgressTracker(sess, sessionCtx, cfg.Phase.String(), sessionID)
+	pr.installSubagentContextTracker(sess, sessionCtx, cfg.Phase.String(), sessionID)
 
 	sessionStart := time.Now()
 	sess.AddCleanupFunc(func() {

@@ -59,15 +59,18 @@ type MockSessionView struct {
 	PendingControlRequestsVal []*llm.ControlRequestMessage
 
 	// Data — types that remain in internal/session
-	MessageLogVal        *session.MessageLog
-	QALogVal             []session.QAPair
-	LogFilePathVal       string
-	ContextFillTokensVal int
-	ContextThresholdVal  int
-	ContextPercentageVal int
-	ErrorDetailVal       string
-	ExitCodeDetailVal    string
-	LastStdoutAtVal      time.Time
+	MessageLogVal                  *session.MessageLog
+	QALogVal                       []session.QAPair
+	LogFilePathVal                 string
+	ContextFillTokensVal           int
+	ContextThresholdVal            int
+	ContextWindowTokensVal         int
+	ContextPercentageVal           int
+	ActiveSubAgentCountVal         int
+	MaxActiveSubAgentFillTokensVal int
+	ErrorDetailVal                 string
+	ExitCodeDetailVal              string
+	LastStdoutAtVal                time.Time
 
 	// Query
 	HasPendingAskUserQuestionVal bool
@@ -176,8 +179,13 @@ func (m *MockSessionView) LogFilePath() string     { return m.LogFilePathVal }
 func (m *MockSessionView) ContextHandoffThresholdTokens() int {
 	return m.ContextThresholdVal
 }
-func (m *MockSessionView) ContextFillTokens() int  { return m.ContextFillTokensVal }
-func (m *MockSessionView) ContextPercentage() int  { return m.ContextPercentageVal }
+func (m *MockSessionView) ContextFillTokens() int   { return m.ContextFillTokensVal }
+func (m *MockSessionView) ContextWindowTokens() int { return m.ContextWindowTokensVal }
+func (m *MockSessionView) ContextPercentage() int   { return m.ContextPercentageVal }
+func (m *MockSessionView) ActiveSubAgentCount() int { return m.ActiveSubAgentCountVal }
+func (m *MockSessionView) MaxActiveSubAgentFillTokens() int {
+	return m.MaxActiveSubAgentFillTokensVal
+}
 func (m *MockSessionView) ErrorDetail() string     { return m.ErrorDetailVal }
 func (m *MockSessionView) ExitCodeDetail() string  { return m.ExitCodeDetailVal }
 func (m *MockSessionView) LastStdoutAt() time.Time { return m.LastStdoutAtVal }

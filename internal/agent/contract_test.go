@@ -508,8 +508,8 @@ func TestContractRegistryArtifactPhaseRolesIgnoreExcludedMarkdown(t *testing.T) 
 	if out.OK {
 		t.Fatal("Validate() OK = true, want false")
 	}
-	if got := JoinProtocolViolations(violations); !strings.Contains(got, "markdown") {
-		t.Fatalf("JoinProtocolViolations() = %q, want markdown violation", got)
+	if got := JoinProtocolViolations(violations); !strings.Contains(got, "research index") {
+		t.Fatalf("JoinProtocolViolations() = %q, want research index violation", got)
 	}
 }
 

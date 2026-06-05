@@ -322,6 +322,265 @@ func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
 	}
 }
 
+func TestTokenUsageUpdatedContextFillMainThreadOnly(t *testing.T) {
+	const mainThread = "thread-main"
+	const window = 200000
+
+	newPayload := func(threadID string) json.RawMessage {
+		ctxWindow := window
+		payload := TokenUsageUpdatedParams{
+			ThreadID: threadID,
+			TurnID:   "turn-1",
+			TokenUsage: ThreadTokenUsage{
+				ModelContextWindow: &ctxWindow,
+				Total: TokenUsageBreakdown{
+					InputTokens:  1500,
+					OutputTokens: 750,
+				},
+				Last: TokenUsageBreakdown{
+					InputTokens: 120000,
+					TotalTokens: 127000,
+				},
+			},
+		}
+		params, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		return params
+	}
+
+	t.Run("sub-agent thread omits context-fill but keeps cost", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+		p.SetThreadIDForTest(mainThread)
+
+		msg, ok := p.parseNotification("thread/tokenUsage/updated", newPayload("thread-subagent"))
+		if !ok {
+			t.Fatal("parseNotification returned false, want true")
+		}
+		if msg.UsageUpdate == nil {
+			t.Fatal("msg.UsageUpdate is nil, want non-nil")
+		}
+		// Cost fields (lifetime cumulative Total) must still be carried.
+		if msg.UsageUpdate.InputTokens != 1500 {
+			t.Errorf("UsageUpdate.InputTokens = %d, want 1500", msg.UsageUpdate.InputTokens)
+		}
+		if msg.UsageUpdate.OutputTokens != 750 {
+			t.Errorf("UsageUpdate.OutputTokens = %d, want 750", msg.UsageUpdate.OutputTokens)
+		}
+		// Context-fill fields must be zero so the session's ContextWindow>0
+		// guard skips updating the Smart Zone fill for a sub-agent thread.
+		// The payload carries a non-zero ModelContextWindow, so a ContextWindow
+		// of 0 here proves the value was actively dropped, not merely absent.
+		if msg.UsageUpdate.ContextTotalTokens != 0 {
+			t.Errorf("UsageUpdate.ContextTotalTokens = %d, want 0 for sub-agent thread", msg.UsageUpdate.ContextTotalTokens)
+		}
+		if msg.UsageUpdate.ContextInputTokens != 0 {
+			t.Errorf("UsageUpdate.ContextInputTokens = %d, want 0 for sub-agent thread", msg.UsageUpdate.ContextInputTokens)
+		}
+		if msg.UsageUpdate.ContextWindow != 0 {
+			t.Errorf("UsageUpdate.ContextWindow = %d, want 0 for sub-agent thread (window present in payload)", msg.UsageUpdate.ContextWindow)
+		}
+		if msg.UsageUpdate.ContextBaseline != 0 {
+			t.Errorf("UsageUpdate.ContextBaseline = %d, want 0 for sub-agent thread", msg.UsageUpdate.ContextBaseline)
+		}
+	})
+
+	t.Run("main thread populates context-fill", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+		p.SetThreadIDForTest(mainThread)
+
+		msg, ok := p.parseNotification("thread/tokenUsage/updated", newPayload(mainThread))
+		if !ok {
+			t.Fatal("parseNotification returned false, want true")
+		}
+		if msg.UsageUpdate == nil {
+			t.Fatal("msg.UsageUpdate is nil, want non-nil")
+		}
+		// Cost fields still present.
+		if msg.UsageUpdate.InputTokens != 1500 {
+			t.Errorf("UsageUpdate.InputTokens = %d, want 1500", msg.UsageUpdate.InputTokens)
+		}
+		if msg.UsageUpdate.OutputTokens != 750 {
+			t.Errorf("UsageUpdate.OutputTokens = %d, want 750", msg.UsageUpdate.OutputTokens)
+		}
+		// Context-fill fields populated from Last for the main thread.
+		if msg.UsageUpdate.ContextTotalTokens != 127000 {
+			t.Errorf("UsageUpdate.ContextTotalTokens = %d, want 127000 for main thread", msg.UsageUpdate.ContextTotalTokens)
+		}
+		if msg.UsageUpdate.ContextInputTokens != 120000 {
+			t.Errorf("UsageUpdate.ContextInputTokens = %d, want 120000 for main thread", msg.UsageUpdate.ContextInputTokens)
+		}
+		if msg.UsageUpdate.ContextWindow != window {
+			t.Errorf("UsageUpdate.ContextWindow = %d, want %d for main thread", msg.UsageUpdate.ContextWindow, window)
+		}
+		if msg.UsageUpdate.ContextBaseline != codexContextBaselineTokens {
+			t.Errorf("UsageUpdate.ContextBaseline = %d, want %d for main thread", msg.UsageUpdate.ContextBaseline, codexContextBaselineTokens)
+		}
+	})
+
+	t.Run("empty thread id keeps behaving as main", func(t *testing.T) {
+		// Preserve non-fan-out behavior: an empty ThreadID (or a not-yet-assigned
+		// p.threadID) must still be treated as the main thread so single-agent
+		// implement/QA/plan flows keep reporting context fill. Here p.threadID is
+		// a real id and the event's ThreadID is empty.
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+		p.SetThreadIDForTest(mainThread)
+
+		msg, ok := p.parseNotification("thread/tokenUsage/updated", newPayload(""))
+		if !ok {
+			t.Fatal("parseNotification returned false, want true")
+		}
+		if msg.UsageUpdate == nil {
+			t.Fatal("msg.UsageUpdate is nil, want non-nil")
+		}
+		if msg.UsageUpdate.ContextTotalTokens != 127000 {
+			t.Errorf("UsageUpdate.ContextTotalTokens = %d, want 127000 for empty thread id", msg.UsageUpdate.ContextTotalTokens)
+		}
+		if msg.UsageUpdate.ContextWindow != window {
+			t.Errorf("UsageUpdate.ContextWindow = %d, want %d for empty thread id", msg.UsageUpdate.ContextWindow, window)
+		}
+		if msg.UsageUpdate.ContextBaseline != codexContextBaselineTokens {
+			t.Errorf("UsageUpdate.ContextBaseline = %d, want %d for empty thread id", msg.UsageUpdate.ContextBaseline, codexContextBaselineTokens)
+		}
+	})
+}
+
+// TestTokenUsageUpdatedSubAgentContextSeparateChannel proves that a sub-agent
+// thread's fill rides the SubAgentContext field (observability-only) while the
+// main-only Context* fields on UsageUpdate stay zero — so the Smart Zone fill
+// is never moved by a fan-out sub-agent. The main thread is the inverse: it
+// populates Context* and leaves SubAgentContext nil.
+func TestTokenUsageUpdatedSubAgentContextSeparateChannel(t *testing.T) {
+	const mainThread = "thread-main"
+	const window = 200000
+
+	newPayload := func(threadID string) json.RawMessage {
+		ctxWindow := window
+		payload := TokenUsageUpdatedParams{
+			ThreadID: threadID,
+			TurnID:   "turn-1",
+			TokenUsage: ThreadTokenUsage{
+				ModelContextWindow: &ctxWindow,
+				Total:              TokenUsageBreakdown{InputTokens: 1500, OutputTokens: 750},
+				Last:               TokenUsageBreakdown{InputTokens: 120000, TotalTokens: 127000},
+			},
+		}
+		params, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		return params
+	}
+
+	t.Run("sub-agent thread carries SubAgentContext, not UsageUpdate fill", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+		p.SetThreadIDForTest(mainThread)
+
+		msg, ok := p.parseNotification("thread/tokenUsage/updated", newPayload("thread-subagent"))
+		if !ok {
+			t.Fatal("parseNotification returned false, want true")
+		}
+		// Main-only fill fields stay zero (regression guard for Smart Zone).
+		if msg.UsageUpdate == nil || msg.UsageUpdate.ContextWindow != 0 || msg.UsageUpdate.ContextTotalTokens != 0 {
+			t.Fatalf("sub-agent UsageUpdate must keep Context* zero, got %+v", msg.UsageUpdate)
+		}
+		// Sub-agent fill rides its own field, net of baseline so it is
+		// directly comparable to its window.
+		if msg.SubAgentContext == nil {
+			t.Fatal("msg.SubAgentContext is nil, want non-nil for sub-agent thread")
+		}
+		if msg.SubAgentContext.ThreadID != "thread-subagent" {
+			t.Errorf("SubAgentContext.ThreadID = %q, want thread-subagent", msg.SubAgentContext.ThreadID)
+		}
+		if got, want := msg.SubAgentContext.FillTokens, 127000-codexContextBaselineTokens; got != want {
+			t.Errorf("SubAgentContext.FillTokens = %d, want %d", got, want)
+		}
+		if got, want := msg.SubAgentContext.WindowTokens, window-codexContextBaselineTokens; got != want {
+			t.Errorf("SubAgentContext.WindowTokens = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("main thread leaves SubAgentContext nil", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+		p.SetThreadIDForTest(mainThread)
+
+		msg, ok := p.parseNotification("thread/tokenUsage/updated", newPayload(mainThread))
+		if !ok {
+			t.Fatal("parseNotification returned false, want true")
+		}
+		if msg.SubAgentContext != nil {
+			t.Errorf("main thread must not carry SubAgentContext, got %+v", msg.SubAgentContext)
+		}
+		// And the main fill IS populated.
+		if msg.UsageUpdate == nil || msg.UsageUpdate.ContextWindow != window {
+			t.Fatalf("main thread must populate ContextWindow=%d, got %+v", window, msg.UsageUpdate)
+		}
+	})
+}
+
+// TestSubAgentTurnCompletedEmitsDoneSignal verifies that a NON-main
+// turn/completed surfaces a lifecycle-only SubAgentContext{Done:true} so the
+// session can mark the sub-thread inactive, while a main turn/completed still
+// produces a result message and carries no SubAgentContext.
+func TestSubAgentTurnCompletedEmitsDoneSignal(t *testing.T) {
+	const mainThread = "thread-main"
+
+	newPayload := func(threadID string) json.RawMessage {
+		payload := TurnCompletedParams{
+			ThreadID: threadID,
+			Turn:     CompletedTurn{ID: "turn-1", Status: "completed"},
+		}
+		params, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		return params
+	}
+
+	t.Run("sub-agent turn surfaces Done signal", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+		p.SetThreadIDForTest(mainThread)
+
+		msg, ok := p.parseNotification("turn/completed", newPayload("thread-subagent"))
+		if !ok {
+			t.Fatal("parseNotification returned false, want true for sub-agent turn/completed")
+		}
+		if msg.SubAgentContext == nil {
+			t.Fatal("sub-agent turn/completed must carry SubAgentContext, got nil")
+		}
+		if !msg.SubAgentContext.Done {
+			t.Errorf("SubAgentContext.Done = false, want true")
+		}
+		if msg.SubAgentContext.ThreadID != "thread-subagent" {
+			t.Errorf("SubAgentContext.ThreadID = %q, want thread-subagent", msg.SubAgentContext.ThreadID)
+		}
+		// The Done signal must never carry a fill snapshot or a result.
+		if msg.SubAgentContext.FillTokens != 0 || msg.SubAgentContext.WindowTokens != 0 {
+			t.Errorf("Done signal must not carry fill/window, got %+v", msg.SubAgentContext)
+		}
+		if msg.Result != nil {
+			t.Errorf("sub-agent turn/completed must not emit a result, got %+v", msg.Result)
+		}
+	})
+
+	t.Run("main turn produces result without SubAgentContext", func(t *testing.T) {
+		p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+		p.SetThreadIDForTest(mainThread)
+
+		msg, ok := p.parseNotification("turn/completed", newPayload(mainThread))
+		if !ok {
+			t.Fatal("parseNotification returned false, want true for main turn/completed")
+		}
+		if msg.SubAgentContext != nil {
+			t.Errorf("main turn/completed must not carry SubAgentContext, got %+v", msg.SubAgentContext)
+		}
+		if msg.Result == nil {
+			t.Errorf("main turn/completed must emit a result, got nil")
+		}
+	})
+}
+
 func TestCodexCommandApproval_NormalizesToBash(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 

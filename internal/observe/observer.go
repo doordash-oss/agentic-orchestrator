@@ -748,6 +748,49 @@ func (o *Observer) ContextHandoffTriggered(sc SpanContext, phase, sessionID, rep
 	}))
 }
 
+// ContextSubAgentHigh emits a context.subagent_high event when a sub-agent
+// thread crosses a fraction (thresholdPct) of its OWN context window. A
+// sub-agent runs in its own window and returns only a concise summary, so a
+// runaway one can silently truncate that summary; this event flags it. The
+// caller is responsible for firing this at most once per sub-thread
+// (high-water), so this method does not itself dedupe. It mirrors the
+// context.handoff_triggered shape and is observability-only — it never
+// touches the main agent's Smart Zone fill.
+func (o *Observer) ContextSubAgentHigh(sc SpanContext, phase, sessionID, repoName string, iteration int, subThreadID string, pct, thresholdPct, fillTokens, windowTokens int) {
+	if o == nil || !o.enabled {
+		return
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "context.subagent_high",
+		Phase:        phase,
+		Status:       "observed",
+		FeatureID:    sc.FeatureID,
+		SessionID:    sessionID,
+		RepoName:     repoName,
+		Iteration:    iteration,
+		Data: map[string]any{
+			"sub_thread_id": subThreadID,
+			"context_pct":   pct,
+			"threshold_pct": thresholdPct,
+			"fill_tokens":   fillTokens,
+			"window_tokens": windowTokens,
+		},
+	})
+	o.otel.AddSpanEvent(sc.SpanID, "context.subagent_high", addRunNumber(sc, map[string]string{
+		"phase":         phase,
+		"session_id":    sessionID,
+		"sub_thread_id": subThreadID,
+		"context_pct":   strconv.Itoa(pct),
+		"threshold_pct": strconv.Itoa(thresholdPct),
+		"fill_tokens":   strconv.Itoa(fillTokens),
+		"window_tokens": strconv.Itoa(windowTokens),
+	}))
+}
+
 // ContextLargeOutput emits a context.large_output event when a Codex command
 // execution records a large aggregated output in the session transcript.
 func (o *Observer) ContextLargeOutput(sc SpanContext, phase, sessionID, repoName, provider string, iteration int, command string, outputChars, thresholdChars int, exitCode *int, durationMs *int64) {

@@ -25,6 +25,9 @@ type SDKMessage struct {
 	Type    string `json:"type"`
 	Subtype string `json:"subtype,omitempty"`
 
+	// SubAgentTurn marks a sub-agent (not main-thread) message; its usage stays off the main fill.
+	SubAgentTurn bool `json:"-"`
+
 	// Exactly one of these is non-nil after unmarshaling, based on Type.
 	Init           *SystemInitMessage      `json:"-"`
 	Assistant      *AssistantMessage       `json:"-"`
@@ -52,6 +55,15 @@ type SDKMessage struct {
 	// session-level accumulation. Not a wire type — never unmarshaled from JSON.
 	UsageUpdate *Usage `json:"-"`
 
+	// SubAgentContext carries the context-fill snapshot for a NON-main
+	// (sub-agent) thread. It travels on its own field — never on UsageUpdate's
+	// Context* fields — so the session's main-only Smart Zone fill
+	// (latestUsage / ContextFillTokens) is never polluted by a fan-out
+	// sub-agent's window. Populated by providers that distinguish threads
+	// (Codex tokenUsage/updated for sub-threads); nil for main-thread updates
+	// and for providers without sub-thread reporting. Not a wire type.
+	SubAgentContext *SubAgentContext `json:"-"`
+
 	// StreamDeltaType is set for stream_event messages (from --include-partial-messages).
 	// Contains the delta type: "thinking", "text", "input_json", or "" for
 	// non-delta events (message_start, content_block_stop, etc.).
@@ -74,14 +86,17 @@ type SDKMessage struct {
 // UnmarshalJSON routes based on "type" (and "subtype") field.
 func (m *SDKMessage) UnmarshalJSON(data []byte) error {
 	var envelope struct {
-		Type    string `json:"type"`
-		Subtype string `json:"subtype,omitempty"`
+		Type            string `json:"type"`
+		Subtype         string `json:"subtype,omitempty"`
+		ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 	}
 	if err := json.Unmarshal(data, &envelope); err != nil {
 		return fmt.Errorf("unmarshal SDKMessage envelope: %w", err)
 	}
 	m.Type = envelope.Type
 	m.Subtype = envelope.Subtype
+	// Claude tags sub-agent turns with parent_tool_use_id; normalize to a neutral flag.
+	m.SubAgentTurn = envelope.ParentToolUseID != ""
 
 	switch envelope.Type {
 	case "stream_event":
@@ -254,6 +269,29 @@ type Usage struct {
 	// calculation so the displayed figure represents user-controllable
 	// space. Codex uses 12000 (TokenUsage::BASELINE_TOKENS); Claude uses 0.
 	ContextBaseline int `json:"-"`
+}
+
+// SubAgentContext is a context-fill snapshot for a single NON-main
+// (sub-agent) thread. Sub-agents each run in their own context window; this
+// is a SEPARATE channel from Usage's main-only Context* fields so that
+// observing a sub-agent's fill can never move the main agent's Smart Zone.
+// It is informational/observability-only — the session never folds it into
+// latestUsage or ContextFillTokens().
+type SubAgentContext struct {
+	// ThreadID identifies the sub-agent thread this snapshot belongs to.
+	ThreadID string
+	// FillTokens is the sub-thread's current context fill (total tokens:
+	// input + output + reasoning), already net of any provider baseline if
+	// the provider reports one — i.e. directly comparable to WindowTokens.
+	FillTokens int
+	// WindowTokens is the sub-thread's own context window size.
+	WindowTokens int
+	// Done marks a sub-thread lifecycle completion (its turn finished) rather
+	// than a fill snapshot. When true, FillTokens/WindowTokens are unset and
+	// the snapshot carries only ThreadID: observers should treat the sub-thread
+	// as no longer active. Like every field here it rides the SubAgentContext
+	// channel exclusively and never touches the main-only Context* fields.
+	Done bool
 }
 
 // UserMessage is an echoed user message or tool result.

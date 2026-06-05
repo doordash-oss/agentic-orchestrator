@@ -851,6 +851,29 @@ func TestResearchSkillDocumentsProgressHandoff(t *testing.T) {
 	}
 }
 
+// TestResearchSkillDocumentsDispatchCap guards the prompt-level PREVENT track:
+// each codebase sub-agent must be handed a SMALL bounded slice so it never
+// approaches its own context window and silently returns a truncated summary.
+// These substrings are load-bearing guidance; a future edit must not silently
+// drop the cap or the split-a-huge-question instruction.
+func TestResearchSkillDocumentsDispatchCap(t *testing.T) {
+	path := repoRootPath(t, "skills", "research-codebase", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"DISPATCH-CAP",
+		"at most ~3–4 closely-related questions",
+		"SPLIT it across several sub-agents",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/research-codebase/SKILL.md missing dispatch-cap guidance %q", want)
+		}
+	}
+}
+
 func TestImplementSkillDocumentsEvidenceFiles(t *testing.T) {
 	path := repoRootPath(t, "skills", "implement", "SKILL.md")
 	data, err := os.ReadFile(path)

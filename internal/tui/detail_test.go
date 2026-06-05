@@ -658,7 +658,7 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	m := NewDetailModel(f, "")
 	const sentinelSpinner = "##SPIN##"
 	m.spinnerView = sentinelSpinner
-	m.contextUsage = smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}
+	m.contextBox = contextBox{mainFill: 42_000, window: 200_000, threshold: 100_000}
 	view := m.ViewCompact(80)
 
 	// phaseTimingKeys collapses multiple cycles of the same type into a single
@@ -686,7 +686,7 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	if !strings.Contains(rebaseLine, sentinelSpinner) {
 		t.Errorf("expected in-flight rebase row to render the live spinner; got: %q", rebaseLine)
 	}
-	if !strings.Contains(rebaseLine, "42K / 100K (42%)") {
+	if !strings.Contains(rebaseLine, "42K / 200K (21%)") {
 		t.Errorf("expected in-flight rebase row to render Smart Zone context; got: %q", rebaseLine)
 	}
 	if !strings.Contains(view, "Tweak #1") {
@@ -849,19 +849,19 @@ func TestDetailViewTerminalFinalReviewFailureOverridesCodeReadyProjection(t *tes
 func TestDetailViewSmartZoneContext(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name         string
-		contextUsage smartZoneContextUsage
-		status       feature.Status
-		wantStr      string
-		wantAbsent   string
+		name       string
+		box        contextBox
+		status     feature.Status
+		wantStr    string
+		wantAbsent string
 	}{
-		{"no data shows calculating", emptySmartZoneContextUsage(), feature.StatusImplementing, "calculating", ""},
-		{"green below 75", smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}, feature.StatusImplementing, "42K / 100K (42%)", "calculating"},
-		{"yellow starts at 75", smartZoneContextUsage{fillTokens: 75_000, thresholdTokens: 100_000, pct: 75}, feature.StatusImplementing, "75K / 100K (75%)", "calculating"},
-		{"red starts at 90", smartZoneContextUsage{fillTokens: 90_000, thresholdTokens: 100_000, pct: 90}, feature.StatusImplementing, "90K / 100K (90%)", "calculating"},
-		{"red over threshold uncapped", smartZoneContextUsage{fillTokens: 125_000, thresholdTokens: 100_000, pct: 125}, feature.StatusImplementing, "125K / 100K (125%)", "calculating"},
-		{"not shown for completed", smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}, feature.StatusCodeReady, "", "42K / 100K (42%)"},
-		{"calculating not shown for completed", emptySmartZoneContextUsage(), feature.StatusCodeReady, "", "calculating"},
+		{"no data shows calculating", contextBox{mainFill: -1}, feature.StatusImplementing, "calculating", ""},
+		{"neutral below threshold", contextBox{mainFill: 42_000, window: 200_000, threshold: 100_000}, feature.StatusImplementing, "42K / 200K (21%)", "calculating"},
+		{"yellow at threshold", contextBox{mainFill: 100_000, window: 200_000, threshold: 100_000}, feature.StatusImplementing, "100K / 200K (50%)", "calculating"},
+		{"over threshold below 80pct window", contextBox{mainFill: 150_000, window: 200_000, threshold: 100_000}, feature.StatusImplementing, "150K / 200K (75%)", "calculating"},
+		{"red at 80pct window", contextBox{mainFill: 160_000, window: 200_000, threshold: 100_000}, feature.StatusImplementing, "160K / 200K (80%)", "calculating"},
+		{"not shown for completed", contextBox{mainFill: 42_000, window: 200_000, threshold: 100_000}, feature.StatusCodeReady, "", "42K / 200K"},
+		{"calculating not shown for completed", contextBox{mainFill: -1}, feature.StatusCodeReady, "", "calculating"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -874,7 +874,7 @@ func TestDetailViewSmartZoneContext(t *testing.T) {
 				Models:           config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 			}
 			m := NewDetailModel(f, "")
-			m.contextUsage = tt.contextUsage
+			m.contextBox = tt.box
 			view := m.View()
 			if tt.wantStr != "" && !strings.Contains(view, tt.wantStr) {
 				t.Errorf("expected %q in view, not found", tt.wantStr)
@@ -897,9 +897,9 @@ func TestDetailViewSmartZoneContextInCompact(t *testing.T) {
 		Models:           config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
-	m.contextUsage = smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}
+	m.contextBox = contextBox{mainFill: 42_000, window: 200_000, threshold: 100_000}
 	compact := m.ViewCompact(80)
-	if !strings.Contains(compact, "42K / 100K (42%)") {
+	if !strings.Contains(compact, "42K / 200K (21%)") {
 		t.Error("Smart Zone context should appear in compact view for active implementing feature")
 	}
 }

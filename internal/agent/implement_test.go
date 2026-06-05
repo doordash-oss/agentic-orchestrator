@@ -1013,6 +1013,19 @@ func withHandoffPollInterval(t *testing.T, d time.Duration) {
 	})
 }
 
+func withHandoffReassertPolls(t *testing.T, n int) {
+	t.Helper()
+	contextHandoffPollIntervalMu.Lock()
+	prev := contextHandoffReassertPolls
+	contextHandoffReassertPolls = n
+	contextHandoffPollIntervalMu.Unlock()
+	t.Cleanup(func() {
+		contextHandoffPollIntervalMu.Lock()
+		contextHandoffReassertPolls = prev
+		contextHandoffPollIntervalMu.Unlock()
+	})
+}
+
 func handoffPollHook(ch chan<- struct{}) func() {
 	return func() {
 		select {
@@ -1319,8 +1332,9 @@ func TestWaitForStatus_AskedFormal_ReturnsMissingMarker(t *testing.T) {
 // Compile-time assertion that captureSink satisfies io.WriteCloser.
 var _ io.WriteCloser = (*captureSink)(nil)
 
-func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
+func TestWaitForStatus_ContextHandoff_ReassertsWhileOverThreshold(t *testing.T) {
 	withHandoffPollInterval(t, 2*time.Millisecond)
+	withHandoffReassertPolls(t, 2)
 
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sink := attachCaptureSink(sess)
@@ -1330,24 +1344,17 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	sess.SetLatestUsage(&llm.Usage{InputTokens: 100_000, ContextWindow: 1_000_000})
 
 	var ready atomic.Bool // stays false until the test flips it.
-	polls := make(chan struct{}, 8)
-
 	done := make(chan string, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
 			ReadyCheck:                    func() bool { return ready.Load() },
 			EnableContextHandoff:          true,
 			ContextHandoffThresholdTokens: 100_000,
-			ContextHandoffPollHook:        handoffPollHook(polls),
 		}).Status
 	}()
 
-	// Wait for the ticker to observe the threshold and send the handoff.
+	// First nudge fires on crossing.
 	sink.waitForWrite(t, 2*time.Second)
-
-	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages = %d, want 1", got)
-	}
 	if !strings.Contains(sink.contents(), "Your context is ~100000 tokens, above the Smart Zone threshold of 100000") {
 		t.Errorf("handoff message should include token threshold, got: %s", sink.contents())
 	}
@@ -1358,11 +1365,13 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 		t.Errorf("unexpected auto-resume messages sent alongside handoff: %d", got)
 	}
 
-	// Observe several more ticker passes; the handoff must not be sent a
-	// second time while the iteration is still running.
-	waitForHandoffPolls(t, polls, 3, 2*time.Second)
-	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages after extra ticks = %d, want 1 (send-once semantics)", got)
+	// Still over threshold: the nudge must be re-asserted, not sent once.
+	deadline := time.Now().Add(2 * time.Second)
+	for countHandoffMessages(sink.contents()) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("handoff not re-asserted: count = %d, want >= 2", countHandoffMessages(sink.contents()))
+		}
+		time.Sleep(time.Millisecond)
 	}
 
 	// Let the agent complete cleanly.

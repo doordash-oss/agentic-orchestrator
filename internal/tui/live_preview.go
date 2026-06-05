@@ -74,7 +74,8 @@ func (m LivePreviewModel) ViewCompact(width int) string {
 	att := computeFeatureAttention(f, m.session)
 	boxWidth := max(width-4, 20)
 	contentWidth := max(boxWidth-4, 1)
-	upperLines := livePreviewMetadataGrid(livePreviewMetadataItems(f, m.session, m.contextUsage), contentWidth)
+	upperLines := livePreviewMetadataGrid(livePreviewMetadataItems(f, m.session), contentWidth)
+	upperLines = append(upperLines, livePreviewContextBoxLines(f, m.session)...)
 
 	activity := livePreviewActivityLine(f, m.session)
 	phaseActivity := activity
@@ -121,7 +122,7 @@ type livePreviewMetadataItem struct {
 	value string
 }
 
-func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, contextUsage smartZoneContextUsage) []livePreviewMetadataItem {
+func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView) []livePreviewMetadataItem {
 	items := []livePreviewMetadataItem{
 		{label: "Feature ID", value: livePreviewFeatureID(f)},
 		{label: "Repos", value: livePreviewReposSummary(f)},
@@ -136,9 +137,6 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, cont
 	if validators := livePreviewValidatorStatusesValue(f); validators != "" {
 		items = append(items, livePreviewMetadataItem{label: "Validators", value: validators})
 	}
-	if livePreviewShouldShowContext(f, sess) {
-		items = append(items, livePreviewMetadataItem{label: "Context", value: livePreviewContextText(contextUsage)})
-	}
 	items = append(items,
 		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
 		livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
@@ -147,18 +145,26 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, cont
 	return items
 }
 
+// livePreviewShouldShowContext reports whether the Context box should render.
+// "Shown for all phases" => render whenever a session is running. The box's
+// main/window/threshold work for any provider; the sub-agent line is only
+// populated by Codex and otherwise shows 0.
 func livePreviewShouldShowContext(f *feature.Feature, sess session.SessionView) bool {
-	if sess != nil {
-		return true
-	}
-	if f == nil {
-		return false
-	}
-	return f.Status == feature.StatusCreated || f.Status.IsRunning() || featureHasRunningCycle(f)
+	return sess != nil
 }
 
-func livePreviewContextText(contextUsage smartZoneContextUsage) string {
-	return smartZoneContextUsageText(contextUsage)
+// livePreviewContextBoxLines renders the multi-line Context box body for the
+// live preview, including a "Context" header. Empty when no session is running.
+func livePreviewContextBoxLines(f *feature.Feature, sess session.SessionView) []string {
+	if !livePreviewShouldShowContext(f, sess) {
+		return nil
+	}
+	header := lipgloss.NewStyle().Foreground(colorSubtext).Render("Context")
+	lines := []string{header}
+	for _, line := range contextBoxLines(contextBoxForSession(sess)) {
+		lines = append(lines, "  "+line)
+	}
+	return lines
 }
 
 func livePreviewMetadataGrid(items []livePreviewMetadataItem, width int) []string {

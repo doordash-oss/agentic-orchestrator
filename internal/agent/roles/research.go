@@ -29,12 +29,23 @@ var researcherRoleSpec = RoleSpec{
 	UserTemplate: "research_from_questions.user",
 	Required:     []feature.Phase{feature.PhaseInquire},
 	OutputRoots: []OutputRootSpec{
-		artifactDirOutputRoot("Shared Research artifact root. research.md is written here and edited in place across iterations."),
+		artifactDirOutputRoot("Shared Research artifact root. The research.md index and the per-question questions/Q-NNN.md files are written here, persisting across iterations."),
 		singleShotPhaseDirOutputRoot("Active Research iteration directory. research-progress.md, meta.yaml, and phase_complete are written here."),
 	},
 	MarkerRoot: "phase_dir",
 	Artifacts: []RoleArtifactSpec{
-		persistentMarkdownRoleArtifact("research_markdown_artifact", "research markdown artifact", "research.md"),
+		{
+			Name:         "research_markdown_artifact",
+			DisplayPath:  "research index",
+			RootName:     "artifact_dir",
+			RelativePath: "research.md",
+			Presence:     ArtifactRequired,
+			Description:  "small index linking the per-question questions/Q-NNN.md files; the deliverable downstream phases read first and drill into as needed",
+			ResolvePath: func(rt RoleRuntime, _ RoleArtifactSpec) string {
+				return artifactDirOutputRoot("").ResolvePath(rt)
+			},
+			Validate: ValidatorPhaseMarkdown,
+		},
 		researchProgressHandoffRoleArtifact(),
 		iterationMetaRoleArtifact(),
 	},

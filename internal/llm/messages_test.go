@@ -429,6 +429,22 @@ func TestSDKMessage_UnmarshalJSON_TaskStarted(t *testing.T) {
 	}
 }
 
+func TestSDKMessage_UnmarshalJSON_SubAgentTurn(t *testing.T) {
+	var sub, main SDKMessage
+	if err := json.Unmarshal([]byte(`{"type":"assistant","parent_tool_use_id":"toolu_x","message":{"role":"assistant","content":[]}}`), &sub); err != nil {
+		t.Fatalf("unmarshal sub: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"type":"assistant","message":{"role":"assistant","content":[]}}`), &main); err != nil {
+		t.Fatalf("unmarshal main: %v", err)
+	}
+	if !sub.SubAgentTurn {
+		t.Error("message with parent_tool_use_id should set SubAgentTurn")
+	}
+	if main.SubAgentTurn {
+		t.Error("main-thread message should not set SubAgentTurn")
+	}
+}
+
 func TestSDKMessage_UnmarshalJSON_TaskProgress(t *testing.T) {
 	data := `{
         "type": "system",

@@ -16,10 +16,10 @@ This is a multi-repo feature spanning the following repositories. Your design mu
 
 ## Research Findings
 
-Read the research document produced by the previous phase at:
+The previous phase produced a research INDEX at:
 /state/feat-x/run-1/research/research.md
 
-Read this file completely before proceeding.
+It lists every research question with a one-line gist and a link to a per-question file under `questions/`. Read the index, then open the `questions/Q-NNN.md` files whose findings are relevant to what you are designing.
 
 ## User Decisions
 

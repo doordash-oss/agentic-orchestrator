@@ -93,7 +93,10 @@ func (s *utilityTestSession) QALog() []session.QAPair            { return nil }
 func (s *utilityTestSession) LogFilePath() string                { return "" }
 func (s *utilityTestSession) ContextHandoffThresholdTokens() int { return s.threshold }
 func (s *utilityTestSession) ContextFillTokens() int             { return s.contextFill }
+func (s *utilityTestSession) ContextWindowTokens() int           { return 0 }
 func (s *utilityTestSession) ContextPercentage() int             { return 0 }
+func (s *utilityTestSession) ActiveSubAgentCount() int           { return 0 }
+func (s *utilityTestSession) MaxActiveSubAgentFillTokens() int   { return 0 }
 func (s *utilityTestSession) ErrorDetail() string                { return "" }
 func (s *utilityTestSession) ExitCodeDetail() string             { return "" }
 func (s *utilityTestSession) LastStdoutAt() time.Time            { return time.Time{} }
@@ -122,8 +125,9 @@ func (s *utilityTestSession) SetHasUnansweredQuestion(v bool)        {}
 func (s *utilityTestSession) CloseStdin()                            {}
 func (s *utilityTestSession) SetOnToolAllowed(fn func(toolName string, input json.RawMessage)) {
 }
-func (s *utilityTestSession) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
-func (s *utilityTestSession) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
+func (s *utilityTestSession) SetOnFileRead(fn func(read llm.FileReadEvent))         {}
+func (s *utilityTestSession) SetOnSubagentEvent(fn func(msg llm.SDKMessage))        {}
+func (s *utilityTestSession) SetOnSubagentContext(fn func(sub llm.SubAgentContext)) {}
 
 var _ session.SessionHandle = (*utilityTestSession)(nil)
 

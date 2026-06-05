@@ -1629,6 +1629,10 @@ type usageUpdateLine struct {
 	Subtype            string  `json:"subtype,omitempty"`
 	SessionID          string  `json:"session_id,omitempty"`
 	TotalCostUSD       float64 `json:"total_cost_usd,omitempty"`
+	// Sub-agent context-fill snapshot (separate observability channel).
+	SubThreadID string `json:"sub_thread_id,omitempty"`
+	SubFill     int    `json:"sub_fill,omitempty"`
+	SubWindow   int    `json:"sub_window,omitempty"`
 }
 
 func (p *usageUpdateProtocol) SetStdin(io.Writer)              {}
@@ -1653,7 +1657,7 @@ func (p *usageUpdateProtocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	}
 	switch raw.Type {
 	case "usage_update":
-		return []llm.SDKMessage{{
+		msg := llm.SDKMessage{
 			Type: "usage_update",
 			UsageUpdate: &llm.Usage{
 				InputTokens:        raw.InputTokens,
@@ -1663,7 +1667,15 @@ func (p *usageUpdateProtocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 				ContextBaseline:    raw.ContextBaseline,
 				ContextWindow:      raw.ContextWindow,
 			},
-		}}, nil
+		}
+		if raw.SubThreadID != "" {
+			msg.SubAgentContext = &llm.SubAgentContext{
+				ThreadID:     raw.SubThreadID,
+				FillTokens:   raw.SubFill,
+				WindowTokens: raw.SubWindow,
+			}
+		}
+		return []llm.SDKMessage{msg}, nil
 	case "result":
 		return []llm.SDKMessage{{
 			Type: "result",
@@ -1699,6 +1711,49 @@ func TestAccumulatedUsageCodexSETSemantics(t *testing.T) {
 	}
 	if got.OutputTokens != 200 {
 		t.Errorf("AccumulatedUsage().OutputTokens = %d, want 200 (SET semantics, not sum 370)", got.OutputTokens)
+	}
+}
+
+// TestSubAgentContextSeparateFromMainFill verifies that a usage_update carrying
+// a SubAgentContext snapshot (1) fires the onSubagentContext callback with the
+// sub-thread fill and (2) does NOT move the session's main-only Smart Zone
+// state (latestUsage / accumulatedUsage). This is the regression guard that
+// keeps sub-agent observability off the main context %.
+func TestSubAgentContextSeparateFromMainFill(t *testing.T) {
+	t.Parallel()
+	s := NewSession("subctx-sep-test", "feat-1", feature.PhaseImplement)
+	s.protocol = &usageUpdateProtocol{sid: "codex-test"}
+
+	var mu sync.Mutex
+	var captured []llm.SubAgentContext
+	s.SetOnSubagentContext(func(sub llm.SubAgentContext) {
+		mu.Lock()
+		captured = append(captured, sub)
+		mu.Unlock()
+	})
+
+	runSessionWithStdoutLines(t, s, []string{
+		// Main-thread fill (moves the Smart Zone).
+		`{"type":"usage_update","input_tokens":100,"output_tokens":50,"context_input_tokens":49900,"context_total_tokens":50000,"context_baseline":12000,"context_window":258400}`,
+		// Sub-agent fill on its own channel (must NOT move the Smart Zone).
+		`{"type":"usage_update","input_tokens":120,"output_tokens":60,"sub_thread_id":"sub-1","sub_fill":188000,"sub_window":246400}`,
+		`{"type":"result","subtype":"success","session_id":"codex-test","total_cost_usd":0.05}`,
+	}, nil)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 1 {
+		t.Fatalf("onSubagentContext fired %d times, want 1", len(captured))
+	}
+	if captured[0].ThreadID != "sub-1" || captured[0].FillTokens != 188000 || captured[0].WindowTokens != 246400 {
+		t.Errorf("captured sub-agent context = %+v, want {sub-1 188000 246400}", captured[0])
+	}
+
+	// Main-only fill must reflect the MAIN usage_update only — the sub-agent
+	// update carried no Context* fields, so it must not have changed it.
+	u := s.LatestUsage()
+	if u == nil || u.ContextTotalTokens != 50000 || u.ContextWindow != 258400 {
+		t.Errorf("LatestUsage main fill = %+v, want ContextTotalTokens=50000 ContextWindow=258400 (sub-agent must not move it)", u)
 	}
 }
 

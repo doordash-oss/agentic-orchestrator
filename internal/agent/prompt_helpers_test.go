@@ -34,6 +34,14 @@ type fakeSubagentSession struct {
 
 func (f *fakeSubagentSession) SetOnSubagentEvent(fn func(llm.SDKMessage)) { f.cb = fn }
 
+// fakeSubagentContextSession implements just enough to test
+// SubAgentContextTracker.Install.
+type fakeSubagentContextSession struct {
+	cb func(llm.SubAgentContext)
+}
+
+func (f *fakeSubagentContextSession) SetOnSubagentContext(fn func(llm.SubAgentContext)) { f.cb = fn }
+
 type fakeContextReadSession struct {
 	toolCB func(string, json.RawMessage)
 	fileCB func(llm.FileReadEvent)
@@ -262,6 +270,70 @@ func TestSubagentProgressTracker_NilObserverNoOp(t *testing.T) {
 	// Must not panic and must not install a callback when Observer is nil.
 	tracker := &SubagentProgressTracker{Observer: nil}
 	fake := &fakeSubagentSession{}
+	tracker.Install(fake)
+	if fake.cb != nil {
+		t.Error("expected no callback when Observer is nil")
+	}
+}
+
+func TestSubAgentContextTracker_EmitsOncePerSubThreadHighWater(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "subctx_feat"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	obs := observe.New(true, stateDir, false, "", false, "agentic")
+	sc := observe.SpanContextForFeature(featureID, "", "", "").Child()
+
+	tracker := &SubAgentContextTracker{
+		Observer: obs, SC: sc, Phase: "Research", SessionID: "sess-research",
+		RepoName: "repo-a", Iteration: 2,
+		// ThresholdPct 0 => default 75%.
+	}
+	fake := &fakeSubagentContextSession{}
+	tracker.Install(fake)
+	if fake.cb == nil {
+		t.Fatal("tracker did not register a callback")
+	}
+
+	// Below threshold (50%): no event.
+	fake.cb(llm.SubAgentContext{ThreadID: "sub-1", FillTokens: 500_000, WindowTokens: 1_000_000})
+	// Crosses threshold (80%): one event for sub-1.
+	fake.cb(llm.SubAgentContext{ThreadID: "sub-1", FillTokens: 800_000, WindowTokens: 1_000_000})
+	// Higher still (90%) for sub-1: high-water dedup, NO second event.
+	fake.cb(llm.SubAgentContext{ThreadID: "sub-1", FillTokens: 900_000, WindowTokens: 1_000_000})
+	// A different sub-thread crossing: a fresh event.
+	fake.cb(llm.SubAgentContext{ThreadID: "sub-2", FillTokens: 760_000, WindowTokens: 1_000_000})
+	// Zero window must not divide-by-zero / emit.
+	fake.cb(llm.SubAgentContext{ThreadID: "sub-3", FillTokens: 10, WindowTokens: 0})
+
+	path := filepath.Join(stateDir, featureID, "events.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading events.jsonl: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 events (one per crossing sub-thread), got %d: %s", len(lines), string(data))
+	}
+	if !strings.Contains(lines[0], `"event_type":"context.subagent_high"`) ||
+		!strings.Contains(lines[0], `"sub_thread_id":"sub-1"`) ||
+		!strings.Contains(lines[0], `"context_pct":80`) ||
+		!strings.Contains(lines[0], `"threshold_pct":75`) ||
+		!strings.Contains(lines[0], `"iteration":2`) ||
+		!strings.Contains(lines[0], `"repo_name":"repo-a"`) {
+		t.Errorf("first event unexpected: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"event_type":"context.subagent_high"`) ||
+		!strings.Contains(lines[1], `"sub_thread_id":"sub-2"`) ||
+		!strings.Contains(lines[1], `"context_pct":76`) {
+		t.Errorf("second event unexpected: %s", lines[1])
+	}
+}
+
+func TestSubAgentContextTracker_NilObserverNoOp(t *testing.T) {
+	tracker := &SubAgentContextTracker{Observer: nil}
+	fake := &fakeSubagentContextSession{}
 	tracker.Install(fake)
 	if fake.cb != nil {
 		t.Error("expected no callback when Observer is nil")

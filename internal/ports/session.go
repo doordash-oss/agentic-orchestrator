@@ -285,7 +285,13 @@ type SessionView interface {
 	LogFilePath() string
 	ContextHandoffThresholdTokens() int
 	ContextFillTokens() int
+	ContextWindowTokens() int
 	ContextPercentage() int
+	// ActiveSubAgentCount and MaxActiveSubAgentFillTokens expose currently-active
+	// sub-agent fan-out context for observability/display. They are main-only
+	// neutral: they never move the Smart Zone fill.
+	ActiveSubAgentCount() int
+	MaxActiveSubAgentFillTokens() int
 	ErrorDetail() string
 	ExitCodeDetail() string
 	LastStdoutAt() time.Time
@@ -320,6 +326,7 @@ type SessionHandle interface {
 	SetOnToolAllowed(fn func(toolName string, input json.RawMessage))
 	SetOnFileRead(fn func(read llm.FileReadEvent))
 	SetOnSubagentEvent(fn func(msg llm.SDKMessage))
+	SetOnSubagentContext(fn func(sub llm.SubAgentContext))
 }
 
 // SessionManager abstracts PTY session lifecycle.

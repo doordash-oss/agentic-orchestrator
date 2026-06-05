@@ -1791,6 +1791,36 @@ func (m AppModel) smartZoneContextForFeature(f *feature.Feature) smartZoneContex
 	return best
 }
 
+// contextBoxForFeature returns the Context box data for the feature's busiest
+// active session (the one closest to its Smart Zone threshold, mirroring
+// smartZoneContextForFeature's selection) so the detail/overview panel shows
+// the same window-relative numbers and coloring as the live-preview box.
+// Returns empty (Calculating) when no active session has reported usage.
+func (m AppModel) contextBoxForFeature(f *feature.Feature) contextBox {
+	if f == nil || m.sessionManager == nil {
+		return contextBox{mainFill: -1}
+	}
+	if !f.Status.IsRunning() && !featureHasRunningCycle(f) {
+		return contextBox{mainFill: -1}
+	}
+	best := emptySmartZoneContextUsage()
+	var bestSess session.SessionView
+	for _, s := range m.sessionManager.FeatureSessions(f.ID) {
+		if !isGenericFeatureSession(s) || !s.IsActive() {
+			continue
+		}
+		usage := smartZoneContextUsageForSession(s)
+		if usage.closerThan(best) {
+			best = usage
+			bestSess = s
+		}
+	}
+	if bestSess == nil {
+		return contextBox{mainFill: -1}
+	}
+	return contextBoxForSession(bestSess)
+}
+
 func featureHasRunningCycle(f *feature.Feature) bool {
 	if f.ActiveCycle != nil && f.ActiveCycle.Status == feature.RepoCycleRunning {
 		return true
@@ -1936,11 +1966,11 @@ func (m AppModel) View() tea.View {
 	m.dashboard.preview.spinnerView = sv
 	m.dashboard.livePreview.spinnerView = sv
 	m.detail.spinnerView = sv
-	m.detail.contextUsage = m.activeSessionSmartZoneContext()
+	m.detail.contextBox = m.contextBoxForFeature(m.detail.feature)
 	m.detail.kbStaleWarning = m.kbStaleWarningFor(m.detail.feature)
 	if sel := m.dashboard.SelectedFeature(); sel != nil {
 		contextUsage := m.smartZoneContextForFeature(sel)
-		m.dashboard.preview.contextUsage = contextUsage
+		m.dashboard.preview.contextBox = m.contextBoxForFeature(sel)
 		m.dashboard.preview.kbStaleWarning = m.kbStaleWarningFor(sel)
 		m.dashboard.livePreview.contextUsage = contextUsage
 		m.dashboard.livePreview.session = m.livePreviewSessionForFeature(sel)

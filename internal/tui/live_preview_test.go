@@ -28,6 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 func TestLivePreviewEligible(t *testing.T) {
@@ -827,14 +828,19 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "download 30%"}},
 		controlRequest("ask_1", "AskUserQuestion", rawJSON(`{"questions":[{"question":"Proceed with patch?"}]}`)),
 	)
+	if s, ok := sess.(*session.Session); ok {
+		s.SetContextHandoffThresholdTokens(100_000)
+		s.SetLatestUsage(&llm.Usage{InputTokens: 42_000, ContextWindow: 200_000})
+	}
 	m := dashboardWithSelectedFeature(f)
 	m.focusPanel = 1
 	m.spinnerView = "spin"
-	m.livePreview.contextUsage = smartZoneContextUsage{fillTokens: 42_000, thresholdTokens: 100_000, pct: 42}
 	m.livePreview.session = sess
 
-	view := m.View()
-	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Context", "42K / 100K (42%)", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
+	// The Context box colors each token number with its own style span, so the
+	// "42K / 200K (21%)" triple is only contiguous after stripping ANSI.
+	view := stripANSI(m.View())
+	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Context", "Main:", "42K / 200K (21%)", "Smart Zone:", "100K", "Sub-agents:", "0 · max 0K", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard live preview missing %q in:\n%s", want, view)
 		}
@@ -852,44 +858,163 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 func TestLivePreviewContextMetadata(t *testing.T) {
 	t.Parallel()
 
+	runningFeature := func() *feature.Feature {
+		return &feature.Feature{ID: "feat-context", Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
+	}
+
+	withUsage := func(fill, window, threshold, subCount, subMax int) session.SessionView {
+		sess := mocks.NewMockSessionView("ctx-sess", "feat-context")
+		sess.ContextFillTokensVal = fill
+		sess.ContextWindowTokensVal = window
+		sess.ContextThresholdVal = threshold
+		sess.ActiveSubAgentCountVal = subCount
+		sess.MaxActiveSubAgentFillTokensVal = subMax
+		return sess
+	}
+
 	tests := []struct {
-		name         string
-		f            *feature.Feature
-		contextUsage smartZoneContextUsage
-		want         string
-		notWant      string
+		name    string
+		f       *feature.Feature
+		sess    session.SessionView
+		want    []string
+		notWant []string
 	}{
 		{
-			name:         "active session shows tokens threshold percentage",
-			f:            &feature.Feature{ID: "feat-context", Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
-			contextUsage: smartZoneContextUsage{fillTokens: 73_000, thresholdTokens: 100_000, pct: 73},
-			want:         "73K / 100K (73%)",
-			notWant:      "Calculating",
+			name:    "active session shows main window threshold and sub-agents",
+			f:       runningFeature(),
+			sess:    withUsage(73_000, 200_000, 100_000, 2, 55_000),
+			want:    []string{"Context", "Main:", "73K / 200K (36%)", "Smart Zone:", "100K", "Sub-agents:", "2 · max 55K"},
+			notWant: []string{"Calculating"},
 		},
 		{
-			name:         "active session without usage shows calculating",
-			f:            &feature.Feature{ID: "feat-context", Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
-			contextUsage: emptySmartZoneContextUsage(),
-			want:         "Calculating",
+			name:    "active session without usage shows calculating",
+			f:       runningFeature(),
+			sess:    withUsage(-1, 0, 100_000, 0, 0),
+			want:    []string{"Context", "Calculating"},
+			notWant: []string{"Main:"},
 		},
 		{
-			name:         "review gate without session omits context",
-			f:            &feature.Feature{ID: "feat-review", Status: feature.StatusPlanNeedsReview, CurrentPhase: feature.PhasePlan},
-			contextUsage: smartZoneContextUsage{fillTokens: 44_000, thresholdTokens: 100_000, pct: 44},
-			notWant:      "Context",
+			name:    "review gate without session omits context box",
+			f:       &feature.Feature{ID: "feat-review", Status: feature.StatusPlanNeedsReview, CurrentPhase: feature.PhasePlan},
+			sess:    nil,
+			notWant: []string{"Smart Zone:", "Sub-agents:"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			view := stripANSI(newLivePreviewModel(tt.f).withContextUsage(tt.contextUsage).withHeight(24).ViewCompact(100))
-			if tt.want != "" && !strings.Contains(view, tt.want) {
-				t.Fatalf("live preview context metadata missing %q in:\n%s", tt.want, view)
+			view := stripANSI(newLivePreviewModel(tt.f).withSession(tt.sess).withHeight(24).ViewCompact(100))
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Fatalf("live preview context box missing %q in:\n%s", want, view)
+				}
 			}
-			if tt.notWant != "" && strings.Contains(view, tt.notWant) {
-				t.Fatalf("live preview context metadata contained %q in:\n%s", tt.notWant, view)
+			for _, notWant := range tt.notWant {
+				if strings.Contains(view, notWant) {
+					t.Fatalf("live preview context box contained %q in:\n%s", notWant, view)
+				}
 			}
 		})
+	}
+}
+
+func TestContextBoxColoring(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		box       contextBox
+		wantMain  color.Color
+		wantThres color.Color
+	}{
+		{
+			// 50K / 200K = 25% of window, below the 100K threshold: neutral.
+			name:      "under threshold neutral",
+			box:       contextBox{mainFill: 50_000, window: 200_000, threshold: 100_000},
+			wantMain:  colorText,
+			wantThres: colorText,
+		},
+		{
+			// 120K / 200K = 60% of window (< 80%) but >= 100K threshold: both
+			// the main number and the threshold number turn yellow.
+			name:      "at or above threshold yellow",
+			box:       contextBox{mainFill: 120_000, window: 200_000, threshold: 100_000},
+			wantMain:  colorWarning,
+			wantThres: colorWarning,
+		},
+		{
+			// 170K / 200K = 85% of window (>= 80%): the main number turns red.
+			// The threshold number stays yellow (>= threshold) and never red.
+			name:      "at or above 80 percent window red main",
+			box:       contextBox{mainFill: 170_000, window: 200_000, threshold: 100_000},
+			wantMain:  colorError,
+			wantThres: colorWarning,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertForeground(t, tt.box.mainStyle(), tt.wantMain)
+			assertForeground(t, tt.box.thresholdStyle(), tt.wantThres)
+
+			// Render-driven check: the box renderer must actually apply the
+			// per-number styles, not just produce neutral text. We render the
+			// expected number with the SAME style helper the renderer uses and
+			// assert that exact styled segment appears in the rendered
+			// (NON-stripped) lines. This guards against a regression that drops
+			// b.mainStyle()/b.thresholdStyle() in contextBoxLines and renders
+			// everything neutral — which the stripANSI content tests would miss.
+			lines := contextBoxLines(tt.box)
+			if len(lines) != 3 {
+				t.Fatalf("expected 3 rendered context box lines, got %d: %#v", len(lines), lines)
+			}
+			wantMainSeg := tt.box.mainStyle().Render(formatTokenK(tt.box.mainFill))
+			if !strings.Contains(lines[0], wantMainSeg) {
+				t.Fatalf("Main line %q missing styled main number %q (foreground %v)", lines[0], wantMainSeg, tt.wantMain)
+			}
+			wantThresSeg := tt.box.thresholdStyle().Render(formatTokenK(tt.box.threshold))
+			if !strings.Contains(lines[1], wantThresSeg) {
+				t.Fatalf("Smart Zone line %q missing styled threshold number %q (foreground %v)", lines[1], wantThresSeg, tt.wantThres)
+			}
+			// And confirm the helper actually carries the expected foreground,
+			// so a swap to the wrong color band is still caught.
+			assertForeground(t, tt.box.mainStyle(), tt.wantMain)
+			assertForeground(t, tt.box.thresholdStyle(), tt.wantThres)
+		})
+	}
+}
+
+func TestContextBoxSubAgentLine(t *testing.T) {
+	t.Parallel()
+
+	lines := contextBoxLines(contextBox{
+		mainFill:   50_000,
+		window:     200_000,
+		threshold:  100_000,
+		subCount:   3,
+		subMaxFill: 88_000,
+	})
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 context box lines, got %d: %#v", len(lines), lines)
+	}
+	subLine := stripANSI(lines[2])
+	for _, want := range []string{"Sub-agents:", "3 · max 88K"} {
+		if !strings.Contains(subLine, want) {
+			t.Fatalf("sub-agent line missing %q, got %q", want, subLine)
+		}
+	}
+	// The sub-agent line is neutral: no alarm/percentage/Smart-Zone reference.
+	for _, notWant := range []string{"%", "Smart Zone"} {
+		if strings.Contains(subLine, notWant) {
+			t.Fatalf("sub-agent line should be neutral, but contained %q: %q", notWant, subLine)
+		}
+	}
+}
+
+func TestContextBoxCalculatingPlaceholder(t *testing.T) {
+	t.Parallel()
+	lines := contextBoxLines(contextBox{mainFill: -1})
+	if len(lines) != 1 || !strings.Contains(stripANSI(lines[0]), "Calculating") {
+		t.Fatalf("expected single Calculating placeholder, got %#v", lines)
 	}
 }
 
@@ -1171,11 +1296,6 @@ func rawJSON(s string) json.RawMessage {
 
 func (m LivePreviewModel) withSession(sess session.SessionView) LivePreviewModel {
 	m.session = sess
-	return m
-}
-
-func (m LivePreviewModel) withContextUsage(contextUsage smartZoneContextUsage) LivePreviewModel {
-	m.contextUsage = contextUsage
 	return m
 }
 

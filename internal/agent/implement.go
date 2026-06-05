@@ -1198,18 +1198,26 @@ const (
 
 const largeCommandOutputThresholdChars = 20_000
 
-// contextHandoffPollInterval is how often the implementation waiter samples
-// session token usage to decide whether to send the handoff message.
-// Declared as var (not const) so tests can override it without a flag plumb.
+// contextHandoffPollInterval is how often the waiter samples token usage.
+// contextHandoffReassertPolls is how many ticks between re-sends of the
+// wind-down nudge while still over threshold (~30s at the 2s poll). Vars (not
+// consts) so tests can override without a flag plumb.
 var (
 	contextHandoffPollIntervalMu sync.RWMutex
 	contextHandoffPollInterval   = 2 * time.Second
+	contextHandoffReassertPolls  = 15
 )
 
 func currentContextHandoffPollInterval() time.Duration {
 	contextHandoffPollIntervalMu.RLock()
 	defer contextHandoffPollIntervalMu.RUnlock()
 	return contextHandoffPollInterval
+}
+
+func currentContextHandoffReassertPolls() int {
+	contextHandoffPollIntervalMu.RLock()
+	defer contextHandoffPollIntervalMu.RUnlock()
+	return contextHandoffReassertPolls
 }
 
 type contextSnapshot struct {
@@ -1320,10 +1328,6 @@ func formatContextHandoffMessageForRole(role string, snap contextSnapshot) strin
 		snap.TotalTokens, snap.ThresholdTokens, role)
 }
 
-func formatContextHandoffMessage(snap contextSnapshot) string {
-	return formatContextHandoffMessageForRole("implement", snap)
-}
-
 func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot, thresholdTokens int) *ContextMeta {
 	if sess == nil {
 		return nil
@@ -1419,6 +1423,7 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 		defer handoffTicker.Stop()
 	}
 	handoffSent := false
+	pollsSinceHandoff := 0
 	handoff := contextSnapshot{
 		Pct:             -1,
 		ThresholdTokens: thresholdTokens,
@@ -1485,25 +1490,36 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 			if opts.ContextHandoffPollHook != nil {
 				opts.ContextHandoffPollHook()
 			}
-			if opts.ContextHandoffDisabled || handoffSent {
+			if opts.ContextHandoffDisabled {
 				continue
 			}
 			snap := currentContextSnapshot(sess, thresholdTokens)
 			if snap.TotalTokens < thresholdTokens {
 				continue
 			}
+			// Re-assert while over threshold (not once): a nudge queued behind a
+			// sub-agent fan-out is otherwise ignored as context runs past the cap.
+			if handoffSent {
+				pollsSinceHandoff++
+				if pollsSinceHandoff < currentContextHandoffReassertPolls() {
+					continue
+				}
+			}
 			role := opts.ContextHandoffRole
 			if role == "" {
 				role = "implement"
 			}
 			if err := sess.SendUserMessage(formatContextHandoffMessageForRole(role, snap)); err == nil {
-				handoffSent = true
-				handoff = snap
-				if opts.OnContextHandoff != nil {
-					opts.OnContextHandoff(snap)
+				pollsSinceHandoff = 0
+				// Fire telemetry / record the snapshot only on the first crossing.
+				if !handoffSent {
+					handoffSent = true
+					handoff = snap
+					if opts.OnContextHandoff != nil {
+						opts.OnContextHandoff(snap)
+					}
 				}
 			}
-			// On send error, leave handoffSent=false so a later tick retries.
 
 		case <-doneCh:
 			// Session exited — drain StatusCh for any pending status

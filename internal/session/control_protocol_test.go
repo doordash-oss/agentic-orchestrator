@@ -877,3 +877,128 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 		t.Errorf("qaLog[0] = %+v, want {Which DB? PostgreSQL}", s.qaLog[0])
 	}
 }
+
+// TestSmartZoneFillTracksMainThreadOnly is the end-to-end run-020 regression
+// guard. It drives the REAL codex Protocol (as the session's protocol) with a
+// main-thread tokenUsage event followed by a sub-agent tokenUsage event whose
+// Last.TotalTokens spikes to ~241K (mirroring the sub-agent threads that flapped
+// the Smart Zone fill in run-020). It asserts the session's ContextFillTokens()
+// continues to report the main thread's 127K, not the 241K sub-agent spike, and
+// that ContextPercentage() stays well under the 100K threshold's window. Because
+// it routes raw JSON-RPC lines through codex.Protocol.ParseLine into the real
+// session consumer (session.go:912-944), it pins the full contract: the codex
+// layer must drop sub-agent context-fill AND the session guard must skip the
+// zero-window update. A regression in either layer fails this test.
+func TestSmartZoneFillTracksMainThreadOnly(t *testing.T) {
+	const mainThread = "thread-main"
+	const window = 272000 // gpt-5-codex-class window
+
+	// rpcLine builds a raw JSON-RPC notification line for a tokenUsage event,
+	// exactly as the Codex CLI emits on stdout.
+	rpcLine := func(threadID string, lastTotal, lastInput int) string {
+		ctxWindow := window
+		params := codex.TokenUsageUpdatedParams{
+			ThreadID: threadID,
+			TurnID:   "turn-1",
+			TokenUsage: codex.ThreadTokenUsage{
+				ModelContextWindow: &ctxWindow,
+				Total: codex.TokenUsageBreakdown{
+					InputTokens:  lastInput,
+					OutputTokens: 1000,
+				},
+				Last: codex.TokenUsageBreakdown{
+					InputTokens: lastInput,
+					TotalTokens: lastTotal,
+				},
+			},
+		}
+		paramsJSON, err := json.Marshal(params)
+		if err != nil {
+			t.Fatalf("marshal params: %v", err)
+		}
+		envelope := struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}{Method: "thread/tokenUsage/updated", Params: paramsJSON}
+		lineJSON, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatalf("marshal envelope: %v", err)
+		}
+		return string(lineJSON)
+	}
+
+	s := NewSession("smartzone-fanout", "feat-sz", feature.PhaseResearch)
+	proto := codex.NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+	proto.SetThreadIDForTest(mainThread)
+	s.protocol = proto
+
+	runSessionWithStdoutLines(t, s, []string{
+		// Main thread climbs to 127K.
+		rpcLine(mainThread, 127000, 120000),
+		// Sub-agent thread independently spikes to 241K — must NOT move the fill.
+		rpcLine("thread-subagent-1", 241000, 235000),
+		// A second sub-agent also spikes.
+		rpcLine("thread-subagent-2", 238000, 232000),
+		// Main thread reports again, slightly higher.
+		rpcLine(mainThread, 130000, 123000),
+	}, nil)
+
+	if got := s.ContextFillTokens(); got != 130000 {
+		t.Errorf("ContextFillTokens() = %d, want 130000 (main thread only, not sub-agent 241K spike)", got)
+	}
+
+	// ContextPercentage uses the 12K baseline both sides:
+	// (130000-12000) / (272000-12000) = 118000/260000 = 45%. The key property is
+	// that it reflects the main thread, not the sub-agent spike (which would be
+	// (241000-12000)/260000 = 88%).
+	pct := s.ContextPercentage()
+	if pct != 45 {
+		t.Errorf("ContextPercentage() = %d, want 45 (main thread fill, not sub-agent spike)", pct)
+	}
+}
+
+// TestSmartZoneFillSubAgentBeforeMainStaysUnset verifies that when only sub-agent
+// tokenUsage events have been seen (no main-thread fill yet), the session reports
+// no fill snapshot rather than adopting a sub-agent's spike. This guards the case
+// where a fan-out's sub-agents report before the main thread's first usage update.
+func TestSmartZoneFillSubAgentBeforeMainStaysUnset(t *testing.T) {
+	const mainThread = "thread-main"
+	const window = 272000
+
+	rpcLine := func(threadID string, lastTotal int) string {
+		ctxWindow := window
+		params := codex.TokenUsageUpdatedParams{
+			ThreadID: threadID,
+			TurnID:   "turn-1",
+			TokenUsage: codex.ThreadTokenUsage{
+				ModelContextWindow: &ctxWindow,
+				Total:              codex.TokenUsageBreakdown{InputTokens: 5000, OutputTokens: 500},
+				Last:               codex.TokenUsageBreakdown{InputTokens: lastTotal, TotalTokens: lastTotal},
+			},
+		}
+		paramsJSON, _ := json.Marshal(params)
+		envelope := struct {
+			Method string          `json:"method"`
+			Params json.RawMessage `json:"params"`
+		}{Method: "thread/tokenUsage/updated", Params: paramsJSON}
+		lineJSON, _ := json.Marshal(envelope)
+		return string(lineJSON)
+	}
+
+	s := NewSession("smartzone-suba-first", "feat-sz2", feature.PhaseResearch)
+	proto := codex.NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
+	proto.SetThreadIDForTest(mainThread)
+	s.protocol = proto
+
+	runSessionWithStdoutLines(t, s, []string{
+		rpcLine("thread-subagent-1", 240000),
+		rpcLine("thread-subagent-2", 230000),
+	}, nil)
+
+	// No main-thread fill ever arrived, so the session guard (ContextWindow>0,
+	// left zero for sub-agents) never wrote latestUsage. ContextFillTokens
+	// returns -1 (no snapshot) rather than a sub-agent spike.
+	if got := s.ContextFillTokens(); got != -1 {
+		t.Errorf("ContextFillTokens() = %d, want -1 (no main-thread fill seen; sub-agent spikes ignored)", got)
+	}
+}

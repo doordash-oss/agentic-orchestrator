@@ -3673,17 +3673,15 @@ func TestDashboardPreviewSmartZoneContext(t *testing.T) {
 		t.Errorf("smartZoneContextForFeature = %+v, want %+v", got, want)
 	}
 
-	// The compact view should render the token threshold triple when context
-	// usage is set on the model.
-	// This verifies the full rendering path from session usage → compact preview.
+	// The compact view should render the context triple WINDOW-relative (fill /
+	// window (pct)), matching the live-preview Context box — not Smart-Zone-
+	// relative. This verifies the full rendering path from session usage →
+	// compact preview.
 	dm := NewDetailModel(f, "")
-	dm.contextUsage = got
+	dm.contextBox = contextBoxForSession(sess)
 	compact := dm.ViewCompact(80)
-	if !strings.Contains(compact, "50K / 100K (50%)") {
-		t.Errorf("expected Smart Zone context in compact view, got:\n%s", compact)
-	}
-	if strings.Contains(compact, "25%") {
-		t.Errorf("raw window percentage should not appear in compact view, got:\n%s", compact)
+	if !strings.Contains(compact, "50K / 200K (25%)") {
+		t.Errorf("expected window-relative context in compact view, got:\n%s", compact)
 	}
 
 	app.dashboard.SetFeatures([]*feature.Feature{f})
@@ -3691,11 +3689,13 @@ func TestDashboardPreviewSmartZoneContext(t *testing.T) {
 	app.dashboard.syncPreview()
 	app.dashboard.focusPanel = 1
 	view := stripANSI(app.View().Content)
-	if !strings.Contains(view, "Context") || !strings.Contains(view, "50K / 100K (50%)") {
-		t.Errorf("expected live preview top box to include Smart Zone context, got:\n%s", view)
-	}
-	if strings.Contains(view, "25%") {
-		t.Errorf("raw window percentage should not appear in live preview, got:\n%s", view)
+	// The live preview now renders the multi-line Context box: main fill is
+	// shown against the real window (200K → 25%), with the Smart Zone threshold
+	// on its own line and an active sub-agent summary.
+	for _, want := range []string{"Context", "Main:", "50K / 200K (25%)", "Smart Zone:", "100K", "Sub-agents:", "0 · max 0K"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("expected live preview Context box to include %q, got:\n%s", want, view)
+		}
 	}
 }
 

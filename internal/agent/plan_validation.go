@@ -648,7 +648,8 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	feedbackPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
 	parentFeedbackPath := filepath.Join(attemptDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
 
-	validationPrompt := buildSpecializedValidationPromptForArtifact(cfg.Feature, planArtifactPath, cfg.ResearchArtifactPath, cfg.SkillsDir, feedbackPath, domain, kind, extras)
+	// Research is for Design/Roadmap only; plan validation does not consume it.
+	validationPrompt := buildSpecializedValidationPromptForArtifact(cfg.Feature, planArtifactPath, "", cfg.SkillsDir, feedbackPath, domain, kind, extras)
 	validatorSpec, ok := PlanValidatorRoleForSkill(domain.Template)
 	if !ok {
 		return ReviewFailed, "", ValidatorMarkers{}, fmt.Errorf("missing validator RoleSpec for skill %q", domain.Template)

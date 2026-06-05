@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -133,6 +134,86 @@ func (t *SubagentProgressTracker) Install(sess interface {
 				totalTokens, toolUses, durationMs)
 		}
 	})
+}
+
+// defaultSubAgentContextThresholdPct is the fraction (percent) of a
+// sub-agent's OWN context window at which we flag it. Sub-agents are
+// disposable and return only a concise summary, so a fill near the window
+// risks a silently truncated/degraded summary the main agent banks as
+// complete. 75% leaves headroom for the sub-agent to wrap up cleanly.
+const defaultSubAgentContextThresholdPct = 75
+
+// SubAgentContextTracker forwards per-sub-thread context-fill snapshots from a
+// session to the Observer, emitting context.subagent_high exactly once per
+// sub-thread (high-water) when its fill crosses ThresholdPct of its own
+// window. This is a SEPARATE observability channel from the main-only Smart
+// Zone fill — it can never move the main agent's context %.
+type SubAgentContextTracker struct {
+	Observer     *observe.Observer
+	SC           observe.SpanContext
+	Phase        string
+	SessionID    string
+	RepoName     string
+	Iteration    int
+	ThresholdPct int // 0 falls back to defaultSubAgentContextThresholdPct
+
+	mu    sync.Mutex
+	fired map[string]struct{} // sub-thread IDs already flagged
+}
+
+// Install registers an onSubagentContext callback on the session that flags a
+// sub-agent whose own context fill crosses the threshold, at most once per
+// sub-thread. No-op on a nil tracker or one with a nil Observer.
+func (t *SubAgentContextTracker) Install(sess interface {
+	SetOnSubagentContext(func(llm.SubAgentContext))
+}) {
+	if t == nil || t.Observer == nil {
+		return
+	}
+	threshold := t.ThresholdPct
+	if threshold <= 0 {
+		threshold = defaultSubAgentContextThresholdPct
+	}
+	sess.SetOnSubagentContext(func(sub llm.SubAgentContext) {
+		if sub.WindowTokens <= 0 || sub.FillTokens <= 0 {
+			return
+		}
+		pct := sub.FillTokens * 100 / sub.WindowTokens
+		if pct < threshold {
+			return
+		}
+		// High-water: emit once per sub-thread. A sub-thread that crosses
+		// the threshold keeps sending updates as it grows; we want a single
+		// flag, not a stream.
+		t.mu.Lock()
+		if t.fired == nil {
+			t.fired = make(map[string]struct{})
+		}
+		if _, seen := t.fired[sub.ThreadID]; seen {
+			t.mu.Unlock()
+			return
+		}
+		t.fired[sub.ThreadID] = struct{}{}
+		t.mu.Unlock()
+
+		t.Observer.ContextSubAgentHigh(t.SC, t.Phase, t.SessionID, t.RepoName,
+			t.Iteration, sub.ThreadID, pct, threshold, sub.FillTokens, sub.WindowTokens)
+	})
+}
+
+// installSubagentContextTracker is a convenience method on PhaseRunner that
+// creates a SubAgentContextTracker and installs it on the session alongside
+// the other context trackers.
+func (pr *PhaseRunner) installSubagentContextTracker(sess interface {
+	SetOnSubagentContext(func(llm.SubAgentContext))
+}, sc observe.SpanContext, phase, sessionID string) {
+	tracker := &SubAgentContextTracker{
+		Observer:  pr.Observer,
+		SC:        sc,
+		Phase:     phase,
+		SessionID: sessionID,
+	}
+	tracker.Install(sess)
 }
 
 // taskUsageFields unpacks a *llm.TaskUsage into its three numeric fields,

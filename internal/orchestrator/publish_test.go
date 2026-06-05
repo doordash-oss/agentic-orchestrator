@@ -533,14 +533,17 @@ func (s *publishDescriptionSessionHandle) LogFilePath() string     { return "" }
 func (s *publishDescriptionSessionHandle) ContextHandoffThresholdTokens() int {
 	return llm.DefaultSmartZoneThresholdTokens
 }
-func (s *publishDescriptionSessionHandle) ContextFillTokens() int          { return -1 }
-func (s *publishDescriptionSessionHandle) ContextPercentage() int          { return 0 }
-func (s *publishDescriptionSessionHandle) ErrorDetail() string             { return "" }
-func (s *publishDescriptionSessionHandle) ExitCodeDetail() string          { return "" }
-func (s *publishDescriptionSessionHandle) LastStdoutAt() time.Time         { return time.Time{} }
-func (s *publishDescriptionSessionHandle) StatusCh() <-chan string         { return s.statusCh }
-func (s *publishDescriptionSessionHandle) AttachCh() <-chan llm.SDKMessage { return s.attachCh }
-func (s *publishDescriptionSessionHandle) Done() <-chan struct{}           { return s.done }
+func (s *publishDescriptionSessionHandle) ContextFillTokens() int           { return -1 }
+func (s *publishDescriptionSessionHandle) ContextWindowTokens() int         { return 0 }
+func (s *publishDescriptionSessionHandle) ContextPercentage() int           { return 0 }
+func (s *publishDescriptionSessionHandle) ActiveSubAgentCount() int         { return 0 }
+func (s *publishDescriptionSessionHandle) MaxActiveSubAgentFillTokens() int { return 0 }
+func (s *publishDescriptionSessionHandle) ErrorDetail() string              { return "" }
+func (s *publishDescriptionSessionHandle) ExitCodeDetail() string           { return "" }
+func (s *publishDescriptionSessionHandle) LastStdoutAt() time.Time          { return time.Time{} }
+func (s *publishDescriptionSessionHandle) StatusCh() <-chan string          { return s.statusCh }
+func (s *publishDescriptionSessionHandle) AttachCh() <-chan llm.SDKMessage  { return s.attachCh }
+func (s *publishDescriptionSessionHandle) Done() <-chan struct{}            { return s.done }
 func (s *publishDescriptionSessionHandle) HasPendingAskUserQuestion() bool {
 	return false
 }
@@ -565,6 +568,8 @@ func (s *publishDescriptionSessionHandle) SetOnToolAllowed(fn func(toolName stri
 }
 func (s *publishDescriptionSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
 func (s *publishDescriptionSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
+func (s *publishDescriptionSessionHandle) SetOnSubagentContext(fn func(sub llm.SubAgentContext)) {
+}
 
 var _ session.SessionHandle = (*publishDescriptionSessionHandle)(nil)
 

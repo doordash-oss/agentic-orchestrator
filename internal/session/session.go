@@ -100,11 +100,22 @@ type Session struct {
 	protocol llm.Protocol
 
 	// SDK protocol fields
-	model            string      // from SystemInitMessage — e.g. "opus[1m]", "sonnet"
-	latestUsage      *llm.Usage  // most recent usage from a non-partial assistant message
-	accumulatedUsage llm.Usage   // cumulative usage across all messages
-	messageLog       *MessageLog // structured message log
-	cost             *llm.ResultMessage
+	model            string     // from SystemInitMessage — e.g. "opus[1m]", "sonnet"
+	latestUsage      *llm.Usage // most recent usage from a non-partial assistant message
+	accumulatedUsage llm.Usage  // cumulative usage across all messages
+
+	// subAgents tracks the most recent context-fill snapshot per NON-main
+	// (sub-agent) thread, keyed by sub-thread id. It is observability-only and
+	// is NEVER folded into latestUsage / ContextFillTokens — keeping the Smart
+	// Zone main-only. Populated from msg.SubAgentContext in readMessages under
+	// s.mu; a Done snapshot marks the thread inactive (lifecycle), so the live
+	// preview can report the count of currently-active sub-agents.
+	subAgents map[string]subAgentState
+	// subAgentClock overrides time.Now for the sub-agent recency TTL; nil in
+	// production. Tests set it to exercise staleness deterministically.
+	subAgentClock func() time.Time
+	messageLog    *MessageLog // structured message log
+	cost          *llm.ResultMessage
 
 	// statusCh carries the SDK-derived session lifecycle status:
 	// "SUCCESS" / "API_ERROR" / "FAILED" (see resultSubtypeToStatus).
@@ -153,6 +164,13 @@ type Session struct {
 	// subagent heartbeats to events.jsonl while the main agent is blocked
 	// in a Task() call. Codex does not emit these messages.
 	onSubagentEvent func(msg llm.SDKMessage)
+
+	// onSubagentContext is called when a usage update carries a context-fill
+	// snapshot for a NON-main (sub-agent) thread (msg.SubAgentContext is
+	// non-nil). This is a SEPARATE channel from the main-only context fill so
+	// observing a sub-agent's window never moves the Smart Zone. Used by the
+	// agent layer to flag a sub-agent crossing a fraction of its own window.
+	onSubagentContext func(sub llm.SubAgentContext)
 
 	// For attach mode: subscribers receive copies of messages
 	attachCh                  chan llm.SDKMessage
@@ -898,7 +916,10 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		// arrive on a partial-subtype message, so we do not filter by subtype.
 		if msg.Assistant != nil && msg.Assistant.Message.Usage != nil {
 			s.mu.Lock()
-			s.latestUsage = msg.Assistant.Message.Usage
+			// Main-only fill: sub-agent usage must not move the main snapshot.
+			if !msg.SubAgentTurn {
+				s.latestUsage = msg.Assistant.Message.Usage
+			}
 			// Accumulate: ADD per-message usage (Claude path — each message is a delta)
 			u := msg.Assistant.Message.Usage
 			s.accumulatedUsage.InputTokens += u.InputTokens
@@ -963,13 +984,43 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			}
 		}
 
-		// Notify subagent (Task tool) lifecycle callback. These messages
-		// are the main signal that a Task() call is still alive while the
-		// main agent is blocked waiting for it to return, so we surface
-		// them even though they don't otherwise affect session state.
-		// Codex does not emit these.
-		if (msg.TaskStarted != nil || msg.TaskProgress != nil || msg.TaskNotification != nil) && s.onSubagentEvent != nil {
-			s.onSubagentEvent(msg)
+		// Subagent (Task tool) lifecycle: the Claude counterpart to Codex's msg.SubAgentContext.
+		if msg.TaskStarted != nil || msg.TaskProgress != nil || msg.TaskNotification != nil {
+			sub, ok := subAgentContextFromTask(msg)
+			s.mu.Lock()
+			if ok {
+				s.recordSubAgentContextLocked(sub)
+			}
+			onEvent := s.onSubagentEvent
+			onSubCtx := s.onSubagentContext
+			s.mu.Unlock()
+			if onEvent != nil {
+				onEvent(msg)
+			}
+			if ok && onSubCtx != nil {
+				onSubCtx(sub)
+			}
+		}
+
+		// Notify sub-agent context-fill callback. This rides a usage_update
+		// on its own field and is observability-only: it deliberately does
+		// NOT touch latestUsage / accumulatedUsage, keeping the Smart Zone
+		// main-only. Codex does not emit these for the main thread.
+		//
+		// Snapshot the callback under s.mu before invoking it: the setter
+		// (SetOnSubagentContext) writes this field under the same lock from a
+		// caller goroutine while this reader goroutine is already live (Start
+		// launches readMessages before the agent layer installs the tracker),
+		// so an unguarded read would race the write. The callback is invoked
+		// outside the lock so its Observer file I/O cannot self-deadlock.
+		if msg.SubAgentContext != nil {
+			s.mu.Lock()
+			s.recordSubAgentContextLocked(*msg.SubAgentContext)
+			onSubCtx := s.onSubagentContext
+			s.mu.Unlock()
+			if onSubCtx != nil {
+				onSubCtx(*msg.SubAgentContext)
+			}
 		}
 
 		// Stream events (from --include-partial-messages) are low-level API
@@ -1824,6 +1875,159 @@ func contextFillTokens(usage *llm.Usage) int {
 	return usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
 }
 
+// subAgentState is the last-known context-fill snapshot for one NON-main
+// (sub-agent) thread, plus whether that thread is still active. Observability
+// only — never folded into the main Smart Zone fill.
+//
+// Activity is determined primarily by LIFECYCLE: a fill snapshot marks the
+// thread active and a Done snapshot (turn/completed) marks it inactive. Two
+// safeguards harden this against unreliable lifecycle ordering:
+//   - done is sticky: once a turn/completed has been observed for a thread, a
+//     late fill snapshot (a provider may flush a final tokenUsage AFTER the
+//     turn finished) must NOT resurrect it — otherwise the count would never
+//     drop to 0 after a fan-out completes.
+//   - lastUpdate timestamps every fill snapshot so a thread that never emits a
+//     Done (e.g. interrupted/killed) is still treated as inactive once it goes
+//     stale, via subAgentActiveTTL. Lifecycle wins; recency is the backstop.
+type subAgentState struct {
+	fillTokens   int
+	windowTokens int
+	active       bool
+	done         bool
+	lastUpdate   time.Time
+}
+
+// subAgentActiveTTL bounds how long a sub-agent thread is considered active
+// after its last fill snapshot when no turn/completed (Done) has arrived. It
+// is a backstop for unreliable/absent lifecycle signals so the active count
+// reliably falls to 0 after a fan-out finishes; lifecycle Done clears a thread
+// immediately and takes precedence.
+const subAgentActiveTTL = 90 * time.Second
+
+// subAgentContextFromTask maps a Claude Task lifecycle message to a SubAgentContext.
+// WindowTokens stays 0 because Task usage is cumulative consumption, not window occupancy.
+func subAgentContextFromTask(msg llm.SDKMessage) (llm.SubAgentContext, bool) {
+	switch {
+	case msg.TaskStarted != nil:
+		id := msg.TaskStarted.TaskID
+		return llm.SubAgentContext{ThreadID: id}, id != ""
+	case msg.TaskProgress != nil:
+		id := msg.TaskProgress.TaskID
+		fill := 0
+		if msg.TaskProgress.Usage != nil {
+			fill = msg.TaskProgress.Usage.TotalTokens
+		}
+		return llm.SubAgentContext{ThreadID: id, FillTokens: fill}, id != ""
+	case msg.TaskNotification != nil:
+		id := msg.TaskNotification.TaskID
+		return llm.SubAgentContext{ThreadID: id, Done: true}, id != ""
+	}
+	return llm.SubAgentContext{}, false
+}
+
+// recordSubAgentContextLocked folds a sub-agent context snapshot into the
+// per-sub-thread map. Caller MUST hold s.mu. A Done snapshot marks the
+// sub-thread inactive (lifecycle); a fill snapshot updates its tokens and
+// (re)marks it active. This never touches latestUsage / accumulatedUsage, so
+// the main-only Smart Zone fill is unaffected.
+func (s *Session) recordSubAgentContextLocked(sub llm.SubAgentContext) {
+	if sub.ThreadID == "" {
+		return
+	}
+	if s.subAgents == nil {
+		s.subAgents = make(map[string]subAgentState)
+	}
+	st := s.subAgents[sub.ThreadID]
+	if sub.Done {
+		// Lifecycle completion: mark inactive and sticky so a late fill
+		// snapshot can't resurrect a finished sub-agent.
+		st.active = false
+		st.done = true
+		s.subAgents[sub.ThreadID] = st
+		return
+	}
+	if st.done {
+		// A turn/completed already retired this thread; record the fresher
+		// fill for inspection but do NOT re-activate it.
+		st.fillTokens = sub.FillTokens
+		st.windowTokens = sub.WindowTokens
+		st.lastUpdate = s.subAgentNow()
+		s.subAgents[sub.ThreadID] = st
+		return
+	}
+	s.subAgents[sub.ThreadID] = subAgentState{
+		fillTokens:   sub.FillTokens,
+		windowTokens: sub.WindowTokens,
+		active:       true,
+		lastUpdate:   s.subAgentNow(),
+	}
+}
+
+// subAgentClockFn lets tests drive the recency TTL deterministically. When nil
+// the real wall clock is used. Caller holds s.mu.
+func (s *Session) subAgentNow() time.Time {
+	if s.subAgentClock != nil {
+		return s.subAgentClock()
+	}
+	return time.Now()
+}
+
+// subAgentIsActiveLocked reports whether a sub-agent thread should currently be
+// counted as active. Lifecycle wins (done => inactive); otherwise the entry is
+// active only while its last fill snapshot is within subAgentActiveTTL. Caller
+// holds s.mu.
+func (s *Session) subAgentIsActiveLocked(st subAgentState) bool {
+	if !st.active || st.done {
+		return false
+	}
+	if st.lastUpdate.IsZero() {
+		return st.active
+	}
+	return s.subAgentNow().Sub(st.lastUpdate) < subAgentActiveTTL
+}
+
+// ActiveSubAgentCount returns the number of sub-agent threads currently
+// considered active (a fill snapshot has arrived and no turn/completed has
+// marked them done). Activity is determined primarily by lifecycle, with a
+// recency TTL backstop (subAgentActiveTTL) for threads that never emit a Done.
+// Returns 0 when none are active or for providers without sub-thread reporting.
+func (s *Session) ActiveSubAgentCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, st := range s.subAgents {
+		if s.subAgentIsActiveLocked(st) {
+			count++
+		}
+	}
+	return count
+}
+
+// MaxActiveSubAgentFillTokens returns the largest fill (in tokens) among the
+// currently-active sub-agent threads, or 0 when none are active.
+func (s *Session) MaxActiveSubAgentFillTokens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	maxFill := 0
+	for _, st := range s.subAgents {
+		if s.subAgentIsActiveLocked(st) && st.fillTokens > maxFill {
+			maxFill = st.fillTokens
+		}
+	}
+	return maxFill
+}
+
+// ContextWindowTokens returns the main thread's context window size in tokens,
+// or 0 when not yet known (no usage snapshot has carried a window).
+func (s *Session) ContextWindowTokens() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.latestUsage != nil {
+		return s.latestUsage.ContextWindow
+	}
+	return 0
+}
+
 // ResetWaitingStatus transitions the session out of a waiting state.
 func (s *Session) ResetWaitingStatus() {
 	s.mu.Lock()
@@ -1856,6 +2060,15 @@ func (s *Session) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onSubagentEvent = fn
+}
+
+// SetOnSubagentContext registers a callback invoked whenever a usage update
+// carries a context-fill snapshot for a sub-agent thread. The callback is
+// fire-and-forget and must not block on channel sends or I/O.
+func (s *Session) SetOnSubagentContext(fn func(sub llm.SubAgentContext)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onSubagentContext = fn
 }
 
 func (s *Session) AddCleanupFunc(fn func()) {

@@ -145,15 +145,6 @@ func TestParseLedgerBlock_DoneRequiresDecisionWhenRequired(t *testing.T) {
 	}
 }
 
-func TestParseLedgerBlock_DecisionTooLongIsViolation(t *testing.T) {
-	long := strings.Repeat("x", ledgerDecisionMaxChars+1)
-	body := ledgerSection("units:\n  - id: d1\n    status: done\n    decision: " + long)
-	_, violations := parseLedgerBlock(body, true, false)
-	if !hasSubstr(violations, "keep it <=") {
-		t.Fatalf("violations = %v, want a too-long-decision violation", violations)
-	}
-}
-
 func TestParseLedgerBlock_CompleteWithPendingIsViolation(t *testing.T) {
 	body := ledgerSection("units:\n  - id: u1\n    status: pending")
 	_, violations := parseLedgerBlock(body, false, true)

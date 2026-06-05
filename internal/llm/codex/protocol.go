@@ -663,6 +663,12 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 	}
 }
 
+// isMainThread reports whether threadID belongs to the main agent thread.
+// Callers MUST hold p.mu: it reads the shared p.threadID without locking, and
+// every call site (item/started, turn/completed, agentMessage delta, the
+// tokenUsage handler) invokes it from inside a held p.mu block. An empty
+// threadID, or an as-yet-unassigned p.threadID (pre-handshake / non-fan-out
+// flows), is treated as the main thread so single-agent behavior is preserved.
 func (p *Protocol) isMainThread(threadID string) bool {
 	mainThread := p.threadID
 	return threadID == "" || mainThread == "" || threadID == mainThread
@@ -724,7 +730,15 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		isMainTurn := p.isMainThread(completed.ThreadID)
 		p.mu.Unlock()
 		if !isMainTurn {
-			return llm.SDKMessage{}, false
+			// A sub-thread's turn finished. Surface a lifecycle-only signal on
+			// the SubAgentContext channel (Done) so observers can mark the
+			// sub-agent inactive. This carries no fill/window and never touches
+			// the main-only Context* fields, mirroring the fill snapshot path
+			// in thread/tokenUsage/updated.
+			return llm.SDKMessage{
+				Type:            "usage_update",
+				SubAgentContext: &llm.SubAgentContext{ThreadID: completed.ThreadID, Done: true},
+			}, true
 		}
 
 		switch completed.Turn.Status {
@@ -872,6 +886,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 		// Total = lifetime cumulative (for cost calculation on turn completion).
 		// Last = current context fill (resets on compaction; use for context %).
+		//
+		// isMain is captured under p.mu (matching every other isMainThread call
+		// site, e.g. turn/completed at :734): p.threadID is also read by
+		// startTurn/sendFollowUpTurn on caller goroutines, so the field is
+		// cross-goroutine shared and the convention is to read it locked.
+		// isMainThread itself does NOT lock (it would self-deadlock here and at
+		// the other in-lock call sites); callers hold p.mu.
 		p.mu.Lock()
 		p.inputTokens = usage.TokenUsage.Total.InputTokens
 		p.outputTokens = usage.TokenUsage.Total.OutputTokens
@@ -879,26 +900,53 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.modelContextWindow = *usage.TokenUsage.ModelContextWindow
 		}
 		ctxWindow := p.modelContextWindow
+		isMain := p.isMainThread(usage.ThreadID)
 		p.mu.Unlock()
 
 		// Surface as synthetic SDKMessage so session layer can accumulate.
 		// Total = lifetime cumulative (for cost); Last = current context fill
 		// (resets on compaction, for context % display).
+		update := &llm.Usage{
+			InputTokens:  usage.TokenUsage.Total.InputTokens,
+			OutputTokens: usage.TokenUsage.Total.OutputTokens,
+		}
+		// Context-fill fields reflect the MAIN thread ONLY. Sub-agent threads
+		// each run in their own context window; including them makes the Smart
+		// Zone fill track the SUM of all in-flight sub-agents instead of the
+		// main agent's own context, firing the handoff the instant a fan-out
+		// spins up. Leaving these zero for sub-threads lets the session's
+		// 'ContextWindow > 0' guard skip the fill update. Cost fields (Total)
+		// are still emitted for every thread.
 		//
 		// ContextTotalTokens carries Last.TotalTokens (input + output +
 		// reasoning) so the session's ContextPercentage() can match Codex's
 		// own `/status` formula: (total - baseline) / (window - baseline).
-		return llm.SDKMessage{
-			Type: "usage_update",
-			UsageUpdate: &llm.Usage{
-				InputTokens:        usage.TokenUsage.Total.InputTokens,
-				OutputTokens:       usage.TokenUsage.Total.OutputTokens,
-				ContextInputTokens: usage.TokenUsage.Last.InputTokens,
-				ContextTotalTokens: usage.TokenUsage.Last.TotalTokens,
-				ContextBaseline:    codexContextBaselineTokens,
-				ContextWindow:      ctxWindow,
-			},
-		}, true
+		if isMain {
+			update.ContextInputTokens = usage.TokenUsage.Last.InputTokens
+			update.ContextTotalTokens = usage.TokenUsage.Last.TotalTokens
+			update.ContextBaseline = codexContextBaselineTokens
+			update.ContextWindow = ctxWindow
+		}
+		// Sub-agent threads travel on a SEPARATE field so their fill never
+		// touches the main-only Context* fields above. Observability (the
+		// SubAgentContextTracker) consumes this to flag a sub-agent that
+		// crosses a fraction of its OWN window. We only emit when both fill
+		// and window are known and net of the same baseline the main thread
+		// uses, so FillTokens / WindowTokens is directly comparable to the
+		// Smart Zone formula. threadID is read under p.mu above.
+		var subCtx *llm.SubAgentContext
+		if !isMain && ctxWindow > 0 && usage.TokenUsage.Last.TotalTokens > 0 {
+			fill := usage.TokenUsage.Last.TotalTokens - codexContextBaselineTokens
+			window := ctxWindow - codexContextBaselineTokens
+			if fill > 0 && window > 0 {
+				subCtx = &llm.SubAgentContext{
+					ThreadID:     usage.ThreadID,
+					FillTokens:   fill,
+					WindowTokens: window,
+				}
+			}
+		}
+		return llm.SDKMessage{Type: "usage_update", UsageUpdate: update, SubAgentContext: subCtx}, true
 
 	case "item/commandExecution/outputDelta":
 		var delta CommandOutputDelta

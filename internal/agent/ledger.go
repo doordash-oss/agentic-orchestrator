@@ -30,10 +30,6 @@ const (
 	ledgerUnitStatusDone    = "done"
 )
 
-// ledgerDecisionMaxChars bounds the per-unit decision summary so the
-// decisions-so-far carry-forward stays compact (Design/Plan only).
-const ledgerDecisionMaxChars = 300
-
 // ledgerIDRE is the stable-slug rule for unit IDs: alphanumerics and hyphens.
 var ledgerIDRE = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
@@ -160,13 +156,8 @@ func parseLedgerBlock(sectionBody string, requireDecision, completeState bool) (
 		case ledgerUnitStatusPending:
 			pending++
 		case ledgerUnitStatusDone:
-			if requireDecision {
-				dec := strings.TrimSpace(u.Decision)
-				if dec == "" {
-					violations = append(violations, fmt.Sprintf("`## Ledger` unit %q is done but missing the required `decision` field", id))
-				} else if len(dec) > ledgerDecisionMaxChars {
-					violations = append(violations, fmt.Sprintf("`## Ledger` unit %q decision is %d chars; keep it <= %d (the chosen option + load-bearing interface/section, ~2 sentences)", id, len(dec), ledgerDecisionMaxChars))
-				}
+			if requireDecision && strings.TrimSpace(u.Decision) == "" {
+				violations = append(violations, fmt.Sprintf("`## Ledger` unit %q is done but missing the required `decision` field", id))
 			}
 		default:
 			violations = append(violations, fmt.Sprintf("`## Ledger` unit %q has status %q; must be one of {pending, done}", id, u.Status))

@@ -1712,6 +1712,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	obs.RecoveryAction(sc, "resume", "implement", true)
 	obs.ContextFileRead(sc, "implement", "s1", "kb", "/path/to/file.md")
 	obs.ContextHandoffTriggered(sc, "implement", "s1", "repo-a", "codex", 1, 81, 80, 80_000, 211000, 258400, 12000)
+	obs.ContextSubAgentHigh(sc, "research", "s1", "repo-a", 1, "sub-7", 80, 75, 188_000, 246_400)
 	exitCode := 0
 	durationMs := int64(123)
 	obs.ContextLargeOutput(sc, "implement", "s1", "repo-a", "codex", 1, "rg -n foo", 21000, 20000, &exitCode, &durationMs)
@@ -1726,8 +1727,8 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	})
 
 	events := readEvents(t, stateDir, featureID)
-	if len(events) != 29 {
-		t.Fatalf("expected 29 events, got %d", len(events))
+	if len(events) != 30 {
+		t.Fatalf("expected 30 events, got %d", len(events))
 	}
 	for i, evt := range events {
 		if evt.RunNumber != wantRun {

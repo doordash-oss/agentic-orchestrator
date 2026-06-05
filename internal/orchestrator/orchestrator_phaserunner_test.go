@@ -98,11 +98,14 @@ func (s *stubSessionHandle) LogFilePath() string                                
 func (s *stubSessionHandle) ContextHandoffThresholdTokens() int {
 	return llm.DefaultSmartZoneThresholdTokens
 }
-func (s *stubSessionHandle) ContextFillTokens() int  { return -1 }
-func (s *stubSessionHandle) ContextPercentage() int  { return 0 }
-func (s *stubSessionHandle) ErrorDetail() string     { return "" }
-func (s *stubSessionHandle) ExitCodeDetail() string  { return "" }
-func (s *stubSessionHandle) LastStdoutAt() time.Time { return time.Time{} }
+func (s *stubSessionHandle) ContextFillTokens() int           { return -1 }
+func (s *stubSessionHandle) ContextWindowTokens() int         { return 0 }
+func (s *stubSessionHandle) ContextPercentage() int           { return 0 }
+func (s *stubSessionHandle) ActiveSubAgentCount() int         { return 0 }
+func (s *stubSessionHandle) MaxActiveSubAgentFillTokens() int { return 0 }
+func (s *stubSessionHandle) ErrorDetail() string              { return "" }
+func (s *stubSessionHandle) ExitCodeDetail() string           { return "" }
+func (s *stubSessionHandle) LastStdoutAt() time.Time          { return time.Time{} }
 
 // SessionView channels.
 func (s *stubSessionHandle) StatusCh() <-chan string         { return s.statusCh }
@@ -134,8 +137,9 @@ func (s *stubSessionHandle) SetHasUnansweredQuestion(v bool)        {}
 func (s *stubSessionHandle) CloseStdin()                            {}
 func (s *stubSessionHandle) SetOnToolAllowed(fn func(toolName string, input json.RawMessage)) {
 }
-func (s *stubSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
-func (s *stubSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
+func (s *stubSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))         {}
+func (s *stubSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage))        {}
+func (s *stubSessionHandle) SetOnSubagentContext(fn func(sub llm.SubAgentContext)) {}
 
 // Compile-time check that stubSessionHandle satisfies SessionHandle.
 var _ session.SessionHandle = (*stubSessionHandle)(nil)

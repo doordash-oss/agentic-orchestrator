@@ -25,32 +25,33 @@ The design follows patterns described in Anthropic's [Building Effective Agents]
 
 ## Quick Start
 
-The fastest way to install is to download a prebuilt binary from the [latest release](https://github.com/doordash-oss/agentic-orchestrator/releases/latest) — no Go toolchain required. Prebuilt binaries are published for macOS and Linux on both amd64 and arm64.
+Use Homebrew if you have it; otherwise grab the prebuilt binary. Build from source only if you're working on agentico itself.
+
+**Homebrew** (recommended — macOS/Linux):
 
 ```bash
-# Install the latest prebuilt binary into ~/.local/bin (no sudo, macOS/Linux, amd64/arm64)
+brew install doordash-oss/agentic-orchestrator/agentico
+```
+
+**Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):
+
+```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/doordash-oss/agentic-orchestrator/releases/latest | sed 's@.*/@@')
 mkdir -p ~/.local/bin
 curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/download/${TAG}/agentic-orchestrator_${TAG#v}_${OS}_${ARCH}.tar.gz" | tar -xz -C ~/.local/bin agentico
-
-# Launch (add ~/.local/bin to your PATH first if it isn't already)
-~/.local/bin/agentico
+# ensure ~/.local/bin is on your PATH
 ```
 
-<details>
-<summary>Build from source (requires Go 1.25+)</summary>
+**From source** — for contributing to agentico (Go 1.25+):
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
-
-# Or clone and build
-git clone https://github.com/doordash-oss/agentic-orchestrator.git
-cd agentic-orchestrator && make install
+# or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-</details>
+Then run `agentico`. Update any time with `agentico update` — it uses the right method for how you installed.
 
 On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
 
@@ -252,6 +253,17 @@ Flags:
   --help, -h                       Show help
   --version, -v                    Show version
 ```
+
+### Updating
+
+```text
+agentico update [--check|-n]
+```
+
+Run `agentico update` to upgrade to the latest stable release. Use
+`agentico update --check` (alias `-n`) to report the current and latest
+available versions without installing anything; it exits `0` and prints an
+already-up-to-date message when you are on the newest release.
 
 ## Development
 

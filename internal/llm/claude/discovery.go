@@ -29,6 +29,7 @@ import (
 const (
 	claudeModelProbePrompt       = "Return exactly: OK"
 	claudeModelProbeMaxBudgetUSD = "0.05"
+	claudeModelProbeAttempts     = 2
 )
 
 // DiscoverModelCatalog resolves Agentic's curated Claude selectors against the
@@ -59,19 +60,7 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 			}
 			break
 		}
-		out, err := runner(ctx, "claude", claudeModelProbeArgs(candidate.Selector), nil)
-		if err != nil {
-			if ctx.Err() != nil {
-				if len(models) > 0 {
-					models = appendClaudeFallbacks(models, candidates[i:])
-				}
-				break
-			}
-			failures = append(failures, fmt.Sprintf("%s: %v", candidate.Selector, err))
-			continue
-		}
-
-		resolved, contextWindow, err := parseClaudeModelProbe(candidate.Selector, out)
+		resolved, contextWindow, err := probeClaudeModel(ctx, runner, candidate)
 		if err != nil {
 			if ctx.Err() != nil {
 				if len(models) > 0 {
@@ -94,6 +83,36 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 		return nil, fmt.Errorf("no Claude model probes succeeded: %s", strings.Join(failures, "; "))
 	}
 	return models, nil
+}
+
+func probeClaudeModel(ctx context.Context, runner clirun.CommandRunner, candidate claudeModelProbeCandidate) (string, int, error) {
+	var lastErr error
+	for range claudeModelProbeAttempts {
+		if err := ctx.Err(); err != nil {
+			return "", 0, err
+		}
+		out, err := runner(ctx, "claude", claudeModelProbeArgs(candidate.Selector), nil)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", 0, ctx.Err()
+			}
+			lastErr = err
+			continue
+		}
+
+		resolved, contextWindow, err := parseClaudeModelProbe(candidate.Selector, out)
+		if err == nil {
+			return resolved, contextWindow, nil
+		}
+		if ctx.Err() != nil {
+			return "", 0, ctx.Err()
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("probe for %s failed", candidate.Selector)
+	}
+	return "", 0, lastErr
 }
 
 func appendClaudeFallbacks(models []llm.ModelInfo, candidates []claudeModelProbeCandidate) []llm.ModelInfo {
@@ -161,13 +180,13 @@ func parseClaudeModelProbe(requestedModel string, out []byte) (string, int, erro
 			if msg.Result.Usage != nil && msg.Result.Usage.ContextWindow > 0 {
 				contextWindow = msg.Result.Usage.ContextWindow
 			}
-			for model, usage := range msg.Result.ModelUsage {
-				if resolvedModel == "" && model != "" {
+			if len(msg.Result.ModelUsage) == 1 && resolvedModel == "" {
+				for model := range msg.Result.ModelUsage {
 					resolvedModel = model
 				}
-				if usage.ContextWindow > 0 {
-					contextWindow = usage.ContextWindow
-				}
+			}
+			if window := contextWindowForResolvedModel(resolvedModel, msg.Result.ModelUsage); window > 0 {
+				contextWindow = window
 			}
 		}
 	}
@@ -178,4 +197,28 @@ func parseClaudeModelProbe(requestedModel string, out []byte) (string, int, erro
 		return "", 0, fmt.Errorf("probe for %s did not include model metadata", requestedModel)
 	}
 	return resolvedModel, contextWindow, nil
+}
+
+func contextWindowForResolvedModel(resolvedModel string, usage map[string]llm.ModelUsageEntry) int {
+	if len(usage) == 0 {
+		return 0
+	}
+	if resolvedModel != "" {
+		if entry, ok := usage[resolvedModel]; ok && entry.ContextWindow > 0 {
+			return entry.ContextWindow
+		}
+		for model, entry := range usage {
+			if strings.EqualFold(model, resolvedModel) && entry.ContextWindow > 0 {
+				return entry.ContextWindow
+			}
+		}
+	}
+	if len(usage) == 1 {
+		for _, entry := range usage {
+			if entry.ContextWindow > 0 {
+				return entry.ContextWindow
+			}
+		}
+	}
+	return 0
 }

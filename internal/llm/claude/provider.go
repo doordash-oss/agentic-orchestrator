@@ -260,6 +260,7 @@ type claudeModelProbeCandidate struct {
 
 func claudeModelProbeCandidates() []claudeModelProbeCandidate {
 	return []claudeModelProbeCandidate{
+		{Family: "fable", Selector: "fable", DisplayName: "Claude Fable 5", FallbackContextWindow: 1_000_000, Category: "capable"},
 		{Family: "opus", Selector: "opus", DisplayName: "Claude Opus", FallbackContextWindow: 200_000, Category: "capable"},
 		{Family: "opus", Selector: "opus[1m]", DisplayName: "Claude Opus", FallbackContextWindow: 1_000_000, Category: "capable"},
 		{Family: "sonnet", Selector: "sonnet", DisplayName: "Claude Sonnet", FallbackContextWindow: 200_000, Category: "balanced"},
@@ -320,9 +321,10 @@ func appendClaudeAlias(aliases []string, id, alias string) []string {
 // so the offline fallback has to keep curated probe selectors and context
 // windows.
 //
-// Context-window sources (verified 2026-06-05):
+// Context-window sources (verified 2026-06-09):
 //   - https://platform.claude.com/docs/en/about-claude/models/overview
 //   - https://code.claude.com/docs/en/model-config
+//   - https://platform.claude.com/docs/en/about-claude/models/introducing-claude-fable-5-and-claude-mythos-5
 //
 // The 200K base windows for opus/sonnet were confirmed empirically from
 // auto-compact thresholds observed in live Claude Code sessions

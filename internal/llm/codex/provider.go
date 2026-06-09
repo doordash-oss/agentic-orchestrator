@@ -100,6 +100,9 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 	if opts.EffortLevel != "" {
 		args = append(args, "-c", "model_reasoning_effort="+MapEffortLevel(opts.EffortLevel))
 	}
+	if window := p.contextWindowOverrideForModel(opts.Model); window > 0 {
+		args = append(args, "-c", fmt.Sprintf("model_context_window=%d", window))
+	}
 	// Enable live web search so agents can fetch current web pages.
 	args = append(args, "-c", "web_search=live")
 
@@ -177,6 +180,24 @@ func (p *Provider) ContextWindowForModel(model string) int {
 					return entry.ContextWindow
 				}
 			}
+		}
+	}
+	return 0
+}
+
+func (p *Provider) contextWindowOverrideForModel(model string) int {
+	if strings.TrimSpace(model) == "" || model == llm.StripModelContextWindow(model) {
+		return 0
+	}
+	p.mu.RLock()
+	cat := p.catalog
+	p.mu.RUnlock()
+	if len(cat) == 0 {
+		cat = p.defaultModelInfos()
+	}
+	for _, entry := range cat {
+		if strings.EqualFold(entry.ID, model) {
+			return entry.ContextWindow
 		}
 	}
 	return 0
@@ -311,17 +332,14 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 //   - https://developers.openai.com/api/docs/models/gpt-5.4-mini
 //   - https://developers.openai.com/api/docs/models/gpt-5.3-codex
 //   - https://developers.openai.com/api/docs/models/gpt-5.2
-//
-// Note: gpt-5.4 has a 272K pricing inflection point (2× input / 1.5× output
-// above that) but the hard context limit is 1.05M. We encode the capacity,
-// not the pricing boundary.
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
-		{ID: "gpt-5.5", DisplayName: "GPT-5.5", ContextWindow: 1_050_000, Category: "capable"},
-		{ID: "gpt-5.4", DisplayName: "GPT-5.4", ContextWindow: 1_050_000, Category: "capable"},
-		{ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 Mini", ContextWindow: 400_000, Category: "balanced"},
-		{ID: "gpt-5.3-codex", DisplayName: "GPT-5.3 Codex", Aliases: []string{"codex"}, ContextWindow: 400_000, Category: "balanced"},
-		{ID: "gpt-5.2", DisplayName: "GPT-5.2", ContextWindow: 400_000},
+		{ID: "gpt-5.5[272K]", DisplayName: "GPT-5.5 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.5"}, Category: "capable"},
+		{ID: "gpt-5.4[272K]", DisplayName: "GPT-5.4 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.4"}, Category: "capable"},
+		{ID: "gpt-5.4[1M]", DisplayName: "GPT-5.4 (1M)", ContextWindow: 1_000_000, Category: "capable"},
+		{ID: "gpt-5.4-mini[400K]", DisplayName: "GPT-5.4 Mini (400K)", ContextWindow: 400_000, Aliases: []string{"gpt-5.4-mini"}, Category: "balanced"},
+		{ID: "gpt-5.3-codex[400K]", DisplayName: "GPT-5.3 Codex (400K)", Aliases: []string{"gpt-5.3-codex", "codex"}, ContextWindow: 400_000, Category: "balanced"},
+		{ID: "gpt-5.2[400K]", DisplayName: "GPT-5.2 (400K)", ContextWindow: 400_000, Aliases: []string{"gpt-5.2"}},
 	}
 }
 

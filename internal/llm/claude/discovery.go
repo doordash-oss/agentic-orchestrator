@@ -59,7 +59,7 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 			}
 			break
 		}
-		out, err := runner(ctx, "claude", claudeModelProbeArgs(candidate.ID), nil)
+		out, err := runner(ctx, "claude", claudeModelProbeArgs(claudeCLIModel(candidate.ID)), nil)
 		if err != nil {
 			if ctx.Err() != nil {
 				if len(models) > 0 {
@@ -87,9 +87,7 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 		if contextWindow > 0 {
 			info.ContextWindow = contextWindow
 		}
-		if resolved != "" && !strings.EqualFold(resolved, info.ID) {
-			info.Aliases = []string{resolved}
-		}
+		info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, resolved)
 		models = append(models, info)
 	}
 

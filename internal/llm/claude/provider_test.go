@@ -146,11 +146,11 @@ func TestClaudeProviderDiscoverModelCatalog_PartialSuccessUpdatesAliases(t *test
 	if len(models) != 2 {
 		t.Fatalf("DiscoverModelCatalog() returned %d models, want 2: %+v", len(models), models)
 	}
-	if models[0].ID != "opus" || !slices.Equal(models[0].Aliases, []string{"claude-opus-4-8"}) {
-		t.Fatalf("first model = %+v, want opus with claude-opus-4-8 alias", models[0])
+	if models[0].ID != "opus[200K]" || !slices.Equal(models[0].Aliases, []string{"opus", "claude-opus-4-8"}) {
+		t.Fatalf("first model = %+v, want opus[200K] with stable and concrete aliases", models[0])
 	}
-	if models[1].ID != "sonnet" || !slices.Equal(models[1].Aliases, []string{"claude-sonnet-4-6"}) {
-		t.Fatalf("second model = %+v, want sonnet with claude-sonnet-4-6 alias", models[1])
+	if models[1].ID != "sonnet[200K]" || !slices.Equal(models[1].Aliases, []string{"sonnet", "claude-sonnet-4-6"}) {
+		t.Fatalf("second model = %+v, want sonnet[200K] with stable and concrete aliases", models[1])
 	}
 }
 
@@ -179,11 +179,11 @@ func TestClaudeProviderDiscoverModelCatalog_PreservesUnattemptedFallbacksOnTimeo
 	for _, model := range models {
 		gotIDs = append(gotIDs, model.ID)
 	}
-	wantIDs := []string{"opus", "opus[1m]", "sonnet", "sonnet[1m]", "haiku"}
+	wantIDs := []string{"opus[200K]", "opus[1M]", "sonnet[200K]", "sonnet[1M]", "haiku"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("model IDs = %v, want %v", gotIDs, wantIDs)
 	}
-	if models[0].ContextWindow != 1_000_000 || !slices.Equal(models[0].Aliases, []string{"claude-opus-4-8"}) {
+	if models[0].ContextWindow != 1_000_000 || !slices.Equal(models[0].Aliases, []string{"opus", "claude-opus-4-8"}) {
 		t.Fatalf("opus entry = %+v, want discovered metadata", models[0])
 	}
 	if models[len(models)-1].ID != "haiku" || models[len(models)-1].ContextWindow != 200_000 {
@@ -203,11 +203,11 @@ func TestClaudeProvider_DefaultCatalog_Invariants(t *testing.T) {
 	}
 
 	wantWindows := map[string]int{
-		"opus":       200_000,
-		"opus[1m]":   1_000_000,
-		"sonnet":     200_000,
-		"sonnet[1m]": 1_000_000,
-		"haiku":      200_000,
+		"opus[200K]":   200_000,
+		"opus[1M]":     1_000_000,
+		"sonnet[200K]": 200_000,
+		"sonnet[1M]":   1_000_000,
+		"haiku":        200_000,
 	}
 
 	for id, want := range wantWindows {
@@ -221,14 +221,11 @@ func TestClaudeProvider_DefaultCatalog_Invariants(t *testing.T) {
 		}
 	}
 
-	// The `[1m]` variants must be distinct catalog entries, not aliases of
-	// the base ID. This is load-bearing: canonicalModelForProvider rewrites
-	// alias matches to the canonical ID, which would silently downgrade
-	// `--model opus[1m]` (1M) to `--model opus` (200K).
-	for _, m := range cat {
-		for _, alias := range m.Aliases {
-			if alias == m.ID+"[1m]" {
-				t.Errorf("entry %q must not carry %q as an alias; %q must be its own catalog ID", m.ID, alias, alias)
+	for _, baseID := range []string{"opus", "sonnet"} {
+		baseEntry := byID[baseID+"[200K]"]
+		for _, alias := range baseEntry.Aliases {
+			if strings.EqualFold(alias, baseID+"[1M]") || strings.EqualFold(alias, baseID+"[1m]") {
+				t.Errorf("entry %q must not carry 1M alias %q; 1M must stay its own catalog ID", baseEntry.ID, alias)
 			}
 		}
 	}
@@ -254,10 +251,15 @@ func TestClaudeProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *tes
 	p := &Provider{}
 
 	tests := map[string]int{
-		"opus":       200_000,
-		"opus[1m]":   1_000_000,
-		"sonnet[1m]": 1_000_000,
-		"haiku":      200_000,
+		"opus":         200_000,
+		"opus[200K]":   200_000,
+		"opus[1m]":     1_000_000,
+		"opus[1M]":     1_000_000,
+		"sonnet":       200_000,
+		"sonnet[1m]":   1_000_000,
+		"sonnet[1M]":   1_000_000,
+		"sonnet[200K]": 200_000,
+		"haiku":        200_000,
 	}
 	for model, want := range tests {
 		t.Run(model, func(t *testing.T) {
@@ -276,6 +278,36 @@ func TestClaudeProvider_ModelCatalog_FallsBackToHardcoded(t *testing.T) {
 	want := p.defaultModelInfos()
 	if len(got) != len(want) {
 		t.Fatalf("ModelCatalog() len = %d, want %d", len(got), len(want))
+	}
+}
+
+func TestBuildInteractiveCommand_MapsDisplayContextModelsToClaudeCLIModels(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"opus[200K]", "opus"},
+		{"opus[1M]", "opus[1m]"},
+		{"sonnet[200K]", "sonnet"},
+		{"sonnet[1M]", "sonnet[1m]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			args := buildInteractiveCommand(llm.CommandBuildOpts{Model: tt.model})
+			found := false
+			for i, arg := range args {
+				if arg != "--model" {
+					continue
+				}
+				found = true
+				if i+1 >= len(args) || args[i+1] != tt.want {
+					t.Fatalf("--model = %q, want %q; args=%v", args[i+1], tt.want, args)
+				}
+			}
+			if !found {
+				t.Fatalf("command args = %v, want --model", args)
+			}
+		})
 	}
 }
 

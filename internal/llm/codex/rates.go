@@ -14,7 +14,11 @@
 
 package codex
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+)
 
 // tokenRate holds per-million-token pricing for a model.
 type tokenRate struct {
@@ -37,7 +41,7 @@ const defaultModel = "gpt-5.4"
 // It handles aliases (e.g. "codex" → "gpt-5.4") and falls back to
 // the default model rate for unrecognized gpt-* variants.
 func lookupRate(model string) (tokenRate, bool) {
-	m := strings.ToLower(model)
+	m := strings.ToLower(llm.StripModelContextWindow(model))
 
 	// Direct match first.
 	if r, ok := modelRates[m]; ok {

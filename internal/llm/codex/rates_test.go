@@ -28,7 +28,9 @@ func TestLookupRate(t *testing.T) {
 	}{
 		// Direct matches
 		{"gpt-5.4", true, 2.50, 15.00},
+		{"gpt-5.4[1M]", true, 2.50, 15.00},
 		{"gpt-5.4-mini", true, 0.75, 4.50},
+		{"gpt-5.4-mini[1M]", true, 0.75, 4.50},
 		{"gpt-5.3-codex", true, 1.75, 14.00},
 
 		// Aliases that should resolve to gpt-5.4 rates

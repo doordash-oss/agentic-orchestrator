@@ -256,7 +256,7 @@ func (p *Provider) CLIVersion() (string, error) {
 // alias (e.g. claude-opus-4-8) because what an alias resolves to is
 // provider-dependent (Anthropic API vs Bedrock/Vertex/Foundry) and drifts over
 // time — a hardcoded version is a frequently-wrong guess. The probe sets the
-// resolved model when it runs. Base and `[1m]` variants stay as separate
+// resolved model when it runs. Base and `[1M]` variants stay as separate
 // entries because `--model opus` (200K) and `--model opus[1m]` (1M) are
 // distinct CLI inputs.
 //
@@ -269,10 +269,10 @@ func (p *Provider) CLIVersion() (string, error) {
 // (compaction at ~167K on --model opus ≈ 83% of 200K).
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
-		{ID: "opus", DisplayName: "Claude Opus", ContextWindow: 200_000, Category: "capable"},
-		{ID: "opus[1m]", DisplayName: "Claude Opus (1M)", ContextWindow: 1_000_000, Category: "capable"},
-		{ID: "sonnet", DisplayName: "Claude Sonnet", ContextWindow: 200_000, Category: "balanced"},
-		{ID: "sonnet[1m]", DisplayName: "Claude Sonnet (1M)", ContextWindow: 1_000_000, Category: "balanced"},
+		{ID: "opus[200K]", DisplayName: "Claude Opus (200K)", ContextWindow: 200_000, Aliases: []string{"opus"}, Category: "capable"},
+		{ID: "opus[1M]", DisplayName: "Claude Opus (1M)", ContextWindow: 1_000_000, Aliases: []string{"opus[1m]"}, Category: "capable"},
+		{ID: "sonnet[200K]", DisplayName: "Claude Sonnet (200K)", ContextWindow: 200_000, Aliases: []string{"sonnet"}, Category: "balanced"},
+		{ID: "sonnet[1M]", DisplayName: "Claude Sonnet (1M)", ContextWindow: 1_000_000, Aliases: []string{"sonnet[1m]"}, Category: "balanced"},
 		{ID: "haiku", DisplayName: "Claude Haiku", ContextWindow: 200_000, Category: "cheap"},
 	}
 }
@@ -308,7 +308,7 @@ func InsertAfterBinary(cmd []string, flags ...string) []string {
 
 func buildInteractiveCommand(opts llm.CommandBuildOpts) []string {
 	args := []string{"claude",
-		"--model", opts.Model,
+		"--model", claudeCLIModel(opts.Model),
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--verbose",
@@ -345,6 +345,21 @@ func buildInteractiveCommand(opts llm.CommandBuildOpts) []string {
 		}
 	}
 	return args
+}
+
+func claudeCLIModel(model string) string {
+	switch strings.ToLower(model) {
+	case "opus[200k]":
+		return "opus"
+	case "opus[1m]":
+		return "opus[1m]"
+	case "sonnet[200k]":
+		return "sonnet"
+	case "sonnet[1m]":
+		return "sonnet[1m]"
+	default:
+		return model
+	}
 }
 
 func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {

@@ -250,6 +250,65 @@ func (p *Provider) CLIVersion() (string, error) {
 	return clirun.ParseVersionOutput(out)
 }
 
+type claudeModelProbeCandidate struct {
+	Family                string
+	Selector              string
+	DisplayName           string
+	Category              string
+	FallbackContextWindow int
+}
+
+func claudeModelProbeCandidates() []claudeModelProbeCandidate {
+	return []claudeModelProbeCandidate{
+		{Family: "opus", Selector: "opus", DisplayName: "Claude Opus", FallbackContextWindow: 200_000, Category: "capable"},
+		{Family: "opus", Selector: "opus[1m]", DisplayName: "Claude Opus", FallbackContextWindow: 1_000_000, Category: "capable"},
+		{Family: "sonnet", Selector: "sonnet", DisplayName: "Claude Sonnet", FallbackContextWindow: 200_000, Category: "balanced"},
+		{Family: "sonnet", Selector: "sonnet[1m]", DisplayName: "Claude Sonnet", FallbackContextWindow: 1_000_000, Category: "balanced"},
+		{Family: "haiku", Selector: "haiku", DisplayName: "Claude Haiku", FallbackContextWindow: 200_000, Category: "cheap"},
+	}
+}
+
+func claudeModelInfoFromProbe(candidate claudeModelProbeCandidate, contextWindow int, resolved string) llm.ModelInfo {
+	if contextWindow <= 0 {
+		contextWindow = candidate.FallbackContextWindow
+	}
+	id := candidate.Family
+	displayName := candidate.DisplayName
+	if label := llm.ContextWindowLabel(contextWindow); label != "" {
+		id = candidate.Family + "[" + label + "]"
+		displayName = candidate.DisplayName + " (" + label + ")"
+	}
+	info := llm.ModelInfo{
+		ID:            id,
+		DisplayName:   displayName,
+		ContextWindow: contextWindow,
+		Category:      candidate.Category,
+	}
+	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, candidate.Selector)
+	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, resolved)
+	return info
+}
+
+func appendClaudeAlias(aliases []string, id, alias string) []string {
+	alias = strings.TrimSpace(alias)
+	if alias == "" || alias == id {
+		return aliases
+	}
+	for _, existing := range aliases {
+		if existing == alias {
+			return aliases
+		}
+	}
+	if !strings.EqualFold(alias, id) {
+		for _, existing := range aliases {
+			if strings.EqualFold(existing, alias) {
+				return aliases
+			}
+		}
+	}
+	return append(aliases, alias)
+}
+
 // defaultModelInfos returns Agentic's curated Claude Code model catalog.
 //
 // Runtime startup tries to refresh these with DiscoverModelCatalog; they are
@@ -257,9 +316,9 @@ func (p *Provider) CLIVersion() (string, error) {
 // alias (e.g. claude-opus-4-8) because what an alias resolves to is
 // provider-dependent (Anthropic API vs Bedrock/Vertex/Foundry) and drifts over
 // time — a hardcoded version is a frequently-wrong guess. The probe sets the
-// resolved model when it runs. Base and `[1M]` variants stay as separate
-// entries because `--model opus` (200K) and `--model opus[1m]` (1M) are
-// distinct CLI inputs.
+// resolved model when it runs. Claude exposes no machine-readable model catalog,
+// so the offline fallback has to keep curated probe selectors and context
+// windows.
 //
 // Context-window sources (verified 2026-06-05):
 //   - https://platform.claude.com/docs/en/about-claude/models/overview
@@ -269,13 +328,12 @@ func (p *Provider) CLIVersion() (string, error) {
 // auto-compact thresholds observed in live Claude Code sessions
 // (compaction at ~167K on --model opus ≈ 83% of 200K).
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
-	return []llm.ModelInfo{
-		{ID: "opus[200K]", DisplayName: "Claude Opus (200K)", ContextWindow: 200_000, Aliases: []string{"opus"}, Category: "capable"},
-		{ID: "opus[1M]", DisplayName: "Claude Opus (1M)", ContextWindow: 1_000_000, Aliases: []string{"opus[1m]"}, Category: "capable"},
-		{ID: "sonnet[200K]", DisplayName: "Claude Sonnet (200K)", ContextWindow: 200_000, Aliases: []string{"sonnet"}, Category: "balanced"},
-		{ID: "sonnet[1M]", DisplayName: "Claude Sonnet (1M)", ContextWindow: 1_000_000, Aliases: []string{"sonnet[1m]"}, Category: "balanced"},
-		{ID: "haiku", DisplayName: "Claude Haiku", ContextWindow: 200_000, Category: "cheap"},
+	candidates := claudeModelProbeCandidates()
+	models := make([]llm.ModelInfo, 0, len(candidates))
+	for _, candidate := range candidates {
+		models = append(models, claudeModelInfoFromProbe(candidate, candidate.FallbackContextWindow, ""))
 	}
+	return models
 }
 
 // --- Command building helpers ---

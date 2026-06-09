@@ -179,15 +179,46 @@ func TestClaudeProviderDiscoverModelCatalog_PreservesUnattemptedFallbacksOnTimeo
 	for _, model := range models {
 		gotIDs = append(gotIDs, model.ID)
 	}
-	wantIDs := []string{"opus[200K]", "opus[1M]", "sonnet[200K]", "sonnet[1M]", "haiku"}
+	wantIDs := []string{"opus[1M]", "sonnet[200K]", "sonnet[1M]", "haiku[200K]"}
 	if !slices.Equal(gotIDs, wantIDs) {
 		t.Fatalf("model IDs = %v, want %v", gotIDs, wantIDs)
 	}
-	if models[0].ContextWindow != 1_000_000 || !slices.Equal(models[0].Aliases, []string{"opus", "claude-opus-4-8"}) {
+	if models[0].ContextWindow != 1_000_000 || !slices.Equal(models[0].Aliases, []string{"opus", "claude-opus-4-8", "opus[1m]"}) {
 		t.Fatalf("opus entry = %+v, want discovered metadata", models[0])
 	}
-	if models[len(models)-1].ID != "haiku" || models[len(models)-1].ContextWindow != 200_000 {
+	if models[len(models)-1].ID != "haiku[200K]" || models[len(models)-1].ContextWindow != 200_000 {
 		t.Fatalf("last entry = %+v, want fallback haiku", models[len(models)-1])
+	}
+}
+
+func TestClaudeProviderDiscoverModelCatalog_DerivesIDFromDiscoveredContextWindow(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			if name != "claude" {
+				t.Fatalf("command name = %q, want claude", name)
+			}
+			switch model := args[1]; model {
+			case "opus":
+				return []byte(`{"type":"system","subtype":"init","model":"claude-opus-4-8"}` + "\n" +
+					`{"type":"result","subtype":"success","modelUsage":{"claude-opus-4-8":{"contextWindow":1000000}}}`), nil
+			default:
+				return nil, errors.New("model not available")
+			}
+		},
+	}
+
+	models, err := p.DiscoverModelCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModelCatalog() error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("DiscoverModelCatalog() returned %d models, want 1: %+v", len(models), models)
+	}
+	if models[0].ID != "opus[1M]" {
+		t.Fatalf("model ID = %q, want opus[1M]", models[0].ID)
+	}
+	if !slices.Equal(models[0].Aliases, []string{"opus", "claude-opus-4-8"}) {
+		t.Fatalf("aliases = %v, want [opus claude-opus-4-8]", models[0].Aliases)
 	}
 }
 
@@ -207,7 +238,7 @@ func TestClaudeProvider_DefaultCatalog_Invariants(t *testing.T) {
 		"opus[1M]":     1_000_000,
 		"sonnet[200K]": 200_000,
 		"sonnet[1M]":   1_000_000,
-		"haiku":        200_000,
+		"haiku[200K]":  200_000,
 	}
 
 	for id, want := range wantWindows {
@@ -259,6 +290,7 @@ func TestClaudeProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *tes
 		"sonnet[1m]":   1_000_000,
 		"sonnet[1M]":   1_000_000,
 		"sonnet[200K]": 200_000,
+		"haiku[200K]":  200_000,
 		"haiku":        200_000,
 	}
 	for model, want := range tests {
@@ -290,6 +322,7 @@ func TestProviderBuildCommand_UsesCatalogAliasForClaudeCLIModel(t *testing.T) {
 		{"opus[1M]", "opus[1m]"},
 		{"sonnet[200K]", "sonnet"},
 		{"sonnet[1M]", "sonnet[1m]"},
+		{"haiku[200K]", "haiku"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {

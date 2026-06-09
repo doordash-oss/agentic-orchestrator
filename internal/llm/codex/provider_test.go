@@ -533,8 +533,8 @@ func TestParseCodexModelCatalog_FiltersAndMapsVisibleAPIModels(t *testing.T) {
 	if got := codexModel.DisplayName; got != "GPT-5.3 Codex (400K)" {
 		t.Errorf("gpt-5.3-codex display name = %q, want generated display name", got)
 	}
-	if !slices.Equal(codexModel.Aliases, []string{"gpt-5.3-codex", "codex"}) {
-		t.Errorf("gpt-5.3-codex aliases = %v, want [gpt-5.3-codex codex]", codexModel.Aliases)
+	if !slices.Equal(codexModel.Aliases, []string{"gpt-5.3-codex"}) {
+		t.Errorf("gpt-5.3-codex aliases = %v, want [gpt-5.3-codex]", codexModel.Aliases)
 	}
 	if got := codexModel.ContextWindow; got != 400_000 {
 		t.Errorf("gpt-5.3-codex context window = %d, want 400000", got)
@@ -648,7 +648,6 @@ func TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *test
 		"gpt-5.4-mini[400K]":  400_000,
 		"gpt-5.3-codex":       400_000,
 		"gpt-5.3-codex[400K]": 400_000,
-		"codex":               400_000, // alias of gpt-5.3-codex
 		"gpt-5.2":             400_000,
 		"gpt-5.2[400K]":       400_000,
 	}

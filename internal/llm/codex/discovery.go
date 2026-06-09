@@ -103,12 +103,9 @@ func parseCodexModelCatalog(out []byte) ([]llm.ModelInfo, error) {
 			if label := llm.ContextWindowLabel(window); label != "" {
 				info.ID = llm.ModelWithContextWindow(id, window)
 				info.DisplayName = displayName + " (" + label + ")"
-				if i == 0 {
-					info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, id)
-				}
 			}
-			if id == "gpt-5.3-codex" && i == 0 {
-				info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, "codex")
+			if i == 0 {
+				info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, id)
 			}
 			models = append(models, info)
 		}

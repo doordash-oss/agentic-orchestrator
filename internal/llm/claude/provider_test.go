@@ -281,7 +281,7 @@ func TestClaudeProvider_ModelCatalog_FallsBackToHardcoded(t *testing.T) {
 	}
 }
 
-func TestBuildInteractiveCommand_MapsDisplayContextModelsToClaudeCLIModels(t *testing.T) {
+func TestProviderBuildCommand_UsesCatalogAliasForClaudeCLIModel(t *testing.T) {
 	tests := []struct {
 		model string
 		want  string
@@ -293,22 +293,56 @@ func TestBuildInteractiveCommand_MapsDisplayContextModelsToClaudeCLIModels(t *te
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			args := buildInteractiveCommand(llm.CommandBuildOpts{Model: tt.model})
-			found := false
-			for i, arg := range args {
-				if arg != "--model" {
-					continue
-				}
-				found = true
-				if i+1 >= len(args) || args[i+1] != tt.want {
-					t.Fatalf("--model = %q, want %q; args=%v", args[i+1], tt.want, args)
-				}
+			p := &Provider{}
+			args, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: tt.model})
+			if err != nil {
+				t.Fatalf("BuildCommand() error: %v", err)
 			}
-			if !found {
-				t.Fatalf("command args = %v, want --model", args)
+			if env != nil {
+				t.Fatalf("BuildCommand() env = %v, want nil", env)
 			}
+			assertModelArg(t, args, tt.want)
 		})
 	}
+}
+
+func TestProviderBuildCommand_UsesDiscoveredCatalogAliasForClaudeCLIModel(t *testing.T) {
+	p := &Provider{}
+	p.SetModelCatalog([]llm.ModelInfo{
+		{
+			ID:            "experimental[1M]",
+			DisplayName:   "Experimental (1M)",
+			ContextWindow: 1_000_000,
+			Aliases:       []string{"experimental[1m]", "claude-experimental-1"},
+			Category:      "capable",
+		},
+	})
+
+	args, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "experimental[1M]"})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	if env != nil {
+		t.Fatalf("BuildCommand() env = %v, want nil", env)
+	}
+	assertModelArg(t, args, "experimental[1m]")
+}
+
+func assertModelArg(t *testing.T, args []string, want string) {
+	t.Helper()
+	for i, arg := range args {
+		if arg != "--model" {
+			continue
+		}
+		if i+1 >= len(args) {
+			t.Fatalf("command args = %v, want --model value", args)
+		}
+		if args[i+1] != want {
+			t.Fatalf("--model = %q, want %q; args=%v", args[i+1], want, args)
+		}
+		return
+	}
+	t.Fatalf("command args = %v, want --model", args)
 }
 
 // TestBuildInteractiveCommand_PermissionMode pins the wiring that prevents

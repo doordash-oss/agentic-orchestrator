@@ -38,8 +38,8 @@ var modelRates = map[string]tokenRate{
 const defaultModel = "gpt-5.4"
 
 // lookupRate resolves a model string to its token rate.
-// It handles aliases (e.g. "codex" → "gpt-5.4") and falls back to
-// the default model rate for unrecognized gpt-* variants.
+// It strips explicit context-window suffixes and falls back to the default
+// model rate for unrecognized gpt-* variants.
 func lookupRate(model string) (tokenRate, bool) {
 	m := strings.ToLower(llm.StripModelContextWindow(model))
 
@@ -48,8 +48,7 @@ func lookupRate(model string) (tokenRate, bool) {
 		return r, true
 	}
 
-	// "codex" is an alias for the default model.
-	if m == "codex" || m == "" {
+	if m == "" {
 		return modelRates[defaultModel], true
 	}
 

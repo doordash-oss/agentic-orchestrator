@@ -59,7 +59,7 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 			}
 			break
 		}
-		out, err := runner(ctx, "claude", claudeModelProbeArgs(claudeCLIModel(candidate.ID)), nil)
+		out, err := runner(ctx, "claude", claudeModelProbeArgs(claudeCLIModelForCatalogEntry(candidate)), nil)
 		if err != nil {
 			if ctx.Err() != nil {
 				if len(models) > 0 {

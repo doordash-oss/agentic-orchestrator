@@ -76,6 +76,7 @@ func (p *Provider) AvailableModels() []string {
 }
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	opts.Model = p.claudeCLIModel(opts.Model)
 	args := buildInteractiveCommand(opts)
 	return args, nil, nil
 }
@@ -308,7 +309,7 @@ func InsertAfterBinary(cmd []string, flags ...string) []string {
 
 func buildInteractiveCommand(opts llm.CommandBuildOpts) []string {
 	args := []string{"claude",
-		"--model", claudeCLIModel(opts.Model),
+		"--model", opts.Model,
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--verbose",
@@ -347,19 +348,41 @@ func buildInteractiveCommand(opts llm.CommandBuildOpts) []string {
 	return args
 }
 
-func claudeCLIModel(model string) string {
-	switch strings.ToLower(model) {
-	case "opus[200k]":
-		return "opus"
-	case "opus[1m]":
-		return "opus[1m]"
-	case "sonnet[200k]":
-		return "sonnet"
-	case "sonnet[1m]":
-		return "sonnet[1m]"
-	default:
-		return model
+func (p *Provider) claudeCLIModel(model string) string {
+	p.mu.RLock()
+	cat := p.catalog
+	p.mu.RUnlock()
+	if len(cat) == 0 {
+		cat = p.defaultModelInfos()
 	}
+	for _, entry := range cat {
+		if strings.EqualFold(entry.ID, model) {
+			return claudeCLIModelForCatalogEntry(entry)
+		}
+		for _, alias := range entry.Aliases {
+			if strings.EqualFold(alias, model) {
+				return claudeCLIModelForCatalogEntry(entry)
+			}
+		}
+	}
+	return model
+}
+
+func claudeCLIModelForCatalogEntry(entry llm.ModelInfo) string {
+	for _, alias := range entry.Aliases {
+		if isStableClaudeCLISelector(alias) {
+			return alias
+		}
+	}
+	if isStableClaudeCLISelector(entry.ID) {
+		return entry.ID
+	}
+	return entry.ID
+}
+
+func isStableClaudeCLISelector(model string) bool {
+	model = strings.TrimSpace(model)
+	return model != "" && !strings.HasPrefix(strings.ToLower(model), "claude-")
 }
 
 func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {

@@ -84,7 +84,7 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	}
 	return &Protocol{
 		opts:           opts,
-		model:          opts.Model,
+		model:          llm.StripModelContextWindow(opts.Model),
 		approvalPolicy: policy,
 	}
 }

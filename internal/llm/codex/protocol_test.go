@@ -272,6 +272,28 @@ func TestCodexProtocolStartTurn_DeveloperInstructionsEncoding(t *testing.T) {
 	}
 }
 
+func TestCodexProtocol_StripsContextWindowFromModel(t *testing.T) {
+	var buf bytes.Buffer
+
+	p := NewProtocol(llm.ProtocolOpts{
+		Model:   "gpt-5.4[1M]",
+		WorkDir: "/tmp/test",
+	})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-123")
+
+	if err := p.startTurn("do something"); err != nil {
+		t.Fatalf("startTurn() error: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `"model":"gpt-5.4"`) {
+		t.Fatalf("startTurn payload = %s, want base model gpt-5.4", got)
+	}
+	if strings.Contains(got, "gpt-5.4[1M]") {
+		t.Fatalf("startTurn payload leaked context-window model ID: %s", got)
+	}
+}
+
 func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 	p.SetThreadIDForTest("thread-abc")

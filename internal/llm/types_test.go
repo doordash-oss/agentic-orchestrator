@@ -274,6 +274,34 @@ func TestLargestContextFrom(t *testing.T) {
 	}
 }
 
+func TestContextWindowLabel(t *testing.T) {
+	tests := []struct {
+		tokens int
+		want   string
+	}{
+		{0, ""},
+		{272_000, "272K"},
+		{400_000, "400K"},
+		{1_000_000, "1M"},
+		{1_050_000, "1.05M"},
+		{2_000_000, "2M"},
+	}
+	for _, tt := range tests {
+		if got := llm.ContextWindowLabel(tt.tokens); got != tt.want {
+			t.Errorf("ContextWindowLabel(%d) = %q, want %q", tt.tokens, got, tt.want)
+		}
+	}
+}
+
+func TestModelContextWindowHelpers(t *testing.T) {
+	if got := llm.ModelWithContextWindow("gpt-5.4", 1_000_000); got != "gpt-5.4[1M]" {
+		t.Fatalf("ModelWithContextWindow() = %q, want gpt-5.4[1M]", got)
+	}
+	if got := llm.StripModelContextWindow("gpt-5.4[272K]"); got != "gpt-5.4" {
+		t.Fatalf("StripModelContextWindow() = %q, want gpt-5.4", got)
+	}
+}
+
 // --- test helpers ---
 
 func modelIDs(models []llm.ModelInfo) []string {

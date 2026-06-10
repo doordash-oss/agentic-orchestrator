@@ -28,11 +28,12 @@ func TestLookupRate(t *testing.T) {
 	}{
 		// Direct matches
 		{"gpt-5.4", true, 2.50, 15.00},
+		{"gpt-5.4[1M]", true, 2.50, 15.00},
 		{"gpt-5.4-mini", true, 0.75, 4.50},
+		{"gpt-5.4-mini[1M]", true, 0.75, 4.50},
 		{"gpt-5.3-codex", true, 1.75, 14.00},
 
-		// Aliases that should resolve to gpt-5.4 rates
-		{"codex", true, 2.50, 15.00},
+		// Empty model uses the default model rate.
 		{"", true, 2.50, 15.00},
 
 		// Unknown gpt-* variants fall back to default
@@ -41,9 +42,8 @@ func TestLookupRate(t *testing.T) {
 
 		// Case insensitive
 		{"GPT-5.4", true, 2.50, 15.00},
-		{"Codex", true, 2.50, 15.00},
-
 		// Non-matching models
+		{"codex", false, 0, 0},
 		{"opus", false, 0, 0},
 		{"sonnet", false, 0, 0},
 		{"unknown", false, 0, 0},
@@ -75,12 +75,6 @@ func TestComputeCost(t *testing.T) {
 		t.Errorf("computeCost(gpt-5.4, 1M, 1M) = %f, want 17.50", cost)
 	}
 
-	// "codex" alias should produce the same result
-	costCodex := computeCost("codex", 1_000_000, 1_000_000)
-	if math.Abs(costCodex-17.50) > 0.001 {
-		t.Errorf("computeCost(codex, 1M, 1M) = %f, want 17.50", costCodex)
-	}
-
 	// Empty model should also work (default)
 	costEmpty := computeCost("", 1_000_000, 1_000_000)
 	if math.Abs(costEmpty-17.50) > 0.001 {
@@ -97,10 +91,10 @@ func TestComputeCost(t *testing.T) {
 func TestProviderComputeCost(t *testing.T) {
 	p := &Provider{}
 
-	// "codex" alias must produce non-zero cost
+	// The provider name is not a model alias.
 	cost := p.ComputeCost("codex", 1_000_000, 1_000_000)
-	if math.Abs(cost-17.50) > 0.001 {
-		t.Errorf("Provider.ComputeCost(codex, 1M, 1M) = %f, want 17.50", cost)
+	if cost != 0 {
+		t.Errorf("Provider.ComputeCost(codex, 1M, 1M) = %f, want 0", cost)
 	}
 
 	// gpt-5.4-mini rates

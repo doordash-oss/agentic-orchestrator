@@ -87,31 +87,47 @@ func parseCodexModelCatalog(out []byte) ([]llm.ModelInfo, error) {
 			continue
 		}
 
-		contextWindow := raw.ContextWindow
-		if contextWindow <= 0 {
-			contextWindow = raw.MaxContextWindow
-		}
 		displayName := strings.TrimSpace(raw.DisplayName)
 		if displayName == "" {
 			displayName = codexDisplayNameFromSlug(id)
 		}
 
-		info := llm.ModelInfo{
-			ID:            id,
-			DisplayName:   displayName,
-			ContextWindow: contextWindow,
-			Category:      codexCategoryForDiscoveredModel(id),
+		windows := codexContextWindowOptions(raw.ContextWindow, raw.MaxContextWindow)
+		for i, window := range windows {
+			info := llm.ModelInfo{
+				ID:            id,
+				DisplayName:   displayName,
+				ContextWindow: window,
+				Category:      codexCategoryForDiscoveredModel(id),
+			}
+			if label := llm.ContextWindowLabel(window); label != "" {
+				info.ID = llm.ModelWithContextWindow(id, window)
+				info.DisplayName = displayName + " (" + label + ")"
+			}
+			if i == 0 {
+				info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, id)
+			}
+			models = append(models, info)
 		}
-		if id == "gpt-5.3-codex" {
-			info.Aliases = []string{"codex"}
-		}
-		models = append(models, info)
 		seen[id] = true
 	}
 	if len(models) == 0 {
 		return nil, fmt.Errorf("codex model catalog contained no visible API-supported models")
 	}
 	return models, nil
+}
+
+func codexContextWindowOptions(contextWindow, maxContextWindow int) []int {
+	if contextWindow <= 0 {
+		if maxContextWindow > 0 {
+			return []int{maxContextWindow}
+		}
+		return []int{0}
+	}
+	if maxContextWindow > 0 && maxContextWindow != contextWindow {
+		return []int{contextWindow, maxContextWindow}
+	}
+	return []int{contextWindow}
 }
 
 func codexDisplayNameFromSlug(slug string) string {

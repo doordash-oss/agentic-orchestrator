@@ -42,6 +42,12 @@ type codexDiscoveredModel struct {
 // `codex debug models`. The command refreshes from Codex's remote catalog by
 // default; if that path fails, we fall back to the catalog bundled in the CLI.
 func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, error) {
+	return p.DiscoverModelCatalogWithProgress(ctx, nil)
+}
+
+// DiscoverModelCatalogWithProgress refreshes Codex's model catalog and reports
+// each parsed visible model before returning the final catalog.
+func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
 	runner := p.runner
 	if runner == nil {
 		runner = clirun.DefaultRunner()
@@ -49,7 +55,7 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 
 	out, err := runner(ctx, "codex", []string{"debug", "models"}, nil)
 	if err == nil {
-		models, parseErr := parseCodexModelCatalog(out)
+		models, parseErr := parseCodexModelCatalogWithProgress(out, report)
 		if parseErr == nil {
 			return models, nil
 		}
@@ -60,7 +66,7 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 	if bundledErr != nil {
 		return nil, fmt.Errorf("running codex debug models: %w; bundled fallback: %v", err, bundledErr)
 	}
-	models, parseErr := parseCodexModelCatalog(bundled)
+	models, parseErr := parseCodexModelCatalogWithProgress(bundled, report)
 	if parseErr != nil {
 		return nil, fmt.Errorf("parsing codex bundled model catalog after live catalog failure (%v): %w", err, parseErr)
 	}
@@ -68,6 +74,10 @@ func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, e
 }
 
 func parseCodexModelCatalog(out []byte) ([]llm.ModelInfo, error) {
+	return parseCodexModelCatalogWithProgress(out, nil)
+}
+
+func parseCodexModelCatalogWithProgress(out []byte, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
 	var payload codexModelCatalogPayload
 	if err := json.Unmarshal(out, &payload); err != nil {
 		return nil, fmt.Errorf("parse codex model catalog JSON: %w", err)
@@ -108,6 +118,9 @@ func parseCodexModelCatalog(out []byte) ([]llm.ModelInfo, error) {
 				info.Aliases = llm.AppendUniqueAlias(info.Aliases, info.ID, id)
 			}
 			models = append(models, info)
+			if report != nil {
+				report(info)
+			}
 		}
 		seen[id] = true
 	}

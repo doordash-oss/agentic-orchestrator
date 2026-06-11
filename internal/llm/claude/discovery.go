@@ -19,8 +19,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
@@ -45,44 +47,95 @@ const (
 // ctx is cancelled partway through — keeps its hardcoded fallback catalog
 // metadata as a fallback.
 func (p *Provider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, error) {
+	return p.DiscoverModelCatalogWithProgress(ctx, nil)
+}
+
+// DiscoverModelCatalogWithProgress resolves Claude selectors concurrently and
+// reports each successful probe as soon as it completes. The final catalog is
+// still returned in the curated selector order so model defaults stay stable.
+func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
 	runner := p.runner
 	if runner == nil {
 		runner = clirun.DefaultRunner()
 	}
 
 	candidates := claudeModelProbeCandidates()
+	results := make([]claudeModelProbeResult, len(candidates))
+	var wg sync.WaitGroup
+	var reportMu sync.Mutex
+	reported := make(map[string]bool, len(candidates))
+	wg.Add(len(candidates))
+	for i, candidate := range candidates {
+		go func(i int, candidate claudeModelProbeCandidate) {
+			defer wg.Done()
+			if err := ctx.Err(); err != nil {
+				results[i] = claudeModelProbeResult{candidate: candidate, err: err}
+				return
+			}
+			resolved, contextWindow, err := probeClaudeModel(ctx, runner, candidate)
+			if err != nil {
+				results[i] = claudeModelProbeResult{candidate: candidate, err: err}
+				return
+			}
+
+			info := claudeModelInfoFromProbe(candidate, contextWindow, resolved)
+			results[i] = claudeModelProbeResult{candidate: candidate, info: info}
+			reportClaudeModelDiscovery(report, info, &reportMu, reported)
+		}(i, candidate)
+	}
+	wg.Wait()
+
 	models := make([]llm.ModelInfo, 0, len(candidates))
 	var failures []string
-	for i, candidate := range candidates {
-		if err := ctx.Err(); err != nil {
-			if len(models) > 0 {
-				models = appendClaudeFallbacks(models, candidates[i:])
+	var canceled []claudeModelProbeCandidate
+	for _, result := range results {
+		if result.err != nil {
+			if errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded) {
+				canceled = append(canceled, result.candidate)
+			} else {
+				failures = append(failures, fmt.Sprintf("%s: %v", result.candidate.Selector, result.err))
 			}
-			break
-		}
-		resolved, contextWindow, err := probeClaudeModel(ctx, runner, candidate)
-		if err != nil {
-			if ctx.Err() != nil {
-				if len(models) > 0 {
-					models = appendClaudeFallbacks(models, candidates[i:])
-				}
-				break
-			}
-			failures = append(failures, fmt.Sprintf("%s: %v", candidate.Selector, err))
 			continue
 		}
-
-		info := claudeModelInfoFromProbe(candidate, contextWindow, resolved)
-		models = appendClaudeModelInfo(models, info)
+		models = appendClaudeModelInfo(models, result.info)
+	}
+	if len(canceled) > 0 && len(models) > 0 {
+		models = appendClaudeFallbacks(models, canceled)
 	}
 
 	if len(models) == 0 {
-		if len(failures) == 0 && ctx.Err() != nil {
-			return nil, ctx.Err()
+		if len(failures) == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if len(canceled) > 0 {
+				return nil, fmt.Errorf("no Claude model probes succeeded before cancellation")
+			}
 		}
 		return nil, fmt.Errorf("no Claude model probes succeeded: %s", strings.Join(failures, "; "))
 	}
 	return models, nil
+}
+
+type claudeModelProbeResult struct {
+	candidate claudeModelProbeCandidate
+	info      llm.ModelInfo
+	err       error
+}
+
+func reportClaudeModelDiscovery(report llm.ModelDiscoveryReporter, info llm.ModelInfo, mu *sync.Mutex, reported map[string]bool) {
+	if report == nil {
+		return
+	}
+	key := strings.ToLower(info.ID)
+	mu.Lock()
+	if reported[key] {
+		mu.Unlock()
+		return
+	}
+	reported[key] = true
+	mu.Unlock()
+	report(info)
 }
 
 func probeClaudeModel(ctx context.Context, runner clirun.CommandRunner, candidate claudeModelProbeCandidate) (string, int, error) {

@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -212,7 +213,143 @@ func TestClaudeProviderDiscoverModelCatalog_RetriesTransientProbeFailure(t *test
 	}
 }
 
-func TestClaudeProviderDiscoverModelCatalog_PreservesUnattemptedFallbacksOnTimeout(t *testing.T) {
+func TestClaudeProviderDiscoverModelCatalog_ProbesCandidatesConcurrently(t *testing.T) {
+	candidates := claudeModelProbeCandidates()
+	started := make(chan string, len(candidates)*claudeModelProbeAttempts)
+	release := make(chan struct{})
+	closeRelease := func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}
+	defer closeRelease()
+
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			if name != "claude" {
+				t.Fatalf("command name = %q, want claude", name)
+			}
+			model := args[1]
+			started <- model
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if model == "fable" {
+				return []byte(`{"type":"system","subtype":"init","model":"claude-fable-5"}` + "\n" +
+					`{"type":"result","subtype":"success","modelUsage":{"claude-fable-5":{"contextWindow":1000000}}}`), nil
+			}
+			return nil, errors.New("model not available")
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		models, err := p.DiscoverModelCatalog(context.Background())
+		if err == nil && (len(models) != 1 || models[0].ID != "fable[1M]") {
+			err = errors.New("expected only fable[1M] after releasing blocked probes")
+		}
+		done <- err
+	}()
+
+	seen := make(map[string]bool, len(candidates))
+	for len(seen) < len(candidates) {
+		select {
+		case model := <-started:
+			seen[model] = true
+		case <-time.After(250 * time.Millisecond):
+			closeRelease()
+			<-done
+			t.Fatalf("Claude probes did not start concurrently; started = %v", seen)
+		}
+	}
+
+	closeRelease()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DiscoverModelCatalog did not return after releasing probes")
+	}
+}
+
+func TestClaudeProviderDiscoverModelCatalogWithProgress_ReportsBeforeReturn(t *testing.T) {
+	release := make(chan struct{})
+	closeRelease := func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}
+	defer closeRelease()
+
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			if name != "claude" {
+				t.Fatalf("command name = %q, want claude", name)
+			}
+			model := args[1]
+			if model == "fable" {
+				return []byte(`{"type":"system","subtype":"init","model":"claude-fable-5"}` + "\n" +
+					`{"type":"result","subtype":"success","modelUsage":{"claude-fable-5":{"contextWindow":1000000}}}`), nil
+			}
+			select {
+			case <-release:
+				return nil, errors.New("model not available")
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+
+	reported := make(chan string, 1)
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.DiscoverModelCatalogWithProgress(context.Background(), func(model llm.ModelInfo) {
+			reported <- model.ID
+		})
+		done <- err
+	}()
+
+	select {
+	case id := <-reported:
+		if id != "fable[1M]" {
+			t.Fatalf("reported model = %q, want fable[1M]", id)
+		}
+	case <-time.After(250 * time.Millisecond):
+		closeRelease()
+		<-done
+		t.Fatal("expected progress report before blocked probes returned")
+	}
+
+	select {
+	case err := <-done:
+		closeRelease()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatal("DiscoverModelCatalogWithProgress returned before blocked probes were released")
+	default:
+	}
+
+	closeRelease()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("DiscoverModelCatalogWithProgress did not return after releasing probes")
+	}
+}
+
+func TestClaudeProviderDiscoverModelCatalog_PreservesCanceledFallbacksOnTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &Provider{
 		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
@@ -221,7 +358,8 @@ func TestClaudeProviderDiscoverModelCatalog_PreservesUnattemptedFallbacksOnTimeo
 			}
 			model := args[1]
 			if model != "fable" {
-				t.Fatalf("runner should only be called for fable before cancellation, got %s", model)
+				<-ctx.Done()
+				return nil, ctx.Err()
 			}
 			cancel()
 			return []byte(`{"type":"system","subtype":"init","model":"claude-fable-5"}` + "\n" +

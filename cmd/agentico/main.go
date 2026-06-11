@@ -326,9 +326,18 @@ func formatProviderNameList(providers []llm.LLMProvider) string {
 	return strings.Join(names, ", ")
 }
 
-func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string) []string {
-	var warnings []string
-	for _, p := range providers {
+type providerCatalogDiscoveryProgress func(provider string, model llm.ModelInfo)
+
+type providerCatalogDiscoveryJob struct {
+	index      int
+	provider   llm.LLMProvider
+	discoverer llm.CatalogDiscoverer
+	enricher   llm.CatalogEnricher
+}
+
+func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress) []string {
+	var jobs []providerCatalogDiscoveryJob
+	for i, p := range providers {
 		discoverer, ok := p.(llm.CatalogDiscoverer)
 		if !ok {
 			continue
@@ -337,58 +346,119 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 		if !ok {
 			continue
 		}
+		jobs = append(jobs, providerCatalogDiscoveryJob{
+			index:      i,
+			provider:   p,
+			discoverer: discoverer,
+			enricher:   enricher,
+		})
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
 
-		version := ""
-		if cacheRoot != "" {
-			if rawVersion, err := p.VersionInfo(); err == nil {
-				version = strings.TrimSpace(rawVersion)
-			}
+	warningsByProvider := make([][]string, len(providers))
+	var wg sync.WaitGroup
+	var reportMu sync.Mutex
+	reportProgress := func(provider string, model llm.ModelInfo) {
+		if report == nil {
+			return
 		}
-		if version != "" {
-			models, err := loadProviderCatalogCache(cacheRoot, p.Name(), version)
-			if err == nil {
-				enricher.SetModelCatalog(models)
-				continue
-			}
-			if !os.IsNotExist(err) {
-				warnings = append(warnings, fmt.Sprintf(
-					"Warning: ignoring cached %s model catalog; refreshing: %v",
-					p.Name(),
-					err,
-				))
-			}
-		}
+		reportMu.Lock()
+		defer reportMu.Unlock()
+		report(provider, model)
+	}
+	wg.Add(len(jobs))
+	for _, job := range jobs {
+		go func(job providerCatalogDiscoveryJob) {
+			defer wg.Done()
+			warningsByProvider[job.index] = discoverOneProviderCatalog(ctx, job.provider, job.discoverer, job.enricher, cacheRoot, reportProgress)
+		}(job)
+	}
+	wg.Wait()
 
-		discoveryCtx, cancel := context.WithTimeout(ctx, providerCatalogDiscoveryTimeout)
-		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
-		cancel()
-		if err != nil {
+	var warnings []string
+	for _, providerWarnings := range warningsByProvider {
+		warnings = append(warnings, providerWarnings...)
+	}
+	return warnings
+}
+
+func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress) []string {
+	var warnings []string
+	providerName := p.Name()
+	reportModel := func(model llm.ModelInfo) {
+		if report != nil {
+			report(providerName, model)
+		}
+	}
+
+	version := ""
+	if cacheRoot != "" {
+		if rawVersion, err := p.VersionInfo(); err == nil {
+			version = strings.TrimSpace(rawVersion)
+		}
+	}
+	if version != "" {
+		models, err := loadProviderCatalogCache(cacheRoot, providerName, version)
+		if err == nil {
+			enricher.SetModelCatalog(models)
+			return nil
+		}
+		if !os.IsNotExist(err) {
 			warnings = append(warnings, fmt.Sprintf(
-				"Warning: could not discover %s model catalog; using built-in fallback: %v",
-				p.Name(),
+				"Warning: ignoring cached %s model catalog; refreshing: %v",
+				providerName,
 				err,
 			))
-			continue
 		}
-		if len(models) == 0 {
+	}
+
+	discoveryCtx, cancel := context.WithTimeout(ctx, providerCatalogDiscoveryTimeout)
+	models, err := discoverModelCatalog(discoveryCtx, discoverer, reportModel)
+	cancel()
+	if err != nil {
+		warnings = append(warnings, fmt.Sprintf(
+			"Warning: could not discover %s model catalog; using built-in fallback: %v",
+			providerName,
+			err,
+		))
+		return warnings
+	}
+	if len(models) == 0 {
+		warnings = append(warnings, fmt.Sprintf(
+			"Warning: discovered empty %s model catalog; using built-in fallback",
+			providerName,
+		))
+		return warnings
+	}
+	enricher.SetModelCatalog(models)
+	if version != "" {
+		if err := saveProviderCatalogCache(cacheRoot, providerName, version, models); err != nil {
 			warnings = append(warnings, fmt.Sprintf(
-				"Warning: discovered empty %s model catalog; using built-in fallback",
-				p.Name(),
+				"Warning: could not cache %s model catalog: %v",
+				providerName,
+				err,
 			))
-			continue
-		}
-		enricher.SetModelCatalog(models)
-		if version != "" {
-			if err := saveProviderCatalogCache(cacheRoot, p.Name(), version, models); err != nil {
-				warnings = append(warnings, fmt.Sprintf(
-					"Warning: could not cache %s model catalog: %v",
-					p.Name(),
-					err,
-				))
-			}
 		}
 	}
 	return warnings
+}
+
+func discoverModelCatalog(ctx context.Context, discoverer llm.CatalogDiscoverer, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	if progressDiscoverer, ok := discoverer.(llm.CatalogProgressDiscoverer); ok {
+		return progressDiscoverer.DiscoverModelCatalogWithProgress(ctx, report)
+	}
+	models, err := discoverer.DiscoverModelCatalog(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, nil
 }
 
 func showProviderStartupNotices(w io.Writer, notices []string, delay time.Duration) {
@@ -566,9 +636,9 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		}
 	}
 
-	stop = startSyncSpinner(os.Stderr, "Discovering models")
-	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir))
-	stop()
+	modelDiscovery := newModelDiscoveryProgressPrinter(os.Stderr)
+	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir), modelDiscovery.Report)
+	modelDiscovery.Done()
 	for _, w := range catalogWarnings {
 		fmt.Fprintln(os.Stderr, w)
 	}
@@ -642,20 +712,82 @@ func overrideColorProfile() (colorprofile.Profile, bool) {
 	return 0, false
 }
 
+type modelDiscoveryProgressPrinter struct {
+	mu      sync.Mutex
+	w       io.Writer
+	stop    func(doneLine bool)
+	stopped bool
+}
+
+func newModelDiscoveryProgressPrinter(w io.Writer) *modelDiscoveryProgressPrinter {
+	return &modelDiscoveryProgressPrinter{
+		w:    w,
+		stop: startSyncSpinnerControl(w, "Discovering models"),
+	}
+}
+
+func (p *modelDiscoveryProgressPrinter) Report(provider string, model llm.ModelInfo) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stopSpinnerLocked(false)
+	fmt.Fprintf(
+		p.w,
+		"Discovered: %s - %s\n",
+		startupProviderDisplayName(provider),
+		startupModelDisplayName(model),
+	)
+}
+
+func (p *modelDiscoveryProgressPrinter) Done() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stopSpinnerLocked(true)
+}
+
+func (p *modelDiscoveryProgressPrinter) stopSpinnerLocked(doneLine bool) {
+	if p.stopped {
+		return
+	}
+	p.stop(doneLine)
+	p.stopped = true
+}
+
+func startupProviderDisplayName(provider string) string {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return "Provider"
+	}
+	return strings.ToUpper(provider[:1]) + provider[1:]
+}
+
+func startupModelDisplayName(model llm.ModelInfo) string {
+	if displayName := strings.TrimSpace(model.DisplayName); displayName != "" {
+		return displayName
+	}
+	return strings.TrimSpace(model.ID)
+}
+
 // startSyncSpinner shows a "<msg>..." startup indicator on w. On a TTY the
 // trailing dots animate so the user can tell the process is still doing work;
 // on a non-TTY (CI, piped output) a single static line is printed instead. The
 // returned stop() blocks until the animation goroutine has cleared its line, so
 // subsequent writes to w don't collide with the spinner.
 func startSyncSpinner(w io.Writer, msg string) func() {
+	stop := startSyncSpinnerControl(w, msg)
+	return func() {
+		stop(true)
+	}
+}
+
+func startSyncSpinnerControl(w io.Writer, msg string) func(doneLine bool) {
 	f, _ := w.(*os.File)
 	isTTY := f != nil && term.IsTerminal(int(f.Fd()))
 	if !isTTY {
 		fmt.Fprintf(w, "%s...\n", msg)
-		return func() {}
+		return func(bool) {}
 	}
 
-	done := make(chan struct{})
+	done := make(chan bool)
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		frames := []string{".  ", ".. ", "..."}
@@ -665,9 +797,13 @@ func startSyncSpinner(w io.Writer, msg string) func() {
 		defer ticker.Stop()
 		for {
 			select {
-			case <-done:
+			case doneLine := <-done:
 				clear := strings.Repeat(" ", len(msg)+len(frames[0]))
-				fmt.Fprintf(w, "\r%s\r%s... done\n", clear, msg)
+				if doneLine {
+					fmt.Fprintf(w, "\r%s\r%s... done\n", clear, msg)
+				} else {
+					fmt.Fprintf(w, "\r%s\r", clear)
+				}
 				return
 			case <-ticker.C:
 				i = (i + 1) % len(frames)
@@ -675,8 +811,8 @@ func startSyncSpinner(w io.Writer, msg string) func() {
 			}
 		}
 	})
-	return func() {
-		close(done)
+	return func(doneLine bool) {
+		done <- doneLine
 		wg.Wait()
 	}
 }

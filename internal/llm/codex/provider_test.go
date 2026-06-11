@@ -541,6 +541,33 @@ func TestParseCodexModelCatalog_FiltersAndMapsVisibleAPIModels(t *testing.T) {
 	}
 }
 
+func TestParseCodexModelCatalogWithProgress_ReportsVisibleAPIModels(t *testing.T) {
+	catalogJSON := []byte(`{"models":[
+		{"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":272000},
+		{"slug":"hidden-model","display_name":"Hidden","visibility":"hide","supported_in_api":true,"context_window":272000},
+		{"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":1000000}
+	]}`)
+	var reported []string
+
+	models, err := parseCodexModelCatalogWithProgress(catalogJSON, func(model llm.ModelInfo) {
+		reported = append(reported, model.ID)
+	})
+	if err != nil {
+		t.Fatalf("parseCodexModelCatalogWithProgress() error: %v", err)
+	}
+	gotIDs := make([]string, 0, len(models))
+	for _, model := range models {
+		gotIDs = append(gotIDs, model.ID)
+	}
+	wantIDs := []string{"gpt-5.5[272K]", "gpt-5.4[272K]", "gpt-5.4[1M]"}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("model IDs = %v, want %v", gotIDs, wantIDs)
+	}
+	if !slices.Equal(reported, wantIDs) {
+		t.Fatalf("reported = %v, want %v", reported, wantIDs)
+	}
+}
+
 func TestProviderDiscoverModelCatalog_FallsBackToBundledCatalog(t *testing.T) {
 	var calls [][]string
 	p := &Provider{

@@ -70,10 +70,14 @@ type stubCatalogDiscoveryProvider struct {
 	versionInfo string
 	versionErr  error
 	discoveries int
+	discoverFn  func(context.Context) ([]llm.ModelInfo, error)
 }
 
-func (s *stubCatalogDiscoveryProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+func (s *stubCatalogDiscoveryProvider) DiscoverModelCatalog(ctx context.Context) ([]llm.ModelInfo, error) {
 	s.discoveries++
+	if s.discoverFn != nil {
+		return s.discoverFn(ctx)
+	}
 	return s.discovered, s.discoverErr
 }
 
@@ -104,7 +108,7 @@ func TestDiscoverProviderCatalogsSetsCatalogAndWarnsOnFailure(t *testing.T) {
 	}
 	plain := &stubProvider{name: "plain", hasCLI: true}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{success, failure, plain}, t.TempDir())
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{success, failure, plain}, t.TempDir(), nil)
 	if len(success.catalog) != 1 || success.catalog[0].ID != "live-model" {
 		t.Fatalf("success catalog = %+v, want live-model", success.catalog)
 	}
@@ -116,6 +120,88 @@ func TestDiscoverProviderCatalogsSetsCatalogAndWarnsOnFailure(t *testing.T) {
 	}
 	if !strings.Contains(warnings[0], "failure") || !strings.Contains(warnings[0], "catalog unavailable") {
 		t.Fatalf("warning = %q, want provider name and error", warnings[0])
+	}
+}
+
+func TestDiscoverProviderCatalogsReportsDiscoveredModels(t *testing.T) {
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "success", hasCLI: true},
+		discovered: []llm.ModelInfo{
+			{ID: "live-model", DisplayName: "Live Model", ContextWindow: 123_000, Category: "capable"},
+		},
+	}
+	var reported []string
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, "", func(provider string, model llm.ModelInfo) {
+		reported = append(reported, provider+":"+model.DisplayName)
+	})
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if !slices.Equal(reported, []string{"success:Live Model"}) {
+		t.Fatalf("reported = %v, want discovered model", reported)
+	}
+}
+
+func TestDiscoverProviderCatalogsRunsProvidersConcurrently(t *testing.T) {
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	closeRelease := func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}
+	defer closeRelease()
+
+	provider := func(name string) *stubCatalogDiscoveryProvider {
+		return &stubCatalogDiscoveryProvider{
+			stubProvider: stubProvider{name: name, hasCLI: true},
+			discoverFn: func(ctx context.Context) ([]llm.ModelInfo, error) {
+				started <- name
+				select {
+				case <-release:
+					return []llm.ModelInfo{{ID: name + "-model", DisplayName: name + " Model"}}, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		}
+	}
+	first := provider("first")
+	second := provider("second")
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan []string, 1)
+	go func() {
+		done <- discoverProviderCatalogs(ctx, []llm.LLMProvider{first, second}, "", nil)
+	}()
+
+	seen := make(map[string]bool)
+	for len(seen) < 2 {
+		select {
+		case name := <-started:
+			seen[name] = true
+		case <-time.After(250 * time.Millisecond):
+			closeRelease()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+			}
+			t.Fatalf("providers did not start concurrently; started = %v", seen)
+		}
+	}
+
+	closeRelease()
+	select {
+	case warnings := <-done:
+		if len(warnings) != 0 {
+			t.Fatalf("warnings = %v, want none", warnings)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("discoverProviderCatalogs did not return after releasing providers")
 	}
 }
 
@@ -133,7 +219,7 @@ func TestDiscoverProviderCatalogsLoadsVersionedCache(t *testing.T) {
 		discoverErr:  errors.New("discovery should not run"),
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)
 	}
@@ -156,7 +242,7 @@ func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
 		discovered:   discovered,
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)
 	}
@@ -189,7 +275,7 @@ func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 		},
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "ignoring cached corrupt model catalog") {
 		t.Fatalf("warnings = %v, want corrupt cache warning", warnings)
 	}

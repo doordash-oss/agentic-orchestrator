@@ -113,6 +113,17 @@ type CatalogDiscoverer interface {
 	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
 }
 
+// ModelDiscoveryReporter receives models as soon as a provider discovers them.
+// It is best-effort and should be safe to call from provider discovery
+// goroutines.
+type ModelDiscoveryReporter func(ModelInfo)
+
+// CatalogProgressDiscoverer is implemented by providers that can stream
+// model discovery progress before returning the final catalog.
+type CatalogProgressDiscoverer interface {
+	DiscoverModelCatalogWithProgress(ctx context.Context, report ModelDiscoveryReporter) ([]ModelInfo, error)
+}
+
 // Protocol handles the wire-level communication with a provider's CLI process.
 // One instance is created per session. Implementations hold provider-specific
 // state (e.g. Codex thread IDs, handshake channels).

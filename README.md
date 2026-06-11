@@ -1,39 +1,39 @@
 # Agentic Orchestrator
 
-### One-shot the moonshot — then do it ten times in parallel.
+### 'Na sola botta â luna — e po' diece vote 'nsieme.
 
-Agentic Orchestrator is an AI development workflow orchestrator that turns any engineer into a force multiplier. Describe your features, make the high-level decisions, and AI handles the rest — research, planning, implementation, code review, pull request — all running concurrently from a single terminal.
+Agentic Orchestrator è 'nu orchestratore 'e workflow 'e sviluppo AI ca trasfòrma cualsiasi ingegnere 'n'nu moltiplicatore 'e forze. Descrive 'e tue feature, piglie 'e decisione 'e alto livello, e 'o AI fa 'o rimanente — ricerca, pianificazione, implementazione, code review, pull request — tutto ca gira 'nzieme 'a 'nu solo terminale.
 
-> The local CLI is `agentico`
+> 'O CLI locale è `agentico`
 
 <img width="3000" height="1800" alt="agentico-basic-flow-3000x1800" src="https://github.com/user-attachments/assets/b61ccb6e-3b0d-4b29-9b74-ade9a3917e82" />
 
-## Why Agentic Orchestrator?
+## Pecché Agentic Orchestrator?
 
-The hard part of agentic coding is not asking a model to edit files. The hard part is getting from a vague, high-level feature request to a reviewable PR without losing context, skipping design work, or letting a bad plan produce a huge diff. Left unmanaged, this is how teams get AI slop: plausible-looking code produced faster than the context, tests, and review process needed to make it trustworthy. Agentic Orchestrator is built around that problem: it turns one feature prompt into a durable engineering workflow that gathers context, asks questions, designs the approach, decomposes the work, implements it, verifies it, reviews it, and publishes it.
+'A parte difficile d''o coding agentico nun è dicere a 'nu modello 'e cambiare 'e file. 'A parte difficile è passare 'a 'na richiesta vaga 'e alto livello a 'na PR revisionabile senza perdere 'o contesto, saltare 'o lavoro 'e design, o lassare ca 'nu piano sbagliato produca 'na diff enorme. Senza gestione, è accussì ca 'e squadre si ritrovano c''o AI slop: codice ca pare giusto ma viene prodotto cchiù veloce d''o contesto, d''e test e d''o processo 'e revisione necessari pè rennere 'o codice affidabile. Agentic Orchestrator è costruito attorno a chisto problema: trasfòrma 'nu solo prompt 'e feature 'n'nu workflow ingegneristico duraturo ca raccoglie contesto, fa domande, progetta l'approccio, decompone 'o lavoro, l'implementa, 'o verifica, 'o rivede e 'o pubblica.
 
-That is the real "oneshot" value: an engineer can describe a large feature once, then supervise the checkpoints where judgment matters instead of manually shepherding every prompt, terminal session, worktree, test run, review pass, and PR step.
+Chisto è 'o valore vero d''o "oneshot": 'nu ingegnere po' descrivere 'na feature grossa 'na sola vota, e po' supervisionare 'e checkpoint addò conta 'o giudizio invece 'e guidare a mano ogni prompt, sessione d''o terminale, worktree, test run, revisione e passo 'e PR.
 
-- **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
-- **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
-- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
-- **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
-- **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
-- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add a second to split the work. By default Claude handles context gathering, planning, and implementation while Codex handles independent review, but models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
+- **'O contesto se costruisce, nun se spera** — 'E feature Large e Moonshot partono costruenno 'na knowledge base pe repo, e po' eseguono fasi 'e inquiry, ricerca e design prima 'e pianificare. L'agente 'e implementazione legge artefatti strutturati invece 'e basarsi 'ncopp'a 'na sola chat history sovraccaricata.
+- **'A complessità è suddivisa 'n fasi** — 'A pianificazione produce 'nu roadmap, e po' ogni fase d''o roadmap tene 'o proprio piano dettagliato. 'Na fase tracer-bullet stabilisce 'a strada; 'e fasi TDD successive ritirano 'e stub e ampliano 'a copertura.
+- **'E controlli 'e qualità vengono prima ca 'a diff diventa costosa** — 'E validatori 'e piano revisionano architettura, scope, struttura, e, pe lavori ad alto rischio, sicurezza, performance e testing. 'E loop 'e implementazione e 'e Final Review usano prove 'e verifica esplicite prima ca 'a feature diventa pubblicabile.
+- **L'attenzione umana è riservata â decisioni** — Gate opzionali si fermano pe decisioni 'e inquiry, ricerca, design, piano, user-input e publish. Appruove 'a direzione, chiedi iterazione, o rispunne a domande mirate; l'orchestratore tene 'o stato d''o workflow.
+- **'O parallelismo è 'o moltiplicatore, nun 'a premessa** — Pecché ogni feature ha worktree, branch, sessioni e artefatti isolati, puoi gestire cchiù workflow complessi 'nsieme senza mescolare stati o bloccare 'o tuo checkout principale.
+- **L'orchestrazione d''e provider è esplicita** — Uno solo provider basta pe eseguire l'intero workflow; aggiungine 'nu secondo pe dividere 'o lavoro. 'E default Claude gestisce raccolta d''o contesto, pianificazione e implementazione mentre Codex fa 'a revisione indipendente, ma 'e modelli possono essere sovrascritti pe fase e scambiati a runtime. Usa `--providers` pè limitare l'orchestratore ai CLI ca haie davero installato.
 
-The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
+'O design segue 'e pattern descritti nell'articolo [Costruire Agenti Efficaci](https://www.anthropic.com/engineering/building-effective-agents) 'e Anthropic: prompt chaining, parallelizzazione, orchestrator-workers e loop evaluator-optimizer. Codifica pure 'o workflow [esplora → pianifica → codifica](https://code.claude.com/docs/en/best-practices) 'e Claude Code e 'a guida 'e OpenAI sull'agente [orchestrazione e guardrail](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
-## Quick Start
+## 'A Partenza
 
-Use Homebrew if you have it; otherwise grab the prebuilt binary. Build from source only if you're working on agentico itself.
+Usa Homebrew si 'o tiene già; sinnò pigliate 'o binario precompilato. Costruisce dall'origine sulo si staje lavoranno 'ncopp'a agentico stesso.
 
-**Homebrew** (recommended — macOS/Linux):
+**Homebrew** (consigliato — macOS/Linux):
 
 ```bash
 brew install doordash-oss/agentic-orchestrator/agentico
 ```
 
-**Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):
+**Binario precompilato** — senza Homebrew o Go (macOS/Linux, amd64/arm64):
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -41,48 +41,50 @@ ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/doordash-oss/agentic-orchestrator/releases/latest | sed 's@.*/@@')
 mkdir -p ~/.local/bin
 curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/download/${TAG}/agentic-orchestrator_${TAG#v}_${OS}_${ARCH}.tar.gz" | tar -xz -C ~/.local/bin agentico
-# ensure ~/.local/bin is on your PATH
+# assicurate ca ~/.local/bin sia 'ncopp'ô vostro PATH
 ```
 
-**From source** — for contributing to agentico (Go 1.25+):
+**Dall'origine** — pe chi contribuisce a agentico (Go 1.25+):
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 # or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-Then run `agentico`. Update any time with `agentico update` — it uses the right method for how you installed.
+Po' avviate `agentico`. Aggiornate quann' vulite c''o `agentico update` — usa 'o metodo giusto pe come l'haie installato.
 
-On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
+'A prima vota ca 'o fate partire, Agentic Orchestrator v'accompagna attreverso 'nu flusso 'e benvenuto pe scegliere 'e directory d''o workspace. Doppo, site 'ncopp'ô dashboard.
 
-**Three keys to remember**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Everything else is discoverable from the help overlay.
+**Tre tasti ca nun v'abbandonate**: `n` ('na nova feature), `?` (aiuto), `a` (guarda 'o lavoro attivo; rispunne, approva, o rivedi quann' te 'o chiede). Tutto 'o rimanente 'o truvate 'a l'overlay d'aiuto.
 
-## Prerequisites
+<a id="prerequisites"></a>
+<a name="prerequisites"></a>
+## Prerequisiti
 
-### Required
+### Obbligatori
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
-| **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
+| **`git`** | Operazioni 'e worktree, branch, commit e rebase | Pre-installato 'ncopp'a 'a maggior parte d''e sistemi |
+| **`gh` CLI** | Creazione 'e PR al push e aggiornamento d''o corpo 'e PR cross-repo durante 'o Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), e po' `gh auth login` |
 
-### Provider CLIs — install at least one
+### Provider CLI — Installane Almeno Uno
 
-Agentic Orchestrator needs **at least one** AI provider CLI.
+Agentic Orchestrator tene bisogno 'e **almeno uno** AI provider CLI.
 
 | Tool | Role | Install |
 |------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend predefinito pe KB, inquiry, ricerca, design, pianificazione, implementazione e chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Backend predefinito pe 'a Final Review e 'e modelli 'e revisione supportati 'a Codex | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
 
-### Optional
+### Opzionali
 
 | Tool | Purpose | Install |
 |------|---------|---------|
-| **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
-| **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
+| **Go 1.25+** | Serve sulo pe costruire `agentico` dall'origine — nun è necessario quann' usi 'nu [binario precompilato](#a-partenza) | [go.dev](https://go.dev/dl/) |
+| **Node.js 18+ and npm** | Serve sulo quann' stai installando Claude Code o Codex tramite npm | [nodejs.org](https://nodejs.org/) |
 
-After installing your provider CLI(s), run `claude auth status` and/or `codex login status`, plus `gh auth status`, before launching `agentico`.
+Doppo 'e installà 'o/i provider CLI, esegui `claude auth status` e/o `codex login status`, cchiù `gh auth status`, prima 'e lanciare `agentico`.
 
 ## How It Works
 

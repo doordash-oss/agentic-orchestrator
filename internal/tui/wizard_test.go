@@ -542,6 +542,79 @@ func TestWizardWhatStepShiftTabFromDesc(t *testing.T) {
 	}
 }
 
+func TestWizardWhatStepShiftEnterInDescriptionInsertsNewline(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m, _ = m.Update(tea.KeyPressMsg{Text: "name"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "line1"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "line2"})
+
+	if got := m.descInput.Value(); got != "line1\nline2" {
+		t.Fatalf("description = %q, want %q", got, "line1\nline2")
+	}
+	if m.step != wizardStepWhat {
+		t.Fatalf("step = %d, want What after Shift+Enter newline", m.step)
+	}
+}
+
+func TestWizardWhatStepDownFromNameFocusesDescription(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m, _ = m.Update(tea.KeyPressMsg{Text: "name"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+
+	if m.whatFocus != 1 {
+		t.Fatalf("whatFocus = %d, want description focus", m.whatFocus)
+	}
+	if m.nameInput.Focused() {
+		t.Fatal("name input should be blurred after Down")
+	}
+	if !m.descInput.Focused() {
+		t.Fatal("description input should be focused after Down")
+	}
+}
+
+func TestWizardWhatStepUpFromDescriptionFirstLineFocusesName(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m.nameInput.SetValue("name")
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "description"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+
+	if m.whatFocus != 0 {
+		t.Fatalf("whatFocus = %d, want name focus", m.whatFocus)
+	}
+	if !m.nameInput.Focused() {
+		t.Fatal("name input should be focused after Up from first description line")
+	}
+	if m.descInput.Focused() {
+		t.Fatal("description input should be blurred after Up from first description line")
+	}
+}
+
+func TestWizardWhatStepUpInsideWrappedDescriptionStaysInDescription(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m.nameInput.SetValue("name")
+	m.descInput.SetWidth(4)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "abcdef"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+
+	if m.whatFocus != 1 {
+		t.Fatalf("whatFocus = %d, want description focus", m.whatFocus)
+	}
+	if !m.descInput.Focused() {
+		t.Fatal("description input should remain focused when moving within wrapped text")
+	}
+	if got := m.descInput.col; got != 2 {
+		t.Fatalf("description cursor col = %d, want 2 after moving up one visual line", got)
+	}
+}
+
 // --- Review step only responds to G ---
 
 func TestWizardReviewEnterIsNoOp(t *testing.T) {

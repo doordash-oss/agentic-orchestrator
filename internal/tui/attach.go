@@ -848,7 +848,7 @@ func NewAttachModel(tabs []repoTab, initialIdx int, featureID string, width, hei
 		PageDown: key.NewBinding(key.WithKeys("pgdown")),
 	}
 
-	ti := textarea.New()
+	ti := newStyledTextarea()
 	ti.Placeholder = attachMessagePlaceholder
 	ti.CharLimit = 4096
 	ti.SetWidth(inputW)

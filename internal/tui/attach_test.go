@@ -120,6 +120,16 @@ func TestAttachModelView(t *testing.T) {
 	}
 }
 
+func TestAttachModelViewDoesNotUseDarkTextareaCursorLine(t *testing.T) {
+	sess := session.NewSession("test-view-light-bg", "feat-1", 0)
+	m := attachModelFromSession(sess, 80, 24)
+
+	view := m.View()
+	if strings.Contains(view, "\x1b[40m") || strings.Contains(view, "\x1b[48;5;0m") {
+		t.Fatalf("attach view rendered Bubble textarea's dark cursor-line background: %q", view)
+	}
+}
+
 func TestAttachModelViewUsesWatchVocabulary(t *testing.T) {
 	sess := session.NewSession("test-view-watch", "feat-1", feature.PhaseImplement)
 	m := attachModelFromSession(sess, 80, 24)

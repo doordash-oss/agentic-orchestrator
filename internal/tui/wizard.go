@@ -420,6 +420,31 @@ func (m WizardModel) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+func wizardDescriptionNewlineKey(msg tea.KeyPressMsg) bool {
+	if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+j", "alt+enter", "shift+enter"))) {
+		return true
+	}
+	return msg.Code == tea.KeyEnter && msg.Mod.Contains(tea.ModShift)
+}
+
+func (m *WizardModel) focusWhatName() tea.Cmd {
+	m.descInput.Blur()
+	m.whatFocus = 0
+	return m.nameInput.Focus()
+}
+
+func (m *WizardModel) focusWhatDescription() tea.Cmd {
+	m.nameInput.Blur()
+	m.whatFocus = 1
+	return m.descInput.Focus()
+}
+
+func (m WizardModel) insertDescriptionNewline() (WizardModel, tea.Cmd) {
+	var cmd tea.Cmd
+	m.descInput, cmd = m.descInput.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	return m, cmd
+}
+
 // isTextInputStep returns true if the current step has an active text input.
 func (m WizardModel) isTextInputStep() bool {
 	if m.step == wizardStepReview && m.summaryEditing &&
@@ -1187,12 +1212,14 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			// Esc goes back; on first step goBack() cancels the wizard
 			return m.goBack()
 
-		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+j", "alt+enter"))):
+		case wizardDescriptionNewlineKey(msg):
 			// On wizardStepWhat when description is focused, insert newline
 			if m.step == wizardStepWhat && m.whatFocus == 1 {
-				var cmd tea.Cmd
-				m.descInput, cmd = m.descInput.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-				return m, cmd
+				return m.insertDescriptionNewline()
+			}
+			if key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))) ||
+				msg.Mod.Contains(tea.ModShift) {
+				return m, nil
 			}
 			// On other steps/cases, treat as advance — respect picker guards
 			if m.filePicker.IsActive() {
@@ -1270,10 +1297,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			}
 			// On wizardStepWhat with name focused, move to description first
 			if m.step == wizardStepWhat && m.whatFocus == 0 {
-				m.nameInput.Blur()
-				m.whatFocus = 1
-				cmd := m.descInput.Focus()
-				return m, cmd
+				return m, m.focusWhatDescription()
 			}
 			// Where step: Enter is contextual based on the focus axis.
 			if m.step == wizardStepWhere {
@@ -1298,10 +1322,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.step == wizardStepWhat {
 				// If description focused, switch to name
 				if m.whatFocus == 1 {
-					m.descInput.Blur()
-					m.whatFocus = 0
-					m.nameInput.Focus()
-					return m, textinput.Blink
+					return m, m.focusWhatName()
 				}
 				// Already on name (first step) — no-op
 				return m, nil
@@ -1315,15 +1336,9 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.step == wizardStepWhat {
 				// Toggle whatFocus between 0 (name) and 1 (description)
 				if m.whatFocus == 0 {
-					m.nameInput.Blur()
-					m.whatFocus = 1
-					cmd := m.descInput.Focus()
-					return m, cmd
+					return m, m.focusWhatDescription()
 				}
-				m.descInput.Blur()
-				m.whatFocus = 0
-				m.nameInput.Focus()
-				return m, textinput.Blink
+				return m, m.focusWhatName()
 			}
 			if m.step == wizardStepWhere {
 				// Tab cycles list -> Browse -> Create (if visible) -> Continue -> list.
@@ -1343,8 +1358,12 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.filePicker.IsActive() {
 				return m, nil
 			}
-			// On wizardStepWhat with description focused, let textarea handle cursor
+			// On wizardStepWhat with description focused, leave the field only
+			// from its top visual line; otherwise let textarea move the cursor.
 			if m.step == wizardStepWhat && m.whatFocus == 1 {
+				if m.descInput.atFirstVisualLine() {
+					return m, m.focusWhatName()
+				}
 				break
 			}
 			if m.step == wizardStepWhere {
@@ -1396,6 +1415,9 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			(!m.isTextInputStep() && key.Matches(msg, key.NewBinding(key.WithKeys("j")))):
 			if m.filePicker.IsActive() {
 				return m, nil
+			}
+			if m.step == wizardStepWhat && m.whatFocus == 0 {
+				return m, m.focusWhatDescription()
 			}
 			// On wizardStepWhat with description focused, let textarea handle cursor
 			if m.step == wizardStepWhat && m.whatFocus == 1 {

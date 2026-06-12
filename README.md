@@ -74,8 +74,8 @@ Agentic Orchestrator tene bisogno 'e **almeno uno** AI provider CLI.
 
 | Tool | Role | Install |
 |------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Backend predefinito pe KB, inquiry, ricerca, design, pianificazione, implementazione e chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Backend predefinito pe 'a Final Review e 'e modelli 'e revisione supportati 'a Codex | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend predefinito pe KB, inquiry, ricerca, design, pianificazione, implementazione e chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) o `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Backend predefinito pe 'a Final Review e 'e modelli 'e revisione supportati 'a Codex | [Codex CLI setup](https://developers.openai.com/codex/cli) o `npm i -g @openai/codex@latest` |
 
 ### Opzionali
 

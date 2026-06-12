@@ -77,6 +77,14 @@ func TestChatModelViewEmptyState(t *testing.T) {
 	}
 }
 
+func TestChatModelViewDoesNotUseDarkTextareaCursorLine(t *testing.T) {
+	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	view := m.View()
+	if strings.Contains(view, "\x1b[40m") || strings.Contains(view, "\x1b[48;5;0m") {
+		t.Fatalf("chat view rendered Bubble textarea's dark cursor-line background: %q", view)
+	}
+}
+
 func TestChatModelEscWhileRespondingMinimizes(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
 	m.responding = true

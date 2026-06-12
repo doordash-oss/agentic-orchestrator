@@ -1166,7 +1166,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if f, err := m.featureManager.Get(msg.FeatureID); err == nil {
 			m.refactorFeatureName = f.Name
 		}
-		ta := textarea.New()
+		ta := newStyledTextarea()
 		ta.Placeholder = "Describe the refactoring for " + msg.RepoName + "..."
 		if m.dashboard.getLayoutMode() == layoutNarrow {
 			m = m.transitionTo(ViewDetail, msg.FeatureID)

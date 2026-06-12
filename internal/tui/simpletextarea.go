@@ -137,6 +137,10 @@ func (t *SimpleTextarea) Line() int {
 	return t.row
 }
 
+func (t SimpleTextarea) atFirstVisualLine() bool {
+	return t.row == 0 && t.col < max(t.width, 1)
+}
+
 // LineCount returns the number of lines.
 func (t *SimpleTextarea) LineCount() int {
 	return len(t.lines)

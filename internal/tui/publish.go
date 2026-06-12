@@ -134,7 +134,7 @@ func newPublishViewport(width, height int, prTitle, prBody, diff string) (viewpo
 		ti.SetValue(prTitle)
 	}
 
-	ta := textarea.New()
+	ta := newStyledTextarea()
 	ta.Placeholder = "PR body (markdown)"
 	ta.SetWidth(max(width-8, 40))
 	ta.SetHeight(max(height-14, 8))

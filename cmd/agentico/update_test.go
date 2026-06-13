@@ -45,6 +45,14 @@ func failingUpdater(t *testing.T) updater {
 	}
 }
 
+func failingServerLauncher(t *testing.T) serverLauncher {
+	t.Helper()
+	return func(string, string, bool, []string) int {
+		t.Fatal("server seam invoked on a non-server launch path")
+		return 1
+	}
+}
+
 // --- Task 1: parser surface for `update` ------------------------------------
 
 func TestParseLaunchArgsUpdateSurface(t *testing.T) {
@@ -122,6 +130,7 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 			var gotCheck, updateCalled, launchCalled bool
 			code := runArgs(tt.args, &stdout, &stderr,
 				func(string, string, bool, []string, bool) { launchCalled = true },
+				failingServerLauncher(t),
 				func(checkOnly bool, _, _ io.Writer) int {
 					updateCalled = true
 					gotCheck = checkOnly
@@ -149,6 +158,7 @@ func TestRunArgsDefaultStillLaunchesTUINotUpdate(t *testing.T) {
 	var launchCalled, updateCalled bool
 	code := runArgs(nil, &stdout, &stderr,
 		func(string, string, bool, []string, bool) { launchCalled = true },
+		failingServerLauncher(t),
 		func(bool, io.Writer, io.Writer) int { updateCalled = true; return 1 },
 	)
 	if !launchCalled {

@@ -217,7 +217,7 @@ observability:
 
 ## Launch Flags
 
-Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agentico [flags]`. Feature name, description, repos, checkpoint selection, and publish gating are selected inside the feature creation wizard.
+Launch flags configure how the TUI or foreground server starts. Start the direct TUI with `agentico [flags]` or the loopback HTTP server with `agentico server [flags]`. Feature name, description, repos, checkpoint selection, and publish gating are selected inside the feature creation wizard.
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -228,6 +228,8 @@ Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agen
 | `--dangerously-skip-permissions` | Skip all permission prompts | `false` |
 | `--help`, `-h` | Print usage | - |
 | `--version`, `-v` | Print version | - |
+
+The same launch flags are accepted by `agentico server`.
 
 ## Updating
 

@@ -254,6 +254,7 @@ Use `agentico --refresh-models` when a provider CLI shows new models but Agentic
 
 ```text
 agentico [flags]
+agentico server [flags]
 
 Flags:
   --config <path>                  Config file (default: ~/.agentic-orchestrator/config.yaml)
@@ -264,6 +265,9 @@ Flags:
   --help, -h                       Show help
   --version, -v                    Show version
 ```
+
+`agentico` starts the direct TUI. `agentico server` starts the foreground
+loopback HTTP server for the selected runtime and uses the same launch flags.
 
 ### Updating
 

@@ -359,6 +359,17 @@ func WithObserver(o Observer) AppOption {
 	return func(a *AppModel) { a.observer = o }
 }
 
+// WithStartupRecovery injects recovery scan results from the launcher
+// bootstrap so non-TUI launch modes can share the same startup gate.
+func WithStartupRecovery(items []session.RecoveryItem, scanOK bool) AppOption {
+	copied := append([]session.RecoveryItem(nil), items...)
+	return func(a *AppModel) {
+		a.startupRecoveryProvided = true
+		a.startupRecoveryScanOK = scanOK
+		a.startupRecoveryItems = copied
+	}
+}
+
 // notifyType distinguishes notification categories so they get independent cooldowns.
 type notifyType int
 
@@ -541,10 +552,18 @@ type AppModel struct {
 	// Cached KB stale warnings per feature ID.
 	// Computed lazily; cleared when KB phase completes.
 	kbStaleWarnings map[string]string
+
+	startupRecoveryProvided bool
+	startupRecoveryScanOK   bool
+	startupRecoveryItems    []session.RecoveryItem
 }
 
 func NewAppModel(fm *feature.Manager, sm *session.Manager, orch orchestratorAPI, permCache *permission.Cache, eventCh chan interface{}, opts ...AppOption) (AppModel, error) {
 	stateDir := fm.Store.BaseDir
+	var startupOpts AppModel
+	for _, opt := range opts {
+		opt(&startupOpts)
+	}
 
 	// Scan for recovery items before any startup sweep. A second Agentic
 	// process must surface the recovery screen without first interrupting the
@@ -561,7 +580,10 @@ func NewAppModel(fm *feature.Manager, sm *session.Manager, orch orchestratorAPI,
 	// slice, which is the correct default — no orphans visible → no recovery UI.
 	var recoveryItems []session.RecoveryItem
 	recoveryScanOK := orch == nil
-	if orch != nil {
+	if startupOpts.startupRecoveryProvided {
+		recoveryItems = append([]session.RecoveryItem(nil), startupOpts.startupRecoveryItems...)
+		recoveryScanOK = startupOpts.startupRecoveryScanOK
+	} else if orch != nil {
 		portItems, err := orch.ScanRecovery(context.Background())
 		if err != nil {
 			log.Printf("startup recovery scan: %v", err)

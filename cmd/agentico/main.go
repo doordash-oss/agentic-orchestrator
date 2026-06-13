@@ -16,13 +16,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -41,6 +45,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
@@ -74,6 +79,7 @@ const (
 	launchModeVersion
 	launchModeUpdate
 	launchModeValidateArtifacts
+	launchModeServer
 )
 
 type launchOptions struct {
@@ -96,6 +102,8 @@ type validateArtifactsOptions struct {
 }
 
 type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool)
+
+type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) int
 
 // updater is the injectable update seam. It mirrors tuiLauncher: production
 // wiring passes the real updater, tests pass a fake. It returns the process
@@ -129,10 +137,10 @@ func pickRuntimeParent(stat func(string) (os.FileInfo, error)) string {
 }
 
 func run() {
-	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runTUI, runUpdate))
+	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runTUI, runServer, runUpdate))
 }
 
-func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update updater) int {
+func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, launchServer serverLauncher, update updater) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -153,6 +161,8 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update
 		return update(opts.updateCheck, stdout, stderr)
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
+	case launchModeServer:
+		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders)
 	default:
 		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 		return 0
@@ -172,6 +182,10 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == "validate-artifacts" {
 		opts.mode = launchModeValidateArtifacts
 		return parseValidateArtifactsArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == "server" {
+		opts.mode = launchModeServer
+		args = args[1:]
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -262,10 +276,12 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
 Usage: agentico [flags]
+       agentico server [flags]
        agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
 
 Launches the Bubble Tea TUI dashboard.
+Run 'agentico server' to start the foreground loopback HTTP server.
 Run 'agentico update' to upgrade the binary, or 'agentico update --check'
 (alias -n) to report the latest available release without installing.
 Run 'agentico validate-artifacts' from agent sessions before phase_complete
@@ -687,52 +703,96 @@ func formatNoReadyProviderMessage(all []llm.LLMProvider, issues []providerReadin
 	return b.String()
 }
 
-func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) {
-	lock, acquired, owner, err := instancelock.Acquire(filepath.Dir(stateDir), stateDir, configPath, tui.GetVersion())
+type runtimeLockBusyError struct {
+	stateDir string
+	owner    instancelock.Owner
+}
+
+func (e runtimeLockBusyError) Error() string {
+	return formatInstanceLockBusyMessage(e.stateDir, e.owner)
+}
+
+type runtimeBootstrap struct {
+	lock            *instancelock.Lock
+	owner           instancelock.Owner
+	fxApp           *fx.App
+	featureManager  *feature.Manager
+	sessionManager  *session.Manager
+	orchestrator    *orchestrator.Orchestrator
+	registry        *llm.Registry
+	cfg             *config.Config
+	phaseRunner     *agent.PhaseRunner
+	observer        *observe.Observer
+	permissionCache *permission.Cache
+	eventCh         chan interface{}
+	runtime         serverruntime.RuntimeIdentity
+	workspaceDir    string
+	recoveryItems   []session.RecoveryItem
+	recoveryScanOK  bool
+}
+
+func (b *runtimeBootstrap) Close(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	var errStop error
+	if b.fxApp != nil {
+		errStop = b.fxApp.Stop(ctx)
+		b.fxApp = nil
+	}
+	var errLock error
+	if b.lock != nil {
+		errLock = b.lock.Close()
+		b.lock = nil
+	}
+	return errors.Join(errStop, errLock)
+}
+
+func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stdin io.Reader, stderr io.Writer) (*runtimeBootstrap, error) {
+	runtimeDir := filepath.Dir(stateDir)
+	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, tui.GetVersion())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error acquiring instance lock: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("acquiring instance lock: %w", err)
 	}
 	if !acquired {
-		fmt.Fprint(os.Stderr, formatInstanceLockBusyMessage(stateDir, owner))
-		os.Exit(1)
+		return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
 	}
+	boot := &runtimeBootstrap{
+		lock:  lock,
+		owner: owner,
+		runtime: serverruntime.RuntimeIdentity{
+			RuntimeDir: runtimeDir,
+			StateDir:   stateDir,
+			Config:     configPath,
+		},
+	}
+	success := false
 	defer func() {
-		if err := lock.Close(); err != nil {
-			log.Printf("release instance lock: %v", err)
+		if !success {
+			_ = boot.Close(context.Background())
 		}
 	}()
 
-	// Detect first-run before config is loaded (LoadOrCreate will create it).
 	configIsNew := !fileExists(configPath)
-
 	workspaceDir, _ := os.Getwd()
-	tui.SetMarkdownRenderer(markdown.Render)
+	eventCh := make(chan interface{}, 1000)
 
-	// Use fx for dependency injection only — not lifecycle management.
-	// The TUI's p.Run() is the main event loop; fx.App.Run() would block
-	// forever after it returns waiting for SIGINT/SIGTERM.
-	var app tui.AppModel
 	var fm *feature.Manager
 	var sm *session.Manager
 	var orch *orchestrator.Orchestrator
 	var registry *llm.Registry
 	var cfg *config.Config
 	var phaseRunner *agent.PhaseRunner
+	var observer *observe.Observer
+	var permissionCache *permission.Cache
 	fxApp := fx.New(
-		// Infrastructure
 		fx.Supply(
 			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
 			fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`)),
 			fx.Annotate(dangerouslySkipPerms, fx.ResultTags(`name:"dsp"`)),
 			fx.Annotate(workspaceDir, fx.ResultTags(`name:"workspaceDir"`)),
+			fx.Annotate(eventCh, fx.ResultTags(`name:"eventCh"`)),
 		),
-		fx.Provide(fx.Annotate(
-			func() chan interface{} { return make(chan interface{}, 1000) },
-			fx.ResultTags(`name:"eventCh"`),
-		)),
-
-		// Modules
 		config.Module,
 		feature.Module,
 		git.Module,
@@ -743,90 +803,72 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		fx.Options(providerFxModules(enabledProviders)...),
 		agent.Module,
 		orchestrator.Module,
-		tuiModule,
-
-		// Apply notification settings after config is loaded
 		fx.Invoke(func(c *config.Config) {
 			if c.Notifications.TerminalBundleID != "" {
 				tui.SetTerminalBundleID(c.Notifications.TerminalBundleID)
 			}
 		}),
-
-		// Extract components for use after fx.Start
-		fx.Populate(&app, &fm, &sm, &orch, &registry, &cfg, &phaseRunner),
-
-		// Silence fx startup/shutdown logs
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache),
 		fx.NopLogger,
 	)
-
-	if err := fxApp.Start(context.Background()); err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing: %v\n", err)
-		os.Exit(1)
+	boot.fxApp = fxApp
+	if err := fxApp.Start(ctx); err != nil {
+		return nil, fmt.Errorf("initializing: %w", err)
 	}
 
-	// Check provider CLIs after fx initialization (registry is now populated)
-	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(context.Background(), registry)
+	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return nil, err
 	}
 	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, w)
+		fmt.Fprintln(stderr, w)
 	}
 
-	// Check required external tools (git, gh).
 	toolErrors, toolWarnings := agent.CheckRequiredTools()
 	for _, w := range toolWarnings {
-		fmt.Fprintln(os.Stderr, w)
+		fmt.Fprintln(stderr, w)
 	}
 	if len(toolErrors) > 0 {
-		for _, e := range toolErrors {
-			fmt.Fprintln(os.Stderr, e)
-		}
-		os.Exit(1)
+		return nil, fmt.Errorf("%s", strings.Join(toolErrors, "\n"))
 	}
 
-	// Reconcile embedded skills and guidelines to disk (non-fatal). When
-	// either side has work to do (stamp missing or mismatched), surface a
-	// spinner so the user knows the pause is intentional.
-	skillsDir := filepath.Join(filepath.Dir(stateDir), "skills")
-	guidelinesDir := filepath.Join(filepath.Dir(stateDir), "guidelines")
+	skillsDir := filepath.Join(runtimeDir, "skills")
+	guidelinesDir := filepath.Join(runtimeDir, "guidelines")
 	stop := func() {}
 	if skilldef.NeedsReconcile(skillsDir) || guidelinedef.NeedsReconcile(guidelinesDir) {
-		stop = startSyncSpinner(os.Stderr, "Syncing skills and guidelines")
+		stop = startSyncSpinner(stderr, "Syncing skills and guidelines")
 	}
 	if err := skilldef.ReconcileSkills(skillsDir); err != nil {
 		stop()
 		stop = func() {}
-		fmt.Fprintf(os.Stderr, "Warning: could not reconcile skills: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: could not reconcile skills: %v\n", err)
 	} else {
 		phaseRunner.SkillsDir = skillsDir
 	}
 	if err := guidelinedef.ReconcileGuidelines(guidelinesDir); err != nil {
 		stop()
 		stop = func() {}
-		fmt.Fprintf(os.Stderr, "Warning: could not reconcile guidelines: %v\n", err)
+		fmt.Fprintf(stderr, "Warning: could not reconcile guidelines: %v\n", err)
 	} else {
 		phaseRunner.GuidelinesDir = guidelinesDir
 	}
 	stop()
 
-	// Provider-generic version check (replaces old CheckCLIVersion)
 	for _, vr := range agent.CheckProviderVersions(detected) {
 		if vr.Err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not check %s CLI version: %v\n", vr.Provider, vr.Err)
+			fmt.Fprintf(stderr, "Warning: could not check %s CLI version: %v\n", vr.Provider, vr.Err)
 		} else if vr.Warning != "" {
-			fmt.Fprintf(os.Stderr, "Warning: %s\n", vr.Warning)
+			fmt.Fprintf(stderr, "Warning: %s\n", vr.Warning)
 		} else {
-			fmt.Fprintf(os.Stderr, "%s CLI version: %s\n", vr.Provider, vr.Version)
+			fmt.Fprintf(stderr, "%s CLI version: %s\n", vr.Provider, vr.Version)
 		}
 	}
 
-	modelDiscovery := newModelDiscoveryProgressPrinter(os.Stderr)
-	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir), modelDiscovery.Report, refreshModels)
+	modelDiscovery := newModelDiscoveryProgressPrinter(stderr)
+	catalogWarnings := discoverProviderCatalogs(ctx, detected, runtimeDir, modelDiscovery.Report, refreshModels)
 	modelDiscovery.Done()
 	for _, w := range catalogWarnings {
-		fmt.Fprintln(os.Stderr, w)
+		fmt.Fprintln(stderr, w)
 	}
 
 	// Apply catalog-driven defaults after discovery. For a brand-new config,
@@ -842,7 +884,80 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	// launch flag never rewrites the user's selections.
 	reconcileModelDefaults(cfg, registry, configPath, configIsNew, enabledProviders != nil, availabilityFiltered)
 
-	showProviderStartupNotices(os.Stderr, startupNotices, providerReadinessNoticeDelay)
+	showProviderStartupNotices(stderr, startupNotices, providerReadinessNoticeDelay)
+
+	recoveryItems, recoveryScanOK := scanStartupRecovery(ctx, orch, stderr)
+	boot.featureManager = fm
+	boot.sessionManager = sm
+	boot.orchestrator = orch
+	boot.registry = registry
+	boot.cfg = cfg
+	boot.phaseRunner = phaseRunner
+	boot.observer = observer
+	boot.permissionCache = permissionCache
+	boot.eventCh = eventCh
+	boot.workspaceDir = workspaceDir
+	boot.recoveryItems = recoveryItems
+	boot.recoveryScanOK = recoveryScanOK
+	success = true
+	return boot, nil
+}
+
+func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, stderr io.Writer) ([]session.RecoveryItem, bool) {
+	if orch == nil {
+		return nil, true
+	}
+	items, err := orch.ScanRecovery(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "Warning: startup recovery scan: %v\n", err)
+		return nil, false
+	}
+	recoveryItems := make([]session.RecoveryItem, len(items))
+	for i, item := range items {
+		recoveryItems[i] = item
+	}
+	return recoveryItems, true
+}
+
+func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) {
+	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stdin, os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			if err := boot.Close(context.Background()); err != nil {
+				log.Printf("close runtime: %v", err)
+			}
+		}
+	}()
+
+	tui.SetMarkdownRenderer(markdown.Render)
+	appOpts := []tui.AppOption{
+		tui.WithConfigPath(configPath),
+		tui.WithWorkspaceDir(boot.workspaceDir),
+		tui.WithPhaseRunner(boot.phaseRunner),
+		tui.WithRegistry(boot.registry),
+		tui.WithObserver(observeAdapter{observer: boot.observer}),
+		tui.WithStartupRecovery(boot.recoveryItems, boot.recoveryScanOK),
+	}
+	if dangerouslySkipPerms {
+		appOpts = append(appOpts, tui.WithDangerouslySkipPermissions())
+	}
+	app, err := tui.NewAppModel(
+		boot.featureManager,
+		boot.sessionManager,
+		boot.orchestrator,
+		boot.permissionCache,
+		boot.eventCh,
+		appOpts...,
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing TUI: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Redirect stderr and Go's default logger to a file before the TUI takes
 	// over the terminal. Any write to stderr (from OTEL, gRPC, net/http, etc.)
@@ -870,12 +985,93 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	app.SetProgram(p)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		shutdownFeatures(boot.orchestrator, boot.sessionManager)
+		if closeErr := boot.Close(context.Background()); closeErr != nil {
+			log.Printf("close runtime: %v", closeErr)
+		}
+		closed = true
 		os.Exit(1)
 	}
 
 	app.Close()
-	shutdownFeatures(orch, sm)
-	_ = fxApp.Stop(context.Background())
+	shutdownFeatures(boot.orchestrator, boot.sessionManager)
+	if err := boot.Close(context.Background()); err != nil {
+		log.Printf("close runtime: %v", err)
+	}
+	closed = true
+}
+
+func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, false, os.Stdin, os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	defer func() {
+		if err := boot.Close(context.Background()); err != nil {
+			log.Printf("close runtime: %v", err)
+		}
+	}()
+
+	if boot.recoveryScanOK && len(boot.recoveryItems) == 0 {
+		if err := boot.orchestrator.InterruptAllRunning(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: startup sweep: %v\n", err)
+		}
+	}
+
+	discoveryClient := &http.Client{Timeout: time.Second}
+	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, discoveryClient)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: validating discovery metadata: %v\n", err)
+		return 1
+	}
+	if decision.AlreadyRunning {
+		fmt.Fprintf(os.Stderr, "Error: Agentic server is already running at %s\n", decision.Record.BaseURL)
+		return 1
+	}
+
+	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
+		Runtime:   boot.runtime,
+		StartMode: "server",
+		Owner:     boot.owner,
+		Features:  boot.featureManager,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)
+		return 1
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := runtimeServer.Close(shutdownCtx); err != nil {
+			log.Printf("close server: %v", err)
+		}
+	}()
+
+	now := time.Now().UTC()
+	if err := serverruntime.PublishDiscovery(boot.runtime.RuntimeDir, serverruntime.DiscoveryRecord{
+		SchemaVersion: 1,
+		APIVersion:    serverruntime.APIVersion,
+		BaseURL:       runtimeServer.BaseURL(),
+		Runtime:       boot.runtime,
+		StartMode:     "server",
+		PID:           boot.owner.PID,
+		PGID:          boot.owner.PGID,
+		StartedAt:     boot.owner.StartedAt,
+		PublishedAt:   now,
+		Owner:         boot.owner,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
+		return 1
+	}
+
+	fmt.Fprintf(os.Stderr, "Agentic server listening at %s\n", runtimeServer.BaseURL())
+	<-ctx.Done()
+	shutdownFeatures(boot.orchestrator, boot.sessionManager)
+	return 0
 }
 
 func overrideColorProfile() (colorprofile.Profile, bool) {

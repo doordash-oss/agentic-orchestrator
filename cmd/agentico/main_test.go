@@ -31,6 +31,7 @@ import (
 	"github.com/charmbracelet/colorprofile"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 )
@@ -806,7 +807,7 @@ func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
 		if enabledProviders != nil {
 			t.Errorf("enabledProviders = %v, want nil", enabledProviders)
 		}
-	}, failingUpdater(t))
+	}, failingServerLauncher(t), failingUpdater(t))
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
 	}
@@ -833,6 +834,7 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 			gotDangerouslySkipPerms = dangerouslySkipPerms
 			gotProviders = enabledProviders
 		},
+		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -865,6 +867,7 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 		func(_ string, _ string, _ bool, _ []string, refreshModels bool) {
 			gotRefresh = refreshModels
 		},
+		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -894,13 +897,17 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	var launchedTUI, updateCalled bool
+	var launchedTUI, launchedServer, updateCalled bool
 	code := runArgs(
 		[]string{"validate-artifacts", "--phase", "review", "--role", string(agent.RoleFinalReviewer), "--dir", iterDir},
 		&stdout,
 		&stderr,
 		func(string, string, bool, []string, bool) {
 			launchedTUI = true
+		},
+		func(string, string, bool, []string) int {
+			launchedServer = true
+			return 0
 		},
 		func(bool, io.Writer, io.Writer) int {
 			updateCalled = true
@@ -910,8 +917,8 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("runArgs() code = %d, want validation failure 1", code)
 	}
-	if launchedTUI || updateCalled {
-		t.Fatalf("validate-artifacts launched unrelated path: tui=%v update=%v", launchedTUI, updateCalled)
+	if launchedTUI || launchedServer || updateCalled {
+		t.Fatalf("validate-artifacts launched unrelated path: tui=%v server=%v update=%v", launchedTUI, launchedServer, updateCalled)
 	}
 	if got := stderr.String(); !strings.Contains(got, "review-feedback.md") || !strings.Contains(got, "LGTM") {
 		t.Fatalf("stderr = %q, want review-feedback.md malformed verdict violation", got)
@@ -931,6 +938,7 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 		&stdout,
 		&stderr,
 		failingLauncher(t),
+		failingServerLauncher(t),
 		failingUpdater(t),
 	)
 	if code != 0 {
@@ -941,6 +949,94 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestParseLaunchArgsServerSurface(t *testing.T) {
+	opts, err := parseLaunchArgs([]string{"server", "--config", "/tmp/server-config.yaml", "--state-dir", "/tmp/server-features", "--providers", "codex", "--dangerously-skip-permissions"})
+	if err != nil {
+		t.Fatalf("parseLaunchArgs(server ...) error = %v", err)
+	}
+	if opts.mode != launchModeServer {
+		t.Fatalf("mode = %v; want launchModeServer", opts.mode)
+	}
+	if opts.configPath != "/tmp/server-config.yaml" {
+		t.Fatalf("configPath = %q; want server config", opts.configPath)
+	}
+	if opts.stateDir != "/tmp/server-features" {
+		t.Fatalf("stateDir = %q; want server state dir", opts.stateDir)
+	}
+	if !opts.dangerouslySkipPerms {
+		t.Fatal("dangerouslySkipPerms = false; want true")
+	}
+	if !slices.Equal(opts.enabledProviders, []string{"codex"}) {
+		t.Fatalf("enabledProviders = %v; want [codex]", opts.enabledProviders)
+	}
+}
+
+func TestRunArgsDispatchesServerToSeam(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var launchedTUI, launchedServer bool
+	code := runArgs(
+		[]string{"server", "--config", "/tmp/server-config.yaml", "--state-dir", "/tmp/server-features", "--providers", "codex"},
+		&stdout,
+		&stderr,
+		func(string, string, bool, []string, bool) { launchedTUI = true },
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) int {
+			launchedServer = true
+			if configPath != "/tmp/server-config.yaml" {
+				t.Errorf("configPath = %q; want server config", configPath)
+			}
+			if stateDir != "/tmp/server-features" {
+				t.Errorf("stateDir = %q; want server state dir", stateDir)
+			}
+			if dangerouslySkipPerms {
+				t.Error("dangerouslySkipPerms = true; want false")
+			}
+			if !slices.Equal(enabledProviders, []string{"codex"}) {
+				t.Errorf("enabledProviders = %v; want [codex]", enabledProviders)
+			}
+			return 9
+		},
+		failingUpdater(t),
+	)
+	if launchedTUI {
+		t.Fatal("TUI launcher invoked for server mode")
+	}
+	if !launchedServer {
+		t.Fatal("server launcher was not invoked")
+	}
+	if code != 9 {
+		t.Fatalf("runArgs() code = %d; want server exit code 9", code)
+	}
+}
+
+func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	lock, acquired, _, err := instancelock.Acquire(runtimeDir, stateDir, configPath, "test")
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+	if !acquired {
+		t.Fatal("Acquire() acquired = false; want true")
+	}
+	t.Cleanup(func() { _ = lock.Close() })
+
+	var stderr bytes.Buffer
+	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, false, []string{"codex"}, false, strings.NewReader(""), &stderr)
+	if err == nil {
+		if boot != nil {
+			_ = boot.Close(context.Background())
+		}
+		t.Fatal("bootstrapRuntime() error = nil; want held lock error")
+	}
+	if !strings.Contains(err.Error(), "Another Agentic instance is already running") {
+		t.Fatalf("bootstrapRuntime() error = %q; want lock owner message", err.Error())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q; want no provider/startup work after lock rejection", stderr.String())
 	}
 }
 
@@ -1395,6 +1491,7 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	for _, want := range []string{
 		"Agentic Orchestrator",
 		"agentico [flags]",
+		"agentico server [flags]",
 		"~/.agentic-orchestrator/config.yaml",
 		"~/.agentic-orchestrator/features",
 		"~/.agentic-workflow/", // legacy-recovery callout retained

@@ -1,10 +1,12 @@
-# TUI-only launch contract.
+# Launch contract.
 
 exec agentico --help
 stdout '^Agentic Orchestrator$'
 ! stdout 'Agentic Workflow Orchestrator'
 stdout 'Usage: agentico \[flags\]'
+stdout 'agentico server \[flags\]'
 stdout 'Launches the Bubble Tea TUI dashboard'
+stdout 'foreground loopback HTTP server'
 stdout '--config <path>'
 stdout '--state-dir <path>'
 stdout '--providers <list>'

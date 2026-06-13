@@ -16,6 +16,7 @@ package e2e
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,6 +27,7 @@ import (
 var expectedTUISmokeTests = []string{
 	"TestDashboardRendersEmptyState",
 	"TestDashboardShowsFeature",
+	"TestDefaultCommandLaunchesDirectTUI",
 	"TestFreshFeatureSkeletonInvariants",
 	"TestMediumWizardGateProjectionSmoke",
 	"TestNeedUserInputPauseResumeSmoke",
@@ -34,6 +36,15 @@ var expectedTUISmokeTests = []string{
 	"TestTUI_HelpInputBlocking",
 	"TestTUI_PermissionPromptSurfaced",
 	"TestTUI_SessionCrashInterrupted",
+}
+
+func TestDefaultCommandLaunchesDirectTUI(t *testing.T) {
+	cmd := exec.Command("go", "test", "./cmd/agentico", "-run", "^TestRunArgsLaunchesTUIByDefault$", "-count=1")
+	cmd.Dir = filepath.Join("..", "..")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("default launch router regression failed: %v\n%s", err, out)
+	}
 }
 
 func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {

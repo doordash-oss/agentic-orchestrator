@@ -1,6 +1,6 @@
 # Agentic Orchestrator
 
-### 'Na sola botta â luna — e po' diece vote 'nsieme.
+### 'Na sola botta â luna — e po', 'a luna 'a piglie pure diece vote 'nzieme.
 
 Agentic Orchestrator è 'nu orchestratore 'e workflow 'e sviluppo AI ca trasfòrma cualsiasi ingegnere 'n'nu moltiplicatore 'e forze. Descrive 'e tue feature, piglie 'e decisione 'e alto livello, e 'o AI fa 'o rimanente — ricerca, pianificazione, implementazione, code review, pull request — tutto ca gira 'nzieme 'a 'nu solo terminale.
 

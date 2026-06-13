@@ -21,11 +21,14 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 type RuntimeServer struct {
 	baseURL string
 	srv     *http.Server
+	broker  *eventBroker
 	done    chan error
 }
 
@@ -36,8 +39,19 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		return nil, fmt.Errorf("listen on loopback: %w", err)
 	}
 	baseURL := "http://" + ln.Addr().String()
+	handler := newAPIHandler(HandlerOptions{
+		Runtime:      opts.Runtime,
+		StartedAt:    startedAt,
+		Features:     opts.Features,
+		FeatureStore: opts.FeatureStore,
+		Config:       opts.Config,
+		Registry:     opts.Registry,
+		Sessions:     opts.Sessions,
+		Events:       opts.Events,
+		DomainEvents: opts.DomainEvents,
+	})
 	httpServer := &http.Server{
-		Handler:      NewHandler(HandlerOptions{Runtime: opts.Runtime, StartedAt: startedAt, Features: opts.Features}),
+		Handler:      handler.routes(),
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  30 * time.Second,
@@ -45,6 +59,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	s := &RuntimeServer{
 		baseURL: baseURL,
 		srv:     httpServer,
+		broker:  handler.broker,
 		done:    make(chan error, 1),
 	}
 	go func() {
@@ -76,6 +91,9 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	}
 	srv := s.srv
 	s.srv = nil
+	if s.broker != nil {
+		s.broker.publish(eventDTOFromDomain(ports.Event{Type: ports.RuntimeShutdownStarted}, s.broker.newID()))
+	}
 	shutdownErr := srv.Shutdown(ctx)
 	var serveErr error
 	select {

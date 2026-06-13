@@ -339,6 +339,30 @@ func (m *Manager) ActiveSessions() []SessionView {
 	return result
 }
 
+// RecentSessions returns the most recently started sessions across features,
+// bounded by limit.
+func (m *Manager) RecentSessions(limit int) []SessionView {
+	if limit <= 0 {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]SessionView, 0, min(limit, len(m.sessions)))
+	for _, s := range m.sessions {
+		result = append(result, s)
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].StartedAt().Equal(result[j].StartedAt()) {
+			return result[i].ID() < result[j].ID()
+		}
+		return result[i].StartedAt().After(result[j].StartedAt())
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result
+}
+
 // FeatureSessions returns all sessions (including completed ones) for a feature,
 // sorted with the most recently started session first.
 func (m *Manager) FeatureSessions(featureID string) []SessionView {

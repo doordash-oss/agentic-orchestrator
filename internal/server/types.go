@@ -17,8 +17,11 @@ package server
 import (
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const APIVersion = "v1"
@@ -32,20 +35,57 @@ type RuntimeIdentity struct {
 }
 
 type Options struct {
-	Runtime   RuntimeIdentity
-	StartMode string
-	Owner     instancelock.Owner
-	Features  FeatureLister
+	Runtime      RuntimeIdentity
+	StartMode    string
+	Owner        instancelock.Owner
+	Features     FeatureLister
+	FeatureStore FeatureReader
+	Config       *config.Config
+	Registry     *llm.Registry
+	Sessions     ports.SessionManager
+	Events       <-chan interface{}
+	DomainEvents <-chan ports.Event
 }
 
 type HandlerOptions struct {
-	Runtime   RuntimeIdentity
-	StartedAt time.Time
-	Features  FeatureLister
+	Runtime      RuntimeIdentity
+	StartedAt    time.Time
+	Features     FeatureLister
+	FeatureStore FeatureReader
+	Config       *config.Config
+	Registry     *llm.Registry
+	Sessions     ports.SessionManager
+	Events       <-chan interface{}
+	DomainEvents <-chan ports.Event
 }
 
 type FeatureLister interface {
 	List() ([]*feature.Feature, error)
+}
+
+type FeatureReader interface {
+	FeatureLister
+	Load(id string) (*feature.Feature, error)
+	LoadRun(featureID string, runNumber int) (*feature.Run, error)
+	RunDir(featureID string, runNumber int) string
+}
+
+type ResponseMeta struct {
+	Revision    string    `json:"revision"`
+	GeneratedAt time.Time `json:"generated_at"`
+	CacheHit    bool      `json:"cache_hit,omitempty"`
+}
+
+type ErrorResponse struct {
+	APIVersion string   `json:"api_version"`
+	Error      ErrorDTO `json:"error"`
+}
+
+type ErrorDTO struct {
+	Code    string         `json:"code"`
+	Message string         `json:"message"`
+	Status  int            `json:"status"`
+	Target  map[string]any `json:"target,omitempty"`
 }
 
 type HealthResponse struct {
@@ -58,6 +98,7 @@ type HealthResponse struct {
 
 type FeatureListResponse struct {
 	APIVersion string           `json:"api_version"`
+	Meta       ResponseMeta     `json:"meta"`
 	Features   []FeatureSummary `json:"features"`
 	Warnings   []WarningDTO     `json:"warnings,omitempty"`
 }
@@ -73,6 +114,7 @@ type FeatureSummary struct {
 	Repos        []string        `json:"repos"`
 	CreatedAt    time.Time       `json:"created_at"`
 	Progress     FeatureProgress `json:"progress"`
+	Warnings     []WarningDTO    `json:"warnings,omitempty"`
 }
 
 type FeatureProgress struct {
@@ -86,6 +128,342 @@ type WarningDTO struct {
 	Code      string `json:"code"`
 	FeatureID string `json:"feature_id,omitempty"`
 	Message   string `json:"message"`
+}
+
+type FeatureDetailResponse struct {
+	APIVersion string           `json:"api_version"`
+	Meta       ResponseMeta     `json:"meta"`
+	Feature    FeatureDetailDTO `json:"feature"`
+}
+
+type FeatureDetailDTO struct {
+	FeatureSummary
+	Description     string            `json:"description,omitempty"`
+	Summary         string            `json:"summary,omitempty"`
+	Pipeline        string            `json:"pipeline,omitempty"`
+	ActiveRun       *RunSummaryDTO    `json:"active_run_detail,omitempty"`
+	HistoricalRuns  []RunSummaryDTO   `json:"historical_runs"`
+	RepoStatus      []RepoStatusDTO   `json:"repo_status"`
+	Cycle           *CycleDTO         `json:"cycle,omitempty"`
+	Timing          TimingDTO         `json:"timing"`
+	Cost            CostDTO           `json:"cost"`
+	ReviewGate      ReviewGateDTO     `json:"review_gate"`
+	Failure         *FailureDTO       `json:"failure,omitempty"`
+	NeedUserInput   *NeedInputGateDTO `json:"need_user_input,omitempty"`
+	Revision        string            `json:"revision"`
+	CacheRevalidate string            `json:"cache_revalidate"`
+}
+
+type RunSummaryDTO struct {
+	RunNumber       int        `json:"run_number"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	SealedAt        *time.Time `json:"sealed_at,omitempty"`
+	SealReason      string     `json:"seal_reason,omitempty"`
+	CurrentPhase    string     `json:"current_phase,omitempty"`
+	PhaseStatus     string     `json:"phase_status,omitempty"`
+	Iteration       int        `json:"iteration,omitempty"`
+	RoadmapPhase    int        `json:"roadmap_phase,omitempty"`
+	RoadmapTotal    int        `json:"roadmap_total,omitempty"`
+	ArtifactCount   int        `json:"artifact_count"`
+	HasNeedUserGate bool       `json:"has_need_user_gate,omitempty"`
+}
+
+type RepoStatusDTO struct {
+	Name        string `json:"name"`
+	Touched     bool   `json:"touched"`
+	PRURL       string `json:"pr_url,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+	Publishable bool   `json:"publishable"`
+	CycleType   string `json:"cycle_type,omitempty"`
+	CycleStatus string `json:"cycle_status,omitempty"`
+}
+
+type CycleDTO struct {
+	Type      string `json:"type,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Count     int    `json:"count,omitempty"`
+	Iteration int    `json:"iteration,omitempty"`
+}
+
+type TimingDTO struct {
+	TotalSeconds int64            `json:"total_seconds"`
+	ByPhase      map[string]int64 `json:"by_phase"`
+}
+
+type CostDTO struct {
+	TotalUSD float64            `json:"total_usd"`
+	ByPhase  map[string]float64 `json:"by_phase"`
+}
+
+type ReviewGateDTO struct {
+	ReviewingGate     bool              `json:"reviewing_gate"`
+	ReviewFixing      bool              `json:"review_fixing"`
+	ValidatingPlan    bool              `json:"validating_plan"`
+	ValidatorStatuses map[string]string `json:"validator_statuses,omitempty"`
+}
+
+type FailureDTO struct {
+	Type    string `json:"type,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type NeedInputGateDTO struct {
+	FeatureID string `json:"feature_id,omitempty"`
+	Open      bool   `json:"open"`
+	Scope     string `json:"scope,omitempty"`
+	Iteration int    `json:"iteration,omitempty"`
+}
+
+type RuntimeConfigResponse struct {
+	APIVersion    string                `json:"api_version"`
+	Meta          ResponseMeta          `json:"meta"`
+	Runtime       RuntimeIdentity       `json:"runtime"`
+	Defaults      config.ModelConfig    `json:"model_defaults"`
+	Repos         []ConfigRepoDTO       `json:"repos"`
+	UI            config.UIConfig       `json:"ui"`
+	Notifications NotificationConfigDTO `json:"notifications"`
+	Observability ObservabilityDTO      `json:"observability"`
+	Providers     []string              `json:"providers"`
+}
+
+type ConfigRepoDTO struct {
+	Name string `json:"name"`
+	Path string `json:"path,omitempty"`
+}
+
+type NotificationConfigDTO struct {
+	MuteFeatureInput bool `json:"mute_feature_input"`
+}
+
+type ObservabilityDTO struct {
+	Events          bool   `json:"events"`
+	OTelEnabled     bool   `json:"otel_enabled"`
+	OTelServiceName string `json:"otel_service_name,omitempty"`
+}
+
+type FeatureConfigResponse struct {
+	APIVersion string            `json:"api_version"`
+	Meta       ResponseMeta      `json:"meta"`
+	FeatureID  string            `json:"feature_id"`
+	Current    FeatureConfigDTO  `json:"current"`
+	Defaults   FeatureConfigDTO  `json:"defaults"`
+	Original   FeatureConfigDTO  `json:"original"`
+	Publish    PublishabilityDTO `json:"publishability"`
+}
+
+type FeatureConfigDTO struct {
+	Models      config.ModelConfig `json:"models"`
+	Inquireness string             `json:"inquireness"`
+	Checkpoints CheckpointsDTO     `json:"checkpoints"`
+	Pipeline    string             `json:"pipeline,omitempty"`
+}
+
+type CheckpointsDTO struct {
+	InquiryReview  bool `json:"inquiry_review"`
+	ResearchReview bool `json:"research_review"`
+	DesignReview   bool `json:"design_review"`
+	PlanReview     bool `json:"plan_review"`
+	ManualPublish  bool `json:"manual_publish"`
+}
+
+type PublishabilityDTO struct {
+	ManualPublish bool            `json:"manual_publish"`
+	Repos         map[string]bool `json:"repos"`
+}
+
+type ModelCatalogResponse struct {
+	APIVersion          string                         `json:"api_version"`
+	Meta                ResponseMeta                   `json:"meta"`
+	ProviderOrder       []string                       `json:"provider_order"`
+	ProviderModels      map[string][]ModelDTO          `json:"provider_models"`
+	PhaseDefaults       config.ModelConfig             `json:"phase_defaults"`
+	PhaseProviderModels map[string]map[string][]string `json:"phase_provider_models"`
+}
+
+type ModelDTO struct {
+	ID            string   `json:"id"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	ContextWindow int      `json:"context_window,omitempty"`
+	Aliases       []string `json:"aliases,omitempty"`
+	Category      string   `json:"category,omitempty"`
+}
+
+type PromptSnapshotResponse struct {
+	APIVersion       string              `json:"api_version"`
+	Meta             ResponseMeta        `json:"meta"`
+	AskUserQuestions []ControlRequestDTO `json:"ask_user_questions"`
+	HelpQueue        []HelpQueueDTO      `json:"help_queue"`
+	NeedUserInputs   []NeedInputGateDTO  `json:"need_user_inputs"`
+}
+
+type PermissionSnapshotResponse struct {
+	APIVersion string              `json:"api_version"`
+	Meta       ResponseMeta        `json:"meta"`
+	Requests   []ControlRequestDTO `json:"requests"`
+}
+
+type ControlRequestDTO struct {
+	RequestID string `json:"request_id"`
+	SessionID string `json:"session_id,omitempty"`
+	FeatureID string `json:"feature_id,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+	ToolName  string `json:"tool_name"`
+	Status    string `json:"status"`
+	Summary   string `json:"summary,omitempty"`
+}
+
+type HelpQueueDTO struct {
+	FeatureID string    `json:"feature_id"`
+	Question  string    `json:"question"`
+	Pending   bool      `json:"pending"`
+	Time      time.Time `json:"time,omitempty"`
+}
+
+type ArtifactListResponse struct {
+	APIVersion string        `json:"api_version"`
+	Meta       ResponseMeta  `json:"meta"`
+	Artifacts  []ArtifactDTO `json:"artifacts"`
+}
+
+type ArtifactDTO struct {
+	ID               string    `json:"id"`
+	Type             string    `json:"type"`
+	Category         string    `json:"category"`
+	RunNumber        int       `json:"run_number"`
+	Phase            string    `json:"phase,omitempty"`
+	Iteration        int       `json:"iteration,omitempty"`
+	Size             int64     `json:"size,omitempty"`
+	ModifiedAt       time.Time `json:"modified_at,omitempty"`
+	ContentAvailable bool      `json:"content_available"`
+}
+
+type TextContentResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta"`
+	ID         string       `json:"id"`
+	Offset     int64        `json:"offset"`
+	Limit      int64        `json:"limit"`
+	Size       int64        `json:"size"`
+	Text       string       `json:"text"`
+	Truncated  bool         `json:"truncated"`
+}
+
+type LivePreviewResponse struct {
+	APIVersion string                 `json:"api_version"`
+	Meta       ResponseMeta           `json:"meta"`
+	Feature    FeatureSummary         `json:"feature"`
+	Session    *SessionSummaryDTO     `json:"session,omitempty"`
+	Activity   string                 `json:"activity"`
+	Attention  []ControlRequestDTO    `json:"attention,omitempty"`
+	Context    ContextDTO             `json:"context"`
+	Timing     TimingDTO              `json:"timing"`
+	Cost       CostDTO                `json:"cost"`
+	Transcript []TranscriptMessageDTO `json:"transcript"`
+}
+
+type ContextDTO struct {
+	Percentage int `json:"percentage"`
+}
+
+type SessionListResponse struct {
+	APIVersion string              `json:"api_version"`
+	Meta       ResponseMeta        `json:"meta"`
+	Sessions   []SessionSummaryDTO `json:"sessions"`
+}
+
+type SessionDetailResponse struct {
+	APIVersion string           `json:"api_version"`
+	Meta       ResponseMeta     `json:"meta"`
+	Session    SessionDetailDTO `json:"session"`
+}
+
+type SessionSummaryDTO struct {
+	ID         string    `json:"id"`
+	FeatureID  string    `json:"feature_id"`
+	Phase      string    `json:"phase"`
+	Repo       string    `json:"repo,omitempty"`
+	Kind       string    `json:"kind"`
+	Label      string    `json:"label,omitempty"`
+	Provider   string    `json:"provider,omitempty"`
+	Model      string    `json:"model,omitempty"`
+	Status     string    `json:"status"`
+	StartedAt  time.Time `json:"started_at"`
+	Iteration  int       `json:"iteration,omitempty"`
+	ContextPct int       `json:"context_percentage,omitempty"`
+	Usage      UsageDTO  `json:"usage"`
+}
+
+type SessionDetailDTO struct {
+	SessionSummaryDTO
+	TranscriptCursor CursorDTO           `json:"transcript_cursor"`
+	PendingControls  []ControlRequestDTO `json:"pending_controls"`
+	CanAttach        bool                `json:"can_attach"`
+	LogAvailable     bool                `json:"log_available"`
+	SafeError        string              `json:"safe_error,omitempty"`
+}
+
+type CursorDTO struct {
+	Total int `json:"total"`
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+type UsageDTO struct {
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+}
+
+type TranscriptResponse struct {
+	APIVersion string                 `json:"api_version"`
+	Meta       ResponseMeta           `json:"meta"`
+	Cursor     CursorDTO              `json:"cursor"`
+	Messages   []TranscriptMessageDTO `json:"messages"`
+}
+
+type TranscriptMessageDTO struct {
+	Index    int    `json:"index"`
+	Role     string `json:"role"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Tool     string `json:"tool,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Redacted bool   `json:"redacted,omitempty"`
+}
+
+type OperationSnapshotResponse struct {
+	APIVersion string             `json:"api_version"`
+	Meta       ResponseMeta       `json:"meta"`
+	Schema     OperationSchemaDTO `json:"schema"`
+	Operations []OperationDTO     `json:"operations"`
+}
+
+type OperationSchemaDTO struct {
+	Version string   `json:"version"`
+	States  []string `json:"states"`
+	Filters []string `json:"filters"`
+}
+
+type OperationDTO struct {
+	ID string `json:"id"`
+}
+
+type SSEEventDTO struct {
+	APIVersion       string      `json:"api_version"`
+	ID               string      `json:"id"`
+	Kind             string      `json:"kind"`
+	At               time.Time   `json:"at"`
+	Resource         ResourceDTO `json:"resource"`
+	Revision         string      `json:"revision,omitempty"`
+	SnapshotRequired bool        `json:"snapshot_required"`
+	Summary          string      `json:"summary,omitempty"`
+}
+
+type ResourceDTO struct {
+	Type      string `json:"type"`
+	ID        string `json:"id,omitempty"`
+	FeatureID string `json:"feature_id,omitempty"`
+	Phase     string `json:"phase,omitempty"`
 }
 
 type DiscoveryRecord struct {

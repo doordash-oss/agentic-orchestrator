@@ -352,6 +352,7 @@ type SessionManager interface {
 	StopSession(id string) error
 	GetSession(id string) SessionView
 	ActiveSessions() []SessionView
+	RecentSessions(limit int) []SessionView
 	FeatureSessions(featureID string) []SessionView
 	SendInput(sessionID string, data []byte) error
 	Attach(sessionID string) (SessionView, error)

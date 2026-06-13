@@ -59,6 +59,10 @@ const (
 	SetupProgress
 	SetupCompleted
 	SetupFailed
+	// RuntimeShutdownStarted fires when the orchestrator/runtime has begun a
+	// graceful shutdown. SSE consumers use it as a metadata-only signal to
+	// refresh authoritative REST snapshots during reconnect.
+	RuntimeShutdownStarted
 )
 
 // Event is a typed domain event emitted by the orchestrator.

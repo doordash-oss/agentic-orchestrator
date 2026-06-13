@@ -1034,10 +1034,16 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	}
 
 	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
-		Runtime:   boot.runtime,
-		StartMode: "server",
-		Owner:     boot.owner,
-		Features:  boot.featureManager,
+		Runtime:      boot.runtime,
+		StartMode:    "server",
+		Owner:        boot.owner,
+		Features:     boot.featureManager,
+		FeatureStore: boot.featureManager.Store,
+		Config:       boot.cfg,
+		Registry:     boot.registry,
+		Sessions:     boot.sessionManager,
+		Events:       boot.eventCh,
+		DomainEvents: boot.orchestrator.Events(),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)

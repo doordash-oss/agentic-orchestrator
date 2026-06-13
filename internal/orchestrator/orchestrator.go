@@ -423,6 +423,21 @@ func (o *Orchestrator) emitEventBlocking(ev ports.Event) {
 	}
 }
 
+func (o *Orchestrator) emitShutdownStarted() {
+	ev := ports.Event{Type: ports.RuntimeShutdownStarted}
+	select {
+	case o.eventCh <- ev:
+		return
+	default:
+	}
+	// Do not drain eventCh to make room: queued lifecycle events are part of
+	// the read/SSE contract. eventCh is never closed, so a parked sender is
+	// safe and will publish shutdown as soon as a consumer drains capacity.
+	go func() {
+		o.eventCh <- ev
+	}()
+}
+
 // StartFeature starts a feature's phase pipeline.
 // Determines the correct phase from the feature's state (first phase for
 // StatusCreated, CurrentPhase for resumed features), handles the
@@ -1899,6 +1914,7 @@ func (o *Orchestrator) Publish(featureID string) error {
 // runs exactly once. Never closes eventCh — consumers observe doneCh instead.
 func (o *Orchestrator) Shutdown() error {
 	o.stopOnce.Do(func() {
+		o.emitShutdownStarted()
 		close(o.doneCh)
 		if o.deps.Sessions != nil {
 			o.deps.Sessions.Shutdown()

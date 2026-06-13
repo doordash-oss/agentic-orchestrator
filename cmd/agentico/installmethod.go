@@ -59,20 +59,23 @@ var errResolveHome = errors.New("home directory unavailable")
 //
 // Precedence:
 //
-//  1. go-install  if build info is a real module version, OR the binary sits in
-//     the Go bin dir (which also captures `make install`).
-//  2. homebrew    else if the resolved binary lives inside a Homebrew Cellar.
-//     Ordered before tarball because a Homebrew-installed binary also carries a
-//     clean injected release version; without this it would misclassify as a
-//     tarball and the in-place swap would desync Homebrew's bookkeeping.
+//  1. homebrew    if the resolved binary lives inside a Homebrew Cellar. Checked
+//     first because the Cellar location is the most unambiguous signal: a
+//     Homebrew-poured binary also carries a clean injected release version and,
+//     for users whose Go bin dir coincides with the brew prefix, can sit in (or
+//     resolve through) the Go bin dir — so any later go-install or tarball check
+//     would misclassify it and the in-place swap would desync Homebrew's
+//     bookkeeping.
+//  2. go-install  else if build info is a real module version, OR the binary sits
+//     in the Go bin dir (which also captures `make install`).
 //  3. tarball     else if the injected version is a clean MAJOR.MINOR.PATCH.
 //  4. dev-refuse  otherwise.
 func classifyInstallMethod(buildInfoVersion, injectedVersion, binaryDir, goBinDir string, homebrew bool) installMethod {
-	if isRealModuleVersion(buildInfoVersion) || sameDir(binaryDir, goBinDir) {
-		return installMethodGoInstall
-	}
 	if homebrew {
 		return installMethodHomebrew
+	}
+	if isRealModuleVersion(buildInfoVersion) || sameDir(binaryDir, goBinDir) {
+		return installMethodGoInstall
 	}
 	if isReleaseVersion(injectedVersion) {
 		return installMethodTarball

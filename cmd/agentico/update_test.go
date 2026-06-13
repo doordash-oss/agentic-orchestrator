@@ -542,7 +542,7 @@ func TestRunUpdateWithCheckReportsMethodAndAction(t *testing.T) {
 			name:       "go-install",
 			method:     installMethodGoInstall,
 			wantLabel:  "go install",
-			wantAction: "re-running the Go install",
+			wantAction: "falling back to the release tarball",
 		},
 		{
 			name:       "tarball",
@@ -871,25 +871,90 @@ func TestMainPackagePathDerivedFromBuildInfo(t *testing.T) {
 
 // --- Phase 3 / Task 2: clear failure surfacing through the runner seam ------
 
-// Toolchain absent (the runner surfaces exec.ErrNotFound): a clear
-// toolchain-not-found message to stderr, non-zero exit, and no success line.
-func TestRunUpdateWithGoInstallToolchainMissing(t *testing.T) {
+// Toolchain absent (the runner surfaces exec.ErrNotFound): Go is a soft
+// dependency, so update falls back to the release tarball updater, emits a
+// non-fatal warning, prints the old → new transition, and exits 0.
+func TestRunUpdateWithGoInstallToolchainMissingFallsBackToTarball(t *testing.T) {
+	const binDir = "/home/user/go/bin"
 	var rec recordedInstall
 	var stdout, stderr bytes.Buffer
+	var tarballCalled bool
+	var checkedDir string
 
 	notFound := &exec.Error{Name: "go", Err: exec.ErrNotFound}
-	code := runUpdateWith(context.Background(), false, &stdout, &stderr,
-		goInstallDeps(&rec, nil, notFound, "/home/user/go/bin"))
+	deps := goInstallDeps(&rec, nil, notFound, binDir)
+	deps.binaryPath = filepath.Join(binDir, "agentico")
+	deps.checkWritable = func(dir string) error {
+		checkedDir = dir
+		return nil
+	}
+	deps.runTarball = func(_ context.Context, slug, version string) error {
+		tarballCalled = true
+		if slug != "doordash-oss/agentic-orchestrator" {
+			t.Errorf("tarball slug = %q, want doordash-oss/agentic-orchestrator", slug)
+		}
+		if version != "v2.0.0" {
+			t.Errorf("tarball version = %q, want v2.0.0", version)
+		}
+		return nil
+	}
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
 
-	if code == 0 {
-		t.Fatal("toolchain-absent path must exit non-zero")
+	if code != 0 {
+		t.Fatalf("toolchain-absent path must fall back and exit 0, got %d\nstderr: %s", code, stderr.String())
+	}
+	if !rec.called {
+		t.Fatal("go install runner was not invoked before falling back")
+	}
+	if !tarballCalled {
+		t.Fatal("tarball updater was not invoked after missing Go")
+	}
+	if checkedDir != binDir {
+		t.Errorf("fallback pre-flight checked %q, want %q", checkedDir, binDir)
 	}
 	errOut := stderr.String()
-	if !strings.Contains(errOut, "Go toolchain") || !strings.Contains(errOut, "PATH") {
-		t.Errorf("stderr missing a clear toolchain-not-found message\nfull:\n%s", errOut)
+	if !strings.Contains(errOut, "Go toolchain") || !strings.Contains(errOut, "falling back") {
+		t.Errorf("stderr missing a clear non-fatal fallback warning\nfull:\n%s", errOut)
+	}
+	if !strings.Contains(stdout.String(), "1.2.3 → 2.0.0") {
+		t.Errorf("stdout missing old → new transition from fallback\nfull:\n%s", stdout.String())
+	}
+}
+
+// The missing-Go fallback still performs the tarball writability pre-flight:
+// an unwritable target aborts before any download or swap and reports the same
+// elevated-privilege guidance as the normal tarball branch.
+func TestRunUpdateWithGoInstallToolchainMissingFallbackPreflightUnwritable(t *testing.T) {
+	const dir = "/usr/local/bin"
+	var rec recordedInstall
+	var stdout, stderr bytes.Buffer
+	var checkedDir string
+
+	notFound := &exec.Error{Name: "go", Err: exec.ErrNotFound}
+	deps := goInstallDeps(&rec, nil, notFound, dir)
+	deps.binaryPath = filepath.Join(dir, "agentico")
+	deps.checkWritable = func(d string) error {
+		checkedDir = d
+		return errors.New("permission denied")
+	}
+	deps.runTarball = failingTarball(t)
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+
+	if code == 0 {
+		t.Fatal("unwritable fallback target must exit non-zero")
+	}
+	if checkedDir != dir {
+		t.Errorf("fallback pre-flight checked %q, want %q", checkedDir, dir)
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, updateGoToolchainFallbackMsg) {
+		t.Errorf("stderr missing fallback warning\nfull:\n%s", errOut)
+	}
+	if !strings.Contains(errOut, dir) || !strings.Contains(strings.ToLower(errOut), "sudo") {
+		t.Errorf("stderr missing unwritable-directory guidance\nfull:\n%s", errOut)
 	}
 	if strings.Contains(stdout.String(), "→") {
-		t.Errorf("no old → new success line may be printed when the toolchain is absent\nfull:\n%s", stdout.String())
+		t.Errorf("no old → new line may print when fallback pre-flight aborts\nfull:\n%s", stdout.String())
 	}
 }
 

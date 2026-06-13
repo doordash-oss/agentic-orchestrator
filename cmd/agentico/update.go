@@ -69,10 +69,17 @@ const (
 	innerBinaryName = "agentico"
 
 	// updateGoToolchainMissingMsg is printed to stderr when the go-install
-	// branch cannot find the Go toolchain on PATH. The existing binary is left
-	// untouched.
+	// branch cannot find the Go toolchain on PATH and no release-tarball fallback
+	// is wired. The existing binary is left untouched.
 	updateGoToolchainMissingMsg = "Error: the Go toolchain was not found on PATH. " +
 		"Install Go or add it to PATH, then run `agentico update` again."
+
+	// updateGoToolchainFallbackMsg is printed to stderr when a go-install update
+	// detects that Go is absent and falls back to the release tarball updater. Go
+	// is useful for source installs but not required for a released agentico to
+	// self-update.
+	updateGoToolchainFallbackMsg = "Warning: the Go toolchain was not found on PATH; " +
+		"falling back to the release tarball update."
 
 	// updateFromSourceGuidance is printed to stderr when a development build
 	// refuses to self-update. It points the user back at their source checkout
@@ -306,7 +313,7 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 	// dev-build case was already handled (and refused) above.
 	switch method {
 	case installMethodGoInstall:
-		return performGoInstall(stdout, stderr, deps, current, latest)
+		return performGoInstall(stdout, stderr, deps, slug, current, latest)
 	case installMethodTarball:
 		return performTarballUpdate(stdout, stderr, deps, slug, current, latest)
 	case installMethodHomebrew:
@@ -329,10 +336,12 @@ func runUpdateWith(ctx context.Context, checkOnly bool, stdout, stderr io.Writer
 // inherited-plus-augmented environment that forces GOBIN to the running
 // binary's resolved directory so the binary that is actually running is the one
 // replaced — no stray second copy in the default Go bin dir. On success it
-// prints the old → new transition to stdout and returns 0. Every failure is
-// surfaced to stderr with a non-zero exit and no success transition; a failed
-// or partial `go install` does not replace the running binary.
-func performGoInstall(stdout, stderr io.Writer, deps updateDeps, current, latest string) int {
+// prints the old → new transition to stdout and returns 0. A missing Go
+// toolchain falls back to the verified release tarball updater when it is wired;
+// other failures are surfaced to stderr with a non-zero exit and no success
+// transition. A failed or partial `go install` does not replace the running
+// binary.
+func performGoInstall(stdout, stderr io.Writer, deps updateDeps, slug, current, latest string) int {
 	pkg, err := deps.mainPackage()
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: could not determine the package to install: %v\n", err)
@@ -349,6 +358,13 @@ func performGoInstall(stdout, stderr io.Writer, deps updateDeps, current, latest
 
 	out, err := deps.runInstall(ctx, "go", args, goInstallEnv(deps.binaryDir))
 	if err != nil {
+		if errors.Is(err, exec.ErrNotFound) && deps.runTarball != nil {
+			fmt.Fprintln(stderr, updateGoToolchainFallbackMsg)
+			if !preflightTarballWritable(stderr, deps) {
+				return 1
+			}
+			return performTarballUpdate(stdout, stderr, deps, slug, current, latest)
+		}
 		return reportGoInstallFailure(ctx, stderr, err, out)
 	}
 

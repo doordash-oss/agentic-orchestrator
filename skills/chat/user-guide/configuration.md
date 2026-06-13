@@ -177,7 +177,7 @@ Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agen
 
 ## Updating
 
-Run `agentico update` to upgrade to the latest stable release, or `agentico update [--check|-n]` to report the current and latest available versions without installing. The `--check` form (alias `-n`) exits `0` and prints an already-up-to-date message when you are already on the newest release.
+Run `agentico update` to upgrade to the latest stable release, or `agentico update [--check|-n]` to report the current and latest available versions without installing. The `--check` form (alias `-n`) exits `0` and prints an already-up-to-date message when you are already on the newest release. If the binary was installed with `go install`, updates use Go when it is available and fall back to the release tarball when it is not.
 
 | Invocation | Description |
 |------------|-------------|

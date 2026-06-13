@@ -263,7 +263,9 @@ agentico update [--check|-n]
 Run `agentico update` to upgrade to the latest stable release. Use
 `agentico update --check` (alias `-n`) to report the current and latest
 available versions without installing anything; it exits `0` and prints an
-already-up-to-date message when you are on the newest release.
+already-up-to-date message when you are on the newest release. If the binary was
+installed with `go install`, the update uses Go when it is available and falls
+back to the release tarball when it is not.
 
 ## Development
 

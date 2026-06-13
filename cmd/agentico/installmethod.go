@@ -312,7 +312,7 @@ func (m installMethod) label() string {
 func (m installMethod) wouldDoAction() string {
 	switch m {
 	case installMethodGoInstall:
-		return "Would update by re-running the Go install of the latest version."
+		return "Would update by re-running the Go install of the latest version, falling back to the release tarball if Go is unavailable."
 	case installMethodTarball:
 		return "Would update by downloading the latest release and replacing the binary in place."
 	case installMethodHomebrew:

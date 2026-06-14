@@ -90,7 +90,7 @@ func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
 	store, f := seedReadFeature(t)
 	f.PendingNeedUserInputPath = filepath.Join(store.RunDir(f.ID, 1), "phase-02", "implement", "need-user-input.yaml")
 	f.Pipeline = feature.PipelineMedium
-	f.Checkpoints = feature.Checkpoints{InquiryReview: true, PlanReview: true, ManualPublish: true}
+	f.Checkpoints = feature.Checkpoints{InquiryReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true, DraftPublish: true}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -162,7 +162,7 @@ func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
 		t.Fatalf("feature config original inquireness = %v; want %s", original["inquireness"], f.Inquireness)
 	}
 	checkpoints := original["checkpoints"].(map[string]any)
-	if checkpoints["plan_review"] != true || checkpoints["inquiry_review"] == true {
+	if checkpoints["roadmap_review"] != true || checkpoints["phase_plan_review"] != true || checkpoints["draft_publish"] != true || checkpoints["inquiry_review"] == true {
 		t.Fatalf("feature config original checkpoints = %+v; want medium-normalized persisted checkpoints", checkpoints)
 	}
 	prompts := getJSONMap(t, handler, "/api/v1/prompts")

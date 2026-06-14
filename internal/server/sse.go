@@ -142,6 +142,13 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *apiHandler) publishOperationUpdate(rec OperationRecord) {
+	if h == nil || h.broker == nil {
+		return
+	}
+	h.broker.publish(operationSSEEvent(h.broker.newID(), rec))
+}
+
 func heartbeatInterval(r *http.Request) time.Duration {
 	ms, err := strconv.Atoi(r.URL.Query().Get("heartbeat_ms"))
 	if err != nil || ms <= 0 {

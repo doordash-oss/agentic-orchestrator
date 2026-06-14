@@ -34,14 +34,16 @@ func NewHandler(opts HandlerOptions) http.Handler {
 }
 
 type apiHandler struct {
-	runtime   RuntimeIdentity
-	startedAt time.Time
-	features  FeatureLister
-	store     FeatureReader
-	cfg       *config.Config
-	registry  *llm.Registry
-	sessions  ports.SessionManager
-	broker    *eventBroker
+	runtime    RuntimeIdentity
+	startedAt  time.Time
+	features   FeatureLister
+	store      FeatureReader
+	cfg        *config.Config
+	registry   *llm.Registry
+	sessions   ports.SessionManager
+	broker     *eventBroker
+	operations *OperationRegistry
+	mutations  *mutationExecutor
 }
 
 func newAPIHandler(opts HandlerOptions) *apiHandler {
@@ -59,35 +61,48 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	if features == nil && store != nil {
 		features = store
 	}
-	return &apiHandler{
-		runtime:   opts.Runtime,
-		startedAt: startedAt,
-		features:  features,
-		store:     store,
-		cfg:       opts.Config,
-		registry:  opts.Registry,
-		sessions:  opts.Sessions,
-		broker:    newEventBroker(opts.Events, opts.DomainEvents),
+	handler := &apiHandler{
+		runtime:    opts.Runtime,
+		startedAt:  startedAt,
+		features:   features,
+		store:      store,
+		cfg:        opts.Config,
+		registry:   opts.Registry,
+		sessions:   opts.Sessions,
+		broker:     newEventBroker(opts.Events, opts.DomainEvents),
+		operations: opts.Operations,
 	}
+	if opts.Operations != nil && opts.Mutations != nil {
+		handler.mutations = newMutationExecutor(opts.Operations, opts.Mutations, opts.MutationLimits, handler.publishOperationUpdate)
+	}
+	return handler
 }
 
 func (h *apiHandler) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", methodHandler(http.MethodGet, h.handleHealth))
-	mux.HandleFunc("/api/v1/features", methodHandler(http.MethodGet, h.handleFeatureList))
-	mux.HandleFunc("/api/v1/features/", methodHandler(http.MethodGet, h.handleFeatureRoutes))
-	mux.HandleFunc("/api/v1/config/runtime", methodHandler(http.MethodGet, h.handleRuntimeConfig))
+	mux.HandleFunc("/api/v1/features", h.handleFeaturesRoot)
+	mux.HandleFunc("/api/v1/features/", h.handleFeatureRoutes)
+	mux.HandleFunc("/api/v1/config/runtime", h.handleRuntimeConfigRoute)
 	mux.HandleFunc("/api/v1/catalog/models", methodHandler(http.MethodGet, h.handleModelCatalog))
 	mux.HandleFunc("/api/v1/prompts", methodHandler(http.MethodGet, h.handlePrompts))
+	mux.HandleFunc("/api/v1/prompts/", h.handlePromptMutationRoutes)
 	mux.HandleFunc("/api/v1/permissions", methodHandler(http.MethodGet, h.handlePermissions))
+	mux.HandleFunc("/api/v1/permissions/", h.handlePermissionMutationRoutes)
 	mux.HandleFunc("/api/v1/sessions", methodHandler(http.MethodGet, h.handleSessionList))
 	mux.HandleFunc("/api/v1/sessions/", methodHandler(http.MethodGet, h.handleSessionRoutes))
 	mux.HandleFunc("/api/v1/operations", methodHandler(http.MethodGet, h.handleOperations))
 	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.handleMutationPreflight(w, r) {
+			return
+		}
+		if h.applyMutationCORS(w, r) {
+			return
+		}
 		escaped := r.URL.EscapedPath()
 		if strings.HasPrefix(escaped, "/api/v1/features/") {
-			methodHandler(http.MethodGet, h.handleFeatureRoutes)(w, r)
+			h.handleFeatureRoutes(w, r)
 			return
 		}
 		if strings.HasPrefix(escaped, "/api/v1/sessions/") {
@@ -137,6 +152,14 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	featureID := parts[0]
+	if h.handleFeatureMutationRoute(w, r, featureID, parts[1:]) {
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET, POST")
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		return
+	}
 	switch {
 	case len(parts) == 1:
 		h.handleFeatureDetail(w, r, featureID)

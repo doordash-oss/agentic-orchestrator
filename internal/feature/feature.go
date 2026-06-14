@@ -490,13 +490,13 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 // Checkpoints controls which phase transitions pause for human review.
 type Checkpoints struct {
-	InquiryReview   bool `yaml:"inquiry_review,omitempty"`
-	ResearchReview  bool `yaml:"research_review,omitempty"`
-	DesignReview    bool `yaml:"design_review,omitempty"`
-	RoadmapReview   bool `yaml:"roadmap_review,omitempty"`
-	PhasePlanReview bool `yaml:"phase_plan_review,omitempty"`
-	ManualPublish   bool `yaml:"manual_publish,omitempty"`
-	DraftPublish    bool `yaml:"draft_publish,omitempty"`
+	InquiryReview   bool `yaml:"inquiry_review,omitempty" json:"inquiry_review,omitempty"`
+	ResearchReview  bool `yaml:"research_review,omitempty" json:"research_review,omitempty"`
+	DesignReview    bool `yaml:"design_review,omitempty" json:"design_review,omitempty"`
+	RoadmapReview   bool `yaml:"roadmap_review,omitempty" json:"roadmap_review,omitempty"`
+	PhasePlanReview bool `yaml:"phase_plan_review,omitempty" json:"phase_plan_review,omitempty"`
+	ManualPublish   bool `yaml:"manual_publish,omitempty" json:"manual_publish,omitempty"`
+	DraftPublish    bool `yaml:"draft_publish,omitempty" json:"draft_publish,omitempty"`
 }
 
 // HasGateForPhase returns true if a review gate is enabled for the given target phase.

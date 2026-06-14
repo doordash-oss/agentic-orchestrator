@@ -35,28 +35,34 @@ type RuntimeIdentity struct {
 }
 
 type Options struct {
-	Runtime      RuntimeIdentity
-	StartMode    string
-	Owner        instancelock.Owner
-	Features     FeatureLister
-	FeatureStore FeatureReader
-	Config       *config.Config
-	Registry     *llm.Registry
-	Sessions     ports.SessionManager
-	Events       <-chan interface{}
-	DomainEvents <-chan ports.Event
+	Runtime        RuntimeIdentity
+	StartMode      string
+	Owner          instancelock.Owner
+	Features       FeatureLister
+	FeatureStore   FeatureReader
+	Config         *config.Config
+	Registry       *llm.Registry
+	Sessions       ports.SessionManager
+	Events         <-chan interface{}
+	DomainEvents   <-chan ports.Event
+	Operations     *OperationRegistry
+	Mutations      MutationTarget
+	MutationLimits MutationLimits
 }
 
 type HandlerOptions struct {
-	Runtime      RuntimeIdentity
-	StartedAt    time.Time
-	Features     FeatureLister
-	FeatureStore FeatureReader
-	Config       *config.Config
-	Registry     *llm.Registry
-	Sessions     ports.SessionManager
-	Events       <-chan interface{}
-	DomainEvents <-chan ports.Event
+	Runtime        RuntimeIdentity
+	StartedAt      time.Time
+	Features       FeatureLister
+	FeatureStore   FeatureReader
+	Config         *config.Config
+	Registry       *llm.Registry
+	Sessions       ports.SessionManager
+	Events         <-chan interface{}
+	DomainEvents   <-chan ports.Event
+	Operations     *OperationRegistry
+	Mutations      MutationTarget
+	MutationLimits MutationLimits
 }
 
 type FeatureLister interface {
@@ -259,11 +265,13 @@ type FeatureConfigDTO struct {
 }
 
 type CheckpointsDTO struct {
-	InquiryReview  bool `json:"inquiry_review"`
-	ResearchReview bool `json:"research_review"`
-	DesignReview   bool `json:"design_review"`
-	PlanReview     bool `json:"plan_review"`
-	ManualPublish  bool `json:"manual_publish"`
+	InquiryReview   bool `json:"inquiry_review"`
+	ResearchReview  bool `json:"research_review"`
+	DesignReview    bool `json:"design_review"`
+	RoadmapReview   bool `json:"roadmap_review"`
+	PhasePlanReview bool `json:"phase_plan_review"`
+	ManualPublish   bool `json:"manual_publish"`
+	DraftPublish    bool `json:"draft_publish"`
 }
 
 type PublishabilityDTO struct {
@@ -436,6 +444,7 @@ type OperationSnapshotResponse struct {
 	Meta       ResponseMeta       `json:"meta"`
 	Schema     OperationSchemaDTO `json:"schema"`
 	Operations []OperationDTO     `json:"operations"`
+	NextCursor string             `json:"next_cursor,omitempty"`
 }
 
 type OperationSchemaDTO struct {
@@ -445,7 +454,21 @@ type OperationSchemaDTO struct {
 }
 
 type OperationDTO struct {
-	ID string `json:"id"`
+	ID          string            `json:"id"`
+	Kind        string            `json:"kind,omitempty"`
+	Target      OperationTarget   `json:"target,omitempty"`
+	RequestedAt time.Time         `json:"requested_at,omitempty"`
+	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
+	CompletedAt *time.Time        `json:"completed_at,omitempty"`
+	Status      OperationStatus   `json:"status,omitempty"`
+	Result      map[string]string `json:"result,omitempty"`
+	Error       *OperationError   `json:"error,omitempty"`
+}
+
+type OperationAcceptedResponse struct {
+	APIVersion  string          `json:"api_version"`
+	OperationID string          `json:"operation_id"`
+	Status      OperationStatus `json:"status"`
 }
 
 type SSEEventDTO struct {

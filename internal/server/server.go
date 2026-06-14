@@ -26,10 +26,11 @@ import (
 )
 
 type RuntimeServer struct {
-	baseURL string
-	srv     *http.Server
-	broker  *eventBroker
-	done    chan error
+	baseURL   string
+	srv       *http.Server
+	broker    *eventBroker
+	mutations *mutationExecutor
+	done      chan error
 }
 
 func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
@@ -40,15 +41,18 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	}
 	baseURL := "http://" + ln.Addr().String()
 	handler := newAPIHandler(HandlerOptions{
-		Runtime:      opts.Runtime,
-		StartedAt:    startedAt,
-		Features:     opts.Features,
-		FeatureStore: opts.FeatureStore,
-		Config:       opts.Config,
-		Registry:     opts.Registry,
-		Sessions:     opts.Sessions,
-		Events:       opts.Events,
-		DomainEvents: opts.DomainEvents,
+		Runtime:        opts.Runtime,
+		StartedAt:      startedAt,
+		Features:       opts.Features,
+		FeatureStore:   opts.FeatureStore,
+		Config:         opts.Config,
+		Registry:       opts.Registry,
+		Sessions:       opts.Sessions,
+		Events:         opts.Events,
+		DomainEvents:   opts.DomainEvents,
+		Operations:     opts.Operations,
+		Mutations:      opts.Mutations,
+		MutationLimits: opts.MutationLimits,
 	})
 	httpServer := &http.Server{
 		Handler:      handler.routes(),
@@ -57,10 +61,11 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		IdleTimeout:  30 * time.Second,
 	}
 	s := &RuntimeServer{
-		baseURL: baseURL,
-		srv:     httpServer,
-		broker:  handler.broker,
-		done:    make(chan error, 1),
+		baseURL:   baseURL,
+		srv:       httpServer,
+		broker:    handler.broker,
+		mutations: handler.mutations,
+		done:      make(chan error, 1),
 	}
 	go func() {
 		err := httpServer.Serve(ln)
@@ -93,6 +98,9 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	s.srv = nil
 	if s.broker != nil {
 		s.broker.publish(eventDTOFromDomain(ports.Event{Type: ports.RuntimeShutdownStarted}, s.broker.newID()))
+	}
+	if s.mutations != nil {
+		s.mutations.shutdown()
 	}
 	shutdownErr := srv.Shutdown(ctx)
 	var serveErr error

@@ -77,33 +77,33 @@ type NotificationConfig struct {
 }
 
 type DefaultsConfig struct {
-	Models                   ModelConfig                   `yaml:"models"`
-	PipelinePreferences      map[string]PipelinePreference `yaml:"pipeline_preferences,omitempty"`
-	ExitCriteria             string                        `yaml:"exit_criteria"`
-	Inquireness              string                        `yaml:"inquireness"`
-	Pipeline                 string                        `yaml:"pipeline,omitempty"`
-	MaxIterations            int                           `yaml:"max_iterations"`
-	MaxConsecutiveFailures   int                           `yaml:"max_consecutive_failures"`
-	MaxConsecutiveNoProgress int                           `yaml:"max_consecutive_no_progress"`
-	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty"`
-	Checkpoints              Checkpoints                   `yaml:"checkpoints"`
+	Models                   ModelConfig                   `yaml:"models" json:"models"`
+	PipelinePreferences      map[string]PipelinePreference `yaml:"pipeline_preferences,omitempty" json:"pipeline_preferences,omitempty"`
+	ExitCriteria             string                        `yaml:"exit_criteria" json:"exit_criteria,omitempty"`
+	Inquireness              string                        `yaml:"inquireness" json:"inquireness,omitempty"`
+	Pipeline                 string                        `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
+	MaxIterations            int                           `yaml:"max_iterations" json:"max_iterations,omitempty"`
+	MaxConsecutiveFailures   int                           `yaml:"max_consecutive_failures" json:"max_consecutive_failures,omitempty"`
+	MaxConsecutiveNoProgress int                           `yaml:"max_consecutive_no_progress" json:"max_consecutive_no_progress,omitempty"`
+	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty" json:"max_phase_plan_iterations,omitempty"`
+	Checkpoints              Checkpoints                   `yaml:"checkpoints" json:"checkpoints"`
 }
 
 // PipelinePreference stores the last-used feature-creation settings for a
 // specific pipeline profile.
 type PipelinePreference struct {
-	Models      ModelConfig `yaml:"models,omitempty"`
-	Inquireness string      `yaml:"inquireness,omitempty"`
+	Models      ModelConfig `yaml:"models,omitempty" json:"models,omitempty"`
+	Inquireness string      `yaml:"inquireness,omitempty" json:"inquireness,omitempty"`
 }
 
 type ModelConfig struct {
-	Inquiry        string `yaml:"inquiry"`
-	Research       string `yaml:"research"`
-	Planning       string `yaml:"planning"`
-	Implementation string `yaml:"implementation"`
-	Review         string `yaml:"review"`
-	Utilities      string `yaml:"utilities"`
-	KBBuild        string `yaml:"kb_build"`
+	Inquiry        string `yaml:"inquiry" json:"inquiry,omitempty"`
+	Research       string `yaml:"research" json:"research,omitempty"`
+	Planning       string `yaml:"planning" json:"planning,omitempty"`
+	Implementation string `yaml:"implementation" json:"implementation,omitempty"`
+	Review         string `yaml:"review" json:"review,omitempty"`
+	Utilities      string `yaml:"utilities" json:"utilities,omitempty"`
+	KBBuild        string `yaml:"kb_build" json:"kb_build,omitempty"`
 }
 
 // UnmarshalYAML migrates the legacy "chat" YAML key to "utilities".
@@ -141,13 +141,13 @@ func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 
 // Checkpoints controls which phase transitions pause for human review in the config defaults.
 type Checkpoints struct {
-	InquiryReview   bool `yaml:"inquiry_review"`
-	ResearchReview  bool `yaml:"research_review"`
-	DesignReview    bool `yaml:"design_review"`
-	RoadmapReview   bool `yaml:"roadmap_review"`
-	PhasePlanReview bool `yaml:"phase_plan_review"`
-	ManualPublish   bool `yaml:"manual_publish"`
-	DraftPublish    bool `yaml:"draft_publish"`
+	InquiryReview   bool `yaml:"inquiry_review" json:"inquiry_review,omitempty"`
+	ResearchReview  bool `yaml:"research_review" json:"research_review,omitempty"`
+	DesignReview    bool `yaml:"design_review" json:"design_review,omitempty"`
+	RoadmapReview   bool `yaml:"roadmap_review" json:"roadmap_review,omitempty"`
+	PhasePlanReview bool `yaml:"phase_plan_review" json:"phase_plan_review,omitempty"`
+	ManualPublish   bool `yaml:"manual_publish" json:"manual_publish"`
+	DraftPublish    bool `yaml:"draft_publish" json:"draft_publish,omitempty"`
 
 	parsed bool // set by UnmarshalYAML; not serialized
 }

@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +46,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
@@ -748,6 +750,468 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 	return errors.Join(errStop, errLock)
 }
 
+type serverMutationTarget struct {
+	mu         sync.Mutex
+	orch       *orchestrator.Orchestrator
+	cfg        *config.Config
+	configPath string
+	store      *feature.Store
+	sessions   ports.SessionManager
+}
+
+func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (serverruntime.OperationResult, error) {
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	models := cfg.Defaults.Models
+	if hasAnyModelConfig(req.Models) {
+		models = mergeModelConfig(models, req.Models)
+	}
+	pipeline := effectiveCreatePipeline(req.Pipeline, cfg)
+	checkpoints := pipeline.ProjectGates(req.Checkpoints, true).Checkpoints
+	f, err := t.orch.CreateFeature(req.Name, req.Description, req.Repos, models, req.ExitCriteria, req.Inquireness, req.Images, feature.CreateOptions{
+		UseCurrentBranch:        req.UseCurrentBranch,
+		UseCurrentBranchPerRepo: req.UseCurrentBranchPerRepo,
+		Checkpoints:             checkpoints,
+		Attachments:             req.Attachments,
+		RiskLevel:               req.RiskLevel,
+		Pipeline:                req.Pipeline,
+	})
+	if err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Inquireness, f.Checkpoints, true); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"feature_id": f.ID}}, nil
+}
+
+func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.OperationResult, error) {
+	if err := t.orch.StartFeature(featureID); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"feature_id": featureID}}, nil
+}
+
+func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.OperationResult, error) {
+	if err := t.orch.InterruptFeature(featureID); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"feature_id": featureID}}, nil
+}
+
+func (t *serverMutationTarget) RestartFeature(featureID string, req serverruntime.RestartFeatureRequest) (serverruntime.OperationResult, error) {
+	outcome, err := t.orch.RestartPhase(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
+	if err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{
+		"feature_id": featureID,
+		"status":     fmt.Sprint(outcome.Action),
+		"phase":      outcome.Phase.String(),
+	}}, nil
+}
+
+func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) (serverruntime.OperationResult, error) {
+	decision := orchestrator.ReviewDecision{
+		Decision:    req.Decision,
+		TargetPhase: parseServerPhase(req.Phase),
+		IsRewind:    req.IsRewind,
+		PhasePlan:   req.PhasePlan,
+		Roadmap:     req.Roadmap,
+		Comment:     req.Comment,
+	}
+	if err := t.orch.HandleReviewDecision(featureID, decision); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"feature_id": featureID, "decision": req.Decision}}, nil
+}
+
+func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.OperationResult, error) {
+	if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
+		Models:      req.Models,
+		Inquireness: feature.Inquireness(req.Inquireness),
+		Checkpoints: req.Checkpoints,
+	}); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	if t.store == nil {
+		return serverruntime.OperationResult{}, errors.New("feature store is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	pipeline := req.Pipeline
+	if pipeline == "" {
+		pipeline = f.EffectivePipeline()
+	}
+	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"feature_id": featureID}}, nil
+}
+
+func (t *serverMutationTarget) NeedUserInputDecision(featureID string, req serverruntime.NeedUserInputDecisionRequest) (serverruntime.OperationResult, error) {
+	if err := t.orch.HandleNeedUserInputDecision(featureID, orchestrator.NeedUserInputDecision{
+		Decision:  req.Decision,
+		RepoName:  req.RepoName,
+		CycleType: feature.RepoCycleType(req.CycleType),
+	}); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"feature_id": featureID, "decision": req.Decision}}, nil
+}
+
+func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.OperationResult, error) {
+	gatePath, err := t.needUserInputGatePath(featureID, req.RepoName)
+	if err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	rec, err := agent.ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		return serverruntime.OperationResult{}, fmt.Errorf("read need-user-input gate: %w", err)
+	}
+	if err := applyNeedUserInputDraftAnswers(&rec, req.Answers); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		return serverruntime.OperationResult{}, fmt.Errorf("write need-user-input gate: %w", err)
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "drafted"}}, nil
+}
+
+func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequest) (serverruntime.OperationResult, error) {
+	decision := strings.ToLower(strings.TrimSpace(req.Decision))
+	if decision != "allow" && decision != "deny" {
+		return serverruntime.OperationResult{}, fmt.Errorf("unknown permission decision %q", req.Decision)
+	}
+	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, false)
+	if err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	reason := ""
+	if decision == "deny" {
+		reason = "denied by user"
+	}
+	if err := sess.RespondToControl(pending.RequestID, decision == "allow", reason); err != nil {
+		return serverruntime.OperationResult{}, fmt.Errorf("answer permission: %w", err)
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{
+		"session_id": sess.ID(),
+		"request_id": pending.RequestID,
+		"decision":   decision,
+	}}, nil
+}
+
+func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequest) (serverruntime.OperationResult, error) {
+	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, true)
+	if err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, req.Answers, nil); err != nil {
+		return serverruntime.OperationResult{}, fmt.Errorf("answer ask-user question: %w", err)
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{
+		"session_id": sess.ID(),
+		"request_id": pending.RequestID,
+		"decision":   "answered",
+	}}, nil
+}
+
+func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (serverruntime.OperationResult, error) {
+	sess, err := t.helpSession(req)
+	if err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	if err := sess.SendUserMessage(req.Message); err != nil {
+		return serverruntime.OperationResult{}, fmt.Errorf("send help message: %w", err)
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{
+		"feature_id": sess.FeatureID(),
+		"session_id": sess.ID(),
+		"status":     "sent",
+	}}, nil
+}
+
+func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMutationRequest) (serverruntime.OperationResult, error) {
+	if t.configPath == "" {
+		return serverruntime.OperationResult{}, errors.New("config path is not available")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	changed := mergeRuntimeDefaultsMutation(&cfg.Defaults, req.Defaults)
+	if err := config.Save(t.configPath, cfg); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	t.cfg = cfg
+	status := "unchanged"
+	if changed {
+		status = "updated"
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"kind": "runtime.config", "status": status}}, nil
+}
+
+func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID string, wantAskUser bool) (ports.SessionView, *llm.ControlRequestMessage, error) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return nil, nil, errors.New("request_id is required")
+	}
+	if t.sessions == nil {
+		return nil, nil, errors.New("session manager is not available")
+	}
+	var candidates []ports.SessionView
+	if strings.TrimSpace(sessionID) != "" {
+		sess := t.sessions.GetSession(strings.TrimSpace(sessionID))
+		if sess == nil {
+			return nil, nil, fmt.Errorf("session %s not found", sessionID)
+		}
+		candidates = []ports.SessionView{sess}
+	} else {
+		candidates = t.sessions.ActiveSessions()
+	}
+	for _, sess := range candidates {
+		if sess == nil {
+			continue
+		}
+		for _, pending := range sess.PendingControlRequests() {
+			if pending == nil || pending.RequestID != requestID {
+				continue
+			}
+			isAskUser := pending.Request.ToolName == "AskUserQuestion"
+			if isAskUser != wantAskUser {
+				return nil, nil, fmt.Errorf("request %s has incompatible control type", requestID)
+			}
+			return sess, pending, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("pending request %s not found", requestID)
+}
+
+func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) (ports.SessionView, error) {
+	if t.sessions == nil {
+		return nil, errors.New("session manager is not available")
+	}
+	if id := strings.TrimSpace(req.SessionID); id != "" {
+		sess := t.sessions.GetSession(id)
+		if sess == nil {
+			return nil, fmt.Errorf("session %s not found", id)
+		}
+		return sess, nil
+	}
+	featureID := strings.TrimSpace(req.FeatureID)
+	if featureID == "" {
+		return nil, errors.New("session_id or feature_id is required")
+	}
+	var active []ports.SessionView
+	for _, sess := range t.sessions.FeatureSessions(featureID) {
+		if sess != nil && sess.IsActive() {
+			active = append(active, sess)
+		}
+	}
+	switch len(active) {
+	case 0:
+		return nil, fmt.Errorf("no active session for feature %s", featureID)
+	case 1:
+		return active[0], nil
+	default:
+		return nil, fmt.Errorf("multiple active sessions for feature %s; session_id is required", featureID)
+	}
+}
+
+func (t *serverMutationTarget) needUserInputGatePath(featureID, repoName string) (string, error) {
+	if t.store == nil {
+		return "", errors.New("feature store is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return "", err
+	}
+	repoName = strings.TrimSpace(repoName)
+	if repoName != "" {
+		if rc := f.RepoCycles[repoName]; rc != nil && rc.Status == feature.RepoCycleNeedUserInput && rc.PendingNeedUserInputPath != "" {
+			return rc.PendingNeedUserInputPath, nil
+		}
+		return "", fmt.Errorf("repo %s is not paused on a need-user-input gate", repoName)
+	}
+	if f.PendingNeedUserInputPath == "" {
+		return "", fmt.Errorf("feature %s is not paused on a need-user-input gate", featureID)
+	}
+	return f.PendingNeedUserInputPath, nil
+}
+
+func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[string]string) error {
+	if rec == nil {
+		return errors.New("nil need-user-input record")
+	}
+	questionByKey := make(map[string]*agent.NeedUserInputQuestion)
+	for i := range rec.Questions {
+		q := &rec.Questions[i]
+		if q.Index > 0 {
+			questionByKey[strconv.Itoa(q.Index)] = q
+			questionByKey[fmt.Sprintf("q%d", q.Index)] = q
+		}
+		if prompt := strings.TrimSpace(q.Prompt); prompt != "" {
+			questionByKey[prompt] = q
+		}
+	}
+	for key, answer := range answers {
+		q := questionByKey[strings.TrimSpace(key)]
+		if q == nil {
+			return fmt.Errorf("answer key %q does not match a need-user-input question", key)
+		}
+		q.Answer = answer
+	}
+	return nil
+}
+
+func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch config.DefaultsConfig) bool {
+	if dst == nil {
+		return false
+	}
+	changed := false
+	if hasAnyModelConfig(patch.Models) {
+		next := mergeModelConfig(dst.Models, patch.Models)
+		if next != dst.Models {
+			dst.Models = next
+			changed = true
+		}
+	}
+	if patch.ExitCriteria != "" && patch.ExitCriteria != dst.ExitCriteria {
+		dst.ExitCriteria = patch.ExitCriteria
+		changed = true
+	}
+	if patch.Inquireness != "" && patch.Inquireness != dst.Inquireness {
+		dst.Inquireness = patch.Inquireness
+		changed = true
+	}
+	if patch.Pipeline != "" && patch.Pipeline != dst.Pipeline {
+		dst.Pipeline = patch.Pipeline
+		changed = true
+	}
+	if patch.MaxIterations > 0 && patch.MaxIterations != dst.MaxIterations {
+		dst.MaxIterations = patch.MaxIterations
+		changed = true
+	}
+	if patch.MaxConsecutiveFailures > 0 && patch.MaxConsecutiveFailures != dst.MaxConsecutiveFailures {
+		dst.MaxConsecutiveFailures = patch.MaxConsecutiveFailures
+		changed = true
+	}
+	if patch.MaxConsecutiveNoProgress > 0 && patch.MaxConsecutiveNoProgress != dst.MaxConsecutiveNoProgress {
+		dst.MaxConsecutiveNoProgress = patch.MaxConsecutiveNoProgress
+		changed = true
+	}
+	if patch.MaxPhasePlanIterations > 0 && patch.MaxPhasePlanIterations != dst.MaxPhasePlanIterations {
+		dst.MaxPhasePlanIterations = patch.MaxPhasePlanIterations
+		changed = true
+	}
+	if patch.Checkpoints != (config.Checkpoints{}) && patch.Checkpoints != dst.Checkpoints {
+		dst.Checkpoints = patch.Checkpoints
+		changed = true
+	}
+	if len(patch.PipelinePreferences) > 0 {
+		dst.PipelinePreferences = patch.PipelinePreferences
+		changed = true
+	}
+	return changed
+}
+
+func effectiveCreatePipeline(requested feature.PipelineProfile, cfg *config.Config) feature.PipelineProfile {
+	if requested.IsValid() {
+		return requested
+	}
+	if cfg != nil && cfg.Defaults.Pipeline != "" {
+		if parsed, err := feature.ParsePipelineProfile(cfg.Defaults.Pipeline); err == nil {
+			return parsed
+		}
+	}
+	return feature.PipelineMoonshot
+}
+
+func featureRepoNames(f *feature.Feature) []string {
+	if f == nil {
+		return nil
+	}
+	repos := make([]string, 0, len(f.Repos))
+	for _, repo := range f.Repos {
+		repos = append(repos, repo.Name)
+	}
+	return repos
+}
+
+func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, inquireness feature.Inquireness, checkpoints feature.Checkpoints, publishable bool) error {
+	if t.configPath == "" {
+		return errors.New("config path is not available")
+	}
+	if !pipeline.IsValid() {
+		return fmt.Errorf("invalid pipeline profile %q", pipeline)
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	if cfg.Defaults.PipelinePreferences == nil {
+		cfg.Defaults.PipelinePreferences = make(map[string]config.PipelinePreference)
+	}
+	if cfg.Repos == nil {
+		cfg.Repos = make(map[string]config.RepoConfig)
+	}
+	projection := pipeline.ProjectGates(checkpoints, publishable)
+	profileKey := string(pipeline)
+	cfg.Defaults.PipelinePreferences[profileKey] = config.PipelinePreference{
+		Models:      models,
+		Inquireness: string(inquireness),
+	}
+	configGates := feature.FeatureCheckpointsToConfig(projection.Checkpoints)
+	for _, repoName := range repos {
+		rc := cfg.Repos[repoName]
+		if rc.PipelineGates == nil {
+			rc.PipelineGates = make(map[string]config.Checkpoints)
+		}
+		rc.PipelineGates[profileKey] = configGates
+		cfg.Repos[repoName] = rc
+	}
+	if err := config.Save(t.configPath, cfg); err != nil {
+		return err
+	}
+	t.cfg = cfg
+	return nil
+}
+
+func parseServerPhase(in string) feature.Phase {
+	switch strings.ToLower(strings.TrimSpace(in)) {
+	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
+		return feature.PhaseKnowledgeBase
+	case "inquire":
+		return feature.PhaseInquire
+	case "research":
+		return feature.PhaseResearch
+	case "design":
+		return feature.PhaseDesign
+	case "plan":
+		return feature.PhasePlan
+	case "implement":
+		return feature.PhaseImplement
+	case "review":
+		return feature.PhaseReview
+	case "final-review", "final review":
+		return feature.PhaseFinalReview
+	case "publish":
+		return feature.PhasePublish
+	default:
+		return feature.Phase(0)
+	}
+}
+
 func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stdin io.Reader, stderr io.Writer) (*runtimeBootstrap, error) {
 	runtimeDir := filepath.Dir(stateDir)
 	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, tui.GetVersion())
@@ -1033,6 +1497,16 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		return 1
 	}
 
+	operations, err := serverruntime.NewOperationRegistry(serverruntime.OperationRegistryOptions{
+		Dir:          filepath.Join(boot.runtime.RuntimeDir, "operations"),
+		DefaultLimit: 50,
+		MaxLimit:     200,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: loading operation registry: %v\n", err)
+		return 1
+	}
+
 	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
 		Runtime:      boot.runtime,
 		StartMode:    "server",
@@ -1044,6 +1518,15 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Sessions:     boot.sessionManager,
 		Events:       boot.eventCh,
 		DomainEvents: boot.orchestrator.Events(),
+		Operations:   operations,
+		Mutations: &serverMutationTarget{
+			orch:       boot.orchestrator,
+			cfg:        boot.cfg,
+			configPath: boot.runtime.Config,
+			store:      boot.featureManager.Store,
+			sessions:   boot.sessionManager,
+		},
+		MutationLimits: serverruntime.MutationLimits{FeatureQueue: 0, RuntimeQueue: 0, AggregateQueue: 100},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)

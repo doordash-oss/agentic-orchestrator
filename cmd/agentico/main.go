@@ -757,6 +757,7 @@ type serverMutationTarget struct {
 	configPath string
 	store      *feature.Store
 	sessions   ports.SessionManager
+	reviewer   ports.ReviewCommentOperator
 }
 
 func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (serverruntime.OperationResult, error) {
@@ -956,6 +957,541 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		status = "updated"
 	}
 	return serverruntime.OperationResult{Metadata: map[string]string{"kind": "runtime.config", "status": status}}, nil
+}
+
+func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "publish")
+	if err := t.ensureWholeFeatureRepoSelection(featureID, req.Repos, "publish"); err != nil {
+		metadata["status"] = "unsupported"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.Publish(featureID); err != nil {
+		addConflictMetadata(metadata, err)
+		if metadata["status"] == "" {
+			metadata["status"] = "failed"
+		}
+		return serverruntime.OperationResult{Metadata: metadata}, operationFailureForMetadata(err, metadata)
+	}
+	metadata["status"] = "published"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) MergeFeature(featureID string) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "merge")
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.MergeFeatureLocal(featureID); err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	metadata["status"] = "merged"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime.RewindFeatureRequest) (serverruntime.OperationResult, error) {
+	requestedTarget := strings.ToLower(strings.TrimSpace(req.TargetPhase))
+	targetPhase, err := parseServerPhaseStrict(req.TargetPhase)
+	metadata := actionMetadata(featureID, "rewind")
+	metadata["target_phase"] = requestedTarget
+	if err == nil {
+		metadata["target_phase"] = targetPhase.DirName()
+	}
+	if req.RoadmapPhase > 0 {
+		metadata["roadmap_phase"] = strconv.Itoa(req.RoadmapPhase)
+	}
+	if err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	warnings, effectiveTarget, err := t.orch.RewindWithRequest(featureID, feature.RewindRequest{
+		TargetPhase:  targetPhase,
+		RoadmapPhase: req.RoadmapPhase,
+	})
+	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, "research") {
+		metadata["effective_phase"] = effectiveTarget.DirName()
+	}
+	metadata["warning_count"] = strconv.Itoa(len(warnings))
+	if err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	metadata["status"] = "rewound"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "retry")
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.RetryPhase(featureID); err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	metadata["status"] = "retried"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.RebaseActionRequest) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "rebase")
+	metadata["cycle_type"] = string(feature.CycleRebase)
+	if req.Repo != "" {
+		metadata["repo"] = req.Repo
+	}
+	if req.RebaseTarget != "" {
+		metadata["rebase_target"] = req.RebaseTarget
+	}
+	metadata["conflict_files"] = strconv.Itoa(len(req.ConflictFiles))
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleRebase, req.RebaseTarget, req.ConflictFiles...)
+	if sessionID != "" {
+		metadata["session_id"] = sessionID
+	}
+	if err != nil {
+		addConflictMetadata(metadata, err)
+		if metadata["status"] == "" {
+			metadata["status"] = "failed"
+		}
+		return serverruntime.OperationResult{Metadata: metadata}, operationFailureForMetadata(err, metadata)
+	}
+	metadata["status"] = "started"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverruntime.ReviewCommentsFetchRequest) (serverruntime.ReviewCommentsFetchResponse, error) {
+	comments, err := t.fetchUnaddressedReviewComments(featureID, req.Repo)
+	if err != nil {
+		return serverruntime.ReviewCommentsFetchResponse{}, err
+	}
+	return serverruntime.ReviewCommentsFetchResponse{
+		APIVersion: serverruntime.APIVersion,
+		FeatureID:  featureID,
+		Repo:       req.Repo,
+		Mode:       "auto",
+		Comments:   reviewCommentDTOs(req.Repo, comments),
+	}, nil
+}
+
+func (t *serverMutationTarget) fetchUnaddressedReviewComments(featureID, repoName string) ([]ports.ReviewComment, error) {
+	if t.store == nil {
+		return nil, errors.New("feature store is not available")
+	}
+	if t.reviewer == nil {
+		return nil, errors.New("review comment adapter is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return nil, err
+	}
+	repo, ok := findFeatureRepo(f, repoName)
+	if !ok {
+		return nil, fmt.Errorf("repo %s not found", repoName)
+	}
+	prURL := f.PRURLs()[repoName]
+	if prURL == "" {
+		return nil, fmt.Errorf("repo %s has no PR URL", repoName)
+	}
+	comments, err := t.reviewer.FetchPRComments(repo.Path, prURL)
+	if err != nil {
+		return nil, err
+	}
+	for i := range comments {
+		comments[i].RepoName = repoName
+	}
+	addressed, _ := agent.LoadAddressedIDsForRepo(t.store.BaseDir, f, repoName)
+	if len(addressed) > 0 {
+		filtered := comments[:0]
+		for _, comment := range comments {
+			if !addressed[comment.ID] {
+				filtered = append(filtered, comment)
+			}
+		}
+		comments = filtered
+	}
+	return comments, nil
+}
+
+func (t *serverMutationTarget) StartReviewComments(featureID string, req serverruntime.ReviewCommentsActionRequest) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "review-comments")
+	metadata["cycle_type"] = string(feature.CycleReviewComments)
+	metadata["repo"] = req.Repo
+	metadata["mode"] = req.Mode
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	comments, err := t.fetchUnaddressedReviewComments(featureID, req.Repo)
+	if err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	if len(comments) == 0 {
+		metadata["status"] = "no_comments"
+		return serverruntime.OperationResult{Metadata: metadata}, fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleReviewComments, "")
+	if sessionID != "" {
+		metadata["session_id"] = sessionID
+	}
+	if err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	metadata["status"] = "started"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) StartTweak(featureID string, req serverruntime.TweakActionRequest) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "tweak")
+	metadata["cycle_type"] = string(feature.CycleTweak)
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	sessionID, err := t.orch.StartTweak(featureID)
+	if sessionID != "" {
+		metadata["session_id"] = sessionID
+	}
+	if err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	metadata["status"] = "started"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) FinishTweak(featureID string, req serverruntime.TweakFinishRequest) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "tweak.finish")
+	metadata["decision"] = strings.ToLower(strings.TrimSpace(req.Decision))
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	var err error
+	switch metadata["decision"] {
+	case "commit":
+		hadChanges, commitErr := t.orch.CompleteTweakCommit(featureID)
+		metadata["had_changes"] = strconv.FormatBool(hadChanges)
+		err = commitErr
+	case "skip-review":
+		metadata["had_changes"] = strconv.FormatBool(req.HadChanges)
+		err = t.orch.CompleteTweakFinish(featureID, req.HadChanges)
+	case "restore-from-review":
+		err = t.orch.RestoreTweakFromReview(featureID)
+	case "fail":
+		err = t.orch.FailTweakSession(featureID)
+	case "final-review":
+		metadata["had_changes"] = strconv.FormatBool(req.HadChanges)
+		err = t.orch.StartCycleFinalReview(featureID)
+		if err == nil {
+			metadata["status"] = "review_started"
+		}
+	default:
+		err = fmt.Errorf("unknown tweak finish decision %q", req.Decision)
+	}
+	if err != nil {
+		addConflictMetadata(metadata, err)
+		if metadata["status"] == "" {
+			metadata["status"] = "failed"
+		}
+		return serverruntime.OperationResult{Metadata: metadata}, operationFailureForMetadata(err, metadata)
+	}
+	if metadata["status"] == "" {
+		metadata["status"] = "finished"
+	}
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) StartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.OperationResult, error) {
+	return t.startRefactorAction(featureID, req, false)
+}
+
+func (t *serverMutationTarget) RestartRefactor(featureID string, req serverruntime.RefactorActionRequest) (serverruntime.OperationResult, error) {
+	return t.startRefactorAction(featureID, req, true)
+}
+
+func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "mark-done")
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.MarkDone(featureID); err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	metadata["status"] = "done"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntime.CleanupActionRequest) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "cleanup")
+	target := strings.ToLower(strings.TrimSpace(req.Target))
+	if target == "" {
+		target = "worktrees"
+	}
+	metadata["target"] = target
+	if req.Repo != "" {
+		metadata["repo"] = req.Repo
+	}
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	if req.Repo != "" {
+		metadata["status"] = "unsupported"
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("repo-scoped cleanup is not supported by the orchestrator adapter")
+	}
+	switch target {
+	case "worktrees":
+		if err := t.orch.CleanWorktree(featureID); err != nil {
+			metadata["status"] = "failed"
+			return serverruntime.OperationResult{Metadata: metadata}, err
+		}
+	case "cycles":
+		if err := t.orch.ClearRepoCycles(featureID); err != nil {
+			metadata["status"] = "failed"
+			return serverruntime.OperationResult{Metadata: metadata}, err
+		}
+	case "failed-cycles", "completed-cycles":
+		metadata["status"] = "unsupported"
+		return serverruntime.OperationResult{Metadata: metadata}, fmt.Errorf("cleanup target %q is not supported by the orchestrator adapter", target)
+	default:
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, fmt.Errorf("unknown cleanup target %q", req.Target)
+	}
+	metadata["status"] = "cleaned"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.OperationResult, error) {
+	metadata := actionMetadata(featureID, "delete")
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	if err := t.orch.Delete(featureID); err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	metadata["status"] = "deleted"
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func actionMetadata(featureID, action string) map[string]string {
+	return map[string]string{
+		"feature_id": featureID,
+		"action":     action,
+	}
+}
+
+func addConflictMetadata(metadata map[string]string, err error) {
+	if metadata == nil || err == nil {
+		return
+	}
+	var publishConflict *orchestrator.PublishConflictError
+	if errors.As(err, &publishConflict) {
+		metadata["status"] = "conflict"
+		metadata["conflict"] = "publish"
+		metadata["repo"] = publishConflict.RepoName
+		metadata["branch"] = publishConflict.Branch
+		metadata["rebase_target"] = publishConflict.RebaseTarget
+		metadata["conflict_files"] = "0"
+		return
+	}
+	var rebaseConflict *orchestrator.RebaseConflictError
+	if errors.As(err, &rebaseConflict) {
+		metadata["status"] = "conflict"
+		metadata["conflict"] = "rebase"
+		metadata["repo"] = rebaseConflict.RepoName
+		metadata["branch"] = rebaseConflict.Branch
+		metadata["rebase_target"] = rebaseConflict.RebaseTarget
+		metadata["conflict_files"] = strconv.Itoa(len(rebaseConflict.ConflictFiles))
+	}
+}
+
+func operationFailureForMetadata(err error, metadata map[string]string) error {
+	if err == nil {
+		return nil
+	}
+	if metadata["status"] != "conflict" && metadata["conflict"] == "" {
+		return err
+	}
+	return serverruntime.OperationFailureError{
+		Err: err,
+		Failure: &serverruntime.OperationError{
+			Code:     "conflict",
+			Message:  "operation conflict",
+			Metadata: metadata,
+		},
+	}
+}
+
+func (t *serverMutationTarget) ensureWholeFeatureRepoSelection(featureID string, repos []string, action string) error {
+	requested := normalizedStringSet(repos)
+	if len(requested) == 0 {
+		return nil
+	}
+	if t.store == nil {
+		return fmt.Errorf("%s repo selection requires feature store", action)
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return err
+	}
+	featureRepos := featureRepoNames(f)
+	if len(requested) != len(featureRepos) {
+		return fmt.Errorf("%s for selected repos is not supported by the orchestrator adapter", action)
+	}
+	for _, repo := range featureRepos {
+		if !requested[repo] {
+			return fmt.Errorf("%s for selected repos is not supported by the orchestrator adapter", action)
+		}
+	}
+	return nil
+}
+
+func normalizedStringSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = true
+		}
+	}
+	return out
+}
+
+func (t *serverMutationTarget) startRefactorAction(featureID string, req serverruntime.RefactorActionRequest, restart bool) (serverruntime.OperationResult, error) {
+	action := "refactor"
+	if restart {
+		action = "refactor.restart"
+	}
+	metadata := actionMetadata(featureID, action)
+	metadata["cycle_type"] = string(feature.CycleRefactor)
+	if req.Repo != "" {
+		metadata["repo"] = req.Repo
+	}
+	if req.Pipeline != "" {
+		metadata["pipeline"] = string(req.Pipeline)
+	}
+	if t.orch == nil {
+		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
+	}
+	if req.Pipeline != "" {
+		if err := t.orch.ApplyRefactorPipeline(featureID, req.Pipeline); err != nil {
+			metadata["status"] = "failed"
+			return serverruntime.OperationResult{Metadata: metadata}, err
+		}
+	}
+	var (
+		sessionID string
+		err       error
+	)
+	if restart {
+		sessionID, err = t.orch.RestartRefactorCycle(featureID, req.Repo, req.Prompt)
+	} else {
+		sessionID, err = t.orch.StartRefactorCycle(featureID, req.Repo, req.Prompt)
+	}
+	if sessionID != "" {
+		metadata["session_id"] = sessionID
+	}
+	if err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	if restart {
+		metadata["status"] = "restarted"
+	} else {
+		metadata["status"] = "started"
+	}
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) updateSavedReviewCommentsMode(featureID, repoName, mode string) error {
+	if t.store == nil {
+		return errors.New("feature store is not available")
+	}
+	f, err := t.store.Load(featureID)
+	if err != nil {
+		return err
+	}
+	data, err := agent.LoadReviewCommentsForRepo(t.store.BaseDir, f, repoName)
+	if err != nil {
+		return err
+	}
+	data.Mode = mode
+	return agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, repoName, *data)
+}
+
+func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewCommentDTO {
+	out := make([]serverruntime.ReviewCommentDTO, 0, len(comments))
+	for _, comment := range comments {
+		dtoRepo := comment.RepoName
+		if dtoRepo == "" {
+			dtoRepo = repoName
+		}
+		out = append(out, serverruntime.ReviewCommentDTO{
+			ID:        comment.ID,
+			Type:      comment.Type,
+			RepoName:  dtoRepo,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			Body:      comment.Body,
+			UserLogin: comment.User.Login,
+			CreatedAt: comment.CreatedAt,
+		})
+	}
+	return out
+}
+
+func findFeatureRepo(f *feature.Feature, repoName string) (feature.FeatureRepo, bool) {
+	if f == nil {
+		return feature.FeatureRepo{}, false
+	}
+	for _, repo := range f.Repos {
+		if repo.Name == repoName {
+			return repo, true
+		}
+	}
+	return feature.FeatureRepo{}, false
+}
+
+func parseServerPhaseStrict(in string) (feature.Phase, error) {
+	switch strings.ToLower(strings.TrimSpace(in)) {
+	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
+		return feature.PhaseKnowledgeBase, nil
+	case "inquire":
+		return feature.PhaseInquire, nil
+	case "research":
+		return feature.PhaseResearch, nil
+	case "design":
+		return feature.PhaseDesign, nil
+	case "plan":
+		return feature.PhasePlan, nil
+	case "implement":
+		return feature.PhaseImplement, nil
+	case "review":
+		return feature.PhaseReview, nil
+	case "final-review", "final review":
+		return feature.PhaseFinalReview, nil
+	case "publish":
+		return feature.PhasePublish, nil
+	default:
+		return feature.PhaseResearch, fmt.Errorf("unknown phase %q", in)
+	}
 }
 
 func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID string, wantAskUser bool) (ports.SessionView, *llm.ControlRequestMessage, error) {
@@ -1525,6 +2061,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			configPath: boot.runtime.Config,
 			store:      boot.featureManager.Store,
 			sessions:   boot.sessionManager,
+			reviewer:   &git.ReviewCommentAdapter{},
 		},
 		MutationLimits: serverruntime.MutationLimits{FeatureQueue: 0, RuntimeQueue: 0, AggregateQueue: 100},
 	})

@@ -16,6 +16,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *testing.T) {
@@ -490,6 +492,515 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	if gates.InquiryReview || gates.DesignReview || !gates.RoadmapReview || !gates.PhasePlanReview || gates.ManualPublish {
 		t.Fatalf("persisted repo gates = %+v; want normalized medium gates", gates)
 	}
+}
+
+func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata(t *testing.T) {
+	target, manager, store, f := newPublishActionTarget(t)
+	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+		if featureID != f.ID || repoName != "repo-a" {
+			t.Fatalf("publish repo call = %s/%s, want %s/repo-a", featureID, repoName, f.ID)
+		}
+		prURL := "https://github.com/acme/repo-a/pull/12"
+		if err := manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
+			return "", err
+		}
+		return prURL, nil
+	})
+
+	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{"repo-a"}})
+	if err != nil {
+		t.Fatalf("publishAction() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Status != feature.StatusPublished {
+		t.Fatalf("feature status = %s, want Published", updated.Status)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id": f.ID,
+		"action":     "publish",
+		"status":     "published",
+	})
+	assertMetadataDoesNotContain(t, result.Metadata, "https://github.com/acme/repo-a/pull/12")
+}
+
+func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *testing.T) {
+	target, _, _, f := newPublishActionTarget(t)
+	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+		return "", &orchestrator.PublishConflictError{
+			RepoName:     repoName,
+			Branch:       "feature/publish-conflict",
+			RebaseTarget: "main",
+		}
+	})
+
+	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{})
+	if err == nil {
+		t.Fatal("publishAction() error = nil, want publish conflict")
+	}
+	var conflict *orchestrator.PublishConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("publishAction() error = %T %v, want PublishConflictError", err, err)
+	}
+	var opFailure serverruntime.OperationFailureError
+	if !errors.As(err, &opFailure) || opFailure.OperationFailure() == nil || opFailure.OperationFailure().Code != "conflict" {
+		t.Fatalf("publishAction() operation failure = %+v; want conflict metadata wrapper", opFailure.OperationFailure())
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id":     f.ID,
+		"action":         "publish",
+		"status":         "conflict",
+		"conflict":       "publish",
+		"repo":           "repo-a",
+		"branch":         "feature/publish-conflict",
+		"rebase_target":  "main",
+		"conflict_files": "0",
+	})
+}
+
+func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("rewind via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusCodeReady
+		ff.CurrentPhase = feature.PhasePublish
+		ff.RepoStates = map[string]*feature.RepoState{"repo-a": {Touched: true}}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		store: store,
+	}
+
+	result, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: "implement"})
+	if err != nil {
+		t.Fatalf("rewindAction() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Status != feature.StatusPlanNeedsReview || !updated.IsRewind {
+		t.Fatalf("rewound feature status/is_rewind = %s/%v, want PlanNeedsReview/true", updated.Status, updated.IsRewind)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id":      f.ID,
+		"action":          "rewind",
+		"target_phase":    "implement",
+		"effective_phase": "implement",
+		"warning_count":   "0",
+	})
+}
+
+func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
+	target, store, f := newReviewCommentsActionTarget(t)
+	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, "repo-a", []int{100}); err != nil {
+		t.Fatalf("SaveAddressedIDsForRepo: %v", err)
+	}
+
+	resp, err := target.FetchReviewComments(f.ID, serverruntime.ReviewCommentsFetchRequest{Repo: "repo-a"})
+	if err != nil {
+		t.Fatalf("FetchReviewComments() error = %v", err)
+	}
+	if len(resp.Comments) != 1 || resp.Comments[0].ID != 101 || resp.Comments[0].RepoName != "repo-a" {
+		t.Fatalf("FetchReviewComments() comments = %+v; want only unaddressed repo-tagged comment 101", resp.Comments)
+	}
+	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a"); err == nil {
+		t.Fatalf("FetchReviewComments staged comments; want fetch to remain read-only")
+	}
+
+	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{Repo: "repo-a", Mode: "address_all"})
+	if err == nil {
+		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id": f.ID,
+		"action":     "review-comments",
+		"cycle_type": string(feature.CycleReviewComments),
+		"repo":       "repo-a",
+		"mode":       "address_all",
+		"status":     "failed",
+	})
+	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a")
+	if err != nil {
+		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
+	}
+	if staged.Mode != "address_all" || len(staged.Comments) != 1 || staged.Comments[0].ID != 101 || staged.Comments[0].RepoName != "repo-a" {
+		t.Fatalf("staged review comments = %+v; want address_all with comment 101", staged)
+	}
+}
+
+func TestServerMutationTargetFinishTweakFinalReviewStartsCycleReview(t *testing.T) {
+	target, orch, publisher, f := newTweakFinishActionTarget(t, true)
+
+	result, err := target.FinishTweak(f.ID, serverruntime.TweakFinishRequest{Decision: "final-review", HadChanges: true})
+	if err != nil {
+		t.Fatalf("FinishTweak(final-review) error = %v", err)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id":  f.ID,
+		"action":      "tweak.finish",
+		"decision":    "final-review",
+		"had_changes": "true",
+		"status":      "review_started",
+	})
+	if got := countMockCalls(publisher.Calls, "CommitAll"); got != 0 {
+		t.Fatalf("CommitAll calls = %d; want 0 because final-review follows the commit decision", got)
+	}
+
+	orch.WaitForCycles()
+	select {
+	case ev := <-orch.Events():
+		if ev.Type != ports.TweakReviewApproved || ev.FeatureID != f.ID {
+			t.Fatalf("event = %+v; want TweakReviewApproved for %s", ev, f.ID)
+		}
+	default:
+		t.Fatalf("orchestrator emitted no tweak review approval event")
+	}
+}
+
+func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testing.T) {
+	t.Run("cleanup cycles", func(t *testing.T) {
+		target, store, f, _ := newCleanupActionTarget(t)
+
+		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: "cycles"})
+		if err != nil {
+			t.Fatalf("CleanupFeature(cycles) error = %v", err)
+		}
+		assertMetadata(t, result.Metadata, map[string]string{
+			"feature_id": f.ID,
+			"action":     "cleanup",
+			"target":     "cycles",
+			"status":     "cleaned",
+		})
+		updated, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("Load feature after cleanup: %v", err)
+		}
+		if len(updated.RepoCycles) != 0 {
+			t.Fatalf("RepoCycles after cleanup = %+v; want cleared", updated.RepoCycles)
+		}
+	})
+
+	t.Run("cleanup worktrees", func(t *testing.T) {
+		target, store, f, worktrees := newCleanupActionTarget(t)
+
+		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: "worktrees"})
+		if err != nil {
+			t.Fatalf("CleanupFeature(worktrees) error = %v", err)
+		}
+		assertMetadata(t, result.Metadata, map[string]string{
+			"feature_id": f.ID,
+			"action":     "cleanup",
+			"target":     "worktrees",
+			"status":     "cleaned",
+		})
+		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != "/tmp/repo-a-worktree" || worktrees.removeCalls[0].deleteBranch {
+			t.Fatalf("worktree remove calls = %+v; want one non-branch-deleting cleanup", worktrees.removeCalls)
+		}
+		updated, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("Load feature after cleanup: %v", err)
+		}
+		if updated.Repos[0].WorktreePath != "" {
+			t.Fatalf("WorktreePath after cleanup = %q; want cleared", updated.Repos[0].WorktreePath)
+		}
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		target, store, f, worktrees := newCleanupActionTarget(t)
+
+		result, err := target.DeleteFeature(f.ID)
+		if err != nil {
+			t.Fatalf("DeleteFeature() error = %v", err)
+		}
+		assertMetadata(t, result.Metadata, map[string]string{
+			"feature_id": f.ID,
+			"action":     "delete",
+			"status":     "deleted",
+		})
+		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != "/tmp/repo-a-worktree" || !worktrees.removeCalls[0].deleteBranch {
+			t.Fatalf("worktree remove calls = %+v; want one branch-deleting delete", worktrees.removeCalls)
+		}
+		if _, err := store.Load(f.ID); err == nil {
+			t.Fatalf("Load deleted feature error = nil; want missing feature")
+		}
+	})
+}
+
+func TestServerMutationTargetConflictMetadataWrapsRebaseFailure(t *testing.T) {
+	err := &orchestrator.RebaseConflictError{
+		FeatureID:     "feat-rebase",
+		RepoName:      "repo-a",
+		Branch:        "feature/rebase",
+		RebaseTarget:  "main",
+		ConflictFiles: []string{"a.go", "b.go"},
+	}
+	metadata := actionMetadata("feat-rebase", "rebase")
+	addConflictMetadata(metadata, err)
+	wrapped := operationFailureForMetadata(err, metadata)
+
+	var rebaseConflict *orchestrator.RebaseConflictError
+	if !errors.As(wrapped, &rebaseConflict) {
+		t.Fatalf("wrapped error = %T %v; want RebaseConflictError", wrapped, wrapped)
+	}
+	var opFailure serverruntime.OperationFailureError
+	if !errors.As(wrapped, &opFailure) || opFailure.OperationFailure() == nil {
+		t.Fatalf("wrapped operation failure = %+v; want OperationFailureError", opFailure.OperationFailure())
+	}
+	failure := opFailure.OperationFailure()
+	if failure.Code != "conflict" {
+		t.Fatalf("operation failure code = %q; want conflict", failure.Code)
+	}
+	assertMetadata(t, failure.Metadata, map[string]string{
+		"feature_id":     "feat-rebase",
+		"action":         "rebase",
+		"status":         "conflict",
+		"conflict":       "rebase",
+		"repo":           "repo-a",
+		"branch":         "feature/rebase",
+		"rebase_target":  "main",
+		"conflict_files": "2",
+	})
+}
+
+func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manager, *feature.Store, *feature.Feature) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("publish via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		publishable := true
+		ff.Status = feature.StatusCodeReady
+		ff.CurrentPhase = feature.PhasePublish
+		for i := range ff.Repos {
+			ff.Repos[i].Publishable = &publishable
+			ff.Repos[i].Branch = "feature/publish-via-rest"
+		}
+		ff.RepoStates = map[string]*feature.RepoState{"repo-a": {Touched: true}}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	return serverMutationTarget{orch: orch, store: store}, manager, store, f
+}
+
+func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("review comments via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		publishable := true
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		for i := range ff.Repos {
+			ff.Repos[i].Publishable = &publishable
+		}
+		ff.RepoStates = map[string]*feature.RepoState{"repo-a": {Touched: true, PRURL: "https://github.com/acme/repo-a/pull/12"}}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load prepared feature: %v", err)
+	}
+	reviewer := &fakeReviewCommentOperator{comments: []ports.ReviewComment{
+		reviewComment(100, "already addressed"),
+		reviewComment(101, "please fix"),
+	}}
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	return serverMutationTarget{orch: orch, store: store, reviewer: reviewer}, store, loaded
+}
+
+func newTweakFinishActionTarget(t *testing.T, dirty bool) (serverMutationTarget, *orchestrator.Orchestrator, *mocks.MockPublisher, *feature.Feature) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("tweak finish via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		ff.Repos[0].WorktreePath = filepath.Join(runtimeDir, "repo-a-worktree")
+		ff.Repos[0].Branch = "feature/tweak-finish"
+		ff.ActiveCycle = &feature.CycleState{Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1}
+		ff.RepoCycles = map[string]*feature.RepoCycleState{
+			"repo-a": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load prepared feature: %v", err)
+	}
+	publisher := mocks.NewMockPublisher()
+	publisher.HasUncommittedChangesFn = func(string) (bool, error) { return dirty, nil }
+	pr := &agent.PhaseRunner{
+		FeatureStore: store,
+		StateDir:     store.BaseDir,
+		RunFinalReviewFn: func(agent.OrchestratorConfig, ports.SessionManager) (*agent.FeatureFinalReviewResult, error) {
+			return &agent.FeatureFinalReviewResult{FinalStatus: "review_passed"}, nil
+		},
+	}
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   manager,
+		Store:       store,
+		Publisher:   publisher,
+		PhaseRunner: pr,
+	}, orchestrator.Hooks{})
+	return serverMutationTarget{orch: orch, store: store}, orch, publisher, loaded
+}
+
+func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *fakeWorktreeOperator) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	worktrees := &fakeWorktreeOperator{}
+	manager.Worktrees = worktrees
+	f, err := manager.Create("cleanup via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		ff.Repos[0].WorktreePath = "/tmp/repo-a-worktree"
+		ff.RepoCycles = map[string]*feature.RepoCycleState{
+			"repo-a": {Type: feature.CycleRebase, Status: feature.RepoCycleFailed},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load prepared feature: %v", err)
+	}
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	return serverMutationTarget{orch: orch, store: store}, store, loaded, worktrees
+}
+
+func countMockCalls(calls []mocks.MockCall, method string) int {
+	count := 0
+	for _, call := range calls {
+		if call.Method == method {
+			count++
+		}
+	}
+	return count
+}
+
+type fakeReviewCommentOperator struct {
+	comments []ports.ReviewComment
+}
+
+func (f *fakeReviewCommentOperator) FetchPRComments(string, string) ([]ports.ReviewComment, error) {
+	out := make([]ports.ReviewComment, len(f.comments))
+	copy(out, f.comments)
+	return out, nil
+}
+
+func (f *fakeReviewCommentOperator) ReplyToPRComment(string, string, int, string) error {
+	return nil
+}
+
+func (f *fakeReviewCommentOperator) ReplyToIssueComment(string, string, string) error {
+	return nil
+}
+
+func (f *fakeReviewCommentOperator) FetchReviewThreadMap(string, string) (map[int]string, error) {
+	return nil, nil
+}
+
+func (f *fakeReviewCommentOperator) ResolveReviewThread(string, string) error {
+	return nil
+}
+
+func (f *fakeReviewCommentOperator) LatestCommitSHA(string) (string, error) {
+	return "", nil
+}
+
+func reviewComment(id int, body string) ports.ReviewComment {
+	comment := ports.ReviewComment{
+		ID:        id,
+		Path:      "main.go",
+		Line:      12,
+		Body:      body,
+		CreatedAt: "2026-06-13T12:00:00Z",
+		Type:      ports.CommentTypeReview,
+	}
+	comment.User.Login = "reviewer"
+	return comment
+}
+
+type fakeWorktreeOperator struct {
+	removeCalls []fakeWorktreeRemoveCall
+}
+
+type fakeWorktreeRemoveCall struct {
+	path         string
+	deleteBranch bool
+}
+
+func (f *fakeWorktreeOperator) Create(string, string, string, string) (string, error) {
+	return "", nil
+}
+
+func (f *fakeWorktreeOperator) Remove(path string, deleteBranch bool) error {
+	f.removeCalls = append(f.removeCalls, fakeWorktreeRemoveCall{path: path, deleteBranch: deleteBranch})
+	return nil
+}
+
+func (f *fakeWorktreeOperator) ResetToBase(string, string) error {
+	return nil
+}
+
+func (f *fakeWorktreeOperator) ResetToBaseLocal(string, string) error {
+	return nil
+}
+
+func (f *fakeWorktreeOperator) ResetToCommit(string, string) error {
+	return nil
 }
 
 func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orchestrator {

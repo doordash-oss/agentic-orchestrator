@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -46,7 +47,7 @@ func TestOperationRegistryPersistsPaginatesFiltersAndRedacts(t *testing.T) {
 	for _, seed := range []OperationRecord{
 		{Kind: "feature.create", Target: OperationTarget{Type: "runtime"}, Result: map[string]string{"feature_id": "feat-created"}},
 		{Kind: "feature.start", Target: OperationTarget{Type: "feature", FeatureID: "feat-a"}},
-		{Kind: "feature.stop", Target: OperationTarget{Type: "feature", FeatureID: "feat-b"}, Error: &OperationError{Code: "failed", Message: "private-token /tmp/raw.log"}},
+		{Kind: "feature.stop", Target: OperationTarget{Type: "feature", FeatureID: "feat-b"}, Error: &OperationError{Code: "failed", Message: "private-token /tmp/raw.log", Metadata: map[string]string{"repo_name": "repo-a", "payload": "private-token"}}},
 		{Kind: "feature.config.update", Target: OperationTarget{Type: "feature", FeatureID: "feat-a"}, Result: map[string]string{"payload": "token=private-token"}},
 	} {
 		rec, err := registry.Create(seed.Kind, seed.Target)
@@ -115,6 +116,16 @@ func TestOperationRegistryPersistsPaginatesFiltersAndRedacts(t *testing.T) {
 	}
 	if len(filtered.Operations) != 1 || filtered.Operations[0].Kind != "feature.config.update" || filtered.Operations[0].Target.FeatureID != "feat-a" {
 		t.Fatalf("filtered operations = %+v; want feature config update for feat-a", filtered.Operations)
+	}
+	failed, err := restarted.List(OperationListOptions{FeatureID: "feat-b", Kind: "feature.stop", Limit: 10})
+	if err != nil {
+		t.Fatalf("List(failed) error = %v", err)
+	}
+	if len(failed.Operations) != 1 || failed.Operations[0].Error == nil || failed.Operations[0].Error.Metadata["repo_name"] != "repo-a" {
+		t.Fatalf("failed operation error metadata = %+v; want safe repo_name", failed.Operations)
+	}
+	if _, ok := failed.Operations[0].Error.Metadata["payload"]; ok {
+		t.Fatalf("failed operation error metadata = %+v; leaked payload", failed.Operations[0].Error.Metadata)
 	}
 
 	cursorPage, err := restarted.List(OperationListOptions{Cursor: page.NextCursor, Limit: 3})
@@ -1012,6 +1023,248 @@ func TestFeatureLifecycleMutationRoutesCreateSafeOperations(t *testing.T) {
 	}
 }
 
+func TestAdvancedActionMutationRoutesCreateSafeOperations(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	mutations := &fakeMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  mutations,
+	})
+
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "publish", path: "/api/v1/features/feat-advanced/actions/publish", body: `{}`},
+		{name: "merge", path: "/api/v1/features/feat-advanced/actions/merge", body: `{}`},
+		{name: "rewind", path: "/api/v1/features/feat-advanced/actions/rewind", body: `{"target_phase":"implement","roadmap_phase":2}`},
+		{name: "retry", path: "/api/v1/features/feat-advanced/actions/retry", body: `{}`},
+		{name: "rebase", path: "/api/v1/features/feat-advanced/actions/rebase", body: `{"repo":"agentic-orchestrator","rebase_target":"main","conflict_files":["go.mod"]}`},
+		{name: "review_comments", path: "/api/v1/features/feat-advanced/actions/review-comments", body: `{"repo":"agentic-orchestrator","mode":"auto"}`},
+		{name: "tweak", path: "/api/v1/features/feat-advanced/actions/tweak", body: `{}`},
+		{name: "tweak_finish", path: "/api/v1/features/feat-advanced/actions/tweak/finish", body: `{"decision":"skip-review","had_changes":true}`},
+		{name: "tweak_final_review", path: "/api/v1/features/feat-advanced/actions/tweak/finish", body: `{"decision":"final-review","had_changes":true}`},
+		{name: "refactor", path: "/api/v1/features/feat-advanced/actions/refactor", body: `{"repo":"agentic-orchestrator","prompt":"extract the transport boundary","pipeline":"medium"}`},
+		{name: "refactor_restart", path: "/api/v1/features/feat-advanced/actions/refactor/restart", body: `{"repo":"agentic-orchestrator","prompt":"retry the refactor"}`},
+		{name: "mark_done", path: "/api/v1/features/feat-advanced/actions/mark-done", body: `{}`},
+		{name: "cleanup", path: "/api/v1/features/feat-advanced/actions/cleanup", body: `{"target":"worktrees"}`},
+		{name: "delete", path: "/api/v1/features/feat-advanced/actions/delete", body: `{}`},
+	}
+	for _, tt := range requests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := mutationJSONMap(t, handler, http.MethodPost, tt.path, tt.body, "", "")
+			waitForOperationStatus(t, handler, resp["operation_id"].(string), OperationStatusSucceeded)
+		})
+	}
+
+	if got := len(mutations.publishCalls); got != 1 {
+		t.Fatalf("publish calls = %d; want 1", got)
+	}
+	if got := len(mutations.publishCalls[0].Repos); got != 0 {
+		t.Fatalf("publish repos length = %d; want 0 for feature-wide publish", got)
+	}
+	if len(mutations.mergeCalls) != 1 || len(mutations.rewindCalls) != 1 || len(mutations.retryCalls) != 1 ||
+		len(mutations.rebaseCalls) != 1 || len(mutations.reviewStartCalls) != 1 || len(mutations.tweakStartCalls) != 1 ||
+		len(mutations.tweakFinishCalls) != 2 || len(mutations.refactorStartCalls) != 1 ||
+		len(mutations.refactorRestartCalls) != 1 || len(mutations.markDoneCalls) != 1 ||
+		len(mutations.cleanupCalls) != 1 || len(mutations.deleteCalls) != 1 {
+		t.Fatalf("advanced calls = publish:%d merge:%d rewind:%d retry:%d rebase:%d review:%d tweak:%d tweakFinish:%d refactor:%d refactorRestart:%d markDone:%d cleanup:%d delete:%d; want one each",
+			len(mutations.publishCalls), len(mutations.mergeCalls), len(mutations.rewindCalls), len(mutations.retryCalls),
+			len(mutations.rebaseCalls), len(mutations.reviewStartCalls), len(mutations.tweakStartCalls), len(mutations.tweakFinishCalls),
+			len(mutations.refactorStartCalls), len(mutations.refactorRestartCalls), len(mutations.markDoneCalls), len(mutations.cleanupCalls), len(mutations.deleteCalls))
+	}
+	if got := mutations.rewindCalls[0]; got.TargetPhase != "implement" || got.RoadmapPhase != 2 {
+		t.Fatalf("rewind request = %+v; want implement roadmap phase 2", got)
+	}
+	if got := mutations.rebaseCalls[0]; got.Repo != "agentic-orchestrator" || got.RebaseTarget != "main" || strings.Join(got.ConflictFiles, ",") != "go.mod" {
+		t.Fatalf("rebase request = %+v; want repo target and conflict files", got)
+	}
+	if got := mutations.tweakFinishCalls[0]; got.Decision != "skip-review" || !got.HadChanges {
+		t.Fatalf("tweak finish request = %+v; want skip-review with had_changes", got)
+	}
+	if got := mutations.tweakFinishCalls[1]; got.Decision != "final-review" || !got.HadChanges {
+		t.Fatalf("tweak final review request = %+v; want final-review with had_changes", got)
+	}
+	if got := mutations.refactorStartCalls[0]; got.Prompt != "extract the transport boundary" || got.Pipeline != feature.PipelineMedium {
+		t.Fatalf("refactor request = %+v; want prompt and medium pipeline", got)
+	}
+
+	body := getJSONMap(t, handler, "/api/v1/operations?limit=50")
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal operations: %v", err)
+	}
+	if strings.Contains(string(raw), "extract the transport boundary") || strings.Contains(string(raw), "go.mod") {
+		t.Fatalf("advanced operation snapshot leaked raw prompt or file names: %s", raw)
+	}
+}
+
+func TestLifecycleActionAliasRoutesCreateSafeOperations(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	mutations := &fakeMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  mutations,
+	})
+
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "start", path: "/api/v1/features/feat-alias/actions/start", body: `{}`},
+		{name: "pause_stop", path: "/api/v1/features/feat-alias/actions/pause-stop", body: `{}`},
+		{name: "resume", path: "/api/v1/features/feat-alias/actions/resume", body: `{}`},
+		{name: "restart", path: "/api/v1/features/feat-alias/actions/restart", body: `{"max_iterations_delta":1}`},
+	}
+	for _, tt := range requests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := mutationJSONMap(t, handler, http.MethodPost, tt.path, tt.body, "", "")
+			waitForOperationStatus(t, handler, resp["operation_id"].(string), OperationStatusSucceeded)
+		})
+	}
+
+	if got := strings.Join(mutations.startCalls, ","); got != "feat-alias,feat-alias" {
+		t.Fatalf("start/resume calls = %s; want two feature start dispatches", got)
+	}
+	if got := strings.Join(mutations.stopCalls, ","); got != "feat-alias" {
+		t.Fatalf("pause-stop calls = %s; want feat-alias", got)
+	}
+	if len(mutations.restartCalls) != 1 || mutations.restartCalls[0].MaxIterationsDelta != 1 {
+		t.Fatalf("restart action calls = %+v; want one delta restart", mutations.restartCalls)
+	}
+}
+
+func TestAdvancedActionConflictFailureMetadataStoredOnOperationError(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	mutations := &fakeMutationTarget{
+		publishResult: OperationResult{Metadata: map[string]string{
+			"feature_id":     "feat-conflict",
+			"action":         "publish",
+			"status":         "conflict",
+			"conflict":       "publish",
+			"repo":           "repo-a",
+			"branch":         "feature/conflict",
+			"rebase_target":  "main",
+			"conflict_files": "0",
+			"payload":        "raw-token",
+		}},
+		publishErr: OperationFailureError{
+			Err: errors.New("raw-token should not be exposed"),
+			Failure: &OperationError{
+				Code:    "conflict",
+				Message: "raw-token should not be exposed",
+				Metadata: map[string]string{
+					"repo":           "repo-a",
+					"branch":         "feature/conflict",
+					"rebase_target":  "main",
+					"conflict_files": "0",
+					"payload":        "raw-token",
+				},
+			},
+		},
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  mutations,
+	})
+
+	resp := mutationJSONMap(t, handler, http.MethodPost, "/api/v1/features/feat-conflict/actions/publish", `{}`, "", "")
+	op := waitForOperationStatus(t, handler, resp["operation_id"].(string), OperationStatusFailed)
+	errBody := op["error"].(map[string]any)
+	if errBody["code"] != "conflict" || strings.Contains(errBody["message"].(string), "raw-token") {
+		t.Fatalf("operation error = %+v; want safe conflict error", errBody)
+	}
+	metadata := errBody["metadata"].(map[string]any)
+	if metadata["repo"] != "repo-a" || metadata["branch"] != "feature/conflict" || metadata["rebase_target"] != "main" || metadata["conflict_files"] != "0" {
+		t.Fatalf("operation error metadata = %+v; want conflict routing metadata", metadata)
+	}
+	if _, ok := metadata["payload"]; ok {
+		t.Fatalf("operation error metadata leaked payload: %+v", metadata)
+	}
+}
+
+func TestAdvancedActionValidationRejectsBeforeOperationCreation(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	mutations := &fakeMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  mutations,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-advanced/actions/publish", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	req.Header.Set("Origin", "https://evil.example")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("untrusted advanced action status = %d; want 403", w.Result().StatusCode)
+	}
+	if len(mutations.publishCalls) != 0 {
+		t.Fatalf("publish calls = %d; want 0 before trust boundary passes", len(mutations.publishCalls))
+	}
+
+	tooLongPrompt := strings.Repeat("x", MaxActionTextBytes+1)
+	requestTrustedMutationStatus(t, handler, "/api/v1/features/feat-advanced/actions/refactor", `{"prompt":"`+tooLongPrompt+`"}`, http.StatusBadRequest)
+	requestTrustedMutationStatus(t, handler, "/api/v1/features/feat-advanced/actions/review-comments", `{"mode":"manual"}`, http.StatusBadRequest)
+	requestTrustedMutationStatus(t, handler, "/api/v1/features/feat-advanced/actions/cleanup", `{"target":"../../state"}`, http.StatusBadRequest)
+	requestTrustedMutationStatus(t, handler, "/api/v1/features/feat-advanced/actions/cleanup", `{"target":"failed-cycles"}`, http.StatusBadRequest)
+	requestTrustedMutationStatus(t, handler, "/api/v1/features/feat-advanced/actions/cleanup", `{"repo":"agentic-orchestrator","target":"worktrees"}`, http.StatusBadRequest)
+	assertOperationCount(t, handler, 0)
+}
+
+func TestReviewCommentFetchRequiresTrustBeforeHydratingPrivateComments(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	mutations := &fakeMutationTarget{}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  mutations,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/features/feat-advanced/actions/review-comments/fetch", strings.NewReader(`{"repo":"agentic-orchestrator"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://evil.example")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("untrusted review-comment fetch status = %d; want 403", w.Result().StatusCode)
+	}
+	if len(mutations.reviewFetchCalls) != 0 {
+		t.Fatalf("review fetch calls = %d; want 0 before trust boundary passes", len(mutations.reviewFetchCalls))
+	}
+	assertOperationCount(t, handler, 0)
+
+	body := requestTrustedMutationStatus(t, handler, "/api/v1/features/feat-advanced/actions/review-comments/fetch", `{"repo":"agentic-orchestrator"}`, http.StatusOK)
+	if body["api_version"] != APIVersion || body["feature_id"] != "feat-advanced" {
+		t.Fatalf("review fetch response = %+v; want API version and feature id", body)
+	}
+	rawComments := body["comments"].([]any)
+	if len(rawComments) != 1 || rawComments[0].(map[string]any)["id"].(float64) != 101 {
+		t.Fatalf("review fetch comments = %+v; want fake unaddressed comment", rawComments)
+	}
+	if len(mutations.reviewFetchCalls) != 1 || mutations.reviewFetchCalls[0].Repo != "agentic-orchestrator" {
+		t.Fatalf("review fetch calls = %+v; want trusted repo fetch", mutations.reviewFetchCalls)
+	}
+	assertOperationCount(t, handler, 0)
+}
+
 func mustOperationRegistry(t *testing.T, dir string) *OperationRegistry {
 	t.Helper()
 	registry, err := NewOperationRegistry(OperationRegistryOptions{Dir: dir, DefaultLimit: 50, MaxLimit: 200})
@@ -1040,6 +1293,26 @@ func mutationJSONMap(t *testing.T, handler http.Handler, method, path, body, ori
 	var out map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode mutation response: %v", err)
+	}
+	return out
+}
+
+func requestTrustedMutationStatus(t *testing.T, handler http.Handler, path, body string, wantStatus int) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != wantStatus {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST %s status = %d; want %d; body: %s", path, resp.StatusCode, wantStatus, data)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode %s response: %v", path, err)
 	}
 	return out
 }
@@ -1211,23 +1484,39 @@ func operationSnapshotContains(ops []any, id string, status OperationStatus) boo
 }
 
 type fakeMutationTarget struct {
-	mu                 sync.Mutex
-	createCalls        []CreateFeatureRequest
-	startCalls         []string
-	stopCalls          []string
-	restartCalls       []RestartFeatureRequest
-	reviewCalls        []ReviewDecisionRequest
-	featureConfigCalls []FeatureConfigMutationRequest
-	needDecisionCalls  []NeedUserInputDecisionRequest
-	needDraftCalls     []NeedUserInputDraftRequest
-	permissionCalls    []PermissionAnswerRequest
-	askCalls           []AskUserAnswerRequest
-	helpCalls          []HelpAnswerRequest
-	runtimeConfigCalls []RuntimeConfigMutationRequest
-	startHook          func()
-	createHook         func()
-	runtimeConfigHook  func()
-	featureConfigHook  func()
+	mu                   sync.Mutex
+	createCalls          []CreateFeatureRequest
+	startCalls           []string
+	stopCalls            []string
+	restartCalls         []RestartFeatureRequest
+	reviewCalls          []ReviewDecisionRequest
+	featureConfigCalls   []FeatureConfigMutationRequest
+	needDecisionCalls    []NeedUserInputDecisionRequest
+	needDraftCalls       []NeedUserInputDraftRequest
+	permissionCalls      []PermissionAnswerRequest
+	askCalls             []AskUserAnswerRequest
+	helpCalls            []HelpAnswerRequest
+	runtimeConfigCalls   []RuntimeConfigMutationRequest
+	publishCalls         []PublishFeatureRequest
+	mergeCalls           []string
+	rewindCalls          []RewindFeatureRequest
+	retryCalls           []string
+	rebaseCalls          []RebaseActionRequest
+	reviewFetchCalls     []ReviewCommentsFetchRequest
+	reviewStartCalls     []ReviewCommentsActionRequest
+	tweakStartCalls      []TweakActionRequest
+	tweakFinishCalls     []TweakFinishRequest
+	refactorStartCalls   []RefactorActionRequest
+	refactorRestartCalls []RefactorActionRequest
+	markDoneCalls        []string
+	cleanupCalls         []CleanupActionRequest
+	deleteCalls          []string
+	publishResult        OperationResult
+	publishErr           error
+	startHook            func()
+	createHook           func()
+	runtimeConfigHook    func()
+	featureConfigHook    func()
 }
 
 func (f *fakeMutationTarget) CreateFeature(req CreateFeatureRequest) (OperationResult, error) {
@@ -1324,6 +1613,121 @@ func (f *fakeMutationTarget) RuntimeConfig(req RuntimeConfigMutationRequest) (Op
 		f.runtimeConfigHook()
 	}
 	return OperationResult{Metadata: map[string]string{"kind": "runtime.config", "status": "updated"}}, nil
+}
+
+func (f *fakeMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.publishCalls = append(f.publishCalls, req)
+	f.mu.Unlock()
+	if f.publishErr != nil {
+		return f.publishResult, f.publishErr
+	}
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "published"}}, nil
+}
+
+func (f *fakeMutationTarget) MergeFeature(featureID string) (OperationResult, error) {
+	f.mu.Lock()
+	f.mergeCalls = append(f.mergeCalls, featureID)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "merged"}}, nil
+}
+
+func (f *fakeMutationTarget) RewindFeature(featureID string, req RewindFeatureRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.rewindCalls = append(f.rewindCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "rewound", "target_phase": req.TargetPhase}}, nil
+}
+
+func (f *fakeMutationTarget) RetryFeature(featureID string) (OperationResult, error) {
+	f.mu.Lock()
+	f.retryCalls = append(f.retryCalls, featureID)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "retried"}}, nil
+}
+
+func (f *fakeMutationTarget) StartRebase(featureID string, req RebaseActionRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.rebaseCalls = append(f.rebaseCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "repo_name": req.Repo, "cycle_type": "rebase"}}, nil
+}
+
+func (f *fakeMutationTarget) FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error) {
+	f.mu.Lock()
+	f.reviewFetchCalls = append(f.reviewFetchCalls, req)
+	f.mu.Unlock()
+	return ReviewCommentsFetchResponse{
+		APIVersion: APIVersion,
+		FeatureID:  featureID,
+		Repo:       req.Repo,
+		Mode:       "auto",
+		Comments: []ReviewCommentDTO{{
+			ID:        101,
+			Type:      "review",
+			RepoName:  req.Repo,
+			Path:      "server.go",
+			Line:      12,
+			Body:      "use the server-owned path",
+			UserLogin: "reviewer",
+		}},
+	}, nil
+}
+
+func (f *fakeMutationTarget) StartReviewComments(featureID string, req ReviewCommentsActionRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.reviewStartCalls = append(f.reviewStartCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "repo_name": req.Repo, "cycle_type": "review-comments"}}, nil
+}
+
+func (f *fakeMutationTarget) StartTweak(featureID string, req TweakActionRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.tweakStartCalls = append(f.tweakStartCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "session_id": "sess-tweak"}}, nil
+}
+
+func (f *fakeMutationTarget) FinishTweak(featureID string, req TweakFinishRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.tweakFinishCalls = append(f.tweakFinishCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "decision": req.Decision}}, nil
+}
+
+func (f *fakeMutationTarget) StartRefactor(featureID string, req RefactorActionRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.refactorStartCalls = append(f.refactorStartCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "cycle_type": "refactor"}}, nil
+}
+
+func (f *fakeMutationTarget) RestartRefactor(featureID string, req RefactorActionRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.refactorRestartCalls = append(f.refactorRestartCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "cycle_type": "refactor", "status": "restarted"}}, nil
+}
+
+func (f *fakeMutationTarget) MarkDone(featureID string) (OperationResult, error) {
+	f.mu.Lock()
+	f.markDoneCalls = append(f.markDoneCalls, featureID)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "done"}}, nil
+}
+
+func (f *fakeMutationTarget) CleanupFeature(featureID string, req CleanupActionRequest) (OperationResult, error) {
+	f.mu.Lock()
+	f.cleanupCalls = append(f.cleanupCalls, req)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "cleaned"}}, nil
+}
+
+func (f *fakeMutationTarget) DeleteFeature(featureID string) (OperationResult, error) {
+	f.mu.Lock()
+	f.deleteCalls = append(f.deleteCalls, featureID)
+	f.mu.Unlock()
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "deleted"}}, nil
 }
 
 var _ = bytes.Buffer{}

@@ -67,6 +67,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 			ValidatingPlan:    f.ValidatingPlan,
 			ValidatorStatuses: copyStringMap(f.ValidatorStatuses),
 		},
+		Actions: actionCatalogDTOs(f),
 	}
 	if f.ActiveCycle != nil {
 		detail.Cycle = &CycleDTO{
@@ -86,6 +87,150 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		detail.NeedUserInput = &NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: "feature", Iteration: f.CurrentIteration}
 	}
 	return detail
+}
+
+func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
+	if f == nil {
+		return nil
+	}
+	status := f.Status
+	running := status.IsRunning()
+	activeCycle := f.HasActiveRepoCycles() || f.ActiveCycleType() != ""
+	publishedOrManualReady := status == feature.StatusPublished ||
+		(status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish())
+
+	action := func(id string, enabled bool, scope ActionScopeDTO, inputs []ActionInputDTO, disabled ...ActionDisabledReasonDTO) ActionDTO {
+		if inputs == nil {
+			inputs = []ActionInputDTO{}
+		}
+		dto := ActionDTO{
+			ID:             id,
+			Enabled:        enabled,
+			Scope:          scope,
+			RequiredInputs: inputs,
+		}
+		if !enabled {
+			dto.DisabledReasons = disabled
+			if len(dto.DisabledReasons) == 0 {
+				dto.DisabledReasons = []ActionDisabledReasonDTO{disabledStatusReason(status)}
+			}
+		}
+		return dto
+	}
+	featureScope := ActionScopeDTO{Type: "feature"}
+	repoOptional := ActionScopeDTO{Type: "feature", RepoSelection: "optional"}
+	repoRequired := ActionScopeDTO{Type: "feature", RepoSelection: "required"}
+
+	canStart := !running && !activeCycle && (status == feature.StatusCreated ||
+		status == feature.StatusInquireReady ||
+		status == feature.StatusPlanReady ||
+		status == feature.StatusDesignReady ||
+		status == feature.StatusImplementReady ||
+		status == feature.StatusReviewPassed)
+	canStop := running || activeCycle
+	canResume := status == feature.StatusInterrupted ||
+		status == feature.StatusNeedUserInput ||
+		f.PendingNeedUserInputPath != "" ||
+		len(f.PendingUserInputCycles()) > 0
+	canRestart := !running
+	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
+	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
+	canRewind := !running && len(feature.RewindChoicesForFeature(f)) > 0
+	canPostPublishCycle := publishedOrManualReady && !activeCycle
+	canRefactor := status == feature.StatusPublished && !activeCycle
+	canRetry := status == feature.StatusFailed
+	canMarkDone := publishedOrManualReady
+	canCleanup := !running
+	canDelete := !running
+
+	return []ActionDTO{
+		action("start", canStart, featureScope, nil, disabledStatusReason(status)),
+		action("pause-stop", canStop, featureScope, nil, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"}),
+		action("resume", canResume, featureScope, nil, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"}),
+		action("restart", canRestart, featureScope, nil, ActionDisabledReasonDTO{Code: "running", Message: "feature must stop before restart"}),
+		action("publish", canPublish, featureScope, nil, publishDisabledReason(f)),
+		action("merge", canMerge, featureScope, nil, mergeDisabledReason(f)),
+		action("rewind", canRewind, featureScope, []ActionInputDTO{
+			{Name: "target_phase", Kind: "enum", Required: true, Options: rewindPhaseOptions(f)},
+			{Name: "roadmap_phase", Kind: "integer", Required: false},
+		}, ActionDisabledReasonDTO{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"}),
+		action("rebase", canPostPublishCycle, repoOptional, []ActionInputDTO{
+			{Name: "repo", Kind: "string", Required: false},
+			{Name: "rebase_target", Kind: "string", Required: false, MaxLength: 128},
+			{Name: "conflict_files", Kind: "string_list", Required: false},
+		}, postPublishCycleDisabledReason(f, "rebase")),
+		action("review-comments", canPostPublishCycle && f.IsPublishable(), repoRequired, []ActionInputDTO{
+			{Name: "repo", Kind: "string", Required: true},
+			{Name: "mode", Kind: "enum", Required: true, Options: []string{"auto", "address_all"}},
+		}, postPublishCycleDisabledReason(f, "review-comments")),
+		action("tweak", canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, "tweak")),
+		action("refactor", canRefactor, featureScope, []ActionInputDTO{
+			{Name: "repo", Kind: "string", Required: false},
+			{Name: "prompt", Kind: "string", Required: true, MaxLength: MaxActionTextBytes},
+			{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
+		}, postPublishCycleDisabledReason(f, "refactor")),
+		action("retry", canRetry, featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
+		action("mark-done", canMarkDone, featureScope, nil, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"}),
+		action("cleanup", canCleanup, featureScope, []ActionInputDTO{
+			{Name: "target", Kind: "enum", Required: false, Options: []string{"worktrees", "cycles"}},
+		}, ActionDisabledReasonDTO{Code: "running", Message: "cleanup is disabled while work is running"}),
+		action("delete", canDelete, featureScope, nil, ActionDisabledReasonDTO{Code: "running", Message: "delete is disabled while work is running"}),
+	}
+}
+
+func disabledStatusReason(status feature.Status) ActionDisabledReasonDTO {
+	return ActionDisabledReasonDTO{
+		Code:    "status_not_allowed",
+		Message: "action is not available while feature status is " + status.String(),
+	}
+}
+
+func publishDisabledReason(f *feature.Feature) ActionDisabledReasonDTO {
+	if f == nil {
+		return disabledStatusReason(feature.StatusCreated)
+	}
+	if !f.IsPublishable() {
+		return ActionDisabledReasonDTO{Code: "local_only", Message: "feature has at least one local-only repo"}
+	}
+	if f.Status == feature.StatusPublished || f.Status == feature.StatusDone {
+		return ActionDisabledReasonDTO{Code: "already_published", Message: "feature already has a published terminal state"}
+	}
+	if f.Checkpoints.ManualPublish && f.Status == feature.StatusCodeReady {
+		return ActionDisabledReasonDTO{Code: "manual_publish_required", Message: "feature is waiting for manual publish confirmation"}
+	}
+	return disabledStatusReason(f.Status)
+}
+
+func mergeDisabledReason(f *feature.Feature) ActionDisabledReasonDTO {
+	if f == nil {
+		return disabledStatusReason(feature.StatusCreated)
+	}
+	if f.IsPublishable() {
+		return ActionDisabledReasonDTO{Code: "not_local_only", Message: "merge is only available for local-only features"}
+	}
+	return disabledStatusReason(f.Status)
+}
+
+func postPublishCycleDisabledReason(f *feature.Feature, cycle string) ActionDisabledReasonDTO {
+	if f == nil {
+		return disabledStatusReason(feature.StatusCreated)
+	}
+	if f.HasActiveRepoCycles() || f.ActiveCycleType() != "" {
+		return ActionDisabledReasonDTO{Code: "cycle_active", Message: "another feature cycle is active"}
+	}
+	if cycle == "review-comments" && !f.IsPublishable() {
+		return ActionDisabledReasonDTO{Code: "not_publishable", Message: "review-comment actions require a published PR"}
+	}
+	return disabledStatusReason(f.Status)
+}
+
+func rewindPhaseOptions(f *feature.Feature) []string {
+	choices := feature.RewindChoicesForFeature(f)
+	out := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		out = append(out, choice.Phase.DirName())
+	}
+	return out
 }
 
 func boundedHistoricalRunNumbers(activeRun, runCount, limit int) []int {

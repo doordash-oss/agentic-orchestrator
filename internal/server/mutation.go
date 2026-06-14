@@ -30,6 +30,7 @@ import (
 )
 
 const MaxMutationBodyBytes = 64 * 1024
+const MaxActionTextBytes = 4000
 
 type MutationLimits struct {
 	FeatureQueue   int
@@ -50,10 +51,47 @@ type MutationTarget interface {
 	AnswerAskUser(req AskUserAnswerRequest) (OperationResult, error)
 	SendHelp(req HelpAnswerRequest) (OperationResult, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (OperationResult, error)
+	PublishFeature(featureID string, req PublishFeatureRequest) (OperationResult, error)
+	MergeFeature(featureID string) (OperationResult, error)
+	RewindFeature(featureID string, req RewindFeatureRequest) (OperationResult, error)
+	RetryFeature(featureID string) (OperationResult, error)
+	StartRebase(featureID string, req RebaseActionRequest) (OperationResult, error)
+	FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error)
+	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (OperationResult, error)
+	StartTweak(featureID string, req TweakActionRequest) (OperationResult, error)
+	FinishTweak(featureID string, req TweakFinishRequest) (OperationResult, error)
+	StartRefactor(featureID string, req RefactorActionRequest) (OperationResult, error)
+	RestartRefactor(featureID string, req RefactorActionRequest) (OperationResult, error)
+	MarkDone(featureID string) (OperationResult, error)
+	CleanupFeature(featureID string, req CleanupActionRequest) (OperationResult, error)
+	DeleteFeature(featureID string) (OperationResult, error)
 }
 
 type OperationResult struct {
 	Metadata map[string]string
+}
+
+type OperationFailureError struct {
+	Err     error
+	Failure *OperationError
+}
+
+func (e OperationFailureError) Error() string {
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	if e.Failure != nil {
+		return e.Failure.Message
+	}
+	return "operation failed"
+}
+
+func (e OperationFailureError) Unwrap() error {
+	return e.Err
+}
+
+func (e OperationFailureError) OperationFailure() *OperationError {
+	return e.Failure
 }
 
 type CreateFeatureRequest struct {
@@ -125,6 +163,48 @@ type HelpAnswerRequest struct {
 
 type RuntimeConfigMutationRequest struct {
 	Defaults config.DefaultsConfig `json:"defaults,omitempty"`
+}
+
+type PublishFeatureRequest struct {
+	Repos []string `json:"repos,omitempty"`
+}
+
+type RewindFeatureRequest struct {
+	TargetPhase  string `json:"target_phase"`
+	RoadmapPhase int    `json:"roadmap_phase,omitempty"`
+}
+
+type RebaseActionRequest struct {
+	Repo          string   `json:"repo,omitempty"`
+	RebaseTarget  string   `json:"rebase_target,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+}
+
+type ReviewCommentsFetchRequest struct {
+	Repo string `json:"repo"`
+}
+
+type ReviewCommentsActionRequest struct {
+	Repo string `json:"repo"`
+	Mode string `json:"mode"`
+}
+
+type TweakActionRequest struct{}
+
+type TweakFinishRequest struct {
+	Decision   string `json:"decision"`
+	HadChanges bool   `json:"had_changes,omitempty"`
+}
+
+type RefactorActionRequest struct {
+	Repo     string                  `json:"repo,omitempty"`
+	Prompt   string                  `json:"prompt"`
+	Pipeline feature.PipelineProfile `json:"pipeline,omitempty"`
+}
+
+type CleanupActionRequest struct {
+	Target string `json:"target,omitempty"`
+	Repo   string `json:"repo,omitempty"`
 }
 
 type mutationExecutor struct {
@@ -238,7 +318,7 @@ func (e *mutationExecutor) run(rec OperationRecord, lane string, work func() (Op
 	var opErr *OperationError
 	if err != nil {
 		status = OperationStatusFailed
-		opErr = &OperationError{Code: "failed", Message: err.Error()}
+		opErr = operationErrorFromError(err)
 	}
 	next, shouldComplete := e.finishLane(lane, rec.ID)
 	if !shouldComplete {
@@ -370,7 +450,7 @@ func (e *mutationExecutor) runReserved(rec OperationRecord, lane string, work fu
 	var opErr *OperationError
 	if err != nil {
 		status = OperationStatusFailed
-		opErr = &OperationError{Code: "failed", Message: err.Error()}
+		opErr = operationErrorFromError(err)
 	}
 	next, shouldComplete := e.finishLane(lane, rec.ID)
 	if !shouldComplete {
@@ -379,6 +459,19 @@ func (e *mutationExecutor) runReserved(rec OperationRecord, lane string, work fu
 	_ = e.registry.Complete(rec.ID, status, result.Metadata, opErr)
 	e.publishRecordID(rec.ID)
 	e.runQueued(lane, next)
+}
+
+func operationErrorFromError(err error) *OperationError {
+	if err == nil {
+		return nil
+	}
+	var failure interface {
+		OperationFailure() *OperationError
+	}
+	if errors.As(err, &failure) && failure.OperationFailure() != nil {
+		return failure.OperationFailure()
+	}
+	return &OperationError{Code: "failed", Message: err.Error()}
 }
 
 func (e *mutationExecutor) shutdown() {
@@ -518,15 +611,31 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return nil, false
 	}
 	parts := splitPath(strings.TrimPrefix(path, "/api/v1/features/"))
-	if invalidPathParts(parts) || len(parts) != 2 || !validEntityID(parts[0]) {
+	if invalidPathParts(parts) || len(parts) < 2 || !validEntityID(parts[0]) {
 		return nil, false
 	}
 	switch parts[1] {
 	case "start", "resume", "stop", "interrupt", "restart", "review-decision", "config", "need-user-input", "need-user-input-draft":
 		return []string{http.MethodPost}, true
+	case "actions":
+		if len(parts) < 3 || len(parts) > 4 {
+			return nil, false
+		}
+		switch parts[2] {
+		case "start", "pause-stop", "resume", "restart", "publish", "merge", "rewind", "rebase", "review-comments", "tweak", "refactor", "retry", "mark-done", "cleanup", "delete":
+			if len(parts) == 3 {
+				return []string{http.MethodPost}, true
+			}
+			if (parts[2] == "review-comments" && parts[3] == "fetch") ||
+				(parts[2] == "tweak" && parts[3] == "finish") ||
+				(parts[2] == "refactor" && parts[3] == "restart") {
+				return []string{http.MethodPost}, true
+			}
+		}
 	default:
 		return nil, false
 	}
+	return nil, false
 }
 
 func containsMethod(methods []string, method string) bool {
@@ -597,6 +706,9 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 	if r.Method != http.MethodPost {
 		return false
 	}
+	if len(parts) > 0 && parts[0] == "actions" {
+		return h.handleFeatureActionRoute(w, r, featureID, parts[1:])
+	}
 	if len(parts) != 1 {
 		return false
 	}
@@ -662,6 +774,208 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		return false
 	}
 	return true
+}
+
+func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Request, featureID string, parts []string) bool {
+	if len(parts) == 0 || len(parts) > 2 {
+		return false
+	}
+	action := parts[0]
+	subaction := ""
+	if len(parts) == 2 {
+		subaction = parts[1]
+	}
+	if !h.requireTrustedMutation(w, r) {
+		return true
+	}
+	switch action {
+	case "start":
+		if subaction != "" {
+			return false
+		}
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.start", featureID, func() (OperationResult, error) {
+			return h.mutations.target.StartFeature(featureID)
+		})
+	case "pause-stop":
+		if subaction != "" {
+			return false
+		}
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.stop", featureID, func() (OperationResult, error) {
+			return h.mutations.target.StopFeature(featureID)
+		})
+	case "resume":
+		if subaction != "" {
+			return false
+		}
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.resume", featureID, func() (OperationResult, error) {
+			return h.mutations.target.StartFeature(featureID)
+		})
+	case "restart":
+		if subaction != "" {
+			return false
+		}
+		var req RestartFeatureRequest
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.restart", featureID, func() (OperationResult, error) {
+			return h.mutations.target.RestartFeature(featureID, req)
+		})
+	case "publish":
+		if subaction != "" {
+			return false
+		}
+		var req PublishFeatureRequest
+		if !decodeMutationJSON(w, r, &req) || !validateRepoList(w, req.Repos, false) {
+			return true
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.publish", featureID, func() (OperationResult, error) {
+			return h.mutations.target.PublishFeature(featureID, req)
+		})
+	case "merge":
+		if subaction != "" {
+			return false
+		}
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.merge", featureID, func() (OperationResult, error) {
+			return h.mutations.target.MergeFeature(featureID)
+		})
+	case "rewind":
+		if subaction != "" {
+			return false
+		}
+		var req RewindFeatureRequest
+		if !decodeMutationJSON(w, r, &req) || !validatePhaseName(w, req.TargetPhase) || !validatePositiveOptionalInt(w, "roadmap_phase", req.RoadmapPhase) {
+			return true
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.rewind", featureID, func() (OperationResult, error) {
+			return h.mutations.target.RewindFeature(featureID, req)
+		})
+	case "retry":
+		if subaction != "" {
+			return false
+		}
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.retry", featureID, func() (OperationResult, error) {
+			return h.mutations.target.RetryFeature(featureID)
+		})
+	case "rebase":
+		if subaction != "" {
+			return false
+		}
+		var req RebaseActionRequest
+		if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, false) || !validateSafeOptionalToken(w, "rebase_target", req.RebaseTarget) || !validateConflictFiles(w, req.ConflictFiles) {
+			return true
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.rebase", featureID, func() (OperationResult, error) {
+			return h.mutations.target.StartRebase(featureID, req)
+		})
+	case "review-comments":
+		if subaction == "fetch" {
+			var req ReviewCommentsFetchRequest
+			if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) {
+				return true
+			}
+			resp, err := h.mutations.target.FetchReviewComments(featureID, req)
+			if err != nil {
+				writeAPIError(w, http.StatusBadRequest, "bad_request", "fetch review comments failed", nil)
+				return true
+			}
+			if resp.APIVersion == "" {
+				resp.APIVersion = APIVersion
+			}
+			if resp.FeatureID == "" {
+				resp.FeatureID = featureID
+			}
+			if resp.Comments == nil {
+				resp.Comments = []ReviewCommentDTO{}
+			}
+			writeJSON(w, http.StatusOK, resp)
+			return true
+		}
+		if subaction != "" {
+			return false
+		}
+		var req ReviewCommentsActionRequest
+		if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) || !validateReviewCommentsMode(w, req.Mode) {
+			return true
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.review_comments", featureID, func() (OperationResult, error) {
+			return h.mutations.target.StartReviewComments(featureID, req)
+		})
+	case "tweak":
+		if subaction == "finish" {
+			var req TweakFinishRequest
+			if !decodeMutationJSON(w, r, &req) || !validateTweakDecision(w, req.Decision) {
+				return true
+			}
+			h.handleSimpleFeatureMutationWithDecoded(w, "feature.tweak.finish", featureID, func() (OperationResult, error) {
+				return h.mutations.target.FinishTweak(featureID, req)
+			})
+			return true
+		}
+		if subaction != "" {
+			return false
+		}
+		var req TweakActionRequest
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.tweak.start", featureID, func() (OperationResult, error) {
+			return h.mutations.target.StartTweak(featureID, req)
+		})
+	case "refactor":
+		var req RefactorActionRequest
+		if !decodeMutationJSON(w, r, &req) || !validateRefactorRequest(w, req) {
+			return true
+		}
+		if subaction == "restart" {
+			h.handleSimpleFeatureMutationWithDecoded(w, "feature.refactor.restart", featureID, func() (OperationResult, error) {
+				return h.mutations.target.RestartRefactor(featureID, req)
+			})
+			return true
+		}
+		if subaction != "" {
+			return false
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.refactor.start", featureID, func() (OperationResult, error) {
+			return h.mutations.target.StartRefactor(featureID, req)
+		})
+	case "mark-done":
+		if subaction != "" {
+			return false
+		}
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.mark_done", featureID, func() (OperationResult, error) {
+			return h.mutations.target.MarkDone(featureID)
+		})
+	case "cleanup":
+		if subaction != "" {
+			return false
+		}
+		var req CleanupActionRequest
+		if !decodeMutationJSON(w, r, &req) || !validateCleanupRequest(w, req) {
+			return true
+		}
+		h.handleSimpleFeatureMutationWithDecoded(w, "feature.cleanup", featureID, func() (OperationResult, error) {
+			return h.mutations.target.CleanupFeature(featureID, req)
+		})
+	case "delete":
+		if subaction != "" {
+			return false
+		}
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.delete", featureID, func() (OperationResult, error) {
+			return h.mutations.target.DeleteFeature(featureID)
+		})
+	default:
+		return false
+	}
+	return true
+}
+
+func (h *apiHandler) decodeAndAdmitEmptyFeatureAction(w http.ResponseWriter, r *http.Request, kind, featureID string, work func() (OperationResult, error)) {
+	var req map[string]any
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	h.handleSimpleFeatureMutationWithDecoded(w, kind, featureID, work)
 }
 
 func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Request) {
@@ -818,6 +1132,167 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "risk_level must be low, medium, or high", nil)
 		return false
 	}
+}
+
+func validateRepoList(w http.ResponseWriter, repos []string, required bool) bool {
+	if required && len(repos) == 0 {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "repos are required", nil)
+		return false
+	}
+	if len(repos) > 50 {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "too many repos", nil)
+		return false
+	}
+	for _, repo := range repos {
+		if !validateRepoName(w, repo, true) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		if required {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "repo is required", nil)
+			return false
+		}
+		return true
+	}
+	if !safeActionToken(repo, false) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "repo has invalid characters", nil)
+		return false
+	}
+	return true
+}
+
+func validateSafeOptionalToken(w http.ResponseWriter, field, value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return true
+	}
+	if !safeActionToken(value, true) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", field+" has invalid characters", nil)
+		return false
+	}
+	return true
+}
+
+func validateConflictFiles(w http.ResponseWriter, files []string) bool {
+	if len(files) > 100 {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "too many conflict files", nil)
+		return false
+	}
+	for _, file := range files {
+		if !safeRelativePathToken(file) {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "conflict_files contains an invalid path", nil)
+			return false
+		}
+	}
+	return true
+}
+
+func validatePhaseName(w http.ResponseWriter, phase string) bool {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "knowledge-base", "knowledgebase", "inquire", "research", "design", "plan", "implement", "review", "final-review", "publish":
+		return true
+	default:
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "target_phase is invalid", nil)
+		return false
+	}
+}
+
+func validatePositiveOptionalInt(w http.ResponseWriter, field string, value int) bool {
+	if value >= 0 {
+		return true
+	}
+	writeAPIError(w, http.StatusBadRequest, "bad_request", field+" must be positive", nil)
+	return false
+}
+
+func validateReviewCommentsMode(w http.ResponseWriter, mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "auto", "address_all":
+		return true
+	default:
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "mode must be auto or address_all", nil)
+		return false
+	}
+}
+
+func validateTweakDecision(w http.ResponseWriter, decision string) bool {
+	switch strings.ToLower(strings.TrimSpace(decision)) {
+	case "commit", "final-review", "skip-review", "restore-from-review", "fail":
+		return true
+	default:
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "decision is invalid", nil)
+		return false
+	}
+}
+
+func validateRefactorRequest(w http.ResponseWriter, req RefactorActionRequest) bool {
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is required", nil)
+		return false
+	}
+	if len(prompt) > MaxActionTextBytes {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "prompt is too long", nil)
+		return false
+	}
+	if !validateRepoName(w, req.Repo, false) || !validatePipelineProfile(w, req.Pipeline) {
+		return false
+	}
+	return true
+}
+
+func validateCleanupRequest(w http.ResponseWriter, req CleanupActionRequest) bool {
+	if !validateRepoName(w, req.Repo, false) {
+		return false
+	}
+	if strings.TrimSpace(req.Repo) != "" {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "repo-scoped cleanup is not supported", nil)
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Target)) {
+	case "", "worktrees", "cycles":
+		return true
+	default:
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "cleanup target is invalid", nil)
+		return false
+	}
+}
+
+func safeActionToken(value string, allowSlash bool) bool {
+	if value == "" || len(value) > 200 || strings.Contains(value, "..") || strings.ContainsAny(value, "\\\x00\r\n\t ") {
+		return false
+	}
+	if strings.HasPrefix(value, "/") || strings.HasSuffix(value, "/") {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case '-', '_', '.':
+			continue
+		case '/':
+			if allowSlash {
+				continue
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func safeRelativePathToken(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 512 || strings.Contains(value, "..") || strings.ContainsAny(value, "\\\x00\r\n") {
+		return false
+	}
+	return !strings.HasPrefix(value, "/")
 }
 
 func (h *apiHandler) writeMutationAdmission(w http.ResponseWriter, admission mutationAdmission, accepted bool) {

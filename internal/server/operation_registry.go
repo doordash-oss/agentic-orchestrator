@@ -63,8 +63,9 @@ type OperationTarget struct {
 }
 
 type OperationError struct {
-	Code    string `json:"code" yaml:"code"`
-	Message string `json:"message" yaml:"message"`
+	Code     string            `json:"code" yaml:"code"`
+	Message  string            `json:"message" yaml:"message"`
+	Metadata map[string]string `json:"metadata,omitempty" yaml:"metadata,omitempty"`
 }
 
 type OperationRecord struct {
@@ -741,7 +742,10 @@ func safeOperationResult(in map[string]string) map[string]string {
 	out := make(map[string]string, len(in))
 	for k, v := range in {
 		switch k {
-		case "feature_id", "session_id", "request_id", "status", "decision", "reason", "kind":
+		case "feature_id", "session_id", "request_id", "status", "decision", "reason", "kind",
+			"action", "repo", "repo_name", "cycle_type", "target", "target_phase", "effective_phase",
+			"roadmap_phase", "run_number", "recovery_action", "conflict", "branch", "rebase_target",
+			"conflict_files", "warning_count", "pipeline", "mode", "had_changes":
 			out[k] = safeDisplayText(v, 120)
 		}
 	}
@@ -770,7 +774,7 @@ func safeOperationError(in *OperationError) *OperationError {
 	case "bad_request":
 		message = "invalid operation request"
 	}
-	return &OperationError{Code: code, Message: message}
+	return &OperationError{Code: code, Message: message, Metadata: safeOperationResult(in.Metadata)}
 }
 
 func operationIndexEntryFromRecord(rec OperationRecord) operationIndexEntry {

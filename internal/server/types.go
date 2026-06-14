@@ -156,8 +156,36 @@ type FeatureDetailDTO struct {
 	ReviewGate      ReviewGateDTO     `json:"review_gate"`
 	Failure         *FailureDTO       `json:"failure,omitempty"`
 	NeedUserInput   *NeedInputGateDTO `json:"need_user_input,omitempty"`
+	Actions         []ActionDTO       `json:"actions"`
 	Revision        string            `json:"revision"`
 	CacheRevalidate string            `json:"cache_revalidate"`
+}
+
+type ActionDTO struct {
+	ID              string                    `json:"id"`
+	Enabled         bool                      `json:"enabled"`
+	Scope           ActionScopeDTO            `json:"scope"`
+	RequiredInputs  []ActionInputDTO          `json:"required_inputs"`
+	DisabledReasons []ActionDisabledReasonDTO `json:"disabled_reasons,omitempty"`
+}
+
+type ActionScopeDTO struct {
+	Type          string `json:"type"`
+	RepoSelection string `json:"repo_selection,omitempty"`
+	CycleType     string `json:"cycle_type,omitempty"`
+}
+
+type ActionInputDTO struct {
+	Name      string   `json:"name"`
+	Kind      string   `json:"kind"`
+	Required  bool     `json:"required"`
+	Options   []string `json:"options,omitempty"`
+	MaxLength int      `json:"max_length,omitempty"`
+}
+
+type ActionDisabledReasonDTO struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
 }
 
 type RunSummaryDTO struct {
@@ -437,6 +465,25 @@ type TranscriptMessageDTO struct {
 	Tool     string `json:"tool,omitempty"`
 	Status   string `json:"status,omitempty"`
 	Redacted bool   `json:"redacted,omitempty"`
+}
+
+type ReviewCommentsFetchResponse struct {
+	APIVersion string             `json:"api_version"`
+	FeatureID  string             `json:"feature_id"`
+	Repo       string             `json:"repo"`
+	Mode       string             `json:"mode,omitempty"`
+	Comments   []ReviewCommentDTO `json:"comments"`
+}
+
+type ReviewCommentDTO struct {
+	ID        int    `json:"id"`
+	Type      string `json:"type,omitempty"`
+	RepoName  string `json:"repo_name,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	Body      string `json:"body,omitempty"`
+	UserLogin string `json:"user_login,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 type OperationSnapshotResponse struct {

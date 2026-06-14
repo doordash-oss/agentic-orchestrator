@@ -185,6 +185,238 @@ func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
 	}
 }
 
+func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		ff.RepoCycles = map[string]*feature.RepoCycleState{
+			"agentic-orchestrator": {
+				Type:      feature.CycleReviewComments,
+				Status:    feature.RepoCycleFailed,
+				LastError: "private-token leaked in raw prompt payload",
+			},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify() error = %v", err)
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+	})
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	featureDTO := detail["feature"].(map[string]any)
+	rawActions, ok := featureDTO["actions"].([]any)
+	if !ok {
+		t.Fatalf("detail actions missing or wrong type in %+v", featureDTO)
+	}
+	gotIDs := make([]string, 0, len(rawActions))
+	for _, raw := range rawActions {
+		action := raw.(map[string]any)
+		gotIDs = append(gotIDs, action["id"].(string))
+		if action["scope"].(map[string]any)["type"] != "feature" {
+			t.Fatalf("action scope = %+v; want feature scope", action["scope"])
+		}
+		if _, ok := action["required_inputs"].([]any); !ok {
+			t.Fatalf("action %s missing required_inputs metadata", action["id"])
+		}
+	}
+	wantIDs := []string{
+		"start",
+		"pause-stop",
+		"resume",
+		"restart",
+		"publish",
+		"merge",
+		"rewind",
+		"rebase",
+		"review-comments",
+		"tweak",
+		"refactor",
+		"retry",
+		"mark-done",
+		"cleanup",
+		"delete",
+	}
+	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
+		t.Fatalf("action ids = %v; want %v", gotIDs, wantIDs)
+	}
+	actionsByID := map[string]map[string]any{}
+	for _, rawAction := range rawActions {
+		action := rawAction.(map[string]any)
+		actionsByID[action["id"].(string)] = action
+	}
+	assertActionScope(t, actionsByID["publish"], "feature", "")
+	assertActionInputNames(t, actionsByID["publish"])
+	assertActionScope(t, actionsByID["merge"], "feature", "")
+	assertActionInputNames(t, actionsByID["merge"])
+	assertActionScope(t, actionsByID["rebase"], "feature", "optional")
+	assertActionInputNames(t, actionsByID["rebase"], "repo", "rebase_target", "conflict_files")
+	assertActionInputRequired(t, actionsByID["rebase"], "repo", false)
+	assertActionScope(t, actionsByID["review-comments"], "feature", "required")
+	assertActionInputNames(t, actionsByID["review-comments"], "repo", "mode")
+	assertActionInputRequired(t, actionsByID["review-comments"], "repo", true)
+	assertActionInputRequired(t, actionsByID["review-comments"], "mode", true)
+	assertActionInputNames(t, actionsByID["refactor"], "repo", "prompt", "pipeline")
+	assertActionInputRequired(t, actionsByID["refactor"], "repo", false)
+	assertActionInputRequired(t, actionsByID["refactor"], "prompt", true)
+	assertActionScope(t, actionsByID["cleanup"], "feature", "")
+	assertActionInputNames(t, actionsByID["cleanup"], "target")
+	assertActionScope(t, actionsByID["delete"], "feature", "")
+	refactorPrompt := actionInputByName(t, actionsByID["refactor"], "prompt")
+	if got := int(refactorPrompt["max_length"].(float64)); got != MaxActionTextBytes {
+		t.Fatalf("refactor prompt max_length = %d; want %d", got, MaxActionTextBytes)
+	}
+	raw := mustMarshalJSON(t, rawActions)
+	for _, forbidden := range []string{"private-token", "raw prompt", "/repo/path", "/worktree/path"} {
+		if strings.Contains(raw, forbidden) {
+			t.Fatalf("action catalog leaks %q in %s", forbidden, raw)
+		}
+	}
+	var sawDisabledReason bool
+	for _, rawAction := range rawActions {
+		action := rawAction.(map[string]any)
+		if action["enabled"] == true {
+			continue
+		}
+		reasons := action["disabled_reasons"].([]any)
+		if len(reasons) == 0 {
+			t.Fatalf("disabled action %s has no disabled_reasons", action["id"])
+		}
+		reason := reasons[0].(map[string]any)
+		if reason["code"] == "" || reason["message"] == "" {
+			t.Fatalf("disabled reason = %+v; want machine-readable code and message", reason)
+		}
+		sawDisabledReason = true
+	}
+	if !sawDisabledReason {
+		t.Fatalf("all actions enabled; want representative disabled reasons")
+	}
+}
+
+func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
+	t.Parallel()
+	publishable := true
+	localOnly := false
+	tests := []struct {
+		name string
+		f    *feature.Feature
+		want map[string]struct {
+			enabled      bool
+			disabledCode string
+		}
+	}{
+		{
+			name: "publishable code ready",
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &publishable, nil),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"publish":  {enabled: true},
+				"merge":    {disabledCode: "not_local_only"},
+				"refactor": {disabledCode: "status_not_allowed"},
+			},
+		},
+		{
+			name: "manual publish code ready",
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{ManualPublish: true}, &publishable, nil),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"publish":   {disabledCode: "manual_publish_required"},
+				"refactor":  {disabledCode: "status_not_allowed"},
+				"mark-done": {enabled: true},
+			},
+		},
+		{
+			name: "local only code ready",
+			f:    actionCatalogTestFeature(feature.StatusCodeReady, feature.Checkpoints{}, &localOnly, nil),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"publish": {disabledCode: "local_only"},
+				"merge":   {enabled: true},
+			},
+		},
+		{
+			name: "local only created",
+			f:    actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &localOnly, nil),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"merge": {disabledCode: "status_not_allowed"},
+			},
+		},
+		{
+			name: "published",
+			f:    actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"publish":  {disabledCode: "already_published"},
+				"merge":    {disabledCode: "not_local_only"},
+				"refactor": {enabled: true},
+				"cleanup":  {enabled: true},
+			},
+		},
+		{
+			name: "published active cycle",
+			f: actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
+				"agentic-orchestrator": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+			}),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"rebase":          {disabledCode: "cycle_active"},
+				"review-comments": {disabledCode: "cycle_active"},
+				"tweak":           {disabledCode: "cycle_active"},
+				"refactor":        {disabledCode: "cycle_active"},
+			},
+		},
+		{
+			name: "running cleanup disabled",
+			f:    actionCatalogTestFeature(feature.StatusImplementing, feature.Checkpoints{}, &publishable, nil),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"cleanup": {disabledCode: "running"},
+				"delete":  {disabledCode: "running"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actions := actionCatalogDTOs(tt.f)
+			for id, want := range tt.want {
+				got := actionDTOByID(t, actions, id)
+				if got.Enabled != want.enabled {
+					t.Fatalf("action %s enabled = %v; want %v", id, got.Enabled, want.enabled)
+				}
+				if want.enabled {
+					continue
+				}
+				if len(got.DisabledReasons) == 0 {
+					t.Fatalf("action %s disabled reasons empty; want %s", id, want.disabledCode)
+				}
+				if got.DisabledReasons[0].Code != want.disabledCode {
+					t.Fatalf("action %s disabled code = %q; want %q", id, got.DisabledReasons[0].Code, want.disabledCode)
+				}
+			}
+		})
+	}
+}
+
 func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	t.Parallel()
 	store, newest := seedReadFeature(t)
@@ -725,6 +957,80 @@ func mustMarshalJSON(t *testing.T, v any) string {
 		t.Fatalf("Marshal() error = %v", err)
 	}
 	return string(data)
+}
+
+func assertActionScope(t *testing.T, action map[string]any, wantType, wantRepoSelection string) {
+	t.Helper()
+	scope := action["scope"].(map[string]any)
+	if scope["type"] != wantType {
+		t.Fatalf("action %s scope type = %v; want %s", action["id"], scope["type"], wantType)
+	}
+	if got := stringValue(scope["repo_selection"]); got != wantRepoSelection {
+		t.Fatalf("action %s repo_selection = %q; want %q", action["id"], got, wantRepoSelection)
+	}
+}
+
+func assertActionInputNames(t *testing.T, action map[string]any, want ...string) {
+	t.Helper()
+	rawInputs := action["required_inputs"].([]any)
+	got := make([]string, 0, len(rawInputs))
+	for _, raw := range rawInputs {
+		got = append(got, raw.(map[string]any)["name"].(string))
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("action %s input names = %v; want %v", action["id"], got, want)
+	}
+}
+
+func actionInputByName(t *testing.T, action map[string]any, name string) map[string]any {
+	t.Helper()
+	for _, raw := range action["required_inputs"].([]any) {
+		input := raw.(map[string]any)
+		if input["name"] == name {
+			return input
+		}
+	}
+	t.Fatalf("action %s missing input %q", action["id"], name)
+	return nil
+}
+
+func assertActionInputRequired(t *testing.T, action map[string]any, name string, want bool) {
+	t.Helper()
+	input := actionInputByName(t, action, name)
+	if got := input["required"]; got != want {
+		t.Fatalf("action %s input %s required = %v; want %v", action["id"], name, got, want)
+	}
+}
+
+func stringValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpoints, publishable *bool, cycles map[string]*feature.RepoCycleState) *feature.Feature {
+	return &feature.Feature{
+		ID:          "feat-actions",
+		Status:      status,
+		Checkpoints: checkpoints,
+		Repos: []feature.FeatureRepo{{
+			Name:        "agentic-orchestrator",
+			Publishable: publishable,
+		}},
+		RepoCycles: cycles,
+	}
+}
+
+func actionDTOByID(t *testing.T, actions []ActionDTO, id string) ActionDTO {
+	t.Helper()
+	for _, action := range actions {
+		if action.ID == id {
+			return action
+		}
+	}
+	t.Fatalf("action catalog missing %q", id)
+	return ActionDTO{}
 }
 
 func requestIDsFromJSON(t *testing.T, raw any) []string {

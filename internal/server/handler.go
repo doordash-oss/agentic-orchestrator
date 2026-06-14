@@ -85,6 +85,14 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 }
 
 func (h *apiHandler) routes() http.Handler {
+	return h.routesWithMCP(true)
+}
+
+func (h *apiHandler) restRoutes() http.Handler {
+	return h.routesWithMCP(false)
+}
+
+func (h *apiHandler) routesWithMCP(includeMCP bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", methodHandler(http.MethodGet, h.handleHealth))
 	mux.HandleFunc("/api/v1/features", h.handleFeaturesRoot)
@@ -101,6 +109,9 @@ func (h *apiHandler) routes() http.Handler {
 	mux.HandleFunc("/api/v1/recovery", h.handleRecoveryRoute)
 	mux.HandleFunc("/api/v1/recovery/actions", h.handleRecoveryActionRoute)
 	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
+	if includeMCP {
+		mux.Handle(MCPEndpointPath, h.mcpHTTPHandler())
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.handleMutationPreflight(w, r) {
 			return

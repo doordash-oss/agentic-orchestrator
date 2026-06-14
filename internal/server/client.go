@@ -65,21 +65,21 @@ func (e *APIError) Error() string {
 }
 
 type CursorQuery struct {
-	Cursor int
-	Limit  int
+	Cursor int `json:"cursor,omitempty"`
+	Limit  int `json:"limit,omitempty"`
 }
 
 type TextQuery struct {
-	Offset int64
-	Limit  int64
+	Offset int64 `json:"offset,omitempty"`
+	Limit  int64 `json:"limit,omitempty"`
 }
 
 type OperationQuery struct {
-	State     OperationStatus
-	FeatureID string
-	Kind      string
-	Cursor    string
-	Limit     int
+	State     OperationStatus `json:"state,omitempty"`
+	FeatureID string          `json:"feature_id,omitempty"`
+	Kind      string          `json:"kind,omitempty"`
+	Cursor    string          `json:"cursor,omitempty"`
+	Limit     int             `json:"limit,omitempty"`
 }
 
 func NewClient(opts ClientOptions) (*Client, error) {

@@ -605,6 +605,7 @@ type DiscoveryRecord struct {
 	SchemaVersion int                `json:"schema_version"`
 	APIVersion    string             `json:"api_version"`
 	BaseURL       string             `json:"base_url"`
+	MCP           MCPMetadata        `json:"mcp"`
 	Runtime       RuntimeIdentity    `json:"runtime"`
 	LaunchPolicy  LaunchPolicy       `json:"launch_policy"`
 	StartMode     string             `json:"start_mode"`
@@ -613,6 +614,13 @@ type DiscoveryRecord struct {
 	StartedAt     time.Time          `json:"started_at"`
 	PublishedAt   time.Time          `json:"published_at"`
 	Owner         instancelock.Owner `json:"owner"`
+}
+
+type MCPMetadata struct {
+	Transport      string `json:"transport"`
+	Path           string `json:"path"`
+	Endpoint       string `json:"endpoint"`
+	RESTAPIVersion string `json:"rest_api_version"`
 }
 
 type DiscoveryDecision struct {

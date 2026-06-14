@@ -22,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -103,11 +104,11 @@ type validateArtifactsOptions struct {
 	dir   string
 }
 
-type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool)
+type defaultLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
 
-type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) int
+type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int
 
-// updater is the injectable update seam. It mirrors tuiLauncher: production
+// updater is the injectable update seam. It mirrors defaultLauncher: production
 // wiring passes the real updater, tests pass a fake. It returns the process
 // exit code the router propagates verbatim. The update path deliberately never
 // acquires the instance lock, starts the fx container, or reconciles assets.
@@ -139,10 +140,10 @@ func pickRuntimeParent(stat func(string) (os.FileInfo, error)) string {
 }
 
 func run() {
-	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runTUI, runServer, runUpdate))
+	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runDefaultClientServer, runServer, runUpdate))
 }
 
-func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, launchServer serverLauncher, update updater) int {
+func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, launchServer serverLauncher, update updater) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -164,10 +165,9 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, launch
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
 	case launchModeServer:
-		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders)
+		return launchServer(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 	default:
-		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
-		return 0
+		return launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 	}
 }
 
@@ -957,6 +957,17 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		status = "updated"
 	}
 	return serverruntime.OperationResult{Metadata: map[string]string{"kind": "runtime.config", "status": status}}, nil
+}
+
+func (t *serverMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
+	return t.orch.ScanRecovery(ctx)
+}
+
+func (t *serverMutationTarget) ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (serverruntime.OperationResult, error) {
+	if err := t.orch.ExecuteRecovery(ctx, items, actions); err != nil {
+		return serverruntime.OperationResult{}, err
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{"status": "recovered"}}, nil
 }
 
 func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.OperationResult, error) {
@@ -1919,93 +1930,392 @@ func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, s
 	return recoveryItems, true
 }
 
-func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) {
-	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stdin, os.Stderr)
+type defaultLaunchRequest struct {
+	ConfigPath                 string
+	StateDir                   string
+	DangerouslySkipPermissions bool
+	EnabledProviders           []string
+	RefreshModels              bool
+	Stdin                      io.Reader
+	Stdout                     io.Writer
+	Stderr                     io.Writer
+	WaitForReadyTimeout        time.Duration
+	WaitForReadyPollInterval   time.Duration
+}
+
+type defaultLaunchDeps struct {
+	ResolvePolicy    func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error)
+	PrepareDiscovery func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error)
+	StartServer      func(context.Context, serverStartRequest) (serverProcess, error)
+	LaunchClient     func(context.Context, defaultClientLaunch) error
+	HTTPClient       *http.Client
+}
+
+type serverStartRequest struct {
+	ConfigPath                 string
+	StateDir                   string
+	DangerouslySkipPermissions bool
+	EnabledProviders           []string
+	RefreshModels              bool
+	Stdin                      io.Reader
+	Stdout                     io.Writer
+	Stderr                     io.Writer
+}
+
+type serverProcess interface {
+	Stop(context.Context) error
+}
+
+type serverProcessPID interface {
+	PID() int
+}
+
+type defaultClientLaunch struct {
+	BaseURL      string
+	Runtime      serverruntime.RuntimeIdentity
+	LaunchPolicy serverruntime.LaunchPolicy
+	OwnedServer  bool
+	Server       serverProcess
+}
+
+func runDefaultClientServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:                 configPath,
+		StateDir:                   stateDir,
+		DangerouslySkipPermissions: dangerouslySkipPerms,
+		EnabledProviders:           enabledProviders,
+		RefreshModels:              refreshModels,
+		Stdin:                      os.Stdin,
+		Stdout:                     os.Stdout,
+		Stderr:                     os.Stderr,
+	}, defaultLaunchDeps{
+		LaunchClient: launchAPIClientTUI,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return 1
 	}
-	closed := false
-	defer func() {
-		if !closed {
-			if err := boot.Close(context.Background()); err != nil {
-				log.Printf("close runtime: %v", err)
-			}
-		}
-	}()
+	return 0
+}
 
-	tui.SetMarkdownRenderer(markdown.Render)
-	appOpts := []tui.AppOption{
-		tui.WithConfigPath(configPath),
-		tui.WithWorkspaceDir(boot.workspaceDir),
-		tui.WithPhaseRunner(boot.phaseRunner),
-		tui.WithRegistry(boot.registry),
-		tui.WithObserver(observeAdapter{observer: boot.observer}),
-		tui.WithStartupRecovery(boot.recoveryItems, boot.recoveryScanOK),
+func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, deps defaultLaunchDeps) error {
+	deps = deps.withDefaults()
+	if deps.LaunchClient == nil {
+		return errors.New("client TUI launcher is required")
 	}
-	if dangerouslySkipPerms {
-		appOpts = append(appOpts, tui.WithDangerouslySkipPermissions())
+	runtimeDir := filepath.Dir(req.StateDir)
+	identity := serverruntime.RuntimeIdentity{
+		RuntimeDir: runtimeDir,
+		StateDir:   req.StateDir,
+		Config:     req.ConfigPath,
 	}
-	app, err := tui.NewAppModel(
-		boot.featureManager,
-		boot.sessionManager,
-		boot.orchestrator,
-		boot.permissionCache,
-		boot.eventCh,
-		appOpts...,
-	)
+	policy, err := deps.ResolvePolicy(ctx, req)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error initializing TUI: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("resolve launch policy: %w", err)
+	}
+	client := deps.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: time.Second}
+	}
+	decision, err := deps.PrepareDiscovery(ctx, runtimeDir, identity, policy, client)
+	if err != nil {
+		return fmt.Errorf("validating discovery metadata: %w", err)
+	}
+	if decision.AlreadyRunning {
+		return deps.LaunchClient(ctx, defaultClientLaunch{
+			BaseURL:      decision.Record.BaseURL,
+			Runtime:      identity,
+			LaunchPolicy: policy,
+		})
 	}
 
-	// Redirect stderr and Go's default logger to a file before the TUI takes
-	// over the terminal. Any write to stderr (from OTEL, gRPC, net/http, etc.)
-	// would corrupt bubbletea's alternate screen rendering.
-	logPath := filepath.Join(filepath.Dir(stateDir), defaultLogBasename)
-	if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
-		origStderr := os.Stderr
-		os.Stderr = logFile
-		log.SetOutput(logFile)
-		defer func() {
-			os.Stderr = origStderr
-			log.SetOutput(origStderr)
-			logFile.Close()
-		}()
+	child, err := deps.StartServer(ctx, serverStartRequest{
+		ConfigPath:                 req.ConfigPath,
+		StateDir:                   req.StateDir,
+		DangerouslySkipPermissions: req.DangerouslySkipPermissions,
+		EnabledProviders:           req.EnabledProviders,
+		RefreshModels:              req.RefreshModels,
+		Stdin:                      req.Stdin,
+		Stdout:                     req.Stdout,
+		Stderr:                     req.Stderr,
+	})
+	if err != nil {
+		if isRuntimeLockBusy(err) {
+			record, readyErr := waitForDefaultLaunchServerReady(ctx, req, deps, runtimeDir, identity, policy, client)
+			if readyErr != nil {
+				return errors.Join(fmt.Errorf("lock contention from another live owner: %w", err), readyErr)
+			}
+			return deps.LaunchClient(ctx, defaultClientLaunch{
+				BaseURL:      record.BaseURL,
+				Runtime:      identity,
+				LaunchPolicy: policy,
+			})
+		}
+		return fmt.Errorf("server boot failed: %w", err)
 	}
+	record, err := waitForDefaultLaunchServerReady(ctx, req, deps, runtimeDir, identity, policy, client)
+	if err != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return errors.Join(err, child.Stop(stopCtx))
+	}
+	owned := childOwnsReadyRecord(child, record)
+	launchServer := child
+	if !owned {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopErr := child.Stop(stopCtx)
+		cancel()
+		if stopErr != nil {
+			return fmt.Errorf("stop losing child server: %w", stopErr)
+		}
+		launchServer = nil
+	}
+	return deps.LaunchClient(ctx, defaultClientLaunch{
+		BaseURL:      record.BaseURL,
+		Runtime:      identity,
+		LaunchPolicy: policy,
+		OwnedServer:  owned,
+		Server:       launchServer,
+	})
+}
 
-	// Run the TUI — this blocks until the user quits.
-	// WithFilter drops excess scroll events (trackpad kinetic bursts) before
-	// Update/View runs, so typing and Esc aren't queued behind them.
+func isRuntimeLockBusy(err error) bool {
+	var busy runtimeLockBusyError
+	return errors.As(err, &busy)
+}
+
+func childOwnsReadyRecord(child serverProcess, record serverruntime.DiscoveryRecord) bool {
+	reporter, ok := child.(serverProcessPID)
+	if !ok {
+		return true
+	}
+	childPID := reporter.PID()
+	if childPID <= 0 || record.PID <= 0 {
+		return true
+	}
+	return childPID == record.PID
+}
+
+func (deps defaultLaunchDeps) withDefaults() defaultLaunchDeps {
+	if deps.ResolvePolicy == nil {
+		deps.ResolvePolicy = resolveDefaultLaunchPolicy
+	}
+	if deps.PrepareDiscovery == nil {
+		deps.PrepareDiscovery = serverruntime.PrepareDiscovery
+	}
+	if deps.StartServer == nil {
+		deps.StartServer = startServerProcess
+	}
+	return deps
+}
+
+func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
+	client, err := serverruntime.NewClient(serverruntime.ClientOptions{BaseURL: launch.BaseURL})
+	if err != nil {
+		return fmt.Errorf("create API client: %w", err)
+	}
+	opts := tui.APIAppOptions{
+		Runtime:      launch.Runtime,
+		LaunchPolicy: launch.LaunchPolicy,
+		OwnedServer:  launch.OwnedServer,
+		EventOptions: serverruntime.EventSubscriptionOptions{
+			HeartbeatInterval: 30 * time.Second,
+			ReconnectDelay:    250 * time.Millisecond,
+		},
+	}
+	if launch.OwnedServer && launch.Server != nil {
+		opts.StopOwnedServer = launch.Server.Stop
+	}
+	tui.SetMarkdownRenderer(markdown.Render)
+	app, err := tui.NewAPIAppModel(ctx, client, opts)
+	if err != nil {
+		return fmt.Errorf("initialize API TUI: %w", err)
+	}
+	defer app.Close()
+
+	restoreStderr := redirectStderrToRuntimeLog(launch.Runtime.RuntimeDir)
+	defer restoreStderr()
+
+	p := tea.NewProgram(app, tuiProgramOptions()...)
+	if _, err := p.Run(); err != nil {
+		return fmt.Errorf("run API TUI: %w", err)
+	}
+	return nil
+}
+
+func redirectStderrToRuntimeLog(runtimeDir string) func() {
+	if runtimeDir == "" {
+		return func() {}
+	}
+	logPath := filepath.Join(runtimeDir, defaultLogBasename)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return func() {}
+	}
+	origStderr := os.Stderr
+	os.Stderr = logFile
+	log.SetOutput(logFile)
+	return func() {
+		os.Stderr = origStderr
+		log.SetOutput(origStderr)
+		_ = logFile.Close()
+	}
+}
+
+func tuiProgramOptions() []tea.ProgramOption {
 	opts := []tea.ProgramOption{tea.WithFilter(tui.NewScrollRateLimiter())}
 	if profile, ok := overrideColorProfile(); ok {
 		opts = append(opts, tea.WithColorProfile(profile))
 	}
-	p := tea.NewProgram(app, opts...)
-	app.SetProgram(p)
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		shutdownFeatures(boot.orchestrator, boot.sessionManager)
-		if closeErr := boot.Close(context.Background()); closeErr != nil {
-			log.Printf("close runtime: %v", closeErr)
-		}
-		closed = true
-		os.Exit(1)
-	}
-
-	app.Close()
-	shutdownFeatures(boot.orchestrator, boot.sessionManager)
-	if err := boot.Close(context.Background()); err != nil {
-		log.Printf("close runtime: %v", err)
-	}
-	closed = true
+	return opts
 }
 
-func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) int {
+func waitForDefaultLaunchServerReady(ctx context.Context, req defaultLaunchRequest, deps defaultLaunchDeps, runtimeDir string, identity serverruntime.RuntimeIdentity, policy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryRecord, error) {
+	timeout := req.WaitForReadyTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	poll := req.WaitForReadyPollInterval
+	if poll <= 0 {
+		poll = 50 * time.Millisecond
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	lastReason := "no discovery record"
+	for {
+		decision, err := deps.PrepareDiscovery(waitCtx, runtimeDir, identity, policy, client)
+		if err != nil {
+			return serverruntime.DiscoveryRecord{}, fmt.Errorf("server readiness discovery failed: %w", err)
+		}
+		if decision.AlreadyRunning {
+			return decision.Record, nil
+		}
+		if decision.Reason != "" {
+			lastReason = decision.Reason
+		}
+		timer := time.NewTimer(poll)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return serverruntime.DiscoveryRecord{}, fmt.Errorf("server readiness timed out: %s: %w", lastReason, waitCtx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func resolveDefaultLaunchPolicy(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+	registry, err := newLaunchPolicyRegistry(req.EnabledProviders, req.Stderr)
+	if err != nil {
+		return serverruntime.LaunchPolicy{}, err
+	}
+	if _, warnings, _, _, err := checkRequiredProviders(ctx, registry); err != nil {
+		return serverruntime.LaunchPolicy{}, err
+	} else if req.Stderr != nil {
+		for _, warning := range warnings {
+			fmt.Fprintln(req.Stderr, warning)
+		}
+	}
+	return runtimeLaunchPolicy(registry, req.DangerouslySkipPermissions), nil
+}
+
+func newLaunchPolicyRegistry(enabled []string, stderr io.Writer) (*llm.Registry, error) {
+	registry := llm.NewRegistry()
+	register := func(name string) bool {
+		switch strings.TrimSpace(name) {
+		case "claude":
+			registry.Register(&claude.Provider{})
+			return true
+		case "codex":
+			registry.Register(&codex.Provider{})
+			return true
+		case "opencode":
+			registry.Register(&opencode.Provider{})
+			return true
+		case "":
+			return false
+		default:
+			if stderr != nil {
+				fmt.Fprintf(stderr, "Warning: unknown provider %q, skipping\n", strings.TrimSpace(name))
+			}
+			return false
+		}
+	}
+	if enabled == nil {
+		register("claude")
+		register("codex")
+		register("opencode")
+		return registry, nil
+	}
+	valid := 0
+	for _, name := range enabled {
+		if register(name) {
+			valid++
+		}
+	}
+	if valid == 0 {
+		return nil, errors.New("no valid providers specified in --providers flag")
+	}
+	return registry, nil
+}
+
+type childServerProcess struct {
+	cmd  *exec.Cmd
+	done chan error
+}
+
+func startServerProcess(ctx context.Context, req serverStartRequest) (serverProcess, error) {
+	args := []string{"server", "--config", req.ConfigPath, "--state-dir", req.StateDir}
+	if len(req.EnabledProviders) > 0 {
+		args = append(args, "--providers", strings.Join(req.EnabledProviders, ","))
+	}
+	if req.DangerouslySkipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+	if req.RefreshModels {
+		args = append(args, "--refresh-models")
+	}
+	cmd := exec.CommandContext(ctx, os.Args[0], args...)
+	cmd.Stdin = req.Stdin
+	cmd.Stdout = req.Stdout
+	cmd.Stderr = req.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	child := &childServerProcess{cmd: cmd, done: make(chan error, 1)}
+	go func() {
+		child.done <- cmd.Wait()
+	}()
+	return child, nil
+}
+
+func (p *childServerProcess) Stop(ctx context.Context) error {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return nil
+	}
+	if err := p.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	select {
+	case err := <-p.done:
+		return err
+	case <-ctx.Done():
+		_ = p.cmd.Process.Kill()
+		return ctx.Err()
+	}
+}
+
+func (p *childServerProcess) PID() int {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
+
+func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, false, os.Stdin, os.Stderr)
+	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stdin, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
@@ -2022,8 +2332,9 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}
 	}
 
+	policy := runtimeLaunchPolicy(boot.registry, dangerouslySkipPerms)
 	discoveryClient := &http.Client{Timeout: time.Second}
-	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, discoveryClient)
+	decision, err := serverruntime.PrepareDiscovery(ctx, boot.runtime.RuntimeDir, boot.runtime, policy, discoveryClient)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: validating discovery metadata: %v\n", err)
 		return 1
@@ -2045,6 +2356,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 
 	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
 		Runtime:      boot.runtime,
+		LaunchPolicy: policy,
 		StartMode:    "server",
 		Owner:        boot.owner,
 		Features:     boot.featureManager,
@@ -2083,6 +2395,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		APIVersion:    serverruntime.APIVersion,
 		BaseURL:       runtimeServer.BaseURL(),
 		Runtime:       boot.runtime,
+		LaunchPolicy:  policy,
 		StartMode:     "server",
 		PID:           boot.owner.PID,
 		PGID:          boot.owner.PGID,
@@ -2098,6 +2411,16 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	<-ctx.Done()
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0
+}
+
+func runtimeLaunchPolicy(registry *llm.Registry, dangerouslySkipPerms bool) serverruntime.LaunchPolicy {
+	var providers []string
+	if registry != nil {
+		for _, provider := range registry.DetectedProviders() {
+			providers = append(providers, provider.Name())
+		}
+	}
+	return serverruntime.NewLaunchPolicy(providers, dangerouslySkipPerms)
 }
 
 func overrideColorProfile() (colorprofile.Profile, bool) {

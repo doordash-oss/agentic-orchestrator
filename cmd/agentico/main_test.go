@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,12 +36,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
+	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
-func failingLauncher(t *testing.T) tuiLauncher {
+func failingLauncher(t *testing.T) defaultLauncher {
 	t.Helper()
-	return func(string, string, bool, []string, bool) {
+	return func(string, string, bool, []string, bool) int {
 		t.Fatal("TUI launcher invoked unexpectedly")
+		return 1
 	}
 }
 
@@ -789,11 +793,11 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 	}
 }
 
-func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
+func TestRunArgsLaunchesClientServerByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var launched bool
 	wantParent := pickRuntimeParent(os.Stat)
-	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) {
+	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
 		launched = true
 		if configPath != filepath.Join(wantParent, defaultConfigBasename) {
 			t.Errorf("configPath = %q, want default", configPath)
@@ -807,6 +811,7 @@ func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
 		if enabledProviders != nil {
 			t.Errorf("enabledProviders = %v, want nil", enabledProviders)
 		}
+		return 0
 	}, failingServerLauncher(t), failingUpdater(t))
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
@@ -828,11 +833,12 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 		[]string{"--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
 		&stdout,
 		&stderr,
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) {
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) int {
 			gotConfig = configPath
 			gotState = stateDir
 			gotDangerouslySkipPerms = dangerouslySkipPerms
 			gotProviders = enabledProviders
+			return 0
 		},
 		failingServerLauncher(t),
 		failingUpdater(t),
@@ -864,8 +870,9 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 		[]string{"--refresh-models"},
 		&stdout,
 		&stderr,
-		func(_ string, _ string, _ bool, _ []string, refreshModels bool) {
+		func(_ string, _ string, _ bool, _ []string, refreshModels bool) int {
 			gotRefresh = refreshModels
+			return 0
 		},
 		failingServerLauncher(t),
 		failingUpdater(t),
@@ -902,10 +909,11 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 		[]string{"validate-artifacts", "--phase", "review", "--role", string(agent.RoleFinalReviewer), "--dir", iterDir},
 		&stdout,
 		&stderr,
-		func(string, string, bool, []string, bool) {
+		func(string, string, bool, []string, bool) int {
 			launchedTUI = true
+			return 0
 		},
-		func(string, string, bool, []string) int {
+		func(string, string, bool, []string, bool) int {
 			launchedServer = true
 			return 0
 		},
@@ -981,8 +989,11 @@ func TestRunArgsDispatchesServerToSeam(t *testing.T) {
 		[]string{"server", "--config", "/tmp/server-config.yaml", "--state-dir", "/tmp/server-features", "--providers", "codex"},
 		&stdout,
 		&stderr,
-		func(string, string, bool, []string, bool) { launchedTUI = true },
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) int {
+		func(string, string, bool, []string, bool) int {
+			launchedTUI = true
+			return 0
+		},
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
 			launchedServer = true
 			if configPath != "/tmp/server-config.yaml" {
 				t.Errorf("configPath = %q; want server config", configPath)
@@ -995,6 +1006,9 @@ func TestRunArgsDispatchesServerToSeam(t *testing.T) {
 			}
 			if !slices.Equal(enabledProviders, []string{"codex"}) {
 				t.Errorf("enabledProviders = %v; want [codex]", enabledProviders)
+			}
+			if refreshModels {
+				t.Error("refreshModels = true; want false")
 			}
 			return 9
 		},
@@ -1009,6 +1023,471 @@ func TestRunArgsDispatchesServerToSeam(t *testing.T) {
 	if code != 9 {
 		t.Fatalf("runArgs() code = %d; want server exit code 9", code)
 	}
+}
+
+func TestRuntimeLaunchPolicyUsesActiveDetectedProviders(t *testing.T) {
+	registry := llm.NewRegistry()
+	claude := &stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true}
+	codex := &stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true}
+	missing := &stubProvider{name: "missing", models: []string{"missing-model"}, hasCLI: false}
+	registry.Register(claude)
+	registry.Register(codex)
+	registry.Register(missing)
+	registry.RestrictToProviders([]llm.LLMProvider{codex})
+
+	got := runtimeLaunchPolicy(registry, true)
+	want := serverruntime.NewLaunchPolicy([]string{"codex"}, true)
+	if !slices.Equal(got.Providers, want.Providers) {
+		t.Fatalf("runtimeLaunchPolicy().Providers = %v; want %v", got.Providers, want.Providers)
+	}
+	if got.DangerouslySkipPermissions != want.DangerouslySkipPermissions {
+		t.Fatalf("runtimeLaunchPolicy().DangerouslySkipPermissions = %v; want %v", got.DangerouslySkipPermissions, want.DangerouslySkipPermissions)
+	}
+	if got.Resolved != want.Resolved {
+		t.Fatalf("runtimeLaunchPolicy().Resolved = %v; want %v", got.Resolved, want.Resolved)
+	}
+}
+
+func TestDefaultLaunchAttachesToHealthyDiscoveredServer(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, true)
+	baseURL := "http://127.0.0.1:7654"
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:                 configPath,
+		StateDir:                   stateDir,
+		DangerouslySkipPermissions: true,
+		EnabledProviders:           []string{"codex"},
+		WaitForReadyPollInterval:   time.Millisecond,
+		WaitForReadyTimeout:        25 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
+			if gotIdentity != identity {
+				t.Fatalf("identity = %+v; want %+v", gotIdentity, identity)
+			}
+			if !slices.Equal(gotPolicy.Providers, policy.Providers) || gotPolicy.DangerouslySkipPermissions != policy.DangerouslySkipPermissions {
+				t.Fatalf("policy = %+v; want %+v", gotPolicy, policy)
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         "matching healthy server",
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			t.Fatal("StartServer called for healthy discovery")
+			return nil, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if launched.BaseURL != baseURL {
+		t.Fatalf("client BaseURL = %q; want %q", launched.BaseURL, baseURL)
+	}
+	if launched.OwnedServer {
+		t.Fatal("OwnedServer = true; want false for pre-existing server")
+	}
+}
+
+func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
+	baseURL := "http://127.0.0.1:7655"
+	var started serverStartRequest
+	var launched defaultClientLaunch
+	prepareCalls := 0
+	process := &fakeServerProcess{}
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{"codex"},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: "stale discovery"}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         "matching healthy server",
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+				},
+			}, nil
+		},
+		StartServer: func(ctx context.Context, req serverStartRequest) (serverProcess, error) {
+			started = req
+			return process, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if started.ConfigPath != configPath || started.StateDir != stateDir {
+		t.Fatalf("server start request = %+v; want runtime paths", started)
+	}
+	if !slices.Equal(started.EnabledProviders, []string{"codex"}) {
+		t.Fatalf("server providers = %v; want [codex]", started.EnabledProviders)
+	}
+	if launched.BaseURL != baseURL || !launched.OwnedServer {
+		t.Fatalf("client launch = %+v; want owned child server at %s", launched, baseURL)
+	}
+	if process.stopCalls != 0 {
+		t.Fatalf("server stop calls = %d; want 0 when client exits normally", process.stopCalls)
+	}
+	if prepareCalls < 2 {
+		t.Fatalf("PrepareDiscovery calls = %d; want initial stale plus readiness", prepareCalls)
+	}
+}
+
+func TestDefaultLaunchReportsServerReadinessTimeout(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
+	process := &fakeServerProcess{}
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{"codex"},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(ctx context.Context, req defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			return serverruntime.DiscoveryDecision{Replace: true, Reason: "stale discovery"}, nil
+		},
+		StartServer: func(ctx context.Context, req serverStartRequest) (serverProcess, error) {
+			return process, nil
+		},
+		LaunchClient: func(context.Context, defaultClientLaunch) error {
+			t.Fatal("LaunchClient called before readiness")
+			return nil
+		},
+	})
+	if err == nil {
+		t.Fatal("launchDefaultClientServer() error = nil; want readiness timeout")
+	}
+	if !strings.Contains(err.Error(), "server readiness timed out") {
+		t.Fatalf("error = %q; want readiness timeout", err.Error())
+	}
+	if process.stopCalls != 1 {
+		t.Fatalf("server stop calls = %d; want child cleanup on readiness failure", process.stopCalls)
+	}
+}
+
+func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
+	baseURL := "http://127.0.0.1:7656"
+	process := &fakeServerProcess{pid: 4242}
+	prepareCalls := 0
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{"codex"},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: "no discovery record"}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         "matching healthy server",
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+					PID:          process.pid,
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			return process, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if launched.BaseURL != baseURL || !launched.OwnedServer || launched.Server != process {
+		t.Fatalf("client launch = %+v; want owned child server pid %d", launched, process.pid)
+	}
+	if process.stopCalls != 0 {
+		t.Fatalf("server stop calls = %d; want owned child retained for TUI quit authority", process.stopCalls)
+	}
+}
+
+func TestDefaultLaunchTreatsReadinessFromDifferentPIDAsAttached(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
+	baseURL := "http://127.0.0.1:7657"
+	process := &fakeServerProcess{pid: 1111}
+	prepareCalls := 0
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{"codex"},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: "stale discovery"}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         "matching healthy server",
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+					PID:          2222,
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			return process, nil
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if launched.BaseURL != baseURL || launched.OwnedServer || launched.Server != nil {
+		t.Fatalf("client launch = %+v; want attached pre-existing server", launched)
+	}
+	if process.stopCalls != 1 {
+		t.Fatalf("server stop calls = %d; want losing child cleaned up", process.stopCalls)
+	}
+}
+
+func TestDefaultLaunchConvergesAfterLiveOwnerLockContention(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
+	baseURL := "http://127.0.0.1:7658"
+	owner := instancelock.Owner{PID: 9999, StateDir: stateDir, Config: configPath, Version: "test"}
+	prepareCalls := 0
+	startCalls := 0
+	var launched defaultClientLaunch
+
+	err := launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{"codex"},
+		WaitForReadyPollInterval: time.Millisecond,
+		WaitForReadyTimeout:      50 * time.Millisecond,
+	}, defaultLaunchDeps{
+		ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+			return policy, nil
+		},
+		PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+			prepareCalls++
+			if prepareCalls == 1 {
+				return serverruntime.DiscoveryDecision{Replace: true, Reason: "stale discovery"}, nil
+			}
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Reason:         "matching healthy server",
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      baseURL,
+					Runtime:      identity,
+					LaunchPolicy: policy,
+					PID:          owner.PID,
+					Owner:        owner,
+				},
+			}, nil
+		},
+		StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+			startCalls++
+			return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
+		},
+		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+			launched = launch
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("launchDefaultClientServer() error = %v", err)
+	}
+	if startCalls != 1 {
+		t.Fatalf("StartServer calls = %d; want one losing start attempt", startCalls)
+	}
+	if launched.BaseURL != baseURL || launched.OwnedServer || launched.Server != nil {
+		t.Fatalf("client launch = %+v; want attached live-owner server", launched)
+	}
+}
+
+func TestDefaultLaunchConcurrentStaleRepairStartsOneOwnedServer(t *testing.T) {
+	testDefaultLaunchConcurrentConvergence(t, "stale discovery", "http://127.0.0.1:7659")
+}
+
+func TestDefaultLaunchConcurrentColdStartStartsOneOwnedServer(t *testing.T) {
+	testDefaultLaunchConcurrentConvergence(t, "no discovery record", "http://127.0.0.1:7660")
+}
+
+func testDefaultLaunchConcurrentConvergence(t *testing.T, initialReason, baseURL string) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
+	owner := instancelock.Owner{PID: 31337, StateDir: stateDir, Config: configPath, Version: "test"}
+	process := &fakeServerProcess{pid: owner.PID}
+
+	var mu sync.Mutex
+	started := false
+	ready := false
+	var launches []defaultClientLaunch
+	runLaunch := func() error {
+		return launchDefaultClientServer(context.Background(), defaultLaunchRequest{
+			ConfigPath:               configPath,
+			StateDir:                 stateDir,
+			EnabledProviders:         []string{"codex"},
+			WaitForReadyPollInterval: time.Millisecond,
+			WaitForReadyTimeout:      100 * time.Millisecond,
+		}, defaultLaunchDeps{
+			ResolvePolicy: func(context.Context, defaultLaunchRequest) (serverruntime.LaunchPolicy, error) {
+				return policy, nil
+			},
+			PrepareDiscovery: func(context.Context, string, serverruntime.RuntimeIdentity, serverruntime.LaunchPolicy, *http.Client) (serverruntime.DiscoveryDecision, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if !ready {
+					return serverruntime.DiscoveryDecision{Replace: true, Reason: initialReason}, nil
+				}
+				return serverruntime.DiscoveryDecision{
+					AlreadyRunning: true,
+					Reason:         "matching healthy server",
+					Record: serverruntime.DiscoveryRecord{
+						BaseURL:      baseURL,
+						Runtime:      identity,
+						LaunchPolicy: policy,
+						PID:          owner.PID,
+						Owner:        owner,
+					},
+				}, nil
+			},
+			StartServer: func(context.Context, serverStartRequest) (serverProcess, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				if started {
+					return nil, runtimeLockBusyError{stateDir: stateDir, owner: owner}
+				}
+				started = true
+				ready = true
+				return process, nil
+			},
+			LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
+				mu.Lock()
+				defer mu.Unlock()
+				launches = append(launches, launch)
+				return nil
+			},
+		})
+	}
+	errCh := make(chan error, 2)
+	go func() { errCh <- runLaunch() }()
+	go func() { errCh <- runLaunch() }()
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatalf("launch %d error = %v", i+1, err)
+		}
+	}
+	if len(launches) != 2 {
+		t.Fatalf("launches = %d; want 2", len(launches))
+	}
+	owned := 0
+	for _, launch := range launches {
+		if launch.BaseURL != baseURL {
+			t.Fatalf("launch BaseURL = %q; want %q", launch.BaseURL, baseURL)
+		}
+		if launch.OwnedServer {
+			owned++
+		}
+	}
+	if owned != 1 {
+		t.Fatalf("owned launches = %d; want exactly one owner", owned)
+	}
+}
+
+type fakeServerProcess struct {
+	stopCalls int
+	stopErr   error
+	pid       int
+}
+
+func (p *fakeServerProcess) Stop(context.Context) error {
+	p.stopCalls++
+	return p.stopErr
+}
+
+func (p *fakeServerProcess) PID() int {
+	return p.pid
 }
 
 func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {

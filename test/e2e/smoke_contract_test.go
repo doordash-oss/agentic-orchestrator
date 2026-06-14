@@ -25,26 +25,56 @@ import (
 )
 
 var expectedTUISmokeTests = []string{
+	"TestConcurrentPlainAgenticoColdStart",
+	"TestConcurrentPlainAgenticoStaleDiscoveryRepair",
 	"TestDashboardRendersEmptyState",
 	"TestDashboardShowsFeature",
 	"TestDefaultCommandLaunchesDirectTUI",
 	"TestFreshFeatureSkeletonInvariants",
+	"TestLauncherFailureClassification",
 	"TestMediumWizardGateProjectionSmoke",
 	"TestNeedUserInputPauseResumeSmoke",
+	"TestPlainAgenticoCLIRouting",
+	"TestPlainAgenticoReusePolicyMismatch",
+	"TestPreCutoverRuntimeCompatibility",
 	"TestTUI_ConcurrentFeatures",
 	"TestTUI_FeatureFailsMidChain",
 	"TestTUI_HelpInputBlocking",
 	"TestTUI_PermissionPromptSurfaced",
+	"TestTUIReconnectSnapshotRecovery",
 	"TestTUI_SessionCrashInterrupted",
 }
 
 func TestDefaultCommandLaunchesDirectTUI(t *testing.T) {
-	cmd := exec.Command("go", "test", "./cmd/agentico", "-run", "^TestRunArgsLaunchesTUIByDefault$", "-count=1")
-	cmd.Dir = filepath.Join("..", "..")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("default launch router regression failed: %v\n%s", err, out)
-	}
+	runRepoGoTest(t, "./cmd/agentico", "^TestRunArgsLaunchesClientServerByDefault$")
+}
+
+func TestConcurrentPlainAgenticoColdStart(t *testing.T) {
+	runRepoGoTest(t, "./cmd/agentico", "^TestDefaultLaunchConcurrentColdStartStartsOneOwnedServer$")
+}
+
+func TestConcurrentPlainAgenticoStaleDiscoveryRepair(t *testing.T) {
+	runRepoGoTest(t, "./cmd/agentico", "^TestDefaultLaunchConcurrentStaleRepairStartsOneOwnedServer$")
+}
+
+func TestLauncherFailureClassification(t *testing.T) {
+	runRepoGoTest(t, "./cmd/agentico", "^Test(DefaultLaunchReportsServerReadinessTimeout|ServerBootstrapRejectsHeldInstanceLock)$")
+}
+
+func TestPlainAgenticoReusePolicyMismatch(t *testing.T) {
+	runRepoGoTest(t, "./internal/server", "^TestPrepareDiscoveryRequiresPolicyEquivalentHealthyServer$")
+}
+
+func TestTUIReconnectSnapshotRecovery(t *testing.T) {
+	runRepoGoTest(t, "./internal/tui", "^TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection$")
+}
+
+func TestPlainAgenticoCLIRouting(t *testing.T) {
+	runRepoGoTest(t, "./cmd/agentico", "^Test(RunArgsLaunchesClientServerByDefault|RunArgsPassesRetainedLaunchFlags|RunArgsDispatchesServerToSeam|ParseLaunchArgsServerSurface|ParseLaunchArgsRejectsRemovedSurface)$")
+}
+
+func TestPreCutoverRuntimeCompatibility(t *testing.T) {
+	runRepoGoTest(t, "./cmd/agentico", "^TestPickRuntimeParent$")
 }
 
 func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
@@ -117,6 +147,19 @@ func e2eSmokeRunTargets(t *testing.T, script string) map[string]bool {
 		targets[match[1]] = true
 	}
 	return targets
+}
+
+func runRepoGoTest(t *testing.T, pkg, run string) {
+	t.Helper()
+	cmd := exec.Command("go", "test", pkg, "-run", run, "-count=1")
+	cmd.Dir = filepath.Join("..", "..")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go test %s -run %s failed: %v\n%s", pkg, run, err, out)
+	}
+	if strings.Contains(string(out), "[no tests to run]") {
+		t.Fatalf("go test %s -run %s matched no tests:\n%s", pkg, run, out)
+	}
 }
 
 func e2eTestNames(t *testing.T) map[string]bool {

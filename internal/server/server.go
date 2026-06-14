@@ -42,6 +42,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	baseURL := "http://" + ln.Addr().String()
 	handler := newAPIHandler(HandlerOptions{
 		Runtime:        opts.Runtime,
+		LaunchPolicy:   opts.LaunchPolicy,
 		StartedAt:      startedAt,
 		Features:       opts.Features,
 		FeatureStore:   opts.FeatureStore,

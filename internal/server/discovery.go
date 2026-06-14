@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -100,7 +101,15 @@ func PublishDiscovery(runtimeDir string, rec DiscoveryRecord) error {
 	return nil
 }
 
-func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeIdentity, client *http.Client) (DiscoveryDecision, error) {
+func NewLaunchPolicy(enabledProviders []string, dangerouslySkipPerms bool) LaunchPolicy {
+	return LaunchPolicy{
+		Resolved:                   true,
+		Providers:                  normalizePolicyProviders(enabledProviders),
+		DangerouslySkipPermissions: dangerouslySkipPerms,
+	}
+}
+
+func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeIdentity, policy LaunchPolicy, client *http.Client) (DiscoveryDecision, error) {
 	path := DiscoveryPath(runtimeDir)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return DiscoveryDecision{}, nil
@@ -120,10 +129,20 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 	if rec.APIVersion != APIVersion || rec.Runtime != identity {
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery runtime", Record: rec}, nil
 	}
-	if discoveryHealthMatches(ctx, client, rec.BaseURL, identity) {
-		return DiscoveryDecision{AlreadyRunning: true, Reason: "matching healthy server", Record: rec}, nil
+	if !launchPolicyEquivalent(policy, rec.LaunchPolicy) {
+		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery policy", Record: rec}, nil
 	}
-	return DiscoveryDecision{Replace: true, Reason: "stale discovery", Record: rec}, nil
+	health, ok := discoveryHealth(ctx, client, rec.BaseURL)
+	if !ok {
+		return DiscoveryDecision{Replace: true, Reason: "stale discovery", Record: rec}, nil
+	}
+	if health.Runtime != identity {
+		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery runtime", Record: rec}, nil
+	}
+	if !launchPolicyEquivalent(policy, health.LaunchPolicy) {
+		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery policy", Record: rec}, nil
+	}
+	return DiscoveryDecision{AlreadyRunning: true, Reason: "matching healthy server", Record: rec}, nil
 }
 
 func validateDiscoveryFileSecurity(path string) error {
@@ -165,11 +184,6 @@ func discoveryHealthOK(ctx context.Context, client *http.Client, baseURL string)
 	return ok
 }
 
-func discoveryHealthMatches(ctx context.Context, client *http.Client, baseURL string, identity RuntimeIdentity) bool {
-	health, ok := discoveryHealth(ctx, client, baseURL)
-	return ok && health.Runtime == identity
-}
-
 func discoveryHealth(ctx context.Context, client *http.Client, baseURL string) (HealthResponse, bool) {
 	if client == nil {
 		client = &http.Client{Timeout: time.Second}
@@ -194,4 +208,42 @@ func discoveryHealth(ctx context.Context, client *http.Client, baseURL string) (
 		return HealthResponse{}, false
 	}
 	return health, true
+}
+
+func launchPolicyEquivalent(a, b LaunchPolicy) bool {
+	if !a.Resolved || !b.Resolved {
+		return false
+	}
+	if a.DangerouslySkipPermissions != b.DangerouslySkipPermissions {
+		return false
+	}
+	ap := normalizePolicyProviders(a.Providers)
+	bp := normalizePolicyProviders(b.Providers)
+	if len(ap) != len(bp) {
+		return false
+	}
+	for i := range ap {
+		if ap[i] != bp[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizePolicyProviders(providers []string) []string {
+	if providers == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, provider := range providers {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if provider == "" || seen[provider] {
+			continue
+		}
+		seen[provider] = true
+		out = append(out, provider)
+	}
+	sort.Strings(out)
+	return out
 }

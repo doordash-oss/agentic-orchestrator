@@ -166,6 +166,23 @@ func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
 		t.Fatalf("feature config original checkpoints = %+v; want medium-normalized persisted checkpoints", checkpoints)
 	}
 	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	asks := prompts["ask_user_questions"].([]any)
+	if len(asks) != 1 {
+		t.Fatalf("ask_user_questions length = %d; want 1", len(asks))
+	}
+	ask := asks[0].(map[string]any)
+	questions := ask["questions"].([]any)
+	if len(questions) != 1 {
+		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
+	}
+	question := questions[0].(map[string]any)
+	if question["question"] != "Choose?" {
+		t.Fatalf("ask_user question = %v; want Choose?", question["question"])
+	}
+	options := question["options"].([]any)
+	if len(options) != 1 || options[0].(map[string]any)["label"] != "A" {
+		t.Fatalf("ask_user options = %+v; want sanitized option A", options)
+	}
 	gates := prompts["need_user_inputs"].([]any)
 	if len(gates) != 1 {
 		t.Fatalf("need_user_inputs length = %d; want 1", len(gates))

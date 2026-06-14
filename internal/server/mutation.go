@@ -15,6 +15,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const MaxMutationBodyBytes = 64 * 1024
@@ -65,6 +67,8 @@ type MutationTarget interface {
 	MarkDone(featureID string) (OperationResult, error)
 	CleanupFeature(featureID string, req CleanupActionRequest) (OperationResult, error)
 	DeleteFeature(featureID string) (OperationResult, error)
+	ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error)
+	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (OperationResult, error)
 }
 
 type OperationResult struct {
@@ -603,6 +607,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 	case "/api/v1/config/runtime":
 		return []string{http.MethodPatch, http.MethodPut}, true
 	case "/api/v1/permissions/answer":
+		return []string{http.MethodPost}, true
+	case "/api/v1/recovery/actions":
 		return []string{http.MethodPost}, true
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send":
 		return []string{http.MethodPost}, true

@@ -734,7 +734,7 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 	if req == nil {
 		return ControlRequestDTO{}
 	}
-	return ControlRequestDTO{
+	dto := ControlRequestDTO{
 		RequestID: req.RequestID,
 		SessionID: sess.ID(),
 		FeatureID: sess.FeatureID(),
@@ -743,6 +743,10 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 		Status:    "pending",
 		Summary:   safeControlSummary(req),
 	}
+	if req.Request.ToolName == "AskUserQuestion" {
+		dto.Questions = safeAskUserQuestions(req)
+	}
+	return dto
 }
 
 func safeControlSummary(req *llm.ControlRequestMessage) string {
@@ -766,6 +770,51 @@ func safeControlSummary(req *llm.ControlRequestMessage) string {
 		return "user input requested"
 	}
 	return safeDisplayText(req.Request.ToolName+" requested", 180)
+}
+
+func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {
+	if req == nil || req.Request.ToolName != "AskUserQuestion" {
+		return nil
+	}
+	var envelope struct {
+		Questions []struct {
+			Question    string `json:"question"`
+			Header      string `json:"header"`
+			MultiSelect bool   `json:"multiSelect"`
+			Options     []struct {
+				Label       string   `json:"label"`
+				Description string   `json:"description"`
+				Confidence  *float64 `json:"confidence"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(req.Request.Input, &envelope); err != nil || len(envelope.Questions) == 0 {
+		return nil
+	}
+	questions := make([]AskUserQuestionDTO, 0, len(envelope.Questions))
+	for _, rawQuestion := range envelope.Questions {
+		question := AskUserQuestionDTO{
+			Question:    safeDisplayText(rawQuestion.Question, 180),
+			Header:      safeDisplayText(rawQuestion.Header, 120),
+			MultiSelect: rawQuestion.MultiSelect,
+		}
+		for _, rawOption := range rawQuestion.Options {
+			option := AskUserOptionDTO{
+				Label:       safeDisplayText(rawOption.Label, 120),
+				Description: safeDisplayText(rawOption.Description, 180),
+				Confidence:  rawOption.Confidence,
+			}
+			if option.Label == "" && option.Description == "" && option.Confidence == nil {
+				continue
+			}
+			question.Options = append(question.Options, option)
+		}
+		if question.Question == "" && question.Header == "" && len(question.Options) == 0 {
+			continue
+		}
+		questions = append(questions, question)
+	}
+	return questions
 }
 
 func validOperationState(state string) bool {

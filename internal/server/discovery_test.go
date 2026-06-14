@@ -36,11 +36,13 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 		StateDir:   filepath.Join(runtimeDir, "features"),
 		Config:     filepath.Join(runtimeDir, "config.yaml"),
 	}
+	policy := NewLaunchPolicy([]string{"codex"}, true)
 	srv, err := Start(context.Background(), Options{
-		Runtime:   identity,
-		StartMode: "server",
-		Owner:     instancelock.Owner{PID: os.Getpid(), StartedAt: time.Now()},
-		Features:  featureListerFunc(nil),
+		Runtime:      identity,
+		LaunchPolicy: policy,
+		StartMode:    "server",
+		Owner:        instancelock.Owner{PID: os.Getpid(), StartedAt: time.Now()},
+		Features:     featureListerFunc(nil),
 	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -75,6 +77,9 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 	}
 	if body.Runtime.StateDir != identity.StateDir {
 		t.Fatalf("health runtime state_dir = %q; want %q", body.Runtime.StateDir, identity.StateDir)
+	}
+	if !launchPolicyEquivalent(body.LaunchPolicy, policy) {
+		t.Fatalf("health launch_policy = %+v; want %+v", body.LaunchPolicy, policy)
 	}
 }
 
@@ -131,11 +136,13 @@ func TestPrepareDiscoveryRejectsNonLoopbackWithoutProbe(t *testing.T) {
 		StateDir:   filepath.Join(runtimeDir, "features"),
 		Config:     filepath.Join(runtimeDir, "config.yaml"),
 	}
+	policy := NewLaunchPolicy(nil, false)
 	rec := DiscoveryRecord{
 		SchemaVersion: 1,
 		APIVersion:    APIVersion,
 		BaseURL:       "http://192.0.2.20:4567",
 		Runtime:       identity,
+		LaunchPolicy:  policy,
 		StartMode:     "server",
 	}
 	if err := PublishDiscovery(runtimeDir, rec); err != nil {
@@ -146,7 +153,7 @@ func TestPrepareDiscoveryRejectsNonLoopbackWithoutProbe(t *testing.T) {
 		return nil, errors.New("unreachable")
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -166,11 +173,13 @@ func TestPrepareDiscoveryRejectsUnsafePermissionsWithoutProbe(t *testing.T) {
 		StateDir:   filepath.Join(runtimeDir, "features"),
 		Config:     filepath.Join(runtimeDir, "config.yaml"),
 	}
+	policy := NewLaunchPolicy(nil, false)
 	if err := PublishDiscovery(runtimeDir, DiscoveryRecord{
 		SchemaVersion: 1,
 		APIVersion:    APIVersion,
 		BaseURL:       "http://127.0.0.1:4567",
 		Runtime:       identity,
+		LaunchPolicy:  policy,
 		StartMode:     "server",
 	}); err != nil {
 		t.Fatalf("PublishDiscovery() error = %v", err)
@@ -183,7 +192,7 @@ func TestPrepareDiscoveryRejectsUnsafePermissionsWithoutProbe(t *testing.T) {
 		return nil, errors.New("unreachable")
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -203,11 +212,13 @@ func TestPrepareDiscoveryClassifiesHealthyMatchingServer(t *testing.T) {
 		StateDir:   filepath.Join(runtimeDir, "features"),
 		Config:     filepath.Join(runtimeDir, "config.yaml"),
 	}
+	policy := NewLaunchPolicy(nil, false)
 	rec := DiscoveryRecord{
 		SchemaVersion: 1,
 		APIVersion:    APIVersion,
 		BaseURL:       "http://127.0.0.1:4567",
 		Runtime:       identity,
+		LaunchPolicy:  policy,
 		StartMode:     "server",
 	}
 	if err := PublishDiscovery(runtimeDir, rec); err != nil {
@@ -215,18 +226,108 @@ func TestPrepareDiscoveryClassifiesHealthyMatchingServer(t *testing.T) {
 	}
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusOK, HealthResponse{
-			APIVersion: APIVersion,
-			Status:     "ok",
-			Runtime:    identity,
+			APIVersion:   APIVersion,
+			Status:       "ok",
+			Runtime:      identity,
+			LaunchPolicy: policy,
 		})
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
 	if !decision.AlreadyRunning || decision.Replace {
 		t.Fatalf("decision = %+v; want already running", decision)
+	}
+}
+
+func TestPrepareDiscoveryRequiresPolicyEquivalentHealthyServer(t *testing.T) {
+	t.Parallel()
+	runtimeDir := t.TempDir()
+	identity := RuntimeIdentity{
+		RuntimeDir: runtimeDir,
+		StateDir:   filepath.Join(runtimeDir, "features"),
+		Config:     filepath.Join(runtimeDir, "config.yaml"),
+	}
+	policy := NewLaunchPolicy([]string{"codex"}, true)
+
+	tests := []struct {
+		name         string
+		recordPolicy LaunchPolicy
+		healthPolicy LaunchPolicy
+		wantReason   string
+	}{
+		{
+			name:         "provider restriction differs in discovery",
+			recordPolicy: NewLaunchPolicy([]string{"claude"}, true),
+			healthPolicy: policy,
+			wantReason:   "mismatched discovery policy",
+		},
+		{
+			name:         "dangerous skip differs in discovery",
+			recordPolicy: NewLaunchPolicy([]string{"codex"}, false),
+			healthPolicy: policy,
+			wantReason:   "mismatched discovery policy",
+		},
+		{
+			name:         "provider restriction differs in health",
+			recordPolicy: policy,
+			healthPolicy: NewLaunchPolicy([]string{"claude"}, true),
+			wantReason:   "mismatched discovery policy",
+		},
+		{
+			name:         "dangerous skip differs in health",
+			recordPolicy: policy,
+			healthPolicy: NewLaunchPolicy([]string{"codex"}, false),
+			wantReason:   "mismatched discovery policy",
+		},
+		{
+			name:         "unverifiable policy in existing discovery",
+			recordPolicy: LaunchPolicy{},
+			healthPolicy: policy,
+			wantReason:   "mismatched discovery policy",
+		},
+		{
+			name:         "unverifiable policy in health",
+			recordPolicy: policy,
+			healthPolicy: LaunchPolicy{},
+			wantReason:   "mismatched discovery policy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := PublishDiscovery(runtimeDir, DiscoveryRecord{
+				SchemaVersion: 1,
+				APIVersion:    APIVersion,
+				BaseURL:       "http://127.0.0.1:4567",
+				Runtime:       identity,
+				LaunchPolicy:  tt.recordPolicy,
+				StartMode:     "server",
+			}); err != nil {
+				t.Fatalf("PublishDiscovery() error = %v", err)
+			}
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return jsonResponse(http.StatusOK, HealthResponse{
+					APIVersion:   APIVersion,
+					Status:       "ok",
+					Runtime:      identity,
+					LaunchPolicy: tt.healthPolicy,
+				})
+			})}
+
+			decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+			if err != nil {
+				t.Fatalf("PrepareDiscovery() error = %v", err)
+			}
+			if decision.AlreadyRunning || !decision.Replace {
+				t.Fatalf("PrepareDiscovery() = %+v; want replacement", decision)
+			}
+			if !strings.Contains(decision.Reason, tt.wantReason) {
+				t.Fatalf("PrepareDiscovery() reason = %q; want %q", decision.Reason, tt.wantReason)
+			}
+		})
 	}
 }
 
@@ -238,11 +339,13 @@ func TestPrepareDiscoveryReplacesHealthyWrongRuntime(t *testing.T) {
 		StateDir:   filepath.Join(runtimeDir, "features"),
 		Config:     filepath.Join(runtimeDir, "config.yaml"),
 	}
+	policy := NewLaunchPolicy(nil, false)
 	rec := DiscoveryRecord{
 		SchemaVersion: 1,
 		APIVersion:    APIVersion,
 		BaseURL:       "http://127.0.0.1:4567",
 		Runtime:       identity,
+		LaunchPolicy:  policy,
 		StartMode:     "server",
 	}
 	if err := PublishDiscovery(runtimeDir, rec); err != nil {
@@ -252,13 +355,14 @@ func TestPrepareDiscoveryReplacesHealthyWrongRuntime(t *testing.T) {
 	otherRuntime.StateDir = filepath.Join(runtimeDir, "other-features")
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return jsonResponse(http.StatusOK, HealthResponse{
-			APIVersion: APIVersion,
-			Status:     "ok",
-			Runtime:    otherRuntime,
+			APIVersion:   APIVersion,
+			Status:       "ok",
+			Runtime:      otherRuntime,
+			LaunchPolicy: policy,
 		})
 	})}
 
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery() error = %v", err)
 	}
@@ -275,6 +379,7 @@ func TestPrepareDiscoveryReplacesStaleAndMismatchedRecords(t *testing.T) {
 		StateDir:   filepath.Join(runtimeDir, "features"),
 		Config:     filepath.Join(runtimeDir, "config.yaml"),
 	}
+	policy := NewLaunchPolicy(nil, false)
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	})}
@@ -284,11 +389,12 @@ func TestPrepareDiscoveryReplacesStaleAndMismatchedRecords(t *testing.T) {
 		APIVersion:    APIVersion,
 		BaseURL:       "http://127.0.0.1:4567",
 		Runtime:       identity,
+		LaunchPolicy:  policy,
 		StartMode:     "server",
 	}); err != nil {
 		t.Fatalf("PublishDiscovery(stale) error = %v", err)
 	}
-	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, client)
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery(stale) error = %v", err)
 	}
@@ -303,11 +409,12 @@ func TestPrepareDiscoveryReplacesStaleAndMismatchedRecords(t *testing.T) {
 		APIVersion:    APIVersion,
 		BaseURL:       "http://127.0.0.1:4567",
 		Runtime:       otherRuntime,
+		LaunchPolicy:  policy,
 		StartMode:     "server",
 	}); err != nil {
 		t.Fatalf("PublishDiscovery(mismatch) error = %v", err)
 	}
-	decision, err = PrepareDiscovery(context.Background(), runtimeDir, identity, client)
+	decision, err = PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
 	if err != nil {
 		t.Fatalf("PrepareDiscovery(mismatch) error = %v", err)
 	}

@@ -32,6 +32,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 func TestOperationRegistryPersistsPaginatesFiltersAndRedacts(t *testing.T) {
@@ -551,6 +552,128 @@ func TestMutationCORSRejectsNonLoopbackAndDoesNotOpenReadRoutes(t *testing.T) {
 		t.Fatalf("SSE status = %d; want 200", sseResp.StatusCode)
 	}
 	assertNoAccessControlHeaders(t, sseResp.Header)
+}
+
+func TestReadAndSSECORSContract(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	handler := NewHandler(HandlerOptions{
+		Runtime: RuntimeIdentity{
+			RuntimeDir: filepath.Dir(stateDir),
+			StateDir:   stateDir,
+			Config:     filepath.Join(filepath.Dir(stateDir), "config.yaml"),
+		},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  &fakeMutationTarget{},
+	})
+
+	for _, origin := range []string{"http://localhost:5173", "http://127.0.0.1:5173", "https://evil.example"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+		req.Header.Set("Origin", origin)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET /api/v1/features with Origin %q status = %d; want 200", origin, resp.StatusCode)
+		}
+		assertNoAccessControlHeaders(t, resp.Header)
+		_ = resp.Body.Close()
+	}
+
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/events?heartbeat_ms=10000", nil)
+	if err != nil {
+		t.Fatalf("NewRequest SSE: %v", err)
+	}
+	req.Header.Set("Origin", "http://localhost:5173")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET SSE: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("SSE status = %d; want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/event-stream") {
+		t.Fatalf("SSE Content-Type = %q; want text/event-stream", got)
+	}
+	assertNoAccessControlHeaders(t, resp.Header)
+}
+
+func TestRecoverySnapshotAndActionUseCachedServerSnapshot(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	recoveryFeature := &feature.Feature{
+		ID:     "feat-recover",
+		Name:   "Recover me",
+		Slug:   "recover-me",
+		Status: feature.StatusImplementing,
+		Repos:  []feature.FeatureRepo{{Name: "api"}, {Name: "web"}},
+	}
+	mutations := &fakeMutationTarget{
+		recoveryItems: []ports.RecoveryItem{{
+			PIDFile: ports.PIDFile{
+				PID:         12345,
+				FeatureID:   "feat-recover",
+				Phase:       "implement",
+				Iteration:   7,
+				RepoName:    "api",
+				Dir:         "/private/runtime/features/feat-recover",
+				WorktreeDir: "/private/worktree",
+			},
+			ProcessAlive: true,
+			Feature:      recoveryFeature,
+			RepoName:     "api",
+		}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  mutations,
+	})
+
+	snapshot := getJSONMap(t, handler, "/api/v1/recovery")
+	if snapshot["api_version"] != APIVersion {
+		t.Fatalf("recovery api_version = %v; want %s", snapshot["api_version"], APIVersion)
+	}
+	snapshotID, _ := snapshot["snapshot_id"].(string)
+	if snapshotID == "" {
+		t.Fatalf("snapshot_id is empty in %+v", snapshot)
+	}
+	rawSnapshot := mustMarshalJSON(t, snapshot)
+	for _, leaked := range []string{"/private/runtime", "/private/worktree"} {
+		if strings.Contains(rawSnapshot, leaked) {
+			t.Fatalf("recovery snapshot leaked %q in %s", leaked, rawSnapshot)
+		}
+	}
+	items := snapshot["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("recovery items length = %d; want 1", len(items))
+	}
+	item := items[0].(map[string]any)
+	if item["key"] != "feat-recover:api" || item["feature_name"] != "Recover me" || item["repo_name"] != "api" || item["phase"] != "implement" {
+		t.Fatalf("recovery item = %+v; want safe repo-scoped DTO", item)
+	}
+	if item["default_action"] != "skip" {
+		t.Fatalf("default action = %v; want skip", item["default_action"])
+	}
+
+	body := `{"snapshot_id":"` + snapshotID + `","actions":{"feat-recover:api":"resume"}}`
+	accepted := requestTrustedMutationStatus(t, handler, "/api/v1/recovery/actions", body, http.StatusAccepted)
+	waitForOperationStatus(t, handler, accepted["operation_id"].(string), OperationStatusSucceeded)
+
+	if got := len(mutations.recoveryExecuteItems); got != 1 {
+		t.Fatalf("ExecuteRecovery items length = %d; want cached item", got)
+	}
+	if got := mutations.recoveryExecuteItems[0].PIDFile.Dir; got != "/private/runtime/features/feat-recover" {
+		t.Fatalf("ExecuteRecovery item Dir = %q; want cached raw pid dir", got)
+	}
+	if got := mutations.recoveryExecuteActions[ports.RecoveryActionKey("feat-recover", "api")]; got != ports.RecoveryResume {
+		t.Fatalf("ExecuteRecovery action = %v; want RecoveryResume", got)
+	}
 }
 
 func TestMutationLanesConflictBackpressureAndOperationSSE(t *testing.T) {
@@ -1484,39 +1607,42 @@ func operationSnapshotContains(ops []any, id string, status OperationStatus) boo
 }
 
 type fakeMutationTarget struct {
-	mu                   sync.Mutex
-	createCalls          []CreateFeatureRequest
-	startCalls           []string
-	stopCalls            []string
-	restartCalls         []RestartFeatureRequest
-	reviewCalls          []ReviewDecisionRequest
-	featureConfigCalls   []FeatureConfigMutationRequest
-	needDecisionCalls    []NeedUserInputDecisionRequest
-	needDraftCalls       []NeedUserInputDraftRequest
-	permissionCalls      []PermissionAnswerRequest
-	askCalls             []AskUserAnswerRequest
-	helpCalls            []HelpAnswerRequest
-	runtimeConfigCalls   []RuntimeConfigMutationRequest
-	publishCalls         []PublishFeatureRequest
-	mergeCalls           []string
-	rewindCalls          []RewindFeatureRequest
-	retryCalls           []string
-	rebaseCalls          []RebaseActionRequest
-	reviewFetchCalls     []ReviewCommentsFetchRequest
-	reviewStartCalls     []ReviewCommentsActionRequest
-	tweakStartCalls      []TweakActionRequest
-	tweakFinishCalls     []TweakFinishRequest
-	refactorStartCalls   []RefactorActionRequest
-	refactorRestartCalls []RefactorActionRequest
-	markDoneCalls        []string
-	cleanupCalls         []CleanupActionRequest
-	deleteCalls          []string
-	publishResult        OperationResult
-	publishErr           error
-	startHook            func()
-	createHook           func()
-	runtimeConfigHook    func()
-	featureConfigHook    func()
+	mu                     sync.Mutex
+	createCalls            []CreateFeatureRequest
+	startCalls             []string
+	stopCalls              []string
+	restartCalls           []RestartFeatureRequest
+	reviewCalls            []ReviewDecisionRequest
+	featureConfigCalls     []FeatureConfigMutationRequest
+	needDecisionCalls      []NeedUserInputDecisionRequest
+	needDraftCalls         []NeedUserInputDraftRequest
+	permissionCalls        []PermissionAnswerRequest
+	askCalls               []AskUserAnswerRequest
+	helpCalls              []HelpAnswerRequest
+	runtimeConfigCalls     []RuntimeConfigMutationRequest
+	publishCalls           []PublishFeatureRequest
+	mergeCalls             []string
+	rewindCalls            []RewindFeatureRequest
+	retryCalls             []string
+	rebaseCalls            []RebaseActionRequest
+	reviewFetchCalls       []ReviewCommentsFetchRequest
+	reviewStartCalls       []ReviewCommentsActionRequest
+	tweakStartCalls        []TweakActionRequest
+	tweakFinishCalls       []TweakFinishRequest
+	refactorStartCalls     []RefactorActionRequest
+	refactorRestartCalls   []RefactorActionRequest
+	markDoneCalls          []string
+	cleanupCalls           []CleanupActionRequest
+	deleteCalls            []string
+	recoveryItems          []ports.RecoveryItem
+	recoveryExecuteItems   []ports.RecoveryItem
+	recoveryExecuteActions map[string]ports.RecoveryAction
+	publishResult          OperationResult
+	publishErr             error
+	startHook              func()
+	createHook             func()
+	runtimeConfigHook      func()
+	featureConfigHook      func()
 }
 
 func (f *fakeMutationTarget) CreateFeature(req CreateFeatureRequest) (OperationResult, error) {
@@ -1728,6 +1854,23 @@ func (f *fakeMutationTarget) DeleteFeature(featureID string) (OperationResult, e
 	f.deleteCalls = append(f.deleteCalls, featureID)
 	f.mu.Unlock()
 	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "deleted"}}, nil
+}
+
+func (f *fakeMutationTarget) ScanRecovery(context.Context) ([]ports.RecoveryItem, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]ports.RecoveryItem(nil), f.recoveryItems...), nil
+}
+
+func (f *fakeMutationTarget) ExecuteRecovery(_ context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (OperationResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recoveryExecuteItems = append([]ports.RecoveryItem(nil), items...)
+	f.recoveryExecuteActions = make(map[string]ports.RecoveryAction, len(actions))
+	for key, action := range actions {
+		f.recoveryExecuteActions[key] = action
+	}
+	return OperationResult{Metadata: map[string]string{"status": "recovered"}}, nil
 }
 
 var _ = bytes.Buffer{}

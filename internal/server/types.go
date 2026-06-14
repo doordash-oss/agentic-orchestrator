@@ -34,8 +34,15 @@ type RuntimeIdentity struct {
 	Config     string `json:"config_path"`
 }
 
+type LaunchPolicy struct {
+	Resolved                   bool     `json:"resolved"`
+	Providers                  []string `json:"providers,omitempty"`
+	DangerouslySkipPermissions bool     `json:"dangerously_skip_permissions"`
+}
+
 type Options struct {
 	Runtime        RuntimeIdentity
+	LaunchPolicy   LaunchPolicy
 	StartMode      string
 	Owner          instancelock.Owner
 	Features       FeatureLister
@@ -52,6 +59,7 @@ type Options struct {
 
 type HandlerOptions struct {
 	Runtime        RuntimeIdentity
+	LaunchPolicy   LaunchPolicy
 	StartedAt      time.Time
 	Features       FeatureLister
 	FeatureStore   FeatureReader
@@ -95,11 +103,12 @@ type ErrorDTO struct {
 }
 
 type HealthResponse struct {
-	APIVersion string          `json:"api_version"`
-	Status     string          `json:"status"`
-	Runtime    RuntimeIdentity `json:"runtime"`
-	StartedAt  time.Time       `json:"started_at"`
-	ServerTime time.Time       `json:"server_time"`
+	APIVersion   string          `json:"api_version"`
+	Status       string          `json:"status"`
+	Runtime      RuntimeIdentity `json:"runtime"`
+	LaunchPolicy LaunchPolicy    `json:"launch_policy"`
+	StartedAt    time.Time       `json:"started_at"`
+	ServerTime   time.Time       `json:"server_time"`
 }
 
 type FeatureListResponse struct {
@@ -248,6 +257,32 @@ type NeedInputGateDTO struct {
 	Iteration int    `json:"iteration,omitempty"`
 }
 
+type RecoverySnapshotResponse struct {
+	APIVersion string            `json:"api_version"`
+	Meta       ResponseMeta      `json:"meta"`
+	SnapshotID string            `json:"snapshot_id"`
+	Items      []RecoveryItemDTO `json:"items"`
+}
+
+type RecoveryItemDTO struct {
+	Key            string   `json:"key"`
+	FeatureID      string   `json:"feature_id"`
+	FeatureName    string   `json:"feature_name,omitempty"`
+	RepoName       string   `json:"repo_name,omitempty"`
+	Phase          string   `json:"phase,omitempty"`
+	Iteration      int      `json:"iteration,omitempty"`
+	PID            int      `json:"pid,omitempty"`
+	ProcessAlive   bool     `json:"process_alive"`
+	Tweak          bool     `json:"tweak,omitempty"`
+	DefaultAction  string   `json:"default_action"`
+	AllowedActions []string `json:"allowed_actions"`
+}
+
+type RecoveryActionRequest struct {
+	SnapshotID string            `json:"snapshot_id"`
+	Actions    map[string]string `json:"actions"`
+}
+
 type RuntimeConfigResponse struct {
 	APIVersion    string                `json:"api_version"`
 	Meta          ResponseMeta          `json:"meta"`
@@ -290,6 +325,22 @@ type FeatureConfigDTO struct {
 	Inquireness string             `json:"inquireness"`
 	Checkpoints CheckpointsDTO     `json:"checkpoints"`
 	Pipeline    string             `json:"pipeline,omitempty"`
+}
+
+func FeatureConfigMutationFromDTO(dto FeatureConfigDTO) FeatureConfigMutationRequest {
+	return FeatureConfigMutationRequest{
+		Models:      dto.Models,
+		Inquireness: dto.Inquireness,
+		Checkpoints: feature.Checkpoints{
+			InquiryReview:   dto.Checkpoints.InquiryReview,
+			ResearchReview:  dto.Checkpoints.ResearchReview,
+			DesignReview:    dto.Checkpoints.DesignReview,
+			RoadmapReview:   dto.Checkpoints.RoadmapReview,
+			PhasePlanReview: dto.Checkpoints.PhasePlanReview,
+			ManualPublish:   dto.Checkpoints.ManualPublish,
+		},
+		Pipeline: feature.PipelineProfile(dto.Pipeline),
+	}
 }
 
 type CheckpointsDTO struct {
@@ -339,13 +390,27 @@ type PermissionSnapshotResponse struct {
 }
 
 type ControlRequestDTO struct {
-	RequestID string `json:"request_id"`
-	SessionID string `json:"session_id,omitempty"`
-	FeatureID string `json:"feature_id,omitempty"`
-	Phase     string `json:"phase,omitempty"`
-	ToolName  string `json:"tool_name"`
-	Status    string `json:"status"`
-	Summary   string `json:"summary,omitempty"`
+	RequestID string               `json:"request_id"`
+	SessionID string               `json:"session_id,omitempty"`
+	FeatureID string               `json:"feature_id,omitempty"`
+	Phase     string               `json:"phase,omitempty"`
+	ToolName  string               `json:"tool_name"`
+	Status    string               `json:"status"`
+	Summary   string               `json:"summary,omitempty"`
+	Questions []AskUserQuestionDTO `json:"questions,omitempty"`
+}
+
+type AskUserQuestionDTO struct {
+	Question    string             `json:"question,omitempty"`
+	Header      string             `json:"header,omitempty"`
+	MultiSelect bool               `json:"multi_select,omitempty"`
+	Options     []AskUserOptionDTO `json:"options,omitempty"`
+}
+
+type AskUserOptionDTO struct {
+	Label       string   `json:"label,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Confidence  *float64 `json:"confidence,omitempty"`
 }
 
 type HelpQueueDTO struct {
@@ -541,6 +606,7 @@ type DiscoveryRecord struct {
 	APIVersion    string             `json:"api_version"`
 	BaseURL       string             `json:"base_url"`
 	Runtime       RuntimeIdentity    `json:"runtime"`
+	LaunchPolicy  LaunchPolicy       `json:"launch_policy"`
 	StartMode     string             `json:"start_mode"`
 	PID           int                `json:"pid"`
 	PGID          int                `json:"pgid,omitempty"`

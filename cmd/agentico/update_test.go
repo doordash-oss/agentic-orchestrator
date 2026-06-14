@@ -47,7 +47,7 @@ func failingUpdater(t *testing.T) updater {
 
 func failingServerLauncher(t *testing.T) serverLauncher {
 	t.Helper()
-	return func(string, string, bool, []string) int {
+	return func(string, string, bool, []string, bool) int {
 		t.Fatal("server seam invoked on a non-server launch path")
 		return 1
 	}
@@ -129,7 +129,10 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			var gotCheck, updateCalled, launchCalled bool
 			code := runArgs(tt.args, &stdout, &stderr,
-				func(string, string, bool, []string, bool) { launchCalled = true },
+				func(string, string, bool, []string, bool) int {
+					launchCalled = true
+					return 0
+				},
 				failingServerLauncher(t),
 				func(checkOnly bool, _, _ io.Writer) int {
 					updateCalled = true
@@ -153,16 +156,19 @@ func TestRunArgsDispatchesUpdateToSeam(t *testing.T) {
 	}
 }
 
-func TestRunArgsDefaultStillLaunchesTUINotUpdate(t *testing.T) {
+func TestRunArgsDefaultStillLaunchesClientServerNotUpdate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var launchCalled, updateCalled bool
 	code := runArgs(nil, &stdout, &stderr,
-		func(string, string, bool, []string, bool) { launchCalled = true },
+		func(string, string, bool, []string, bool) int {
+			launchCalled = true
+			return 0
+		},
 		failingServerLauncher(t),
 		func(bool, io.Writer, io.Writer) int { updateCalled = true; return 1 },
 	)
 	if !launchCalled {
-		t.Fatal("default mode must launch the TUI")
+		t.Fatal("default mode must launch the client/server flow")
 	}
 	if updateCalled {
 		t.Fatal("default mode must not invoke the update seam")

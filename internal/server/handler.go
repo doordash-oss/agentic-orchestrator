@@ -21,6 +21,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -35,6 +36,7 @@ func NewHandler(opts HandlerOptions) http.Handler {
 
 type apiHandler struct {
 	runtime    RuntimeIdentity
+	policy     LaunchPolicy
 	startedAt  time.Time
 	features   FeatureLister
 	store      FeatureReader
@@ -44,6 +46,9 @@ type apiHandler struct {
 	broker     *eventBroker
 	operations *OperationRegistry
 	mutations  *mutationExecutor
+
+	recoveryMu        sync.Mutex
+	recoverySnapshots map[string][]ports.RecoveryItem
 }
 
 func newAPIHandler(opts HandlerOptions) *apiHandler {
@@ -63,6 +68,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	}
 	handler := &apiHandler{
 		runtime:    opts.Runtime,
+		policy:     opts.LaunchPolicy,
 		startedAt:  startedAt,
 		features:   features,
 		store:      store,
@@ -92,6 +98,8 @@ func (h *apiHandler) routes() http.Handler {
 	mux.HandleFunc("/api/v1/sessions", methodHandler(http.MethodGet, h.handleSessionList))
 	mux.HandleFunc("/api/v1/sessions/", methodHandler(http.MethodGet, h.handleSessionRoutes))
 	mux.HandleFunc("/api/v1/operations", methodHandler(http.MethodGet, h.handleOperations))
+	mux.HandleFunc("/api/v1/recovery", h.handleRecoveryRoute)
+	mux.HandleFunc("/api/v1/recovery/actions", h.handleRecoveryActionRoute)
 	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.handleMutationPreflight(w, r) {
@@ -115,11 +123,12 @@ func (h *apiHandler) routes() http.Handler {
 
 func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, HealthResponse{
-		APIVersion: APIVersion,
-		Status:     "ok",
-		Runtime:    h.runtime,
-		StartedAt:  h.startedAt,
-		ServerTime: time.Now().UTC(),
+		APIVersion:   APIVersion,
+		Status:       "ok",
+		Runtime:      h.runtime,
+		LaunchPolicy: h.policy,
+		StartedAt:    h.startedAt,
+		ServerTime:   time.Now().UTC(),
 	})
 }
 

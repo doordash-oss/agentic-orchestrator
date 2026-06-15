@@ -208,12 +208,12 @@ Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first lau
 ```yaml
 defaults:
   models:
-    research: "opus[1m]"     # Model for research phase
-    planning: "opus[1m]"     # Model for planning phase
-    implementation: "opus[1m]" # Model for implementation phase
-    review: gpt-5.4          # Model for review phase (Codex)
-    utilities: sonnet        # Model for chat and utility tasks
-    kb_build: "opus[1m]"     # Model for knowledge base builds
+    research: "sonnet[200K]"     # Model for research phase
+    planning: "opus[1M]"         # Model for planning phase
+    implementation: "opus[1M]"   # Model for implementation phase
+    review: "gpt-5.4[272K]"      # Model for review phase (Codex)
+    utilities: "sonnet[200K]"    # Model for chat and utility tasks
+    kb_build: "sonnet[200K]"     # Model for knowledge base builds
   exit_criteria: |
     - Feature fully implemented per plan
     - Unit tests added/updated as needed
@@ -238,7 +238,7 @@ workspace_roots:
 
 ### Model Overrides
 
-Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus`, `codex:gpt-5.4`) or as bare names that are automatically routed to the best-matching provider.
+Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`) or as bare aliases that are automatically routed to the best-matching provider.
 
 ### Launch Flags
 

@@ -414,8 +414,8 @@ func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	})
 
 	defaults := r.DefaultModels()
-	if defaults[llm.PhaseResearch] != "claude:opus" {
-		t.Errorf("research: got %q, want %q", defaults[llm.PhaseResearch], "claude:opus")
+	if defaults[llm.PhaseResearch] != "claude:sonnet" {
+		t.Errorf("research: got %q, want %q", defaults[llm.PhaseResearch], "claude:sonnet")
 	}
 	if defaults[llm.PhaseChat] != "claude:sonnet" {
 		t.Errorf("chat: got %q, want %q", defaults[llm.PhaseChat], "claude:sonnet")
@@ -423,8 +423,8 @@ func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	if defaults[llm.PhaseReview] != "codex:codex" {
 		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "codex:codex")
 	}
-	if defaults[llm.PhaseKBBuild] != "claude:opus" {
-		t.Errorf("kb_build: got %q, want %q", defaults[llm.PhaseKBBuild], "claude:opus")
+	if defaults[llm.PhaseKBBuild] != "claude:sonnet" {
+		t.Errorf("kb_build: got %q, want %q", defaults[llm.PhaseKBBuild], "claude:sonnet")
 	}
 }
 
@@ -758,10 +758,11 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 
 		mc := r.CatalogDefaultModels()
 
-		// Research/Planning/Implementation prefer claude capable → "claude:opus"
-		if mc.Research != "claude:opus" {
-			t.Errorf("research: got %q, want %q", mc.Research, "claude:opus")
+		// Research and KB build prefer cost-efficient claude defaults → "claude:sonnet"
+		if mc.Research != "claude:sonnet" {
+			t.Errorf("research: got %q, want %q", mc.Research, "claude:sonnet")
 		}
+		// Planning/Implementation prefer claude capable → "claude:opus"
 		if mc.Planning != "claude:opus" {
 			t.Errorf("planning: got %q, want %q", mc.Planning, "claude:opus")
 		}
@@ -776,9 +777,8 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Utilities != "claude:sonnet" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "claude:sonnet")
 		}
-		// KBBuild prefers claude capable → "claude:opus"
-		if mc.KBBuild != "claude:opus" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "claude:opus")
+		if mc.KBBuild != "claude:sonnet" {
+			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "claude:sonnet")
 		}
 	})
 
@@ -792,8 +792,8 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		mc := r.CatalogDefaultModels()
 
 		// Single provider → bare names (no prefix)
-		if mc.Research != "opus" {
-			t.Errorf("research: got %q, want %q", mc.Research, "opus")
+		if mc.Research != "sonnet" {
+			t.Errorf("research: got %q, want %q", mc.Research, "sonnet")
 		}
 		if mc.Planning != "opus" {
 			t.Errorf("planning: got %q, want %q", mc.Planning, "opus")
@@ -808,8 +808,8 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Utilities != "sonnet" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "sonnet")
 		}
-		if mc.KBBuild != "opus" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "opus")
+		if mc.KBBuild != "sonnet" {
+			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "sonnet")
 		}
 	})
 
@@ -823,9 +823,9 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		mc := r.CatalogDefaultModels()
 
 		// Single provider → bare names (no prefix)
-		// Research prefers claude, but claude not available; falls back to codex capable
-		if mc.Research != "codex" {
-			t.Errorf("research: got %q, want %q", mc.Research, "codex")
+		// Research prefers claude, but claude not available; falls back to a balanced codex model
+		if mc.Research != "gpt-5.4-mini" {
+			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4-mini")
 		}
 		if mc.Planning != "codex" {
 			t.Errorf("planning: got %q, want %q", mc.Planning, "codex")
@@ -839,8 +839,32 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Utilities != "gpt-5.4-mini" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "gpt-5.4-mini")
 		}
-		if mc.KBBuild != "codex" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "codex")
+		if mc.KBBuild != "gpt-5.4-mini" {
+			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4-mini")
+		}
+	})
+
+	t.Run("codex_cost_efficient_research_and_kb_hint", func(t *testing.T) {
+		r := llm.NewRegistry()
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.5[272K]", "gpt-5.4[272K]", "gpt-5.4[1M]", "gpt-5.4-mini[400K]"}, hasCLI: true},
+			catalog: []llm.ModelInfo{
+				{ID: "gpt-5.5[272K]", Category: "capable", ContextWindow: 272000, Aliases: []string{"gpt-5.5"}},
+				{ID: "gpt-5.4[272K]", Category: "capable", ContextWindow: 272000, Aliases: []string{"gpt-5.4"}},
+				{ID: "gpt-5.4[1M]", Category: "capable", ContextWindow: 1000000},
+				{ID: "gpt-5.4-mini[400K]", Category: "balanced", ContextWindow: 400000, Aliases: []string{"gpt-5.4-mini"}},
+			},
+		})
+
+		mc := r.CatalogDefaultModels()
+		if mc.Research != "gpt-5.4[272K]" {
+			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4[272K]")
+		}
+		if mc.KBBuild != "gpt-5.4[272K]" {
+			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4[272K]")
+		}
+		if mc.Planning != "gpt-5.4[1M]" {
+			t.Errorf("planning: got %q, want most-capable %q", mc.Planning, "gpt-5.4[1M]")
 		}
 	})
 
@@ -884,9 +908,9 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		mc := r.CatalogDefaultModels()
 
 		// Multi-provider detected, so prefixes are used
-		// Research prefers claude capable → "claude:opus"
-		if mc.Research != "claude:opus" {
-			t.Errorf("research: got %q, want %q", mc.Research, "claude:opus")
+		// Research prefers cost-efficient claude defaults → "claude:sonnet"
+		if mc.Research != "claude:sonnet" {
+			t.Errorf("research: got %q, want %q", mc.Research, "claude:sonnet")
 		}
 		// Review prefers codex; codex has no catalog, so synthetic entry for "codex-model"
 		// has no category → MostCapableFrom returns it (rank 0, but still the first/only).
@@ -921,25 +945,22 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 	r.Register(claude)
 	r.Register(codex)
 
-	t.Run("research only capable top N", func(t *testing.T) {
+	t.Run("research includes cost-efficient default and capable options", func(t *testing.T) {
 		result := r.EligibleModelsForPhase(llm.PhaseResearch)
-		// claude: only opus (capable), no aliases, no balanced/cheap
-		if got := result["claude"]; !slices.Contains(got, "opus") {
-			t.Errorf("claude research: got %v, want opus", got)
+		// claude: sonnet is recommended; opus remains available; cheap models are excluded.
+		if got := result["claude"]; !slices.Contains(got, "sonnet") || !slices.Contains(got, "opus") {
+			t.Errorf("claude research: got %v, want sonnet and opus", got)
 		}
-		if slices.Contains(result["claude"], "sonnet") || slices.Contains(result["claude"], "haiku") {
-			t.Error("claude research should not include sonnet or haiku")
+		if slices.Contains(result["claude"], "haiku") {
+			t.Error("claude research should not include haiku")
 		}
 		// Aliases are no longer included in filtered results
 		if slices.Contains(result["claude"], "opus[1m]") {
 			t.Error("claude research should not include aliases")
 		}
-		// codex: codex and gpt-5.4 (capable), not gpt-5.4-mini (balanced)
-		if got := result["codex"]; !slices.Contains(got, "codex") || !slices.Contains(got, "gpt-5.4") {
-			t.Errorf("codex research: got %v, want codex and gpt-5.4", got)
-		}
-		if slices.Contains(result["codex"], "gpt-5.4-mini") {
-			t.Error("codex research should not include gpt-5.4-mini")
+		// codex: gpt-5.4 is the recommended default; balanced mini remains available.
+		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
+			t.Errorf("codex research: got %v, want gpt-5.4 and gpt-5.4-mini", got)
 		}
 	})
 

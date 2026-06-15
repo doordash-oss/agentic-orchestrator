@@ -1161,15 +1161,15 @@ func newRegistryWithProviders() *llm.Registry {
 	reg := llm.NewRegistry()
 	claudeProvider := &claude.Provider{}
 	claudeProvider.SetModelCatalog([]llm.ModelInfo{
-		{ID: "opus", Category: "capable"},
-		{ID: "sonnet", Category: "balanced"},
-		{ID: "haiku", Category: "cheap"},
+		{ID: "opus[1M]", Category: "capable", Aliases: []string{"opus"}},
+		{ID: "sonnet[200K]", Category: "balanced", Aliases: []string{"sonnet"}},
+		{ID: "haiku[200K]", Category: "cheap", Aliases: []string{"haiku"}},
 	})
 	codexProvider := &codex.Provider{}
 	codexProvider.SetModelCatalog([]llm.ModelInfo{
-		{ID: "gpt-5.4", Category: "capable"},
-		{ID: "gpt-5.4-mini", Category: "balanced"},
-		{ID: "codex", Category: "capable"},
+		{ID: "gpt-5.4[272K]", Category: "capable", Aliases: []string{"gpt-5.4"}},
+		{ID: "gpt-5.4-mini[400K]", Category: "balanced", Aliases: []string{"gpt-5.4-mini"}},
+		{ID: "codex[272K]", Category: "capable", Aliases: []string{"codex"}},
 	})
 	reg.Register(claudeProvider)
 	reg.Register(codexProvider)
@@ -2133,7 +2133,7 @@ func stubProviderCLIs(t *testing.T, names ...string) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
-func TestKBBuild_FallsBackToOpus(t *testing.T) {
+func TestKBBuild_FallsBackToCostEfficientDefault(t *testing.T) {
 	stubProviderCLIs(t, "claude", "codex")
 	dir := t.TempDir()
 	eventCh := make(chan any, 10)
@@ -2160,8 +2160,8 @@ func TestKBBuild_FallsBackToOpus(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from mock BuildSession")
 	}
-	if capturedModel != "claude:opus" {
-		t.Errorf("expected fallback model 'claude:opus', got %q", capturedModel)
+	if capturedModel != "claude:sonnet[200K]" {
+		t.Errorf("expected fallback model 'claude:sonnet[200K]', got %q", capturedModel)
 	}
 }
 

@@ -1175,6 +1175,11 @@ const (
 	agentStatusProtocolViolation = "PROTOCOL_VIOLATION"
 )
 
+// minContextHandoffWindowTokens disables the implementation wind-down nudge
+// for smaller context windows. Those models benefit less from a proactive
+// handoff because the prompt itself consumes meaningful remaining context.
+const minContextHandoffWindowTokens = 1_000_000
+
 // defaultContextHandoffThresholdPct is the context-window utilization
 // (percent) at which waitForStatus nudges the agent to wrap up cleanly for
 // providers without a provider-specific override. The default is chosen well
@@ -1182,11 +1187,6 @@ const (
 // to write a handoff and the phase_complete marker before the CLI would
 // otherwise compact and lose working memory.
 const defaultContextHandoffThresholdPct = 60
-
-// codexContextHandoffThresholdPct is higher because Codex reports its own
-// effective active context window via tokenUsage.modelContextWindow; 60% is
-// too early for Codex's current ~258K effective window.
-const codexContextHandoffThresholdPct = 80
 
 const largeCommandOutputThresholdChars = 20_000
 
@@ -1244,13 +1244,6 @@ type waitForStatusResult struct {
 	Handoff contextSnapshot
 }
 
-func contextHandoffThresholdForProvider(provider string) int {
-	if strings.EqualFold(provider, "codex") {
-		return codexContextHandoffThresholdPct
-	}
-	return defaultContextHandoffThresholdPct
-}
-
 func contextTotalTokens(usage *llm.Usage) int {
 	if usage == nil {
 		return 0
@@ -1287,7 +1280,7 @@ func iterationContextMeta(sess ports.SessionView, handoff contextSnapshot) *Cont
 	if sess == nil {
 		return nil
 	}
-	threshold := contextHandoffThresholdForProvider(sess.ProviderName())
+	threshold := defaultContextHandoffThresholdPct
 	final := currentContextSnapshot(sess, threshold)
 	if final.Pct < 0 || final.WindowTokens == 0 {
 		return nil
@@ -1375,7 +1368,7 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	handoffSent := false
 	handoff := contextSnapshot{
 		Pct:          -1,
-		ThresholdPct: contextHandoffThresholdForProvider(sess.ProviderName()),
+		ThresholdPct: defaultContextHandoffThresholdPct,
 	}
 
 	handleStatus := func(status string, sessionDone bool) (string, bool) {
@@ -1426,8 +1419,11 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 			if handoffSent {
 				continue
 			}
-			threshold := contextHandoffThresholdForProvider(sess.ProviderName())
+			threshold := defaultContextHandoffThresholdPct
 			snap := currentContextSnapshot(sess, threshold)
+			if snap.WindowTokens < minContextHandoffWindowTokens {
+				continue
+			}
 			if snap.Pct < threshold {
 				continue
 			}

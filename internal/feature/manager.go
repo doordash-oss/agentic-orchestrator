@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -48,6 +49,7 @@ type BranchOps interface {
 	HasOriginRemote(repoPath string) (bool, error)
 	BranchName(featureSlug string) string
 	BranchExistsOnRemote(repoPath, branch string) (bool, error)
+	CurrentBranch(repoPath string) (string, error)
 	CreateBackupBranch(worktreePath, slug string) (string, error)
 }
 
@@ -64,6 +66,9 @@ type Manager struct {
 	Worktrees WorktreeOps // optional; nil skips worktree creation
 	Branches  BranchOps   // optional; nil skips branch lookups during Create/Rewind
 	PRs       PRCloser    // optional; nil skips PR close on rewind
+
+	setupMu    sync.Mutex
+	setupLocks map[string]struct{}
 }
 
 // SlugExists checks if any existing feature has the given slug.
@@ -122,6 +127,7 @@ type CreateOptions struct {
 	Attachments             []string // temp attachment file paths
 	RiskLevel               RiskLevel
 	Pipeline                PipelineProfile
+	QueueSetup              bool
 }
 
 // Re-entrancy / crash recovery:
@@ -193,7 +199,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 
 	// Ensure the branch name doesn't conflict with an existing upstream branch.
 	// If it does, append a random 4-char hex suffix and recheck (up to 5 attempts).
-	if m.Worktrees != nil && m.Branches != nil {
+	if (opt.QueueSetup || m.Worktrees != nil) && m.Branches != nil {
 		baseSlug := slug
 		for attempt := 0; attempt < 5; attempt++ {
 			branch := m.Branches.BranchName(slug)
@@ -215,22 +221,8 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		}
 	}
 
-	// Create worktrees for each repo if worktree manager is configured
-	if m.Worktrees != nil {
-		for i, fr := range featureRepos {
-			startPoint := fr.BaseBranch
-			useCurrent := opt.UseCurrentBranch
-			if v, ok := opt.UseCurrentBranchPerRepo[fr.Name]; ok {
-				useCurrent = v
-			}
-			if useCurrent {
-				startPoint = "" // empty → HEAD in worktree.Create
-			}
-			wtPath, err := m.Worktrees.Create(fr.Path, slug, fr.Name, startPoint)
-			if err != nil {
-				return nil, fmt.Errorf("creating worktree for %s: %w", fr.Name, err)
-			}
-			featureRepos[i].WorktreePath = wtPath
+	if opt.QueueSetup || m.Worktrees != nil {
+		for i := range featureRepos {
 			if m.Branches != nil {
 				featureRepos[i].Branch = m.Branches.BranchName(slug)
 			} else {
@@ -244,13 +236,18 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		inq = Inquireness(m.Config.Defaults.Inquireness)
 	}
 
+	now := time.Now()
+	status := StatusCreated
+	if opt.QueueSetup {
+		status = StatusSettingUpWorktrees
+	}
 	f := &Feature{
 		ID:            id,
 		Name:          name,
 		Slug:          slug,
 		Description:   description,
-		Created:       time.Now(),
-		Status:        StatusCreated,
+		Created:       now,
+		Status:        status,
 		CurrentPhase:  opt.Pipeline.FirstPhase(),
 		Pipeline:      opt.Pipeline,
 		Repos:         featureRepos,
@@ -279,10 +276,45 @@ func (m *Manager) Create(name, description string, repos []string, models config
 			run.RepoStates[fr.Name] = &RepoState{}
 		}
 	}
+	if opt.QueueSetup {
+		run.Setup = NewActiveSetupState(featureRepos, images, opt.Attachments, now, SetupInitOptions{
+			UseCurrentBranch:        opt.UseCurrentBranch,
+			UseCurrentBranchPerRepo: opt.UseCurrentBranchPerRepo,
+		})
+	}
 	f.SetRun(run)
 
-	if err := m.Store.Save(f); err != nil {
-		return nil, fmt.Errorf("saving feature: %w", err)
+	if opt.QueueSetup {
+		if err := m.Store.Save(f); err != nil {
+			return nil, fmt.Errorf("saving feature: %w", err)
+		}
+		return f, nil
+	}
+
+	saved := false
+
+	// Create worktrees for each repo if worktree manager is configured.
+	if m.Worktrees != nil {
+		for i, fr := range featureRepos {
+			startPoint := fr.BaseBranch
+			useCurrent := opt.UseCurrentBranch
+			if v, ok := opt.UseCurrentBranchPerRepo[fr.Name]; ok {
+				useCurrent = v
+			}
+			if useCurrent {
+				startPoint = "" // empty → HEAD in worktree.Create
+			}
+			wtPath, err := m.Worktrees.Create(fr.Path, slug, fr.Name, startPoint)
+			if err != nil {
+				return nil, fmt.Errorf("creating worktree for %s: %w", fr.Name, err)
+			}
+			featureRepos[i].WorktreePath = wtPath
+			f.Repos[i].WorktreePath = wtPath
+		}
+		if err := m.Store.Save(f); err != nil {
+			return nil, fmt.Errorf("saving feature with worktrees: %w", err)
+		}
+		saved = true
 	}
 
 	// Copy images from temp paths to feature directory
@@ -301,6 +333,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		if err := m.Store.Save(f); err != nil {
 			return nil, fmt.Errorf("saving feature with images: %w", err)
 		}
+		saved = true
 	}
 
 	// Copy attachments from temp paths to feature directory
@@ -319,6 +352,13 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		}
 		if err := m.Store.Save(f); err != nil {
 			return nil, fmt.Errorf("saving feature with attachments: %w", err)
+		}
+		saved = true
+	}
+
+	if !saved {
+		if err := m.Store.Save(f); err != nil {
+			return nil, fmt.Errorf("saving feature: %w", err)
 		}
 	}
 
@@ -1593,9 +1633,20 @@ func (m *Manager) Delete(featureID string) error {
 	}
 
 	if m.Worktrees != nil {
+		seen := make(map[string]bool)
 		for _, repo := range f.Repos {
 			if repo.WorktreePath != "" {
+				seen[repo.WorktreePath] = true
 				_ = m.Worktrees.Remove(repo.WorktreePath, true)
+			}
+		}
+		if setup := f.Run().Setup; setup != nil {
+			for _, task := range setup.Tasks {
+				if task.Kind != SetupTaskWorktree || task.Path == "" || seen[task.Path] {
+					continue
+				}
+				seen[task.Path] = true
+				_ = m.Worktrees.Remove(task.Path, true)
 			}
 		}
 	}

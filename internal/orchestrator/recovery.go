@@ -48,6 +48,17 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 			return nil, fmt.Errorf("cleanup orphan runs: %w", err)
 		}
 	}
+	if reconciler, ok := o.deps.Lifecycle.(interface {
+		ReconcileAbandonedSetups() ([]string, error)
+	}); ok {
+		ids, err := reconciler.ReconcileAbandonedSetups()
+		if err != nil {
+			return nil, fmt.Errorf("reconcile abandoned setup: %w", err)
+		}
+		for _, id := range ids {
+			o.emitSetupReconciled(id)
+		}
+	}
 	items, err := o.deps.Recovery.ScanForRecovery(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("scan for recovery: %w", err)
@@ -60,6 +71,24 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 		o.hooks.OnRecoveryScanned(items)
 	}
 	return items, nil
+}
+
+func (o *Orchestrator) emitSetupReconciled(featureID string) {
+	ev := feature.SetupEvent{
+		Kind:      feature.SetupEventFailed,
+		FeatureID: featureID,
+		Error:     "setup was interrupted by shutdown or crash; retry setup to continue",
+	}
+	if o.deps.Store != nil {
+		if f, err := o.deps.Store.Load(featureID); err == nil && f != nil {
+			ev.RunNumber = f.ActiveRun
+			if setup := f.Run().Setup; setup != nil {
+				ev.Attempt = setup.Attempt
+				ev.LogPath = setup.LatestLogPath
+			}
+		}
+	}
+	o.emitSetupEvent(ev)
 }
 
 // cleanupOrphanRuns enumerates all features (including those surfaced via

@@ -104,6 +104,19 @@ func BuildHooks(obs *observe.Observer, permStore *permission.Store, fs ports.Fea
 			}
 			obs.FeatureInterrupted(sc, f.CurrentPhase.String())
 		},
+		OnSetupEvent: func(ev feature.SetupEvent) {
+			if obs == nil {
+				return
+			}
+			sc, ok := loadSpan(ev.FeatureID)
+			if !ok {
+				return
+			}
+			if ev.RunNumber > 0 {
+				sc = sc.WithRun(ev.RunNumber)
+			}
+			obs.SetupLifecycle(sc, ev)
+		},
 		OnPhaseStarted: func(featureID string, phase feature.Phase) {
 			if obs == nil {
 				return

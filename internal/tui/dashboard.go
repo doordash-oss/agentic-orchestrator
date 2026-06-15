@@ -1057,6 +1057,19 @@ func (m DashboardModel) SelectedFeatureID() string {
 	return ""
 }
 
+func (m *DashboardModel) SelectFeatureID(featureID string) bool {
+	for i, item := range m.visibleItems {
+		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
+			m.cursor = i
+			m.computeCursorLine()
+			m.updateScrollState(0)
+			m.syncPreview()
+			return true
+		}
+	}
+	return false
+}
+
 func (m *DashboardModel) SetFeatures(features []*feature.Feature) {
 	sortFeatures(features)
 	m.features = features
@@ -1339,6 +1352,8 @@ func formatStatus(f *feature.Feature) string {
 	elapsed := formatElapsed(f)
 
 	switch f.Status {
+	case feature.StatusSettingUpWorktrees:
+		return lipgloss.NewStyle().Foreground(colorInfo).Render("Setting up worktrees") + elapsed
 	case feature.StatusImplementing:
 		planPath := ""
 		if f.Artifacts != nil {
@@ -1526,6 +1541,8 @@ func formatFailureType(ft string) string {
 		return "protocol violation"
 	case feature.FailureInfrastructure:
 		return "error"
+	case feature.FailureWorktreeSetup:
+		return "worktree setup"
 	default:
 		return ft
 	}

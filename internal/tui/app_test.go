@@ -566,6 +566,89 @@ func TestViewLogsCmdReturnsContent(t *testing.T) {
 	}
 }
 
+func TestViewLogsCmdUsesLatestSetupLog(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	fm := feature.NewManager(store, cfg)
+
+	logPath := filepath.Join(dir, "feat-setup", "runs", "run-001", "setup", "attempt-01-output.txt")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir setup log dir: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("setup started\ncreated worktree\n"), 0o644); err != nil {
+		t.Fatalf("write setup log: %v", err)
+	}
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "setup",
+		Slug:          "setup",
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.LatestLogPath = logPath
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	app := AppModel{featureManager: fm}
+	msg := app.viewLogsCmd("feat-setup", feature.PhaseKnowledgeBase, 0)()
+
+	logsMsg, ok := msg.(LogsContentMsg)
+	if !ok {
+		t.Fatalf("expected LogsContentMsg, got %T", msg)
+	}
+	if !strings.Contains(logsMsg.Content, "created worktree") {
+		t.Fatalf("setup log content = %q, want setup output", logsMsg.Content)
+	}
+	if !strings.Contains(logsMsg.Title, "setup") {
+		t.Fatalf("setup log title = %q, want setup", logsMsg.Title)
+	}
+}
+
+func TestViewLogsCmdMissingSetupLogReturnsDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	fm := feature.NewManager(store, cfg)
+
+	missingLog := filepath.Join(dir, "feat-setup", "runs", "run-001", "setup", "missing.txt")
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "setup",
+		Slug:          "setup",
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.LatestLogPath = missingLog
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	app := AppModel{featureManager: fm}
+	msg := app.viewLogsCmd("feat-setup", feature.PhaseKnowledgeBase, 0)()
+
+	logsMsg, ok := msg.(LogsContentMsg)
+	if !ok {
+		t.Fatalf("expected LogsContentMsg, got %T", msg)
+	}
+	if !strings.Contains(logsMsg.Content, "Setup log not found") || !strings.Contains(logsMsg.Content, missingLog) {
+		t.Fatalf("missing setup log content = %q, want diagnostic with path", logsMsg.Content)
+	}
+}
+
 func TestViewLogsCmdMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
@@ -8417,6 +8500,154 @@ func TestCreateFeatureCmdSavesGatesToConfig(t *testing.T) {
 	}
 	if loadedPref.Models.Review != "codex:gpt-5.4-mini" {
 		t.Errorf("loaded review model = %q, want %q", loadedPref.Models.Review, "codex:gpt-5.4-mini")
+	}
+}
+
+func TestFeatureCreatedMsgSelectsPersistedSetupWithoutStartingPhase(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	orch := newFakeOrch()
+	app.orchestrator = orch
+	app.currentView = ViewDashboard
+	app.wizardCreating = true
+	app.wizardCreatingName = "setup-feature"
+	app.dashboard.creatingName = "setup-feature"
+	app.kbStaleWarnings = make(map[string]string)
+
+	now := time.Now()
+	setupFeature := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "Setup Feature",
+		Slug:          "setup-feature",
+		Description:   "persisted setup",
+		Created:       now,
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		Repos:         []feature.FeatureRepo{{Name: "test-repo", Path: "/tmp/test-repo", Branch: "feature/setup-feature"}},
+		Models:        fm.Config.Defaults.Models,
+		ExitCriteria:  fm.Config.Defaults.ExitCriteria,
+		Inquireness:   feature.Inquireness(fm.Config.Defaults.Inquireness),
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setupFeature.SetRun(&feature.Run{
+		RunNumber: 1,
+		Setup:     feature.NewActiveSetupState(setupFeature.Repos, nil, nil, now),
+	})
+	if err := fm.Store.Save(setupFeature); err != nil {
+		t.Fatalf("save setup feature: %v", err)
+	}
+
+	model, cmd := app.Update(FeatureCreatedMsg{FeatureIDs: []string{setupFeature.ID}})
+	app = model.(AppModel)
+	msgs := executeBatchCmd(t, cmd)
+
+	if len(orch.startFeatureIDs) != 0 {
+		t.Fatalf("StartFeature calls = %v, want none while setup is active", orch.startFeatureIDs)
+	}
+	foundRunSetup := false
+	for _, call := range orch.lifecycleCalls {
+		if call == "RunSetup:"+setupFeature.ID {
+			foundRunSetup = true
+			break
+		}
+	}
+	if !foundRunSetup {
+		t.Fatalf("lifecycle calls = %v, want RunSetup:%s", orch.lifecycleCalls, setupFeature.ID)
+	}
+	if app.wizardCreating || app.wizardCreatingName != "" || app.dashboard.creatingName != "" {
+		t.Fatalf("creation placeholders not cleared: wizardCreating=%v wizardName=%q dashboardName=%q", app.wizardCreating, app.wizardCreatingName, app.dashboard.creatingName)
+	}
+	for _, msg := range msgs {
+		if _, ok := msg.(RefreshFeaturesMsg); ok {
+			model, _ = app.Update(msg)
+			app = model.(AppModel)
+		}
+	}
+	if got := app.dashboard.SelectedFeatureID(); got != setupFeature.ID {
+		t.Fatalf("selected feature = %q, want %q", got, setupFeature.ID)
+	}
+}
+
+func TestActiveSetupDetailIgnoresPhaseStopAndRestartKeys(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	orch := newFakeOrch()
+	app.orchestrator = orch
+	app.currentView = ViewDetail
+
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "Setup Feature",
+		Slug:          "setup-feature",
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: feature.NewActiveSetupState(nil, nil, nil, now)})
+	if err := fm.Store.Save(f); err != nil {
+		t.Fatalf("save setup feature: %v", err)
+	}
+	app.detail = NewDetailModel(f, fm.Store.BaseDir)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	app = model.(AppModel)
+	if cmd != nil {
+		t.Fatalf("stop key returned cmd during active setup")
+	}
+	if app.stopConfirmActive {
+		t.Fatalf("stop confirmation opened during active setup")
+	}
+
+	model, cmd = app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	app = model.(AppModel)
+	if cmd != nil {
+		msgs := executeBatchCmd(t, cmd)
+		t.Fatalf("restart key returned command during active setup: %T %v", cmd, msgs)
+	}
+	if len(orch.lifecycleCalls) != 0 {
+		t.Fatalf("orchestrator lifecycle calls = %v, want none", orch.lifecycleCalls)
+	}
+}
+
+func TestFailedSetupDetailRestartKeyRetriesSetup(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	orch := newFakeOrch()
+	app.orchestrator = orch
+	app.currentView = ViewDetail
+
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup-failed",
+		Name:          "Setup Failed",
+		Slug:          "setup-failed",
+		Status:        feature.StatusFailed,
+		FailureType:   feature.FailureWorktreeSetup,
+		LastError:     "worktree path already exists",
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.Status = feature.SetupStatusFailed
+	setup.LastError = f.LastError
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, FailureType: feature.FailureWorktreeSetup})
+	if err := fm.Store.Save(f); err != nil {
+		t.Fatalf("save setup feature: %v", err)
+	}
+	app.detail = NewDetailModel(f, fm.Store.BaseDir)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	app = model.(AppModel)
+	msgs := executeBatchCmd(t, cmd)
+	if got, want := orch.lifecycleCalls, []string{"RetrySetup:" + f.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("lifecycle calls = %v, want %v; msgs=%v", got, want, msgs)
+	}
+	if len(orch.startFeatureIDs) != 0 || len(orch.restartPhaseArgs) != 0 {
+		t.Fatalf("phase restart was invoked: start=%v restart=%v", orch.startFeatureIDs, orch.restartPhaseArgs)
 	}
 }
 

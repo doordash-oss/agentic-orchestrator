@@ -46,6 +46,9 @@ type Run struct {
 	RunNumber int        `yaml:"run_number"`
 	StartedAt *time.Time `yaml:"started_at,omitempty"`
 
+	// Setup tracks first-run preparation before any phase session starts.
+	Setup *SetupState `yaml:"setup,omitempty"`
+
 	// Sealing (set only by rewind; absent/zero on active runs).
 	SealedAt     *time.Time `yaml:"sealed_at,omitempty"`
 	SealReason   SealReason `yaml:"seal_reason,omitempty"`

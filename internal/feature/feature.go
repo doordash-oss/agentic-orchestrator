@@ -262,6 +262,7 @@ const (
 	FailureMissingArtifact   = "missing_artifact"
 	FailureProtocolViolation = "protocol_violation"
 	FailureInfrastructure    = "infrastructure"
+	FailureWorktreeSetup     = "worktree_setup"
 	// FailureNeedUserInput marks a feature failure caused by an
 	// implement iteration emitting `## Iteration State: NEED_USER_INPUT`
 	// in progress.md. The harness treats this as a terminal state today;
@@ -307,6 +308,9 @@ const (
 	// StatusReviewPassed → StatusFinalReviewing on entry and
 	// StatusFinalReviewing → StatusCodeReady on success.
 	StatusFinalReviewing
+	// StatusSettingUpWorktrees marks durable first-run setup before any phase
+	// session starts. It is active work, but not a formal pipeline phase.
+	StatusSettingUpWorktrees
 )
 
 func (s Status) String() string {
@@ -361,6 +365,8 @@ func (s Status) String() string {
 		return "NeedUserInput"
 	case StatusFinalReviewing:
 		return "FinalReviewing"
+	case StatusSettingUpWorktrees:
+		return "SettingUpWorktrees"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -368,7 +374,7 @@ func (s Status) String() string {
 
 // IsRunning returns true if this status represents an actively executing phase.
 func (s Status) IsRunning() bool {
-	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing
+	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing || s == StatusSettingUpWorktrees
 }
 
 // IsNeedsReview returns true if this status represents a pending artifact review.
@@ -436,6 +442,7 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"Reviewing":           StatusReviewing,
 		"NeedUserInput":       StatusNeedUserInput,
 		"FinalReviewing":      StatusFinalReviewing,
+		"SettingUpWorktrees":  StatusSettingUpWorktrees,
 	}
 
 	// Legacy integer mapping. Values 0-11 are unchanged from the original iota.
@@ -832,6 +839,7 @@ var validTransitions = map[Status][]Status{
 	StatusInquiryNeedsReview:  {StatusResearching, StatusFailed},
 	StatusResearchNeedsReview: {StatusDesigning, StatusFailed},
 	StatusDesignNeedsReview:   {StatusPlanning, StatusFailed},
+	StatusSettingUpWorktrees:  {StatusCreated, StatusFailed},
 }
 
 // accumulateActiveTime moves elapsed time from ActivePhaseStart into

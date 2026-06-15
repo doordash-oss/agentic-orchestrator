@@ -1084,6 +1084,69 @@ func TestFeatureStartedEmitsEvent(t *testing.T) {
 	}
 }
 
+func TestSetupLifecycleEmitsPrePhaseEventWithDocumentedFields(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "setup_lifecycle_feat"
+	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	obs := New(true, stateDir, false, "", false, "agentic")
+	sc := SpanContextForFeature(featureID, "", "", "").WithRun(3)
+
+	obs.SetupLifecycle(sc, feature.SetupEvent{
+		Kind:       feature.SetupEventTaskCompleted,
+		FeatureID:  featureID,
+		RunNumber:  3,
+		Attempt:    2,
+		LogPath:    "/tmp/state/features/setup_lifecycle_feat/runs/run-001/setup/attempt-02-output.txt",
+		TaskKey:    "worktree:api",
+		TaskKind:   feature.SetupTaskWorktree,
+		TaskStatus: feature.SetupStatusDone,
+		Repo:       "api",
+		Path:       "/tmp/worktrees/setup-lifecycle/api",
+		Branch:     "feature/setup-lifecycle",
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.EventType != "setup.progress" {
+		t.Fatalf("EventType = %q, want setup.progress", evt.EventType)
+	}
+	if evt.Phase != "" {
+		t.Fatalf("Phase = %q, want empty for setup lifecycle", evt.Phase)
+	}
+	if evt.RunNumber != 3 {
+		t.Fatalf("RunNumber = %d, want 3", evt.RunNumber)
+	}
+	if evt.RepoName != "api" {
+		t.Fatalf("RepoName = %q, want api", evt.RepoName)
+	}
+	wantData := map[string]any{
+		"attempt":      float64(2),
+		"setup_log":    "/tmp/state/features/setup_lifecycle_feat/runs/run-001/setup/attempt-02-output.txt",
+		"setup_task":   "worktree:api",
+		"setup_kind":   "worktree",
+		"setup_status": "done",
+		"repo_name":    "api",
+		"path":         "/tmp/worktrees/setup-lifecycle/api",
+		"branch":       "feature/setup-lifecycle",
+	}
+	for key, want := range wantData {
+		if got := evt.Data[key]; got != want {
+			t.Fatalf("Data[%s] = %#v, want %#v; data=%v", key, got, want, evt.Data)
+		}
+	}
+	if _, ok := evt.Data["task_key"]; ok {
+		t.Fatalf("Data contains legacy task_key key: %v", evt.Data)
+	}
+	if _, ok := evt.Data["log_path"]; ok {
+		t.Fatalf("Data contains legacy log_path key: %v", evt.Data)
+	}
+}
+
 func TestFeatureCompletedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat_completed_feat"
@@ -1700,6 +1763,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	obs.FeatureStarted(sc, "my-feature", []string{"repo-a"}, "large")
 	obs.FeatureCompleted(sc, 0.5, time.Second)
 	obs.FeatureFailed(sc, "infrastructure", "boom")
+	obs.SetupLifecycle(sc, feature.SetupEvent{Kind: feature.SetupEventStarted, FeatureID: featureID, Attempt: 1})
 	obs.FeatureInterrupted(sc, "implement")
 	obs.PermissionRequested(sc, "s1", "repo-a", 1, "Edit", "preview")
 	obs.PermissionResolved(sc, "s1", "repo-a", 1, "Edit", "allow")
@@ -1723,8 +1787,8 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	})
 
 	events := readEvents(t, stateDir, featureID)
-	if len(events) != 29 {
-		t.Fatalf("expected 29 events, got %d", len(events))
+	if len(events) != 30 {
+		t.Fatalf("expected 30 events, got %d", len(events))
 	}
 	for i, evt := range events {
 		if evt.RunNumber != wantRun {

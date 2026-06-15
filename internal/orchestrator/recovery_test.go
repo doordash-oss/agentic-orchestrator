@@ -919,6 +919,89 @@ func TestScanRecovery_CallsCleanupOrphanRunsBeforeScan(t *testing.T) {
 	}
 }
 
+func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	cfg := config.NewDefault()
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+	branches := mocks.NewMockBranchOperator()
+	branches.DefaultBranchFn = func(repoPath string) (string, error) { return "main", nil }
+	branches.HasOriginRemoteFn = func(repoPath string) (bool, error) { return false, nil }
+	branches.BranchNameFn = func(featureSlug string) string { return "feature/" + featureSlug }
+	mgr.Branches = branches
+
+	f, err := mgr.Create("Abandoned Setup", "stale setup", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	logPath := filepath.Join(store.RunDir(f.ID, 1), "setup", "attempt-01-output.txt")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir log dir: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("partial setup"), 0o644); err != nil {
+		t.Fatalf("write setup log: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		setup := ff.Run().Setup
+		setup.LatestLogPath = logPath
+		task := setup.Tasks["worktree:test-repo"]
+		task.Status = feature.SetupStatusRunning
+		task.Path = "/tmp/worktrees/abandoned-setup/test-repo"
+		setup.Tasks[task.Key] = task
+		return nil
+	}); err != nil {
+		t.Fatalf("seed setup state: %v", err)
+	}
+
+	var scanSawFailed bool
+	fake := &fakeRecoveryOp{
+		ScanFn: func(ctx context.Context) ([]ports.RecoveryItem, error) {
+			got, err := store.Load(f.ID)
+			if err != nil {
+				t.Fatalf("load during scan: %v", err)
+			}
+			scanSawFailed = got.Status == feature.StatusFailed &&
+				got.FailureType == feature.FailureWorktreeSetup &&
+				got.Run().Setup != nil &&
+				got.Run().Setup.Status == feature.SetupStatusFailed
+			return nil, nil
+		},
+	}
+
+	o := orchestrator.New(orchestrator.Deps{Store: store, Lifecycle: mgr, Recovery: fake}, orchestrator.Hooks{})
+	if _, err := o.ScanRecovery(context.Background()); err != nil {
+		t.Fatalf("ScanRecovery: %v", err)
+	}
+	if !scanSawFailed {
+		t.Fatal("ScanForRecovery ran before abandoned setup was marked failed")
+	}
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load reconciled feature: %v", err)
+	}
+	if loaded.Run().Setup.LatestLogPath != logPath {
+		t.Fatalf("LatestLogPath = %q, want preserved %q", loaded.Run().Setup.LatestLogPath, logPath)
+	}
+	events := drainEvents(o)
+	var setupFailed, recoveryScanned bool
+	for _, ev := range events {
+		switch ev.Type {
+		case ports.SetupFailed:
+			setupFailed = true
+			if ev.FeatureID != f.ID || ev.RunNumber != 1 || ev.Attempt != 1 || ev.SetupLog != logPath {
+				t.Fatalf("SetupFailed event = %+v, want reconciled setup metadata", ev)
+			}
+		case ports.RecoveryScanned:
+			recoveryScanned = true
+		case ports.PhaseStarted, ports.PhaseCompleted:
+			t.Fatalf("unexpected phase telemetry for setup reconciliation: %+v", ev)
+		}
+	}
+	if !setupFailed || !recoveryScanned {
+		t.Fatalf("events = %+v, want SetupFailed and RecoveryScanned", events)
+	}
+}
+
 // TestScanRecovery_CleanupError_SuppressesScan asserts that when cleanup
 // returns an error for any feature, ScanRecovery propagates the error and
 // does NOT call ScanForRecovery. This encodes the "recovery decisions always

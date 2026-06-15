@@ -235,6 +235,16 @@ func (f *fakeOrch) StartFeature(featureID string) error {
 	return f.startFeatureErr
 }
 
+func (f *fakeOrch) RunSetup(featureID string) error {
+	f.lifecycleCalls = append(f.lifecycleCalls, "RunSetup:"+featureID)
+	return f.lifecycleErr
+}
+
+func (f *fakeOrch) RetrySetup(featureID string) error {
+	f.lifecycleCalls = append(f.lifecycleCalls, "RetrySetup:"+featureID)
+	return f.lifecycleErr
+}
+
 func (f *fakeOrch) HandlePhaseCompletion(featureID string, input orchestrator.PhaseCompletionInput) error {
 	f.handlePhaseCompletionArgs = append(f.handlePhaseCompletionArgs, struct {
 		FeatureID string
@@ -620,6 +630,10 @@ var allBridgedEventTypes = []ports.EventType{
 	ports.FeatureCompleted,
 	ports.FeatureFailed,
 	ports.FeatureInterrupted,
+	ports.SetupStarted,
+	ports.SetupProgress,
+	ports.SetupCompleted,
+	ports.SetupFailed,
 	ports.PhaseStarted,
 	ports.PhaseCompleted,
 	ports.ReviewRequired,
@@ -649,6 +663,8 @@ func expectedMsgTypeName(et ports.EventType) string {
 		return "OrchFeatureFailedMsg"
 	case ports.FeatureInterrupted:
 		return "OrchFeatureInterruptedMsg"
+	case ports.SetupStarted, ports.SetupProgress, ports.SetupCompleted, ports.SetupFailed:
+		return "OrchSetupLifecycleMsg"
 	case ports.PhaseStarted:
 		return "OrchPhaseStartedMsg"
 	case ports.PhaseCompleted:
@@ -720,6 +736,8 @@ func typeName(v any) string {
 		return "OrchFeatureFailedMsg"
 	case OrchFeatureInterruptedMsg:
 		return "OrchFeatureInterruptedMsg"
+	case OrchSetupLifecycleMsg:
+		return "OrchSetupLifecycleMsg"
 	case OrchPhaseStartedMsg:
 		return "OrchPhaseStartedMsg"
 	case OrchPhaseCompletedMsg:
@@ -923,6 +941,9 @@ func TestTUI_CreateFeatureCmd_DelegatesCompleteWizardResultToOrchestrator(t *tes
 	}
 	if !slices.Equal(opt.Attachments, result.Attachments) {
 		t.Fatalf("Attachments = %v, want %v", opt.Attachments, result.Attachments)
+	}
+	if !opt.QueueSetup {
+		t.Fatal("QueueSetup = false, want true for wizard-created features")
 	}
 }
 

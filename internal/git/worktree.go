@@ -35,11 +35,15 @@ func NewWorktreeManager(baseDir string) *WorktreeManager {
 	return &WorktreeManager{BaseDir: baseDir}
 }
 
+func (w *WorktreeManager) ExpectedPath(featureSlug, repoName string) string {
+	return filepath.Join(w.BaseDir, featureSlug, repoName)
+}
+
 // Create creates a new worktree branching from startPoint. If startPoint is
 // empty, HEAD is used (preserving legacy behavior).
 func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 	branch := BranchName(featureSlug)
-	wtPath := filepath.Join(w.BaseDir, featureSlug, repoName)
+	wtPath := w.ExpectedPath(featureSlug, repoName)
 
 	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
 		return "", fmt.Errorf("creating worktree directory: %w", err)

@@ -32,17 +32,20 @@ type MockFeatureLifecycle struct {
 	CreateFn func(name, description string, repos []string, models config.ModelConfig,
 		exitCriteria, inquireness string, images []string,
 		opts ...feature.CreateOptions) (*feature.Feature, error)
-	GetFn        func(id string) (*feature.Feature, error)
-	ListFn       func() ([]*feature.Feature, error)
-	DeleteFn     func(featureID string) error
-	TransitionFn func(id string, to feature.Status) error
+	GetFn                      func(id string) (*feature.Feature, error)
+	ListFn                     func() ([]*feature.Feature, error)
+	DeleteFn                   func(featureID string) error
+	TransitionFn               func(id string, to feature.Status) error
+	RunSetupFn                 func(featureID string, opts ...feature.SetupRunnerOptions) error
+	RetrySetupFn               func(featureID string, opts ...feature.SetupRunnerOptions) error
+	ReconcileAbandonedSetupsFn func() ([]string, error)
 
 	// Phase-start hooks — tests that need to mimic real lifecycle behavior
 	// (status transitions) can install these. Called after the mock records
 	// the invocation.
 	StartKnowledgeBaseFn  func(featureID string) error
 	StartInquireFn        func(featureID string) error
-	StartDesignFn     func(featureID string) error
+	StartDesignFn         func(featureID string) error
 	StartResearchFn       func(featureID string) error
 	StartPlanningFn       func(featureID string) error
 	StartImplementationFn func(featureID string) error
@@ -52,7 +55,7 @@ type MockFeatureLifecycle struct {
 	CompleteKnowledgeBaseFn  func(featureID string) error
 	CompleteInquireFn        func(featureID string) error
 	CompleteResearchFn       func(featureID string) error
-	CompleteDesignFn     func(featureID string) error
+	CompleteDesignFn         func(featureID string) error
 	CompletePlanningFn       func(featureID string) error
 	CompleteImplementationFn func(featureID string) error
 
@@ -162,6 +165,30 @@ func (m *MockFeatureLifecycle) Transition(id string, to feature.Status) error {
 		return m.TransitionFn(id, to)
 	}
 	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) RunSetup(featureID string, opts ...feature.SetupRunnerOptions) error {
+	m.record("RunSetup", featureID, opts)
+	if m.RunSetupFn != nil {
+		return m.RunSetupFn(featureID, opts...)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) RetrySetup(featureID string, opts ...feature.SetupRunnerOptions) error {
+	m.record("RetrySetup", featureID, opts)
+	if m.RetrySetupFn != nil {
+		return m.RetrySetupFn(featureID, opts...)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) ReconcileAbandonedSetups() ([]string, error) {
+	m.record("ReconcileAbandonedSetups")
+	if m.ReconcileAbandonedSetupsFn != nil {
+		return m.ReconcileAbandonedSetupsFn()
+	}
+	return nil, m.DefaultError
 }
 
 // ---------------------------------------------------------------------------

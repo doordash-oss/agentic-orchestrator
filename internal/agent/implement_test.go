@@ -1266,8 +1266,8 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sink := attachCaptureSink(sess)
 
-	// Seed usage at exactly the threshold — 60%, on a 200K window.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 120_000, ContextWindow: 200_000})
+	// Seed usage at exactly the threshold — 60%, on a 1M window.
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 600_000, ContextWindow: 1_000_000})
 
 	var ready atomic.Bool // stays false until the test flips it.
 	polls := make(chan struct{}, 8)
@@ -1315,40 +1315,31 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	}
 }
 
-func TestWaitForStatus_ContextHandoff_CodexUses80PercentThreshold(t *testing.T) {
+func TestWaitForStatus_ContextHandoff_CodexUsesDefaultThreshold(t *testing.T) {
 	withHandoffPollInterval(t, 2*time.Millisecond)
 
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sess.SetProviderName("codex")
 	sink := attachCaptureSink(sess)
 
-	// 60% would trigger the default provider policy, but Codex should wait
-	// for its provider-specific 80% threshold.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 120_000, ContextWindow: 200_000})
-	polls := make(chan struct{}, 8)
+	// Codex follows the shared 60% threshold once the window is at least 1M.
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 600_000, ContextWindow: 1_000_000})
 
 	done := make(chan string, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
+			ReadyCheck:           func() bool { return true },
+			EnableContextHandoff: true,
 		}).Status
 	}()
 
-	waitForHandoffPolls(t, polls, 3, 2*time.Second)
-	if got := countHandoffMessages(sink.contents()); got != 0 {
-		t.Errorf("handoff messages at 60%% for codex = %d, want 0", got)
-	}
-
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 160_000, ContextWindow: 200_000})
 	sink.waitForWrite(t, 2*time.Second)
 
 	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages at 80%% for codex = %d, want 1", got)
+		t.Errorf("handoff messages at 60%% for codex = %d, want 1", got)
 	}
-	if !strings.Contains(sink.contents(), "above Agentic's 80% handoff threshold") {
-		t.Errorf("codex handoff message should include 80%% threshold, got: %s", sink.contents())
+	if !strings.Contains(sink.contents(), "above Agentic's 60% handoff threshold") {
+		t.Errorf("codex handoff message should include 60%% threshold, got: %s", sink.contents())
 	}
 
 	sess.SendStatus("SUCCESS")
@@ -1366,8 +1357,8 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 	sess.SetProviderName("codex")
 	sink := attachCaptureSink(sess)
 	sess.SetLatestUsage(&llm.Usage{
-		ContextTotalTokens: 211_000,
-		ContextWindow:      258_400,
+		ContextTotalTokens: 604_800,
+		ContextWindow:      1_000_000,
 		ContextBaseline:    12_000,
 	})
 
@@ -1384,14 +1375,14 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 
 	select {
 	case got := <-done:
-		if got.Handoff.Pct != 80 {
-			t.Errorf("Handoff.Pct = %d, want 80", got.Handoff.Pct)
+		if got.Handoff.Pct != 60 {
+			t.Errorf("Handoff.Pct = %d, want 60", got.Handoff.Pct)
 		}
-		if got.Handoff.TotalTokens != 211_000 {
-			t.Errorf("Handoff.TotalTokens = %d, want 211000", got.Handoff.TotalTokens)
+		if got.Handoff.TotalTokens != 604_800 {
+			t.Errorf("Handoff.TotalTokens = %d, want 604800", got.Handoff.TotalTokens)
 		}
-		if got.Handoff.WindowTokens != 258_400 {
-			t.Errorf("Handoff.WindowTokens = %d, want 258400", got.Handoff.WindowTokens)
+		if got.Handoff.WindowTokens != 1_000_000 {
+			t.Errorf("Handoff.WindowTokens = %d, want 1000000", got.Handoff.WindowTokens)
 		}
 		if got.Handoff.BaselineTokens != 12_000 {
 			t.Errorf("Handoff.BaselineTokens = %d, want 12000", got.Handoff.BaselineTokens)
@@ -1408,7 +1399,7 @@ func TestWaitForStatus_ContextHandoff_BelowThreshold_NoSend(t *testing.T) {
 	sink := attachCaptureSink(sess)
 
 	// 40% usage — comfortably below the 60% threshold.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 80_000, ContextWindow: 200_000})
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 400_000, ContextWindow: 1_000_000})
 	polls := make(chan struct{}, 8)
 
 	done := make(chan string, 1)
@@ -1428,6 +1419,40 @@ func TestWaitForStatus_ContextHandoff_BelowThreshold_NoSend(t *testing.T) {
 	}
 
 	// Clean up.
+	sess.SendStatus("SUCCESS")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for waitForStatus to return")
+	}
+}
+
+func TestWaitForStatus_ContextHandoff_DisabledBelowOneMillionWindow(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	sess := session.NewSession("test", "feat", feature.PhaseImplement)
+	sink := attachCaptureSink(sess)
+
+	// 90% usage would otherwise cross the default threshold, but the
+	// implementation nudge is disabled for context windows below 1M tokens.
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 180_000, ContextWindow: 200_000})
+	polls := make(chan struct{}, 8)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:             func() bool { return true },
+			EnableContextHandoff:   true,
+			ContextHandoffPollHook: handoffPollHook(polls),
+		}).Status
+	}()
+
+	waitForHandoffPolls(t, polls, 3, 2*time.Second)
+
+	if got := countHandoffMessages(sink.contents()); got != 0 {
+		t.Errorf("handoff messages below 1M window = %d, want 0", got)
+	}
+
 	sess.SendStatus("SUCCESS")
 	select {
 	case <-done:

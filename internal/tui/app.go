@@ -862,7 +862,14 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if f, err := m.featureManager.Get(m.attach.featureID); err == nil && f != nil {
 				next := m.buildRepoTabs(f)
 				if len(next) > 0 {
-					m.attach.rebuildTabs(next)
+					if m.attach.rebuildTabs(next) {
+						idx := m.attach.activeTabIdx
+						if idx >= 0 && idx < len(m.attach.repoTabs) && m.attach.repoTabs[idx].sess != nil {
+							var cmd tea.Cmd
+							m.attach, cmd = m.attach.switchToTab(idx)
+							return m, cmd
+						}
+					}
 				}
 			}
 		}

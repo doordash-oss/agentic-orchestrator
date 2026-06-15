@@ -1964,6 +1964,19 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			return m, m.forwardToViewport(msg)
 		}
 
+		if m.done {
+			switch {
+			case key.Matches(msg, keys.Detach):
+				m.detached = true
+				return m, nil
+			case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+f"))):
+				m.filter = m.filter.next()
+				m.updateViewport()
+				return m, nil
+			}
+			return m, m.forwardToViewport(msg)
+		}
+
 		// Handle plan review menu navigation
 		if m.showPlanReviewMenu {
 			switch msg.String() {
@@ -3273,6 +3286,9 @@ func (m AttachModel) TweakFinishing() bool {
 
 // Done returns true if the session has exited.
 func (m AttachModel) Done() bool {
+	if len(m.repoTabs) > 1 {
+		return false
+	}
 	return m.done
 }
 
@@ -3630,12 +3646,14 @@ func (m *AttachModel) rebuildTabs(next []repoTab) bool {
 	// Preserve the active tab if its identity still exists in the new list;
 	// otherwise fall back to the first live tab.
 	activeKey := ""
+	var activeSess session.SessionView
 	if m.activeTabIdx >= 0 && m.activeTabIdx < len(m.repoTabs) {
 		activeKey = m.repoTabs[m.activeTabIdx].repoName
+		activeSess = m.repoTabs[m.activeTabIdx].sess
 	}
 	newIdx := -1
 	for i, t := range next {
-		if t.repoName == activeKey {
+		if t.repoName == activeKey && t.sess != nil {
 			newIdx = i
 			break
 		}
@@ -3649,6 +3667,16 @@ func (m *AttachModel) rebuildTabs(next []repoTab) bool {
 			}
 		}
 		sessionSwapped = true
+	} else if !sameAttachSession(activeSess, next[newIdx].sess) {
+		sessionSwapped = true
+	}
+	if newIdx < 0 {
+		for i, t := range next {
+			if t.repoName == activeKey {
+				newIdx = i
+				break
+			}
+		}
 	}
 
 	m.repoTabs = next
@@ -3656,6 +3684,21 @@ func (m *AttachModel) rebuildTabs(next []repoTab) bool {
 		m.activeTabIdx = newIdx
 	}
 	return sessionSwapped
+}
+
+func sameAttachSession(a, b session.SessionView) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	if a.ID() != b.ID() {
+		return false
+	}
+	aStarted := a.StartedAt()
+	bStarted := b.StartedAt()
+	if aStarted.IsZero() || bStarted.IsZero() {
+		return true
+	}
+	return aStarted.Equal(bStarted)
 }
 
 // ActiveRepoName returns the name of the currently active repo tab.

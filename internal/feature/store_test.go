@@ -990,6 +990,68 @@ artifacts: {}
 	if loaded.SchemaVersion != SchemaVersionCurrent {
 		t.Errorf("loaded.SchemaVersion = %d, want %d", loaded.SchemaVersion, SchemaVersionCurrent)
 	}
+	if loaded.Run().Setup != nil {
+		t.Fatalf("legacy run setup = %+v, want nil", loaded.Run().Setup)
+	}
+}
+
+func TestStoreSetupStateRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and isolated store state.
+	dir := t.TempDir()
+	store := NewStore(dir)
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	repos := []FeatureRepo{{
+		Name:   "api",
+		Path:   "/tmp/api",
+		Branch: "feature/setup-state",
+	}}
+	f := &Feature{
+		ID:            "setup-001",
+		Name:          "Setup State",
+		Slug:          "setup-state",
+		Description:   "setup serialization",
+		Created:       now,
+		Status:        StatusSettingUpWorktrees,
+		CurrentPhase:  PhaseKnowledgeBase,
+		Repos:         repos,
+		Models:        config.ModelConfig{},
+		ExitCriteria:  "",
+		Inquireness:   InquirenessMedium,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	setup := NewActiveSetupState(repos, []string{"/tmp/image.png"}, []string{"/tmp/spec.md"}, now)
+	task := setup.Tasks["worktree:api"]
+	task.Path = "/tmp/worktrees/setup-state/api"
+	setup.Tasks["worktree:api"] = task
+	f.SetRun(&Run{RunNumber: 1, Setup: setup})
+
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	got := loaded.Run().Setup
+	if got == nil {
+		t.Fatal("loaded setup state is nil")
+	}
+	if got.Status != SetupStatusRunning || got.Attempt != 1 {
+		t.Fatalf("loaded setup status/attempt = %q/%d, want running/1", got.Status, got.Attempt)
+	}
+	if !slices.Equal(got.TaskOrder, []string{"worktree:api", "image:1", "attachment:1"}) {
+		t.Fatalf("loaded task order = %v, want worktree/image/attachment", got.TaskOrder)
+	}
+	if got.Tasks["worktree:api"].Path != "/tmp/worktrees/setup-state/api" {
+		t.Fatalf("loaded worktree path = %q", got.Tasks["worktree:api"].Path)
+	}
+	if got.Tasks["worktree:api"].Branch != "feature/setup-state" {
+		t.Fatalf("loaded worktree branch = %q", got.Tasks["worktree:api"].Branch)
+	}
 }
 
 func TestStoreLoadMigratesLegacyBrainstormStatusAndArtifact(t *testing.T) {

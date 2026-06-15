@@ -100,6 +100,140 @@ func TestDetailViewFooterActions(t *testing.T) {
 	}
 }
 
+func TestDetailViewRendersActiveSetupProgressAndActions(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	f := &feature.Feature{
+		ID:           "feat-setup",
+		Slug:         "setup-feature",
+		Status:       feature.StatusSettingUpWorktrees,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Repos: []feature.FeatureRepo{{
+			Name:   "payments",
+			Path:   "/tmp/payments",
+			Branch: "feature/setup-feature",
+		}},
+		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+	}
+	setup := feature.NewActiveSetupState(f.Repos, []string{"/tmp/image.png"}, []string{"/tmp/spec.md"}, now)
+	setup.LatestLogPath = "/tmp/setup-attempt-1.log"
+	task := setup.Tasks["worktree:payments"]
+	task.Path = "/tmp/worktrees/setup-feature/payments"
+	task.StartedAt = &now
+	setup.Tasks["worktree:payments"] = task
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+
+	m := NewDetailModel(f, "")
+	m.width = 100
+	m.height = 40
+
+	view := m.View()
+	for _, want := range []string{
+		"Setting up worktrees",
+		"Worktree: payments",
+		"worktree",
+		"queued",
+		"feature/setup-feature",
+		"/tmp/worktrees/setup-feature/payments",
+		"attempt 1",
+		"Image 1",
+		"Attachment 1",
+		"[l] Logs",
+		"[d] Delete",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("DetailModel.View() missing %q:\n%s", want, view)
+		}
+	}
+	for _, absent := range []string{"[s] Stop", "[r] Restart", "Retry phase", "context window"} {
+		if strings.Contains(view, absent) {
+			t.Fatalf("DetailModel.View() contained %q during active setup:\n%s", absent, view)
+		}
+	}
+}
+
+func TestDetailViewRendersFailedSetupErrorAndRetryAction(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	f := &feature.Feature{
+		ID:           "feat-setup-failed",
+		Slug:         "setup-failed",
+		Status:       feature.StatusFailed,
+		FailureType:  feature.FailureWorktreeSetup,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Repos: []feature.FeatureRepo{{
+			Name:   "payments",
+			Path:   "/tmp/payments",
+			Branch: "feature/setup-failed",
+		}},
+		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+	}
+	setup := feature.NewActiveSetupState(f.Repos, nil, nil, now)
+	setup.Status = feature.SetupStatusFailed
+	setup.LastError = "worktree path already exists"
+	setup.LatestLogPath = "/tmp/setup-attempt-1.log"
+	task := setup.Tasks["worktree:payments"]
+	task.Status = feature.SetupStatusFailed
+	task.LastError = "worktree path already exists"
+	task.EndedAt = &now
+	setup.Tasks["worktree:payments"] = task
+	f.SetRun(&feature.Run{
+		RunNumber:   1,
+		Setup:       setup,
+		FailureType: feature.FailureWorktreeSetup,
+	})
+
+	m := NewDetailModel(f, "")
+	m.width = 100
+	m.height = 40
+
+	view := m.View()
+	for _, want := range []string{
+		"Failed (worktree setup)",
+		"worktree path already exists",
+		"[r] Retry setup",
+		"[l] Logs",
+		"[d] Delete",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("DetailModel.View() missing %q:\n%s", want, view)
+		}
+	}
+	for _, absent := range []string{"[Shift+R] Retry phase", "[s] Stop", "press [r] to restart"} {
+		if strings.Contains(view, absent) {
+			t.Fatalf("DetailModel.View() contained %q for failed setup:\n%s", absent, view)
+		}
+	}
+}
+
+func TestDetailViewHidesRetryForNonWorktreeSetupFailure(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	f := &feature.Feature{
+		ID:           "feat-setup-failed",
+		Slug:         "setup-failed",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Models:       config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.Status = feature.SetupStatusFailed
+	setup.LastError = "setup did not finish"
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+
+	m := NewDetailModel(f, "")
+	m.width = 100
+	m.height = 40
+
+	view := m.View()
+	if strings.Contains(view, "[r] Retry setup") || strings.Contains(view, "press [r] to retry setup") {
+		t.Fatalf("DetailModel.View() exposed setup retry without worktree setup failure:\n%s", view)
+	}
+	if !strings.Contains(view, "setup did not finish") {
+		t.Fatalf("DetailModel.View() missing setup error:\n%s", view)
+	}
+}
+
 func TestDetailViewFooterUsesContextualAttentionLabel(t *testing.T) {
 	t.Parallel()
 

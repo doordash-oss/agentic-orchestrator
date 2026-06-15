@@ -39,6 +39,7 @@ type Hooks struct {
 	OnFeatureCreated     func(f *feature.Feature)
 	OnFeatureStarted     func(featureID string)
 	OnFeatureInterrupted func(featureID string)
+	OnSetupEvent         func(feature.SetupEvent)
 	OnPhaseStarted       func(featureID string, phase feature.Phase)
 	OnPhaseCompleted     func(featureID string, phase feature.Phase, err error)
 
@@ -431,6 +432,9 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature: %w", err)
+	}
+	if f.Status == feature.StatusSettingUpWorktrees {
+		return fmt.Errorf("feature %s is still setting up worktrees", featureID)
 	}
 
 	phase := f.CurrentPhase
@@ -1205,6 +1209,12 @@ func (o *Orchestrator) InterruptAllRunning() error {
 	var errs []error
 	for _, f := range features {
 		switch {
+		case f.Status == feature.StatusSettingUpWorktrees:
+			// Worktree setup is pre-phase lifecycle work, not a session-backed
+			// phase. Startup reconciliation converts stale setup to Failed;
+			// the interrupt sweep should not attempt an invalid Interrupted
+			// transition here.
+			continue
 		case f.Status.IsRunning():
 			if err := o.InterruptFeature(f.ID); err != nil {
 				errs = append(errs, fmt.Errorf("interrupt %s: %w", f.ID, err))

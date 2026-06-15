@@ -38,6 +38,8 @@ type orchestratorAPI interface {
 	Done() <-chan struct{}
 
 	// --- Phase lifecycle -----------------------------------------------
+	RunSetup(featureID string) error
+	RetrySetup(featureID string) error
 	StartFeature(featureID string) error
 	HandlePhaseCompletion(featureID string, input orchestrator.PhaseCompletionInput) error
 	HandleReviewDecision(featureID string, d orchestrator.ReviewDecision) error

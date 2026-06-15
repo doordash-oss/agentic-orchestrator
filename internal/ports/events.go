@@ -55,6 +55,10 @@ const (
 	// the gate artifact. The TUI consumes it to surface a `Needs user input`
 	// banner. Message carries the agent's gate summary.
 	NeedUserInputRequired
+	SetupStarted
+	SetupProgress
+	SetupCompleted
+	SetupFailed
 )
 
 // Event is a typed domain event emitted by the orchestrator.
@@ -65,4 +69,14 @@ type Event struct {
 	Phase     feature.Phase    // set for phase-related events
 	Error     error            // set for failure events
 	Message   string           // human-readable detail
+
+	RunNumber   int
+	Attempt     int
+	SetupLog    string
+	SetupTask   string
+	SetupKind   feature.SetupTaskKind
+	SetupStatus feature.SetupStatus
+	RepoName    string
+	Path        string
+	Branch      string
 }

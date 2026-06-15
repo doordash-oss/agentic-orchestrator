@@ -17,6 +17,7 @@ package tui
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -259,53 +260,63 @@ func (m DetailModel) View() string {
 	// Footer (pinned to bottom)
 	var actionParts []string
 	var leadHint string
-	if actionHint, lead := contextualAActionHint(f); actionHint != "" {
-		if lead {
-			leadHint = WarningStyle.Bold(true).Render(actionHint)
-		} else {
-			actionParts = append(actionParts, actionHint)
+	if isSetupLifecycle(f) {
+		if setup := setupState(f); setup != nil && setup.LatestLogPath != "" {
+			actionParts = append(actionParts, "[l] Logs")
 		}
-	}
-	// Phase retry action — only when the feature is quiescent (Failed/Interrupted)
-	// so we don't kill unrelated in-flight repo sessions.
-	if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) &&
-		featureHasFailedRepos(f) {
-		actionParts = append(actionParts, "[Shift+R] Retry phase")
-	}
-	if isRunningFeature(f) {
-		actionParts = append(actionParts, "[s] Stop")
+		if canRetrySetup(f) {
+			actionParts = append(actionParts, "[r] Retry setup")
+		}
+		actionParts = append(actionParts, "[d] Delete", "[esc] Back")
 	} else {
-		actionParts = append(actionParts, "[r] Restart")
-	}
-	actionParts = append(actionParts, "[ctrl+r] Rewind")
-	if f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted || featureHasDisplayFailure(f) {
-		actionParts = append(actionParts, "[l] Logs")
-	}
-	if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-		actionParts = append(actionParts, "[v] Diff")
-	}
-	if f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish() && f.IsPublishable() {
-		actionParts = append(actionParts, "[p] Publish", "[m] Manual publish")
-	}
-	if f.Status == feature.StatusPublished || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
-		actionParts = append(actionParts, "[t] Tweak", "[Shift+F] Refactor", "[b] Rebase")
-	}
-	if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
-		actionParts = append(actionParts, "[Shift+M] Merge to base", "[Shift+D] Mark done")
-	}
-	if f.Status == feature.StatusPublished {
-		actionParts = append(actionParts, "[Shift+D] Mark done")
-		if len(f.PRURLs()) > 0 && f.IsPublishable() {
-			actionParts = append(actionParts, "[g] Reviews")
+		if actionHint, lead := contextualAActionHint(f); actionHint != "" {
+			if lead {
+				leadHint = WarningStyle.Bold(true).Render(actionHint)
+			} else {
+				actionParts = append(actionParts, actionHint)
+			}
 		}
+		// Phase retry action — only when the feature is quiescent (Failed/Interrupted)
+		// so we don't kill unrelated in-flight repo sessions.
+		if (f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted) &&
+			featureHasFailedRepos(f) {
+			actionParts = append(actionParts, "[Shift+R] Retry phase")
+		}
+		if isRunningFeature(f) {
+			actionParts = append(actionParts, "[s] Stop")
+		} else {
+			actionParts = append(actionParts, "[r] Restart")
+		}
+		actionParts = append(actionParts, "[ctrl+r] Rewind")
+		if f.Status == feature.StatusFailed || f.Status == feature.StatusInterrupted || featureHasDisplayFailure(f) {
+			actionParts = append(actionParts, "[l] Logs")
+		}
+		if f.Status == feature.StatusCodeReady && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
+			actionParts = append(actionParts, "[v] Diff")
+		}
+		if f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish() && f.IsPublishable() {
+			actionParts = append(actionParts, "[p] Publish", "[m] Manual publish")
+		}
+		if f.Status == feature.StatusPublished || (f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()) {
+			actionParts = append(actionParts, "[t] Tweak", "[Shift+F] Refactor", "[b] Rebase")
+		}
+		if f.Status == feature.StatusCodeReady && !f.IsPublishable() {
+			actionParts = append(actionParts, "[Shift+M] Merge to base", "[Shift+D] Mark done")
+		}
+		if f.Status == feature.StatusPublished {
+			actionParts = append(actionParts, "[Shift+D] Mark done")
+			if len(f.PRURLs()) > 0 && f.IsPublishable() {
+				actionParts = append(actionParts, "[g] Reviews")
+			}
+		}
+		if (f.Status == feature.StatusPublished || f.Status == feature.StatusDone) && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
+			actionParts = append(actionParts, "[c] Clean worktree")
+		}
+		if isFeatureQuiescent(f) {
+			actionParts = append(actionParts, "[e] Edit config")
+		}
+		actionParts = append(actionParts, "[Shift+N] Input alerts", "[d] Delete", "[esc] Back")
 	}
-	if (f.Status == feature.StatusPublished || f.Status == feature.StatusDone) && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
-		actionParts = append(actionParts, "[c] Clean worktree")
-	}
-	if isFeatureQuiescent(f) {
-		actionParts = append(actionParts, "[e] Edit config")
-	}
-	actionParts = append(actionParts, "[Shift+N] Input alerts", "[d] Delete", "[esc] Back")
 	actions := " " + strings.Join(actionParts, "  ")
 	brandHintStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	helpHint := brandHintStyle.Render("[" + HelpKeyHint() + "] Help")
@@ -537,7 +548,145 @@ func formatContextUsage(contextPct int) string {
 	}
 }
 
+func setupState(f *feature.Feature) *feature.SetupState {
+	if f == nil {
+		return nil
+	}
+	return f.Run().Setup
+}
+
+func isSetupLifecycle(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	if f.Status == feature.StatusSettingUpWorktrees || f.FailureType == feature.FailureWorktreeSetup {
+		return true
+	}
+	if setup := setupState(f); setup != nil {
+		return setup.Status == feature.SetupStatusRunning || setup.Status == feature.SetupStatusFailed
+	}
+	return false
+}
+
+func canRetrySetup(f *feature.Feature) bool {
+	setup := setupState(f)
+	return f != nil &&
+		f.Status == feature.StatusFailed &&
+		f.FailureType == feature.FailureWorktreeSetup &&
+		setup != nil &&
+		setup.Status == feature.SetupStatusFailed
+}
+
+func (m DetailModel) renderSetupProgress(_ *feature.Feature, setup *feature.SetupState) string {
+	var b strings.Builder
+	header := "Setup"
+	if setup.Attempt > 0 {
+		header += fmt.Sprintf(" attempt %d", setup.Attempt)
+	}
+	b.WriteString(fmt.Sprintf("  %s %s %s\n", setupStatusIcon(setup.Status, m), header, setupStatusLabel(setup.Status)))
+	if setup.LatestLogPath != "" {
+		b.WriteString("    " + LabelStyle.Render("Log") + "  " + MutedStyle.Render(setup.LatestLogPath) + "\n")
+	}
+	if setup.LastError != "" {
+		b.WriteString("    " + LabelStyle.Render("Error") + "  " + ErrorStyle.Render(setup.LastError) + "\n")
+	}
+	for _, key := range setupTaskOrder(setup) {
+		task := setup.Tasks[key]
+		b.WriteString(renderSetupTask(task, m))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func setupTaskOrder(setup *feature.SetupState) []string {
+	if setup == nil {
+		return nil
+	}
+	seen := make(map[string]bool, len(setup.Tasks))
+	var order []string
+	for _, key := range setup.TaskOrder {
+		if _, ok := setup.Tasks[key]; ok && !seen[key] {
+			order = append(order, key)
+			seen[key] = true
+		}
+	}
+	var rest []string
+	for key := range setup.Tasks {
+		if !seen[key] {
+			rest = append(rest, key)
+		}
+	}
+	sort.Strings(rest)
+	return append(order, rest...)
+}
+
+func renderSetupTask(task feature.SetupTask, m DetailModel) string {
+	var b strings.Builder
+	icon := setupStatusIcon(task.Status, m)
+	label := task.Label
+	if label == "" {
+		label = task.Key
+	}
+	b.WriteString(fmt.Sprintf("  %s  \u21b3 %s [%s] %s", MutedStyle.Render(" "), icon+" "+label, task.Kind, setupStatusLabel(task.Status)))
+	if task.Attempt > 0 {
+		b.WriteString(fmt.Sprintf(" attempt %d", task.Attempt))
+	}
+	b.WriteString("\n")
+	if task.Repo != "" {
+		b.WriteString("      " + LabelStyle.Render("Repo") + "  " + MutedStyle.Render(task.Repo) + "\n")
+	}
+	if task.Branch != "" {
+		b.WriteString("      " + LabelStyle.Render("Branch") + "  " + MutedStyle.Render(task.Branch) + "\n")
+	}
+	if task.Path != "" {
+		b.WriteString("      " + LabelStyle.Render("Path") + "  " + MutedStyle.Render(task.Path) + "\n")
+	}
+	if task.StartedAt != nil {
+		b.WriteString("      " + LabelStyle.Render("Started") + "  " + MutedStyle.Render(formatSetupTime(*task.StartedAt)) + "\n")
+	}
+	if task.EndedAt != nil {
+		b.WriteString("      " + LabelStyle.Render("Ended") + "  " + MutedStyle.Render(formatSetupTime(*task.EndedAt)) + "\n")
+	}
+	if task.LastError != "" {
+		b.WriteString("      " + LabelStyle.Render("Error") + "  " + ErrorStyle.Render(task.LastError) + "\n")
+	}
+	return b.String()
+}
+
+func setupStatusIcon(status feature.SetupStatus, m DetailModel) string {
+	switch status {
+	case feature.SetupStatusRunning:
+		return m.activeProgressIcon()
+	case feature.SetupStatusDone:
+		return SuccessStyle.Render("\u2713")
+	case feature.SetupStatusFailed:
+		return ErrorStyle.Render("\u2717")
+	default:
+		return MutedStyle.Render("\u25cb")
+	}
+}
+
+func setupStatusLabel(status feature.SetupStatus) string {
+	switch status {
+	case feature.SetupStatusRunning:
+		return lipgloss.NewStyle().Foreground(colorInfo).Render("running")
+	case feature.SetupStatusDone:
+		return SuccessStyle.Render("done")
+	case feature.SetupStatusFailed:
+		return ErrorStyle.Render("failed")
+	default:
+		return MutedStyle.Render("queued")
+	}
+}
+
+func formatSetupTime(t time.Time) string {
+	return t.Format("2006-01-02 15:04:05")
+}
+
 func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
+	if setup := setupState(f); setup != nil && isSetupLifecycle(f) {
+		return m.renderSetupProgress(f, setup)
+	}
+
 	var b strings.Builder
 	allPhases := []struct {
 		name     string
@@ -849,6 +998,10 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 }
 
 func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
+	if setup := setupState(f); setup != nil && isSetupLifecycle(f) {
+		return m.renderSetupProgress(f, setup)
+	}
+
 	var b strings.Builder
 	allPhases := []struct {
 		name     string
@@ -1261,6 +1414,23 @@ func finalReviewStatusText(f *feature.Feature) string {
 }
 
 func formatDetailStatus(f *feature.Feature) string {
+	if setup := setupState(f); setup != nil && setup.Status == feature.SetupStatusFailed {
+		msg := "Failed"
+		if f.FailureType != "" {
+			msg = "Failed (" + formatFailureType(f.FailureType) + ")"
+		}
+		var hints []string
+		if canRetrySetup(f) {
+			hints = append(hints, "press [r] to retry setup")
+		}
+		if setup.LatestLogPath != "" {
+			hints = append(hints, "[l] logs")
+		}
+		if len(hints) > 0 {
+			msg += " \u2014 " + strings.Join(hints, ", ")
+		}
+		return ErrorStyle.Render(msg)
+	}
 	if featureHasDisplayFailure(f) && f.Status != feature.StatusFailed && !isRunningStatus(f.Status) {
 		msg := "Failed"
 		if f.FailureType != "" {
@@ -1269,6 +1439,8 @@ func formatDetailStatus(f *feature.Feature) string {
 		return ErrorStyle.Render(msg + " — press [r] to restart, [l] logs")
 	}
 	switch f.Status {
+	case feature.StatusSettingUpWorktrees:
+		return lipgloss.NewStyle().Foreground(colorInfo).Render("Setting up worktrees")
 	case feature.StatusImplementing:
 		var label string
 		switch f.ActiveCycleType() {

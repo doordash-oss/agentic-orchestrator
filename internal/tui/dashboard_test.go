@@ -332,6 +332,37 @@ func TestCreatingFeatureRowCreatesInProgressSection(t *testing.T) {
 	}
 }
 
+func TestPersistedSetupFeatureRendersAsSelectableInProgressRow(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:      "feat-setup",
+		Name:    "setup",
+		Slug:    "setup-feature",
+		Status:  feature.StatusSettingUpWorktrees,
+		Created: time.Now(),
+	}
+	m := NewDashboardModel([]*feature.Feature{f}, "")
+
+	if !m.SelectFeatureID(f.ID) {
+		t.Fatalf("setup feature was not selectable")
+	}
+	if got := m.SelectedFeatureID(); got != f.ID {
+		t.Fatalf("selected feature = %q, want %q", got, f.ID)
+	}
+
+	lines := strings.Split(strings.TrimRight(ansi.Strip(m.renderFeatureList()), "\n"), "\n")
+	if len(lines) < 3 || !strings.Contains(lines[0], "IN PROGRESS (1)") {
+		t.Fatalf("rendered lines = %q, want setup feature under in-progress", lines)
+	}
+	row := ansi.Strip(m.renderFeatureRowCompact(f, false))
+	if !strings.Contains(row, "Setting up worktrees") {
+		t.Fatalf("setup row = %q, want Setting up worktrees label", row)
+	}
+	if strings.Contains(row, "SettingUpWorktrees") {
+		t.Fatalf("setup row = %q, should not render raw status token", row)
+	}
+}
+
 func TestGhostCTAReappearsAfterDeletion(t *testing.T) {
 	t.Parallel()
 	m := NewDashboardModel([]*feature.Feature{

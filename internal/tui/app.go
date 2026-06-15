@@ -309,6 +309,12 @@ type FeatureCreatedMsg struct {
 	Err        error
 }
 
+type setupCommandDoneMsg struct {
+	FeatureID string
+	Retry     bool
+	Err       error
+}
+
 // featureSummaryMsg carries a Claude-generated summary for a feature.
 type featureSummaryMsg struct {
 	featureID string
@@ -964,6 +970,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		OrchFeatureCompletedMsg,
 		OrchFeatureFailedMsg,
 		OrchFeatureInterruptedMsg,
+		OrchSetupLifecycleMsg,
 		OrchPhaseStartedMsg,
 		OrchPhaseCompletedMsg,
 		OrchReviewRequiredMsg,
@@ -1312,16 +1319,45 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
+		featuresByID := make(map[string]*feature.Feature)
+		if features, err := m.featureManager.List(); err == nil || feature.IsPartialLoadError(err) {
+			m.dashboard.SetFeatures(features)
+			for _, f := range features {
+				if f != nil {
+					featuresByID[f.ID] = f
+				}
+			}
+			if len(msg.FeatureIDs) > 0 {
+				m.dashboard.SelectFeatureID(msg.FeatureIDs[0])
+			}
+		}
 
 		var cmds []tea.Cmd
 		cmds = append(cmds, func() tea.Msg { return RefreshFeaturesMsg{} })
-		for _, fid := range msg.FeatureIDs {
-			cmds = append(cmds, m.startFirstPhaseCmd(fid))
+		if m.orchestrator != nil {
+			for _, fid := range msg.FeatureIDs {
+				if isSetupLifecycle(featuresByID[fid]) {
+					cmds = append(cmds, m.runSetupCmd(fid))
+				} else {
+					cmds = append(cmds, m.startFirstPhaseCmd(fid))
+				}
+			}
 		}
 		for _, fid := range msg.FeatureIDs {
 			cmds = append(cmds, m.generateSummaryCmd(fid))
 		}
 		return m, tea.Batch(cmds...)
+
+	case setupCommandDoneMsg:
+		if msg.Err != nil {
+			action := "Setup"
+			if msg.Retry {
+				action = "Setup retry"
+			}
+			m.statusMessage = action + " failed: " + firstLine(msg.Err.Error())
+			m.statusTime = time.Now()
+		}
+		return m, func() tea.Msg { return RefreshFeaturesMsg{} }
 
 	case featureSummaryMsg:
 		if msg.summary != "" {
@@ -2212,6 +2248,15 @@ func orchEventToMsg(ev ports.Event) tea.Msg {
 		return OrchFeatureFailedMsg{FeatureID: ev.FeatureID, Message: ev.Message, Error: ev.Error}
 	case ports.FeatureInterrupted:
 		return OrchFeatureInterruptedMsg{FeatureID: ev.FeatureID}
+	case ports.SetupStarted, ports.SetupProgress, ports.SetupCompleted, ports.SetupFailed:
+		return OrchSetupLifecycleMsg{
+			FeatureID: ev.FeatureID,
+			RunNumber: ev.RunNumber,
+			Attempt:   ev.Attempt,
+			TaskKey:   ev.SetupTask,
+			RepoName:  ev.RepoName,
+			Error:     ev.Error,
+		}
 	case ports.PhaseStarted:
 		return OrchPhaseStartedMsg{FeatureID: ev.FeatureID, Phase: ev.Phase}
 	case ports.PhaseCompleted:
@@ -3513,12 +3558,15 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 		}
 
 	case key.Matches(msg, keys.Restart):
-		if f != nil {
+		if canRetrySetup(f) {
+			return m, m.retrySetupCmd(f.ID)
+		}
+		if f != nil && !isSetupLifecycle(f) {
 			return m, m.restartPhaseCmd(f.ID)
 		}
 
 	case key.Matches(msg, keys.Stop):
-		if f != nil && isRunningFeature(f) {
+		if f != nil && !isSetupLifecycle(f) && isRunningFeature(f) {
 			return m.confirmStop(f.ID, f.Name), nil
 		}
 
@@ -3809,20 +3857,23 @@ func (m AppModel) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Retry the failed phase atomically across every phase-declared
 		// repo — only when feature is quiescent (Failed/Interrupted) so
 		// we don't kill unrelated in-flight sessions.
-		if m.detail.feature != nil && featureHasFailedRepos(m.detail.feature) &&
+		if m.detail.feature != nil && !isSetupLifecycle(m.detail.feature) && featureHasFailedRepos(m.detail.feature) &&
 			(m.detail.feature.Status == feature.StatusFailed || m.detail.feature.Status == feature.StatusInterrupted) {
 			return m, m.retryPhaseCmd(m.detail.feature.ID)
 		}
 		return m, nil
 
 	case key.Matches(msg, keys.Restart):
-		if m.detail.feature != nil {
+		if canRetrySetup(m.detail.feature) {
+			return m, m.retrySetupCmd(m.detail.feature.ID)
+		}
+		if m.detail.feature != nil && !isSetupLifecycle(m.detail.feature) {
 			return m, m.restartPhaseCmd(m.detail.feature.ID)
 		}
 		return m, nil
 
 	case key.Matches(msg, keys.Stop):
-		if m.detail.feature != nil && isRunningFeature(m.detail.feature) {
+		if m.detail.feature != nil && !isSetupLifecycle(m.detail.feature) && isRunningFeature(m.detail.feature) {
 			return m.confirmStop(m.detail.feature.ID, m.detail.feature.Name), nil
 		}
 		return m, nil
@@ -4224,6 +4275,7 @@ func (m AppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 			Attachments:             result.Attachments,
 			RiskLevel:               riskLevel,
 			Pipeline:                result.Pipeline,
+			QueueSetup:              true,
 		}
 
 		// Route creation through the orchestrator so its post-creation hook
@@ -4309,6 +4361,26 @@ func (m AppModel) startFirstPhaseCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
 		_ = m.orchestrator.StartFeature(featureID)
 		return RefreshFeaturesMsg{}
+	}
+}
+
+func (m AppModel) runSetupCmd(featureID string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if m.orchestrator != nil {
+			err = m.orchestrator.RunSetup(featureID)
+		}
+		return setupCommandDoneMsg{FeatureID: featureID, Err: err}
+	}
+}
+
+func (m AppModel) retrySetupCmd(featureID string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if m.orchestrator != nil {
+			err = m.orchestrator.RetrySetup(featureID)
+		}
+		return setupCommandDoneMsg{FeatureID: featureID, Retry: true, Err: err}
 	}
 }
 
@@ -5146,6 +5218,22 @@ func (m AppModel) viewLogsCmd(featureID string, phase feature.Phase, roadmapPhas
 		if loadErr != nil {
 			return RefreshFeaturesMsg{}
 		}
+		if setup := setupState(f); setup != nil && setup.LatestLogPath != "" {
+			data, err := os.ReadFile(setup.LatestLogPath)
+			if err != nil {
+				return LogsContentMsg{
+					FeatureID: featureID,
+					Title:     fmt.Sprintf("Logs: %s (setup)", featureID),
+					Content:   fmt.Sprintf("Setup log not found: %s", setup.LatestLogPath),
+				}
+			}
+			lines := splitLastN(string(data), 100)
+			return LogsContentMsg{
+				FeatureID: featureID,
+				Title:     fmt.Sprintf("Logs: %s (setup \u2014 %s)", featureID, filepath.Base(setup.LatestLogPath)),
+				Content:   strings.Join(lines, "\n"),
+			}
+		}
 		var phaseDir string
 		if roadmapPhase > 0 {
 			// Roadmap features store logs under phase-NN/<phase>/
@@ -5356,11 +5444,21 @@ func (m AppModel) transitionToHelpOverlay() (tea.Model, tea.Cmd) {
 	switch m.currentView {
 	case ViewDashboard:
 		if m.dashboard.focusPanel == 1 {
+			if f := m.dashboard.SelectedFeature(); isSetupLifecycle(f) {
+				m.helpOverlay = NewHelpOverlayModel(setupDetailPanelHelp(setupLogsAvailable(f), canRetrySetup(f)), m.width, m.height)
+				m.helpOverlayActive = true
+				return m, nil
+			}
 			ctxName = "Detail Panel"
 		} else {
 			ctxName = "Dashboard"
 		}
 	case ViewDetail:
+		if isSetupLifecycle(m.detail.feature) {
+			m.helpOverlay = NewHelpOverlayModel(setupDetailHelp(setupLogsAvailable(m.detail.feature), canRetrySetup(m.detail.feature)), m.width, m.height)
+			m.helpOverlayActive = true
+			return m, nil
+		}
 		ctxName = "Detail"
 	case ViewWizard:
 		ctxName = "Wizard"
@@ -5384,6 +5482,11 @@ func (m AppModel) transitionToHelpOverlay() (tea.Model, tea.Cmd) {
 	m.helpOverlay = NewHelpOverlayModel(ctx, m.width, m.height)
 	m.helpOverlayActive = true
 	return m, nil
+}
+
+func setupLogsAvailable(f *feature.Feature) bool {
+	setup := setupState(f)
+	return setup != nil && setup.LatestLogPath != ""
 }
 
 // transitionToWorkspaceManager opens the workspace manager overlay.

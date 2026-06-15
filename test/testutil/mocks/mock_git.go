@@ -417,6 +417,7 @@ func (m *MockReviewCommentOperator) LatestCommitSHA(worktreePath string) (string
 // function overrides and call tracking.
 type MockWorktreeOperator struct {
 	CreateFn                func(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	ExpectedPathFn          func(featureSlug, repoName string) string
 	RemoveFn                func(worktreePath string, deleteBranch bool) error
 	ListFn                  func() ([]git.WorktreeInfo, error)
 	DetectStaleFn           func(activeFeatureIDs []string) ([]git.WorktreeInfo, error)
@@ -438,6 +439,14 @@ func (m *MockWorktreeOperator) Create(repoPath, featureSlug, repoName, startPoin
 		return m.CreateFn(repoPath, featureSlug, repoName, startPoint)
 	}
 	return "", m.DefaultError
+}
+
+func (m *MockWorktreeOperator) ExpectedPath(featureSlug, repoName string) string {
+	m.Calls = append(m.Calls, MockCall{Method: "ExpectedPath", Args: []any{featureSlug, repoName}})
+	if m.ExpectedPathFn != nil {
+		return m.ExpectedPathFn(featureSlug, repoName)
+	}
+	return ""
 }
 
 func (m *MockWorktreeOperator) Remove(worktreePath string, deleteBranch bool) error {

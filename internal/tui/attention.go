@@ -183,6 +183,9 @@ func isWatchAttentionEligible(f *feature.Feature) bool {
 	if f.Status == feature.StatusCreated {
 		return true
 	}
+	if f.Status == feature.StatusSettingUpWorktrees {
+		return false
+	}
 	if f.Status.IsRunning() {
 		return true
 	}

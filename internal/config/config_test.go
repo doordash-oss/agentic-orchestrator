@@ -25,8 +25,16 @@ import (
 
 func TestNewDefault(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.Research != "opus[1m]" {
-		t.Errorf("expected research model opus[1m], got %s", cfg.Defaults.Models.Research)
+	wantModels := ModelConfig{
+		Research:       "sonnet[200K]",
+		Planning:       "opus[1M]",
+		Implementation: "opus[1M]",
+		Review:         "gpt-5.4[272K]",
+		Utilities:      "sonnet[200K]",
+		KBBuild:        "sonnet[200K]",
+	}
+	if cfg.Defaults.Models != wantModels {
+		t.Errorf("default models = %+v, want %+v", cfg.Defaults.Models, wantModels)
 	}
 	if cfg.Defaults.MaxIterations != 10 {
 		t.Errorf("expected max iterations 10, got %d", cfg.Defaults.MaxIterations)
@@ -114,8 +122,8 @@ func TestLoadOrCreate(t *testing.T) {
 		t.Fatalf("load or create: %v", err)
 	}
 
-	if cfg.Defaults.Models.Research != "opus[1m]" {
-		t.Errorf("expected default research model opus[1m], got %s", cfg.Defaults.Models.Research)
+	if cfg.Defaults.Models.Research != "sonnet[200K]" {
+		t.Errorf("expected default research model sonnet[200K], got %s", cfg.Defaults.Models.Research)
 	}
 
 	// File should exist now
@@ -367,11 +375,11 @@ func TestApplyDefaults(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
 
-	if cfg.Defaults.Models.Research != "opus[1m]" {
+	if cfg.Defaults.Models.Research != "sonnet[200K]" {
 		t.Errorf("expected default research model, got %s", cfg.Defaults.Models.Research)
 	}
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected default utilities model sonnet, got %s", cfg.Defaults.Models.Utilities)
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected default utilities model sonnet[200K], got %s", cfg.Defaults.Models.Utilities)
 	}
 	if cfg.Defaults.MaxIterations != 10 {
 		t.Errorf("expected default max iterations, got %d", cfg.Defaults.MaxIterations)
@@ -386,8 +394,8 @@ func TestApplyDefaults(t *testing.T) {
 
 func TestUtilitiesModelDefault(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected utilities model sonnet, got %s", cfg.Defaults.Models.Utilities)
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected utilities model sonnet[200K], got %s", cfg.Defaults.Models.Utilities)
 	}
 }
 
@@ -473,16 +481,16 @@ ui:
 
 func TestNewDefaultKBBuild(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.KBBuild != "opus[1m]" {
-		t.Errorf("expected KBBuild default opus[1m], got %s", cfg.Defaults.Models.KBBuild)
+	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
+		t.Errorf("expected KBBuild default sonnet[200K], got %s", cfg.Defaults.Models.KBBuild)
 	}
 }
 
 func TestApplyDefaultsFillsKBBuild(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
-	if cfg.Defaults.Models.KBBuild != "opus[1m]" {
-		t.Errorf("expected KBBuild opus[1m] after applyDefaults, got %s", cfg.Defaults.Models.KBBuild)
+	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
+		t.Errorf("expected KBBuild sonnet[200K] after applyDefaults, got %s", cfg.Defaults.Models.KBBuild)
 	}
 }
 
@@ -528,8 +536,8 @@ func TestLoadConfigWithoutKBBuildGetsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Defaults.Models.KBBuild != "opus[1m]" {
-		t.Errorf("expected KBBuild opus[1m] for config without kb_build, got %s", cfg.Defaults.Models.KBBuild)
+	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
+		t.Errorf("expected KBBuild sonnet[200K] for config without kb_build, got %s", cfg.Defaults.Models.KBBuild)
 	}
 }
 
@@ -1363,8 +1371,8 @@ func TestDefaultsPipelinePreservesExisting(t *testing.T) {
 
 func TestNewDefault_Utilities(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected Utilities default sonnet, got %s", cfg.Defaults.Models.Utilities)
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected Utilities default sonnet[200K], got %s", cfg.Defaults.Models.Utilities)
 	}
 }
 
@@ -1420,9 +1428,9 @@ func TestMigrateModelConfig_NeitherSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// applyDefaults should fill it with "sonnet"
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected Utilities=sonnet (from defaults), got %q", cfg.Defaults.Models.Utilities)
+	// applyDefaults should fill it with "sonnet[200K]"
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected Utilities=sonnet[200K] (from defaults), got %q", cfg.Defaults.Models.Utilities)
 	}
 }
 

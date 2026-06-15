@@ -21,24 +21,24 @@ The `defaults.models` section assigns a model to each phase role:
 ```yaml
 defaults:
   models:
-    research: opus
-    planning: opus
-    implementation: opus
-    review: gpt-5.4
-    utilities: sonnet
-    kb_build: opus
+    research: "sonnet[200K]"
+    planning: "opus[1M]"
+    implementation: "opus[1M]"
+    review: "gpt-5.4[272K]"
+    utilities: "sonnet[200K]"
+    kb_build: "sonnet[200K]"
 ```
 
 | Role | Default | Used For |
 |------|---------|----------|
-| `research` | `opus` | Research, inquiry, design phases |
-| `planning` | `opus` | Plan creation and roadmap generation |
-| `implementation` | `opus` | Code implementation |
-| `review` | `gpt-5.4` | Final Review loop |
-| `utilities` | `sonnet` | Chat (AMA), utility skills |
-| `kb_build` | `opus` | Knowledge base construction |
+| `research` | `sonnet[200K]` | Research, inquiry, design phases |
+| `planning` | `opus[1M]` | Plan creation and roadmap generation |
+| `implementation` | `opus[1M]` | Code implementation |
+| `review` | `gpt-5.4[272K]` | Final Review loop |
+| `utilities` | `sonnet[200K]` | Chat (AMA), utility skills |
+| `kb_build` | `sonnet[200K]` | Knowledge base construction |
 
-Model names can be bare (e.g., `opus`) or prefixed with a provider (e.g., `claude:opus`, `codex:gpt-5.4`). Bare names are resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude` and `internal/llm/codex`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
+Model names can use canonical context-window IDs (e.g., `opus[1M]`) or provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`). Bare aliases such as `opus` are still accepted and resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude` and `internal/llm/codex`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
 
 ## Pipeline Configuration
 

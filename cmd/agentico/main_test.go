@@ -441,17 +441,17 @@ func TestRemapUnresolvableModels(t *testing.T) {
 
 	t.Run("keeps_resolvable_models", func(t *testing.T) {
 		r := llm.NewRegistry()
-		r.Register(&stubProvider{name: "claude", models: []string{"opus", "sonnet"}, hasCLI: true})
+		r.Register(&stubProvider{name: "claude", models: []string{"opus[1M]", "sonnet[200K]"}, hasCLI: true})
 
 		cfg := config.NewDefault()
 		remapUnresolvableModels(cfg, r)
 
-		// opus and sonnet should stay; gpt-5.4 (review) should become opus (most capable)
-		if cfg.Defaults.Models.Research != "opus" {
-			t.Errorf("research should stay opus, got %q", cfg.Defaults.Models.Research)
+		// canonical Claude defaults should stay; gpt-5.4[272K] (review) should become opus[1M].
+		if cfg.Defaults.Models.Research != "sonnet[200K]" {
+			t.Errorf("research should stay sonnet[200K], got %q", cfg.Defaults.Models.Research)
 		}
-		if cfg.Defaults.Models.Utilities != "sonnet" {
-			t.Errorf("utilities should stay sonnet, got %q", cfg.Defaults.Models.Utilities)
+		if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+			t.Errorf("utilities should stay sonnet[200K], got %q", cfg.Defaults.Models.Utilities)
 		}
 	})
 }

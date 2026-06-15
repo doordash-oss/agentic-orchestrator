@@ -370,17 +370,53 @@ var providerPreference = map[PhaseRole]string{
 	PhaseKBBuild:        "claude",
 }
 
-// categoryForRole maps phase roles to the desired model category.
+// categoryForRole maps phase roles to the default model-selection category.
+// Research and KB build are intentionally cost-efficient defaults: they are
+// token-heavy phases that fan out through sub-agents, so a balanced model is
+// usually a better starting point than the largest context window.
 var categoryForRole = map[PhaseRole]string{
-	PhaseResearch:       "capable",
+	PhaseResearch:       "balanced",
 	PhasePlanning:       "capable",
 	PhaseImplementation: "capable",
 	PhaseReview:         "capable",
 	PhaseChat:           "balanced",
-	PhaseKBBuild:        "capable",
+	PhaseKBBuild:        "balanced",
 }
 
-func selectRoleModel(models []ModelInfo, category string) (ModelInfo, bool) {
+var preferredModelHintsByRoleProvider = map[PhaseRole]map[string][]string{
+	PhaseResearch: {
+		"claude": {"sonnet[200K]", "sonnet"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
+	},
+	PhaseKBBuild: {
+		"claude": {"sonnet[200K]", "sonnet"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
+	},
+}
+
+func selectHintedModel(models []ModelInfo, hints []string) (ModelInfo, bool) {
+	for _, hint := range hints {
+		for _, model := range models {
+			if strings.EqualFold(model.ID, hint) {
+				return model, true
+			}
+			for _, alias := range model.Aliases {
+				if strings.EqualFold(alias, hint) {
+					return model, true
+				}
+			}
+		}
+	}
+	return ModelInfo{}, false
+}
+
+func selectRoleModel(models []ModelInfo, role PhaseRole, provider string) (ModelInfo, bool) {
+	if providerHints, ok := preferredModelHintsByRoleProvider[role]; ok {
+		if m, ok := selectHintedModel(models, providerHints[provider]); ok {
+			return m, true
+		}
+	}
+	category := categoryForRole[role]
 	if category == "balanced" {
 		return BalancedFrom(models)
 	}
@@ -420,11 +456,10 @@ func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride str
 		if providerOverride != "" {
 			preferred = providerOverride
 		}
-		category := categoryForRole[role]
 
 		if preferred != "" {
 			if models := r.ModelsForProvider(preferred); len(models) > 0 {
-				if m, ok := selectRoleModel(models, category); ok {
+				if m, ok := selectRoleModel(models, role, preferred); ok {
 					return formatCatalogDefault(preferred, m, multi)
 				}
 			}
@@ -435,7 +470,7 @@ func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride str
 
 		for _, p := range detected {
 			cat := catalogForProvider(p)
-			if m, ok := selectRoleModel(cat, category); ok {
+			if m, ok := selectRoleModel(cat, role, p.Name()); ok {
 				return formatCatalogDefault(p.Name(), m, multi)
 			}
 		}
@@ -469,16 +504,14 @@ func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 }
 
 // eligibleCategoriesForRole maps phase roles to the set of model categories
-// that are appropriate for that phase. Phases requiring deep reasoning only
-// show "capable" models; phases that can use lighter models also include
-// "balanced" or "cheap".
+// that are appropriate for that phase.
 var eligibleCategoriesForRole = map[PhaseRole]map[string]bool{
-	PhaseResearch:       {"capable": true},
+	PhaseResearch:       {"capable": true, "balanced": true},
 	PhasePlanning:       {"capable": true},
 	PhaseImplementation: {"capable": true, "balanced": true},
 	PhaseReview:         {"capable": true, "balanced": true},
 	PhaseChat:           {"balanced": true, "cheap": true},
-	PhaseKBBuild:        {"capable": true},
+	PhaseKBBuild:        {"capable": true, "balanced": true},
 }
 
 // maxModelsPerProvider is the maximum number of models shown per provider
@@ -506,11 +539,43 @@ func (r *Registry) EligibleModelsForPhase(role PhaseRole) map[string][]string {
 			}
 		}
 
-		// Limit to top N by capability rank.
+		// Limit to top N by capability rank, while preserving the role's
+		// default recommendation even when that recommendation is balanced and
+		// would otherwise be crowded out by capable variants.
 		ids := TopModelIDs(filtered, maxModelsPerProvider)
+		if recommended, ok := selectRoleModel(catalog, role, name); ok {
+			ids = includeRecommendedModelID(ids, recommended.ID)
+		}
 		if len(ids) > 0 {
 			result[name] = ids
 		}
 	}
 	return result
+}
+
+func includeRecommendedModelID(ids []string, recommended string) []string {
+	if recommended == "" {
+		return ids
+	}
+	for i, id := range ids {
+		if id != recommended {
+			continue
+		}
+		if i == 0 {
+			return ids
+		}
+		out := make([]string, 0, len(ids))
+		out = append(out, recommended)
+		out = append(out, ids[:i]...)
+		out = append(out, ids[i+1:]...)
+		return out
+	}
+
+	out := make([]string, 0, len(ids)+1)
+	out = append(out, recommended)
+	out = append(out, ids...)
+	if len(out) > maxModelsPerProvider {
+		return out[:maxModelsPerProvider]
+	}
+	return out
 }

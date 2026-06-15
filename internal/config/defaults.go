@@ -25,12 +25,12 @@ func NewDefault() *Config {
 	return &Config{
 		Defaults: DefaultsConfig{
 			Models: ModelConfig{
-				Research:       "opus[1m]",
-				Planning:       "opus[1m]",
-				Implementation: "opus[1m]",
-				Review:         "gpt-5.4",
-				Utilities:      "sonnet",
-				KBBuild:        "opus[1m]",
+				Research:       "sonnet[200K]",
+				Planning:       "opus[1M]",
+				Implementation: "opus[1M]",
+				Review:         "gpt-5.4[272K]",
+				Utilities:      "sonnet[200K]",
+				KBBuild:        "sonnet[200K]",
 			},
 			Checkpoints: Checkpoints{
 				ManualPublish: true,

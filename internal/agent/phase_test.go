@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1099,6 +1100,60 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 	}
 	if HasPhaseComplete(kbDir) {
 		t.Fatal("stale phase_complete still exists after RunKnowledgeBaseForRepo")
+	}
+}
+
+func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateDir := filepath.Join(tmpDir, "state")
+	repoDir := filepath.Join(tmpDir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+
+	sm := mocks.NewMockSessionManager()
+	cmd := mocks.NewMockCommandRunner()
+	cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
+		return []byte("deadbeef\n"), nil
+	}
+
+	var capturedLogPath string
+	var startSessionLogPath string
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		if len(opts) > 0 && opts[0] != nil {
+			startSessionLogPath = opts[0].LogPath
+		}
+		return session.NewSession(id, featureID, phase), nil
+	}
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		StateDir:       stateDir,
+		CommandRunner:  cmd,
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			capturedLogPath = opts.LogPath
+			return []string{"true"}, nil, &session.SessionOpts{}, nil
+		},
+	}
+
+	f := &feature.Feature{
+		ID:     "feat-kb-log",
+		Repos:  []feature.FeatureRepo{{Name: "repo-a", Path: repoDir}},
+		Models: config.ModelConfig{},
+	}
+
+	if _, err := pr.RunKnowledgeBaseForRepo(f, f.Repos[0]); err != nil {
+		t.Fatalf("RunKnowledgeBaseForRepo: %v", err)
+	}
+
+	want := filepath.Join(KBStateDir(stateDir, "repo-a"), "output.txt")
+	if capturedLogPath != want {
+		t.Fatalf("BuildSession LogPath = %q, want %q", capturedLogPath, want)
+	}
+	if len(sm.StartSessionCalls) != 1 {
+		t.Fatalf("StartSession calls = %d, want 1", len(sm.StartSessionCalls))
+	}
+	if got := startSessionLogPath; got != want {
+		t.Fatalf("StartSession SessionOpts.LogPath = %q, want %q", got, want)
 	}
 }
 

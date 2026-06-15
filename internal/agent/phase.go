@@ -570,6 +570,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	workDir := repoPath
 
 	pidDir := filepath.Join(pr.StateDir, f.ID)
+	logPath := filepath.Join(kbDir, "output.txt")
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          kbModel,
 		Prompt:                         prompt,
@@ -584,9 +585,16 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		Phase:                          feature.PhaseKnowledgeBase,
 		SystemPromptHasUsefulResources: true,
 		MarkerPath:                     filepath.Join(kbDir, PhaseCompleteFile),
+		LogPath:                        logPath,
 	})
 	if err != nil {
 		return "", fmt.Errorf("building KB session: %w", err)
+	}
+	if sessOpts == nil {
+		sessOpts = &ports.SessionOpts{}
+	}
+	if sessOpts.LogPath == "" {
+		sessOpts.LogPath = logPath
 	}
 	WriteDebugPrompts(kbDir, sessOpts.DebugSystemPrompt, prompt)
 
@@ -613,11 +621,13 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		_ = ReleaseKBLock(kbDir, featureID)
 	})
 
-	// Set up log file
-	logPath := filepath.Join(kbDir, "output.txt")
-	logFile, err := os.Create(logPath)
-	if err == nil {
-		sess.SetLogFile(logFile)
+	// Fallback for custom SessionManager implementations that do not honor
+	// SessionOpts.LogPath. The production manager opens it before Start().
+	if sess.LogFilePath() == "" {
+		logFile, err := os.Create(logPath)
+		if err == nil {
+			sess.SetLogFile(logFile)
+		}
 	}
 
 	return sessionID, nil
@@ -674,7 +684,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		FeatureStore:               pr.FeatureStore,
 		StateDir:                   pr.StateDir,
 		ResearchArtifactPath:       researchArtifactPath,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		QAFilePaths:                qaFilePaths,
 		KBInfos:                    kbInfos,
 		WorkDir:                    workDir,
@@ -736,7 +746,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			Feature:                    f,
 			FeatureStore:               pr.FeatureStore,
 			StateDir:                   pr.StateDir,
-			DesignArtifactPath:     f.DesignArtifactPath(),
+			DesignArtifactPath:         f.DesignArtifactPath(),
 			QAFilePaths:                qaFilePaths,
 			KBInfos:                    kbInfos,
 			WorkDir:                    workDir,
@@ -813,7 +823,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		StateDir:                   filepath.Join(pr.StateDir, f.ID),
 		PhaseType:                  phaseType,
 		RoadmapPath:                roadmapPath,
-		DesignArtifactPath:     f.DesignArtifactPath(),
+		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		BuildSession:               pr.BuildSession,

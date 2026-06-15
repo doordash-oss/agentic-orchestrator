@@ -1012,6 +1012,49 @@ func TestDashboardWatchAttachPreservesMultiRepoTabs(t *testing.T) {
 	}
 }
 
+func TestUpdateAttach_TabbedDoneSessionDoesNotDetachOnOrdinaryKey(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	fm.Config.Repos["api"] = config.RepoConfig{Path: "/tmp/api"}
+	fm.Config.Repos["web"] = config.RepoConfig{Path: "/tmp/web"}
+	fm.Config.Repos["worker"] = config.RepoConfig{Path: "/tmp/worker"}
+
+	f, err := fm.Create("KB Watch", "desc", []string{"api", "web", "worker"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := fm.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusBuildingKB
+		ff.CurrentPhase = feature.PhaseKnowledgeBase
+		ff.KBStatus = map[string]string{
+			"api":    "completed",
+			"web":    "completed",
+			"worker": "pending",
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	workerSess := session.NewSession(f.ID+"-kb-worker", f.ID, feature.PhaseKnowledgeBase)
+	workerSess.SetKind(ports.KindPhase)
+	workerSess.SetRepoName("worker")
+
+	tabs := []repoTab{
+		{repoName: "api", kind: ports.KindRepoImpl, status: statusReviewPassed},
+		{repoName: "web", kind: ports.KindRepoImpl, status: statusReviewPassed},
+		{repoName: "worker", kind: ports.KindRepoImpl, sess: workerSess, status: statusImplementing},
+	}
+	app.currentView = ViewAttach
+	app.attach = NewAttachModel(tabs, 2, f.ID, app.width, app.height)
+	app.attach.done = true
+
+	result, _ := app.updateAttach(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach; ordinary keys must not detach a tabbed KB view just because the active tab is done", updated.currentView)
+	}
+}
+
 func TestDashboardRightPanelOverviewReturnsToLivePreview(t *testing.T) {
 	app, fm := newTestAppModel(t)
 

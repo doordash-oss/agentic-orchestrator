@@ -1120,6 +1120,27 @@ func TestTabSwitchKeepsInteractiveControls(t *testing.T) {
 	})
 }
 
+func TestRebuildTabsReportsSessionSwapWhenActiveTabLosesSession(t *testing.T) {
+	apiSess := session.NewSession("f1-kb-api", "f1", feature.PhaseKnowledgeBase)
+	workerSess := session.NewSession("f1-kb-worker", "f1", feature.PhaseKnowledgeBase)
+	m := testAttachModel(apiSess, 80, 24, []repoTab{
+		{repoName: "api", sess: apiSess, status: statusImplementing},
+		{repoName: "worker", sess: workerSess, status: statusImplementing},
+	}, 0)
+
+	swapped := m.rebuildTabs([]repoTab{
+		{repoName: "api", status: statusReviewPassed},
+		{repoName: "worker", sess: workerSess, status: statusImplementing},
+	})
+
+	if !swapped {
+		t.Fatal("rebuildTabs should report a session swap when the active tab's session disappears")
+	}
+	if m.activeTabIdx != 1 {
+		t.Fatalf("activeTabIdx = %d, want 1 for remaining live session", m.activeTabIdx)
+	}
+}
+
 func TestActiveRepoName(t *testing.T) {
 	t.Run("returns repo name for multi-repo", func(t *testing.T) {
 		m := AttachModel{

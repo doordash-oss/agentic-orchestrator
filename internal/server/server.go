@@ -27,6 +27,7 @@ import (
 
 type RuntimeServer struct {
 	baseURL   string
+	startedAt time.Time
 	srv       *http.Server
 	broker    *eventBroker
 	mutations *mutationExecutor
@@ -41,19 +42,21 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	}
 	baseURL := "http://" + ln.Addr().String()
 	handler := newAPIHandler(HandlerOptions{
-		Runtime:        opts.Runtime,
-		LaunchPolicy:   opts.LaunchPolicy,
-		StartedAt:      startedAt,
-		Features:       opts.Features,
-		FeatureStore:   opts.FeatureStore,
-		Config:         opts.Config,
-		Registry:       opts.Registry,
-		Sessions:       opts.Sessions,
-		Events:         opts.Events,
-		DomainEvents:   opts.DomainEvents,
-		Operations:     opts.Operations,
-		Mutations:      opts.Mutations,
-		MutationLimits: opts.MutationLimits,
+		Runtime:         opts.Runtime,
+		LaunchPolicy:    opts.LaunchPolicy,
+		StartedAt:       startedAt,
+		Owner:           opts.Owner,
+		Features:        opts.Features,
+		FeatureStore:    opts.FeatureStore,
+		Config:          opts.Config,
+		Registry:        opts.Registry,
+		Sessions:        opts.Sessions,
+		Events:          opts.Events,
+		DomainEvents:    opts.DomainEvents,
+		Operations:      opts.Operations,
+		Mutations:       opts.Mutations,
+		MutationLimits:  opts.MutationLimits,
+		RequestShutdown: opts.RequestShutdown,
 	})
 	httpServer := &http.Server{
 		Handler:      handler.routes(),
@@ -63,6 +66,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	}
 	s := &RuntimeServer{
 		baseURL:   baseURL,
+		startedAt: startedAt,
 		srv:       httpServer,
 		broker:    handler.broker,
 		mutations: handler.mutations,
@@ -89,6 +93,13 @@ func (s *RuntimeServer) BaseURL() string {
 		return ""
 	}
 	return s.baseURL
+}
+
+func (s *RuntimeServer) StartedAt() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	return s.startedAt
 }
 
 func (s *RuntimeServer) Close(ctx context.Context) error {

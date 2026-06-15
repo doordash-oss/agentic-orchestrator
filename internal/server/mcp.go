@@ -48,6 +48,9 @@ func (h *apiHandler) mcpHTTPHandler() http.Handler {
 
 func (h *apiHandler) mcpBrowserOriginHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rejectMCPLocalhostProtection(w, r) {
+			return
+		}
 		if h.handleMCPPreflight(w, r) {
 			return
 		}

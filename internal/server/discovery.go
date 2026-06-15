@@ -145,15 +145,24 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 	if !launchPolicyEquivalent(policy, rec.LaunchPolicy) {
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery policy", Record: rec}, nil
 	}
-	health, ok := discoveryHealth(ctx, client, rec.BaseURL)
+	health, ok, reason := discoveryHealth(ctx, client, rec.BaseURL)
 	if !ok {
-		return DiscoveryDecision{Replace: true, Reason: "stale discovery", Record: rec}, nil
+		if reason == "" {
+			reason = "stale discovery"
+		}
+		return DiscoveryDecision{Replace: true, Reason: reason, Record: rec}, nil
 	}
 	if health.Runtime != identity {
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery runtime", Record: rec}, nil
 	}
 	if !launchPolicyEquivalent(policy, health.LaunchPolicy) {
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery policy", Record: rec}, nil
+	}
+	if (!rec.StartedAt.IsZero() || !health.StartedAt.IsZero()) && !rec.StartedAt.Equal(health.StartedAt) {
+		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery health", Record: rec}, nil
+	}
+	if rec.Owner != health.Owner {
+		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery owner", Record: rec}, nil
 	}
 	return DiscoveryDecision{AlreadyRunning: true, Reason: "matching healthy server", Record: rec}, nil
 }
@@ -193,34 +202,34 @@ func isLoopbackBaseURL(raw string) bool {
 }
 
 func discoveryHealthOK(ctx context.Context, client *http.Client, baseURL string) bool {
-	_, ok := discoveryHealth(ctx, client, baseURL)
+	_, ok, _ := discoveryHealth(ctx, client, baseURL)
 	return ok
 }
 
-func discoveryHealth(ctx context.Context, client *http.Client, baseURL string) (HealthResponse, bool) {
+func discoveryHealth(ctx context.Context, client *http.Client, baseURL string) (HealthResponse, bool, string) {
 	if client == nil {
 		client = &http.Client{Timeout: time.Second}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/v1/health", nil)
 	if err != nil {
-		return HealthResponse{}, false
+		return HealthResponse{}, false, "invalid discovery health URL"
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return HealthResponse{}, false
+		return HealthResponse{}, false, "dead discovery port"
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return HealthResponse{}, false
+		return HealthResponse{}, false, "unhealthy discovery response"
 	}
 	var health HealthResponse
 	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
-		return HealthResponse{}, false
+		return HealthResponse{}, false, "unreadable discovery health"
 	}
 	if health.APIVersion != APIVersion || health.Status != "ok" {
-		return HealthResponse{}, false
+		return HealthResponse{}, false, "mismatched discovery health"
 	}
-	return health, true
+	return health, true, ""
 }
 
 func launchPolicyEquivalent(a, b LaunchPolicy) bool {

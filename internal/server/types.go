@@ -41,36 +41,39 @@ type LaunchPolicy struct {
 }
 
 type Options struct {
-	Runtime        RuntimeIdentity
-	LaunchPolicy   LaunchPolicy
-	StartMode      string
-	Owner          instancelock.Owner
-	Features       FeatureLister
-	FeatureStore   FeatureReader
-	Config         *config.Config
-	Registry       *llm.Registry
-	Sessions       ports.SessionManager
-	Events         <-chan interface{}
-	DomainEvents   <-chan ports.Event
-	Operations     *OperationRegistry
-	Mutations      MutationTarget
-	MutationLimits MutationLimits
+	Runtime         RuntimeIdentity
+	LaunchPolicy    LaunchPolicy
+	StartMode       string
+	Owner           instancelock.Owner
+	Features        FeatureLister
+	FeatureStore    FeatureReader
+	Config          *config.Config
+	Registry        *llm.Registry
+	Sessions        ports.SessionManager
+	Events          <-chan interface{}
+	DomainEvents    <-chan ports.Event
+	Operations      *OperationRegistry
+	Mutations       MutationTarget
+	MutationLimits  MutationLimits
+	RequestShutdown func()
 }
 
 type HandlerOptions struct {
-	Runtime        RuntimeIdentity
-	LaunchPolicy   LaunchPolicy
-	StartedAt      time.Time
-	Features       FeatureLister
-	FeatureStore   FeatureReader
-	Config         *config.Config
-	Registry       *llm.Registry
-	Sessions       ports.SessionManager
-	Events         <-chan interface{}
-	DomainEvents   <-chan ports.Event
-	Operations     *OperationRegistry
-	Mutations      MutationTarget
-	MutationLimits MutationLimits
+	Runtime         RuntimeIdentity
+	LaunchPolicy    LaunchPolicy
+	StartedAt       time.Time
+	Owner           instancelock.Owner
+	Features        FeatureLister
+	FeatureStore    FeatureReader
+	Config          *config.Config
+	Registry        *llm.Registry
+	Sessions        ports.SessionManager
+	Events          <-chan interface{}
+	DomainEvents    <-chan ports.Event
+	Operations      *OperationRegistry
+	Mutations       MutationTarget
+	MutationLimits  MutationLimits
+	RequestShutdown func()
 }
 
 type FeatureLister interface {
@@ -102,12 +105,33 @@ type ErrorDTO struct {
 	Target  map[string]any `json:"target,omitempty"`
 }
 
+// OwnerDTO is the public process-owner metadata safe to expose through REST,
+// MCP, and discovery records.
+type OwnerDTO struct {
+	PID       int       `json:"pid"`
+	PGID      int       `json:"pgid,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	Version   string    `json:"version,omitempty"`
+}
+
+// OwnerDTOFromInstanceOwner drops local filesystem paths from lock owner
+// metadata before it crosses public API or discovery boundaries.
+func OwnerDTOFromInstanceOwner(owner instancelock.Owner) OwnerDTO {
+	return OwnerDTO{
+		PID:       owner.PID,
+		PGID:      owner.PGID,
+		StartedAt: owner.StartedAt,
+		Version:   owner.Version,
+	}
+}
+
 type HealthResponse struct {
 	APIVersion   string          `json:"api_version"`
 	Status       string          `json:"status"`
 	Runtime      RuntimeIdentity `json:"runtime"`
 	LaunchPolicy LaunchPolicy    `json:"launch_policy"`
 	StartedAt    time.Time       `json:"started_at"`
+	Owner        OwnerDTO        `json:"owner"`
 	ServerTime   time.Time       `json:"server_time"`
 }
 
@@ -602,18 +626,18 @@ type ResourceDTO struct {
 }
 
 type DiscoveryRecord struct {
-	SchemaVersion int                `json:"schema_version"`
-	APIVersion    string             `json:"api_version"`
-	BaseURL       string             `json:"base_url"`
-	MCP           MCPMetadata        `json:"mcp"`
-	Runtime       RuntimeIdentity    `json:"runtime"`
-	LaunchPolicy  LaunchPolicy       `json:"launch_policy"`
-	StartMode     string             `json:"start_mode"`
-	PID           int                `json:"pid"`
-	PGID          int                `json:"pgid,omitempty"`
-	StartedAt     time.Time          `json:"started_at"`
-	PublishedAt   time.Time          `json:"published_at"`
-	Owner         instancelock.Owner `json:"owner"`
+	SchemaVersion int             `json:"schema_version"`
+	APIVersion    string          `json:"api_version"`
+	BaseURL       string          `json:"base_url"`
+	MCP           MCPMetadata     `json:"mcp"`
+	Runtime       RuntimeIdentity `json:"runtime"`
+	LaunchPolicy  LaunchPolicy    `json:"launch_policy"`
+	StartMode     string          `json:"start_mode"`
+	PID           int             `json:"pid"`
+	PGID          int             `json:"pgid,omitempty"`
+	StartedAt     time.Time       `json:"started_at"`
+	PublishedAt   time.Time       `json:"published_at"`
+	Owner         OwnerDTO        `json:"owner"`
 }
 
 type MCPMetadata struct {

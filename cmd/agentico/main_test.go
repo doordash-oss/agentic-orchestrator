@@ -23,7 +23,10 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -1357,7 +1360,7 @@ func TestDefaultLaunchConvergesAfterLiveOwnerLockContention(t *testing.T) {
 					Runtime:      identity,
 					LaunchPolicy: policy,
 					PID:          owner.PID,
-					Owner:        owner,
+					Owner:        serverruntime.OwnerDTOFromInstanceOwner(owner),
 				},
 			}, nil
 		},
@@ -1428,7 +1431,7 @@ func testDefaultLaunchConcurrentConvergence(t *testing.T, initialReason, baseURL
 						Runtime:      identity,
 						LaunchPolicy: policy,
 						PID:          owner.PID,
-						Owner:        owner,
+						Owner:        serverruntime.OwnerDTOFromInstanceOwner(owner),
 					},
 				}, nil
 			},
@@ -1488,6 +1491,80 @@ func (p *fakeServerProcess) Stop(context.Context) error {
 
 func (p *fakeServerProcess) PID() int {
 	return p.pid
+}
+
+type fakeWaitableServerProcess struct {
+	fakeServerProcess
+	waitCalls int
+	waitErr   error
+}
+
+func (p *fakeWaitableServerProcess) Wait(context.Context) error {
+	p.waitCalls++
+	return p.waitErr
+}
+
+func TestOwnedServerShutdownFallbackWaitsForGracefulExit(t *testing.T) {
+	proc := &fakeWaitableServerProcess{}
+	fallback := waitForOwnedServerShutdownOrStop(proc, time.Second)
+
+	if err := fallback(context.Background()); err != nil {
+		t.Fatalf("waitForOwnedServerShutdownOrStop() error = %v; want nil", err)
+	}
+	if proc.waitCalls != 1 {
+		t.Fatalf("wait calls = %d; want 1", proc.waitCalls)
+	}
+	if proc.stopCalls != 0 {
+		t.Fatalf("stop calls = %d; want 0 after graceful exit", proc.stopCalls)
+	}
+}
+
+func TestOwnedServerShutdownFallbackStopsAfterGraceTimeout(t *testing.T) {
+	proc := &fakeWaitableServerProcess{waitErr: context.DeadlineExceeded}
+	fallback := waitForOwnedServerShutdownOrStop(proc, time.Second)
+
+	if err := fallback(context.Background()); err != nil {
+		t.Fatalf("waitForOwnedServerShutdownOrStop() error = %v; want nil", err)
+	}
+	if proc.waitCalls != 1 {
+		t.Fatalf("wait calls = %d; want 1", proc.waitCalls)
+	}
+	if proc.stopCalls != 1 {
+		t.Fatalf("stop calls = %d; want 1 after grace timeout", proc.stopCalls)
+	}
+}
+
+func TestChildServerProcessStopReturnsNilAfterForcedKill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signal behavior only")
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcessIgnoreInterrupt")
+	cmd.Env = append(os.Environ(), "AGENTICO_TEST_HELPER_IGNORE_INTERRUPT=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	proc := &childServerProcess{cmd: cmd, done: make(chan error, 1)}
+	go func() {
+		proc.done <- cmd.Wait()
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := proc.Stop(ctx); err != nil {
+		t.Fatalf("Stop() error = %v; want nil after forced kill", err)
+	}
+}
+
+func TestHelperProcessIgnoreInterrupt(t *testing.T) {
+	if os.Getenv("AGENTICO_TEST_HELPER_IGNORE_INTERRUPT") != "1" {
+		return
+	}
+	signal.Ignore(os.Interrupt)
+	select {}
 }
 
 func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {

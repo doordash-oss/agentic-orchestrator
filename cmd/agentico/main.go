@@ -807,11 +807,66 @@ func (t *serverMutationTarget) RestartFeature(featureID string, req serverruntim
 	if err != nil {
 		return serverruntime.OperationResult{}, err
 	}
-	return serverruntime.OperationResult{Metadata: map[string]string{
+	metadata := map[string]string{
 		"feature_id": featureID,
-		"status":     fmt.Sprint(outcome.Action),
-		"phase":      outcome.Phase.String(),
-	}}, nil
+		"status":     "restarted",
+	}
+	if outcome.Phase.String() != "" {
+		metadata["phase"] = outcome.Phase.String()
+	}
+	if err := t.dispatchRestartOutcome(featureID, outcome, metadata); err != nil {
+		metadata["status"] = "failed"
+		return serverruntime.OperationResult{Metadata: metadata}, err
+	}
+	return serverruntime.OperationResult{Metadata: metadata}, nil
+}
+
+func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome orchestrator.RestartOutcome, metadata map[string]string) error {
+	if t.orch == nil {
+		return errors.New("orchestrator is not available")
+	}
+	switch outcome.Action {
+	case orchestrator.RestartNoOp:
+		metadata["dispatch"] = "none"
+		return nil
+	case orchestrator.RestartDispatchPhase:
+		metadata["dispatch"] = "phase"
+		if outcome.Phase.String() != "" {
+			metadata["phase"] = outcome.Phase.String()
+		}
+		return t.orch.StartFeature(featureID)
+	case orchestrator.RestartDispatchRepoCycles:
+		metadata["dispatch"] = "repo_cycles"
+		metadata["repo_cycle_count"] = strconv.Itoa(len(outcome.RepoCycleRestarts))
+		sessionIDs := make([]string, 0, len(outcome.RepoCycleRestarts)+1)
+		for _, restart := range outcome.RepoCycleRestarts {
+			sessionID, err := t.orch.StartRepoCycleImplement(featureID, restart.RepoName, restart.CycleType, restart.PlanContent)
+			if sessionID != "" {
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		if outcome.RefactorRestart != nil {
+			metadata["refactor_count"] = "1"
+			sessionID, err := t.orch.RestartRefactorCycle(featureID, outcome.RefactorRestart.RepoName, outcome.RefactorRestart.Prompt)
+			if sessionID != "" {
+				sessionIDs = append(sessionIDs, sessionID)
+			}
+			if err != nil {
+				return err
+			}
+		} else {
+			metadata["refactor_count"] = "0"
+		}
+		if len(sessionIDs) > 0 {
+			metadata["session_ids"] = strings.Join(sessionIDs, ",")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown restart action %d", outcome.Action)
+	}
 }
 
 func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) (serverruntime.OperationResult, error) {
@@ -1930,6 +1985,71 @@ func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, s
 	return recoveryItems, true
 }
 
+func runtimeOperationReconciler(store *feature.Store) serverruntime.OperationReconciler {
+	return func(rec serverruntime.OperationRecord) serverruntime.OperationReconciliation {
+		if rec.Status == serverruntime.OperationStatusQueued {
+			return interruptedOperationReconciliation("operation interrupted by server restart before it started", map[string]string{
+				"feature_id": rec.Target.FeatureID,
+			})
+		}
+		if store == nil || rec.Target.FeatureID == "" {
+			return interruptedOperationReconciliation("operation interrupted by server restart", nil)
+		}
+		f, err := store.Load(rec.Target.FeatureID)
+		if err != nil {
+			return interruptedOperationReconciliation("operation interrupted by server restart", map[string]string{
+				"feature_id": rec.Target.FeatureID,
+			})
+		}
+		metadata := recoveredOperationMetadata(f)
+		switch {
+		case rec.Kind == "feature.stop" && f.Status == feature.StatusInterrupted:
+			metadata["action"] = "stop"
+			return serverruntime.OperationReconciliation{Status: serverruntime.OperationStatusSucceeded, Result: metadata}
+		case f.Status == feature.StatusFailed:
+			return serverruntime.OperationReconciliation{
+				Status: serverruntime.OperationStatusFailed,
+				Error: &serverruntime.OperationError{
+					Code:     "failed",
+					Metadata: metadata,
+				},
+			}
+		case f.Status == feature.StatusInterrupted:
+			return interruptedOperationReconciliation("operation interrupted by server restart", metadata)
+		default:
+			return serverruntime.OperationReconciliation{Status: serverruntime.OperationStatusSucceeded, Result: metadata}
+		}
+	}
+}
+
+func recoveredOperationMetadata(f *feature.Feature) map[string]string {
+	metadata := map[string]string{
+		"feature_id": f.ID,
+		"status":     f.Status.String(),
+	}
+	if phase := f.CurrentPhase.String(); phase != "" {
+		metadata["phase"] = phase
+	}
+	if f.ActiveRun > 0 {
+		metadata["run_number"] = strconv.Itoa(f.ActiveRun)
+	}
+	if f.CurrentRoadmapPhase > 0 {
+		metadata["roadmap_phase"] = strconv.Itoa(f.CurrentRoadmapPhase)
+	}
+	return metadata
+}
+
+func interruptedOperationReconciliation(message string, metadata map[string]string) serverruntime.OperationReconciliation {
+	return serverruntime.OperationReconciliation{
+		Status: serverruntime.OperationStatusInterrupted,
+		Error: &serverruntime.OperationError{
+			Code:     "interrupted",
+			Message:  message,
+			Metadata: metadata,
+		},
+	}
+}
+
 type defaultLaunchRequest struct {
 	ConfigPath                 string
 	StateDir                   string
@@ -1964,6 +2084,10 @@ type serverStartRequest struct {
 
 type serverProcess interface {
 	Stop(context.Context) error
+}
+
+type serverProcessWaiter interface {
+	Wait(context.Context) error
 }
 
 type serverProcessPID interface {
@@ -2124,7 +2248,7 @@ func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
 		},
 	}
 	if launch.OwnedServer && launch.Server != nil {
-		opts.StopOwnedServer = launch.Server.Stop
+		opts.WaitForOwnedServerShutdown = waitForOwnedServerShutdownOrStop(launch.Server, 2*time.Second)
 	}
 	tui.SetMarkdownRenderer(markdown.Render)
 	app, err := tui.NewAPIAppModel(ctx, client, opts)
@@ -2297,9 +2421,48 @@ func (p *childServerProcess) Stop(ctx context.Context) error {
 	}
 	select {
 	case err := <-p.done:
+		return ignoreExpectedProcessStopError(err)
+	case <-ctx.Done():
+		if err := p.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		select {
+		case <-p.done:
+			return nil
+		case <-time.After(time.Second):
+			return ctx.Err()
+		}
+	}
+}
+
+func ignoreExpectedProcessStopError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return err
+	}
+	status, ok := exitErr.Sys().(syscall.WaitStatus)
+	if !ok || !status.Signaled() {
+		return err
+	}
+	switch status.Signal() {
+	case syscall.SIGINT, syscall.SIGTERM, syscall.SIGKILL:
+		return nil
+	default:
+		return err
+	}
+}
+
+func (p *childServerProcess) Wait(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	select {
+	case err := <-p.done:
 		return err
 	case <-ctx.Done():
-		_ = p.cmd.Process.Kill()
 		return ctx.Err()
 	}
 }
@@ -2311,9 +2474,40 @@ func (p *childServerProcess) PID() int {
 	return p.cmd.Process.Pid
 }
 
+func waitForOwnedServerShutdownOrStop(process serverProcess, grace time.Duration) func(context.Context) error {
+	return func(ctx context.Context) error {
+		if process == nil {
+			return nil
+		}
+		if waiter, ok := process.(serverProcessWaiter); ok {
+			waitCtx := ctx
+			var cancel context.CancelFunc
+			if grace > 0 {
+				waitCtx, cancel = context.WithTimeout(ctx, grace)
+			}
+			if cancel != nil {
+				defer cancel()
+			}
+			err := waiter.Wait(waitCtx)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+				return err
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+		}
+		return process.Stop(ctx)
+	}
+}
+
 func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	runtimeCtx, requestShutdown := context.WithCancel(ctx)
+	defer requestShutdown()
 
 	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stdin, os.Stderr)
 	if err != nil {
@@ -2348,6 +2542,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Dir:          filepath.Join(boot.runtime.RuntimeDir, "operations"),
 		DefaultLimit: 50,
 		MaxLimit:     200,
+		Reconcile:    runtimeOperationReconciler(boot.featureManager.Store),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: loading operation registry: %v\n", err)
@@ -2375,7 +2570,8 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			sessions:   boot.sessionManager,
 			reviewer:   &git.ReviewCommentAdapter{},
 		},
-		MutationLimits: serverruntime.MutationLimits{FeatureQueue: 0, RuntimeQueue: 0, AggregateQueue: 100},
+		MutationLimits:  serverruntime.MutationLimits{FeatureQueue: 0, RuntimeQueue: 0, AggregateQueue: 100},
+		RequestShutdown: requestShutdown,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: starting server: %v\n", err)
@@ -2399,16 +2595,16 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		StartMode:     "server",
 		PID:           boot.owner.PID,
 		PGID:          boot.owner.PGID,
-		StartedAt:     boot.owner.StartedAt,
+		StartedAt:     runtimeServer.StartedAt(),
 		PublishedAt:   now,
-		Owner:         boot.owner,
+		Owner:         serverruntime.OwnerDTOFromInstanceOwner(boot.owner),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: publishing discovery metadata: %v\n", err)
 		return 1
 	}
 
 	fmt.Fprintf(os.Stderr, "Agentic server listening at %s\n", runtimeServer.BaseURL())
-	<-ctx.Done()
+	<-runtimeCtx.Done()
 	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 	return 0
 }

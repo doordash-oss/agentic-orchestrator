@@ -52,6 +52,7 @@ type OperationRegistryOptions struct {
 	Dir          string
 	DefaultLimit int
 	MaxLimit     int
+	Reconcile    OperationReconciler
 }
 
 type OperationTarget struct {
@@ -80,6 +81,14 @@ type OperationRecord struct {
 	Result        map[string]string `json:"result,omitempty" yaml:"result,omitempty"`
 	Error         *OperationError   `json:"error,omitempty" yaml:"error,omitempty"`
 }
+
+type OperationReconciliation struct {
+	Status OperationStatus
+	Result map[string]string
+	Error  *OperationError
+}
+
+type OperationReconciler func(OperationRecord) OperationReconciliation
 
 type operationActiveIndex struct {
 	Active []string `yaml:"active"`
@@ -124,6 +133,7 @@ type OperationRegistry struct {
 	files        []string
 	index        []operationIndexEntry
 	indexByID    map[string]int
+	reconcile    OperationReconciler
 }
 
 var operationIDSequence atomic.Uint64
@@ -152,6 +162,7 @@ func NewOperationRegistry(opts OperationRegistryOptions) (*OperationRegistry, er
 		maxLimit:     maxLimit,
 		records:      map[string]OperationRecord{},
 		indexByID:    map[string]int{},
+		reconcile:    opts.Reconcile,
 	}
 	if err := r.load(); err != nil {
 		return nil, err
@@ -234,6 +245,9 @@ func (r *OperationRegistry) Complete(id string, status OperationStatus, result m
 			return err
 		}
 		rec = loaded
+	}
+	if isTerminalOperationStatus(rec.Status) {
+		return nil
 	}
 	now := time.Now().UTC()
 	rec.Status = status
@@ -323,7 +337,7 @@ func (r *OperationRegistry) load() error {
 				continue
 			}
 			if !isTerminalOperationStatus(rec.Status) {
-				if err := r.markInterruptedLocked(&rec); err != nil {
+				if err := r.markReconciledLocked(&rec); err != nil {
 					return err
 				}
 			} else {
@@ -349,7 +363,7 @@ func (r *OperationRegistry) load() error {
 			continue
 		}
 		if !isTerminalOperationStatus(rec.Status) {
-			if err := r.markInterruptedLocked(&rec); err != nil {
+			if err := r.markReconciledLocked(&rec); err != nil {
 				return err
 			}
 			continue
@@ -396,7 +410,7 @@ func (r *OperationRegistry) loadActiveFromMetadataIndexLocked() error {
 			continue
 		}
 		if !isTerminalOperationStatus(rec.Status) {
-			if err := r.markInterruptedLocked(&rec); err != nil {
+			if err := r.markReconciledLocked(&rec); err != nil {
 				return err
 			}
 			continue
@@ -426,7 +440,7 @@ func (r *OperationRegistry) loadTerminalWindowLocked(files []string, loaded map[
 			continue
 		}
 		if !isTerminalOperationStatus(rec.Status) {
-			if err := r.markInterruptedLocked(&rec); err != nil {
+			if err := r.markReconciledLocked(&rec); err != nil {
 				return err
 			}
 			loaded[rec.ID] = struct{}{}
@@ -439,18 +453,39 @@ func (r *OperationRegistry) loadTerminalWindowLocked(files []string, loaded map[
 	return r.saveIndexesLocked()
 }
 
-func (r *OperationRegistry) markInterruptedLocked(rec *OperationRecord) error {
+func (r *OperationRegistry) markReconciledLocked(rec *OperationRecord) error {
 	now := time.Now().UTC()
-	rec.Status = OperationStatusInterrupted
+	reconciled := r.reconcileStaleOperationLocked(*rec)
+	rec.Status = reconciled.Status
 	rec.UpdatedAt = now
 	rec.CompletedAt = &now
-	rec.Error = &OperationError{Code: "interrupted", Message: "operation interrupted by server restart"}
+	rec.Result = reconciled.Result
+	rec.Error = reconciled.Error
 	if err := r.saveLocked(*rec); err != nil {
 		return err
 	}
 	delete(r.records, rec.ID)
 	r.upsertIndexLocked(*rec)
 	return nil
+}
+
+func (r *OperationRegistry) reconcileStaleOperationLocked(rec OperationRecord) OperationReconciliation {
+	if r.reconcile != nil {
+		reconciled := r.reconcile(rec)
+		if isTerminalOperationStatus(reconciled.Status) {
+			if reconciled.Status != OperationStatusSucceeded && reconciled.Error == nil {
+				reconciled.Error = &OperationError{Code: string(reconciled.Status)}
+			}
+			if reconciled.Status == OperationStatusSucceeded {
+				reconciled.Error = nil
+			}
+			return reconciled
+		}
+	}
+	return OperationReconciliation{
+		Status: OperationStatusInterrupted,
+		Error:  &OperationError{Code: "interrupted", Message: "operation interrupted by server restart"},
+	}
 }
 
 func (r *OperationRegistry) operationFiles() ([]string, error) {
@@ -745,7 +780,7 @@ func safeOperationResult(in map[string]string) map[string]string {
 		case "feature_id", "session_id", "request_id", "status", "decision", "reason", "kind",
 			"action", "repo", "repo_name", "cycle_type", "target", "target_phase", "effective_phase",
 			"roadmap_phase", "run_number", "recovery_action", "conflict", "branch", "rebase_target",
-			"conflict_files", "warning_count", "pipeline", "mode", "had_changes":
+			"conflict_files", "warning_count", "pipeline", "mode", "had_changes", "phase":
 			out[k] = safeDisplayText(v, 120)
 		}
 	}

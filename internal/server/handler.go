@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -35,17 +36,19 @@ func NewHandler(opts HandlerOptions) http.Handler {
 }
 
 type apiHandler struct {
-	runtime    RuntimeIdentity
-	policy     LaunchPolicy
-	startedAt  time.Time
-	features   FeatureLister
-	store      FeatureReader
-	cfg        *config.Config
-	registry   *llm.Registry
-	sessions   ports.SessionManager
-	broker     *eventBroker
-	operations *OperationRegistry
-	mutations  *mutationExecutor
+	runtime         RuntimeIdentity
+	policy          LaunchPolicy
+	startedAt       time.Time
+	owner           instancelock.Owner
+	features        FeatureLister
+	store           FeatureReader
+	cfg             *config.Config
+	registry        *llm.Registry
+	sessions        ports.SessionManager
+	broker          *eventBroker
+	operations      *OperationRegistry
+	mutations       *mutationExecutor
+	requestShutdown func()
 
 	recoveryMu        sync.Mutex
 	recoverySnapshots map[string][]ports.RecoveryItem
@@ -67,16 +70,18 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		features = store
 	}
 	handler := &apiHandler{
-		runtime:    opts.Runtime,
-		policy:     opts.LaunchPolicy,
-		startedAt:  startedAt,
-		features:   features,
-		store:      store,
-		cfg:        opts.Config,
-		registry:   opts.Registry,
-		sessions:   opts.Sessions,
-		broker:     newEventBroker(opts.Events, opts.DomainEvents),
-		operations: opts.Operations,
+		runtime:         opts.Runtime,
+		policy:          opts.LaunchPolicy,
+		startedAt:       startedAt,
+		owner:           opts.Owner,
+		features:        features,
+		store:           store,
+		cfg:             opts.Config,
+		registry:        opts.Registry,
+		sessions:        opts.Sessions,
+		broker:          newEventBroker(opts.Events, opts.DomainEvents),
+		operations:      opts.Operations,
+		requestShutdown: opts.RequestShutdown,
 	}
 	if opts.Operations != nil && opts.Mutations != nil {
 		handler.mutations = newMutationExecutor(opts.Operations, opts.Mutations, opts.MutationLimits, handler.publishOperationUpdate)
@@ -108,6 +113,7 @@ func (h *apiHandler) routesWithMCP(includeMCP bool) http.Handler {
 	mux.HandleFunc("/api/v1/operations", methodHandler(http.MethodGet, h.handleOperations))
 	mux.HandleFunc("/api/v1/recovery", h.handleRecoveryRoute)
 	mux.HandleFunc("/api/v1/recovery/actions", h.handleRecoveryActionRoute)
+	mux.HandleFunc("/api/v1/shutdown", h.handleShutdownMutationRoute)
 	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
 	if includeMCP {
 		mux.Handle(MCPEndpointPath, h.mcpHTTPHandler())
@@ -139,6 +145,7 @@ func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		Runtime:      h.runtime,
 		LaunchPolicy: h.policy,
 		StartedAt:    h.startedAt,
+		Owner:        OwnerDTOFromInstanceOwner(h.owner),
 		ServerTime:   time.Now().UTC(),
 	})
 }

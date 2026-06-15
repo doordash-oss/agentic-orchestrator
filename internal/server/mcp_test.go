@@ -17,6 +17,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -116,6 +118,41 @@ func TestMCPToolCatalogMatchesRESTParityContract(t *testing.T) {
 			t.Fatalf("tools/list includes non-REST-parity stream/resource substitute %q in %v", forbidden, got)
 		}
 	}
+}
+
+func TestMCPRuntimeHealthOmitsOwnerPrivatePaths(t *testing.T) {
+	t.Parallel()
+	runtimeDir := t.TempDir()
+	handler := NewHandler(HandlerOptions{
+		Runtime: RuntimeIdentity{
+			RuntimeDir: runtimeDir,
+			StateDir:   filepath.Join(runtimeDir, "features"),
+			Config:     filepath.Join(runtimeDir, "config.yaml"),
+		},
+		Owner: instancelock.Owner{
+			PID:       1234,
+			StartedAt: time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC),
+			StateDir:  filepath.Join(runtimeDir, "features"),
+			Config:    filepath.Join(runtimeDir, "config.yaml"),
+		},
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	session := connectMCPClient(t, srv)
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "runtime_health_get"})
+	if err != nil {
+		t.Fatalf("CallTool(runtime_health_get) error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool(runtime_health_get) IsError = true; content = %s", mcpToolText(t, res))
+	}
+	got := structuredContentMap(t, res)
+	owner, ok := got["owner"].(map[string]any)
+	if !ok {
+		t.Fatalf("runtime_health_get owner = %v; want object", got["owner"])
+	}
+	assertOwnerMapOmitsPrivatePaths(t, owner, "runtime_health_get owner")
 }
 
 func TestMCPSchemasCoverRESTDTOFields(t *testing.T) {
@@ -225,6 +262,105 @@ func TestMCPMutationToolUsesRESTSemanticsAndOperationFollowUp(t *testing.T) {
 	if len(startCalls) != 1 || startCalls[0] != f.ID {
 		t.Fatalf("StartFeature calls = %v; want [%s]", startCalls, f.ID)
 	}
+}
+
+func TestMCPShutdownToolUsesRESTMutationSemantics(t *testing.T) {
+	t.Parallel()
+	store, _ := seedReadFeature(t)
+	shutdownRequested := make(chan struct{}, 1)
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:   store,
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations")),
+		Mutations:  &fakeMutationTarget{},
+		RequestShutdown: func() {
+			shutdownRequested <- struct{}{}
+		},
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	session := connectMCPClient(t, srv)
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "runtime_shutdown"})
+	if err != nil {
+		t.Fatalf("CallTool(runtime_shutdown) error = %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool(runtime_shutdown) IsError = true; content = %s", mcpToolText(t, res))
+	}
+	accepted := structuredContentMap(t, res)
+	opID, ok := accepted["operation_id"].(string)
+	if !ok || opID == "" {
+		t.Fatalf("runtime_shutdown operation_id = %v; want non-empty", accepted["operation_id"])
+	}
+	if accepted["status"] != string(OperationStatusQueued) {
+		t.Fatalf("runtime_shutdown status = %v; want %s", accepted["status"], OperationStatusQueued)
+	}
+	select {
+	case <-shutdownRequested:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown hook was not called after accepted MCP response")
+	}
+	op := waitForMCPOperationStatus(t, session, opID, OperationStatusSucceeded)
+	if op["kind"] != "runtime.shutdown" || op["target"].(map[string]any)["type"] != "runtime" {
+		t.Fatalf("operation_list shutdown op = %+v; want runtime.shutdown runtime target", op)
+	}
+}
+
+func TestMCPConflictReturnsRejectedOperationStatusMatchingREST(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	mutations := &fakeMutationTarget{startHook: func() {
+		close(started)
+		<-release
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:   store,
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations")),
+		Mutations:  mutations,
+		MutationLimits: MutationLimits{
+			FeatureQueue:   0,
+			RuntimeQueue:   0,
+			AggregateQueue: 10,
+		},
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	session := connectMCPClient(t, srv)
+	restClient := &http.Client{Timeout: time.Second}
+
+	first := postMutationHTTP(t, restClient, srv.URL+"/api/v1/features/"+f.ID+"/start", `{}`)
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("REST feature start status = %d; want 202", first.StatusCode)
+	}
+	firstID := decodeHTTPJSONMap(t, first)["operation_id"].(string)
+	<-started
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+		Name:      "feature_start",
+		Arguments: map[string]any{"feature_id": f.ID},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(feature_start conflict) error = %v; want tool error result", err)
+	}
+	if !res.IsError {
+		t.Fatalf("CallTool(feature_start conflict) IsError = false; want tool error carrying rejected operation")
+	}
+	conflictBody := decodeJSONStringMap(t, mcpToolText(t, res))
+	conflictID, _ := conflictBody["operation_id"].(string)
+	if conflictID == "" || conflictBody["status"] != string(OperationStatusRejected) {
+		t.Fatalf("MCP conflict body = %+v; want rejected operation status with operation_id", conflictBody)
+	}
+	op := waitForMCPOperationStatus(t, session, conflictID, OperationStatusRejected)
+	if op["status"] != string(OperationStatusRejected) {
+		t.Fatalf("MCP operation_list op = %+v; want rejected", op)
+	}
+
+	close(release)
+	waitForMCPOperationStatus(t, session, firstID, OperationStatusSucceeded)
 }
 
 func TestMCPReadToolsCoverSnapshotsTypedContentSessionsOperationsAndRecovery(t *testing.T) {
@@ -383,6 +519,45 @@ func TestMCPMutationRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T)
 	}
 }
 
+func TestMCPShutdownRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T) {
+	t.Parallel()
+	store, _ := seedReadFeature(t)
+	ops := mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations"))
+	shutdownRequested := make(chan struct{}, 1)
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:   store,
+		Operations: ops,
+		Mutations:  &fakeMutationTarget{},
+		RequestShutdown: func() {
+			shutdownRequested <- struct{}{}
+		},
+	})
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	session := connectMCPClientWithHTTPClient(t, srv, httpClientWithOrigin(srv.Client(), "https://evil.example"))
+
+	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "runtime_shutdown"})
+	if err != nil {
+		t.Fatalf("CallTool(runtime_shutdown) error = %v; want REST tool error result", err)
+	}
+	if !res.IsError {
+		t.Fatalf("CallTool(runtime_shutdown) IsError = false; want browser-origin rejection")
+	}
+	text := mcpToolText(t, res)
+	for _, want := range []string{`"api_version":"` + APIVersion + `"`, `"forbidden"`, "browser origin is not trusted"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("tool error text = %s; want substring %s", text, want)
+		}
+	}
+	assertOperationCount(t, handler, 0)
+	select {
+	case <-shutdownRequested:
+		t.Fatal("shutdown hook was called before trusted-origin gate passed")
+	default:
+	}
+}
+
 func TestMCPMutationAllowsTrustedLoopbackBrowserOrigin(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -521,6 +696,28 @@ func TestMCPPreflightRejectsUntrustedBrowserRequests(t *testing.T) {
 			}
 			assertNoAccessControlHeaders(t, resp.Header)
 		})
+	}
+}
+
+func TestMCPActualRequestRejectsLocalhostRebindingHost(t *testing.T) {
+	t.Parallel()
+	handler := NewHandler(HandlerOptions{})
+	loopbackLocalAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 4321}
+	req := httptest.NewRequest(http.MethodPost, MCPEndpointPath, strings.NewReader(`{}`))
+	req.Host = "evil.example"
+	req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, loopbackLocalAddr))
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("actual /mcp status = %d; want 403 for localhost rebinding Host", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "invalid Host header") {
+		t.Fatalf("actual /mcp body = %q; want invalid Host header", string(body))
 	}
 }
 
@@ -724,6 +921,7 @@ func expectedMCPToolNames() []string {
 		"review_comments_start",
 		"review_decision_submit",
 		"runtime_health_get",
+		"runtime_shutdown",
 		"session_get",
 		"session_list",
 		"session_transcript_get",
@@ -762,6 +960,7 @@ func operationAcceptedMCPTools() []string {
 		"refactor_start",
 		"review_comments_start",
 		"review_decision_submit",
+		"runtime_shutdown",
 		"tweak_finish",
 		"tweak_start",
 	}
@@ -842,6 +1041,15 @@ func structuredContentMap(t *testing.T, result *mcp.CallToolResult) map[string]a
 	var out map[string]any
 	if err := json.Unmarshal(data, &out); err != nil {
 		t.Fatalf("unmarshal StructuredContent %s: %v", data, err)
+	}
+	return out
+}
+
+func decodeJSONStringMap(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("unmarshal JSON object %s: %v", raw, err)
 	}
 	return out
 }

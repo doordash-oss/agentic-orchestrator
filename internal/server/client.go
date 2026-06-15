@@ -334,6 +334,10 @@ func (c *Client) ExecuteRecovery(ctx context.Context, req RecoveryActionRequest)
 	return c.postMutation(ctx, "/api/v1/recovery/actions", req)
 }
 
+func (c *Client) Shutdown(ctx context.Context) (OperationAcceptedResponse, error) {
+	return c.postMutation(ctx, "/api/v1/shutdown", map[string]any{})
+}
+
 func (c *Client) postFeatureAction(ctx context.Context, featureID, action string, in any) (OperationAcceptedResponse, error) {
 	return c.postMutation(ctx, featureActionPath(featureID, action), in)
 }

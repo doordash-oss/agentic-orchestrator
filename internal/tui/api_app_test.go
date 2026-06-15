@@ -16,6 +16,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -2457,7 +2458,10 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	client := &fakeTUIAPIClient{}
+	client := &fakeTUIAPIClient{
+		shutdownAccepted: server.OperationAcceptedResponse{OperationID: "op-shutdown", Status: server.OperationStatusQueued},
+	}
+	var fallbackCalls int
 	attached, err := NewAPIAppModel(ctx, client, APIAppOptions{})
 	if err != nil {
 		t.Fatalf("NewAPIAppModel(attached) error = %v", err)
@@ -2469,8 +2473,17 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 	if got := model.(APIAppModel).ShowingOwnedServerQuitPrompt(); got {
 		t.Fatal("attached TUI showed owned-server quit prompt")
 	}
+	if client.shutdownCalls != 0 {
+		t.Fatalf("attached TUI shutdown calls = %d, want 0", client.shutdownCalls)
+	}
 
-	owned, err := NewAPIAppModel(ctx, client, APIAppOptions{OwnedServer: true})
+	owned, err := NewAPIAppModel(ctx, client, APIAppOptions{
+		OwnedServer: true,
+		StopOwnedServer: func(context.Context) error {
+			fallbackCalls++
+			return nil
+		},
+	})
 	if err != nil {
 		t.Fatalf("NewAPIAppModel(owned) error = %v", err)
 	}
@@ -2480,6 +2493,62 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 	}
 	if got := model.(APIAppModel).ShowingOwnedServerQuitPrompt(); !got {
 		t.Fatal("owned TUI did not show owned-server quit prompt")
+	}
+
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("owned Update(y) returned nil command, want shutdown command")
+	}
+	msg := cmd()
+	if client.shutdownCalls != 1 {
+		t.Fatalf("owned TUI shutdown calls = %d, want 1", client.shutdownCalls)
+	}
+	if fallbackCalls != 1 {
+		t.Fatalf("owned TUI fallback stop calls = %d, want 1 after shutdown acceptance", fallbackCalls)
+	}
+	_, cmd = model.(APIAppModel).Update(msg)
+	if cmd == nil {
+		t.Fatal("owned shutdown completion did not return quit command")
+	}
+
+	ownedNo, err := NewAPIAppModel(ctx, client, APIAppOptions{OwnedServer: true})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel(owned no) error = %v", err)
+	}
+	model, _ = ownedNo.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	_, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if cmd == nil {
+		t.Fatal("owned Update(n) returned nil command, want quit command")
+	}
+	if client.shutdownCalls != 1 {
+		t.Fatalf("owned TUI shutdown calls after n = %d, want 1", client.shutdownCalls)
+	}
+}
+
+func TestAPIAppModelOwnedServerShutdownErrorKeepsTUIOpen(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := &fakeTUIAPIClient{shutdownErr: errors.New("connection refused")}
+	owned, err := NewAPIAppModel(ctx, client, APIAppOptions{OwnedServer: true})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel(owned) error = %v", err)
+	}
+	model, _ := owned.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("owned Update(y) returned nil command, want shutdown command")
+	}
+	model, cmd = model.(APIAppModel).Update(cmd())
+	if cmd != nil {
+		t.Fatal("owned shutdown error returned quit command")
+	}
+	updated := model.(APIAppModel)
+	if updated.ShowingOwnedServerQuitPrompt() {
+		t.Fatal("owned shutdown error left quit prompt visible")
+	}
+	if !strings.Contains(updated.statusMessage, "Server shutdown failed: connection refused") {
+		t.Fatalf("statusMessage = %q, want shutdown failure", updated.statusMessage)
 	}
 }
 
@@ -2595,6 +2664,9 @@ type fakeTUIAPIClient struct {
 	askUserAccepted               server.OperationAcceptedResponse
 	askUserErr                    error
 	askUserAnswers                []server.AskUserAnswerRequest
+	shutdownAccepted              server.OperationAcceptedResponse
+	shutdownErr                   error
+	shutdownCalls                 int
 	detail                        server.FeatureDetailResponse
 	detailsByID                   map[string]server.FeatureDetailResponse
 	detailFeatureIDs              []string
@@ -2916,6 +2988,12 @@ func (f *fakeTUIAPIClient) AnswerAskUser(_ context.Context, req server.AskUserAn
 	f.calls = append(f.calls, "AnswerAskUser")
 	f.askUserAnswers = append(f.askUserAnswers, req)
 	return f.askUserAccepted, f.askUserErr
+}
+
+func (f *fakeTUIAPIClient) Shutdown(context.Context) (server.OperationAcceptedResponse, error) {
+	f.calls = append(f.calls, "Shutdown")
+	f.shutdownCalls++
+	return f.shutdownAccepted, f.shutdownErr
 }
 
 func (f *fakeTUIAPIClient) SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,11 +38,17 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 		Config:     filepath.Join(runtimeDir, "config.yaml"),
 	}
 	policy := NewLaunchPolicy([]string{"codex"}, true)
+	owner := instancelock.Owner{
+		PID:       os.Getpid(),
+		StartedAt: time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC),
+		StateDir:  identity.StateDir,
+		Config:    identity.Config,
+	}
 	srv, err := Start(context.Background(), Options{
 		Runtime:      identity,
 		LaunchPolicy: policy,
 		StartMode:    "server",
-		Owner:        instancelock.Owner{PID: os.Getpid(), StartedAt: time.Now()},
+		Owner:        owner,
 		Features:     featureListerFunc(nil),
 	})
 	if err != nil {
@@ -68,8 +75,13 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("health status = %d; want 200", resp.StatusCode)
 	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read health body: %v", err)
+	}
+	assertTopLevelJSONOwnerOmitsPrivatePaths(t, data, "health owner")
 	var body HealthResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		t.Fatalf("decode health: %v", err)
 	}
 	if body.APIVersion != APIVersion || body.Status != "ok" {
@@ -81,11 +93,25 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 	if !launchPolicyEquivalent(body.LaunchPolicy, policy) {
 		t.Fatalf("health launch_policy = %+v; want %+v", body.LaunchPolicy, policy)
 	}
+	if !body.StartedAt.Equal(srv.StartedAt()) {
+		t.Fatalf("health started_at = %s; want server started_at %s", body.StartedAt, srv.StartedAt())
+	}
+	wantOwner := OwnerDTOFromInstanceOwner(owner)
+	if body.Owner != wantOwner {
+		t.Fatalf("health owner = %+v; want %+v", body.Owner, wantOwner)
+	}
 }
 
 func TestPublishDiscoveryWritesOwnerOnlyAtomically(t *testing.T) {
 	t.Parallel()
 	runtimeDir := t.TempDir()
+	owner := instancelock.Owner{
+		PID:       os.Getpid(),
+		StartedAt: time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC),
+		StateDir:  filepath.Join(runtimeDir, "features"),
+		Config:    filepath.Join(runtimeDir, "config.yaml"),
+		Version:   "test-version",
+	}
 	rec := DiscoveryRecord{
 		SchemaVersion: 1,
 		APIVersion:    APIVersion,
@@ -99,6 +125,7 @@ func TestPublishDiscoveryWritesOwnerOnlyAtomically(t *testing.T) {
 		PID:         os.Getpid(),
 		StartedAt:   time.Now().UTC(),
 		PublishedAt: time.Now().UTC(),
+		Owner:       OwnerDTOFromInstanceOwner(owner),
 	}
 
 	if err := PublishDiscovery(runtimeDir, rec); err != nil {
@@ -118,6 +145,11 @@ func TestPublishDiscoveryWritesOwnerOnlyAtomically(t *testing.T) {
 	if len(matches) != 0 {
 		t.Fatalf("temporary discovery files left behind: %v", matches)
 	}
+	data, err := os.ReadFile(DiscoveryPath(runtimeDir))
+	if err != nil {
+		t.Fatalf("ReadFile(discovery) error = %v", err)
+	}
+	assertTopLevelJSONOwnerOmitsPrivatePaths(t, data, "discovery owner")
 
 	got, err := ReadDiscovery(runtimeDir)
 	if err != nil {
@@ -125,6 +157,28 @@ func TestPublishDiscoveryWritesOwnerOnlyAtomically(t *testing.T) {
 	}
 	if got.BaseURL != rec.BaseURL || got.Runtime.StateDir != rec.Runtime.StateDir {
 		t.Fatalf("ReadDiscovery() = %+v; want published record", got)
+	}
+}
+
+func assertTopLevelJSONOwnerOmitsPrivatePaths(t testing.TB, data []byte, label string) {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(data, &body); err != nil {
+		t.Fatalf("unmarshal %s JSON %s: %v", label, data, err)
+	}
+	owner, ok := body["owner"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %v; want object", label, body["owner"])
+	}
+	assertOwnerMapOmitsPrivatePaths(t, owner, label)
+}
+
+func assertOwnerMapOmitsPrivatePaths(t testing.TB, owner map[string]any, label string) {
+	t.Helper()
+	for _, key := range []string{"state_dir", "config_path"} {
+		if _, ok := owner[key]; ok {
+			t.Fatalf("%s contains %q: %+v", label, key, owner)
+		}
 	}
 }
 
@@ -239,6 +293,115 @@ func TestPrepareDiscoveryClassifiesHealthyMatchingServer(t *testing.T) {
 	}
 	if !decision.AlreadyRunning || decision.Replace {
 		t.Fatalf("decision = %+v; want already running", decision)
+	}
+}
+
+func TestPrepareDiscoveryRequiresHealthStartedAtToMatchRecord(t *testing.T) {
+	t.Parallel()
+	runtimeDir := t.TempDir()
+	identity := RuntimeIdentity{
+		RuntimeDir: runtimeDir,
+		StateDir:   filepath.Join(runtimeDir, "features"),
+		Config:     filepath.Join(runtimeDir, "config.yaml"),
+	}
+	policy := NewLaunchPolicy([]string{"codex"}, false)
+	recordStartedAt := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	rec := DiscoveryRecord{
+		SchemaVersion: 1,
+		APIVersion:    APIVersion,
+		BaseURL:       "http://127.0.0.1:4567",
+		Runtime:       identity,
+		LaunchPolicy:  policy,
+		StartMode:     "server",
+		PID:           1111,
+		StartedAt:     recordStartedAt,
+	}
+	if err := PublishDiscovery(runtimeDir, rec); err != nil {
+		t.Fatalf("PublishDiscovery() error = %v", err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, HealthResponse{
+			APIVersion:   APIVersion,
+			Status:       "ok",
+			Runtime:      identity,
+			LaunchPolicy: policy,
+			StartedAt:    recordStartedAt.Add(time.Minute),
+		})
+	})}
+
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	if err != nil {
+		t.Fatalf("PrepareDiscovery() error = %v", err)
+	}
+	if decision.AlreadyRunning || !decision.Replace {
+		t.Fatalf("decision = %+v; want replacement for health/record mismatch", decision)
+	}
+	if !strings.Contains(decision.Reason, "mismatched discovery health") {
+		t.Fatalf("decision reason = %q; want mismatched discovery health", decision.Reason)
+	}
+}
+
+func TestPrepareDiscoveryRequiresHealthOwnerToMatchRecord(t *testing.T) {
+	t.Parallel()
+	runtimeDir := t.TempDir()
+	identity := RuntimeIdentity{
+		RuntimeDir: runtimeDir,
+		StateDir:   filepath.Join(runtimeDir, "features"),
+		Config:     filepath.Join(runtimeDir, "config.yaml"),
+	}
+	policy := NewLaunchPolicy([]string{"codex"}, false)
+	startedAt := time.Date(2026, 6, 14, 8, 0, 0, 0, time.UTC)
+	recordOwner := OwnerDTO{
+		PID:       1111,
+		PGID:      2222,
+		StartedAt: startedAt,
+		Version:   "record-owner",
+	}
+	healthOwner := recordOwner
+	healthOwner.PID = 3333
+	healthOwner.Version = "health-owner"
+	rec := DiscoveryRecord{
+		SchemaVersion: 1,
+		APIVersion:    APIVersion,
+		BaseURL:       "http://127.0.0.1:4567",
+		Runtime:       identity,
+		LaunchPolicy:  policy,
+		StartMode:     "server",
+		PID:           recordOwner.PID,
+		PGID:          recordOwner.PGID,
+		StartedAt:     startedAt,
+		Owner:         recordOwner,
+	}
+	if err := PublishDiscovery(runtimeDir, rec); err != nil {
+		t.Fatalf("PublishDiscovery() error = %v", err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, struct {
+			APIVersion   string          `json:"api_version"`
+			Status       string          `json:"status"`
+			Runtime      RuntimeIdentity `json:"runtime"`
+			LaunchPolicy LaunchPolicy    `json:"launch_policy"`
+			StartedAt    time.Time       `json:"started_at"`
+			Owner        OwnerDTO        `json:"owner"`
+		}{
+			APIVersion:   APIVersion,
+			Status:       "ok",
+			Runtime:      identity,
+			LaunchPolicy: policy,
+			StartedAt:    startedAt,
+			Owner:        healthOwner,
+		})
+	})}
+
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	if err != nil {
+		t.Fatalf("PrepareDiscovery() error = %v", err)
+	}
+	if decision.AlreadyRunning || !decision.Replace {
+		t.Fatalf("decision = %+v; want replacement for owner metadata mismatch", decision)
+	}
+	if !strings.Contains(decision.Reason, "mismatched discovery owner") {
+		t.Fatalf("decision reason = %q; want mismatched discovery owner", decision.Reason)
 	}
 }
 
@@ -368,6 +531,41 @@ func TestPrepareDiscoveryReplacesHealthyWrongRuntime(t *testing.T) {
 	}
 	if decision.AlreadyRunning || !decision.Replace {
 		t.Fatalf("decision = %+v; want replacement for wrong health runtime", decision)
+	}
+}
+
+func TestPrepareDiscoveryReportsDeadPortDiagnostic(t *testing.T) {
+	t.Parallel()
+	runtimeDir := t.TempDir()
+	identity := RuntimeIdentity{
+		RuntimeDir: runtimeDir,
+		StateDir:   filepath.Join(runtimeDir, "features"),
+		Config:     filepath.Join(runtimeDir, "config.yaml"),
+	}
+	policy := NewLaunchPolicy(nil, false)
+	if err := PublishDiscovery(runtimeDir, DiscoveryRecord{
+		SchemaVersion: 1,
+		APIVersion:    APIVersion,
+		BaseURL:       "http://127.0.0.1:4567",
+		Runtime:       identity,
+		LaunchPolicy:  policy,
+		StartMode:     "server",
+	}); err != nil {
+		t.Fatalf("PublishDiscovery() error = %v", err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("connect: connection refused")
+	})}
+
+	decision, err := PrepareDiscovery(context.Background(), runtimeDir, identity, policy, client)
+	if err != nil {
+		t.Fatalf("PrepareDiscovery() error = %v", err)
+	}
+	if decision.AlreadyRunning || !decision.Replace {
+		t.Fatalf("decision = %+v; want replacement for dead discovery port", decision)
+	}
+	if !strings.Contains(decision.Reason, "dead discovery port") {
+		t.Fatalf("decision reason = %q; want dead discovery port", decision.Reason)
 	}
 }
 

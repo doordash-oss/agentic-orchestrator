@@ -138,6 +138,34 @@ func TestOperationRegistryPersistsPaginatesFiltersAndRedacts(t *testing.T) {
 	}
 }
 
+func TestOperationRegistryTerminalRecordsAreWriteOnce(t *testing.T) {
+	t.Parallel()
+
+	registry := mustOperationRegistry(t, filepath.Join(t.TempDir(), "operations"))
+	rec, err := registry.Create("feature.start", OperationTarget{Type: "feature", FeatureID: "feat-terminal"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := registry.Complete(rec.ID, OperationStatusSucceeded, map[string]string{"feature_id": "feat-terminal"}, nil); err != nil {
+		t.Fatalf("Complete(succeeded) error = %v", err)
+	}
+	if err := registry.Complete(rec.ID, OperationStatusFailed, nil, &OperationError{Code: "failed", Message: "private-token"}); err != nil {
+		t.Fatalf("Complete(failed after terminal) error = %v", err)
+	}
+
+	page, err := registry.List(OperationListOptions{Limit: 10})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(page.Operations) != 1 {
+		t.Fatalf("operations = %+v; want one terminal record", page.Operations)
+	}
+	op := page.Operations[0]
+	if op.Status != OperationStatusSucceeded || op.Result["feature_id"] != "feat-terminal" || op.Error != nil {
+		t.Fatalf("terminal operation after stale complete = %+v; want original succeeded result", op)
+	}
+}
+
 func TestOperationRegistryUsesMetadataIndexWithoutHydratingUnrelatedRecords(t *testing.T) {
 	t.Parallel()
 
@@ -246,6 +274,115 @@ status: running
 	}
 	if len(defaultPage.Operations) != 1 || defaultPage.Operations[0].ID != "op-005" || defaultPage.Operations[0].Status != OperationStatusInterrupted || defaultPage.NextCursor == "" {
 		t.Fatalf("default page = %+v cursor %q; want bounded indexed first page with next cursor", defaultPage.Operations, defaultPage.NextCursor)
+	}
+}
+
+func TestOperationRegistryReconcilesStaleOperationsFromRecoveredState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	operationsDir := filepath.Join(dir, "operations")
+	registry, err := NewOperationRegistry(OperationRegistryOptions{Dir: operationsDir, DefaultLimit: 10, MaxLimit: 10})
+	if err != nil {
+		t.Fatalf("NewOperationRegistry() error = %v", err)
+	}
+	running, err := registry.Create("feature.restart", OperationTarget{Type: "feature", FeatureID: "feat-restart", RunNumber: 3, SessionID: "session-before"})
+	if err != nil {
+		t.Fatalf("Create running operation: %v", err)
+	}
+	if err := registry.UpdateStatus(running.ID, OperationStatusRunning); err != nil {
+		t.Fatalf("UpdateStatus running: %v", err)
+	}
+	queued, err := registry.Create("feature.restart", OperationTarget{Type: "feature", FeatureID: "feat-failed", RunNumber: 2, SessionID: "session-failed"})
+	if err != nil {
+		t.Fatalf("Create queued operation: %v", err)
+	}
+
+	restarted, err := NewOperationRegistry(OperationRegistryOptions{
+		Dir:          operationsDir,
+		DefaultLimit: 10,
+		MaxLimit:     10,
+		Reconcile: func(rec OperationRecord) OperationReconciliation {
+			switch rec.Target.FeatureID {
+			case "feat-restart":
+				return OperationReconciliation{
+					Status: OperationStatusSucceeded,
+					Result: map[string]string{
+						"feature_id": "feat-restart",
+						"status":     "implementing",
+						"phase":      "Implement",
+						"run_number": "3",
+						"session_id": "session-after",
+						"prompt":     "raw initial prompt with secret=do-not-leak",
+						"path":       "/private/worktree",
+					},
+				}
+			case "feat-failed":
+				return OperationReconciliation{
+					Status: OperationStatusFailed,
+					Error: &OperationError{
+						Code:    "failed",
+						Message: strings.Repeat("x", 1000) + " /private/worktree secret=do-not-leak",
+						Metadata: map[string]string{
+							"feature_id": "feat-failed",
+							"status":     "failed",
+							"phase":      "Plan",
+							"run_number": "2",
+							"prompt":     "raw initial prompt with secret=do-not-leak",
+							"path":       "/private/worktree",
+						},
+					},
+				}
+			default:
+				return OperationReconciliation{}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("restart NewOperationRegistry() error = %v", err)
+	}
+
+	succeeded, err := restarted.List(OperationListOptions{FeatureID: "feat-restart", State: OperationStatusSucceeded, Limit: 10})
+	if err != nil {
+		t.Fatalf("List succeeded: %v", err)
+	}
+	if len(succeeded.Operations) != 1 || succeeded.Operations[0].ID != running.ID {
+		t.Fatalf("succeeded operations = %+v; want reconciled %s", succeeded.Operations, running.ID)
+	}
+	result := succeeded.Operations[0].Result
+	if result["status"] != "implementing" || result["phase"] != "Implement" || result["run_number"] != "3" || result["session_id"] != "session-after" {
+		t.Fatalf("reconciled result = %+v; want recovered feature/run/session metadata", result)
+	}
+
+	failed, err := restarted.List(OperationListOptions{FeatureID: "feat-failed", State: OperationStatusFailed, Limit: 10})
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(failed.Operations) != 1 || failed.Operations[0].ID != queued.ID || failed.Operations[0].Error == nil {
+		t.Fatalf("failed operations = %+v; want reconciled %s with error", failed.Operations, queued.ID)
+	}
+	if failed.Operations[0].Error.Message != "operation failed" {
+		t.Fatalf("failed operation message = %q; want bounded generic message", failed.Operations[0].Error.Message)
+	}
+
+	rawFiles, err := os.ReadDir(operationsDir)
+	if err != nil {
+		t.Fatalf("ReadDir(operations): %v", err)
+	}
+	for _, entry := range rawFiles {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(operationsDir, entry.Name()))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", entry.Name(), err)
+		}
+		raw := string(data)
+		for _, leaked := range []string{"raw initial prompt", "do-not-leak", "/private/worktree"} {
+			if strings.Contains(raw, leaked) {
+				t.Fatalf("operation record %s leaked %q:\n%s", entry.Name(), leaked, raw)
+			}
+		}
 	}
 }
 
@@ -745,6 +882,57 @@ func TestMutationLanesConflictBackpressureAndOperationSSE(t *testing.T) {
 	}
 }
 
+func TestConflictingMutationsFromDistinctRESTClientsReturnRejectedOperationStatus(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	mutations := &fakeMutationTarget{startHook: func() {
+		close(started)
+		<-release
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  mutations,
+		MutationLimits: MutationLimits{
+			FeatureQueue:   0,
+			RuntimeQueue:   0,
+			AggregateQueue: 10,
+		},
+	})
+
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	clientA := &http.Client{Timeout: time.Second}
+	clientB := &http.Client{Timeout: time.Second}
+
+	first := postMutationHTTP(t, clientA, srv.URL+"/api/v1/features/feat-shared/start", `{}`)
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("first start status = %d; want 202", first.StatusCode)
+	}
+	firstID := decodeHTTPJSONMap(t, first)["operation_id"].(string)
+	<-started
+
+	conflict := postMutationHTTP(t, clientB, srv.URL+"/api/v1/features/feat-shared/stop", `{}`)
+	if conflict.StatusCode != http.StatusConflict {
+		t.Fatalf("conflict status = %d; want 409", conflict.StatusCode)
+	}
+	conflictBody := decodeHTTPJSONMap(t, conflict)
+	conflictID, _ := conflictBody["operation_id"].(string)
+	if conflictID == "" || conflictBody["status"] != string(OperationStatusRejected) {
+		t.Fatalf("conflict body = %+v; want rejected operation status with operation_id", conflictBody)
+	}
+	op := waitForOperationStatus(t, handler, conflictID, OperationStatusRejected)
+	if op["status"] != string(OperationStatusRejected) {
+		t.Fatalf("conflict operation = %+v; want rejected", op)
+	}
+
+	close(release)
+	waitForOperationStatus(t, handler, firstID, OperationStatusSucceeded)
+}
+
 func TestMutationFeatureLaneQueuesWithinCapAndRejectsExcessBeforeHistory(t *testing.T) {
 	t.Parallel()
 
@@ -986,6 +1174,149 @@ func TestRuntimeServerCloseInterruptsActiveAndQueuedOperations(t *testing.T) {
 	active = waitForRegistryOperationStatus(t, operations, firstID, OperationStatusInterrupted)
 	if active.Status != OperationStatusInterrupted {
 		t.Fatalf("active operation status after worker return = %s; want interrupted", active.Status)
+	}
+}
+
+func TestShutdownMutationInterruptsActiveOperationAndLateWorkerCannotRewriteTerminalRecord(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	operations := mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations"))
+	started := make(chan struct{})
+	release := make(chan struct{})
+	shutdownRequested := make(chan struct{}, 1)
+	var releaseOnce sync.Once
+	mutations := &fakeMutationTarget{startHook: func() {
+		close(started)
+		<-release
+	}}
+	srv, err := Start(context.Background(), Options{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: operations,
+		Mutations:  mutations,
+		MutationLimits: MutationLimits{
+			FeatureQueue:   1,
+			RuntimeQueue:   0,
+			AggregateQueue: 10,
+		},
+		RequestShutdown: func() {
+			shutdownRequested <- struct{}{}
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer releaseOnce.Do(func() { close(release) })
+
+	clientA := &http.Client{Timeout: time.Second}
+	clientB := &http.Client{Timeout: time.Second}
+	first := postMutationHTTP(t, clientA, srv.BaseURL()+"/api/v1/features/feat-shutdown/start", `{}`)
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("first start status = %d; want 202", first.StatusCode)
+	}
+	firstID := decodeHTTPJSONMap(t, first)["operation_id"].(string)
+	<-started
+
+	shutdown := postMutationHTTP(t, clientB, srv.BaseURL()+"/api/v1/shutdown", `{}`)
+	if shutdown.StatusCode != http.StatusAccepted {
+		t.Fatalf("shutdown status = %d; want 202", shutdown.StatusCode)
+	}
+	shutdownID := decodeHTTPJSONMap(t, shutdown)["operation_id"].(string)
+	select {
+	case <-shutdownRequested:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown hook was not called after shutdown operation completion")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := srv.Close(ctx); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	active := waitForRegistryOperationStatus(t, operations, firstID, OperationStatusInterrupted)
+	if active.Error == nil || active.Error.Code != "interrupted" {
+		t.Fatalf("active operation after shutdown close = %+v; want interrupted error", active)
+	}
+	shutdownOp := waitForRegistryOperationStatus(t, operations, shutdownID, OperationStatusSucceeded)
+	if shutdownOp.Result["status"] != "accepted" {
+		t.Fatalf("shutdown operation result = %+v; want accepted status", shutdownOp.Result)
+	}
+
+	releaseOnce.Do(func() { close(release) })
+	time.Sleep(25 * time.Millisecond)
+	active = waitForRegistryOperationStatus(t, operations, firstID, OperationStatusInterrupted)
+	if active.Result["feature_id"] == "feat-shutdown" || active.Error == nil || active.Error.Code != "interrupted" {
+		t.Fatalf("active operation after late worker return = %+v; want original interrupted terminal record", active)
+	}
+}
+
+func TestShutdownMutationCreatesAcceptedRuntimeOperation(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  &fakeMutationTarget{},
+	})
+
+	accepted := mutationJSONMap(t, handler, http.MethodPost, "/api/v1/shutdown", `{}`, "", "")
+	opID := accepted["operation_id"].(string)
+	if opID == "" {
+		t.Fatalf("shutdown operation_id is empty in %+v", accepted)
+	}
+	op := waitForOperationStatus(t, handler, opID, OperationStatusSucceeded)
+	if op["kind"] != "runtime.shutdown" {
+		t.Fatalf("shutdown operation kind = %v; want runtime.shutdown", op["kind"])
+	}
+	if target := op["target"].(map[string]any); target["type"] != "runtime" {
+		t.Fatalf("shutdown operation target = %+v; want runtime target", target)
+	}
+	raw := mustMarshalJSON(t, op)
+	for _, leaked := range []string{"private-token", "raw prompt", "password", "/tmp/private-agentico"} {
+		if strings.Contains(raw, leaked) {
+			t.Fatalf("shutdown operation leaked %q in %s", leaked, raw)
+		}
+	}
+}
+
+func TestShutdownMutationReturnsAcceptedBeforeGracefulShutdownBegins(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	shutdownRequested := make(chan struct{}, 1)
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  &fakeMutationTarget{},
+		RequestShutdown: func() {
+			shutdownRequested <- struct{}{}
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/shutdown", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("shutdown status = %d; want 202; body: %s", resp.StatusCode, data)
+	}
+	var accepted OperationAcceptedResponse
+	if err := json.NewDecoder(resp.Body).Decode(&accepted); err != nil {
+		t.Fatalf("decode shutdown accepted response: %v", err)
+	}
+	if accepted.OperationID == "" || accepted.Status != OperationStatusQueued {
+		t.Fatalf("accepted shutdown response = %+v; want queued operation id", accepted)
+	}
+	select {
+	case <-shutdownRequested:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown hook was not called after accepted response")
 	}
 }
 

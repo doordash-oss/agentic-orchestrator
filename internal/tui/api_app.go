@@ -73,16 +73,18 @@ type APIClient interface {
 	AnswerPermission(context.Context, server.PermissionAnswerRequest) (server.OperationAcceptedResponse, error)
 	SendHelp(context.Context, server.HelpAnswerRequest) (server.OperationAcceptedResponse, error)
 	AnswerAskUser(context.Context, server.AskUserAnswerRequest) (server.OperationAcceptedResponse, error)
+	Shutdown(context.Context) (server.OperationAcceptedResponse, error)
 	SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error)
 	FetchRefreshSnapshot(context.Context, server.RefreshSignal) (server.RefreshSnapshot, error)
 }
 
 type APIAppOptions struct {
-	Runtime         server.RuntimeIdentity
-	LaunchPolicy    server.LaunchPolicy
-	OwnedServer     bool
-	EventOptions    server.EventSubscriptionOptions
-	StopOwnedServer func(context.Context) error
+	Runtime                    server.RuntimeIdentity
+	LaunchPolicy               server.LaunchPolicy
+	OwnedServer                bool
+	EventOptions               server.EventSubscriptionOptions
+	WaitForOwnedServerShutdown func(context.Context) error
+	StopOwnedServer            func(context.Context) error
 }
 
 const (
@@ -233,65 +235,65 @@ type APIActionPresentation struct {
 }
 
 type APIAppModel struct {
-	client                   APIClient
-	featureList              server.FeatureListResponse
-	featureDetails           map[string]server.FeatureDetailResponse
-	runtimeConfig            server.RuntimeConfigResponse
-	catalog                  server.ModelCatalogResponse
-	prompts                  server.PromptSnapshotResponse
-	permissions              server.PermissionSnapshotResponse
-	sessionList              server.SessionListResponse
-	sessionDetails           map[string]server.SessionDetailResponse
-	livePreviews             map[string]server.LivePreviewResponse
-	transcripts              map[string]server.TranscriptResponse
-	contents                 map[string]apiFeatureContentSnapshot
-	operations               server.OperationSnapshotResponse
-	recovery                 server.RecoverySnapshotResponse
-	launchPolicy             server.LaunchPolicy
-	snapshot                 APIAppSnapshot
-	recoveryPanel            *apiRecoveryPanel
-	selectedFeature          string
-	width                    int
-	height                   int
-	ownedServer              bool
-	stopOwnedServer          func(context.Context) error
-	quitOwnedServerPrompt    bool
-	actionConfirmActive      bool
-	actionConfirmKind        string
-	actionConfirmFeatureID   string
-	actionConfirmFeatureName string
-	tweakReviewModalActive   bool
-	tweakReviewFeatureID     string
-	tweakReviewFeatureName   string
-	needInputPromptActive    bool
-	needInputFeatureID       string
-	needInputFeatureName     string
-	permissionPromptActive   bool
-	permissionFeatureID      string
-	permissionFeatureName    string
-	permissionRequest        server.ControlRequestDTO
-	helpPromptActive         bool
-	helpFeatureID            string
-	helpFeatureName          string
-	helpQuestion             string
-	helpAnswerDraft          string
-	askUserPromptActive      bool
-	askUserFeatureID         string
-	askUserFeatureName       string
-	askUserQuestion          string
-	askUserRequest           server.ControlRequestDTO
-	askUserAnswerDraft       string
-	createPrompt             *apiCreateFeaturePrompt
-	reviewComments           *apiReviewCommentsPanel
-	refactorPrompt           *apiRefactorPrompt
-	refactorPipeline         *apiRefactorPipelinePanel
-	configEditor             *apiFeatureConfigEditor
-	runtimeConfigEditor      *apiRuntimeConfigEditor
-	statusMessage            string
-	eventCtx                 context.Context
-	cancelEvents             context.CancelFunc
-	signals                  <-chan server.RefreshSignal
-	eventErrs                <-chan error
+	client                     APIClient
+	featureList                server.FeatureListResponse
+	featureDetails             map[string]server.FeatureDetailResponse
+	runtimeConfig              server.RuntimeConfigResponse
+	catalog                    server.ModelCatalogResponse
+	prompts                    server.PromptSnapshotResponse
+	permissions                server.PermissionSnapshotResponse
+	sessionList                server.SessionListResponse
+	sessionDetails             map[string]server.SessionDetailResponse
+	livePreviews               map[string]server.LivePreviewResponse
+	transcripts                map[string]server.TranscriptResponse
+	contents                   map[string]apiFeatureContentSnapshot
+	operations                 server.OperationSnapshotResponse
+	recovery                   server.RecoverySnapshotResponse
+	launchPolicy               server.LaunchPolicy
+	snapshot                   APIAppSnapshot
+	recoveryPanel              *apiRecoveryPanel
+	selectedFeature            string
+	width                      int
+	height                     int
+	ownedServer                bool
+	waitForOwnedServerShutdown func(context.Context) error
+	quitOwnedServerPrompt      bool
+	actionConfirmActive        bool
+	actionConfirmKind          string
+	actionConfirmFeatureID     string
+	actionConfirmFeatureName   string
+	tweakReviewModalActive     bool
+	tweakReviewFeatureID       string
+	tweakReviewFeatureName     string
+	needInputPromptActive      bool
+	needInputFeatureID         string
+	needInputFeatureName       string
+	permissionPromptActive     bool
+	permissionFeatureID        string
+	permissionFeatureName      string
+	permissionRequest          server.ControlRequestDTO
+	helpPromptActive           bool
+	helpFeatureID              string
+	helpFeatureName            string
+	helpQuestion               string
+	helpAnswerDraft            string
+	askUserPromptActive        bool
+	askUserFeatureID           string
+	askUserFeatureName         string
+	askUserQuestion            string
+	askUserRequest             server.ControlRequestDTO
+	askUserAnswerDraft         string
+	createPrompt               *apiCreateFeaturePrompt
+	reviewComments             *apiReviewCommentsPanel
+	refactorPrompt             *apiRefactorPrompt
+	refactorPipeline           *apiRefactorPipelinePanel
+	configEditor               *apiFeatureConfigEditor
+	runtimeConfigEditor        *apiRuntimeConfigEditor
+	statusMessage              string
+	eventCtx                   context.Context
+	cancelEvents               context.CancelFunc
+	signals                    <-chan server.RefreshSignal
+	eventErrs                  <-chan error
 }
 
 type apiRefreshSignalMsg struct {
@@ -413,18 +415,22 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	waitForOwnedServerShutdown := opts.WaitForOwnedServerShutdown
+	if waitForOwnedServerShutdown == nil {
+		waitForOwnedServerShutdown = opts.StopOwnedServer
+	}
 	app := APIAppModel{
-		client:          client,
-		featureDetails:  map[string]server.FeatureDetailResponse{},
-		sessionDetails:  map[string]server.SessionDetailResponse{},
-		livePreviews:    map[string]server.LivePreviewResponse{},
-		transcripts:     map[string]server.TranscriptResponse{},
-		contents:        map[string]apiFeatureContentSnapshot{},
-		width:           100,
-		height:          30,
-		ownedServer:     opts.OwnedServer,
-		stopOwnedServer: opts.StopOwnedServer,
-		launchPolicy:    opts.LaunchPolicy,
+		client:                     client,
+		featureDetails:             map[string]server.FeatureDetailResponse{},
+		sessionDetails:             map[string]server.SessionDetailResponse{},
+		livePreviews:               map[string]server.LivePreviewResponse{},
+		transcripts:                map[string]server.TranscriptResponse{},
+		contents:                   map[string]apiFeatureContentSnapshot{},
+		width:                      100,
+		height:                     30,
+		ownedServer:                opts.OwnedServer,
+		waitForOwnedServerShutdown: waitForOwnedServerShutdown,
+		launchPolicy:               opts.LaunchPolicy,
 	}
 	features, err := client.Features(ctx)
 	if err != nil {
@@ -646,7 +652,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	case apiOwnedServerStoppedMsg:
 		if msg.err != nil {
-			m.statusMessage = "Server stop failed: " + firstLine(msg.err.Error())
+			m.statusMessage = "Server shutdown failed: " + firstLine(msg.err.Error())
 			m.quitOwnedServerPrompt = false
 			return m, nil
 		}
@@ -3564,12 +3570,13 @@ func askUserQuestionLabel(req server.ControlRequestDTO) string {
 
 func (m APIAppModel) stopOwnedServerCmd() tea.Cmd {
 	return func() tea.Msg {
-		if m.stopOwnedServer == nil {
-			return apiOwnedServerStoppedMsg{}
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return apiOwnedServerStoppedMsg{err: m.stopOwnedServer(ctx)}
+		_, err := m.client.Shutdown(ctx)
+		if err == nil && m.waitForOwnedServerShutdown != nil {
+			err = m.waitForOwnedServerShutdown(ctx)
+		}
+		return apiOwnedServerStoppedMsg{err: err}
 	}
 }
 

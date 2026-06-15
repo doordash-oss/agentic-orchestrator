@@ -223,6 +223,9 @@ func (h *apiHandler) registerMCPMutationTools(server *mcp.Server) {
 	addRESTTool[RuntimeConfigMutationRequest, OperationAcceptedResponse](server, h, "config_runtime_update", "Update runtime configuration.", http.MethodPatch, func(RuntimeConfigMutationRequest) string {
 		return "/api/v1/config/runtime"
 	}, nil, func(in RuntimeConfigMutationRequest) any { return in }, true)
+	addRESTTool[noMCPArgs, OperationAcceptedResponse](server, h, "runtime_shutdown", "Shut down the runtime server.", http.MethodPost, func(noMCPArgs) string {
+		return "/api/v1/shutdown"
+	}, nil, func(noMCPArgs) any { return emptyBody() }, true)
 	addRESTTool[publishFeatureMCPArgs, OperationAcceptedResponse](server, h, "feature_publish", "Publish a feature.", http.MethodPost, func(in publishFeatureMCPArgs) string {
 		return featureActionPath(in.FeatureID, "publish")
 	}, nil, func(in publishFeatureMCPArgs) any {

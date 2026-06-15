@@ -607,6 +607,199 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 	})
 }
 
+func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("restart via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	planPath := filepath.Join(runtimeDir, "plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n\n## Tasks\n\n**Repo:** repo-a\n\n- Restart the implementation.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile plan: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusFailed
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.LastError = "previous worker died with secret=do-not-leak"
+		ff.Artifacts = map[string]string{"plan": planPath}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	var dispatched []string
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle: manager,
+		Store:     store,
+	}, orchestrator.Hooks{})
+	orch.SetRunMultiRepoImplFn(func(f *feature.Feature, planPath string, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		dispatched = append(dispatched, f.ID+":"+planPath)
+		ch := make(chan *agent.OrchestratorResult)
+		close(ch)
+		return ch, nil
+	})
+	target := serverMutationTarget{orch: orch, store: store}
+
+	result, err := target.RestartFeature(f.ID, serverruntime.RestartFeatureRequest{})
+	if err != nil {
+		t.Fatalf("RestartFeature() error = %v", err)
+	}
+
+	if len(dispatched) != 1 || dispatched[0] != f.ID+":"+planPath {
+		t.Fatalf("phase dispatches = %v, want one implementation dispatch with plan path", dispatched)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load restarted feature: %v", err)
+	}
+	if updated.Status != feature.StatusImplementing || updated.CurrentPhase != feature.PhaseImplement {
+		t.Fatalf("restarted feature status/phase = %s/%s, want Implementing/Implement", updated.Status, updated.CurrentPhase)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id": f.ID,
+		"phase":      feature.PhaseImplement.String(),
+		"dispatch":   "phase",
+	})
+	assertMetadataDoesNotContain(t, result.Metadata, "do-not-leak", planPath)
+}
+
+func TestRuntimeOperationReconcilerMapsRecoveredFeatureState(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	saveRecoveredFeature := func(id string, status feature.Status, phase feature.Phase) {
+		t.Helper()
+		f := &feature.Feature{
+			ID:                       id,
+			Name:                     id,
+			Slug:                     id,
+			Status:                   status,
+			CurrentPhase:             phase,
+			ActiveRun:                3,
+			RunCount:                 3,
+			CurrentRoadmapPhase:      7,
+			LastError:                "raw prompt secret=do-not-leak /tmp/private-agentico",
+			PendingNeedUserInputPath: "/tmp/private-agentico/need-user-input.yaml",
+		}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("Save(%s) error = %v", id, err)
+		}
+	}
+	saveRecoveredFeature("feat-running", feature.StatusImplementing, feature.PhaseImplement)
+	saveRecoveredFeature("feat-failed", feature.StatusFailed, feature.PhasePlan)
+	saveRecoveredFeature("feat-interrupted", feature.StatusInterrupted, feature.PhaseResearch)
+
+	reconcile := runtimeOperationReconciler(store)
+	tests := []struct {
+		name       string
+		record     serverruntime.OperationRecord
+		wantStatus serverruntime.OperationStatus
+		wantResult map[string]string
+		wantErr    string
+	}{
+		{
+			name: "running feature means dispatched mutation succeeded",
+			record: serverruntime.OperationRecord{
+				Kind:   "feature.restart",
+				Status: serverruntime.OperationStatusRunning,
+				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-running", RunNumber: 2},
+			},
+			wantStatus: serverruntime.OperationStatusSucceeded,
+			wantResult: map[string]string{
+				"feature_id":    "feat-running",
+				"status":        feature.StatusImplementing.String(),
+				"phase":         feature.PhaseImplement.String(),
+				"run_number":    "3",
+				"roadmap_phase": "7",
+			},
+		},
+		{
+			name: "queued feature mutation did not start before restart",
+			record: serverruntime.OperationRecord{
+				Kind:   "feature.restart",
+				Status: serverruntime.OperationStatusQueued,
+				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-running", RunNumber: 2},
+			},
+			wantStatus: serverruntime.OperationStatusInterrupted,
+			wantErr:    "interrupted",
+		},
+		{
+			name: "failed feature fails stale mutation",
+			record: serverruntime.OperationRecord{
+				Kind:   "feature.restart",
+				Status: serverruntime.OperationStatusRunning,
+				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-failed"},
+			},
+			wantStatus: serverruntime.OperationStatusFailed,
+			wantErr:    "failed",
+		},
+		{
+			name: "interrupted feature interrupts stale non-stop mutation",
+			record: serverruntime.OperationRecord{
+				Kind:   "feature.restart",
+				Status: serverruntime.OperationStatusRunning,
+				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-interrupted"},
+			},
+			wantStatus: serverruntime.OperationStatusInterrupted,
+			wantErr:    "interrupted",
+		},
+		{
+			name: "interrupted feature completes stale stop mutation",
+			record: serverruntime.OperationRecord{
+				Kind:   "feature.stop",
+				Status: serverruntime.OperationStatusRunning,
+				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-interrupted"},
+			},
+			wantStatus: serverruntime.OperationStatusSucceeded,
+			wantResult: map[string]string{
+				"feature_id": "feat-interrupted",
+				"status":     feature.StatusInterrupted.String(),
+				"phase":      feature.PhaseResearch.String(),
+				"run_number": "3",
+				"action":     "stop",
+			},
+		},
+		{
+			name: "missing feature interrupts stale mutation with public id only",
+			record: serverruntime.OperationRecord{
+				Kind:   "feature.start",
+				Status: serverruntime.OperationStatusRunning,
+				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-missing"},
+			},
+			wantStatus: serverruntime.OperationStatusInterrupted,
+			wantErr:    "interrupted",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := reconcile(tt.record)
+			if got.Status != tt.wantStatus {
+				t.Fatalf("runtimeOperationReconciler(%s).Status = %s, want %s", tt.record.Target.FeatureID, got.Status, tt.wantStatus)
+			}
+			for k, want := range tt.wantResult {
+				if got.Result[k] != want {
+					t.Fatalf("runtimeOperationReconciler(%s).Result[%s] = %q, want %q; result=%v", tt.record.Target.FeatureID, k, got.Result[k], want, got.Result)
+				}
+			}
+			if tt.wantErr != "" {
+				if got.Error == nil || got.Error.Code != tt.wantErr {
+					t.Fatalf("runtimeOperationReconciler(%s).Error = %+v, want code %q", tt.record.Target.FeatureID, got.Error, tt.wantErr)
+				}
+			}
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("Marshal reconciliation: %v", err)
+			}
+			for _, leaked := range []string{"do-not-leak", "raw prompt", "/tmp/private-agentico"} {
+				if strings.Contains(string(raw), leaked) {
+					t.Fatalf("runtimeOperationReconciler leaked %q in %s", leaked, raw)
+				}
+			}
+		})
+	}
+}
+
 func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
 	target, store, f := newReviewCommentsActionTarget(t)
 	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, "repo-a", []int{100}); err != nil {

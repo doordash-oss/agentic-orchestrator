@@ -325,6 +325,44 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 	})
 }
 
+func TestClientShutdownPostsTrustedMutationAndReturnsAcceptedOperation(t *testing.T) {
+	var sawTrustedHeader bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/shutdown" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("Content-Type = %q, want application/json", got)
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode shutdown request: %v", err)
+		}
+		if len(req) != 0 {
+			t.Fatalf("shutdown request = %+v, want empty JSON object", req)
+		}
+		writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{
+			APIVersion:  APIVersion,
+			OperationID: "op-shutdown",
+			Status:      OperationStatusQueued,
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	accepted, err := client.Shutdown(context.Background())
+	if err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	if accepted.OperationID != "op-shutdown" || accepted.Status != OperationStatusQueued || !sawTrustedHeader {
+		t.Fatalf("Shutdown() = %+v trusted=%v, want queued accepted operation with trusted header", accepted, sawTrustedHeader)
+	}
+}
+
 func TestClientReturnsStructuredErrorsMalformedResponsesAndTimeouts(t *testing.T) {
 	t.Run("structured_error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -467,6 +505,82 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 	}
 }
 
+func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testing.T) {
+	var eventConnections atomic.Int32
+	var sawEventClient atomic.Bool
+	var sawSnapshotClient atomic.Bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/events":
+			if r.Header.Get("X-Test-Client") == "events" {
+				sawEventClient.Store(true)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			n := eventConnections.Add(1)
+			if n == 1 {
+				_, _ = w.Write([]byte("id: 1\nevent: connected\ndata: {\"api_version\":\"v1\",\"id\":\"1\",\"kind\":\"connected\",\"resource\":{\"type\":\"runtime\"},\"snapshot_required\":true}\n\n"))
+				flusher.Flush()
+				return
+			}
+			_, _ = w.Write([]byte("id: 2\nevent: operation.updated\ndata: {\"api_version\":\"v1\",\"id\":\"2\",\"kind\":\"operation.updated\",\"resource\":{\"type\":\"operation\",\"id\":\"op-recovered\",\"feature_id\":\"feat-1\"},\"snapshot_required\":true}\n\n"))
+			flusher.Flush()
+			<-r.Context().Done()
+		case "/api/v1/operations":
+			if r.Header.Get("X-Test-Client") == "snapshot" {
+				sawSnapshotClient.Store(true)
+			}
+			writeJSON(w, http.StatusOK, OperationSnapshotResponse{APIVersion: APIVersion, Operations: []OperationDTO{{ID: "op-recovered", Status: OperationStatusSucceeded}}})
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	eventClient, err := NewClient(ClientOptions{BaseURL: srv.URL, HTTPClient: taggedHTTPClient("events")})
+	if err != nil {
+		t.Fatalf("NewClient(event) error = %v", err)
+	}
+	snapshotClient, err := NewClient(ClientOptions{BaseURL: srv.URL, HTTPClient: taggedHTTPClient("snapshot")})
+	if err != nil {
+		t.Fatalf("NewClient(snapshot) error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	signals, errs := eventClient.SubscribeEvents(ctx, EventSubscriptionOptions{
+		HeartbeatInterval: 10 * time.Millisecond,
+		ReconnectDelay:    10 * time.Millisecond,
+	})
+	first := waitRefreshSignal(t, signals)
+	if first.Event.Kind != "connected" || !first.SnapshotRequired {
+		t.Fatalf("first signal = %+v, want connected snapshot", first)
+	}
+	second := waitRefreshSignal(t, signals)
+	if second.Event.Kind != "operation.updated" || second.Resource.ID != "op-recovered" {
+		t.Fatalf("second signal = %+v, want operation update for op-recovered", second)
+	}
+	snapshot, err := snapshotClient.FetchRefreshSnapshot(context.Background(), second)
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if snapshot.Operations == nil || len(snapshot.Operations.Operations) != 1 || snapshot.Operations.Operations[0].ID != "op-recovered" {
+		t.Fatalf("FetchRefreshSnapshot() = %+v, want recovered operation snapshot", snapshot)
+	}
+	if !sawEventClient.Load() || !sawSnapshotClient.Load() {
+		t.Fatalf("request clients used: events=%v snapshot=%v; want both distinct clients", sawEventClient.Load(), sawSnapshotClient.Load())
+	}
+
+	cancel()
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatalf("SubscribeEvents() terminal error = %v, want nil after cancel", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SSE subscription shutdown")
+	}
+}
+
 func TestClientFetchRefreshSnapshotIncludesLivePreviewForSessionOutput(t *testing.T) {
 	var sawSessionDetail bool
 	var sawTranscript bool
@@ -588,4 +702,24 @@ func waitRefreshSignal(t *testing.T, signals <-chan RefreshSignal) RefreshSignal
 		t.Fatal("timed out waiting for refresh signal")
 	}
 	return RefreshSignal{}
+}
+
+func taggedHTTPClient(tag string) *http.Client {
+	return &http.Client{
+		Transport: taggedRoundTripper{
+			tag:  tag,
+			base: http.DefaultTransport,
+		},
+	}
+}
+
+type taggedRoundTripper struct {
+	tag  string
+	base http.RoundTripper
+}
+
+func (t taggedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	cloned.Header.Set("X-Test-Client", t.tag)
+	return t.base.RoundTrip(cloned)
 }

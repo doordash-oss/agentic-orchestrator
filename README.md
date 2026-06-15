@@ -269,6 +269,30 @@ Flags:
 `agentico` starts the direct TUI. `agentico server` starts the foreground
 loopback HTTP server for the selected runtime and uses the same launch flags.
 
+### Local API Security Boundary
+
+Agentico does not use bearer-token authentication for the local REST or MCP
+server. The server binds only to loopback HTTP and trusts local processes that
+can reach that listener. Mutating REST requests must also send
+`X-Agentico-Client: local`, use JSON bodies within the configured size limit,
+and pass browser-origin checks.
+
+Browser-based callers are intentionally narrower than local processes: mutating
+REST and MCP requests accept loopback origins such as `http://localhost:<port>`
+or `http://127.0.0.1:<port>` and reject non-loopback origins by default,
+including preflight requests. Read and SSE endpoints do not grant permissive CORS
+access to arbitrary websites.
+
+Discovery metadata is treated as local trust material. Clients replace discovery
+records that are unreadable, unsafe for the current user, stale, non-loopback, or
+for a different runtime identity or launch policy. MCP requests also enforce
+localhost host-header protection when the server is reached on loopback.
+
+Operation records, structured errors, DTOs, MCP tool errors, and shutdown events
+are metadata surfaces. They should expose operation IDs, feature IDs, repo names,
+status, and bounded summaries, not raw prompts, secret values, credentials, full
+private paths, or oversized error payloads.
+
 ### Updating
 
 ```text

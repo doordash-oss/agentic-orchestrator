@@ -465,6 +465,62 @@ func (e *mutationExecutor) runReserved(rec OperationRecord, lane string, work fu
 	e.runQueued(lane, next)
 }
 
+func (e *mutationExecutor) admitShutdown(kind string, target OperationTarget) (mutationAdmission, []string, bool) {
+	if e == nil || e.registry == nil || e.target == nil {
+		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "unavailable", Message: "mutation service unavailable"}}, nil, false
+	}
+	e.mu.Lock()
+	if e.closing {
+		e.mu.Unlock()
+		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "shutdown", Message: "server is shutting down"}}, nil, false
+	}
+	rec, err := e.registry.Create(kind, target)
+	if err != nil {
+		e.mu.Unlock()
+		return mutationAdmission{status: http.StatusInternalServerError, err: &OperationError{Code: "failed", Message: "operation failed"}}, nil, false
+	}
+	e.closing = true
+	interrupted := e.interruptedOperationIDsLocked()
+	e.active = map[string]string{}
+	e.activeAll = 0
+	e.queued = map[string][]queuedMutation{}
+	e.queuedAll = 0
+	e.mu.Unlock()
+	return mutationAdmission{record: rec, status: http.StatusAccepted}, interrupted, true
+}
+
+func (e *mutationExecutor) interruptedOperationIDsLocked() []string {
+	interrupted := make([]string, 0, e.activeAll+e.queuedAll)
+	for _, id := range e.active {
+		if id != "" {
+			interrupted = append(interrupted, id)
+		}
+	}
+	for _, queue := range e.queued {
+		for _, queued := range queue {
+			if queued.record.ID != "" {
+				interrupted = append(interrupted, queued.record.ID)
+			}
+		}
+	}
+	return interrupted
+}
+
+func (e *mutationExecutor) completeShutdown(rec OperationRecord, interrupted []string) {
+	if e == nil || e.registry == nil || rec.ID == "" {
+		return
+	}
+	_ = e.registry.UpdateStatus(rec.ID, OperationStatusRunning)
+	e.publishRecordID(rec.ID)
+	_ = e.registry.Complete(rec.ID, OperationStatusSucceeded, map[string]string{"status": "accepted"}, nil)
+	e.publishRecordID(rec.ID)
+	opErr := &OperationError{Code: "interrupted", Message: "operation interrupted by server shutdown"}
+	for _, id := range interrupted {
+		_ = e.registry.Complete(id, OperationStatusInterrupted, nil, opErr)
+		e.publishRecordID(id)
+	}
+}
+
 func operationErrorFromError(err error) *OperationError {
 	if err == nil {
 		return nil
@@ -488,19 +544,7 @@ func (e *mutationExecutor) shutdown() {
 		return
 	}
 	e.closing = true
-	ids := make([]string, 0, e.activeAll+e.queuedAll)
-	for _, id := range e.active {
-		if id != "" {
-			ids = append(ids, id)
-		}
-	}
-	for _, queue := range e.queued {
-		for _, queued := range queue {
-			if queued.record.ID != "" {
-				ids = append(ids, queued.record.ID)
-			}
-		}
-	}
+	ids := e.interruptedOperationIDsLocked()
 	e.active = map[string]string{}
 	e.queued = map[string][]queuedMutation{}
 	e.activeAll = 0
@@ -609,6 +653,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 	case "/api/v1/permissions/answer":
 		return []string{http.MethodPost}, true
 	case "/api/v1/recovery/actions":
+		return []string{http.MethodPost}, true
+	case "/api/v1/shutdown":
 		return []string{http.MethodPost}, true
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send":
 		return []string{http.MethodPost}, true
@@ -1003,6 +1049,38 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+	}
+}
+
+func (h *apiHandler) handleShutdownMutationRoute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+		return
+	}
+	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	var req map[string]any
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	if h.mutations == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
+		return
+	}
+	admission, interrupted, accepted := h.mutations.admitShutdown("runtime.shutdown", OperationTarget{Type: "runtime"})
+	h.writeMutationAdmission(w, admission, accepted)
+	if accepted {
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		go func() {
+			h.mutations.completeShutdown(admission.record, interrupted)
+			if h.requestShutdown != nil {
+				h.requestShutdown()
+			}
+		}()
 	}
 }
 

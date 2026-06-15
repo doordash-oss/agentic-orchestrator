@@ -16,6 +16,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -23,10 +24,12 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
 type APIClient interface {
@@ -289,6 +292,8 @@ type APIAppModel struct {
 	refactorPipeline           *apiRefactorPipelinePanel
 	configEditor               *apiFeatureConfigEditor
 	runtimeConfigEditor        *apiRuntimeConfigEditor
+	focusPanel                 int
+	contentPanelActive         bool
 	statusMessage              string
 	eventCtx                   context.Context
 	cancelEvents               context.CancelFunc
@@ -726,6 +731,10 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.askUserPromptActive {
 		return m.handleAPIAskUserPromptKey(msg)
 	}
+	if m.contentPanelActive && msg.Code == tea.KeyEscape {
+		m.contentPanelActive = false
+		return m, nil
+	}
 	if m.tweakReviewModalActive {
 		featureID := m.tweakReviewFeatureID
 		switch strings.ToLower(msg.Text) {
@@ -756,6 +765,21 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.Code == 'f' && msg.Mod.Contains(tea.ModCtrl) {
 		return m.openRefactorRestartPrompt(), nil
+	}
+	switch msg.Code {
+	case tea.KeyTab:
+		m.focusPanel = (m.focusPanel + 1) % 2
+		return m, nil
+	case tea.KeyRight:
+		if m.selectedFeature != "" {
+			m.focusPanel = 1
+		}
+		return m, nil
+	case tea.KeyLeft, tea.KeyEscape:
+		if m.focusPanel == 1 {
+			m.focusPanel = 0
+			return m, nil
+		}
 	}
 	switch msg.Text {
 	case "[":
@@ -833,6 +857,10 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.selectedFeature == "" {
 			return m, nil
 		}
+		if m.focusPanel == 0 {
+			m.focusPanel = 1
+			return m, nil
+		}
 		return m, m.primarySelectedFeatureActionCmd(m.selectedPrimaryFeatureActionKind(), m.selectedFeature)
 	case tea.KeyUp:
 		previous := m.selectedFeature
@@ -853,119 +881,431 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m APIAppModel) View() tea.View {
-	w := m.width
-	if w < 60 {
-		w = 60
-	}
-	var b strings.Builder
-	b.WriteString(TitleStyle.Render(" Agentico"))
-	b.WriteString("\n")
-	b.WriteString(MutedStyle.Render(strings.Repeat("-", min(w, 100))))
-	b.WriteString("\n")
-	b.WriteString(m.renderAPIRuntimeLine())
-	if workspace := m.renderAPIWorkspaceSummary(); workspace != "" {
-		b.WriteString("\n")
-		b.WriteString(workspace)
-	}
-	b.WriteString("\n\n")
-	b.WriteString(m.renderAPIFeatureList())
+	view := m.renderAPIDashboard()
+	w := max(m.width, 80)
+	h := max(m.height, 24)
 	if m.recoveryPanel != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPIRecovery())
-	}
-	if m.snapshot.Detail != nil {
-		b.WriteString(m.renderAPIFeatureDetail())
-	}
-	if m.snapshot.LivePreview != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPILivePreview())
-	}
-	if m.snapshot.Transcript != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPITranscript())
-	}
-	if m.snapshot.Content != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPIContent())
-	}
-	if len(m.snapshot.Sessions) > 0 {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPISessions())
-	}
-	if len(m.snapshot.Operations) > 0 {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPIOperations())
-	}
-	if m.statusMessage != "" {
-		b.WriteString("\n")
-		b.WriteString(lipgloss.NewStyle().Foreground(colorError).Render(m.statusMessage))
-		b.WriteString("\n")
+		view = overlayModal(view, m.renderAPIRecovery(), w, h)
 	}
 	if m.configEditor != nil {
-		b.WriteString("\n")
-		b.WriteString(m.configEditor.render(min(w-4, 96)))
-		b.WriteString("\n")
+		view = overlayModal(view, m.configEditor.render(min(w-4, 96)), w, h)
 	}
 	if m.runtimeConfigEditor != nil {
-		b.WriteString("\n")
-		b.WriteString(m.runtimeConfigEditor.render(min(w-4, 96)))
-		b.WriteString("\n")
+		view = overlayModal(view, m.runtimeConfigEditor.render(min(w-4, 96)), w, h)
 	}
 	if m.createPrompt != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPICreateFeaturePrompt(min(w-4, 96)))
-		b.WriteString("\n")
+		view = overlayModal(view, m.renderAPICreateFeaturePrompt(min(w-4, 96)), w, h)
 	}
 	if m.reviewComments != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPIReviewCommentsPanel(min(w-4, 96)))
-		b.WriteString("\n")
+		view = overlayModal(view, m.renderAPIReviewCommentsPanel(min(w-4, 96)), w, h)
 	}
 	if m.refactorPrompt != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPIRefactorPrompt(min(w-4, 96)))
-		b.WriteString("\n")
+		view = overlayModal(view, m.renderAPIRefactorPrompt(min(w-4, 96)), w, h)
 	}
 	if m.refactorPipeline != nil {
-		b.WriteString("\n")
-		b.WriteString(m.renderAPIRefactorPipeline(min(w-4, 96)))
-		b.WriteString("\n")
+		view = overlayModal(view, m.renderAPIRefactorPipeline(min(w-4, 96)), w, h)
 	}
-	b.WriteString("\n")
-	b.WriteString(KeyHelpStyle.Render(" [n] New   [up/down] Select   [enter] Start/Resume   [v] Attach/Live   [l] Log   [[ / ]] Artifact   [i] Input   [a] Permission   [u] AskUser   [h] Chat/Help   [w] Workspace   [e] Config   [Shift+E] Runtime   [g] Review   [t] Tweak   [Shift+T] Finish Tweak   [b] Rebase   [Shift+F] Refactor   [ctrl+f] Restart refactor   [r] Restart   [ctrl+r] Rewind   [p] Publish   [Shift+M] Merge   [Shift+D] Done   [Shift+R] Retry   [s] Stop   [c] Clean   [d] Delete   [q] Quit"))
+	if m.contentPanelActive && m.snapshot.Content != nil {
+		view = overlayModal(view, panelStyle(true).Width(min(w-4, 96)).Render(m.renderAPIContent()), w, h)
+	}
 	if m.quitOwnedServerPrompt {
-		b.WriteString("\n\n")
-		b.WriteString(panelStyle(true).
+		view = overlayModal(view, panelStyle(true).
 			Width(58).
 			BorderForeground(colorWarning).
-			Render("Stop the server started for this TUI session?\n\n[y] Stop server and quit   [n] Leave running   [esc] Cancel"))
+			Render("Stop the server started for this TUI session?\n\n[y] Stop server and quit   [n] Leave running   [esc] Cancel"), w, h)
 	}
 	if m.actionConfirmActive {
-		b.WriteString("\n\n")
-		b.WriteString(m.renderFeatureActionConfirm())
+		view = overlayModal(view, m.renderFeatureActionConfirm(), w, h)
 	}
 	if m.tweakReviewModalActive {
-		b.WriteString("\n\n")
-		b.WriteString(m.renderTweakReviewModal())
+		view = overlayModal(view, m.renderTweakReviewModal(), w, h)
 	}
 	if m.needInputPromptActive {
-		b.WriteString("\n\n")
-		b.WriteString(m.renderNeedInputPrompt())
+		view = overlayModal(view, m.renderNeedInputPrompt(), w, h)
 	}
 	if m.permissionPromptActive {
-		b.WriteString("\n\n")
-		b.WriteString(m.renderPermissionPrompt())
+		view = overlayModal(view, m.renderPermissionPrompt(), w, h)
 	}
 	if m.helpPromptActive {
-		b.WriteString("\n\n")
-		b.WriteString(m.renderHelpPrompt())
+		view = overlayModal(view, m.renderHelpPrompt(), w, h)
 	}
 	if m.askUserPromptActive {
-		b.WriteString("\n\n")
-		b.WriteString(m.renderAskUserPrompt())
+		view = overlayModal(view, m.renderAskUserPrompt(), w, h)
 	}
-	return tea.NewView(b.String())
+	v := tea.NewView(view)
+	v.AltScreen = true
+	return v
 }
+
+func (m APIAppModel) renderAPIDashboard() string {
+	features := m.apiDashboardFeatures()
+	dashboard := NewDashboardModel(features, m.runtimeConfig.Runtime.StateDir)
+	dashboard.width = max(m.width, 80)
+	dashboard.height = max(m.height, 24)
+	dashboard.focusPanel = m.focusPanel
+	dashboard.dangerouslySkipPerms = m.snapshot.Runtime.DangerouslySkipPermissions
+	dashboard.statusMessage = m.statusMessage
+	if len(m.runtimeConfig.UI.CollapsedSections) > 0 {
+		dashboard.SetCollapsedSections(m.runtimeConfig.UI.CollapsedSections)
+	}
+	dashboard.selectFeature(m.selectedFeature)
+	if preview := m.snapshot.LivePreview; preview != nil {
+		if dashboard.livePreview.feature != nil && preview.CostUSD > 0 {
+			dashboard.livePreview.feature.PhaseCosts = apiPhaseCosts(nil, preview.CostUSD, dashboard.livePreview.feature.CurrentPhase)
+		}
+		dashboard.livePreview.contextPct = preview.ContextPct
+		dashboard.livePreview.session = newAPILivePreviewSession(*preview)
+	}
+	return dashboard.View()
+}
+
+func (m APIAppModel) apiDashboardFeatures() []*feature.Feature {
+	details := make(map[string]server.FeatureDetailDTO, len(m.featureDetails))
+	for id, resp := range m.featureDetails {
+		details[id] = resp.Feature
+	}
+	features := make([]*feature.Feature, 0, len(m.featureList.Features))
+	for _, summary := range m.featureList.Features {
+		detail, hasDetail := details[summary.ID]
+		features = append(features, m.apiDashboardFeature(summary, detail, hasDetail))
+	}
+	return features
+}
+
+func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail server.FeatureDetailDTO, hasDetail bool) *feature.Feature {
+	if hasDetail {
+		summary = detail.FeatureSummary
+	}
+	f := &feature.Feature{
+		ID:                  summary.ID,
+		Name:                firstNonEmpty(summary.Name, summary.Slug),
+		Slug:                firstNonEmpty(summary.Slug, summary.Name),
+		Status:              apiFeatureStatus(summary.Status),
+		CurrentPhase:        apiFeaturePhase(summary.CurrentPhase),
+		Created:             summary.CreatedAt,
+		ActiveRun:           summary.ActiveRun,
+		RunCount:            summary.RunCount,
+		Models:              m.runtimeConfig.Defaults,
+		CurrentIteration:    summary.Progress.CurrentIteration,
+		CurrentRoadmapPhase: summary.Progress.CurrentRoadmapPhase,
+		TotalRoadmapPhases:  summary.Progress.TotalRoadmapPhases,
+		CurrentPhaseStatus:  summary.Progress.CurrentPhaseStatus,
+		RepoStates:          map[string]*feature.RepoState{},
+		RepoCycles:          map[string]*feature.RepoCycleState{},
+		PhaseTimings:        map[string]time.Duration{},
+		PhaseCosts:          map[string]float64{},
+	}
+	if f.ActiveRun == 0 {
+		f.ActiveRun = 1
+	}
+	if f.RunCount == 0 {
+		f.RunCount = f.ActiveRun
+	}
+	if hasDetail {
+		f.Description = detail.Description
+		f.Summary = detail.Summary
+		f.Pipeline = feature.PipelineProfile(detail.Pipeline)
+		f.PhaseTimings = apiPhaseTimings(detail.Timing.ByPhase)
+		f.PhaseCosts = apiPhaseCosts(detail.Cost.ByPhase, detail.Cost.TotalUSD, f.CurrentPhase)
+		if detail.ActiveRun != nil {
+			if detail.ActiveRun.RunNumber > 0 {
+				f.ActiveRun = detail.ActiveRun.RunNumber
+			}
+			f.CurrentIteration = firstNonZero(detail.ActiveRun.Iteration, f.CurrentIteration)
+			f.CurrentRoadmapPhase = firstNonZero(detail.ActiveRun.RoadmapPhase, f.CurrentRoadmapPhase)
+			f.TotalRoadmapPhases = firstNonZero(detail.ActiveRun.RoadmapTotal, f.TotalRoadmapPhases)
+			f.CurrentPhaseStatus = firstNonEmpty(detail.ActiveRun.PhaseStatus, f.CurrentPhaseStatus)
+			if detail.ActiveRun.CurrentPhase != "" {
+				f.CurrentPhase = apiFeaturePhase(detail.ActiveRun.CurrentPhase)
+			}
+		}
+		if detail.Failure != nil {
+			f.FailureType = detail.Failure.Type
+			f.LastError = detail.Failure.Message
+		}
+		if detail.NeedUserInput != nil && detail.NeedUserInput.Open && f.Status != feature.StatusNeedUserInput {
+			f.Status = feature.StatusNeedUserInput
+		}
+	}
+	repoStatuses := map[string]server.RepoStatusDTO{}
+	if hasDetail {
+		for _, repo := range detail.RepoStatus {
+			repoStatuses[repo.Name] = repo
+		}
+	}
+	for _, repoName := range summary.Repos {
+		f.Repos = append(f.Repos, m.apiDashboardRepo(repoName, repoStatuses[repoName], hasDetail))
+	}
+	for _, repo := range detail.RepoStatus {
+		if repo.Name == "" || apiHasRepo(f.Repos, repo.Name) {
+			continue
+		}
+		f.Repos = append(f.Repos, m.apiDashboardRepo(repo.Name, repo, true))
+	}
+	for _, repo := range f.Repos {
+		dto := repoStatuses[repo.Name]
+		f.RepoStates[repo.Name] = &feature.RepoState{
+			Touched:   dto.Touched,
+			PRURL:     dto.PRURL,
+			LastError: dto.LastError,
+		}
+		if dto.CycleType != "" || dto.CycleStatus != "" {
+			cycle := &feature.RepoCycleState{
+				Type:   feature.RepoCycleType(dto.CycleType),
+				Status: dto.CycleStatus,
+			}
+			f.RepoCycles[repo.Name] = cycle
+			if f.ActiveCycle == nil && cycle.Status != "" {
+				f.ActiveCycle = &feature.CycleState{Type: cycle.Type, Status: cycle.Status, Count: cycle.Count}
+			}
+		}
+	}
+	if len(f.RepoStates) == 0 {
+		f.RepoStates = nil
+	}
+	if len(f.RepoCycles) == 0 {
+		f.RepoCycles = nil
+	}
+	m.applyAPIAttention(f)
+	f.SetRun(&feature.Run{
+		RunNumber:           f.ActiveRun,
+		CurrentIteration:    f.CurrentIteration,
+		CurrentRoadmapPhase: f.CurrentRoadmapPhase,
+		TotalRoadmapPhases:  f.TotalRoadmapPhases,
+		CurrentPhaseStatus:  f.CurrentPhaseStatus,
+		RepoStates:          f.RepoStates,
+		RepoCycles:          f.RepoCycles,
+		ActiveCycle:         f.ActiveCycle,
+		PhaseTimings:        f.PhaseTimings,
+		PhaseCosts:          f.PhaseCosts,
+		LastError:           f.LastError,
+		FailureType:         f.FailureType,
+	})
+	return f
+}
+
+func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, hasDetail bool) feature.FeatureRepo {
+	repo := feature.FeatureRepo{Name: name}
+	for _, cfgRepo := range m.runtimeConfig.Repos {
+		if cfgRepo.Name == name {
+			repo.Path = cfgRepo.Path
+			repo.WorktreePath = cfgRepo.Path
+			break
+		}
+	}
+	if hasDetail {
+		publishable := status.Publishable
+		repo.Publishable = &publishable
+	}
+	return repo
+}
+
+func (m APIAppModel) applyAPIAttention(f *feature.Feature) {
+	if f == nil {
+		return
+	}
+	for _, help := range m.prompts.HelpQueue {
+		if help.FeatureID == f.ID && help.Pending {
+			f.HelpQueue = append(f.HelpQueue, feature.HelpRequest{
+				Question: help.Question,
+				Time:     help.Time,
+				Pending:  true,
+			})
+		}
+	}
+	for _, ask := range m.prompts.AskUserQuestions {
+		if ask.FeatureID == f.ID && isPendingControlStatus(ask.Status) {
+			f.HelpQueue = append(f.HelpQueue, feature.HelpRequest{
+				Question: firstNonEmpty(ask.Summary, ask.ToolName, "Agent has a question"),
+				Pending:  true,
+			})
+		}
+	}
+	for _, req := range m.permissions.Requests {
+		if req.FeatureID == f.ID && isPendingControlStatus(req.Status) {
+			f.PermissionsQueue = append(f.PermissionsQueue, feature.PermissionRequest{
+				Tool:    firstNonEmpty(req.ToolName, "tool"),
+				Args:    req.Summary,
+				Pending: true,
+			})
+		}
+	}
+}
+
+func (m *DashboardModel) selectFeature(featureID string) {
+	if featureID == "" {
+		m.syncPreview()
+		return
+	}
+	for i, item := range m.visibleItems {
+		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
+			m.cursor = i
+			m.computeCursorLine()
+			m.updateScrollState(0)
+			m.syncPreview()
+			return
+		}
+	}
+	m.syncPreview()
+}
+
+type apiSessionView struct {
+	id         string
+	featureID  string
+	phase      feature.Phase
+	repo       string
+	kind       ports.SessionKind
+	label      string
+	status     ports.SessionStatus
+	startedAt  time.Time
+	iteration  int
+	provider   string
+	model      string
+	contextPct int
+	log        ports.MessageLog
+	cost       *llm.ResultMessage
+}
+
+func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionView {
+	if preview.SessionID == "" && preview.Activity == "" && len(preview.TranscriptTail) == 0 {
+		return nil
+	}
+	log := session.NewMessageLog()
+	for _, line := range preview.TranscriptTail {
+		appendAPILivePreviewText(log, line)
+	}
+	appendAPILivePreviewActivity(log, preview.Activity)
+	var cost *llm.ResultMessage
+	if preview.CostUSD > 0 {
+		cost = &llm.ResultMessage{TotalCostUSD: preview.CostUSD}
+	}
+	return apiSessionView{
+		id:         preview.SessionID,
+		featureID:  preview.FeatureID,
+		phase:      feature.PhaseImplement,
+		kind:       ports.KindPhase,
+		label:      "Live Preview",
+		status:     ports.SessionRunning,
+		contextPct: preview.ContextPct,
+		log:        log,
+		cost:       cost,
+	}
+}
+
+func appendAPILivePreviewActivity(log ports.MessageLog, activity string) {
+	activity = strings.TrimSpace(activity)
+	if activity == "" {
+		return
+	}
+	if tool := apiToolNameFromActivity(activity); tool != "" {
+		log.Append(llm.SDKMessage{
+			Type: "tool_progress",
+			ToolProgress: &llm.ToolProgressMessage{
+				Type:     "tool_progress",
+				ToolName: tool,
+			},
+		})
+		return
+	}
+	log.Append(llm.SDKMessage{
+		Type:   "status",
+		Status: &llm.StatusMessage{Type: "status", Message: activity},
+	})
+}
+
+func appendAPILivePreviewText(log ports.MessageLog, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	log.Append(llm.SDKMessage{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{
+			Type: "assistant",
+			Message: llm.ConversationMsg{
+				Role: "assistant",
+				Content: []llm.ContentBlock{{
+					Type: "text",
+					Text: text,
+				}},
+			},
+		},
+	})
+}
+
+func apiToolNameFromActivity(activity string) string {
+	activity = strings.TrimSpace(activity)
+	if !strings.HasPrefix(activity, "Using ") || !strings.HasSuffix(activity, "...") {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(activity, "Using "), "..."))
+}
+
+func (s apiSessionView) ID() string { return s.id }
+func (s apiSessionView) FeatureID() string {
+	return s.featureID
+}
+func (s apiSessionView) Phase() feature.Phase { return s.phase }
+func (s apiSessionView) RepoName() string     { return s.repo }
+func (s apiSessionView) PermCacheScope() string {
+	return ""
+}
+func (s apiSessionView) Kind() ports.SessionKind     { return s.kind }
+func (s apiSessionView) Label() string               { return s.label }
+func (s apiSessionView) Status() ports.SessionStatus { return s.status }
+func (s apiSessionView) IsActive() bool {
+	return s.status == ports.SessionRunning || s.status == ports.SessionWaitingHelp || s.status == ports.SessionWaitingPermission
+}
+func (s apiSessionView) Iteration() int               { return s.iteration }
+func (s apiSessionView) StartedAt() time.Time         { return s.startedAt }
+func (s apiSessionView) InitialPrompt() string        { return "" }
+func (s apiSessionView) ProviderName() string         { return s.provider }
+func (s apiSessionView) Model() string                { return s.model }
+func (s apiSessionView) WorkDir() string              { return "" }
+func (s apiSessionView) MessageLog() ports.MessageLog { return s.log }
+func (s apiSessionView) Cost() *llm.ResultMessage     { return s.cost }
+func (s apiSessionView) LatestUsage() *llm.Usage      { return nil }
+func (s apiSessionView) AccumulatedUsage() llm.Usage  { return llm.Usage{} }
+func (s apiSessionView) LastControlRequest() *llm.ControlRequestMessage {
+	return nil
+}
+func (s apiSessionView) PendingControlRequests() []*llm.ControlRequestMessage {
+	return nil
+}
+func (s apiSessionView) QALog() []ports.QAPair { return nil }
+func (s apiSessionView) LogFilePath() string   { return "" }
+func (s apiSessionView) ContextPercentage() int {
+	return s.contextPct
+}
+func (s apiSessionView) ErrorDetail() string    { return "" }
+func (s apiSessionView) ExitCodeDetail() string { return "" }
+func (s apiSessionView) LastStdoutAt() time.Time {
+	return time.Time{}
+}
+func (s apiSessionView) StatusCh() <-chan string         { return nil }
+func (s apiSessionView) AttachCh() <-chan llm.SDKMessage { return nil }
+func (s apiSessionView) Done() <-chan struct{}           { return nil }
+func (s apiSessionView) HasPendingAskUserQuestion() bool {
+	return false
+}
+func (s apiSessionView) SendUserMessage(string) error {
+	return errors.New("api live preview session is read-only")
+}
+func (s apiSessionView) RespondToControl(string, bool, string) error {
+	return errors.New("api live preview session is read-only")
+}
+func (s apiSessionView) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+	return errors.New("api live preview session is read-only")
+}
+func (s apiSessionView) ClearPendingQuestion(string) {}
+func (s apiSessionView) ResetWaitingStatus()         {}
+func (s apiSessionView) Stop() error {
+	return errors.New("api live preview session is read-only")
+}
+func (s apiSessionView) Interrupt() error {
+	return errors.New("api live preview session is read-only")
+}
+func (s apiSessionView) Wait() {}
 
 func (m APIAppModel) Close() {
 	if m.cancelEvents != nil {
@@ -1694,6 +2034,7 @@ func (m APIAppModel) cycleSelectedArtifact(delta int) (APIAppModel, tea.Cmd) {
 		m.statusMessage = "No run content for selected feature"
 		return m, nil
 	}
+	m.contentPanelActive = true
 	artifacts := availableTextArtifacts(content.Artifacts)
 	if len(artifacts) == 0 {
 		m.statusMessage = "No text artifacts for selected run"
@@ -1713,6 +2054,7 @@ func (m APIAppModel) cycleSelectedLog() (APIAppModel, tea.Cmd) {
 		m.statusMessage = "No run content for selected feature"
 		return m, nil
 	}
+	m.contentPanelActive = true
 	return m, m.fetchNextLogContentCmd(content)
 }
 
@@ -4077,6 +4419,137 @@ func apiHasFeature(features []APIFeaturePresentation, id string) bool {
 		}
 	}
 	return false
+}
+
+func apiHasRepo(repos []feature.FeatureRepo, name string) bool {
+	for _, repo := range repos {
+		if repo.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonZero(values ...int) int {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func apiFeatureStatus(status string) feature.Status {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "created":
+		return feature.StatusCreated
+	case "researching":
+		return feature.StatusResearching
+	case "planready", "plan_ready", "plan-ready":
+		return feature.StatusPlanReady
+	case "planning":
+		return feature.StatusPlanning
+	case "implementready", "implement_ready", "implement-ready":
+		return feature.StatusImplementReady
+	case "implementing":
+		return feature.StatusImplementing
+	case "reviewpassed", "review_passed", "review-passed":
+		return feature.StatusReviewPassed
+	case "codeready", "code_ready", "code-ready", "prready", "pr_ready", "pr-ready":
+		return feature.StatusCodeReady
+	case "published":
+		return feature.StatusPublished
+	case "failed":
+		return feature.StatusFailed
+	case "interrupted":
+		return feature.StatusInterrupted
+	case "done":
+		return feature.StatusDone
+	case "buildingkb", "building_kb", "building-kb":
+		return feature.StatusBuildingKB
+	case "planneedsreview", "plan_needs_review", "plan-needs-review":
+		return feature.StatusPlanNeedsReview
+	case "inquiring":
+		return feature.StatusInquiring
+	case "inquireready", "inquire_ready", "inquire-ready":
+		return feature.StatusInquireReady
+	case "designready", "design_ready", "design-ready":
+		return feature.StatusDesignReady
+	case "designing":
+		return feature.StatusDesigning
+	case "promptneedsreview", "prompt_needs_review", "prompt-needs-review":
+		return feature.StatusPromptNeedsReview
+	case "inquiryneedsreview", "inquiry_needs_review", "inquiry-needs-review":
+		return feature.StatusInquiryNeedsReview
+	case "researchneedsreview", "research_needs_review", "research-needs-review":
+		return feature.StatusResearchNeedsReview
+	case "designneedsreview", "design_needs_review", "design-needs-review":
+		return feature.StatusDesignNeedsReview
+	case "reviewing":
+		return feature.StatusReviewing
+	case "needuserinput", "need_user_input", "need-user-input":
+		return feature.StatusNeedUserInput
+	case "finalreviewing", "final_reviewing", "final-reviewing":
+		return feature.StatusFinalReviewing
+	default:
+		return feature.StatusCreated
+	}
+}
+
+func apiFeaturePhase(phase string) feature.Phase {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "knowledgebase", "knowledge_base", "knowledge-base", "kb":
+		return feature.PhaseKnowledgeBase
+	case "inquire", "inquiry":
+		return feature.PhaseInquire
+	case "research":
+		return feature.PhaseResearch
+	case "design", "brainstorm":
+		return feature.PhaseDesign
+	case "plan", "planning":
+		return feature.PhasePlan
+	case "implement", "implementation":
+		return feature.PhaseImplement
+	case "review":
+		return feature.PhaseReview
+	case "finalreview", "final_review", "final-review":
+		return feature.PhaseFinalReview
+	case "publish", "publishing":
+		return feature.PhasePublish
+	default:
+		return feature.PhaseKnowledgeBase
+	}
+}
+
+func apiPhaseTimings(in map[string]int64) map[string]time.Duration {
+	if len(in) == 0 {
+		return map[string]time.Duration{}
+	}
+	out := make(map[string]time.Duration, len(in))
+	for key, seconds := range in {
+		if seconds <= 0 {
+			continue
+		}
+		out[key] = time.Duration(seconds) * time.Second
+	}
+	return out
+}
+
+func apiPhaseCosts(byPhase map[string]float64, total float64, current feature.Phase) map[string]float64 {
+	out := make(map[string]float64, len(byPhase)+1)
+	for key, cost := range byPhase {
+		if cost > 0 {
+			out[key] = cost
+		}
+	}
+	if len(out) == 0 && total > 0 {
+		key := current.DirName()
+		if key == "" {
+			key = "implement"
+		}
+		out[key] = total
+	}
+	return out
 }
 
 func apiFeatureCanStop(status string) bool {

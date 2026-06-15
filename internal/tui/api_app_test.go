@@ -107,9 +107,14 @@ func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
 		t.Fatal("Runtime.DangerouslySkipPermissions = false, want true from launch policy")
 	}
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Client cutover", "Implementing", "2 attention", "codex", "sess-1", "Implement", "running", "42%", "op-1", "Render selected feature detail from REST.", "roadmap", "agentic-orchestrator", "feature.stop", "feature.publish disabled", "$12.34", "Need user input"} {
+	for _, want := range []string{"Orchestrator v", "Features", "IN PROGRESS", "PUBLISHED", "COMPLETED", "client-cutover", "published-feature", "done-feature", "Live Preview", "Permission Request", "Bash: run tests", "$12.34", "NeedUserInput"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Selected detail", "Attach / Live Preview", "Run Content", "Operations"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("API app View() rendered reduced-client section %q in:\n%s", notWant, view)
 		}
 	}
 	for _, leaked := range []string{runtime.RuntimeDir, runtime.StateDir, runtime.Config} {
@@ -143,36 +148,28 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 
 	view := stripANSI(app.View().Content)
 	for _, want := range []string{
-		"Agentico",
-		"Workspace: agentic-orchestrator",
+		"Orchestrator v",
+		"Features",
+		"IN PROGRESS",
+		"client-cutover",
+		"Live Preview",
 		"[n] New",
-		"[v] Attach/Live",
-		"[h] Chat/Help",
-		"[w] Workspace",
-		"Attach / Live Preview",
-		"Config",
-		"Runtime",
-		"Review",
-		"Tweak",
-		"Refactor",
-		"Restart",
-		"Rewind",
-		"Publish",
-		"Rebase",
-		"Merge",
-		"Done",
-		"Retry",
-		"Stop",
-		"Finish Tweak",
-		"Clean",
-		"Delete",
+		"[→/enter] Focus",
+		"[Shift+W] Workspaces",
+		"[Shift+R] Resume All",
+		"[tab] Panel",
+		"Layout: US",
+		"[/] Ask",
+		"[?] Help",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app production surface missing %q in:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Agentico API Client") {
-		t.Fatalf("API app View() exposed reduced-client title:\n%s", view)
+	for _, notWant := range []string{"Agentico API Client", "Selected detail", "Attach / Live Preview", "Run Content"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("API app View() exposed reduced-client surface %q in:\n%s", notWant, view)
+		}
 	}
 	if strings.Contains(view, "/workspace/agentic-orchestrator") {
 		t.Fatalf("API app View() leaked workspace path:\n%s", view)
@@ -270,11 +267,9 @@ func TestAPIAppModelSessionSnapshotRefreshUsesAPIReadModels(t *testing.T) {
 	}
 	initialDetailCalls := len(client.detailFeatureIDs)
 
-	initial := stripANSI(app.View().Content)
-	for _, want := range []string{"Sessions", "sess-1", "Implement", "running", "10%"} {
-		if !strings.Contains(initial, want) {
-			t.Fatalf("initial API app View() missing %q in:\n%s", want, initial)
-		}
+	initial := app.Snapshot()
+	if len(initial.Sessions) != 1 || initial.Sessions[0].ID != "sess-1" || initial.Sessions[0].ContextPct != 10 {
+		t.Fatalf("initial Snapshot().Sessions = %+v, want sess-1 at 10%%", initial.Sessions)
 	}
 
 	signal := server.RefreshSignal{
@@ -298,11 +293,9 @@ func TestAPIAppModelSessionSnapshotRefreshUsesAPIReadModels(t *testing.T) {
 	if got := len(client.detailFeatureIDs); got != initialDetailCalls {
 		t.Fatalf("FeatureDetail calls after session refresh = %d, want unchanged %d", got, initialDetailCalls)
 	}
-	view := stripANSI(refreshed.View().Content)
-	for _, want := range []string{"sess-1", "completed", "37%", "log"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("refreshed API app View() missing %q in:\n%s", want, view)
-		}
+	snapshot := refreshed.Snapshot()
+	if len(snapshot.Sessions) != 1 || snapshot.Sessions[0].ID != "sess-1" || snapshot.Sessions[0].Status != "completed" || snapshot.Sessions[0].ContextPct != 37 || !snapshot.Sessions[0].LogAvailable {
+		t.Fatalf("refreshed Snapshot().Sessions = %+v, want completed sess-1 with log at 37%%", snapshot.Sessions)
 	}
 }
 
@@ -337,7 +330,7 @@ func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 		t.Fatalf("LivePreview calls = %q, want active", got)
 	}
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Live Preview", "Using Bash...", "sess-live", "Context: 42%", "Cost: $0.42", "AskUserQuestion: Pick the cutover path", "Ready to patch live preview"} {
+	for _, want := range []string{"Live Preview", "Using Bash...", "42%", "$0.42", "Ready to patch live preview"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -389,11 +382,8 @@ func TestAPIAppModelTranscriptLoadsSelectedSessionFromREST(t *testing.T) {
 	if snapshot.Transcript == nil || snapshot.Transcript.SessionID != "sess-live" {
 		t.Fatalf("Snapshot().Transcript = %+v, want sess-live transcript", snapshot.Transcript)
 	}
-	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Transcript", "Patch transcript continuation", "Bash"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("API app View() missing %q in:\n%s", want, view)
-		}
+	if got := strings.Join(snapshot.Transcript.Lines, "\n"); !strings.Contains(got, "Patch transcript continuation") || !strings.Contains(got, "Bash") {
+		t.Fatalf("Snapshot().Transcript lines = %q, want transcript continuation and Bash", got)
 	}
 }
 
@@ -452,6 +442,11 @@ func TestAPIAppModelLoadsSelectedRunContentFromREST(t *testing.T) {
 		t.Fatalf("Snapshot().Content = %+v, want run 3 content", snapshot.Content)
 	}
 	view := stripANSI(app.View().Content)
+	if strings.Contains(view, "Run Content") {
+		t.Fatalf("API app View() showed run content before opening the content panel:\n%s", view)
+	}
+	app.contentPanelActive = true
+	view = stripANSI(app.View().Content)
 	for _, want := range []string{"Run Content", "Log session", "log tail from server", "Artifact plan", "artifact tail from server"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
@@ -532,6 +527,7 @@ func TestAPIAppModelLogRefreshUsesBoundedContentTail(t *testing.T) {
 	if got := client.artifactContentQueries[1]; got.Offset != 120 || got.Limit != apiContentTailLimit {
 		t.Fatalf("refresh ArtifactContent query = %+v, want offset 120 limit %d", got, apiContentTailLimit)
 	}
+	refreshed.contentPanelActive = true
 	view := stripANSI(refreshed.View().Content)
 	for _, want := range []string{"refreshed log tail", "refreshed artifact tail"} {
 		if !strings.Contains(view, want) {
@@ -761,7 +757,7 @@ func TestAPIAppModelLivePreviewRefreshUsesBoundedAPIReadModel(t *testing.T) {
 		t.Fatalf("Transcript calls after live-preview refresh = %d, want unchanged %d", got, initialTranscriptCalls)
 	}
 	view := stripANSI(refreshed.View().Content)
-	for _, want := range []string{"Live Preview", "Using Bash...", "Context: 57%", "Cost: $1.25", "Patched through REST snapshot"} {
+	for _, want := range []string{"Live Preview", "Using Bash...", "57%", "$1.25", "Patched through REST snapshot"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("refreshed API app View() missing %q in:\n%s", want, view)
 		}
@@ -954,7 +950,8 @@ func TestAPIAppModelStartSelectedFeatureUsesRESTMutationAndTracksOperation(t *te
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 
-	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want start mutation command")
 	}
@@ -1001,7 +998,8 @@ func TestAPIAppModelResumeSelectedFeatureUsesRESTMutationAndTracksOperation(t *t
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 
-	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want resume mutation command")
 	}
@@ -2439,9 +2437,6 @@ func TestAPIAppModelSelectionFetchesSelectedFeatureDetail(t *testing.T) {
 		t.Fatalf("LivePreview calls = %q, want active,queued", got)
 	}
 	view := stripANSI(selected.View().Content)
-	if !strings.Contains(view, "Queued detail from REST") {
-		t.Fatalf("API app View() missing queued detail in:\n%s", view)
-	}
 	for _, want := range []string{"Queued preview", "Queued preview from REST"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)

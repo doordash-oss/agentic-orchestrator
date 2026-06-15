@@ -389,6 +389,10 @@ type notifyKey struct {
 // within a short window.
 const minNotifyInterval = 10 * time.Second
 
+// AppModel is the legacy direct TUI model. Production launch uses APIAppModel
+// over the local REST/MCP runtime; AppModel remains as a transition/test
+// surface for model-layer coverage that has not yet moved to the REST-backed
+// seam.
 type AppModel struct {
 	currentView    View
 	dashboard      DashboardModel
@@ -558,6 +562,9 @@ type AppModel struct {
 	startupRecoveryItems    []session.RecoveryItem
 }
 
+// NewAppModel constructs the legacy direct TUI model. New production entry
+// points should use NewAPIAppModel so feature lifecycle state flows through
+// the REST-backed runtime.
 func NewAppModel(fm *feature.Manager, sm *session.Manager, orch orchestratorAPI, permCache *permission.Cache, eventCh chan interface{}, opts ...AppOption) (AppModel, error) {
 	stateDir := fm.Store.BaseDir
 	var startupOpts AppModel

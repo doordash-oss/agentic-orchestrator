@@ -202,6 +202,35 @@ func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigDiscoversWorkspaceRootReposOnRead(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	for _, name := range []string{"api", "web", "worker"} {
+		if err := os.MkdirAll(filepath.Join(root, name, ".git"), 0o755); err != nil {
+			t.Fatalf("mkdir git repo %s: %v", name, err)
+		}
+	}
+	cfg := &config.Config{
+		Repos:          map[string]config.RepoConfig{"explicit": {Path: "/explicit"}},
+		WorkspaceRoots: []string{root},
+	}
+	handler := NewHandler(HandlerOptions{Config: cfg})
+
+	body := getJSONMap(t, handler, "/api/v1/config/runtime")
+	repos := body["repos"].([]any)
+	names := make(map[string]bool, len(repos))
+	for _, item := range repos {
+		repo := item.(map[string]any)
+		names[repo["name"].(string)] = true
+	}
+	for _, want := range []string{"api", "web", "worker", "explicit"} {
+		if !names[want] {
+			t.Fatalf("runtime config repos = %+v, want discovered repo %q", names, want)
+		}
+	}
+}
+
 func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -270,6 +299,10 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputNames(t, actionsByID["publish"])
 	assertActionScope(t, actionsByID["merge"], "feature", "")
 	assertActionInputNames(t, actionsByID["merge"])
+	assertActionInputNames(t, actionsByID["rewind"], "target_phase", "roadmap_phase", "upgrade_pipeline")
+	assertActionInputRequired(t, actionsByID["rewind"], "target_phase", true)
+	assertActionInputRequired(t, actionsByID["rewind"], "roadmap_phase", false)
+	assertActionInputRequired(t, actionsByID["rewind"], "upgrade_pipeline", false)
 	assertActionScope(t, actionsByID["rebase"], "feature", "optional")
 	assertActionInputNames(t, actionsByID["rebase"], "repo", "rebase_target", "conflict_files")
 	assertActionInputRequired(t, actionsByID["rebase"], "repo", false)
@@ -346,7 +379,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				disabledCode string
 			}{
 				"publish":   {disabledCode: "manual_publish_required"},
-				"refactor":  {disabledCode: "status_not_allowed"},
+				"refactor":  {enabled: true},
 				"mark-done": {enabled: true},
 			},
 		},

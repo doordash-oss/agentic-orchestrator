@@ -305,6 +305,71 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	assertMetadata(t, result.Metadata, map[string]string{"status": "updated"})
 }
 
+func TestServerMutationTargetRuntimeConfigPersistsWorkspaceRootsAndDiscoversRepos(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	root := filepath.Join(runtimeDir, "workspace")
+	if err := os.MkdirAll(filepath.Join(root, "api", ".git"), 0o755); err != nil {
+		t.Fatalf("create repo fixture: %v", err)
+	}
+	cfg := config.NewDefault()
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	roots := []string{root}
+
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		WorkspaceRoots: &roots,
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() error = %v", err)
+	}
+
+	if len(cfg.WorkspaceRoots) != 1 || cfg.WorkspaceRoots[0] != root {
+		t.Fatalf("in-memory workspace roots = %+v, want %q", cfg.WorkspaceRoots, root)
+	}
+	if got := cfg.DiscoveredRepos["api"].Path; got != filepath.Join(root, "api") {
+		t.Fatalf("discovered api path = %q, want repo under workspace root", got)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load config error = %v", err)
+	}
+	if len(loaded.WorkspaceRoots) != 1 || loaded.WorkspaceRoots[0] != root {
+		t.Fatalf("persisted workspace roots = %+v, want %q", loaded.WorkspaceRoots, root)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{"status": "updated"})
+}
+
+func TestServerMutationTargetRuntimeConfigRediscoverReposWhenWorkspaceRootsUnchanged(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	root := filepath.Join(runtimeDir, "workspace")
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "new-service", ".git"), 0o755); err != nil {
+		t.Fatalf("create repo fixture: %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	roots := []string{root}
+
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		WorkspaceRoots: &roots,
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() error = %v", err)
+	}
+
+	if got := cfg.DiscoveredRepos["new-service"].Path; got != filepath.Join(root, "new-service") {
+		t.Fatalf("discovered new-service path = %q, want repo under unchanged workspace root", got)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{"status": "unchanged"})
+}
+
 func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing.T) {
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")
@@ -607,6 +672,182 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 	})
 }
 
+func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("rewind stops sessions", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	sessions := &mutationTargetSessionManager{
+		sessions: []ports.SessionView{&mutationTargetSessionView{
+			id:        "session-rewind",
+			featureID: f.ID,
+			phase:     feature.PhaseImplement,
+			status:    ports.SessionRunning,
+			active:    true,
+		}},
+	}
+	var statusAtStop feature.Status
+	sessions.onStop = func(string) {
+		loaded, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("Load during StopSession: %v", err)
+		}
+		statusAtStop = loaded.Status
+	}
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{}),
+		store: store,
+	}
+
+	if _, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: "plan"}); err != nil {
+		t.Fatalf("rewindAction() error = %v", err)
+	}
+
+	if got := strings.Join(sessions.stopCalls, ","); got != "session-rewind" {
+		t.Fatalf("StopSession calls = %q, want session-rewind", got)
+	}
+	if statusAtStop != feature.StatusImplementing {
+		t.Fatalf("feature status during StopSession = %s, want %s before rewind mutation", statusAtStop, feature.StatusImplementing)
+	}
+}
+
+func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("upgrade rewind via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	sessions := &mutationTargetSessionManager{
+		sessions: []ports.SessionView{&mutationTargetSessionView{
+			id:        "session-upgrade-rewind",
+			featureID: f.ID,
+			phase:     feature.PhaseImplement,
+			status:    ports.SessionRunning,
+			active:    true,
+		}},
+	}
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{}),
+		store: store,
+	}
+
+	result, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{
+		TargetPhase:     "inquire",
+		UpgradePipeline: feature.PipelineLarge,
+	})
+	if err != nil {
+		t.Fatalf("rewindAction() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Pipeline != feature.PipelineLarge || updated.CurrentPhase != feature.PhaseKnowledgeBase {
+		t.Fatalf("feature pipeline/current phase = %s/%s, want large/knowledge base", updated.Pipeline, updated.CurrentPhase)
+	}
+	if got := strings.Join(sessions.stopCalls, ","); got != "session-upgrade-rewind" {
+		t.Fatalf("StopSession calls = %q, want session-upgrade-rewind", got)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id":       f.ID,
+		"action":           "rewind",
+		"target_phase":     "inquire",
+		"upgrade_pipeline": "large",
+		"effective_phase":  feature.PhaseKnowledgeBase.DirName(),
+		"status":           "rewound",
+		"warning_count":    "0",
+	})
+}
+
+func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("failed upgrade rewind via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		Pipeline: feature.PipelineMoonshot,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	sessions := &mutationTargetSessionManager{
+		sessions: []ports.SessionView{&mutationTargetSessionView{
+			id:        "session-failed-upgrade",
+			featureID: f.ID,
+			phase:     feature.PhaseImplement,
+			status:    ports.SessionRunning,
+			active:    true,
+		}},
+	}
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{}),
+		store: store,
+	}
+
+	result, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{
+		TargetPhase:     "inquire",
+		UpgradePipeline: feature.PipelineLarge,
+	})
+	if err == nil {
+		t.Fatal("rewindAction() error = nil, want upgrade failure")
+	}
+
+	if len(sessions.stopCalls) != 0 {
+		t.Fatalf("StopSession calls = %v, want none when upgrade fails", sessions.stopCalls)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Pipeline != feature.PipelineMoonshot || updated.Status != feature.StatusImplementing {
+		t.Fatalf("feature pipeline/status = %s/%s, want unchanged moonshot/implementing", updated.Pipeline, updated.Status)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id":       f.ID,
+		"action":           "rewind",
+		"target_phase":     "inquire",
+		"upgrade_pipeline": "large",
+		"status":           "failed",
+		"failed_stage":     "upgrade_pipeline",
+	})
+}
+
 func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
@@ -835,6 +1076,50 @@ func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing
 	}
 	if staged.Mode != "address_all" || len(staged.Comments) != 1 || staged.Comments[0].ID != 101 || staged.Comments[0].RepoName != "repo-a" {
 		t.Fatalf("staged review comments = %+v; want address_all with comment 101", staged)
+	}
+}
+
+func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t *testing.T) {
+	target, store, f := newReviewCommentsActionTarget(t)
+	reviewer := target.reviewer.(*fakeReviewCommentOperator)
+	reviewer.fetchCalls = 0
+
+	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
+		Repo: "repo-a",
+		Mode: "auto",
+		Comments: []serverruntime.ReviewCommentDTO{{
+			ID:        202,
+			Type:      ports.CommentTypeReview,
+			RepoName:  "repo-a",
+			Path:      "internal/tui/api_app.go",
+			Line:      42,
+			Body:      "use the previewed set",
+			UserLogin: "reviewer",
+			DiffHunk:  "@@ -1 +1 @@\n-old\n+new",
+		}},
+	})
+	if err == nil {
+		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
+	}
+	if reviewer.fetchCalls != 0 {
+		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", reviewer.fetchCalls)
+	}
+	assertMetadata(t, result.Metadata, map[string]string{
+		"feature_id":    f.ID,
+		"action":        "review-comments",
+		"cycle_type":    string(feature.CycleReviewComments),
+		"repo":          "repo-a",
+		"mode":          "auto",
+		"source":        "provided",
+		"comment_count": "1",
+		"status":        "failed",
+	})
+	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a")
+	if err != nil {
+		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
+	}
+	if staged.Mode != "auto" || len(staged.Comments) != 1 || staged.Comments[0].ID != 202 || staged.Comments[0].DiffHunk == "" || staged.Comments[0].User.Login != "reviewer" {
+		t.Fatalf("staged review comments = %+v; want provided previewed comment 202", staged)
 	}
 }
 
@@ -1124,10 +1409,12 @@ func countMockCalls(calls []mocks.MockCall, method string) int {
 }
 
 type fakeReviewCommentOperator struct {
-	comments []ports.ReviewComment
+	comments   []ports.ReviewComment
+	fetchCalls int
 }
 
 func (f *fakeReviewCommentOperator) FetchPRComments(string, string) ([]ports.ReviewComment, error) {
+	f.fetchCalls++
 	out := make([]ports.ReviewComment, len(f.comments))
 	copy(out, f.comments)
 	return out, nil
@@ -1201,13 +1488,21 @@ func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orc
 }
 
 type mutationTargetSessionManager struct {
-	sessions []ports.SessionView
+	sessions  []ports.SessionView
+	stopCalls []string
+	onStop    func(string)
 }
 
 func (m *mutationTargetSessionManager) StartSession(string, string, feature.Phase, []string, string, []string, ...*ports.SessionOpts) (ports.SessionHandle, error) {
 	return nil, nil
 }
-func (m *mutationTargetSessionManager) StopSession(string) error { return nil }
+func (m *mutationTargetSessionManager) StopSession(id string) error {
+	m.stopCalls = append(m.stopCalls, id)
+	if m.onStop != nil {
+		m.onStop(id)
+	}
+	return nil
+}
 func (m *mutationTargetSessionManager) GetSession(id string) ports.SessionView {
 	for _, s := range m.sessions {
 		if s != nil && s.ID() == id {

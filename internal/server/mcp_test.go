@@ -192,7 +192,7 @@ func TestMCPSchemasCoverRESTDTOFields(t *testing.T) {
 		"help_send":              {"feature_id", "session_id", "message"},
 		"config_runtime_update":  {"defaults"},
 		"feature_publish":        {"feature_id", "repos"},
-		"feature_rewind":         {"feature_id", "target_phase", "roadmap_phase"},
+		"feature_rewind":         {"feature_id", "target_phase", "roadmap_phase", "upgrade_pipeline"},
 		"rebase_start":           {"feature_id", "repo", "rebase_target", "conflict_files"},
 		"review_comments_fetch":  {"feature_id", "repo"},
 		"review_comments_start":  {"feature_id", "repo", "mode"},

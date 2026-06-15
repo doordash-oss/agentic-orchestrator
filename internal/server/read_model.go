@@ -137,7 +137,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canRewind := !running && len(feature.RewindChoicesForFeature(f)) > 0
 	canPostPublishCycle := publishedOrManualReady && !activeCycle
-	canRefactor := status == feature.StatusPublished && !activeCycle
+	canRefactor := publishedOrManualReady && !activeCycle
 	canRetry := status == feature.StatusFailed
 	canMarkDone := publishedOrManualReady
 	canCleanup := !running
@@ -153,6 +153,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 		action("rewind", canRewind, featureScope, []ActionInputDTO{
 			{Name: "target_phase", Kind: "enum", Required: true, Options: rewindPhaseOptions(f)},
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
+			{Name: "upgrade_pipeline", Kind: "enum", Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, ActionDisabledReasonDTO{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"}),
 		action("rebase", canPostPublishCycle, repoOptional, []ActionInputDTO{
 			{Name: "repo", Kind: "string", Required: false},
@@ -233,6 +234,17 @@ func rewindPhaseOptions(f *feature.Feature) []string {
 	return out
 }
 
+func rewindUpgradePipelineOptions(f *feature.Feature) []string {
+	switch f.EffectivePipeline() {
+	case feature.PipelineMedium:
+		return []string{string(feature.PipelineLarge), string(feature.PipelineMoonshot)}
+	case feature.PipelineLarge:
+		return []string{string(feature.PipelineMoonshot)}
+	default:
+		return nil
+	}
+}
+
 func boundedHistoricalRunNumbers(activeRun, runCount, limit int) []int {
 	if runCount <= 0 || limit <= 0 {
 		return nil
@@ -272,7 +284,10 @@ func repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
 		cycle := f.RepoCycles[repo.Name]
-		dto := RepoStatusDTO{Name: repo.Name, Publishable: repo.Publishable == nil || *repo.Publishable}
+		dto := RepoStatusDTO{
+			Name:        repo.Name,
+			Publishable: repo.Publishable == nil || *repo.Publishable,
+		}
 		if state != nil {
 			dto.Touched = state.Touched
 			dto.PRURL = state.PRURL
@@ -474,6 +489,7 @@ func (h *apiHandler) configOrDefault() *config.Config {
 }
 
 func configRepoDTOs(cfg *config.Config) []ConfigRepoDTO {
+	cfg = runtimeConfigRepoSnapshot(cfg)
 	repos := make([]ConfigRepoDTO, 0, len(cfg.Repos)+len(cfg.DiscoveredRepos))
 	for name, repo := range cfg.Repos {
 		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
@@ -486,6 +502,31 @@ func configRepoDTOs(cfg *config.Config) []ConfigRepoDTO {
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 	return repos
+}
+
+func runtimeConfigRepoSnapshot(cfg *config.Config) *config.Config {
+	if cfg == nil {
+		return config.NewDefault()
+	}
+	snapshot := *cfg
+	snapshot.WorkspaceRoots = append([]string(nil), cfg.WorkspaceRoots...)
+	snapshot.Repos = copyConfigRepoMap(cfg.Repos)
+	snapshot.DiscoveredRepos = copyConfigRepoMap(cfg.DiscoveredRepos)
+	if len(snapshot.WorkspaceRoots) > 0 {
+		config.DiscoverReposFromRoots(&snapshot)
+	}
+	return &snapshot
+}
+
+func copyConfigRepoMap(in map[string]config.RepoConfig) map[string]config.RepoConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]config.RepoConfig, len(in))
+	for name, repo := range in {
+		out[name] = repo
+	}
+	return out
 }
 
 func copyConfigPipelineGates(in map[string]config.Checkpoints) map[string]config.Checkpoints {

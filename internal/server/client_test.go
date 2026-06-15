@@ -325,6 +325,81 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 	})
 }
 
+func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
+	var sawTrustedHeader bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/config/runtime" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+		var req RuntimeConfigMutationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode update request: %v", err)
+		}
+		if req.WorkspaceRoots == nil || len(*req.WorkspaceRoots) != 2 || (*req.WorkspaceRoots)[0] != "/workspace/a" || (*req.WorkspaceRoots)[1] != "/workspace/b" {
+			t.Fatalf("workspace roots request = %+v, want supplied roots", req.WorkspaceRoots)
+		}
+		writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{
+			APIVersion:  APIVersion,
+			OperationID: "op-runtime",
+			Status:      OperationStatusQueued,
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	roots := []string{"/workspace/a", "/workspace/b"}
+	accepted, err := client.UpdateRuntimeConfig(context.Background(), RuntimeConfigMutationRequest{WorkspaceRoots: &roots})
+	if err != nil {
+		t.Fatalf("UpdateRuntimeConfig() error = %v", err)
+	}
+	if accepted.OperationID != "op-runtime" || !sawTrustedHeader {
+		t.Fatalf("UpdateRuntimeConfig() = %+v trusted=%v, want accepted trusted runtime op", accepted, sawTrustedHeader)
+	}
+}
+
+func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
+	var sawTrustedHeader bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/actions/rewind" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+		var req RewindFeatureRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode rewind request: %v", err)
+		}
+		if req.TargetPhase != "inquire" || req.RoadmapPhase != 2 || string(req.UpgradePipeline) != "large" {
+			t.Fatalf("rewind request = %+v, want inquire roadmap phase 2 large upgrade", req)
+		}
+		writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{
+			APIVersion:  APIVersion,
+			OperationID: "op-rewind",
+			Status:      OperationStatusQueued,
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	accepted, err := client.RewindFeature(context.Background(), "feat-1", RewindFeatureRequest{
+		TargetPhase:     "inquire",
+		RoadmapPhase:    2,
+		UpgradePipeline: "large",
+	})
+	if err != nil {
+		t.Fatalf("RewindFeature() error = %v", err)
+	}
+	if accepted.OperationID != "op-rewind" || !sawTrustedHeader {
+		t.Fatalf("RewindFeature() = %+v trusted=%v, want accepted trusted rewind op", accepted, sawTrustedHeader)
+	}
+}
+
 func TestClientShutdownPostsTrustedMutationAndReturnsAcceptedOperation(t *testing.T) {
 	var sawTrustedHeader bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

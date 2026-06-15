@@ -1003,6 +1003,27 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		cfg = config.NewDefault()
 	}
 	changed := mergeRuntimeDefaultsMutation(&cfg.Defaults, req.Defaults)
+	if req.WorkspaceRoots != nil {
+		if !sameStringSlice(cfg.WorkspaceRoots, *req.WorkspaceRoots) {
+			changed = true
+		}
+		cfg.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
+		config.DiscoverReposFromRoots(cfg)
+	}
+	if req.UI != nil {
+		if !sameStringSlice(cfg.UI.CollapsedSections, req.UI.CollapsedSections) {
+			cfg.UI.CollapsedSections = append([]string(nil), req.UI.CollapsedSections...)
+			changed = true
+		}
+		if req.UI.KeyboardLayout != "" && req.UI.KeyboardLayout != cfg.UI.KeyboardLayout {
+			cfg.UI.KeyboardLayout = req.UI.KeyboardLayout
+			changed = true
+		}
+	}
+	if req.Notifications != nil && cfg.Notifications.MuteFeatureInput != req.Notifications.MuteFeatureInput {
+		cfg.Notifications.MuteFeatureInput = req.Notifications.MuteFeatureInput
+		changed = true
+	}
 	if err := config.Save(t.configPath, cfg); err != nil {
 		return serverruntime.OperationResult{}, err
 	}
@@ -1012,6 +1033,38 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		status = "updated"
 	}
 	return serverruntime.OperationResult{Metadata: map[string]string{"kind": "runtime.config", "status": status}}, nil
+}
+
+func (t *serverMutationTarget) ToggleInputNotifications(featureID string) (serverruntime.OperationResult, error) {
+	if t.store == nil {
+		return serverruntime.OperationResult{}, errors.New("feature store is not available")
+	}
+	defaultMuted := false
+	if t.cfg != nil {
+		defaultMuted = t.cfg.Notifications.MuteFeatureInput
+	}
+	muted := false
+	if err := t.store.Modify(featureID, func(f *feature.Feature) error {
+		current := defaultMuted
+		if f.MuteInputNotifications != nil {
+			current = *f.MuteInputNotifications
+		}
+		next := !current
+		f.MuteInputNotifications = &next
+		muted = next
+		return nil
+	}); err != nil {
+		return serverruntime.OperationResult{}, fmt.Errorf("toggling input notifications: %w", err)
+	}
+	status := "enabled"
+	if muted {
+		status = "muted"
+	}
+	return serverruntime.OperationResult{Metadata: map[string]string{
+		"feature_id": featureID,
+		"status":     status,
+		"muted":      strconv.FormatBool(muted),
+	}}, nil
 }
 
 func (t *serverMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
@@ -1069,13 +1122,25 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 	if req.RoadmapPhase > 0 {
 		metadata["roadmap_phase"] = strconv.Itoa(req.RoadmapPhase)
 	}
+	if req.UpgradePipeline != "" {
+		metadata["upgrade_pipeline"] = string(req.UpgradePipeline)
+	}
 	if err != nil {
 		metadata["status"] = "failed"
 		return serverruntime.OperationResult{Metadata: metadata}, err
 	}
 	if t.orch == nil {
+		metadata["status"] = "failed"
 		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
 	}
+	if req.UpgradePipeline != "" {
+		if err := t.orch.UpgradePipeline(featureID, req.UpgradePipeline); err != nil {
+			metadata["status"] = "failed"
+			metadata["failed_stage"] = "upgrade_pipeline"
+			return serverruntime.OperationResult{Metadata: metadata}, err
+		}
+	}
+	t.orch.StopFeatureSessions(featureID)
 	warnings, effectiveTarget, err := t.orch.RewindWithRequest(featureID, feature.RewindRequest{
 		TargetPhase:  targetPhase,
 		RoadmapPhase: req.RoadmapPhase,
@@ -1194,15 +1259,22 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	if t.orch == nil {
 		return serverruntime.OperationResult{Metadata: metadata}, errors.New("orchestrator is not available")
 	}
-	comments, err := t.fetchUnaddressedReviewComments(featureID, req.Repo)
-	if err != nil {
-		metadata["status"] = "failed"
-		return serverruntime.OperationResult{Metadata: metadata}, err
+	comments := reviewCommentDTOsToPorts(req.Repo, req.Comments)
+	if len(comments) == 0 {
+		var err error
+		comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
+		if err != nil {
+			metadata["status"] = "failed"
+			return serverruntime.OperationResult{Metadata: metadata}, err
+		}
+	} else {
+		metadata["source"] = "provided"
 	}
 	if len(comments) == 0 {
 		metadata["status"] = "no_comments"
 		return serverruntime.OperationResult{Metadata: metadata}, fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
 	}
+	metadata["comment_count"] = strconv.Itoa(len(comments))
 	f, err := t.store.Load(featureID)
 	if err != nil {
 		metadata["status"] = "failed"
@@ -1518,7 +1590,33 @@ func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []server
 			Body:      comment.Body,
 			UserLogin: comment.User.Login,
 			CreatedAt: comment.CreatedAt,
+			DiffHunk:  comment.DiffHunk,
+			InReplyTo: comment.InReplyTo,
 		})
+	}
+	return out
+}
+
+func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewCommentDTO) []ports.ReviewComment {
+	out := make([]ports.ReviewComment, 0, len(comments))
+	for _, comment := range comments {
+		dtoRepo := comment.RepoName
+		if dtoRepo == "" {
+			dtoRepo = repoName
+		}
+		portComment := ports.ReviewComment{
+			ID:        comment.ID,
+			Type:      comment.Type,
+			RepoName:  dtoRepo,
+			Path:      comment.Path,
+			Line:      comment.Line,
+			Body:      comment.Body,
+			CreatedAt: comment.CreatedAt,
+			DiffHunk:  comment.DiffHunk,
+			InReplyTo: comment.InReplyTo,
+		}
+		portComment.User.Login = comment.UserLogin
+		out = append(out, portComment)
 	}
 	return out
 }
@@ -1722,6 +1820,18 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch config.Defau
 		changed = true
 	}
 	return changed
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func effectiveCreatePipeline(requested feature.PipelineProfile, cfg *config.Config) feature.PipelineProfile {

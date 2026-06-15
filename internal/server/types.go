@@ -585,6 +585,8 @@ type ReviewCommentDTO struct {
 	Body      string `json:"body,omitempty"`
 	UserLogin string `json:"user_login,omitempty"`
 	CreatedAt string `json:"created_at,omitempty"`
+	DiffHunk  string `json:"diff_hunk,omitempty"`
+	InReplyTo int    `json:"in_reply_to_id,omitempty"`
 }
 
 type OperationSnapshotResponse struct {

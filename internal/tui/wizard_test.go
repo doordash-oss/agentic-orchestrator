@@ -934,6 +934,36 @@ func TestWizardCtrlNCtrlPNavigation(t *testing.T) {
 	}
 }
 
+func TestWizardRepoListScrollsWithMouseWheel(t *testing.T) {
+	repos := []string{
+		"repo-00", "repo-01", "repo-02", "repo-03", "repo-04",
+		"repo-05", "repo-06", "repo-07", "repo-08", "repo-09",
+		"repo-10", "repo-11", "repo-12", "repo-13", "repo-14",
+	}
+	m := NewWizardModel(repos, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	m.SetWidth(120)
+	m.height = 28
+	m = advanceWizardToWhereViaUI(m, "test")
+
+	initial := stripANSI(m.ViewModal())
+	if !strings.Contains(initial, "repo-00") {
+		t.Fatalf("initial repo list missing repo-00 in:\n%s", initial)
+	}
+	if strings.Contains(initial, "repo-12") {
+		t.Fatalf("initial repo list unexpectedly already shows repo-12 in:\n%s", initial)
+	}
+
+	updated, _ := m.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelDown}))
+	m = updated
+	scrolled := stripANSI(m.ViewModal())
+	if !strings.Contains(scrolled, "repo-12") {
+		t.Fatalf("scrolled repo list missing repo-12 in:\n%s", scrolled)
+	}
+	if m.repoCursor <= 0 || m.repoScrollOffset <= 0 {
+		t.Fatalf("repo list did not advance after wheel: cursor=%d offset=%d", m.repoCursor, m.repoScrollOffset)
+	}
+}
+
 func TestWizardRepoFilterNoMatches(t *testing.T) {
 	repos := []string{"alpha", "beta", "gamma"}
 	defaults := config.DefaultsConfig{

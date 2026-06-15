@@ -250,6 +250,10 @@ func (c *Client) DraftNeedUserInputAnswers(ctx context.Context, featureID string
 	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/need-user-input-draft", req)
 }
 
+func (c *Client) ToggleInputNotifications(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
+	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/input-notifications", map[string]any{})
+}
+
 func (c *Client) AnswerPermission(ctx context.Context, req PermissionAnswerRequest) (OperationAcceptedResponse, error) {
 	return c.postMutation(ctx, "/api/v1/permissions/answer", req)
 }

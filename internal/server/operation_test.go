@@ -1495,7 +1495,7 @@ func TestAdvancedActionMutationRoutesCreateSafeOperations(t *testing.T) {
 	}{
 		{name: "publish", path: "/api/v1/features/feat-advanced/actions/publish", body: `{}`},
 		{name: "merge", path: "/api/v1/features/feat-advanced/actions/merge", body: `{}`},
-		{name: "rewind", path: "/api/v1/features/feat-advanced/actions/rewind", body: `{"target_phase":"implement","roadmap_phase":2}`},
+		{name: "rewind", path: "/api/v1/features/feat-advanced/actions/rewind", body: `{"target_phase":"implement","roadmap_phase":2,"upgrade_pipeline":"large"}`},
 		{name: "retry", path: "/api/v1/features/feat-advanced/actions/retry", body: `{}`},
 		{name: "rebase", path: "/api/v1/features/feat-advanced/actions/rebase", body: `{"repo":"agentic-orchestrator","rebase_target":"main","conflict_files":["go.mod"]}`},
 		{name: "review_comments", path: "/api/v1/features/feat-advanced/actions/review-comments", body: `{"repo":"agentic-orchestrator","mode":"auto"}`},
@@ -1531,8 +1531,8 @@ func TestAdvancedActionMutationRoutesCreateSafeOperations(t *testing.T) {
 			len(mutations.rebaseCalls), len(mutations.reviewStartCalls), len(mutations.tweakStartCalls), len(mutations.tweakFinishCalls),
 			len(mutations.refactorStartCalls), len(mutations.refactorRestartCalls), len(mutations.markDoneCalls), len(mutations.cleanupCalls), len(mutations.deleteCalls))
 	}
-	if got := mutations.rewindCalls[0]; got.TargetPhase != "implement" || got.RoadmapPhase != 2 {
-		t.Fatalf("rewind request = %+v; want implement roadmap phase 2", got)
+	if got := mutations.rewindCalls[0]; got.TargetPhase != "implement" || got.RoadmapPhase != 2 || got.UpgradePipeline != feature.PipelineLarge {
+		t.Fatalf("rewind request = %+v; want implement roadmap phase 2 large upgrade", got)
 	}
 	if got := mutations.rebaseCalls[0]; got.Repo != "agentic-orchestrator" || got.RebaseTarget != "main" || strings.Join(got.ConflictFiles, ",") != "go.mod" {
 		t.Fatalf("rebase request = %+v; want repo target and conflict files", got)
@@ -1555,6 +1555,23 @@ func TestAdvancedActionMutationRoutesCreateSafeOperations(t *testing.T) {
 	if strings.Contains(string(raw), "extract the transport boundary") || strings.Contains(string(raw), "go.mod") {
 		t.Fatalf("advanced operation snapshot leaked raw prompt or file names: %s", raw)
 	}
+}
+
+func TestRewindActionRejectsInvalidUpgradePipeline(t *testing.T) {
+	t.Parallel()
+
+	stateDir := t.TempDir()
+	handler := NewHandler(HandlerOptions{
+		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: filepath.Join(filepath.Dir(stateDir), "config.yaml")},
+		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(stateDir), "operations")),
+		Mutations:  &fakeMutationTarget{},
+	})
+
+	body := requestTrustedMutationStatus(t, handler, "/api/v1/features/feat-advanced/actions/rewind", `{"target_phase":"implement","upgrade_pipeline":"tiny"}`, http.StatusBadRequest)
+	if body["error"].(map[string]any)["code"] != "bad_request" {
+		t.Fatalf("invalid upgrade pipeline response = %+v; want bad_request", body)
+	}
+	assertOperationCount(t, handler, 0)
 }
 
 func TestLifecycleActionAliasRoutesCreateSafeOperations(t *testing.T) {
@@ -2039,6 +2056,10 @@ func (f *fakeMutationTarget) DraftNeedUserInputAnswers(featureID string, req Nee
 	f.needDraftCalls = append(f.needDraftCalls, req)
 	f.mu.Unlock()
 	return OperationResult{Metadata: map[string]string{"feature_id": featureID}}, nil
+}
+
+func (f *fakeMutationTarget) ToggleInputNotifications(featureID string) (OperationResult, error) {
+	return OperationResult{Metadata: map[string]string{"feature_id": featureID, "status": "muted"}}, nil
 }
 
 func (f *fakeMutationTarget) AnswerPermission(req PermissionAnswerRequest) (OperationResult, error) {

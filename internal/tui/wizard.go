@@ -1142,6 +1142,9 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 		}
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		return m.scrollRepoList(msg), nil
+
 	case tea.KeyPressMsg:
 
 		// When file picker is active, route navigation keys there first.
@@ -1444,7 +1447,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 					if len(avail) > 0 {
 						m.whereFocus = whereFocusList
 						m.repoCursor = len(avail) - 1
-						const maxVisibleRepos = 12
+						maxVisibleRepos := m.maxVisibleRepos()
 						if m.repoCursor >= m.repoScrollOffset+maxVisibleRepos {
 							m.repoScrollOffset = m.repoCursor - maxVisibleRepos + 1
 						}
@@ -1492,7 +1495,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 				case whereFocusList:
 					if m.repoCursor < m.maxRepoCursor() {
 						m.repoCursor++
-						const maxVisibleRepos = 12
+						maxVisibleRepos := m.maxVisibleRepos()
 						if m.repoCursor >= m.repoScrollOffset+maxVisibleRepos {
 							m.repoScrollOffset = m.repoCursor - maxVisibleRepos + 1
 						}
@@ -1973,13 +1976,62 @@ func (m *WizardModel) handleWhereFocusEntry() {
 	if m.repoCursor > availLen-1 {
 		m.repoCursor = availLen - 1
 	}
-	const maxVisibleRepos = 12
+	maxVisibleRepos := m.maxVisibleRepos()
 	if m.repoCursor < m.repoScrollOffset {
 		m.repoScrollOffset = m.repoCursor
 	}
 	if m.repoCursor >= m.repoScrollOffset+maxVisibleRepos {
 		m.repoScrollOffset = m.repoCursor - maxVisibleRepos + 1
 	}
+}
+
+func (m WizardModel) maxVisibleRepos() int {
+	const defaultVisibleRepos = 12
+	if m.height <= 0 {
+		return defaultVisibleRepos
+	}
+	rows := m.height - 17
+	if m.whereCreateVisible() {
+		rows--
+	}
+	if m.repoError != "" {
+		rows -= 2
+	}
+	return max(4, min(defaultVisibleRepos, rows))
+}
+
+func (m WizardModel) scrollRepoList(msg tea.MouseWheelMsg) WizardModel {
+	if m.step != wizardStepWhere || m.showBranchWarning || m.filePicker.IsActive() {
+		return m
+	}
+	avail := m.availableRepos()
+	if len(avail) == 0 {
+		return m
+	}
+	visible := m.maxVisibleRepos()
+	maxOffset := max(len(avail)-visible, 0)
+	if maxOffset == 0 {
+		return m
+	}
+
+	step := min(3, visible)
+	switch msg.Mouse().Button {
+	case tea.MouseWheelDown:
+		m.repoScrollOffset = min(maxOffset, m.repoScrollOffset+step)
+	case tea.MouseWheelUp:
+		m.repoScrollOffset = max(0, m.repoScrollOffset-step)
+	default:
+		return m
+	}
+	m.whereFocus = whereFocusList
+	m.repoInput.Focus()
+	if m.repoCursor < m.repoScrollOffset {
+		m.repoCursor = m.repoScrollOffset
+	}
+	if m.repoCursor >= m.repoScrollOffset+visible {
+		m.repoCursor = min(len(avail)-1, m.repoScrollOffset+visible-1)
+	}
+	return m
 }
 
 // renderRepoChips lays out selected repos as removable pills. Wraps at the
@@ -2925,7 +2977,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		}
 
 		// Render visible repos with scroll window.
-		const maxVisibleRepos = 12
+		maxVisibleRepos := m.maxVisibleRepos()
 		visibleStart := m.repoScrollOffset
 		visibleEnd := visibleStart + maxVisibleRepos
 		if visibleEnd > len(avail) {
@@ -3249,7 +3301,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		if m.showBranchWarning {
 			footer = KeyHelpStyle.Render(" [↑↓/tab] Switch   [enter] Choose   [esc] Back")
 		} else {
-			footer = KeyHelpStyle.Render(" [enter] Add   [backspace] Remove last   [tab] Cycle focus   [ctrl+d] Continue   [esc] Back")
+			footer = KeyHelpStyle.Render(" [↑↓/wheel] Scroll   [enter] Add   [backspace] Remove last   [tab] Cycle focus   [ctrl+d] Continue   [esc] Back")
 		}
 	case wizardStepPipeline:
 		footer = KeyHelpStyle.Render(" [↑↓] Select   [enter] Next   [esc] Back")

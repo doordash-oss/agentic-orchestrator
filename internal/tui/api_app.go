@@ -19,13 +19,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
@@ -66,6 +71,8 @@ type APIClient interface {
 	UpdateRuntimeConfig(context.Context, server.RuntimeConfigMutationRequest) (server.OperationAcceptedResponse, error)
 	ExecuteRecovery(context.Context, server.RecoveryActionRequest) (server.OperationAcceptedResponse, error)
 	NeedUserInputDecision(context.Context, string, server.NeedUserInputDecisionRequest) (server.OperationAcceptedResponse, error)
+	DraftNeedUserInputAnswers(context.Context, string, server.NeedUserInputDraftRequest) (server.OperationAcceptedResponse, error)
+	ToggleInputNotifications(context.Context, string) (server.OperationAcceptedResponse, error)
 	ReviewDecision(context.Context, string, server.ReviewDecisionRequest) (server.OperationAcceptedResponse, error)
 	FetchReviewComments(context.Context, string, server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error)
 	StartReviewComments(context.Context, string, server.ReviewCommentsActionRequest) (server.OperationAcceptedResponse, error)
@@ -265,12 +272,17 @@ type APIAppModel struct {
 	actionConfirmKind          string
 	actionConfirmFeatureID     string
 	actionConfirmFeatureName   string
+	actionConfirmArgs          apiFeatureActionArgs
+	repoActionPanel            *apiRepoActionPanel
+	rewindPanel                *apiRewindPanel
+	rewindPhasePicker          *apiRoadmapRewindPanel
 	tweakReviewModalActive     bool
 	tweakReviewFeatureID       string
 	tweakReviewFeatureName     string
 	needInputPromptActive      bool
 	needInputFeatureID         string
 	needInputFeatureName       string
+	needInputGate              server.NeedInputGateDTO
 	permissionPromptActive     bool
 	permissionFeatureID        string
 	permissionFeatureName      string
@@ -286,14 +298,25 @@ type APIAppModel struct {
 	askUserQuestion            string
 	askUserRequest             server.ControlRequestDTO
 	askUserAnswerDraft         string
+	askUserOptionCursor        int
 	wizard                     *WizardModel
 	reviewComments             *apiReviewCommentsPanel
 	refactorPrompt             *apiRefactorPrompt
 	refactorPipeline           *apiRefactorPipelinePanel
 	configEditor               *EditConfigModel
 	runtimeConfigEditor        *apiRuntimeConfigEditor
+	workspaceManager           *WorkspaceManagerModel
+	wizardRuntimeConfigPending bool
+	helpOverlayActive          bool
+	helpOverlay                HelpOverlayModel
+	resumeAllConfirmActive     bool
+	resumeAllFeatureIDs        []string
 	focusPanel                 int
+	rightPanelMode             dashboardRightPanelMode
 	contentPanelActive         bool
+	textPanelActive            bool
+	textPanelTitle             string
+	textPanelContent           string
 	statusMessage              string
 	eventCtx                   context.Context
 	cancelEvents               context.CancelFunc
@@ -315,6 +338,11 @@ type apiContentSelectionMsg struct {
 	featureID string
 	content   apiFeatureContentSnapshot
 	err       error
+}
+
+type apiTextPanelMsg struct {
+	title   string
+	content string
 }
 
 type apiFeatureDetailMsg struct {
@@ -354,8 +382,21 @@ type apiOperationAcceptedMsg struct {
 	err       error
 }
 
+type apiRuntimeConfigMutationMsg struct {
+	kind            string
+	accepted        server.OperationAcceptedResponse
+	config          server.RuntimeConfigResponse
+	createdRepoPath string
+	err             error
+}
+
 type apiOwnedServerStoppedMsg struct {
 	err error
+}
+
+type apiResumeAllResultMsg struct {
+	accepted []apiOperationAcceptedMsg
+	failed   []string
 }
 
 type apiRecoveryPanel struct {
@@ -374,11 +415,69 @@ type apiReviewCommentsPanel struct {
 	comments    []server.ReviewCommentDTO
 }
 
+type apiFeatureActionArgs struct {
+	Repo            string
+	Repos           []string
+	TargetPhase     string
+	RoadmapPhase    int
+	UpgradePipeline feature.PipelineProfile
+}
+
+type apiRepoActionPanel struct {
+	featureID   string
+	featureName string
+	kind        string
+	repos       []apiRepoActionOption
+	cursor      int
+	multi       bool
+	selected    map[string]bool
+}
+
+type apiRepoActionOption struct {
+	Name        string
+	State       string
+	Publishable bool
+	PRURL       string
+}
+
+type apiRewindPanel struct {
+	featureID   string
+	featureName string
+	choices     []apiRewindChoice
+	cursor      int
+}
+
+type apiRewindChoice struct {
+	TargetPhase     string
+	Label           string
+	OverridePhase   string
+	UpgradePipeline feature.PipelineProfile
+}
+
+type apiRoadmapRewindPanel struct {
+	featureID   string
+	featureName string
+	rows        []apiRoadmapRewindRow
+	cursor      int
+}
+
+type apiRoadmapRewindRow struct {
+	Number        int
+	Total         int
+	Title         string
+	PhaseType     string
+	Status        string
+	Effect        string
+	ResetBoundary string
+	CurrentPhase  bool
+}
+
 type apiRefactorPrompt struct {
 	featureID   string
 	featureName string
 	repo        string
 	draft       string
+	input       textarea.Model
 	pipelines   []feature.PipelineProfile
 	restart     bool
 }
@@ -437,6 +536,7 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 	if err != nil {
 		return APIAppModel{}, fmt.Errorf("load runtime config snapshot: %w", err)
 	}
+	ApplyKeyboardLayout(runtimeConfig.UI.KeyboardLayout)
 	catalog, err := client.ModelCatalog(ctx)
 	if err != nil {
 		return APIAppModel{}, fmt.Errorf("load model catalog snapshot: %w", err)
@@ -514,9 +614,27 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.helpOverlayActive {
+			m.helpOverlay = NewHelpOverlayModel(m.helpOverlay.context, msg.Width, msg.Height)
+		}
+		if m.workspaceManager != nil {
+			updated, _ := m.workspaceManager.Update(msg)
+			m.workspaceManager = &updated
+		}
+		if m.wizard != nil {
+			m.wizard.SetWidth(msg.Width)
+			m.wizard.height = msg.Height
+			if m.wizard.IsPickerActive() || m.wizard.IsRootPickerActive() {
+				updated, _ := m.wizard.Update(msg)
+				m.wizard = &updated
+			}
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleAPIKey(msg)
+	case HelpOverlayCloseMsg:
+		m.helpOverlayActive = false
+		return m, nil
 	case apiRefreshSignalMsg:
 		return m, tea.Batch(m.fetchRefreshSnapshotCmd(msg.signal), m.listenForAPIEvents())
 	case apiRefreshSnapshotMsg:
@@ -538,6 +656,12 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.storeContent(msg.content)
 		m.statusMessage = ""
 		m.rebuildPresentation(msg.featureID)
+		return m, nil
+	case apiTextPanelMsg:
+		m.textPanelActive = true
+		m.textPanelTitle = msg.title
+		m.textPanelContent = msg.content
+		m.statusMessage = ""
 		return m, nil
 	case apiFeatureDetailMsg:
 		if msg.err != nil {
@@ -612,7 +736,6 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.upsertAcceptedOperation(msg.kind, msg.featureID, msg.accepted)
-		m.statusMessage = fmt.Sprintf("Accepted %s operation %s", msg.kind, msg.accepted.OperationID)
 		if msg.kind == "recovery.execute" {
 			m.recoveryPanel = nil
 			m.recovery = server.RecoverySnapshotResponse{}
@@ -641,6 +764,25 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.kind == "feature.review_comments" {
 			m.reviewComments = nil
 		}
+		m.statusMessage = apiAcceptedOperationStatus(msg.kind, msg.accepted.OperationID)
+		m.rebuildPresentation(m.selectedFeature)
+		return m, nil
+	case apiRuntimeConfigMutationMsg:
+		m.wizardRuntimeConfigPending = false
+		if msg.err != nil {
+			m.statusMessage = "Runtime config update failed: " + firstLine(msg.err.Error())
+			return m, nil
+		}
+		m.upsertAcceptedOperation(msg.kind, "", msg.accepted)
+		m.runtimeConfig = msg.config
+		ApplyKeyboardLayout(m.runtimeConfig.UI.KeyboardLayout)
+		if m.workspaceManager != nil {
+			m.workspaceManager.SetRoots(apiWorkspaceRoots(m.runtimeConfig.WorkspaceRoots))
+		}
+		if m.wizard != nil {
+			m.refreshAPIWizardRepos(msg.createdRepoPath)
+		}
+		m.statusMessage = apiAcceptedOperationStatus(msg.kind, msg.accepted.OperationID)
 		m.rebuildPresentation(m.selectedFeature)
 		return m, nil
 	case PlanReviewDecisionMsg:
@@ -659,12 +801,41 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
+	case apiResumeAllResultMsg:
+		m.resumeAllConfirmActive = false
+		m.resumeAllFeatureIDs = nil
+		for _, accepted := range msg.accepted {
+			m.upsertAcceptedOperation(accepted.kind, accepted.featureID, accepted.accepted)
+		}
+		switch {
+		case len(msg.accepted) > 0 && len(msg.failed) > 0:
+			m.statusMessage = fmt.Sprintf("Accepted resume all for %d feature(s); %d failed", len(msg.accepted), len(msg.failed))
+		case len(msg.accepted) > 0:
+			m.statusMessage = fmt.Sprintf("Accepted resume all for %d feature(s)", len(msg.accepted))
+		case len(msg.failed) > 0:
+			m.statusMessage = "Resume all failed: " + strings.Join(msg.failed, "; ")
+		default:
+			m.statusMessage = "No interrupted or failed features to resume"
+		}
+		m.rebuildPresentation(m.selectedFeature)
+		return m, nil
 	default:
+		if m.workspaceManager != nil {
+			return m.updateAPIWorkspaceManager(msg)
+		}
+		if m.wizard != nil {
+			return m.handleAPIWizardMsg(msg)
+		}
 		return m, nil
 	}
 }
 
 func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.helpOverlayActive {
+		var cmd tea.Cmd
+		m.helpOverlay, cmd = m.helpOverlay.Update(msg)
+		return m, cmd
+	}
 	if m.quitOwnedServerPrompt {
 		switch strings.ToLower(msg.Text) {
 		case "y":
@@ -677,6 +848,9 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if m.workspaceManager != nil {
+		return m.updateAPIWorkspaceManager(msg)
+	}
 	if m.runtimeConfigEditor != nil {
 		return m.handleAPIRuntimeConfigEditorKey(msg)
 	}
@@ -687,10 +861,19 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleAPIConfigEditorKey(msg)
 	}
 	if m.wizard != nil {
-		return m.handleAPIWizardKey(msg)
+		return m.handleAPIWizardMsg(msg)
 	}
 	if m.reviewComments != nil {
 		return m.handleAPIReviewCommentsKey(msg)
+	}
+	if m.repoActionPanel != nil {
+		return m.handleAPIRepoActionKey(msg)
+	}
+	if m.rewindPhasePicker != nil {
+		return m.handleAPIRoadmapRewindKey(msg)
+	}
+	if m.rewindPanel != nil {
+		return m.handleAPIRewindKey(msg)
 	}
 	if m.refactorPipeline != nil {
 		return m.handleAPIRefactorPipelineKey(msg)
@@ -728,6 +911,12 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.askUserPromptActive {
 		return m.handleAPIAskUserPromptKey(msg)
 	}
+	if m.textPanelActive && msg.Code == tea.KeyEscape {
+		m.textPanelActive = false
+		m.textPanelTitle = ""
+		m.textPanelContent = ""
+		return m, nil
+	}
 	if m.contentPanelActive && msg.Code == tea.KeyEscape {
 		m.contentPanelActive = false
 		return m, nil
@@ -751,17 +940,27 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.actionConfirmActive {
 		kind := m.actionConfirmKind
 		featureID := m.actionConfirmFeatureID
+		args := m.actionConfirmArgs
 		m.clearActionConfirm()
 		if strings.ToLower(msg.Text) == "y" {
-			return m, m.selectedFeatureActionCmd(kind, featureID)
+			return m, m.selectedFeatureActionCmd(kind, featureID, args)
 		}
 		return m, nil
 	}
-	if msg.Code == 'r' && msg.Mod.Contains(tea.ModCtrl) {
-		return m.confirmSelectedFeatureAction("feature.rewind"), nil
+	if m.resumeAllConfirmActive {
+		if strings.ToLower(msg.Text) == "y" {
+			featureIDs := append([]string(nil), m.resumeAllFeatureIDs...)
+			return m, m.resumeAllCmd(featureIDs)
+		}
+		m.resumeAllConfirmActive = false
+		m.resumeAllFeatureIDs = nil
+		return m, nil
 	}
-	if msg.Code == 'f' && msg.Mod.Contains(tea.ModCtrl) {
-		return m.openRefactorRestartPrompt(), nil
+	if key.Matches(msg, keys.HelpOverlay) {
+		return m.transitionToAPIHelpOverlay()
+	}
+	if msg.Code == 'r' && msg.Mod.Contains(tea.ModCtrl) {
+		return m.openRewindPanel(), nil
 	}
 	switch msg.Code {
 	case tea.KeyTab:
@@ -784,13 +983,30 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "]":
 		return m.cycleSelectedArtifact(1)
 	}
+	switch {
+	case msg.Text == "W":
+		return m.openAPIWorkspaceManager(), nil
+	case msg.Text == "R":
+		return m.confirmResumeAll()
+	case msg.Text == "N":
+		if m.selectedFeature == "" {
+			m.statusMessage = "No feature selected"
+			return m, nil
+		}
+		return m, m.toggleAPIInputNotificationsCmd(m.selectedFeature)
+	case key.Matches(msg, keys.Chat):
+		m.statusMessage = "Ask chat requires a REST chat operation"
+		return m, nil
+	case msg.Text == "a":
+		return m.openAPIContextualAction()
+	case msg.Text == "o":
+		return m.showAPIOverview(), nil
+	}
 	switch msg.Text {
 	case "E":
 		return m.openRuntimeConfigEditor(), nil
 	case "M":
 		return m.confirmSelectedFeatureAction("feature.merge"), nil
-	case "R":
-		return m.confirmSelectedFeatureAction("feature.retry"), nil
 	case "D":
 		return m.confirmSelectedFeatureAction("feature.mark-done"), nil
 	case "F":
@@ -808,16 +1024,11 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m.openCreateFeaturePrompt(0), nil
 	case "v":
-		if m.selectedFeature == "" {
-			m.statusMessage = "No feature selected"
-			return m, nil
-		}
-		m.statusMessage = "Refreshing attach/live snapshots"
-		return m, m.fetchFeatureDetailCmd(m.selectedFeature)
+		return m.openSelectedDiff()
 	case "w":
 		return m.openCreateFeaturePrompt(2), nil
 	case "p":
-		return m.confirmSelectedFeatureAction("feature.publish"), nil
+		return m.openPublishAction(), nil
 	case "r":
 		return m.confirmSelectedFeatureAction("feature.restart"), nil
 	case "s":
@@ -831,15 +1042,24 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "No feature selected"
 			return m, nil
 		}
+		if f := m.selectedAPIDashboardFeature(); f == nil || !isFeatureQuiescent(f) {
+			m.statusMessage = "Config can only be edited when the feature is idle"
+			return m, nil
+		}
 		return m, m.fetchFeatureConfigCmd(m.selectedFeature)
 	case "l":
+		if m.rightPanelMode == dashboardRightPanelOverview {
+			m.rightPanelMode = dashboardRightPanelLivePreview
+			m.statusMessage = ""
+			return m, nil
+		}
 		return m.cycleSelectedLog()
 	case "g":
 		return m.openReviewCommentsPreview()
 	case "t":
-		return m.confirmSelectedFeatureAction("feature.tweak.start"), nil
+		return m.openRepoCycleAction("feature.tweak.start"), nil
 	case "b":
-		return m.confirmSelectedFeatureAction("feature.rebase"), nil
+		return m.openRepoCycleAction("feature.rebase"), nil
 	case "i":
 		return m.openNeedInputPrompt(), nil
 	case "a":
@@ -856,9 +1076,8 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.focusPanel == 0 {
 			m.focusPanel = 1
-			return m, nil
 		}
-		return m, m.primarySelectedFeatureActionCmd(m.selectedPrimaryFeatureActionKind(), m.selectedFeature)
+		return m, nil
 	case tea.KeyUp:
 		previous := m.selectedFeature
 		m.moveSelection(-1)
@@ -890,6 +1109,12 @@ func (m APIAppModel) View() tea.View {
 	if m.runtimeConfigEditor != nil {
 		view = overlayModal(view, m.runtimeConfigEditor.render(min(w-4, 96)), w, h)
 	}
+	if m.workspaceManager != nil {
+		view = overlayModal(view, m.workspaceManager.View(), w, h)
+		if m.workspaceManager.IsPickerActive() {
+			view = overlayModal(view, m.workspaceManager.PickerView(), w, h)
+		}
+	}
 	if m.wizard != nil {
 		view = overlayModal(view, m.wizard.ViewModal(), w, h)
 		if m.wizard.IsPickerActive() {
@@ -902,14 +1127,23 @@ func (m APIAppModel) View() tea.View {
 	if m.reviewComments != nil {
 		view = overlayModal(view, m.renderAPIReviewCommentsPanel(min(w-4, 96)), w, h)
 	}
-	if m.refactorPrompt != nil {
-		view = overlayModal(view, m.renderAPIRefactorPrompt(min(w-4, 96)), w, h)
+	if m.repoActionPanel != nil {
+		view = overlayModal(view, m.renderAPIRepoActionPanel(min(w-4, 72)), w, h)
 	}
-	if m.refactorPipeline != nil {
-		view = overlayModal(view, m.renderAPIRefactorPipeline(min(w-4, 96)), w, h)
+	if m.rewindPanel != nil {
+		view = overlayModal(view, m.renderAPIRewindPanel(min(w-4, 72)), w, h)
+	}
+	if m.rewindPhasePicker != nil {
+		view = overlayModal(view, m.renderAPIRoadmapRewindPanel(min(w-4, 84)), w, h)
 	}
 	if m.contentPanelActive && m.snapshot.Content != nil {
 		view = overlayModal(view, panelStyle(true).Width(min(w-4, 96)).Render(m.renderAPIContent()), w, h)
+	}
+	if m.textPanelActive {
+		view = overlayModal(view, panelStyle(true).Width(min(w-4, 96)).Render(m.renderAPITextPanel()), w, h)
+	}
+	if m.helpOverlayActive {
+		view = overlayModal(view, m.helpOverlay.View(), w, h)
 	}
 	if m.quitOwnedServerPrompt {
 		view = overlayModal(view, panelStyle(true).
@@ -919,6 +1153,9 @@ func (m APIAppModel) View() tea.View {
 	}
 	if m.actionConfirmActive {
 		view = overlayModal(view, m.renderFeatureActionConfirm(), w, h)
+	}
+	if m.resumeAllConfirmActive {
+		view = overlayModal(view, m.renderAPIResumeAllConfirm(), w, h)
 	}
 	if m.tweakReviewModalActive {
 		view = overlayModal(view, m.renderTweakReviewModal(), w, h)
@@ -946,12 +1183,14 @@ func (m APIAppModel) renderAPIDashboard() string {
 	dashboard.width = max(m.width, 80)
 	dashboard.height = max(m.height, 24)
 	dashboard.focusPanel = m.focusPanel
+	dashboard.rightPanelMode = m.rightPanelMode
 	dashboard.dangerouslySkipPerms = m.snapshot.Runtime.DangerouslySkipPermissions
 	dashboard.statusMessage = m.statusMessage
 	if len(m.runtimeConfig.UI.CollapsedSections) > 0 {
 		dashboard.SetCollapsedSections(m.runtimeConfig.UI.CollapsedSections)
 	}
 	dashboard.selectFeature(m.selectedFeature)
+	m.applyAPIDashboardRefactorState(&dashboard)
 	if preview := m.snapshot.LivePreview; preview != nil {
 		if dashboard.livePreview.feature != nil && preview.CostUSD > 0 {
 			dashboard.livePreview.feature.PhaseCosts = apiPhaseCosts(nil, preview.CostUSD, dashboard.livePreview.feature.CurrentPhase)
@@ -960,6 +1199,23 @@ func (m APIAppModel) renderAPIDashboard() string {
 		dashboard.livePreview.session = newAPILivePreviewSession(*preview)
 	}
 	return dashboard.View()
+}
+
+func (m APIAppModel) applyAPIDashboardRefactorState(dashboard *DashboardModel) {
+	if dashboard == nil {
+		return
+	}
+	dashboard.preview.refactorActive = false
+	dashboard.preview.refactorPipelineActive = false
+	if prompt := m.refactorPrompt; prompt != nil {
+		dashboard.preview.refactorActive = true
+		dashboard.preview.refactorFeatureName = firstNonEmpty(prompt.featureName, prompt.featureID)
+		dashboard.preview.refactorInputView = prompt.input.View()
+	}
+	if panel := m.refactorPipeline; panel != nil {
+		dashboard.preview.refactorPipelineActive = true
+		dashboard.preview.refactorPipelineView = m.renderAPIRefactorPipelineSelector()
+	}
 }
 
 func (m APIAppModel) apiDashboardFeatures() []*feature.Feature {
@@ -973,6 +1229,15 @@ func (m APIAppModel) apiDashboardFeatures() []*feature.Feature {
 		features = append(features, m.apiDashboardFeature(summary, detail, hasDetail))
 	}
 	return features
+}
+
+func (m APIAppModel) selectedAPIDashboardFeature() *feature.Feature {
+	for _, f := range m.apiDashboardFeatures() {
+		if f.ID == m.selectedFeature {
+			return f
+		}
+	}
+	return nil
 }
 
 func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail server.FeatureDetailDTO, hasDetail bool) *feature.Feature {
@@ -1404,6 +1669,7 @@ func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	}
 	if snapshot.RuntimeConfig != nil {
 		m.runtimeConfig = *snapshot.RuntimeConfig
+		ApplyKeyboardLayout(m.runtimeConfig.UI.KeyboardLayout)
 	}
 	if snapshot.Prompts != nil {
 		m.prompts = *snapshot.Prompts
@@ -1631,16 +1897,28 @@ func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
 
 func newAPIRecoveryPanel(snapshot server.RecoverySnapshotResponse) *apiRecoveryPanel {
 	actions := make(map[string]string, len(snapshot.Items))
-	for _, item := range snapshot.Items {
+	items := append([]server.RecoveryItemDTO(nil), snapshot.Items...)
+	for i, item := range items {
+		if len(item.AllowedActions) == 0 {
+			if item.Tweak {
+				item.AllowedActions = []string{"kill"}
+			} else {
+				item.AllowedActions = []string{"resume", "kill", "skip"}
+			}
+			items[i] = item
+		}
 		action := item.DefaultAction
 		if action == "" {
 			action = "skip"
+			if item.Tweak {
+				action = "kill"
+			}
 		}
 		actions[item.Key] = action
 	}
 	return &apiRecoveryPanel{
 		snapshotID: snapshot.SnapshotID,
-		items:      append([]server.RecoveryItemDTO(nil), snapshot.Items...),
+		items:      items,
 		actions:    actions,
 	}
 }
@@ -1744,11 +2022,14 @@ func (m APIAppModel) renderAPIRecovery() string {
 		content := fmt.Sprintf("%s%d. %s (%s, iter %d)%s\n", cursor, i+1, name, item.Phase, item.Iteration, repoSuffix)
 		content += fmt.Sprintf("   PID %d: %s\n", item.PID, alive)
 		content += fmt.Sprintf("   Action: %s", action)
+		if item.Tweak {
+			content += "\n   " + MutedStyle.Render("(interactive tweak - kill only)")
+		}
 		b.WriteString(panelStyle(i == m.recoveryPanel.cursor).Render(content))
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(KeyHelpStyle.Render(" [r] Resume   [k] Kill   [s] Skip   [enter] Continue"))
+	b.WriteString(KeyHelpStyle.Render(apiRecoveryFooter(m.recoveryPanel.currentAllowedActions())))
 	b.WriteString("\n")
 	return b.String()
 }
@@ -1764,6 +2045,29 @@ func apiRecoveryActionLabel(action string) string {
 	default:
 		return strings.TrimSpace(action)
 	}
+}
+
+func (p *apiRecoveryPanel) currentAllowedActions() []string {
+	if p == nil || p.cursor < 0 || p.cursor >= len(p.items) {
+		return nil
+	}
+	return append([]string(nil), p.items[p.cursor].AllowedActions...)
+}
+
+func apiRecoveryFooter(allowed []string) string {
+	parts := make([]string, 0, len(allowed)+1)
+	for _, action := range allowed {
+		switch action {
+		case "resume":
+			parts = append(parts, "[r] Resume")
+		case "kill":
+			parts = append(parts, "[k] Kill")
+		case "skip":
+			parts = append(parts, "[s] Skip")
+		}
+	}
+	parts = append(parts, "[enter] Continue")
+	return " " + strings.Join(parts, "   ")
 }
 
 func copyStringMapValues(in map[string]string) map[string]string {
@@ -1825,17 +2129,22 @@ func (m *APIAppModel) moveSelection(delta int) {
 }
 
 func (m APIAppModel) confirmSelectedFeatureAction(kind string) APIAppModel {
+	return m.confirmSelectedFeatureActionWithArgs(kind, apiFeatureActionArgs{})
+}
+
+func (m APIAppModel) confirmSelectedFeatureActionWithArgs(kind string, args apiFeatureActionArgs) APIAppModel {
 	if m.selectedFeature == "" {
 		return m
 	}
 	if !m.selectedActionReady(kind) {
-		m.statusMessage = kind + " is unavailable"
+		m.statusMessage = apiMutationKindLabel(kind) + " is unavailable"
 		return m
 	}
 	m.actionConfirmActive = true
 	m.actionConfirmKind = kind
 	m.actionConfirmFeatureID = m.selectedFeature
 	m.actionConfirmFeatureName = m.selectedFeatureName()
+	m.actionConfirmArgs = args
 	return m
 }
 
@@ -1844,6 +2153,7 @@ func (m *APIAppModel) clearActionConfirm() {
 	m.actionConfirmKind = ""
 	m.actionConfirmFeatureID = ""
 	m.actionConfirmFeatureName = ""
+	m.actionConfirmArgs = apiFeatureActionArgs{}
 }
 
 func (m APIAppModel) openTweakReviewModal() APIAppModel {
@@ -1851,7 +2161,7 @@ func (m APIAppModel) openTweakReviewModal() APIAppModel {
 		return m
 	}
 	if !m.selectedActionReady("feature.tweak.finish") {
-		m.statusMessage = "feature.tweak.finish is unavailable"
+		m.statusMessage = apiMutationKindLabel("feature.tweak.finish") + " is unavailable"
 		return m
 	}
 	m.tweakReviewModalActive = true
@@ -1870,6 +2180,7 @@ func (m *APIAppModel) clearNeedInputPrompt() {
 	m.needInputPromptActive = false
 	m.needInputFeatureID = ""
 	m.needInputFeatureName = ""
+	m.needInputGate = server.NeedInputGateDTO{}
 }
 
 func (m *APIAppModel) clearPermissionPrompt() {
@@ -1898,6 +2209,7 @@ func (m *APIAppModel) clearAskUserPrompt() {
 
 func (m *APIAppModel) clearCreatePrompt() {
 	m.wizard = nil
+	m.wizardRuntimeConfigPending = false
 }
 
 func (m APIAppModel) openCreateFeaturePrompt(_ int) APIAppModel {
@@ -1916,21 +2228,7 @@ func (m APIAppModel) openCreateFeaturePrompt(_ int) APIAppModel {
 }
 
 func (m APIAppModel) newCreateFeatureWizard() WizardModel {
-	availRepos := make([]string, 0, len(m.runtimeConfig.Repos))
-	repoPaths := make(map[string]string, len(m.runtimeConfig.Repos))
-	repoConfigs := make(map[string]config.RepoConfig, len(m.runtimeConfig.Repos))
-	for _, repo := range m.runtimeConfig.Repos {
-		if repo.Name == "" {
-			continue
-		}
-		availRepos = append(availRepos, repo.Name)
-		repoPaths[repo.Name] = repo.Path
-		repoConfigs[repo.Name] = config.RepoConfig{
-			Path:          repo.Path,
-			PipelineGates: copyConfigPipelineGates(repo.PipelineGates),
-		}
-	}
-	sort.Strings(availRepos)
+	availRepos, repoPaths, repoConfigs := apiRuntimeRepoState(m.runtimeConfig)
 
 	existingSlugs := make(map[string]string, len(m.featureList.Features))
 	for _, f := range m.featureList.Features {
@@ -1953,6 +2251,158 @@ func (m APIAppModel) newCreateFeatureWizard() WizardModel {
 		existingSlugs,
 		append([]string(nil), m.runtimeConfig.WorkspaceRoots...),
 	)
+}
+
+func apiRuntimeRepoState(runtime server.RuntimeConfigResponse) ([]string, map[string]string, map[string]config.RepoConfig) {
+	availRepos := make([]string, 0, len(runtime.Repos))
+	repoPaths := make(map[string]string, len(runtime.Repos))
+	repoConfigs := make(map[string]config.RepoConfig, len(runtime.Repos))
+	for _, repo := range runtime.Repos {
+		if repo.Name == "" {
+			continue
+		}
+		availRepos = append(availRepos, repo.Name)
+		repoPaths[repo.Name] = repo.Path
+		repoConfigs[repo.Name] = config.RepoConfig{
+			Path:          repo.Path,
+			PipelineGates: copyConfigPipelineGates(repo.PipelineGates),
+		}
+	}
+	sort.Strings(availRepos)
+	return availRepos, repoPaths, repoConfigs
+}
+
+func (m *APIAppModel) refreshAPIWizardRepos(createdRepoPath string) {
+	if m.wizard == nil {
+		return
+	}
+	availRepos, repoPaths, repoConfigs := apiRuntimeRepoState(m.runtimeConfig)
+	m.wizard.RefreshRepos(availRepos, repoPaths, repoConfigs)
+	m.wizard.SetWorkspaceRoots(m.runtimeConfig.WorkspaceRoots)
+	if createdRepoPath != "" {
+		m.wizard.AutoSelectCreatedRepo(createdRepoPath, repoPaths)
+		m.wizard.Advance()
+	}
+}
+
+func (m APIAppModel) openAPIWorkspaceManager() APIAppModel {
+	manager := NewWorkspaceManagerModel(apiWorkspaceRoots(m.runtimeConfig.WorkspaceRoots), m.width, m.height)
+	m.workspaceManager = &manager
+	m.configEditor = nil
+	m.runtimeConfigEditor = nil
+	m.statusMessage = ""
+	return m
+}
+
+func apiWorkspaceRoots(paths []string) []workspaceRoot {
+	roots := make([]workspaceRoot, 0, len(paths))
+	for _, path := range paths {
+		expanded := config.ExpandHome(path)
+		roots = append(roots, workspaceRoot{
+			Path:      expanded,
+			RepoCount: countGitReposInDir(expanded),
+			IsRepo:    isGitRepo(expanded),
+		})
+	}
+	return roots
+}
+
+func (m APIAppModel) updateAPIWorkspaceManager(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.workspaceManager == nil {
+		return m, nil
+	}
+	manager, cmd := m.workspaceManager.Update(msg)
+	m.workspaceManager = &manager
+	var cmds []tea.Cmd
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	if root := m.workspaceManager.ConsumeAddedRoot(); root != "" {
+		roots := append([]string(nil), m.runtimeConfig.WorkspaceRoots...)
+		if !containsRootExpanded(roots, root) {
+			roots = append(roots, root)
+			m.runtimeConfig.WorkspaceRoots = roots
+			m.workspaceManager.SetRoots(apiWorkspaceRoots(roots))
+			cmds = append(cmds, m.persistRuntimeWorkspaceRootsCmd(roots, ""))
+		}
+	}
+
+	if root := m.workspaceManager.ConsumeRemovedRoot(); root != "" {
+		roots := removeRoot(m.runtimeConfig.WorkspaceRoots, root)
+		m.runtimeConfig.WorkspaceRoots = roots
+		m.workspaceManager.SetRoots(apiWorkspaceRoots(roots))
+		cmds = append(cmds, m.persistRuntimeWorkspaceRootsCmd(roots, ""))
+	}
+
+	if m.workspaceManager.IsClosed() {
+		m.workspaceManager = nil
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m APIAppModel) persistRuntimeWorkspaceRootsCmd(roots []string, createdRepoPath string) tea.Cmd {
+	roots = append([]string(nil), roots...)
+	return func() tea.Msg {
+		ctx := context.Background()
+		if m.eventCtx != nil {
+			ctx = m.eventCtx
+		}
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		accepted, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
+			WorkspaceRoots: &roots,
+		})
+		if err != nil {
+			return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", accepted: accepted, createdRepoPath: createdRepoPath, err: err}
+		}
+		if err := waitForAPIOperation(ctx, m.client, accepted.OperationID); err != nil {
+			return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", accepted: accepted, createdRepoPath: createdRepoPath, err: err}
+		}
+		cfg, err := m.client.RuntimeConfig(ctx)
+		return apiRuntimeConfigMutationMsg{
+			kind:            "runtime.config.update",
+			accepted:        accepted,
+			config:          cfg,
+			createdRepoPath: createdRepoPath,
+			err:             err,
+		}
+	}
+}
+
+func waitForAPIOperation(ctx context.Context, client APIClient, operationID string) error {
+	if operationID == "" {
+		return nil
+	}
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		ops, err := client.Operations(ctx, server.OperationQuery{Limit: 50})
+		if err != nil {
+			return err
+		}
+		for _, op := range ops.Operations {
+			if op.ID != operationID {
+				continue
+			}
+			switch op.Status {
+			case server.OperationStatusSucceeded:
+				return nil
+			case server.OperationStatusFailed, server.OperationStatusRejected, server.OperationStatusInterrupted:
+				if op.Error != nil && op.Error.Message != "" {
+					return errors.New(op.Error.Message)
+				}
+				return fmt.Errorf("operation %s %s", operationID, op.Status)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func apiWizardDefaults(runtime server.RuntimeConfigResponse) config.DefaultsConfig {
@@ -1996,13 +2446,15 @@ func (m APIAppModel) openNeedInputPrompt() APIAppModel {
 		m.statusMessage = "No feature selected"
 		return m
 	}
-	if _, ok := m.selectedNeedInputGate(m.selectedFeature); !ok {
+	gate, ok := m.selectedNeedInputGate(m.selectedFeature)
+	if !ok {
 		m.statusMessage = "No need-user-input gate for selected feature"
 		return m
 	}
 	m.needInputPromptActive = true
 	m.needInputFeatureID = m.selectedFeature
 	m.needInputFeatureName = m.selectedFeatureName()
+	m.needInputGate = gate
 	m.statusMessage = ""
 	return m
 }
@@ -2065,6 +2517,81 @@ func (m APIAppModel) openAskUserPrompt() APIAppModel {
 	m.askUserQuestion = question
 	m.askUserRequest = req
 	m.askUserAnswerDraft = ""
+	m.askUserOptionCursor = 0
+	m.statusMessage = ""
+	return m
+}
+
+func (m APIAppModel) openPublishAction() APIAppModel {
+	if m.selectedFeature == "" {
+		m.statusMessage = "No feature selected"
+		return m
+	}
+	if !m.selectedActionReady("feature.publish") {
+		m.statusMessage = apiMutationKindLabel("feature.publish") + " is unavailable"
+		return m
+	}
+	repos := m.selectedRepoActionOptions("feature.publish")
+	if len(repos) > 1 {
+		m.repoActionPanel = newAPIRepoActionPanel(m.selectedFeature, m.selectedFeatureName(), "feature.publish", repos, true)
+		m.statusMessage = ""
+		return m
+	}
+	args := apiFeatureActionArgs{}
+	if len(repos) == 1 {
+		args.Repos = []string{repos[0].Name}
+	}
+	return m.confirmSelectedFeatureActionWithArgs("feature.publish", args)
+}
+
+func (m APIAppModel) openRepoCycleAction(kind string) APIAppModel {
+	if m.selectedFeature == "" {
+		m.statusMessage = "No feature selected"
+		return m
+	}
+	if !m.selectedActionReady(kind) {
+		m.statusMessage = apiMutationKindLabel(kind) + " is unavailable"
+		return m
+	}
+	repos := m.selectedRepoActionOptions(kind)
+	if len(repos) > 1 {
+		m.repoActionPanel = newAPIRepoActionPanel(m.selectedFeature, m.selectedFeatureName(), kind, repos, false)
+		m.statusMessage = ""
+		return m
+	}
+	args := apiFeatureActionArgs{}
+	if len(repos) == 1 {
+		args.Repo = repos[0].Name
+	}
+	return m.confirmSelectedFeatureActionWithArgs(kind, args)
+}
+
+func (m APIAppModel) openRewindPanel() APIAppModel {
+	if m.selectedFeature == "" {
+		m.statusMessage = "No feature selected"
+		return m
+	}
+	if !m.selectedActionReady("feature.rewind") {
+		m.statusMessage = apiMutationKindLabel("feature.rewind") + " is unavailable"
+		return m
+	}
+	choices := m.selectedRewindChoices()
+	if len(choices) == 0 {
+		m.statusMessage = "selected feature has no rewind target phase"
+		return m
+	}
+	if len(choices) == 1 {
+		choice := choices[0]
+		return m.confirmSelectedFeatureActionWithArgs("feature.rewind", apiFeatureActionArgs{
+			TargetPhase:     choice.TargetPhase,
+			UpgradePipeline: choice.UpgradePipeline,
+		})
+	}
+	m.rewindPanel = &apiRewindPanel{
+		featureID:   m.selectedFeature,
+		featureName: m.selectedFeatureName(),
+		choices:     choices,
+	}
 	m.statusMessage = ""
 	return m
 }
@@ -2073,6 +2600,183 @@ func (m APIAppModel) openRuntimeConfigEditor() APIAppModel {
 	m.runtimeConfigEditor = newAPIRuntimeConfigEditor(m.runtimeConfig.Defaults, apiPhaseModelCatalog(m.catalog))
 	m.configEditor = nil
 	m.statusMessage = ""
+	return m
+}
+
+func (m APIAppModel) transitionToAPIHelpOverlay() (tea.Model, tea.Cmd) {
+	contexts := AllHelpContexts()
+	ctxName := "Dashboard"
+	switch {
+	case m.contentPanelActive:
+		ctxName = "Logs"
+	case m.recoveryPanel != nil:
+		ctxName = "Recovery"
+	case m.reviewComments != nil:
+		ctxName = "Review Comments"
+	case m.wizard != nil:
+		ctxName = "Wizard"
+	case m.focusPanel == 1:
+		ctxName = "Detail Panel"
+	}
+	ctx, ok := contexts[ctxName]
+	if !ok {
+		ctx = contexts["Dashboard"]
+	}
+	m.helpOverlay = NewHelpOverlayModel(ctx, m.width, m.height)
+	m.helpOverlayActive = true
+	return m, nil
+}
+
+func (m APIAppModel) confirmResumeAll() (tea.Model, tea.Cmd) {
+	m.resumeAllFeatureIDs = m.resumeAllCandidates()
+	m.resumeAllConfirmActive = true
+	return m, nil
+}
+
+func (m APIAppModel) resumeAllCandidates() []string {
+	ids := make([]string, 0)
+	for _, summary := range m.featureList.Features {
+		if apiFeatureResumeAllKind(summary.Status) != "" {
+			ids = append(ids, summary.ID)
+		}
+	}
+	return ids
+}
+
+func apiFeatureResumeAllKind(status string) string {
+	switch apiFeatureStatus(status) {
+	case feature.StatusInterrupted, feature.StatusNeedUserInput:
+		return "feature.resume"
+	case feature.StatusFailed:
+		return "feature.retry"
+	default:
+		return ""
+	}
+}
+
+func (m APIAppModel) resumeAllCmd(featureIDs []string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if m.eventCtx != nil {
+			ctx = m.eventCtx
+		}
+		statusByFeature := map[string]string{}
+		for _, summary := range m.featureList.Features {
+			statusByFeature[summary.ID] = summary.Status
+		}
+		var result apiResumeAllResultMsg
+		for _, featureID := range featureIDs {
+			kind := apiFeatureResumeAllKind(statusByFeature[featureID])
+			if kind == "" {
+				continue
+			}
+			var (
+				accepted server.OperationAcceptedResponse
+				err      error
+			)
+			switch kind {
+			case "feature.resume":
+				accepted, err = m.client.ResumeFeature(ctx, featureID)
+			case "feature.retry":
+				accepted, err = m.client.RetryFeature(ctx, featureID)
+			}
+			if err != nil {
+				result.failed = append(result.failed, fmt.Sprintf("%s: %s", featureID, firstLine(err.Error())))
+				continue
+			}
+			result.accepted = append(result.accepted, apiOperationAcceptedMsg{
+				kind:      kind,
+				featureID: featureID,
+				accepted:  accepted,
+			})
+		}
+		return result
+	}
+}
+
+func (m APIAppModel) toggleAPIInputNotificationsCmd(featureID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if m.eventCtx != nil {
+			ctx = m.eventCtx
+		}
+		accepted, err := m.client.ToggleInputNotifications(ctx, featureID)
+		return apiOperationAcceptedMsg{
+			kind:      "feature.input_notifications.toggle",
+			featureID: featureID,
+			accepted:  accepted,
+			err:       err,
+		}
+	}
+}
+
+func (m APIAppModel) openSelectedDiff() (APIAppModel, tea.Cmd) {
+	f := m.selectedAPIDashboardFeature()
+	if f == nil {
+		m.statusMessage = "No feature selected"
+		return m, nil
+	}
+	if f.Status != feature.StatusCodeReady || len(f.Repos) == 0 || f.Repos[0].WorktreePath == "" {
+		m.statusMessage = "Diff is only available for Code Ready features with a worktree"
+		return m, nil
+	}
+	m.textPanelActive = true
+	m.textPanelTitle = fmt.Sprintf("Diff: %s", firstNonEmpty(f.Slug, f.Name, f.ID))
+	m.textPanelContent = MutedStyle.Render("Loading diff...")
+	return m, func() tea.Msg {
+		diff, err := git.DiffSummary(f.Repos[0].WorktreePath, f.Repos[0].BaseBranch)
+		if err != nil || strings.TrimSpace(diff) == "" {
+			diff = MutedStyle.Render("No changes found")
+		} else {
+			diff = colorizeDiff(diff)
+		}
+		return apiTextPanelMsg{title: fmt.Sprintf("Diff: %s", firstNonEmpty(f.Slug, f.Name, f.ID)), content: diff}
+	}
+}
+
+func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
+	if m.selectedFeature == "" {
+		m.statusMessage = "No feature selected"
+		return m, nil
+	}
+	if _, ok := m.selectedPendingPermission(m.selectedFeature); ok {
+		return m.openPermissionPrompt(), nil
+	}
+	if _, ok := m.selectedPendingAskUser(m.selectedFeature); ok {
+		return m.openAskUserPrompt(), nil
+	}
+	if _, ok := m.selectedPendingHelp(m.selectedFeature); ok {
+		return m.openHelpPrompt(), nil
+	}
+	if _, ok := m.selectedNeedInputGate(m.selectedFeature); ok {
+		return m.openNeedInputPrompt(), nil
+	}
+	if m.selectedActionReady("feature.resume") {
+		return m, m.primarySelectedFeatureActionCmd("feature.resume", m.selectedFeature)
+	}
+	if m.selectedActionReady("feature.retry") {
+		return m, m.selectedFeatureActionCmd("feature.retry", m.selectedFeature)
+	}
+	if m.selectedActionReady("feature.start") {
+		return m, m.primarySelectedFeatureActionCmd("feature.start", m.selectedFeature)
+	}
+	if f := m.selectedAPIDashboardFeature(); isLivePreviewEligible(f) {
+		m.focusPanel = 1
+		m.statusMessage = "Live preview is already visible"
+		return m, nil
+	}
+	m.statusMessage = "No contextual action for selected feature"
+	return m, nil
+}
+
+func (m APIAppModel) showAPIOverview() APIAppModel {
+	if f := m.selectedAPIDashboardFeature(); isLivePreviewEligible(f) {
+		m.rightPanelMode = dashboardRightPanelOverview
+		m.focusPanel = 1
+		m.statusMessage = ""
+		return m
+	}
+	m.statusMessage = "Overview is only available for live features"
 	return m
 }
 
@@ -2134,7 +2838,13 @@ func (m APIAppModel) openReviewCommentsPreview() (APIAppModel, tea.Cmd) {
 		return m, nil
 	}
 	if !m.selectedActionReady("feature.review_comments") {
-		m.statusMessage = "feature.review_comments is unavailable"
+		m.statusMessage = apiMutationKindLabel("feature.review_comments") + " is unavailable"
+		return m, nil
+	}
+	repos := m.selectedRepoActionOptions("feature.review_comments")
+	if len(repos) > 1 {
+		m.repoActionPanel = newAPIRepoActionPanel(m.selectedFeature, m.selectedFeatureName(), "feature.review_comments", repos, false)
+		m.statusMessage = ""
 		return m, nil
 	}
 	repo, mode, modes, ok := m.selectedReviewCommentsDefaults()
@@ -2165,18 +2875,43 @@ func (m APIAppModel) openRefactorPromptFor(restart bool) APIAppModel {
 		kind = "feature.refactor.restart"
 	}
 	if !m.selectedActionReady(kind) {
-		m.statusMessage = kind + " is unavailable"
+		m.statusMessage = apiMutationKindLabel(kind) + " is unavailable"
 		return m
 	}
-	repo, pipelines, ok := m.selectedRefactorDefaults(kind)
+	repos := m.selectedRepoActionOptions(kind)
+	if len(repos) > 1 {
+		m.repoActionPanel = newAPIRepoActionPanel(m.selectedFeature, m.selectedFeatureName(), kind, repos, false)
+		m.refactorPrompt = nil
+		m.refactorPipeline = nil
+		m.statusMessage = ""
+		return m
+	}
+	repo := ""
+	if len(repos) == 1 {
+		repo = repos[0].Name
+	}
+	return m.openRefactorPromptForRepo(kind, repo, restart)
+}
+
+func (m APIAppModel) openRefactorPromptForRepo(kind, repo string, restart bool) APIAppModel {
+	pipelines, ok := m.selectedRefactorPipelines(kind)
 	if !ok {
 		m.statusMessage = "refactor action is unavailable"
 		return m
 	}
+	ta := newStyledTextarea()
+	ta.Placeholder = "Describe the refactoring for " + repo + "..."
+	ta.SetWidth(max(m.width-12, 20))
+	if m.width >= 100 {
+		ta.SetWidth(max((m.width/2)-10, 20))
+	}
+	ta.SetHeight(5)
+	ta.Focus()
 	m.refactorPrompt = &apiRefactorPrompt{
 		featureID:   m.selectedFeature,
 		featureName: m.selectedFeatureName(),
 		repo:        repo,
+		input:       ta,
 		pipelines:   pipelines,
 		restart:     restart,
 	}
@@ -2185,34 +2920,144 @@ func (m APIAppModel) openRefactorPromptFor(restart bool) APIAppModel {
 	return m
 }
 
+func newAPIRepoActionPanel(featureID, featureName, kind string, repos []apiRepoActionOption, multi bool) *apiRepoActionPanel {
+	selected := map[string]bool{}
+	if multi {
+		for _, repo := range repos {
+			if repo.Name != "" && (kind != "feature.publish" || repo.Publishable) {
+				selected[repo.Name] = true
+			}
+		}
+		if len(selected) == 0 {
+			for _, repo := range repos {
+				if repo.Name != "" {
+					selected[repo.Name] = true
+				}
+			}
+		}
+	}
+	return &apiRepoActionPanel{
+		featureID:   featureID,
+		featureName: featureName,
+		kind:        kind,
+		repos:       append([]apiRepoActionOption(nil), repos...),
+		multi:       multi,
+		selected:    selected,
+	}
+}
+
+func (m APIAppModel) selectedRepoActionOptions(kind string) []apiRepoActionOption {
+	byName := map[string]apiRepoActionOption{}
+	order := []string{}
+	add := func(option apiRepoActionOption) {
+		option.Name = strings.TrimSpace(option.Name)
+		if option.Name == "" {
+			return
+		}
+		if _, ok := byName[option.Name]; !ok {
+			order = append(order, option.Name)
+		}
+		byName[option.Name] = option
+	}
+	if detail, ok := m.featureDetails[m.selectedFeature]; ok {
+		for _, repo := range detail.Feature.RepoStatus {
+			stateParts := make([]string, 0, 3)
+			if repo.CycleType != "" || repo.CycleStatus != "" {
+				stateParts = append(stateParts, strings.Trim(strings.TrimSpace(repo.CycleType)+"/"+strings.TrimSpace(repo.CycleStatus), "/"))
+			}
+			if repo.LastError != "" {
+				stateParts = append(stateParts, firstLine(repo.LastError))
+			}
+			if repo.PRURL != "" {
+				stateParts = append(stateParts, apiPRNumberLabel(repo.PRURL))
+			}
+			add(apiRepoActionOption{
+				Name:        repo.Name,
+				State:       strings.Join(nonEmptyStrings(stateParts), " "),
+				Publishable: repo.Publishable,
+				PRURL:       repo.PRURL,
+			})
+		}
+	}
+	for _, feature := range m.featureList.Features {
+		if feature.ID != m.selectedFeature {
+			continue
+		}
+		for _, repo := range feature.Repos {
+			if _, ok := byName[repo]; !ok {
+				add(apiRepoActionOption{Name: repo})
+			}
+		}
+	}
+	for _, feature := range m.snapshot.Features {
+		if feature.ID != m.selectedFeature {
+			continue
+		}
+		for _, repo := range feature.Repos {
+			if _, ok := byName[repo]; !ok {
+				add(apiRepoActionOption{Name: repo})
+			}
+		}
+	}
+	options := make([]apiRepoActionOption, 0, len(order))
+	for _, name := range order {
+		options = append(options, byName[name])
+	}
+	if kind == "feature.review_comments" {
+		publishable := options[:0]
+		for _, option := range options {
+			if option.Publishable {
+				publishable = append(publishable, option)
+			}
+		}
+		if len(publishable) > 0 {
+			return publishable
+		}
+	}
+	return options
+}
+
 func (m APIAppModel) selectedReviewCommentsDefaults() (string, string, []string, bool) {
 	action, ok := m.selectedRawAction("feature.review_comments")
 	if !ok || !action.Enabled {
 		return "", "", nil, false
 	}
-	modes := apiReviewCommentModes(nil)
 	repoRequired := false
 	if ok {
 		for _, input := range action.RequiredInputs {
 			switch input.Name {
 			case "repo":
 				repoRequired = input.Required
-			case "mode":
-				modes = apiReviewCommentModes(input.Options)
 			}
 		}
 	}
 	repo := m.selectedReviewCommentsRepo()
 	if repo == "" && repoRequired {
+		_, modes := m.selectedReviewCommentsModeDefaults()
 		return "", "", modes, false
 	}
-	return repo, modes[0], modes, true
+	mode, modes := m.selectedReviewCommentsModeDefaults()
+	return repo, mode, modes, true
 }
 
-func (m APIAppModel) selectedRefactorDefaults(kind string) (string, []feature.PipelineProfile, bool) {
+func (m APIAppModel) selectedReviewCommentsModeDefaults() (string, []string) {
+	modes := apiReviewCommentModes(nil)
+	action, ok := m.selectedRawAction("feature.review_comments")
+	if ok {
+		for _, input := range action.RequiredInputs {
+			if input.Name == "mode" {
+				modes = apiReviewCommentModes(input.Options)
+				break
+			}
+		}
+	}
+	return modes[0], modes
+}
+
+func (m APIAppModel) selectedRefactorPipelines(kind string) ([]feature.PipelineProfile, bool) {
 	action, ok := m.selectedRawAction(kind)
 	if !ok || !action.Enabled {
-		return "", nil, false
+		return nil, false
 	}
 	pipelines := apiRefactorPipelines(nil)
 	for _, input := range action.RequiredInputs {
@@ -2221,7 +3066,7 @@ func (m APIAppModel) selectedRefactorDefaults(kind string) (string, []feature.Pi
 			break
 		}
 	}
-	return m.selectedRefactorRepo(), pipelines, true
+	return pipelines, true
 }
 
 func (m APIAppModel) selectedRawAction(kind string) (server.ActionDTO, bool) {
@@ -2352,13 +3197,11 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 	}
 	switch kind {
 	case "feature.start":
-		return m.selectedFeature != ""
+		status, ok := m.selectedFeatureStatus(m.selectedFeature)
+		return ok && status == feature.StatusCreated
 	case "feature.resume":
-		for _, f := range m.snapshot.Features {
-			if f.ID == m.selectedFeature {
-				return apiFeatureCanResume(f.Status)
-			}
-		}
+		status, ok := m.selectedFeatureStatus(m.selectedFeature)
+		return ok && (status == feature.StatusInterrupted || status == feature.StatusNeedUserInput)
 	case "feature.publish":
 		return m.selectedFeature != ""
 	case "feature.merge":
@@ -2366,7 +3209,8 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 	case "feature.restart":
 		return m.selectedFeature != ""
 	case "feature.retry":
-		return m.selectedFeature != ""
+		status, ok := m.selectedFeatureStatus(m.selectedFeature)
+		return ok && status == feature.StatusFailed
 	case "feature.mark-done":
 		return m.selectedFeature != ""
 	case "feature.rebase":
@@ -2659,14 +3503,19 @@ func (m APIAppModel) renderAPIContent() string {
 		b.WriteString(fmt.Sprintf("  Run: %d\n", content.RunNumber))
 	}
 	if content.Log != nil {
+		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("  Log %s", content.Log.ID))
 		if content.Log.Size > 0 {
 			b.WriteString(fmt.Sprintf("  bytes %d-%d of %d", content.Log.Offset, min(content.Log.Offset+content.Log.Limit, content.Log.Size), content.Log.Size))
+		}
+		if content.Log.Truncated {
+			b.WriteString("  truncated")
 		}
 		b.WriteByte('\n')
 		appendIndentedText(&b, content.Log.Text)
 	}
 	if content.Artifact != nil {
+		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("  Artifact %s", content.Artifact.ID))
 		if content.Artifact.Phase != "" {
 			b.WriteString("  " + content.Artifact.Phase)
@@ -2674,10 +3523,27 @@ func (m APIAppModel) renderAPIContent() string {
 		if content.Artifact.Size > 0 {
 			b.WriteString(fmt.Sprintf("  bytes %d-%d of %d", content.Artifact.Offset, min(content.Artifact.Offset+content.Artifact.Limit, content.Artifact.Size), content.Artifact.Size))
 		}
+		if content.Artifact.Truncated {
+			b.WriteString("  truncated")
+		}
 		b.WriteByte('\n')
 		appendIndentedText(&b, content.Artifact.Text)
 	}
+	b.WriteByte('\n')
+	b.WriteString(KeyHelpStyle.Render(" [l] Next log   [[] Prev artifact   []] Next artifact   [esc] Close"))
 	return b.String()
+}
+
+func (m APIAppModel) renderAPITextPanel() string {
+	title := strings.TrimSpace(m.textPanelTitle)
+	if title == "" {
+		title = "Content"
+	}
+	content := strings.TrimRight(m.textPanelContent, "\n")
+	if content == "" {
+		content = MutedStyle.Render("No content")
+	}
+	return TitleStyle.Render(title) + "\n\n" + content + "\n\n" + KeyHelpStyle.Render(" [esc] Close")
 }
 
 func appendIndentedText(b *strings.Builder, text string) {
@@ -2698,6 +3564,9 @@ func (m APIAppModel) renderAPIOperations() string {
 		if label == "" {
 			label = "operation"
 		}
+		if friendly := apiMutationKindLabel(op.Kind); friendly != "" {
+			label = friendly
+		}
 		b.WriteString(fmt.Sprintf("  %s  %s  %s", op.ID, label, op.Status))
 		if op.FeatureID != "" {
 			b.WriteString("  " + op.FeatureID)
@@ -2708,7 +3577,10 @@ func (m APIAppModel) renderAPIOperations() string {
 }
 
 func (m APIAppModel) renderFeatureActionConfirm() string {
-	title := "Confirm " + m.actionConfirmKind
+	title := "Confirm " + apiMutationKindLabel(m.actionConfirmKind)
+	if m.actionConfirmKind == "feature.rewind" {
+		return m.renderAPIRewindConfirm()
+	}
 	name := m.actionConfirmFeatureName
 	if name == "" {
 		name = m.actionConfirmFeatureID
@@ -2717,6 +3589,14 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 	b.WriteString(title)
 	b.WriteString("\n\n")
 	b.WriteString("  " + name + "\n\n")
+	if len(m.actionConfirmArgs.Repos) > 0 {
+		b.WriteString("  Repos: " + strings.Join(m.actionConfirmArgs.Repos, ", ") + "\n\n")
+	} else if m.actionConfirmArgs.Repo != "" {
+		b.WriteString("  Repo: " + m.actionConfirmArgs.Repo + "\n\n")
+	}
+	if m.actionConfirmArgs.TargetPhase != "" {
+		b.WriteString("  Target phase: " + apiRewindPhaseLabel(m.actionConfirmArgs.TargetPhase) + "\n\n")
+	}
 	switch m.actionConfirmKind {
 	case "feature.publish":
 		b.WriteString(WarningStyle.Render("  This will publish the selected feature."))
@@ -2742,10 +3622,6 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 		b.WriteString(WarningStyle.Render("  This will clean the selected feature worktrees."))
 		b.WriteString("\n")
 		b.WriteString(WarningStyle.Render("  Feature state and repo-cycle history will be preserved."))
-	case "feature.rewind":
-		b.WriteString(WarningStyle.Render("  This will rewind the selected feature to its current phase."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Later phase work may be replaced by the server action."))
 	case "feature.rebase":
 		b.WriteString(WarningStyle.Render("  This will start a rebase cycle for the selected feature."))
 		b.WriteString("\n")
@@ -2771,6 +3647,104 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 		Width(58).
 		BorderForeground(colorWarning).
 		Render(b.String())
+}
+
+func (m APIAppModel) renderAPIRewindConfirm() string {
+	args := m.actionConfirmArgs
+	target := args.TargetPhase
+	if target == "" {
+		target = m.selectedFeatureCurrentPhase(m.actionConfirmFeatureID)
+	}
+	phaseName := apiRewindPhaseLabel(target)
+	if args.UpgradePipeline != "" {
+		phaseName = "KB Build"
+	}
+	var c strings.Builder
+	c.WriteString("\n")
+	if args.UpgradePipeline != "" {
+		fmt.Fprintf(&c, "  \u26a0 Upgrade to %s\n\n", args.UpgradePipeline)
+		c.WriteString(WarningStyle.Render("  Pipeline will be upgraded and feature will restart from KB Build."))
+		c.WriteString("\n")
+		c.WriteString(WarningStyle.Render("  All progress will be lost."))
+		c.WriteString("\n")
+	} else if args.RoadmapPhase > 0 {
+		_, total := m.selectedRoadmapProgress(m.actionConfirmFeatureID)
+		if total < args.RoadmapPhase {
+			total = args.RoadmapPhase
+		}
+		fmt.Fprintf(&c, "  \u26a0 Rewind Implement to roadmap Phase %d\n\n", args.RoadmapPhase)
+		c.WriteString(WarningStyle.Render("  Keep: " + roadmapPhaseRangeLabel(1, args.RoadmapPhase-1)))
+		c.WriteString("\n")
+		c.WriteString(WarningStyle.Render(fmt.Sprintf("  Redo: Phase %d", args.RoadmapPhase)))
+		c.WriteString("\n")
+		c.WriteString(WarningStyle.Render("  Discard: " + roadmapPhaseRangeLabel(args.RoadmapPhase+1, total)))
+		c.WriteString("\n")
+		c.WriteString(WarningStyle.Render("  Reset boundary: " + roadmapResetBoundaryLabel(args.RoadmapPhase)))
+		c.WriteString("\n")
+	} else {
+		fmt.Fprintf(&c, "  \u26a0 Rewind to %s\n\n", phaseName)
+		c.WriteString(WarningStyle.Render("  All progress from this phase onwards will be lost:"))
+		c.WriteString("\n")
+		for _, phase := range feature.PhasesFromOnwards(apiFeaturePhase(target)) {
+			c.WriteString(WarningStyle.Render("  - " + phase.String()))
+			c.WriteString("\n")
+		}
+	}
+	for _, line := range m.apiRewindPRWarningLines(m.actionConfirmFeatureID) {
+		c.WriteString(WarningStyle.Render("  " + line))
+		c.WriteString("\n")
+	}
+	contentBox := panelStyle(true).
+		Width(60).
+		BorderForeground(colorWarning).
+		Render(c.String())
+	contentBox = renderBorderTitle(contentBox, "Rewind Confirmation", WarningStyle)
+	return contentBox + "\n" + KeyHelpStyle.Render(" [y] Confirm   [any key] Cancel")
+}
+
+func (m APIAppModel) apiRewindPRWarningLines(featureID string) []string {
+	if featureID == "" {
+		return nil
+	}
+	prs := map[string]string{}
+	if detail, ok := m.featureDetails[featureID]; ok {
+		for _, repo := range detail.Feature.RepoStatus {
+			if repo.Name != "" && repo.PRURL != "" {
+				prs[repo.Name] = repo.PRURL
+			}
+		}
+	}
+	if len(prs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(prs))
+	for name := range prs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	lines := []string{"PRs that will be closed:"}
+	for _, name := range names {
+		lines = append(lines, fmt.Sprintf("- %s: %s", name, prs[name]))
+	}
+	return lines
+}
+
+func (m APIAppModel) renderAPIResumeAllConfirm() string {
+	var b strings.Builder
+	b.WriteString("\n")
+	if len(m.resumeAllFeatureIDs) > 0 {
+		b.WriteString(fmt.Sprintf("  %d interrupted/failed feature(s) will be resumed.\n", len(m.resumeAllFeatureIDs)))
+	} else {
+		b.WriteString(MutedStyle.Render("  No interrupted or failed features to resume."))
+		b.WriteString("\n")
+	}
+	panelWidth := 56
+	contentBox := panelStyle(true).
+		Width(panelWidth).
+		BorderForeground(colorInfo).
+		Render(b.String())
+	contentBox = renderBorderTitle(contentBox, "Resume All", lipgloss.NewStyle().Foreground(colorInfo))
+	return contentBox + "\n" + KeyHelpStyle.Render(" [y] Confirm   [any key] Cancel")
 }
 
 func (m APIAppModel) renderTweakReviewModal() string {
@@ -2811,26 +3785,25 @@ func (m APIAppModel) renderAPIReviewCommentsPanel(width int) string {
 		name = panel.featureID
 	}
 	var b strings.Builder
-	b.WriteString("Review comments\n\n")
-	b.WriteString("  Feature: " + name + "\n")
+	b.WriteString(fmt.Sprintf("Review Comments: %s (%d)\n\n", name, len(panel.comments)))
 	b.WriteString("  Repo: " + panel.repo + "\n")
-	b.WriteString("  Mode: " + panel.mode)
-	if len(panel.modes) > 1 {
-		b.WriteString(" (" + strings.Join(panel.modes, ", ") + ")")
-	}
 	b.WriteString("\n\n")
 	if len(panel.comments) == 0 {
 		b.WriteString("  No pending review comments on this PR.\n")
 	} else {
 		for i, comment := range panel.comments {
 			b.WriteString(fmt.Sprintf("  Comment %d/%d", i+1, len(panel.comments)))
-			if comment.UserLogin != "" {
-				b.WriteString(" @" + comment.UserLogin)
-			}
 			b.WriteByte('\n')
 			location := apiReviewCommentLocation(comment)
 			if location != "" {
-				b.WriteString("  " + location + "\n")
+				if comment.Path != "" {
+					b.WriteString("  Location: " + location + "\n")
+				} else {
+					b.WriteString("  File: " + location + "\n")
+				}
+			}
+			if comment.UserLogin != "" {
+				b.WriteString("  Author: @" + comment.UserLogin + "\n")
 			}
 			for _, line := range strings.Split(comment.Body, "\n") {
 				if strings.TrimSpace(line) == "" {
@@ -2838,17 +3811,219 @@ func (m APIAppModel) renderAPIReviewCommentsPanel(width int) string {
 				}
 				b.WriteString("  " + line + "\n")
 			}
+			if strings.TrimSpace(comment.DiffHunk) != "" {
+				b.WriteString("  Context:\n")
+				for _, line := range strings.Split(strings.TrimSpace(comment.DiffHunk), "\n") {
+					b.WriteString("    " + line + "\n")
+				}
+			}
 			if i < len(panel.comments)-1 {
 				b.WriteByte('\n')
 			}
 		}
 	}
 	b.WriteByte('\n')
-	b.WriteString(KeyHelpStyle.Render(" [tab] Mode   [enter]/[a] Start   [esc]/[q] Close"))
+	b.WriteString(KeyHelpStyle.Render(" [Shift+A] Auto-address   [esc] Back   [q] Quit   [\u2191/\u2193] Scroll"))
 	return panelStyle(true).
 		Width(width).
 		BorderForeground(colorBrand).
 		Render(b.String())
+}
+
+func (m APIAppModel) renderAPIRepoActionPanel(width int) string {
+	panel := m.repoActionPanel
+	if panel == nil {
+		return ""
+	}
+	if width < 52 {
+		width = 52
+	}
+	name := panel.featureName
+	if name == "" {
+		name = panel.featureID
+	}
+	var b strings.Builder
+	b.WriteString("Select repo \u2014 " + apiMutationKindLabel(panel.kind) + "\n\n")
+	if name != "" {
+		b.WriteString("  Feature: " + name + "\n\n")
+	}
+	if len(panel.repos) == 0 {
+		b.WriteString("  No repos available.\n")
+	} else {
+		for i, repo := range panel.repos {
+			cursor := "  "
+			if i == panel.cursor {
+				cursor = "> "
+			}
+			mark := ""
+			if panel.multi {
+				mark = "[ ] "
+				if panel.selected[repo.Name] {
+					mark = "[x] "
+				}
+			}
+			line := cursor + mark + repo.Name
+			status := apiRepoActionStatusForKind(panel.kind, repo)
+			if status != "" {
+				line += "  " + status
+			}
+			if i == panel.cursor {
+				line = SelectedRowStyle.Render(line)
+			}
+			b.WriteString("  " + line + "\n")
+		}
+	}
+	b.WriteByte('\n')
+	footer := " [\u2191/\u2193] Select   [enter] Confirm   [esc] Cancel"
+	if panel.multi {
+		footer = " [space] Toggle   [enter] Confirm   [esc] Cancel"
+	}
+	b.WriteString(KeyHelpStyle.Render(footer))
+	return panelStyle(true).
+		Width(width).
+		BorderForeground(colorBrand).
+		Render(b.String())
+}
+
+func apiRepoActionStatus(repo apiRepoActionOption) string {
+	return apiRepoActionStatusForKind("", repo)
+}
+
+func apiRepoActionStatusForKind(kind string, repo apiRepoActionOption) string {
+	parts := make([]string, 0, 3)
+	if repo.Publishable && kind == "feature.publish" {
+		parts = append(parts, "publishable")
+	}
+	if repo.State != "" {
+		parts = append(parts, repo.State)
+	} else if kind != "feature.publish" {
+		parts = append(parts, "idle")
+	}
+	if repo.PRURL != "" && !strings.Contains(repo.State, "PR #") {
+		parts = append(parts, apiPRNumberLabel(repo.PRURL))
+	}
+	return strings.Join(nonEmptyStrings(parts), " ")
+}
+
+func (m APIAppModel) renderAPIRewindPanel(width int) string {
+	panel := m.rewindPanel
+	if panel == nil {
+		return ""
+	}
+	if width < 52 {
+		width = 52
+	}
+	name := panel.featureName
+	if name == "" {
+		name = panel.featureID
+	}
+	var b strings.Builder
+	b.WriteString(TitleStyle.Render("Rewind to Phase"))
+	b.WriteString("\n\n")
+	if name != "" {
+		b.WriteString("  Feature: " + name + "\n\n")
+	}
+	printedUpgradeTitle := false
+	for i, choice := range panel.choices {
+		if choice.UpgradePipeline != "" && !printedUpgradeTitle {
+			b.WriteByte('\n')
+			b.WriteString(TitleStyle.Render("Pipeline Upgrade"))
+			b.WriteByte('\n')
+			printedUpgradeTitle = true
+		}
+		cursor := "  "
+		line := choice.Label
+		if line == "" {
+			line = apiRewindChoiceLabel(choice.TargetPhase)
+		}
+		if i == panel.cursor {
+			cursor = "> "
+			line = SelectedRowStyle.Render(line)
+		}
+		b.WriteString("  " + cursor + line + "\n")
+	}
+	b.WriteByte('\n')
+	b.WriteString(KeyHelpStyle.Render("Enter to select \u00b7 Esc to cancel"))
+	return panelStyle(true).
+		Width(width).
+		BorderForeground(colorBrand).
+		Render(b.String())
+}
+
+func (m APIAppModel) renderAPIRoadmapRewindPanel(width int) string {
+	panel := m.rewindPhasePicker
+	if panel == nil {
+		return ""
+	}
+	if width < 60 {
+		width = 60
+	}
+	var b strings.Builder
+	b.WriteString(TitleStyle.Render("Choose Roadmap Phase"))
+	b.WriteString("\n\n")
+	if panel.featureName != "" {
+		b.WriteString("  Feature: " + panel.featureName + "\n\n")
+	}
+	for i, row := range panel.rows {
+		cursor := "  "
+		style := lipgloss.NewStyle()
+		if i == panel.cursor {
+			cursor = "> "
+			style = SelectedRowStyle
+		}
+		header := fmt.Sprintf("%sPhase %d/%d: %s  [%s]  %s", cursor, row.Number, row.Total, row.Title, row.PhaseType, row.Status)
+		if row.CurrentPhase {
+			header += "  (current phase)"
+		}
+		b.WriteString(style.Render(header))
+		b.WriteByte('\n')
+		b.WriteString(MutedStyle.Render("    " + row.Effect))
+		b.WriteByte('\n')
+		b.WriteString(MutedStyle.Render("    Reset boundary: " + row.ResetBoundary))
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	b.WriteString(KeyHelpStyle.Render("Enter to continue \u00b7 Esc to return"))
+	return panelStyle(true).
+		Width(width).
+		BorderForeground(colorBrand).
+		Render(b.String())
+}
+
+func apiRewindChoiceLabel(phase string) string {
+	if strings.EqualFold(strings.TrimSpace(phase), "inquire") || strings.EqualFold(strings.TrimSpace(phase), "inquiry") {
+		return "Rewind to Start (Inquiry)"
+	}
+	label := apiRewindPhaseLabel(phase)
+	if label == "" {
+		label = strings.TrimSpace(phase)
+	}
+	return "Rewind to " + label
+}
+
+func apiRewindPhaseLabel(phase string) string {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case "knowledgebase", "knowledge_base", "knowledge-base", "kb":
+		return "KB Build"
+	case "inquire", "inquiry":
+		return "Start (Inquiry)"
+	case "research":
+		return "Research"
+	case "design":
+		return "Design"
+	case "plan":
+		return "Plan"
+	case "implement":
+		return "Implement"
+	case "review":
+		return "Review"
+	case "finalreview", "final_review", "final-review":
+		return "Final Review"
+	case "publish":
+		return "Publish"
+	default:
+		return strings.TrimSpace(phase)
+	}
 }
 
 func (m APIAppModel) renderAPIRefactorPrompt(width int) string {
@@ -2888,37 +4063,48 @@ func (m APIAppModel) renderAPIRefactorPrompt(width int) string {
 }
 
 func (m APIAppModel) renderAPIRefactorPipeline(width int) string {
+	if width < 48 {
+		width = 48
+	}
+	return panelStyle(true).
+		Width(width).
+		BorderForeground(colorBrand).
+		Render(m.renderAPIRefactorPipelineSelector())
+}
+
+func (m APIAppModel) renderAPIRefactorPipelineSelector() string {
 	panel := m.refactorPipeline
 	if panel == nil {
 		return ""
 	}
-	if width < 48 {
-		width = 48
-	}
-	name := panel.featureName
-	if name == "" {
-		name = panel.featureID
-	}
 	var b strings.Builder
-	b.WriteString("Pipeline\n\n")
-	b.WriteString("  Feature: " + name + "\n")
-	if panel.repo != "" {
-		b.WriteString("  Repo: " + panel.repo + "\n")
-	}
-	b.WriteString("\n")
+	b.WriteString(TitleStyle.Render("Select Pipeline for Refactor"))
+	b.WriteString("\n\n")
+	parts := make([]string, 0, len(panel.pipelines))
 	for i, option := range panel.pipelines {
-		cursor := "  "
 		if i == panel.cursor {
-			cursor = "> "
+			parts = append(parts, SelectedRowStyle.Render("\u25b8 "+string(option)))
+		} else {
+			parts = append(parts, "  "+string(option))
 		}
-		b.WriteString(fmt.Sprintf("%s%s\n", cursor, option))
 	}
-	b.WriteString("\n")
-	b.WriteString(KeyHelpStyle.Render(" [left/right] Select   [enter] Start   [esc] Cancel"))
-	return panelStyle(true).
-		Width(width).
-		BorderForeground(colorBrand).
-		Render(b.String())
+	b.WriteString(strings.Join(parts, "    "))
+	b.WriteString("\n\n")
+	selected := feature.PipelineLarge
+	if len(panel.pipelines) > 0 && panel.cursor >= 0 && panel.cursor < len(panel.pipelines) {
+		selected = panel.pipelines[panel.cursor]
+	}
+	switch selected {
+	case feature.PipelineMedium:
+		b.WriteString(MutedStyle.Render("Skip research - go straight to planning"))
+	case feature.PipelineLarge:
+		b.WriteString(MutedStyle.Render("Inquiry + research + planning"))
+	case feature.PipelineMoonshot:
+		b.WriteString(MutedStyle.Render("Full pipeline with all gates enabled"))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(KeyHelpStyle.Render(" [\u2190/\u2192] Navigate   [enter] Confirm   [esc] Cancel"))
+	return b.String()
 }
 
 func (m APIAppModel) renderNeedInputPrompt() string {
@@ -2929,6 +4115,15 @@ func (m APIAppModel) renderNeedInputPrompt() string {
 	var b strings.Builder
 	b.WriteString("Need user input\n\n")
 	b.WriteString("  " + name + "\n\n")
+	if m.needInputGate.Scope != "" {
+		b.WriteString("  Scope: " + m.needInputGate.Scope + "\n")
+	}
+	if m.needInputGate.Iteration > 0 {
+		b.WriteString(fmt.Sprintf("  Iteration: %d\n", m.needInputGate.Iteration))
+	}
+	if m.needInputGate.Scope != "" || m.needInputGate.Iteration > 0 {
+		b.WriteByte('\n')
+	}
 	b.WriteString(WarningStyle.Render("  Resume continues from the saved answers."))
 	b.WriteString("\n")
 	b.WriteString(WarningStyle.Render("  Abort marks the paused gate as failed."))
@@ -2952,6 +4147,15 @@ func (m APIAppModel) renderPermissionPrompt() string {
 	var b strings.Builder
 	b.WriteString("Permission request\n\n")
 	b.WriteString("  " + name + "\n")
+	if m.permissionRequest.RequestID != "" {
+		b.WriteString("  Request: " + m.permissionRequest.RequestID + "\n")
+	}
+	if m.permissionRequest.SessionID != "" {
+		b.WriteString("  Session: " + m.permissionRequest.SessionID + "\n")
+	}
+	if m.permissionRequest.Phase != "" {
+		b.WriteString("  Phase: " + m.permissionRequest.Phase + "\n")
+	}
 	b.WriteString("  " + toolName)
 	if m.permissionRequest.Summary != "" {
 		b.WriteString(": " + firstLine(m.permissionRequest.Summary))
@@ -2997,13 +4201,38 @@ func (m APIAppModel) renderAskUserPrompt() string {
 	var b strings.Builder
 	b.WriteString("AskUser question\n\n")
 	b.WriteString("  " + name + "\n")
+	if m.askUserRequest.RequestID != "" {
+		b.WriteString("  Request: " + m.askUserRequest.RequestID + "\n")
+	}
+	if m.askUserRequest.SessionID != "" {
+		b.WriteString("  Session: " + m.askUserRequest.SessionID + "\n")
+	}
 	if question := strings.TrimSpace(m.askUserQuestion); question != "" {
 		b.WriteString("  " + firstLine(question) + "\n")
+	}
+	if q, ok := apiAskUserFirstQuestion(m.askUserRequest); ok && len(q.Options) > 0 {
+		b.WriteByte('\n')
+		for i, option := range q.Options {
+			cursor := "  "
+			line := fmt.Sprintf("%d. %s", i+1, option.Label)
+			if option.Description != "" {
+				line += " - " + option.Description
+			}
+			if i == m.askUserOptionCursor {
+				cursor = "> "
+				line = SelectedRowStyle.Render(line)
+			}
+			b.WriteString("  " + cursor + line + "\n")
+		}
 	}
 	b.WriteString("\n")
 	b.WriteString("  Answer: " + m.askUserAnswerDraft + "\n")
 	b.WriteString("\n")
-	b.WriteString(KeyHelpStyle.Render(" [enter] Send   [esc] Cancel"))
+	footer := " [enter] Send   [esc] Cancel"
+	if q, ok := apiAskUserFirstQuestion(m.askUserRequest); ok && len(q.Options) > 0 {
+		footer = " [up/down] Option   [enter] Send   [esc] Cancel"
+	}
+	b.WriteString(KeyHelpStyle.Render(footer))
 	return panelStyle(true).
 		Width(58).
 		BorderForeground(colorWarning).
@@ -3241,12 +4470,29 @@ func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 	}
 }
 
-func (m APIAppModel) handleAPIWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (m APIAppModel) handleAPIWizardMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.wizard == nil {
+		return m, nil
+	}
+	if m.wizardRuntimeConfigPending {
+		if keyMsg, ok := msg.(tea.KeyPressMsg); ok && keyMsg.Code == tea.KeyEscape {
+			m.clearCreatePrompt()
+			m.wizardRuntimeConfigPending = false
+			m.statusMessage = ""
+			return m, nil
+		}
+		m.statusMessage = "Updating workspace configuration..."
 		return m, nil
 	}
 	wizard, cmd := m.wizard.Update(msg)
 	m.wizard = &wizard
+	var cmds []tea.Cmd
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if sideEffectCmd := m.consumeAPIWizardRuntimeConfigSideEffect(); sideEffectCmd != nil {
+		cmds = append(cmds, sideEffectCmd)
+	}
 
 	if m.wizard.IsCancelled() {
 		m.clearCreatePrompt()
@@ -3254,6 +4500,10 @@ func (m APIAppModel) handleAPIWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 	if m.wizard.IsDone() {
+		if m.wizardRuntimeConfigPending {
+			m.statusMessage = "Updating workspace configuration..."
+			return m, tea.Batch(cmds...)
+		}
 		result := m.wizard.Result()
 		m.clearCreatePrompt()
 		if result != nil {
@@ -3261,7 +4511,38 @@ func (m APIAppModel) handleAPIWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 		}
 		return m, nil
 	}
-	return m, cmd
+	return m, tea.Batch(cmds...)
+}
+
+func (m *APIAppModel) consumeAPIWizardRuntimeConfigSideEffect() tea.Cmd {
+	if m.wizard == nil {
+		return nil
+	}
+	if root := m.wizard.ConsumeBrowseRoot(); root != "" {
+		roots := append([]string(nil), m.runtimeConfig.WorkspaceRoots...)
+		if containsRootExpanded(roots, root) {
+			m.refreshAPIWizardRepos("")
+			return nil
+		}
+		roots = append(roots, root)
+		m.runtimeConfig.WorkspaceRoots = roots
+		m.refreshAPIWizardRepos("")
+		m.wizardRuntimeConfigPending = true
+		m.statusMessage = "Updating workspace configuration..."
+		return m.persistRuntimeWorkspaceRootsCmd(roots, "")
+	}
+	if createdPath := m.wizard.ConsumeCreateRepoPath(); createdPath != "" {
+		parentDir := filepath.Dir(createdPath)
+		roots := append([]string(nil), m.runtimeConfig.WorkspaceRoots...)
+		if !containsRootExpanded(roots, parentDir) {
+			roots = append(roots, parentDir)
+		}
+		m.runtimeConfig.WorkspaceRoots = roots
+		m.wizardRuntimeConfigPending = true
+		m.statusMessage = "Updating workspace configuration..."
+		return m.persistRuntimeWorkspaceRootsCmd(roots, createdPath)
+	}
+	return nil
 }
 
 func (m APIAppModel) primarySelectedFeatureActionCmd(kind, featureID string) tea.Cmd {
@@ -3291,11 +4572,15 @@ func (m APIAppModel) primarySelectedFeatureActionCmd(kind, featureID string) tea
 	}
 }
 
-func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string) tea.Cmd {
+func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ...apiFeatureActionArgs) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
+		}
+		args := apiFeatureActionArgs{}
+		if len(argsOpt) > 0 {
+			args = argsOpt[0]
 		}
 		var (
 			accepted server.OperationAcceptedResponse
@@ -3303,7 +4588,7 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string) tea.Cmd {
 		)
 		switch kind {
 		case "feature.publish":
-			accepted, err = m.client.PublishFeature(ctx, featureID, server.PublishFeatureRequest{})
+			accepted, err = m.client.PublishFeature(ctx, featureID, server.PublishFeatureRequest{Repos: append([]string(nil), args.Repos...)})
 		case "feature.merge":
 			accepted, err = m.client.MergeFeature(ctx, featureID)
 		case "feature.restart":
@@ -3313,16 +4598,27 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string) tea.Cmd {
 		case "feature.mark-done":
 			accepted, err = m.client.MarkDone(ctx, featureID)
 		case "feature.rebase":
-			accepted, err = m.client.StartRebase(ctx, featureID, server.RebaseActionRequest{Repo: m.selectedRebaseRepo(featureID)})
+			repo := args.Repo
+			if repo == "" {
+				repo = m.selectedRebaseRepo(featureID)
+			}
+			accepted, err = m.client.StartRebase(ctx, featureID, server.RebaseActionRequest{Repo: repo})
 		case "feature.cleanup":
-			accepted, err = m.client.CleanupFeature(ctx, featureID, server.CleanupActionRequest{Target: "worktrees"})
+			accepted, err = m.client.CleanupFeature(ctx, featureID, server.CleanupActionRequest{Target: "worktrees", Repo: args.Repo})
 		case "feature.rewind":
-			targetPhase := m.selectedFeatureCurrentPhase(featureID)
+			targetPhase := args.TargetPhase
+			if targetPhase == "" {
+				targetPhase = m.selectedFeatureCurrentPhase(featureID)
+			}
 			if targetPhase == "" {
 				err = errors.New("selected feature has no rewind target phase")
 				break
 			}
-			accepted, err = m.client.RewindFeature(ctx, featureID, server.RewindFeatureRequest{TargetPhase: targetPhase})
+			accepted, err = m.client.RewindFeature(ctx, featureID, server.RewindFeatureRequest{
+				TargetPhase:     targetPhase,
+				RoadmapPhase:    args.RoadmapPhase,
+				UpgradePipeline: args.UpgradePipeline,
+			})
 		case "feature.tweak.start":
 			accepted, err = m.client.StartTweak(ctx, featureID, server.TweakActionRequest{})
 		case "feature.stop":
@@ -3370,6 +4666,214 @@ func (m APIAppModel) executeRecoveryCmd(panel apiRecoveryPanel) tea.Cmd {
 	}
 }
 
+func (m APIAppModel) handleAPIRepoActionKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	panel := m.repoActionPanel
+	if panel == nil {
+		return m, nil
+	}
+	switch msg.Code {
+	case tea.KeyEscape:
+		m.repoActionPanel = nil
+		m.statusMessage = ""
+		return m, nil
+	case tea.KeyUp:
+		if panel.cursor > 0 {
+			panel.cursor--
+		}
+		return m, nil
+	case tea.KeyDown:
+		if panel.cursor < len(panel.repos)-1 {
+			panel.cursor++
+		}
+		return m, nil
+	case tea.KeySpace:
+		if panel.multi && panel.cursor >= 0 && panel.cursor < len(panel.repos) {
+			name := panel.repos[panel.cursor].Name
+			if panel.selected == nil {
+				panel.selected = map[string]bool{}
+			}
+			panel.selected[name] = !panel.selected[name]
+		}
+		return m, nil
+	case tea.KeyEnter:
+		return m.acceptAPIRepoAction(*panel)
+	}
+	switch strings.ToLower(msg.Text) {
+	case "j":
+		if panel.cursor < len(panel.repos)-1 {
+			panel.cursor++
+		}
+	case "k":
+		if panel.cursor > 0 {
+			panel.cursor--
+		}
+	case " ":
+		if panel.multi && panel.cursor >= 0 && panel.cursor < len(panel.repos) {
+			name := panel.repos[panel.cursor].Name
+			if panel.selected == nil {
+				panel.selected = map[string]bool{}
+			}
+			panel.selected[name] = !panel.selected[name]
+		}
+	}
+	return m, nil
+}
+
+func (m APIAppModel) acceptAPIRepoAction(panel apiRepoActionPanel) (tea.Model, tea.Cmd) {
+	if len(panel.repos) == 0 {
+		m.repoActionPanel = nil
+		m.statusMessage = "No repos available for " + panel.kind
+		return m, nil
+	}
+	repo := panel.repos[min(max(panel.cursor, 0), len(panel.repos)-1)].Name
+	m.repoActionPanel = nil
+	switch panel.kind {
+	case "feature.publish":
+		repos := panel.selectedRepoNames()
+		if len(repos) == 0 {
+			m.repoActionPanel = &panel
+			m.statusMessage = "Select at least one repo to publish"
+			return m, nil
+		}
+		m.selectedFeature = panel.featureID
+		return m.confirmSelectedFeatureActionWithArgs("feature.publish", apiFeatureActionArgs{Repos: repos}), nil
+	case "feature.review_comments":
+		m.selectedFeature = panel.featureID
+		mode, modes := m.selectedReviewCommentsModeDefaults()
+		m.statusMessage = "Fetching review comments..."
+		return m, m.fetchReviewCommentsCmd(panel.featureID, panel.featureName, repo, mode, modes)
+	case "feature.rebase", "feature.tweak.start":
+		m.selectedFeature = panel.featureID
+		return m.confirmSelectedFeatureActionWithArgs(panel.kind, apiFeatureActionArgs{Repo: repo}), nil
+	case "feature.refactor.start":
+		m.selectedFeature = panel.featureID
+		return m.openRefactorPromptForRepo(panel.kind, repo, false), nil
+	case "feature.refactor.restart":
+		m.selectedFeature = panel.featureID
+		return m.openRefactorPromptForRepo(panel.kind, repo, true), nil
+	default:
+		m.statusMessage = "Unsupported repo action " + panel.kind
+		return m, nil
+	}
+}
+
+func (m APIAppModel) handleAPIRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	panel := m.rewindPanel
+	if panel == nil {
+		return m, nil
+	}
+	switch msg.Code {
+	case tea.KeyEscape:
+		m.rewindPanel = nil
+		m.statusMessage = ""
+		return m, nil
+	case tea.KeyUp:
+		if panel.cursor > 0 {
+			panel.cursor--
+		}
+		return m, nil
+	case tea.KeyDown:
+		if panel.cursor < len(panel.choices)-1 {
+			panel.cursor++
+		}
+		return m, nil
+	case tea.KeyEnter:
+		if len(panel.choices) == 0 {
+			m.rewindPanel = nil
+			m.statusMessage = "selected feature has no rewind target phase"
+			return m, nil
+		}
+		choice := panel.choices[min(max(panel.cursor, 0), len(panel.choices)-1)]
+		m.selectedFeature = panel.featureID
+		m.rewindPanel = nil
+		if choice.UpgradePipeline == "" && apiFeaturePhase(choice.TargetPhase) == feature.PhaseImplement {
+			if next, ok := m.newAPIRoadmapRewindPanel(panel.featureID, panel.featureName); ok {
+				m.rewindPhasePicker = next
+				m.statusMessage = ""
+				return m, nil
+			}
+		}
+		return m.confirmSelectedFeatureActionWithArgs("feature.rewind", apiFeatureActionArgs{
+			TargetPhase:     choice.TargetPhase,
+			UpgradePipeline: choice.UpgradePipeline,
+		}), nil
+	}
+	switch strings.ToLower(msg.Text) {
+	case "j":
+		if panel.cursor < len(panel.choices)-1 {
+			panel.cursor++
+		}
+	case "k":
+		if panel.cursor > 0 {
+			panel.cursor--
+		}
+	}
+	return m, nil
+}
+
+func (m APIAppModel) handleAPIRoadmapRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	panel := m.rewindPhasePicker
+	if panel == nil {
+		return m, nil
+	}
+	switch msg.Code {
+	case tea.KeyEscape:
+		m.rewindPhasePicker = nil
+		m.statusMessage = ""
+		return m, nil
+	case tea.KeyUp:
+		if panel.cursor > 0 {
+			panel.cursor--
+		}
+		return m, nil
+	case tea.KeyDown:
+		if panel.cursor < len(panel.rows)-1 {
+			panel.cursor++
+		}
+		return m, nil
+	case tea.KeyEnter:
+		if len(panel.rows) == 0 {
+			m.rewindPhasePicker = nil
+			m.statusMessage = "selected feature has no roadmap phases"
+			return m, nil
+		}
+		row := panel.rows[min(max(panel.cursor, 0), len(panel.rows)-1)]
+		m.selectedFeature = panel.featureID
+		m.rewindPhasePicker = nil
+		return m.confirmSelectedFeatureActionWithArgs("feature.rewind", apiFeatureActionArgs{
+			TargetPhase:  feature.PhaseImplement.DirName(),
+			RoadmapPhase: row.Number,
+		}), nil
+	}
+	switch strings.ToLower(msg.Text) {
+	case "j":
+		if panel.cursor < len(panel.rows)-1 {
+			panel.cursor++
+		}
+	case "k":
+		if panel.cursor > 0 {
+			panel.cursor--
+		}
+	}
+	return m, nil
+}
+
+func (p apiRepoActionPanel) selectedRepoNames() []string {
+	if !p.multi {
+		if p.cursor >= 0 && p.cursor < len(p.repos) {
+			return []string{p.repos[p.cursor].Name}
+		}
+		return nil
+	}
+	out := make([]string, 0, len(p.repos))
+	for _, repo := range p.repos {
+		if p.selected[repo.Name] {
+			out = append(out, repo.Name)
+		}
+	}
+	return out
+}
+
 func (m APIAppModel) handleAPIReviewCommentsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	panel := m.reviewComments
 	if panel == nil {
@@ -3380,23 +4884,14 @@ func (m APIAppModel) handleAPIReviewCommentsKey(msg tea.KeyPressMsg) (tea.Model,
 		m.reviewComments = nil
 		m.statusMessage = ""
 		return m, nil
-	case tea.KeyTab:
-		next := *panel
-		next.mode = apiNextReviewCommentMode(panel.mode, panel.modes)
-		m.reviewComments = &next
+	case 'A':
+		if msg.Text == "A" && len(panel.comments) > 0 {
+			m.statusMessage = "Auto-addressing review comments for " + panel.repo + "..."
+			return m, m.startReviewCommentsCmd(*panel)
+		}
 		return m, nil
-	case tea.KeyEnter:
-		return m, m.startReviewCommentsCmd(*panel)
 	}
-	switch strings.ToLower(msg.Text) {
-	case "a":
-		return m, m.startReviewCommentsCmd(*panel)
-	case "m":
-		next := *panel
-		next.mode = apiNextReviewCommentMode(panel.mode, panel.modes)
-		m.reviewComments = &next
-		return m, nil
-	case "q":
+	if strings.ToLower(msg.Text) == "q" {
 		m.reviewComments = nil
 		m.statusMessage = ""
 		return m, nil
@@ -3410,7 +4905,7 @@ func (m APIAppModel) handleAPIRefactorPromptKey(msg tea.KeyPressMsg) (tea.Model,
 		return m, nil
 	}
 	if msg.Code == 's' && msg.Mod.Contains(tea.ModCtrl) {
-		value := strings.TrimSpace(prompt.draft)
+		value := strings.TrimSpace(prompt.input.Value())
 		if value == "" {
 			m.statusMessage = "Refactor prompt cannot be empty"
 			return m, nil
@@ -3433,18 +4928,12 @@ func (m APIAppModel) handleAPIRefactorPromptKey(msg tea.KeyPressMsg) (tea.Model,
 		m.refactorPrompt = nil
 		m.statusMessage = ""
 		return m, nil
-	case tea.KeyBackspace:
-		runes := []rune(prompt.draft)
-		if len(runes) > 0 {
-			prompt.draft = string(runes[:len(runes)-1])
-		}
-		return m, nil
 	}
-	if msg.Text != "" && !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt) {
-		prompt.draft += msg.Text
-		m.statusMessage = ""
-	}
-	return m, nil
+	var cmd tea.Cmd
+	prompt.input, cmd = prompt.input.Update(msg)
+	prompt.draft = prompt.input.Value()
+	m.statusMessage = ""
+	return m, cmd
 }
 
 func (m APIAppModel) handleAPIRefactorPipelineKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -3582,12 +5071,27 @@ func (m APIAppModel) handleAPIHelpPromptKey(msg tea.KeyPressMsg) (tea.Model, tea
 }
 
 func (m APIAppModel) handleAPIAskUserPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	question, hasQuestion := apiAskUserFirstQuestion(m.askUserRequest)
+	hasOptions := hasQuestion && len(question.Options) > 0
 	switch msg.Code {
 	case tea.KeyEscape:
 		m.clearAskUserPrompt()
 		return m, nil
+	case tea.KeyUp:
+		if hasOptions && m.askUserOptionCursor > 0 {
+			m.askUserOptionCursor--
+		}
+		return m, nil
+	case tea.KeyDown:
+		if hasOptions && m.askUserOptionCursor < len(question.Options)-1 {
+			m.askUserOptionCursor++
+		}
+		return m, nil
 	case tea.KeyEnter:
 		answer := strings.TrimSpace(m.askUserAnswerDraft)
+		if answer == "" && hasOptions && m.askUserOptionCursor >= 0 && m.askUserOptionCursor < len(question.Options) {
+			answer = strings.TrimSpace(question.Options[m.askUserOptionCursor].Label)
+		}
 		if answer == "" {
 			m.statusMessage = "AskUser answer cannot be empty"
 			return m, nil
@@ -3599,6 +5103,28 @@ func (m APIAppModel) handleAPIAskUserPromptKey(msg tea.KeyPressMsg) (tea.Model, 
 			m.askUserAnswerDraft = string(runes[:len(runes)-1])
 		}
 		return m, nil
+	}
+	if hasOptions {
+		switch strings.ToLower(msg.Text) {
+		case "j":
+			if m.askUserOptionCursor < len(question.Options)-1 {
+				m.askUserOptionCursor++
+			}
+			return m, nil
+		case "k":
+			if m.askUserOptionCursor > 0 {
+				m.askUserOptionCursor--
+			}
+			return m, nil
+		}
+		if len(msg.Text) == 1 && msg.Text[0] >= '1' && msg.Text[0] <= '9' {
+			idx := int(msg.Text[0] - '1')
+			if idx < len(question.Options) {
+				m.askUserOptionCursor = idx
+				m.askUserAnswerDraft = question.Options[idx].Label
+			}
+			return m, nil
+		}
 	}
 	if msg.Text != "" && !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt) {
 		m.askUserAnswerDraft += msg.Text
@@ -3653,8 +5179,9 @@ func (m APIAppModel) startReviewCommentsCmd(panel apiReviewCommentsPanel) tea.Cm
 			ctx = m.eventCtx
 		}
 		accepted, err := m.client.StartReviewComments(ctx, panel.featureID, server.ReviewCommentsActionRequest{
-			Repo: panel.repo,
-			Mode: panel.mode,
+			Repo:     panel.repo,
+			Mode:     panel.mode,
+			Comments: append([]server.ReviewCommentDTO(nil), panel.comments...),
 		})
 		return apiOperationAcceptedMsg{
 			kind:      "feature.review_comments",
@@ -3891,6 +5418,17 @@ func askUserQuestionLabel(req server.ControlRequestDTO) string {
 		}
 	}
 	return strings.TrimSpace(req.Summary)
+}
+
+func apiAskUserFirstQuestion(req server.ControlRequestDTO) (server.AskUserQuestionDTO, bool) {
+	if len(req.Questions) == 0 {
+		return server.AskUserQuestionDTO{}, false
+	}
+	q := req.Questions[0]
+	if strings.TrimSpace(q.Question) == "" {
+		q.Question = strings.TrimSpace(q.Header)
+	}
+	return q, true
 }
 
 func (m APIAppModel) stopOwnedServerCmd() tea.Cmd {
@@ -4157,6 +5695,28 @@ func stringSliceContains(values []string, needle string) bool {
 	return false
 }
 
+func nonEmptyStrings(values []string) []string {
+	out := values[:0]
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func apiPRNumberLabel(prURL string) string {
+	prURL = strings.TrimSpace(prURL)
+	if prURL == "" {
+		return ""
+	}
+	parts := strings.Split(strings.TrimRight(prURL, "/"), "/")
+	if len(parts) == 0 || parts[len(parts)-1] == "" {
+		return prURL
+	}
+	return "PR #" + parts[len(parts)-1]
+}
+
 func apiReviewCommentModes(values []string) []string {
 	modes := make([]string, 0, len(values))
 	for _, value := range values {
@@ -4260,6 +5820,146 @@ func (m APIAppModel) selectedFeatureCurrentPhase(featureID string) string {
 		}
 	}
 	return ""
+}
+
+func (m APIAppModel) selectedFeatureStatus(featureID string) (feature.Status, bool) {
+	if featureID == "" {
+		return feature.StatusCreated, false
+	}
+	if detail, ok := m.featureDetails[featureID]; ok && strings.TrimSpace(detail.Feature.Status) != "" {
+		return apiFeatureStatus(detail.Feature.Status), true
+	}
+	for _, f := range m.featureList.Features {
+		if f.ID == featureID {
+			return apiFeatureStatus(f.Status), true
+		}
+	}
+	for _, f := range m.snapshot.Features {
+		if f.ID == featureID {
+			return apiFeatureStatus(f.Status), true
+		}
+	}
+	return feature.StatusCreated, false
+}
+
+func (m APIAppModel) selectedRewindChoices() []apiRewindChoice {
+	choices := []apiRewindChoice{}
+	addPhase := func(option string) {
+		option = strings.ToLower(strings.TrimSpace(option))
+		if option == "" {
+			return
+		}
+		for _, choice := range choices {
+			if choice.UpgradePipeline == "" && choice.TargetPhase == option {
+				return
+			}
+		}
+		choices = append(choices, apiRewindChoice{
+			TargetPhase: option,
+			Label:       apiRewindChoiceLabel(option),
+		})
+	}
+	addUpgrade := func(option string) {
+		option = strings.ToLower(strings.TrimSpace(option))
+		profile := feature.PipelineProfile(option)
+		if profile == "" {
+			return
+		}
+		choices = append(choices, apiRewindChoice{
+			TargetPhase:     feature.PhaseInquire.DirName(),
+			Label:           "Upgrade to " + string(profile) + " " + MutedStyle.Render("(rewinds to KB Build)"),
+			OverridePhase:   feature.PhaseKnowledgeBase.DirName(),
+			UpgradePipeline: profile,
+		})
+	}
+	action, ok := m.selectedRawAction("feature.rewind")
+	if ok {
+		for _, input := range action.RequiredInputs {
+			if input.Name == "target_phase" {
+				for _, option := range input.Options {
+					addPhase(option)
+				}
+			}
+		}
+		for _, input := range action.RequiredInputs {
+			if input.Name == "upgrade_pipeline" {
+				for _, option := range input.Options {
+					addUpgrade(option)
+				}
+			}
+		}
+		if len(choices) > 0 {
+			return choices
+		}
+	}
+	if phase := m.selectedFeatureCurrentPhase(m.selectedFeature); phase != "" {
+		addPhase(phase)
+		return choices
+	}
+	return nil
+}
+
+func (m APIAppModel) newAPIRoadmapRewindPanel(featureID, featureName string) (*apiRoadmapRewindPanel, bool) {
+	current, total := m.selectedRoadmapProgress(featureID)
+	if total <= 1 {
+		return nil, false
+	}
+	rows := make([]apiRoadmapRewindRow, 0, total)
+	cursor := 0
+	for phaseNum := 1; phaseNum <= total; phaseNum++ {
+		row := apiRoadmapRewindRow{
+			Number:        phaseNum,
+			Total:         total,
+			Title:         fmt.Sprintf("Phase %d", phaseNum),
+			PhaseType:     fallbackRoadmapPhaseType(phaseNum, total),
+			Status:        apiRoadmapPhaseStatus(current, phaseNum),
+			Effect:        roadmapPhaseEffect(phaseNum, total),
+			ResetBoundary: roadmapResetBoundaryLabel(phaseNum),
+			CurrentPhase:  current == phaseNum,
+		}
+		if row.CurrentPhase {
+			cursor = len(rows)
+		}
+		rows = append(rows, row)
+	}
+	if featureName == "" {
+		featureName = m.featureNameByID(featureID)
+	}
+	return &apiRoadmapRewindPanel{
+		featureID:   featureID,
+		featureName: featureName,
+		rows:        rows,
+		cursor:      cursor,
+	}, true
+}
+
+func (m APIAppModel) selectedRoadmapProgress(featureID string) (int, int) {
+	if detail, ok := m.featureDetails[featureID]; ok {
+		current := detail.Feature.Progress.CurrentRoadmapPhase
+		total := detail.Feature.Progress.TotalRoadmapPhases
+		if detail.Feature.ActiveRun != nil {
+			current = firstNonZero(detail.Feature.ActiveRun.RoadmapPhase, current)
+			total = firstNonZero(detail.Feature.ActiveRun.RoadmapTotal, total)
+		}
+		return current, total
+	}
+	for _, summary := range m.featureList.Features {
+		if summary.ID == featureID {
+			return summary.Progress.CurrentRoadmapPhase, summary.Progress.TotalRoadmapPhases
+		}
+	}
+	return 0, 0
+}
+
+func apiRoadmapPhaseStatus(current, phaseNum int) string {
+	switch {
+	case current == phaseNum:
+		return "current"
+	case current > phaseNum:
+		return "completed"
+	default:
+		return "pending"
+	}
 }
 
 func apiAttentionCounts(prompts server.PromptSnapshotResponse, permissions server.PermissionSnapshotResponse) map[string]int {
@@ -4820,6 +6520,71 @@ func apiTextSnippetPresentation(dto server.TextContentResponse) APITextSnippetPr
 		Text:      dto.Text,
 		Truncated: dto.Truncated,
 	}
+}
+
+func apiMutationKindLabel(kind string) string {
+	switch kind {
+	case "feature.create":
+		return "Create Feature"
+	case "feature.start":
+		return "Start"
+	case "feature.resume":
+		return "Resume"
+	case "feature.publish":
+		return "Publish"
+	case "feature.merge":
+		return "Merge"
+	case "feature.stop":
+		return "Stop"
+	case "feature.delete":
+		return "Delete"
+	case "feature.restart":
+		return "Restart"
+	case "feature.retry":
+		return "Retry"
+	case "feature.mark-done":
+		return "Mark Done"
+	case "feature.rebase":
+		return "Rebase"
+	case "feature.cleanup":
+		return "Cleanup"
+	case "feature.rewind":
+		return "Rewind"
+	case "feature.tweak.start":
+		return "Tweak"
+	case "feature.tweak.finish":
+		return "Finish Tweak"
+	case "feature.review_comments":
+		return "Review Comments"
+	case "feature.refactor.start":
+		return "Refactor"
+	case "feature.refactor.restart":
+		return "Restart Refactor"
+	case "feature.need_user_input.decision":
+		return "Need Input Decision"
+	case "feature.input_notifications.toggle":
+		return "Input Alerts"
+	case "feature.review_decision":
+		return "Review Decision"
+	case "feature.config.update":
+		return "Feature Config"
+	case "runtime.config.update":
+		return "Runtime Config"
+	case "permission.answer":
+		return "Permission Answer"
+	case "help.send":
+		return "Help Reply"
+	case "ask_user.answer":
+		return "AskUser Answer"
+	case "recovery.execute":
+		return "Recovery"
+	default:
+		return strings.TrimSpace(kind)
+	}
+}
+
+func apiAcceptedOperationStatus(kind, operationID string) string {
+	return fmt.Sprintf("Accepted %s operation %s", apiMutationKindLabel(kind), operationID)
 }
 
 func apiOperationPresentations(resp server.OperationSnapshotResponse) []APIOperationPresentation {

@@ -17,6 +17,10 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -290,6 +294,59 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 	}
 	if strings.Contains(stripANSI(submitted.View().Content), "Session Recovery") {
 		t.Fatalf("API app View() still shows recovery panel after accepted submit:\n%s", stripANSI(submitted.View().Content))
+	}
+}
+
+func TestAPIAppModelRecoveryTweakShowsKillOnlyAffordance(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		recovery: server.RecoverySnapshotResponse{
+			SnapshotID: "recovery-snapshot-tweak",
+			Items: []server.RecoveryItemDTO{{
+				Key:            "feat-tweak:api",
+				FeatureID:      "feat-tweak",
+				FeatureName:    "Tweak me",
+				RepoName:       "api",
+				Phase:          "implement",
+				Iteration:      2,
+				PID:            23456,
+				ProcessAlive:   true,
+				Tweak:          true,
+				DefaultAction:  "kill",
+				AllowedActions: []string{"kill"},
+			}},
+		},
+		executeRecoveryAccepted: server.OperationAcceptedResponse{OperationID: "op-recovery", Status: server.OperationStatusQueued},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{"Tweak me", "[K]ill", "interactive tweak - kill only", "[k] Kill", "[enter] Continue"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API recovery view missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"[r] Resume", "[s] Skip"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("API recovery view unexpectedly advertised %q in:\n%s", notWant, view)
+		}
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd != nil {
+		t.Fatal("Update(r) returned command before recovery submit")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want recovery execute")
+	}
+	msg := cmd()
+	_, _ = model.(APIAppModel).Update(msg)
+	if got := client.executeRecoveryRequests; len(got) != 1 || got[0].Actions["feat-tweak:api"] != "kill" {
+		t.Fatalf("ExecuteRecovery requests = %+v, want kill action", got)
 	}
 }
 
@@ -996,8 +1053,12 @@ func TestAPIAppModelStartSelectedFeatureUsesRESTMutationAndTracksOperation(t *te
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter) returned command, want focus-only behavior")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want start mutation command")
+		t.Fatal("Update(a) returned nil command, want start mutation command")
 	}
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
@@ -1011,7 +1072,7 @@ func TestAPIAppModelStartSelectedFeatureUsesRESTMutationAndTracksOperation(t *te
 		t.Fatalf("Operations after start = %+v, want accepted start operation", snapshot.Operations)
 	}
 	view := stripANSI(started.View().Content)
-	for _, want := range []string{"Accepted feature.start operation op-start", "op-start", "queued"} {
+	for _, want := range []string{"Accepted Start operation op-start", "op-start", "queued"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -1044,8 +1105,12 @@ func TestAPIAppModelResumeSelectedFeatureUsesRESTMutationAndTracksOperation(t *t
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter) returned command, want focus-only behavior")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want resume mutation command")
+		t.Fatal("Update(a) returned nil command, want resume mutation command")
 	}
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
@@ -1062,10 +1127,214 @@ func TestAPIAppModelResumeSelectedFeatureUsesRESTMutationAndTracksOperation(t *t
 		t.Fatalf("Operations after resume = %+v, want accepted resume operation", snapshot.Operations)
 	}
 	view := stripANSI(resumed.View().Content)
-	for _, want := range []string{"Accepted feature.resume operation op-resume", "op-resume", "paused"} {
+	for _, want := range []string{"Accepted Resume operation op-resume", "op-resume", "paused"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAppModelContextualRetryUsesRESTMutationAndTracksOperation(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		retryAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-retry",
+			Status:      server.OperationStatusQueued,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want retry mutation command")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	retried := model.(APIAppModel)
+
+	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
+		t.Fatalf("RetryFeature calls = %q, want failed", got)
+	}
+	snapshot := retried.Snapshot()
+	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-retry" || snapshot.Operations[0].Kind != "feature.retry" {
+		t.Fatalf("Operations after retry = %+v, want accepted retry operation", snapshot.Operations)
+	}
+	if view := stripANSI(retried.View().Content); !strings.Contains(view, "Accepted Retry operation op-retry") {
+		t.Fatalf("API app View() missing retry accepted status in:\n%s", view)
+	}
+}
+
+func TestAPIAppModelDetailContextualRetryUsesAWithoutResumeAll(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		retryAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-retry",
+			Status:      server.OperationStatusQueued,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) in detail returned nil command, want retry mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	retried := model.(APIAppModel)
+
+	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
+		t.Fatalf("RetryFeature calls = %q, want failed", got)
+	}
+	if retried.resumeAllConfirmActive {
+		t.Fatal("contextual retry in detail opened resume-all confirmation")
+	}
+	if view := stripANSI(retried.View().Content); !strings.Contains(view, "Accepted Retry operation op-retry") {
+		t.Fatalf("API app View() missing retry accepted status in:\n%s", view)
+	}
+}
+
+func TestAPIAppModelResumeAllUsesRESTMutationsAndTracksOperations(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "paused", Name: "Paused work", Slug: "paused-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now().Add(-time.Minute)},
+		}},
+		resumeAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-resume",
+			Status:      server.OperationStatusQueued,
+		},
+		retryAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-retry",
+			Status:      server.OperationStatusQueued,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	focused := model.(APIAppModel)
+	if focused.focusPanel != 1 {
+		t.Fatalf("focusPanel after right = %d, want detail focus", focused.focusPanel)
+	}
+	model, cmd := focused.Update(tea.KeyPressMsg{Code: 'R', Text: "R"})
+	if cmd != nil {
+		t.Fatal("Update(Shift+R) returned command before resume-all confirmation")
+	}
+	confirming := model.(APIAppModel)
+	if !confirming.resumeAllConfirmActive {
+		t.Fatal("Update(Shift+R) did not open resume-all confirmation")
+	}
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Resume All") {
+		t.Fatalf("API app View() missing resume-all confirmation:\n%s", view)
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("Update(y) returned nil command, want resume-all mutation command")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	resumed := model.(APIAppModel)
+
+	if got := strings.Join(client.resumeFeatureIDs, ","); got != "paused" {
+		t.Fatalf("ResumeFeature calls = %q, want paused", got)
+	}
+	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
+		t.Fatalf("RetryFeature calls = %q, want failed", got)
+	}
+	snapshot := resumed.Snapshot()
+	if len(snapshot.Operations) != 2 {
+		t.Fatalf("Operations after resume all = %+v, want two accepted operations", snapshot.Operations)
+	}
+	if view := stripANSI(resumed.View().Content); !strings.Contains(view, "Accepted resume all for 2 feature(s)") {
+		t.Fatalf("API app View() missing resume-all accepted status in:\n%s", view)
+	}
+}
+
+func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		toggleInputAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-input-alerts",
+			Status:      server.OperationStatusQueued,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter) returned command, want focus-only behavior")
+	}
+	focused := model.(APIAppModel)
+	if focused.focusPanel != 1 {
+		t.Fatalf("focusPanel after enter = %d, want detail focus", focused.focusPanel)
+	}
+
+	model, cmd = focused.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+	if cmd != nil {
+		t.Fatal("Update(o) returned command, want local overview toggle")
+	}
+	overview := model.(APIAppModel)
+	if overview.rightPanelMode != dashboardRightPanelOverview {
+		t.Fatalf("rightPanelMode after o = %v, want overview", overview.rightPanelMode)
+	}
+
+	model, cmd = overview.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if cmd != nil {
+		t.Fatal("Update(/) returned command without REST chat operation")
+	}
+	chat := model.(APIAppModel)
+	if !strings.Contains(chat.statusMessage, "REST chat operation") {
+		t.Fatalf("status after / = %q, want REST chat operation gap", chat.statusMessage)
+	}
+
+	model, cmd = chat.Update(tea.KeyPressMsg{Code: 'N', Text: "N"})
+	if cmd == nil {
+		t.Fatal("Update(Shift+N) returned nil command, want input-alert mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	toggled := model.(APIAppModel)
+	if got := strings.Join(client.toggleInputFeatureIDs, ","); got != "active" {
+		t.Fatalf("ToggleInputNotifications calls = %q, want active", got)
+	}
+	if view := stripANSI(toggled.View().Content); !strings.Contains(view, "Accepted Input Alerts operation op-input-alerts") {
+		t.Fatalf("API app View() missing input-alert accepted status in:\n%s", view)
+	}
+
+	model, cmd = toggled.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if cmd != nil {
+		t.Fatal("Update(?) returned command, want local help overlay")
+	}
+	helping := model.(APIAppModel)
+	if !helping.helpOverlayActive {
+		t.Fatal("Update(?) did not open help overlay")
 	}
 }
 
@@ -1171,6 +1440,198 @@ func TestAPIAppModelCreateFeatureUsesRESTMutationAndTracksOperation(t *testing.T
 	}
 }
 
+func TestAPIAppModelWorkspaceManagerUsesRuntimeConfigMutation(t *testing.T) {
+	t.Parallel()
+
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	makeGitRepoDir(t, rootA, "api")
+	makeGitRepoDir(t, rootB, "web")
+
+	client := &fakeTUIAPIClient{
+		runtime: server.RuntimeConfigResponse{
+			WorkspaceRoots: []string{rootA},
+			Repos:          testRuntimeConfigRepos(nil, []string{rootA}),
+		},
+		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
+			{ID: "op-workspaces", Kind: "runtime.config.update", Status: server.OperationStatusSucceeded},
+		}},
+		updateRuntimeConfigAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-workspaces",
+			Status:      server.OperationStatusQueued,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'W', Text: "W"})
+	if cmd != nil {
+		t.Fatal("Update(W) returned command before workspace mutation")
+	}
+	managing := model.(APIAppModel)
+	if managing.workspaceManager == nil {
+		t.Fatal("Update(W) did not open workspace manager")
+	}
+	if managing.wizard != nil {
+		t.Fatal("Update(W) opened create wizard, want workspace manager")
+	}
+	view := stripANSI(managing.View().Content)
+	if !strings.Contains(view, "Workspace Manager") {
+		t.Fatalf("workspace manager view missing modal title:\n%s", view)
+	}
+	if len(managing.workspaceManager.roots) != 1 || managing.workspaceManager.roots[0].Path != rootA {
+		t.Fatalf("workspace manager roots = %+v, want %q", managing.workspaceManager.roots, rootA)
+	}
+
+	managing.workspaceManager.addedRoot = rootB
+	model, cmd = managing.Update(struct{}{})
+	if cmd == nil {
+		t.Fatal("workspace root add returned nil command, want runtime config mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	updated := model.(APIAppModel)
+
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].WorkspaceRoots == nil || !containsRootExpanded(*got[0].WorkspaceRoots, rootB) {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want workspace roots including %q", got, rootB)
+	}
+	if !containsRootExpanded(updated.runtimeConfig.WorkspaceRoots, rootB) {
+		t.Fatalf("runtime workspace roots = %+v, want %q", updated.runtimeConfig.WorkspaceRoots, rootB)
+	}
+	_, repoPaths, _ := apiRuntimeRepoState(updated.runtimeConfig)
+	if repoPaths["web"] != filepath.Join(rootB, "web") {
+		t.Fatalf("runtime repos = %+v, want discovered web repo under rootB", updated.runtimeConfig.Repos)
+	}
+}
+
+func TestAPIAppModelWizardBrowseRootPersistsAndRefreshesRepos(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	makeGitRepoDir(t, root, "agentic-orchestrator")
+
+	client := &fakeTUIAPIClient{
+		runtime: server.RuntimeConfigResponse{
+			Defaults:  config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+			Providers: []string{"codex"},
+		},
+		catalog: server.ModelCatalogResponse{
+			ProviderOrder: []string{"codex"},
+			ProviderModels: map[string][]server.ModelDTO{
+				"codex": {{ID: "gpt-5.4"}},
+			},
+			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+		},
+		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
+			{ID: "op-workspaces", Kind: "runtime.config.update", Status: server.OperationStatusSucceeded},
+		}},
+		updateRuntimeConfigAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-workspaces",
+			Status:      server.OperationStatusQueued,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	creating := model.(APIAppModel)
+	creating.wizard.browseRoot = root
+	model, cmd := creating.Update(struct{}{})
+	if cmd == nil {
+		t.Fatal("wizard browse root returned nil command, want runtime config mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	updated := model.(APIAppModel)
+
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].WorkspaceRoots == nil || !containsRootExpanded(*got[0].WorkspaceRoots, root) {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want workspace roots including %q", got, root)
+	}
+	if updated.wizard == nil {
+		t.Fatal("wizard closed after browse-root refresh")
+	}
+	if !containsRootExpanded(updated.wizard.workspaceRoots, root) {
+		t.Fatalf("wizard workspace roots = %+v, want %q", updated.wizard.workspaceRoots, root)
+	}
+	if _, ok := updated.wizard.repoPaths["agentic-orchestrator"]; !ok {
+		t.Fatalf("wizard repo paths = %+v, want discovered agentic-orchestrator", updated.wizard.repoPaths)
+	}
+}
+
+func TestAPIAppModelWizardCreateRepoPersistsRootRescansAndAutoSelects(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	createdPath := filepath.Join(root, "new-service")
+
+	client := &fakeTUIAPIClient{
+		runtime: server.RuntimeConfigResponse{
+			Defaults:       config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+			Providers:      []string{"codex"},
+			WorkspaceRoots: []string{root},
+		},
+		catalog: server.ModelCatalogResponse{
+			ProviderOrder: []string{"codex"},
+			ProviderModels: map[string][]server.ModelDTO{
+				"codex": {{ID: "gpt-5.4"}},
+			},
+			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+		},
+		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
+			{ID: "op-workspaces", Kind: "runtime.config.update", Status: server.OperationStatusSucceeded},
+		}},
+		updateRuntimeConfigAccepted: server.OperationAcceptedResponse{
+			OperationID: "op-workspaces",
+			Status:      server.OperationStatusQueued,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	creating := model.(APIAppModel)
+	creating.wizard.step = wizardStepWhere
+	creating.wizard.createRepoPath = createdPath
+	makeGitRepoDir(t, root, "new-service")
+
+	model, cmd := creating.Update(struct{}{})
+	if cmd == nil {
+		t.Fatal("wizard create repo returned nil command, want runtime config mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	updated := model.(APIAppModel)
+
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].WorkspaceRoots == nil || len(*got[0].WorkspaceRoots) != 1 || (*got[0].WorkspaceRoots)[0] != root {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want unchanged root %q supplied for rescan", got, root)
+	}
+	if updated.wizard == nil {
+		t.Fatal("wizard closed after create-repo refresh")
+	}
+	if updated.wizard.step != wizardStepPipeline {
+		t.Fatalf("wizard step = %v, want pipeline after auto-select advance", updated.wizard.step)
+	}
+	if !updated.wizard.selectedRepos["new-service"] {
+		t.Fatalf("wizard selected repos = %+v, want new-service selected", updated.wizard.selectedRepos)
+	}
+	if updated.wizard.repoPaths["new-service"] != createdPath {
+		t.Fatalf("wizard repo path = %q, want %q", updated.wizard.repoPaths["new-service"], createdPath)
+	}
+}
+
+func makeGitRepoDir(t *testing.T, root, name string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(root, name, ".git"), 0o755); err != nil {
+		t.Fatalf("create git repo fixture: %v", err)
+	}
+}
+
 func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *testing.T) {
 	t.Parallel()
 
@@ -1197,22 +1658,6 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 				t.Helper()
 				if got := strings.Join(client.mergeFeatureIDs, ","); got != "active" {
 					t.Fatalf("MergeFeature calls = %q, want active", got)
-				}
-			},
-		},
-		{
-			name:     "retry",
-			key:      tea.KeyPressMsg{Code: 'R', Text: "R"},
-			actionID: "retry",
-			wantKind: "feature.retry",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-retry",
-				Status:      server.OperationStatusQueued,
-			},
-			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
-				t.Helper()
-				if got := strings.Join(client.retryFeatureIDs, ","); got != "active" {
-					t.Fatalf("RetryFeature calls = %q, want active", got)
 				}
 			},
 		},
@@ -1398,8 +1843,12 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 				t.Fatalf("Update(%s) returned command before confirmation", tt.name)
 			}
 			confirming := model.(APIAppModel)
-			if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Confirm "+tt.wantKind) {
-				t.Fatalf("View() missing %q confirmation in:\n%s", tt.wantKind, view)
+			wantTitle := "Confirm " + apiMutationKindLabel(tt.wantKind)
+			if tt.wantKind == "feature.rewind" {
+				wantTitle = "Rewind Confirmation"
+			}
+			if view := stripANSI(confirming.View().Content); !strings.Contains(view, wantTitle) {
+				t.Fatalf("View() missing %q confirmation in:\n%s", wantTitle, view)
 			}
 			if len(client.mergeFeatureIDs)+len(client.retryFeatureIDs)+len(client.markDoneFeatureIDs)+len(client.cleanupFeatureIDs)+len(client.startTweakFeatureIDs)+len(client.finishTweakFeatureIDs)+len(client.rewindFeatureIDs)+len(client.startRebaseFeatureIDs)+len(client.restartFeatureIDs)+len(client.stopFeatureIDs)+len(client.deleteFeatureIDs) != 0 {
 				t.Fatalf("API action was sent before confirmation: merge=%v retry=%v markDone=%v cleanup=%v tweak=%v finishTweak=%v restart=%v stop=%v delete=%v rewind=%v rebase=%v", client.mergeFeatureIDs, client.retryFeatureIDs, client.markDoneFeatureIDs, client.cleanupFeatureIDs, client.startTweakFeatureIDs, client.finishTweakFeatureIDs, client.restartFeatureIDs, client.stopFeatureIDs, client.deleteFeatureIDs, client.rewindFeatureIDs, client.startRebaseFeatureIDs)
@@ -1419,7 +1868,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 				t.Fatalf("Operations after %s = %+v, want accepted %s operation", tt.name, snapshot.Operations, tt.wantKind)
 			}
 			view := stripANSI(accepted.View().Content)
-			for _, want := range []string{"Accepted " + tt.wantKind + " operation " + tt.accepted.OperationID, tt.accepted.OperationID, "active"} {
+			for _, want := range []string{"Accepted " + apiMutationKindLabel(tt.wantKind) + " operation " + tt.accepted.OperationID, tt.accepted.OperationID, "active"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("API app View() missing %q in:\n%s", want, view)
 				}
@@ -1533,7 +1982,7 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()},
 		}},
 		catalog: server.ModelCatalogResponse{
 			ProviderOrder: []string{"codex"},
@@ -1551,7 +2000,7 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 			},
 		},
 		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"},
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish"},
 			Pipeline:       "large",
 		}},
 		featureConfig: server.FeatureConfigResponse{
@@ -1620,10 +2069,36 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 		t.Fatalf("Operations after config save = %+v, want accepted feature.config.update operation", snapshot.Operations)
 	}
 	view = stripANSI(saved.View().Content)
-	for _, want := range []string{"Accepted feature.config.update operation op-config", "op-config", "active"} {
+	for _, want := range []string{"Accepted Feature Config operation op-config", "op-config", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAppModelFeatureConfigEditorRequiresQuiescentFeature(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd != nil {
+		t.Fatal("Update(e) returned command for running feature, want quiescence gate")
+	}
+	blocked := model.(APIAppModel)
+	if got := client.featureConfigIDs; len(got) != 0 {
+		t.Fatalf("FeatureConfig calls = %v, want none for running feature", got)
+	}
+	if !strings.Contains(blocked.statusMessage, "idle") {
+		t.Fatalf("statusMessage = %q, want idle gate", blocked.statusMessage)
 	}
 }
 
@@ -1699,7 +2174,7 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutationAndTracksOperation(t *te
 		t.Fatalf("Operations after runtime config save = %+v, want accepted runtime.config.update operation", snapshot.Operations)
 	}
 	view = stripANSI(saved.View().Content)
-	for _, want := range []string{"Accepted runtime.config.update operation op-runtime-config", "op-runtime-config"} {
+	for _, want := range []string{"Accepted Runtime Config operation op-runtime-config", "op-runtime-config"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -1767,7 +2242,7 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutationAndTracksOperation(t *t
 		t.Fatalf("Operations after need-user-input decision = %+v, want accepted decision operation", snapshot.Operations)
 	}
 	view = stripANSI(decided.View().Content)
-	for _, want := range []string{"Accepted feature.need_user_input.decision operation op-need-input", "op-need-input", "blocked"} {
+	for _, want := range []string{"Accepted Need Input Decision operation op-need-input", "op-need-input", "blocked"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -1831,7 +2306,7 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutationAndTracksOperation(t *testin
 		t.Fatalf("Operations after permission answer = %+v, want accepted permission answer operation", snapshot.Operations)
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Accepted permission.answer operation op-permission", "op-permission", "active"} {
+	for _, want := range []string{"Accepted Permission Answer operation op-permission", "op-permission", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -1902,7 +2377,7 @@ func TestAPIAppModelHelpMessageUsesRESTMutationAndTracksOperation(t *testing.T) 
 		t.Fatalf("Operations after help answer = %+v, want accepted help.send operation", snapshot.Operations)
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Accepted help.send operation op-help", "op-help", "active"} {
+	for _, want := range []string{"Accepted Help Reply operation op-help", "op-help", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -1981,10 +2456,62 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutationAndTracksOperation(t *testing.T
 		t.Fatalf("Operations after ask-user answer = %+v, want accepted ask_user.answer operation", snapshot.Operations)
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Accepted ask_user.answer operation op-ask", "op-ask", "active"} {
+	for _, want := range []string{"Accepted AskUser Answer operation op-ask", "op-ask", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		prompts: server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
+			{
+				RequestID: "ask-1",
+				SessionID: "sess-1",
+				FeatureID: "active",
+				ToolName:  "AskUserQuestion",
+				Status:    "pending",
+				Summary:   "Which database?",
+				Questions: []server.AskUserQuestionDTO{{
+					Question: "Which database?",
+					Options: []server.AskUserOptionDTO{
+						{Label: "PostgreSQL", Description: "relational"},
+						{Label: "DynamoDB", Description: "managed key-value"},
+					},
+				}},
+			},
+		}},
+		askUserAccepted: server.OperationAcceptedResponse{OperationID: "op-ask", Status: server.OperationStatusQueued},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	prompting := model.(APIAppModel)
+	view := stripANSI(prompting.View().Content)
+	for _, want := range []string{"AskUser question", "Request: ask-1", "Session: sess-1", "1. PostgreSQL - relational", "2. DynamoDB - managed key-value"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("AskUser option prompt missing %q in:\n%s", want, view)
+		}
+	}
+
+	model, _ = prompting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want ask-user answer")
+	}
+	msg := cmd()
+	_, _ = model.(APIAppModel).Update(msg)
+	if got := client.askUserAnswers; len(got) != 1 || got[0].Answers["Which database?"] != "DynamoDB" {
+		t.Fatalf("AnswerAskUser requests = %+v, want DynamoDB answer", got)
 	}
 }
 
@@ -2070,7 +2597,7 @@ func TestAPIAppModelReviewDecisionsUseRESTMutationAndTrackOperation(t *testing.T
 				t.Fatalf("Operations after review decision = %+v, want accepted review-decision operation", snapshot.Operations)
 			}
 			view := stripANSI(reviewed.View().Content)
-			for _, want := range []string{"Accepted feature.review_decision operation op-review", "op-review", "active"} {
+			for _, want := range []string{"Accepted Review Decision operation op-review", "op-review", "active"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("API app View() missing %q in:\n%s", want, view)
 				}
@@ -2107,7 +2634,7 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 			FeatureID: "active",
 			Repo:      "agentic-orchestrator",
 			Comments: []server.ReviewCommentDTO{
-				{ID: 101, Type: "review", Path: "internal/tui/api_app.go", Line: 42, Body: "use REST DTOs here", UserLogin: "reviewer"},
+				{ID: 101, Type: "review", Path: "internal/tui/api_app.go", Line: 42, Body: "use REST DTOs here", UserLogin: "reviewer", DiffHunk: "@@ -1 +1 @@\n-old\n+new"},
 			},
 		},
 		startReviewCommentsAccepted: server.OperationAcceptedResponse{
@@ -2138,24 +2665,26 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 		t.Fatalf("StartReviewComments calls = %v before preview confirmation, want none", client.startReviewCommentsFeatureIDs)
 	}
 	view := stripANSI(previewing.View().Content)
-	for _, want := range []string{"Review comments", "Active work", "agentic-orchestrator", "Mode: auto", "address_all", "@reviewer", "internal/tui/api_app.go:42", "use REST DTOs here"} {
+	for _, want := range []string{"Review Comments: Active work (1)", "agentic-orchestrator", "Shift+A", "@reviewer", "internal/tui/api_app.go:42", "use REST DTOs here", "@@ -1 +1 @@", "-old", "+new"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 
-	model, cmd = previewing.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model, cmd = previewing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
-		t.Fatal("Update(tab) returned command before review-comments start")
+		t.Fatal("Update(enter) started review-comments; want Shift+A only")
 	}
-	modeChanged := model.(APIAppModel)
-	if view := stripANSI(modeChanged.View().Content); !strings.Contains(view, "Mode: address_all") {
-		t.Fatalf("API app View() did not cycle review-comments mode:\n%s", view)
+	previewing = model.(APIAppModel)
+	model, cmd = previewing.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd != nil {
+		t.Fatal("Update(a) started review-comments; want Shift+A only")
 	}
+	previewing = model.(APIAppModel)
 
-	model, cmd = modeChanged.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, cmd = previewing.Update(tea.KeyPressMsg{Code: 'A', Text: "A"})
 	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want review-comments start mutation")
+		t.Fatal("Update(Shift+A) returned nil command, want review-comments start mutation")
 	}
 	msg = cmd()
 	model, _ = model.(APIAppModel).Update(msg)
@@ -2164,15 +2693,15 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	if got := strings.Join(client.startReviewCommentsFeatureIDs, ","); got != "active" {
 		t.Fatalf("StartReviewComments feature IDs = %q, want active", got)
 	}
-	if got := client.startReviewCommentsRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Mode != "address_all" {
-		t.Fatalf("StartReviewComments requests = %+v, want agentic-orchestrator address_all", got)
+	if got := client.startReviewCommentsRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Mode != "auto" || len(got[0].Comments) != 1 || got[0].Comments[0].ID != 101 || got[0].Comments[0].DiffHunk == "" {
+		t.Fatalf("StartReviewComments requests = %+v, want agentic-orchestrator auto with previewed comment", got)
 	}
 	snapshot := started.Snapshot()
 	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-review-comments" || snapshot.Operations[0].Kind != "feature.review_comments" {
 		t.Fatalf("Operations after review-comments start = %+v, want accepted review-comments operation", snapshot.Operations)
 	}
 	view = stripANSI(started.View().Content)
-	for _, want := range []string{"Accepted feature.review_comments operation op-review-comments", "op-review-comments", "active"} {
+	for _, want := range []string{"Accepted Review Comments operation op-review-comments", "op-review-comments", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2220,7 +2749,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	}
 	refactor := model.(APIAppModel)
 	view := stripANSI(refactor.View().Content)
-	for _, want := range []string{"Refactor", "Active work", "agentic-orchestrator", "ctrl+s"} {
+	for _, want := range []string{"Refactor", "Active work", "What changes do you want to make?", "Describe the refactoring for", "agentic-orchestrator...", "ctrl+s"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in refactor prompt:\n%s", want, view)
 		}
@@ -2228,9 +2757,6 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 
 	for _, r := range "extract transport boundary" {
 		model, cmd = refactor.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		if cmd != nil {
-			t.Fatalf("Update(%q) returned command while typing refactor prompt", r)
-		}
 		refactor = model.(APIAppModel)
 	}
 	model, cmd = refactor.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
@@ -2239,7 +2765,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	}
 	refactor = model.(APIAppModel)
 	view = stripANSI(refactor.View().Content)
-	for _, want := range []string{"Pipeline", "medium", "> large", "moonshot"} {
+	for _, want := range []string{"Select Pipeline for Refactor", "medium", "large", "moonshot", "Inquiry + research + planning", "Confirm"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in refactor pipeline selector:\n%s", want, view)
 		}
@@ -2264,14 +2790,14 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 		t.Fatalf("Operations after refactor start = %+v, want accepted refactor operation", snapshot.Operations)
 	}
 	view = stripANSI(started.View().Content)
-	for _, want := range []string{"Accepted feature.refactor.start operation op-refactor", "op-refactor", "active"} {
+	for _, want := range []string{"Accepted Refactor operation op-refactor", "op-refactor", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 }
 
-func TestAPIAppModelRefactorRestartUsesRESTMutation(t *testing.T) {
+func TestAPIAppModelRefactorRestartShortcutIsNotExposed(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -2296,10 +2822,6 @@ func TestAPIAppModelRefactorRestartUsesRESTMutation(t *testing.T) {
 				},
 			},
 		}},
-		restartRefactorAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-refactor-restart",
-			Status:      server.OperationStatusQueued,
-		},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2308,57 +2830,14 @@ func TestAPIAppModelRefactorRestartUsesRESTMutation(t *testing.T) {
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'f', Text: "f", Mod: tea.ModCtrl})
 	if cmd != nil {
-		t.Fatal("Update(Ctrl+F) returned command before refactor restart prompt submit")
+		t.Fatal("Update(Ctrl+F) returned command; restart refactor is not a dashboard shortcut")
 	}
-	refactor := model.(APIAppModel)
-	view := stripANSI(refactor.View().Content)
-	for _, want := range []string{"Restart refactor", "Active work", "agentic-orchestrator", "ctrl+s"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("API app View() missing %q in refactor restart prompt:\n%s", want, view)
-		}
+	updated := model.(APIAppModel)
+	if updated.refactorPrompt != nil || updated.refactorPipeline != nil {
+		t.Fatal("Update(Ctrl+F) opened refactor restart UI; want no normal-user restart shortcut")
 	}
-	if len(client.restartRefactorFeatureIDs) != 0 {
-		t.Fatalf("RestartRefactor calls = %v before prompt submit, want none", client.restartRefactorFeatureIDs)
-	}
-
-	for _, r := range "retry transport split" {
-		model, cmd = refactor.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
-		if cmd != nil {
-			t.Fatalf("Update(%q) returned command while typing refactor restart prompt", r)
-		}
-		refactor = model.(APIAppModel)
-	}
-	model, cmd = refactor.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
-	if cmd != nil {
-		t.Fatal("Update(ctrl+s) returned command before restart pipeline selection")
-	}
-	refactor = model.(APIAppModel)
-	model, cmd = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want refactor restart mutation")
-	}
-	msg := cmd()
-	model, _ = model.(APIAppModel).Update(msg)
-	restarted := model.(APIAppModel)
-
-	if got := strings.Join(client.restartRefactorFeatureIDs, ","); got != "active" {
-		t.Fatalf("RestartRefactor feature IDs = %q, want active", got)
-	}
-	if got := client.restartRefactorRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Prompt != "retry transport split" || got[0].Pipeline != feature.PipelineLarge {
-		t.Fatalf("RestartRefactor requests = %+v, want agentic-orchestrator prompt with large pipeline", got)
-	}
-	if len(client.startRefactorFeatureIDs) != 0 {
-		t.Fatalf("StartRefactor calls = %v, want none for restart", client.startRefactorFeatureIDs)
-	}
-	snapshot := restarted.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-refactor-restart" || snapshot.Operations[0].Kind != "feature.refactor.restart" {
-		t.Fatalf("Operations after refactor restart = %+v, want accepted refactor restart operation", snapshot.Operations)
-	}
-	view = stripANSI(restarted.View().Content)
-	for _, want := range []string{"Accepted feature.refactor.restart operation op-refactor-restart", "op-refactor-restart", "active"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("API app View() missing %q in:\n%s", want, view)
-		}
+	if len(client.restartRefactorFeatureIDs) != 0 || len(client.startRefactorFeatureIDs) != 0 {
+		t.Fatalf("refactor calls start=%v restart=%v; want none", client.startRefactorFeatureIDs, client.restartRefactorFeatureIDs)
 	}
 }
 
@@ -2398,7 +2877,7 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 	if len(client.deleteFeatureIDs) != 0 {
 		t.Fatalf("DeleteFeature calls = %v, want none for disabled action", client.deleteFeatureIDs)
 	}
-	if view := stripANSI(updated.View().Content); !strings.Contains(view, "feature.delete is unavailable") {
+	if view := stripANSI(updated.View().Content); !strings.Contains(view, "Delete is unavailable") {
 		t.Fatalf("View() missing disabled-action status in:\n%s", view)
 	}
 }
@@ -2431,8 +2910,8 @@ func TestAPIAppModelPublishConfirmsBeforeRESTMutationAndTracksOperation(t *testi
 		t.Fatal("Update(p) returned command before confirmation")
 	}
 	confirming := model.(APIAppModel)
-	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Confirm feature.publish") {
-		t.Fatalf("View() missing feature.publish confirmation in:\n%s", view)
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Confirm Publish") {
+		t.Fatalf("View() missing publish confirmation in:\n%s", view)
 	}
 	if len(client.publishFeatureIDs) != 0 {
 		t.Fatalf("PublishFeature calls = %v before confirmation, want none", client.publishFeatureIDs)
@@ -2454,10 +2933,394 @@ func TestAPIAppModelPublishConfirmsBeforeRESTMutationAndTracksOperation(t *testi
 		t.Fatalf("Operations after publish = %+v, want accepted publish operation", snapshot.Operations)
 	}
 	view := stripANSI(published.View().Content)
-	for _, want := range []string{"Accepted feature.publish operation op-publish", "op-publish", "ready"} {
+	for _, want := range []string{"Accepted Publish operation op-publish", "op-publish", "ready"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "implement", Repos: []string{"api", "web"}, CreatedAt: time.Now()},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "implement", Repos: []string{"api", "web"}},
+			RepoStatus: []server.RepoStatusDTO{
+				{Name: "api", Publishable: true},
+				{Name: "web", Publishable: true},
+			},
+			Actions: []server.ActionDTO{
+				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+			},
+		}},
+		publishAccepted: server.OperationAcceptedResponse{OperationID: "op-publish", Status: server.OperationStatusQueued},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if cmd != nil {
+		t.Fatal("Update(p) returned command before repo selection")
+	}
+	selecting := model.(APIAppModel)
+	view := stripANSI(selecting.View().Content)
+	for _, want := range []string{"Select repo — Publish", "[x] api", "[x] web"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("repo selector missing %q in:\n%s", want, view)
+		}
+	}
+
+	model, _ = selecting.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	selecting = model.(APIAppModel)
+	model, cmd = selecting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter) returned command before publish confirmation")
+	}
+	confirming := model.(APIAppModel)
+	view = stripANSI(confirming.View().Content)
+	for _, want := range []string{"Confirm Publish", "Repos: web"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("publish confirmation missing %q in:\n%s", want, view)
+		}
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("Update(y) returned nil command, want publish mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	if got := client.publishRequests; len(got) != 1 || !slices.Equal(got[0].Repos, []string{"web"}) {
+		t.Fatalf("PublishFeature requests = %+v, want repos [web]", got)
+	}
+}
+
+func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		key        tea.KeyPressMsg
+		actionID   string
+		wantTitle  string
+		accepted   server.OperationAcceptedResponse
+		assertCall func(t *testing.T, client *fakeTUIAPIClient)
+	}{
+		{
+			name:      "rebase",
+			key:       tea.KeyPressMsg{Code: 'b', Text: "b"},
+			actionID:  "rebase",
+			wantTitle: "Confirm Rebase",
+			accepted:  server.OperationAcceptedResponse{OperationID: "op-rebase", Status: server.OperationStatusQueued},
+			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
+				t.Helper()
+				if got := client.startRebaseRequests; len(got) != 1 || got[0].Repo != "web" {
+					t.Fatalf("StartRebase requests = %+v, want repo web", got)
+				}
+			},
+		},
+		{
+			name:      "tweak",
+			key:       tea.KeyPressMsg{Code: 't', Text: "t"},
+			actionID:  "tweak",
+			wantTitle: "Confirm Tweak",
+			accepted:  server.OperationAcceptedResponse{OperationID: "op-tweak", Status: server.OperationStatusQueued},
+			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
+				t.Helper()
+				if got := len(client.startTweakRequests); got != 1 {
+					t.Fatalf("StartTweak request count = %d, want 1", got)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := apiRepoSelectorClient(tt.actionID, tt.accepted)
+			app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+			if err != nil {
+				t.Fatalf("NewAPIAppModel() error = %v", err)
+			}
+
+			model, cmd := app.Update(tt.key)
+			if cmd != nil {
+				t.Fatal("action key returned command before repo selection")
+			}
+			selecting := model.(APIAppModel)
+			if view := stripANSI(selecting.View().Content); !strings.Contains(view, "Select repo") || !strings.Contains(view, "api") || !strings.Contains(view, "web") {
+				t.Fatalf("repo selector not shown:\n%s", view)
+			}
+
+			model, _ = selecting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+			selecting = model.(APIAppModel)
+			model, cmd = selecting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			if cmd != nil {
+				t.Fatal("repo selection returned command before confirmation")
+			}
+			confirming := model.(APIAppModel)
+			view := stripANSI(confirming.View().Content)
+			for _, want := range []string{tt.wantTitle, "Repo: web"} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("confirmation missing %q in:\n%s", want, view)
+				}
+			}
+
+			model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+			if cmd == nil {
+				t.Fatal("confirmation returned nil command")
+			}
+			msg := cmd()
+			_, _ = model.(APIAppModel).Update(msg)
+			tt.assertCall(t, client)
+		})
+	}
+}
+
+func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("review comments", func(t *testing.T) {
+		t.Parallel()
+
+		client := apiRepoSelectorClient("review-comments", server.OperationAcceptedResponse{OperationID: "op-review-comments", Status: server.OperationStatusQueued})
+		client.reviewCommentsResponse = server.ReviewCommentsFetchResponse{FeatureID: "active", Repo: "web"}
+		app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+		if err != nil {
+			t.Fatalf("NewAPIAppModel() error = %v", err)
+		}
+
+		model, cmd := app.Update(tea.KeyPressMsg{Code: 'g', Text: "g"})
+		if cmd != nil {
+			t.Fatal("Update(g) returned command before repo selection")
+		}
+		model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatal("repo selection returned nil command, want review-comments fetch")
+		}
+		msg := cmd()
+		_, _ = model.(APIAppModel).Update(msg)
+		if got := client.reviewCommentsFetchRequests; len(got) != 1 || got[0].Repo != "web" {
+			t.Fatalf("FetchReviewComments requests = %+v, want repo web", got)
+		}
+	})
+
+	t.Run("refactor", func(t *testing.T) {
+		t.Parallel()
+
+		client := apiRepoSelectorClient("refactor", server.OperationAcceptedResponse{OperationID: "op-refactor", Status: server.OperationStatusQueued})
+		app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+		if err != nil {
+			t.Fatalf("NewAPIAppModel() error = %v", err)
+		}
+
+		model, cmd := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
+		if cmd != nil {
+			t.Fatal("Update(F) returned command before repo selection")
+		}
+		model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd != nil {
+			t.Fatal("repo selection returned command before refactor prompt")
+		}
+		prompting := model.(APIAppModel)
+		view := stripANSI(prompting.View().Content)
+		if !strings.Contains(view, "Describe the refactoring for") || !strings.Contains(view, "web...") {
+			t.Fatalf("refactor prompt missing selected repo:\n%s", view)
+		}
+
+		for _, r := range "split transport" {
+			model, _ = prompting.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+			prompting = model.(APIAppModel)
+		}
+		model, _ = prompting.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
+		model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatal("pipeline selection returned nil command")
+		}
+		msg := cmd()
+		_, _ = model.(APIAppModel).Update(msg)
+		if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != "web" || got[0].Prompt != "split transport" {
+			t.Fatalf("StartRefactor requests = %+v, want repo web prompt", got)
+		}
+	})
+}
+
+func TestAPIAppModelRewindPhaseSelectorUsesChosenTarget(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review", CreatedAt: time.Now()},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review"},
+			Actions: []server.ActionDTO{
+				{
+					ID:      "rewind",
+					Enabled: true,
+					Scope:   server.ActionScopeDTO{Type: "feature"},
+					RequiredInputs: []server.ActionInputDTO{
+						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"plan", "implement"}},
+						{Name: "upgrade_pipeline", Kind: "enum", Required: false, Options: []string{"large"}},
+					},
+				},
+			},
+		}},
+		rewindAccepted: server.OperationAcceptedResponse{OperationID: "op-rewind", Status: server.OperationStatusQueued},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Update(ctrl+r) returned command before phase choice")
+	}
+	choosing := model.(APIAppModel)
+	if view := stripANSI(choosing.View().Content); !strings.Contains(view, "Rewind to Phase") || !strings.Contains(view, "Rewind to Plan") || !strings.Contains(view, "Rewind to Implement") || !strings.Contains(view, "Pipeline Upgrade") || !strings.Contains(view, "Upgrade to large") {
+		t.Fatalf("rewind phase selector missing choices:\n%s", view)
+	}
+
+	model, _ = choosing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("phase selection returned command before confirmation")
+	}
+	confirming := model.(APIAppModel)
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Rewind Confirmation") || !strings.Contains(view, "Rewind to Implement") || !strings.Contains(view, "All progress from this phase onwards will be lost") {
+		t.Fatalf("rewind confirmation missing selected target:\n%s", view)
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("Update(y) returned nil command, want rewind mutation")
+	}
+	msg := cmd()
+	_, _ = model.(APIAppModel).Update(msg)
+	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "implement" {
+		t.Fatalf("RewindFeature requests = %+v, want target implement", got)
+	}
+}
+
+func TestAPIAppModelRewindPipelineUpgradeUsesUpgradeRequest(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review", CreatedAt: time.Now()},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review"},
+			Actions: []server.ActionDTO{
+				{
+					ID:      "rewind",
+					Enabled: true,
+					Scope:   server.ActionScopeDTO{Type: "feature"},
+					RequiredInputs: []server.ActionInputDTO{
+						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"plan", "implement"}},
+						{Name: "upgrade_pipeline", Kind: "enum", Required: false, Options: []string{"large"}},
+					},
+				},
+			},
+		}},
+		rewindAccepted: server.OperationAcceptedResponse{OperationID: "op-rewind", Status: server.OperationStatusQueued},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Update(ctrl+r) returned command before phase choice")
+	}
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("upgrade selection returned command before confirmation")
+	}
+	confirming := model.(APIAppModel)
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Upgrade to large") || !strings.Contains(view, "restart") || !strings.Contains(view, "KB Build") {
+		t.Fatalf("rewind upgrade confirmation missing upgrade copy:\n%s", view)
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("Update(y) returned nil command, want rewind mutation")
+	}
+	msg := cmd()
+	_, _ = model.(APIAppModel).Update(msg)
+	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "inquire" || got[0].UpgradePipeline != feature.PipelineLarge {
+		t.Fatalf("RewindFeature requests = %+v, want inquire with large upgrade", got)
+	}
+}
+
+func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now(), Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
+			Actions: []server.ActionDTO{
+				{
+					ID:      "rewind",
+					Enabled: true,
+					Scope:   server.ActionScopeDTO{Type: "feature"},
+					RequiredInputs: []server.ActionInputDTO{
+						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"plan", "implement"}},
+					},
+				},
+			},
+		}},
+		rewindAccepted: server.OperationAcceptedResponse{OperationID: "op-rewind", Status: server.OperationStatusQueued},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("implement rewind selection returned command before roadmap phase picker")
+	}
+	picking := model.(APIAppModel)
+	if view := stripANSI(picking.View().Content); !strings.Contains(view, "Choose Roadmap Phase") || !strings.Contains(view, "Phase 2/3") || !strings.Contains(view, "current phase") {
+		t.Fatalf("roadmap phase picker missing expected rows:\n%s", view)
+	}
+
+	model, cmd = picking.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("roadmap phase selection returned command before confirmation")
+	}
+	confirming := model.(APIAppModel)
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Rewind Implement to roadmap Phase 2") || !strings.Contains(view, "Keep: Phase 1") || !strings.Contains(view, "Discard: Phase 3") {
+		t.Fatalf("roadmap rewind confirmation missing partial rewind copy:\n%s", view)
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("Update(y) returned nil command, want rewind mutation")
+	}
+	msg := cmd()
+	_, _ = model.(APIAppModel).Update(msg)
+	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "implement" || got[0].RoadmapPhase != 2 {
+		t.Fatalf("RewindFeature requests = %+v, want implement roadmap phase 2", got)
 	}
 }
 
@@ -2626,6 +3489,46 @@ func TestAPIAppModelOwnedServerShutdownErrorKeepsTUIOpen(t *testing.T) {
 	}
 }
 
+func apiRepoSelectorClient(actionID string, accepted server.OperationAcceptedResponse) *fakeTUIAPIClient {
+	action := server.ActionDTO{
+		ID:      actionID,
+		Enabled: true,
+		Scope:   server.ActionScopeDTO{Type: "feature", RepoSelection: "optional"},
+	}
+	switch actionID {
+	case "review-comments":
+		action.Scope = server.ActionScopeDTO{Type: "feature", RepoSelection: "required", CycleType: "review-comments"}
+		action.RequiredInputs = []server.ActionInputDTO{
+			{Name: "repo", Kind: "string", Required: true},
+			{Name: "mode", Kind: "enum", Required: true, Options: []string{"auto", "address_all"}},
+		}
+	case "refactor":
+		action.RequiredInputs = []server.ActionInputDTO{
+			{Name: "repo", Kind: "string", Required: false},
+			{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
+			{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
+		}
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"api", "web"}},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", Repos: []string{"api", "web"}},
+			RepoStatus: []server.RepoStatusDTO{
+				{Name: "api", Publishable: true},
+				{Name: "web", Publishable: true},
+			},
+			Actions: []server.ActionDTO{action},
+		}},
+		startRebaseAccepted:         accepted,
+		startTweakAccepted:          accepted,
+		startReviewCommentsAccepted: accepted,
+		startRefactorAccepted:       accepted,
+	}
+	return client
+}
+
 type fakeTUIAPIClient struct {
 	calls                         []string
 	features                      server.FeatureListResponse
@@ -2666,6 +3569,7 @@ type fakeTUIAPIClient struct {
 	publishAccepted               server.OperationAcceptedResponse
 	publishErr                    error
 	publishFeatureIDs             []string
+	publishRequests               []server.PublishFeatureRequest
 	mergeAccepted                 server.OperationAcceptedResponse
 	mergeErr                      error
 	mergeFeatureIDs               []string
@@ -2717,6 +3621,13 @@ type fakeTUIAPIClient struct {
 	needUserInputErr              error
 	needUserInputFeatureIDs       []string
 	needUserInputRequests         []server.NeedUserInputDecisionRequest
+	needUserInputDraftAccepted    server.OperationAcceptedResponse
+	needUserInputDraftErr         error
+	needUserInputDraftFeatureIDs  []string
+	needUserInputDraftRequests    []server.NeedUserInputDraftRequest
+	toggleInputAccepted           server.OperationAcceptedResponse
+	toggleInputErr                error
+	toggleInputFeatureIDs         []string
 	reviewAccepted                server.OperationAcceptedResponse
 	reviewErr                     error
 	reviewFeatureIDs              []string
@@ -2919,9 +3830,10 @@ func (f *fakeTUIAPIClient) DeleteFeature(_ context.Context, featureID string) (s
 	return f.deleteAccepted, f.deleteErr
 }
 
-func (f *fakeTUIAPIClient) PublishFeature(_ context.Context, featureID string, _ server.PublishFeatureRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) PublishFeature(_ context.Context, featureID string, req server.PublishFeatureRequest) (server.OperationAcceptedResponse, error) {
 	f.calls = append(f.calls, "PublishFeature")
 	f.publishFeatureIDs = append(f.publishFeatureIDs, featureID)
+	f.publishRequests = append(f.publishRequests, req)
 	return f.publishAccepted, f.publishErr
 }
 
@@ -3008,7 +3920,40 @@ func (f *fakeTUIAPIClient) UpdateFeatureConfig(_ context.Context, featureID stri
 func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.RuntimeConfigMutationRequest) (server.OperationAcceptedResponse, error) {
 	f.calls = append(f.calls, "UpdateRuntimeConfig")
 	f.updateRuntimeConfigRequests = append(f.updateRuntimeConfigRequests, req)
+	if req.WorkspaceRoots != nil {
+		f.runtime.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
+		f.runtime.Repos = testRuntimeConfigRepos(f.runtime.Repos, f.runtime.WorkspaceRoots)
+	}
 	return f.updateRuntimeConfigAccepted, f.updateRuntimeConfigErr
+}
+
+func testRuntimeConfigRepos(existing []server.ConfigRepoDTO, workspaceRoots []string) []server.ConfigRepoDTO {
+	cfg := &config.Config{
+		Repos:          make(map[string]config.RepoConfig, len(existing)),
+		WorkspaceRoots: append([]string(nil), workspaceRoots...),
+	}
+	for _, repo := range existing {
+		if repo.Name == "" {
+			continue
+		}
+		cfg.Repos[repo.Name] = config.RepoConfig{
+			Path:          repo.Path,
+			PipelineGates: copyConfigPipelineGates(repo.PipelineGates),
+		}
+	}
+	config.DiscoverReposFromRoots(cfg)
+	repos := make([]server.ConfigRepoDTO, 0, len(cfg.Repos)+len(cfg.DiscoveredRepos))
+	for name, repo := range cfg.Repos {
+		repos = append(repos, server.ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
+	}
+	for name, repo := range cfg.DiscoveredRepos {
+		if _, ok := cfg.Repos[name]; ok {
+			continue
+		}
+		repos = append(repos, server.ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
+	}
+	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
+	return repos
 }
 
 func (f *fakeTUIAPIClient) ExecuteRecovery(_ context.Context, req server.RecoveryActionRequest) (server.OperationAcceptedResponse, error) {
@@ -3023,6 +3968,19 @@ func (f *fakeTUIAPIClient) NeedUserInputDecision(_ context.Context, featureID st
 	f.needUserInputFeatureIDs = append(f.needUserInputFeatureIDs, featureID)
 	f.needUserInputRequests = append(f.needUserInputRequests, req)
 	return f.needUserInputAccepted, f.needUserInputErr
+}
+
+func (f *fakeTUIAPIClient) DraftNeedUserInputAnswers(_ context.Context, featureID string, req server.NeedUserInputDraftRequest) (server.OperationAcceptedResponse, error) {
+	f.calls = append(f.calls, "DraftNeedUserInputAnswers")
+	f.needUserInputDraftFeatureIDs = append(f.needUserInputDraftFeatureIDs, featureID)
+	f.needUserInputDraftRequests = append(f.needUserInputDraftRequests, req)
+	return f.needUserInputDraftAccepted, f.needUserInputDraftErr
+}
+
+func (f *fakeTUIAPIClient) ToggleInputNotifications(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+	f.calls = append(f.calls, "ToggleInputNotifications")
+	f.toggleInputFeatureIDs = append(f.toggleInputFeatureIDs, featureID)
+	return f.toggleInputAccepted, f.toggleInputErr
 }
 
 func (f *fakeTUIAPIClient) ReviewDecision(_ context.Context, featureID string, req server.ReviewDecisionRequest) (server.OperationAcceptedResponse, error) {

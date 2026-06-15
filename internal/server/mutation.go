@@ -49,6 +49,7 @@ type MutationTarget interface {
 	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (OperationResult, error)
 	NeedUserInputDecision(featureID string, req NeedUserInputDecisionRequest) (OperationResult, error)
 	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (OperationResult, error)
+	ToggleInputNotifications(featureID string) (OperationResult, error)
 	AnswerPermission(req PermissionAnswerRequest) (OperationResult, error)
 	AnswerAskUser(req AskUserAnswerRequest) (OperationResult, error)
 	SendHelp(req HelpAnswerRequest) (OperationResult, error)
@@ -166,7 +167,10 @@ type HelpAnswerRequest struct {
 }
 
 type RuntimeConfigMutationRequest struct {
-	Defaults config.DefaultsConfig `json:"defaults,omitempty"`
+	Defaults       config.DefaultsConfig  `json:"defaults,omitempty"`
+	WorkspaceRoots *[]string              `json:"workspace_roots,omitempty"`
+	UI             *config.UIConfig       `json:"ui,omitempty"`
+	Notifications  *NotificationConfigDTO `json:"notifications,omitempty"`
 }
 
 type PublishFeatureRequest struct {
@@ -174,8 +178,9 @@ type PublishFeatureRequest struct {
 }
 
 type RewindFeatureRequest struct {
-	TargetPhase  string `json:"target_phase"`
-	RoadmapPhase int    `json:"roadmap_phase,omitempty"`
+	TargetPhase     string                  `json:"target_phase"`
+	RoadmapPhase    int                     `json:"roadmap_phase,omitempty"`
+	UpgradePipeline feature.PipelineProfile `json:"upgrade_pipeline,omitempty"`
 }
 
 type RebaseActionRequest struct {
@@ -189,8 +194,9 @@ type ReviewCommentsFetchRequest struct {
 }
 
 type ReviewCommentsActionRequest struct {
-	Repo string `json:"repo"`
-	Mode string `json:"mode"`
+	Repo     string             `json:"repo"`
+	Mode     string             `json:"mode"`
+	Comments []ReviewCommentDTO `json:"comments,omitempty"`
 }
 
 type TweakActionRequest struct{}
@@ -822,6 +828,10 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		h.handleSimpleFeatureMutationWithDecoded(w, "feature.need_user_input.draft", featureID, func() (OperationResult, error) {
 			return h.mutations.target.DraftNeedUserInputAnswers(featureID, req)
 		})
+	case "input-notifications":
+		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.input_notifications.toggle", featureID, func() (OperationResult, error) {
+			return h.mutations.target.ToggleInputNotifications(featureID)
+		})
 	default:
 		return false
 	}
@@ -896,7 +906,10 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return false
 		}
 		var req RewindFeatureRequest
-		if !decodeMutationJSON(w, r, &req) || !validatePhaseName(w, req.TargetPhase) || !validatePositiveOptionalInt(w, "roadmap_phase", req.RoadmapPhase) {
+		if !decodeMutationJSON(w, r, &req) ||
+			!validatePhaseName(w, req.TargetPhase) ||
+			!validatePositiveOptionalInt(w, "roadmap_phase", req.RoadmapPhase) ||
+			!validatePipelineProfile(w, req.UpgradePipeline) {
 			return true
 		}
 		h.handleSimpleFeatureMutationWithDecoded(w, "feature.rewind", featureID, func() (OperationResult, error) {

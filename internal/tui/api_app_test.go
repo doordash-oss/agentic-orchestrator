@@ -124,6 +124,50 @@ func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelDashboardKeepsManualPublishCodeReady(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "ready",
+		Name:         "Ready work",
+		Slug:         "ready-work",
+		Status:       "CodeReady",
+		CurrentPhase: "publish",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    time.Now(),
+		Checkpoints:  server.CheckpointsDTO{ManualPublish: true},
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: summary,
+			RepoStatus: []server.RepoStatusDTO{
+				{Name: "agentic-orchestrator", Publishable: true},
+			},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	features := app.apiDashboardFeatures()
+	if len(features) != 1 {
+		t.Fatalf("apiDashboardFeatures length = %d, want 1", len(features))
+	}
+	f := features[0]
+	if !f.Checkpoints.ManualPublish {
+		t.Fatalf("dashboard feature checkpoints = %+v; want manual publish preserved", f.Checkpoints)
+	}
+	row := stripANSI(NewDashboardModel(features, "").renderFeatureRowCompact(f, false))
+	if !strings.Contains(row, "Code Ready") {
+		t.Fatalf("dashboard row = %q; want Code Ready", row)
+	}
+	if strings.Contains(row, "Publishing") {
+		t.Fatalf("dashboard row = %q; should not show Publishing for manual publish CodeReady", row)
+	}
+}
+
 func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 	t.Parallel()
 
@@ -1030,10 +1074,18 @@ func TestAPIAppModelCreateFeatureUsesRESTMutationAndTracksOperation(t *testing.T
 
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
-			Defaults: config.ModelConfig{Implementation: "gpt-5.4"},
+			Defaults:  config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+			Providers: []string{"codex"},
 			Repos: []server.ConfigRepoDTO{
-				{Name: "agentic-orchestrator", Path: "/workspace/agentic-orchestrator"},
+				{Name: "agentic-orchestrator"},
 			},
+		},
+		catalog: server.ModelCatalogResponse{
+			ProviderOrder: []string{"codex"},
+			ProviderModels: map[string][]server.ModelDTO{
+				"codex": {{ID: "gpt-5.4"}},
+			},
+			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
 		},
 		createAccepted: server.OperationAcceptedResponse{
 			OperationID: "op-create",
@@ -1054,22 +1106,44 @@ func TestAPIAppModelCreateFeatureUsesRESTMutationAndTracksOperation(t *testing.T
 		t.Fatal("Update(n) did not show create feature prompt")
 	}
 	view := stripANSI(creating.View().Content)
-	for _, want := range []string{"New Feature", "agentic-orchestrator", "Create"} {
+	for _, want := range []string{"New Feature", "Name", "Description ("} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
-
-	for _, ch := range "API cutover regression" {
-		model, cmd = creating.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
-		if cmd != nil {
-			t.Fatalf("Update(%q) returned unexpected command while typing create name", ch)
+	for _, unwanted := range []string{"[tab] Field", "Toggle repo"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("API app View() still contains reduced create prompt text %q in:\n%s", unwanted, view)
 		}
-		creating = model.(APIAppModel)
 	}
-	model, cmd = creating.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	model, _ = creating.Update(tea.KeyPressMsg{Text: "API cutover regression"})
+	creating = model.(APIAppModel)
+	model, _ = creating.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	creating = model.(APIAppModel)
+	model, _ = creating.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	creating = model.(APIAppModel)
+	if creating.wizard == nil || creating.wizard.step != wizardStepWhere {
+		t.Fatalf("wizard step after name/description = %+v, want where", creating.wizard)
+	}
+	view = stripANSI(creating.View().Content)
+	for _, want := range []string{"Pick one or more repos", "agentic-orchestrator", "Browse for more"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API app wizard repo step missing %q in:\n%s", want, view)
+		}
+	}
+	model, _ = creating.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	creating = model.(APIAppModel)
+	model, _ = creating.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	creating = model.(APIAppModel)
+	model, _ = creating.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	creating = model.(APIAppModel)
+	if creating.wizard == nil || creating.wizard.step != wizardStepReview {
+		t.Fatalf("wizard step after pipeline confirm = %+v, want review", creating.wizard)
+	}
+	model, cmd = creating.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
 	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want create mutation")
+		t.Fatal("Update(Go) returned nil command, want create mutation")
 	}
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
@@ -1514,13 +1588,18 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 		t.Fatalf("FeatureConfig calls = %q, want active", got)
 	}
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Feature config", "Client cutover", "Research", "codex:gpt-5.4", "large", "targeted"} {
+	for _, want := range []string{"Edit Config", "Client cutover", "Models", "Behavior", "Gates", "Research", "codex / gpt-5.4"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
+	for _, unwanted := range []string{"Feature config", "[up/down] Field", "[tab] Change model"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("API app View() still contains reduced feature-config text %q in:\n%s", unwanted, view)
+		}
+	}
 
-	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	edited := model.(APIAppModel)
 	model, cmd = edited.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {

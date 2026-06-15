@@ -313,11 +313,13 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 	repos := configRepoDTOs(cfg)
 	providers := providerNames(h.registry)
 	resp := RuntimeConfigResponse{
-		APIVersion: APIVersion,
-		Runtime:    h.runtime,
-		Defaults:   cfg.Defaults.Models,
-		Repos:      repos,
-		UI:         cfg.UI,
+		APIVersion:      APIVersion,
+		Runtime:         h.runtime,
+		Defaults:        cfg.Defaults.Models,
+		FeatureDefaults: featureDefaultsDTO(cfg.Defaults),
+		Repos:           repos,
+		WorkspaceRoots:  append([]string(nil), cfg.WorkspaceRoots...),
+		UI:              cfg.UI,
 		Notifications: NotificationConfigDTO{
 			MuteFeatureInput: cfg.Notifications.MuteFeatureInput,
 		},
@@ -474,16 +476,44 @@ func (h *apiHandler) configOrDefault() *config.Config {
 func configRepoDTOs(cfg *config.Config) []ConfigRepoDTO {
 	repos := make([]ConfigRepoDTO, 0, len(cfg.Repos)+len(cfg.DiscoveredRepos))
 	for name, repo := range cfg.Repos {
-		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path})
+		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
 	}
 	for name, repo := range cfg.DiscoveredRepos {
 		if _, ok := cfg.Repos[name]; ok {
 			continue
 		}
-		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path})
+		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 	return repos
+}
+
+func copyConfigPipelineGates(in map[string]config.Checkpoints) map[string]config.Checkpoints {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]config.Checkpoints, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaultsDTO {
+	var prefs map[string]config.PipelinePreference
+	if len(defaults.PipelinePreferences) > 0 {
+		prefs = make(map[string]config.PipelinePreference, len(defaults.PipelinePreferences))
+		for key, value := range defaults.PipelinePreferences {
+			prefs[key] = value
+		}
+	}
+	return FeatureDefaultsDTO{
+		Models:              defaults.Models,
+		PipelinePreferences: prefs,
+		Inquireness:         defaults.Inquireness,
+		Pipeline:            defaults.Pipeline,
+		Checkpoints:         defaults.Checkpoints,
+	}
 }
 
 func providerNames(reg *llm.Registry) []string {

@@ -152,6 +152,7 @@ type FeatureSummary struct {
 	RunCount     int             `json:"run_count"`
 	Repos        []string        `json:"repos"`
 	CreatedAt    time.Time       `json:"created_at"`
+	Checkpoints  CheckpointsDTO  `json:"checkpoints"`
 	Progress     FeatureProgress `json:"progress"`
 	Warnings     []WarningDTO    `json:"warnings,omitempty"`
 }
@@ -308,20 +309,31 @@ type RecoveryActionRequest struct {
 }
 
 type RuntimeConfigResponse struct {
-	APIVersion    string                `json:"api_version"`
-	Meta          ResponseMeta          `json:"meta"`
-	Runtime       RuntimeIdentity       `json:"runtime"`
-	Defaults      config.ModelConfig    `json:"model_defaults"`
-	Repos         []ConfigRepoDTO       `json:"repos"`
-	UI            config.UIConfig       `json:"ui"`
-	Notifications NotificationConfigDTO `json:"notifications"`
-	Observability ObservabilityDTO      `json:"observability"`
-	Providers     []string              `json:"providers"`
+	APIVersion      string                `json:"api_version"`
+	Meta            ResponseMeta          `json:"meta"`
+	Runtime         RuntimeIdentity       `json:"runtime"`
+	Defaults        config.ModelConfig    `json:"model_defaults"`
+	FeatureDefaults FeatureDefaultsDTO    `json:"feature_defaults"`
+	Repos           []ConfigRepoDTO       `json:"repos"`
+	WorkspaceRoots  []string              `json:"workspace_roots,omitempty"`
+	UI              config.UIConfig       `json:"ui"`
+	Notifications   NotificationConfigDTO `json:"notifications"`
+	Observability   ObservabilityDTO      `json:"observability"`
+	Providers       []string              `json:"providers"`
 }
 
 type ConfigRepoDTO struct {
-	Name string `json:"name"`
-	Path string `json:"path,omitempty"`
+	Name          string                        `json:"name"`
+	Path          string                        `json:"path,omitempty"`
+	PipelineGates map[string]config.Checkpoints `json:"pipeline_gates,omitempty"`
+}
+
+type FeatureDefaultsDTO struct {
+	Models              config.ModelConfig                   `json:"models"`
+	PipelinePreferences map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+	Inquireness         string                               `json:"inquireness,omitempty"`
+	Pipeline            string                               `json:"pipeline,omitempty"`
+	Checkpoints         config.Checkpoints                   `json:"checkpoints"`
 }
 
 type NotificationConfigDTO struct {

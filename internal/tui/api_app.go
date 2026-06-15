@@ -286,11 +286,11 @@ type APIAppModel struct {
 	askUserQuestion            string
 	askUserRequest             server.ControlRequestDTO
 	askUserAnswerDraft         string
-	createPrompt               *apiCreateFeaturePrompt
+	wizard                     *WizardModel
 	reviewComments             *apiReviewCommentsPanel
 	refactorPrompt             *apiRefactorPrompt
 	refactorPipeline           *apiRefactorPipelinePanel
-	configEditor               *apiFeatureConfigEditor
+	configEditor               *EditConfigModel
 	runtimeConfigEditor        *apiRuntimeConfigEditor
 	focusPanel                 int
 	contentPanelActive         bool
@@ -391,14 +391,6 @@ type apiRefactorPipelinePanel struct {
 	pipelines   []feature.PipelineProfile
 	cursor      int
 	restart     bool
-}
-
-type apiCreateFeaturePrompt struct {
-	nameDraft        string
-	descriptionDraft string
-	focus            int
-	repoCursor       int
-	selectedRepos    map[string]bool
 }
 
 type apiFeatureContentSnapshot struct {
@@ -574,7 +566,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Config load failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
-		m.configEditor = newAPIFeatureConfigEditor(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiPhaseModelCatalog(m.catalog))
+		m.configEditor = newAPIEditConfigModel(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiPhaseModelCatalog(m.catalog))
 		m.statusMessage = ""
 		return m, nil
 	case apiReviewCommentsFetchedMsg:
@@ -611,6 +603,11 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case apiOperationAcceptedMsg:
 		if msg.err != nil {
+			if msg.kind == "feature.config.update" && m.configEditor != nil {
+				m.configEditor.saving = false
+				m.configEditor.saveErr = firstLine(msg.err.Error())
+				return m, nil
+			}
 			m.statusMessage = "Mutation failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
@@ -689,8 +686,8 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.configEditor != nil {
 		return m.handleAPIConfigEditorKey(msg)
 	}
-	if m.createPrompt != nil {
-		return m.handleAPICreateFeaturePromptKey(msg)
+	if m.wizard != nil {
+		return m.handleAPIWizardKey(msg)
 	}
 	if m.reviewComments != nil {
 		return m.handleAPIReviewCommentsKey(msg)
@@ -888,13 +885,19 @@ func (m APIAppModel) View() tea.View {
 		view = overlayModal(view, m.renderAPIRecovery(), w, h)
 	}
 	if m.configEditor != nil {
-		view = overlayModal(view, m.configEditor.render(min(w-4, 96)), w, h)
+		view = overlayModal(view, m.configEditor.View(), w, h)
 	}
 	if m.runtimeConfigEditor != nil {
 		view = overlayModal(view, m.runtimeConfigEditor.render(min(w-4, 96)), w, h)
 	}
-	if m.createPrompt != nil {
-		view = overlayModal(view, m.renderAPICreateFeaturePrompt(min(w-4, 96)), w, h)
+	if m.wizard != nil {
+		view = overlayModal(view, m.wizard.ViewModal(), w, h)
+		if m.wizard.IsPickerActive() {
+			view = overlayModal(view, m.wizard.PickerView(), w, h)
+		}
+		if m.wizard.IsRootPickerActive() {
+			view = overlayModal(view, m.wizard.RootPickerView(), w, h)
+		}
 	}
 	if m.reviewComments != nil {
 		view = overlayModal(view, m.renderAPIReviewCommentsPanel(min(w-4, 96)), w, h)
@@ -990,10 +993,17 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		CurrentRoadmapPhase: summary.Progress.CurrentRoadmapPhase,
 		TotalRoadmapPhases:  summary.Progress.TotalRoadmapPhases,
 		CurrentPhaseStatus:  summary.Progress.CurrentPhaseStatus,
-		RepoStates:          map[string]*feature.RepoState{},
-		RepoCycles:          map[string]*feature.RepoCycleState{},
-		PhaseTimings:        map[string]time.Duration{},
-		PhaseCosts:          map[string]float64{},
+		Checkpoints: feature.Checkpoints{
+			InquiryReview:  summary.Checkpoints.InquiryReview,
+			ResearchReview: summary.Checkpoints.ResearchReview,
+			DesignReview:   summary.Checkpoints.DesignReview,
+			PlanReview:     summary.Checkpoints.PlanReview,
+			ManualPublish:  summary.Checkpoints.ManualPublish,
+		},
+		RepoStates:   map[string]*feature.RepoState{},
+		RepoCycles:   map[string]*feature.RepoCycleState{},
+		PhaseTimings: map[string]time.Duration{},
+		PhaseCosts:   map[string]float64{},
 	}
 	if f.ActiveRun == 0 {
 		f.ActiveRun = 1
@@ -1384,7 +1394,7 @@ func (m APIAppModel) ShowingAskUserPrompt() bool {
 }
 
 func (m APIAppModel) ShowingCreateFeaturePrompt() bool {
-	return m.createPrompt != nil
+	return m.wizard != nil
 }
 
 func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
@@ -1887,60 +1897,98 @@ func (m *APIAppModel) clearAskUserPrompt() {
 }
 
 func (m *APIAppModel) clearCreatePrompt() {
-	m.createPrompt = nil
+	m.wizard = nil
 }
 
-func (m APIAppModel) openCreateFeaturePrompt(focus int) APIAppModel {
-	prompt := newAPICreateFeaturePrompt(m.runtimeConfig)
-	if focus >= prompt.focusCount(len(m.runtimeConfig.Repos)) {
-		focus = 0
+func (m APIAppModel) openCreateFeaturePrompt(_ int) APIAppModel {
+	wizard := m.newCreateFeatureWizard()
+	if m.width > 0 {
+		wizard.SetWidth(m.width)
 	}
-	prompt.focus = focus
-	m.createPrompt = prompt
+	if m.height > 0 {
+		wizard.height = m.height
+	}
+	m.wizard = &wizard
 	m.configEditor = nil
 	m.runtimeConfigEditor = nil
 	m.statusMessage = ""
 	return m
 }
 
-func newAPICreateFeaturePrompt(runtime server.RuntimeConfigResponse) *apiCreateFeaturePrompt {
-	selected := make(map[string]bool, len(runtime.Repos))
-	for _, repo := range runtime.Repos {
-		if repo.Name != "" {
-			selected[repo.Name] = true
+func (m APIAppModel) newCreateFeatureWizard() WizardModel {
+	availRepos := make([]string, 0, len(m.runtimeConfig.Repos))
+	repoPaths := make(map[string]string, len(m.runtimeConfig.Repos))
+	repoConfigs := make(map[string]config.RepoConfig, len(m.runtimeConfig.Repos))
+	for _, repo := range m.runtimeConfig.Repos {
+		if repo.Name == "" {
+			continue
+		}
+		availRepos = append(availRepos, repo.Name)
+		repoPaths[repo.Name] = repo.Path
+		repoConfigs[repo.Name] = config.RepoConfig{
+			Path:          repo.Path,
+			PipelineGates: copyConfigPipelineGates(repo.PipelineGates),
 		}
 	}
-	return &apiCreateFeaturePrompt{selectedRepos: selected}
-}
+	sort.Strings(availRepos)
 
-func (p apiCreateFeaturePrompt) focusCount(repoCount int) int {
-	if repoCount > 0 {
-		return 3
-	}
-	return 2
-}
-
-func (p apiCreateFeaturePrompt) selectedRepoNames(repos []server.ConfigRepoDTO) []string {
-	selected := make([]string, 0, len(repos))
-	for _, repo := range repos {
-		if repo.Name != "" && p.selectedRepos[repo.Name] {
-			selected = append(selected, repo.Name)
+	existingSlugs := make(map[string]string, len(m.featureList.Features))
+	for _, f := range m.featureList.Features {
+		if f.Slug != "" {
+			existingSlugs[f.Slug] = f.Name
 		}
 	}
-	return selected
+
+	cat := apiPhaseModelCatalog(m.catalog)
+	return NewWizardModel(
+		availRepos,
+		repoPaths,
+		repoConfigs,
+		apiWizardDefaults(m.runtimeConfig),
+		"",
+		cat.ProviderModels,
+		cat.ProviderOrder,
+		cat.PhaseDefaults,
+		cat.PhaseProviderModels,
+		existingSlugs,
+		append([]string(nil), m.runtimeConfig.WorkspaceRoots...),
+	)
 }
 
-func (p *apiCreateFeaturePrompt) normalizeRepoCursor(repoCount int) {
-	if repoCount == 0 {
-		p.repoCursor = 0
-		return
+func apiWizardDefaults(runtime server.RuntimeConfigResponse) config.DefaultsConfig {
+	defaults := config.DefaultsConfig{
+		Models:              runtime.FeatureDefaults.Models,
+		PipelinePreferences: runtime.FeatureDefaults.PipelinePreferences,
+		Inquireness:         runtime.FeatureDefaults.Inquireness,
+		Pipeline:            runtime.FeatureDefaults.Pipeline,
+		Checkpoints:         runtime.FeatureDefaults.Checkpoints,
 	}
-	if p.repoCursor < 0 {
-		p.repoCursor = 0
+	if defaults.Models == (config.ModelConfig{}) {
+		defaults.Models = runtime.Defaults
 	}
-	if p.repoCursor >= repoCount {
-		p.repoCursor = repoCount - 1
+	return defaults
+}
+
+func copyConfigPipelineGates(in map[string]config.Checkpoints) map[string]config.Checkpoints {
+	if len(in) == 0 {
+		return nil
 	}
+	out := make(map[string]config.Checkpoints, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func copyBoolMap(in map[string]bool) map[string]bool {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func (m APIAppModel) openNeedInputPrompt() APIAppModel {
@@ -2659,48 +2707,6 @@ func (m APIAppModel) renderAPIOperations() string {
 	return b.String()
 }
 
-func (m APIAppModel) renderAPICreateFeaturePrompt(width int) string {
-	prompt := m.createPrompt
-	if prompt == nil {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("New Feature\n\n")
-	b.WriteString(apiPromptFieldLine("Name", prompt.nameDraft, prompt.focus == 0))
-	b.WriteString(apiPromptFieldLine("Description", prompt.descriptionDraft, prompt.focus == 1))
-	if len(m.runtimeConfig.Repos) > 0 {
-		b.WriteString("\nRepos\n")
-		for i, repo := range m.runtimeConfig.Repos {
-			if repo.Name == "" {
-				continue
-			}
-			cursor := "  "
-			if prompt.focus == 2 && i == prompt.repoCursor {
-				cursor = "> "
-			}
-			mark := " "
-			if prompt.selectedRepos[repo.Name] {
-				mark = "x"
-			}
-			b.WriteString(fmt.Sprintf("%s[%s] %s\n", cursor, mark, repo.Name))
-		}
-	}
-	b.WriteString("\n")
-	b.WriteString(KeyHelpStyle.Render("[tab] Field   [space] Toggle repo   [enter] Create   [esc] Cancel"))
-	return panelStyle(true).Width(width).Render(b.String())
-}
-
-func apiPromptFieldLine(label, value string, focused bool) string {
-	cursor := "  "
-	if focused {
-		cursor = "> "
-	}
-	if value == "" {
-		value = MutedStyle.Render("(empty)")
-	}
-	return fmt.Sprintf("%s%s: %s\n", cursor, label, value)
-}
-
 func (m APIAppModel) renderFeatureActionConfirm() string {
 	title := "Confirm " + m.actionConfirmKind
 	name := m.actionConfirmFeatureName
@@ -3204,17 +3210,27 @@ func (m APIAppModel) selectedPrimaryFeatureActionKind() string {
 	return "feature.start"
 }
 
-func (m APIAppModel) createFeatureCmd(prompt apiCreateFeaturePrompt) tea.Cmd {
+func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
+		projection := result.Pipeline.ProjectGates(result.Checkpoints, true)
 		req := server.CreateFeatureRequest{
-			Name:        strings.TrimSpace(prompt.nameDraft),
-			Description: strings.TrimSpace(prompt.descriptionDraft),
-			Repos:       prompt.selectedRepoNames(m.runtimeConfig.Repos),
-			Models:      m.runtimeConfig.Defaults,
+			Name:                    strings.TrimSpace(result.Name),
+			Description:             strings.TrimSpace(result.Description),
+			Repos:                   append([]string(nil), result.Repos...),
+			Models:                  result.Models,
+			ExitCriteria:            result.ExitCriteria,
+			Inquireness:             result.Inquireness,
+			Images:                  append([]string(nil), result.Images...),
+			UseCurrentBranch:        result.UseCurrentBranch,
+			UseCurrentBranchPerRepo: copyBoolMap(result.UseCurrentBranchPerRepo),
+			Checkpoints:             projection.Checkpoints,
+			Attachments:             append([]string(nil), result.Attachments...),
+			RiskLevel:               feature.RiskLevel(result.RiskLevel),
+			Pipeline:                result.Pipeline,
 		}
 		accepted, err := m.client.CreateFeature(ctx, req)
 		return apiOperationAcceptedMsg{
@@ -3223,6 +3239,29 @@ func (m APIAppModel) createFeatureCmd(prompt apiCreateFeaturePrompt) tea.Cmd {
 			err:      err,
 		}
 	}
+}
+
+func (m APIAppModel) handleAPIWizardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.wizard == nil {
+		return m, nil
+	}
+	wizard, cmd := m.wizard.Update(msg)
+	m.wizard = &wizard
+
+	if m.wizard.IsCancelled() {
+		m.clearCreatePrompt()
+		m.statusMessage = ""
+		return m, nil
+	}
+	if m.wizard.IsDone() {
+		result := m.wizard.Result()
+		m.clearCreatePrompt()
+		if result != nil {
+			return m, m.createFeatureCmd(result)
+		}
+		return m, nil
+	}
+	return m, cmd
 }
 
 func (m APIAppModel) primarySelectedFeatureActionCmd(kind, featureID string) tea.Cmd {
@@ -3329,70 +3368,6 @@ func (m APIAppModel) executeRecoveryCmd(panel apiRecoveryPanel) tea.Cmd {
 		})
 		return apiOperationAcceptedMsg{kind: "recovery.execute", accepted: accepted, err: err}
 	}
-}
-
-func (m APIAppModel) handleAPICreateFeaturePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	prompt := m.createPrompt
-	if prompt == nil {
-		return m, nil
-	}
-	repoCount := len(m.runtimeConfig.Repos)
-	switch msg.Code {
-	case tea.KeyEscape:
-		m.clearCreatePrompt()
-		m.statusMessage = ""
-		return m, nil
-	case tea.KeyTab:
-		prompt.focus = (prompt.focus + 1) % prompt.focusCount(repoCount)
-		prompt.normalizeRepoCursor(repoCount)
-		return m, nil
-	case tea.KeyEnter:
-		if strings.TrimSpace(prompt.nameDraft) == "" {
-			m.statusMessage = "Feature name cannot be empty"
-			return m, nil
-		}
-		return m, m.createFeatureCmd(*prompt)
-	case tea.KeyBackspace:
-		switch prompt.focus {
-		case 0:
-			prompt.nameDraft = trimLastRuneAPI(prompt.nameDraft)
-		case 1:
-			prompt.descriptionDraft = trimLastRuneAPI(prompt.descriptionDraft)
-		}
-		return m, nil
-	case tea.KeyUp:
-		if prompt.focus == 2 {
-			prompt.repoCursor--
-			prompt.normalizeRepoCursor(repoCount)
-		}
-		return m, nil
-	case tea.KeyDown:
-		if prompt.focus == 2 {
-			prompt.repoCursor++
-			prompt.normalizeRepoCursor(repoCount)
-		}
-		return m, nil
-	}
-	if prompt.focus == 2 && msg.Text == " " {
-		if repoCount > 0 {
-			prompt.normalizeRepoCursor(repoCount)
-			repo := m.runtimeConfig.Repos[prompt.repoCursor]
-			if repo.Name != "" {
-				prompt.selectedRepos[repo.Name] = !prompt.selectedRepos[repo.Name]
-			}
-		}
-		return m, nil
-	}
-	if msg.Text != "" && !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt) {
-		switch prompt.focus {
-		case 0:
-			prompt.nameDraft += msg.Text
-		case 1:
-			prompt.descriptionDraft += msg.Text
-		}
-		m.statusMessage = ""
-	}
-	return m, nil
 }
 
 func (m APIAppModel) handleAPIReviewCommentsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -3514,33 +3489,36 @@ func (m APIAppModel) handleAPIConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, t
 	if editor == nil {
 		return m, nil
 	}
-	switch msg.Code {
-	case tea.KeyEscape:
+	if editor.discardConfirm {
+		switch msg.String() {
+		case "y", "Y":
+			m.configEditor = nil
+			return m, nil
+		default:
+			editor.discardConfirm = false
+			return m, nil
+		}
+	}
+	switch msg.String() {
+	case "esc":
+		if editor.editor.HasChanges() {
+			editor.discardConfirm = true
+			return m, nil
+		}
 		m.configEditor = nil
 		return m, nil
-	case tea.KeyUp:
-		editor.move(-1)
-		return m, nil
-	case tea.KeyDown:
-		editor.move(1)
-		return m, nil
-	case tea.KeyTab:
-		if msg.Mod.Contains(tea.ModShift) {
-			editor.cycleModel(-1)
-		} else {
-			editor.cycleModel(1)
+	case "enter":
+		if editor.saving {
+			return m, nil
 		}
-		return m, nil
-	case tea.KeyEnter:
+		editor.saving = true
+		editor.saveErr = ""
 		return m, m.saveFeatureConfigCmd(*editor)
+	default:
+		updated, cmd := editor.Update(msg)
+		m.configEditor = &updated
+		return m, cmd
 	}
-	switch strings.ToLower(msg.Text) {
-	case "k":
-		editor.move(-1)
-	case "j":
-		editor.move(1)
-	}
-	return m, nil
 }
 
 func (m APIAppModel) handleAPIRuntimeConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -3629,14 +3607,19 @@ func (m APIAppModel) handleAPIAskUserPromptKey(msg tea.KeyPressMsg) (tea.Model, 
 	return m, nil
 }
 
-func (m APIAppModel) saveFeatureConfigCmd(editor apiFeatureConfigEditor) tea.Cmd {
+func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		req := server.FeatureConfigMutationFromDTO(editor.draft)
-		accepted, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, req)
+		snap := editor.editor.Snapshot()
+		accepted, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
+			Models:      snap.Models,
+			Inquireness: string(snap.Inquireness),
+			Checkpoints: snap.Checkpoints,
+			Pipeline:    editor.pipeline,
+		})
 		return apiOperationAcceptedMsg{
 			kind:      "feature.config.update",
 			featureID: editor.featureID,
@@ -3922,14 +3905,6 @@ func (m APIAppModel) stopOwnedServerCmd() tea.Cmd {
 	}
 }
 
-type apiFeatureConfigEditor struct {
-	featureID   string
-	featureName string
-	draft       server.FeatureConfigDTO
-	catalog     PhaseModelCatalog
-	cursor      int
-}
-
 type apiRuntimeConfigEditor struct {
 	draft   config.ModelConfig
 	catalog PhaseModelCatalog
@@ -4055,139 +4030,66 @@ func (e *apiRuntimeConfigEditor) setModelValue(field, value string) {
 	}
 }
 
-func newAPIFeatureConfigEditor(featureID, featureName string, response server.FeatureConfigResponse, catalog PhaseModelCatalog) *apiFeatureConfigEditor {
+func newAPIEditConfigModel(featureID, featureName string, response server.FeatureConfigResponse, catalog PhaseModelCatalog) *EditConfigModel {
 	if response.FeatureID != "" {
 		featureID = response.FeatureID
 	}
-	return &apiFeatureConfigEditor{
-		featureID:   featureID,
-		featureName: featureName,
-		draft:       response.Current,
-		catalog:     catalog,
+	if featureName == "" {
+		featureName = featureID
+	}
+	f := apiFeatureFromConfig(featureID, featureName, response)
+	model := NewEditConfigModel(f, catalog, apiFeatureConfigPublishable(response.Publish))
+	return &model
+}
+
+func apiFeatureFromConfig(featureID, featureName string, response server.FeatureConfigResponse) *feature.Feature {
+	current := response.Current
+	pipeline := feature.PipelineProfile(current.Pipeline)
+	if !pipeline.IsValid() {
+		pipeline = feature.PipelineProfile(response.Defaults.Pipeline)
+	}
+	if !pipeline.IsValid() {
+		pipeline = feature.PipelineLarge
+	}
+	return &feature.Feature{
+		ID:          featureID,
+		Name:        featureName,
+		Models:      current.Models,
+		Inquireness: feature.Inquireness(current.Inquireness),
+		Checkpoints: feature.Checkpoints{
+			InquiryReview:  current.Checkpoints.InquiryReview,
+			ResearchReview: current.Checkpoints.ResearchReview,
+			DesignReview:   current.Checkpoints.DesignReview,
+			PlanReview:     current.Checkpoints.PlanReview,
+			ManualPublish:  current.Checkpoints.ManualPublish,
+		},
+		Pipeline: pipeline,
+		Repos:    apiFeatureConfigRepos(response.Publish),
 	}
 }
 
-func (e *apiFeatureConfigEditor) move(delta int) {
-	fields := e.fields()
-	if len(fields) == 0 {
-		e.cursor = 0
-		return
+func apiFeatureConfigRepos(publish server.PublishabilityDTO) []feature.FeatureRepo {
+	repos := make([]feature.FeatureRepo, 0, len(publish.Repos))
+	names := make([]string, 0, len(publish.Repos))
+	for name := range publish.Repos {
+		names = append(names, name)
 	}
-	e.cursor += delta
-	if e.cursor < 0 {
-		e.cursor = len(fields) - 1
+	sort.Strings(names)
+	for _, name := range names {
+		publishable := publish.Repos[name]
+		value := publishable
+		repos = append(repos, feature.FeatureRepo{Name: name, Publishable: &value})
 	}
-	if e.cursor >= len(fields) {
-		e.cursor = 0
-	}
+	return repos
 }
 
-func (e *apiFeatureConfigEditor) cycleModel(delta int) {
-	field := e.currentField()
-	if field == "" {
-		return
-	}
-	opts := e.catalog.ModelOptionsForField(field)
-	if len(opts) == 0 {
-		return
-	}
-	current := e.modelValue(field)
-	idx := -1
-	for i, opt := range opts {
-		if opt == current {
-			idx = i
-			break
+func apiFeatureConfigPublishable(publish server.PublishabilityDTO) bool {
+	for _, repoPublishable := range publish.Repos {
+		if !repoPublishable {
+			return false
 		}
 	}
-	if idx == -1 {
-		if delta < 0 {
-			idx = len(opts) - 1
-		} else {
-			idx = 0
-		}
-	} else {
-		idx = (idx + delta + len(opts)) % len(opts)
-	}
-	e.setModelValue(field, opts[idx])
-}
-
-func (e apiFeatureConfigEditor) render(width int) string {
-	if width < 52 {
-		width = 52
-	}
-	name := e.featureName
-	if name == "" {
-		name = e.featureID
-	}
-	var b strings.Builder
-	b.WriteString("Feature config\n\n")
-	b.WriteString("  " + name + "\n")
-	if e.draft.Pipeline != "" {
-		b.WriteString("  Pipeline: " + e.draft.Pipeline + "\n")
-	}
-	if e.draft.Inquireness != "" {
-		b.WriteString("  Inquireness: " + e.draft.Inquireness + "\n")
-	}
-	b.WriteString("\n")
-	for i, field := range e.fields() {
-		prefix := "  "
-		line := fmt.Sprintf("%-14s %s", field, apiConfigModelSummary(e.modelValue(field)))
-		if i == e.cursor {
-			prefix = "> "
-			line = SelectedRowStyle.Render(line)
-		}
-		b.WriteString(prefix + line + "\n")
-	}
-	b.WriteString("\n")
-	b.WriteString(KeyHelpStyle.Render(" [up/down] Field   [tab] Change model   [enter] Save   [esc] Cancel"))
-	return panelStyle(true).Width(width).Render(b.String())
-}
-
-func (e apiFeatureConfigEditor) fields() []string {
-	if len(e.catalog.Fields) > 0 {
-		return e.catalog.Fields
-	}
-	return phaseCatalogFields
-}
-
-func (e apiFeatureConfigEditor) currentField() string {
-	fields := e.fields()
-	if e.cursor < 0 || e.cursor >= len(fields) {
-		return ""
-	}
-	return fields[e.cursor]
-}
-
-func (e apiFeatureConfigEditor) modelValue(field string) string {
-	switch field {
-	case "Research":
-		return e.draft.Models.Research
-	case "Planning":
-		return e.draft.Models.Planning
-	case "Implementation":
-		return e.draft.Models.Implementation
-	case "Review":
-		return e.draft.Models.Review
-	case "KB Build":
-		return e.draft.Models.KBBuild
-	default:
-		return ""
-	}
-}
-
-func (e *apiFeatureConfigEditor) setModelValue(field, value string) {
-	switch field {
-	case "Research":
-		e.draft.Models.Research = value
-	case "Planning":
-		e.draft.Models.Planning = value
-	case "Implementation":
-		e.draft.Models.Implementation = value
-	case "Review":
-		e.draft.Models.Review = value
-	case "KB Build":
-		e.draft.Models.KBBuild = value
-	}
+	return true
 }
 
 func apiConfigModelSummary(value string) string {
@@ -4253,14 +4155,6 @@ func stringSliceContains(values []string, needle string) bool {
 		}
 	}
 	return false
-}
-
-func trimLastRuneAPI(value string) string {
-	runes := []rune(value)
-	if len(runes) == 0 {
-		return value
-	}
-	return string(runes[:len(runes)-1])
 }
 
 func apiReviewCommentModes(values []string) []string {

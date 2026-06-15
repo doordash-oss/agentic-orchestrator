@@ -44,6 +44,7 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 		CurrentIteration:    4,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  5,
+		Checkpoints:         feature.Checkpoints{ManualPublish: true},
 		Repos: []feature.FeatureRepo{
 			{Name: "agentic-orchestrator", Path: "/repo/path", WorktreePath: "/worktree/path", Branch: "feature/secret"},
 		},
@@ -87,6 +88,9 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 	}
 	if got.ActiveRun != 2 || got.RunCount != 3 || got.Progress.CurrentIteration != 4 {
 		t.Fatalf("summary progress = %+v; want run/progress fields", got)
+	}
+	if !got.Checkpoints.ManualPublish {
+		t.Fatalf("summary checkpoints = %+v; want manual_publish=true", got.Checkpoints)
 	}
 	if len(got.Repos) != 1 || got.Repos[0] != "agentic-orchestrator" {
 		t.Fatalf("summary repos = %v; want repo names only", got.Repos)

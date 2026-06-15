@@ -323,6 +323,7 @@ func summarizeFeature(f *feature.Feature) FeatureSummary {
 		RunCount:     f.RunCount,
 		Repos:        repos,
 		CreatedAt:    f.Created,
+		Checkpoints:  checkpointsDTO(f.Checkpoints),
 		Progress: FeatureProgress{
 			CurrentIteration:    f.CurrentIteration,
 			CurrentRoadmapPhase: f.CurrentRoadmapPhase,

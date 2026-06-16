@@ -2187,15 +2187,15 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 	}
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	if cmd != nil {
-		t.Fatal("Update(a) returned command before permission decision")
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
 	}
 	prompting := model.(APIAppModel)
 	if !prompting.ShowingPermissionPrompt() {
-		t.Fatal("Update(a) did not show permission answer prompt")
+		t.Fatal("Update(a) did not enter attach permission prompt")
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Permission request", "Active work", "Bash", "go test ./internal/tui", "[a] Allow", "[d] Deny"} {
+	for _, want := range []string{"Allow Bash?", "Active work", "go test ./internal/tui", "[y] Allow", "[n] Deny"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2204,9 +2204,9 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 		t.Fatalf("AnswerPermission calls = %v before decision, want none", client.permissionAnswers)
 	}
 
-	model, cmd = prompting.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	model, cmd = prompting.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	if cmd == nil {
-		t.Fatal("Update(a) returned nil command, want permission answer mutation")
+		t.Fatal("Update(y) returned nil command, want permission answer mutation")
 	}
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
@@ -2219,7 +2219,7 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 		t.Fatal("permission prompt remained open after accepted answer")
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Completed Permission Answer", "active"} {
+	for _, want := range []string{"Active work", "Type a message"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2315,16 +2315,16 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 
-	model, cmd := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
-	if cmd != nil {
-		t.Fatal("Update(u) returned command before ask-user answer")
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
 	}
 	prompting := model.(APIAppModel)
 	if !prompting.ShowingAskUserPrompt() {
-		t.Fatal("Update(u) did not show ask-user answer prompt")
+		t.Fatal("Update(a) did not enter attach ask-user prompt")
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"AskUser question", "Active work", "Which database?", "Answer:"} {
+	for _, want := range []string{"Which database?", "Type your answer", "Enter"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2335,12 +2335,13 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 
 	for _, ch := range "PostgreSQL" {
 		model, cmd = prompting.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
-		if cmd != nil {
-			t.Fatalf("Update(%q) returned unexpected command while typing ask-user answer", ch)
-		}
 		prompting = model.(APIAppModel)
 	}
 	model, cmd = prompting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("first Update(enter) returned command, want review step before ask-user answer")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want ask-user answer mutation")
 	}
@@ -2352,10 +2353,10 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 		t.Fatalf("AnswerAskUser requests = %+v, want ask-1/sess-1 answer keyed by full question", got)
 	}
 	if answered.ShowingAskUserPrompt() {
-		t.Fatal("ask-user prompt remained open after accepted answer")
+		t.Fatal("ask-user question remained active after accepted answer")
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Completed AskUser Answer", "active"} {
+	for _, want := range []string{"[you] PostgreSQL", "Active work"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2396,7 +2397,7 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
 	prompting := model.(APIAppModel)
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"AskUser question", "Request: ask-1", "Session: sess-1", "1. PostgreSQL - relational", "2. DynamoDB - managed key-value"} {
+	for _, want := range []string{"Which database?", "PostgreSQL", "relational", "DynamoDB", "managed key-value"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("AskUser option prompt missing %q in:\n%s", want, view)
 		}
@@ -2404,6 +2405,10 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 
 	model, _ = prompting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("first Update(enter) returned command, want review step before ask-user answer")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want ask-user answer")
 	}
@@ -2411,6 +2416,106 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 	_, _ = model.(APIAppModel).Update(msg)
 	if got := client.askUserAnswers; len(got) != 1 || got[0].Answers["Which database?"] != "DynamoDB" {
 		t.Fatalf("AnswerAskUser requests = %+v, want DynamoDB answer", got)
+	}
+}
+
+func TestAPIAppModelAttachRefreshActivatesAskUserPrompt(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
+	}
+	attached := model.(APIAppModel)
+	if attached.ShowingAskUserPrompt() {
+		t.Fatal("attach unexpectedly started with ask-user prompt")
+	}
+
+	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Prompts: &server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
+			{
+				RequestID: "ask-1",
+				SessionID: "sess-1",
+				FeatureID: "active",
+				ToolName:  "AskUserQuestion",
+				Status:    "pending",
+				Summary:   "Pick database",
+				Questions: []server.AskUserQuestionDTO{{Question: "Pick database"}},
+			},
+		}},
+	}})
+	prompting := model.(APIAppModel)
+	if !prompting.ShowingAskUserPrompt() {
+		t.Fatal("prompt refresh did not activate attach ask-user prompt")
+	}
+	if view := stripANSI(prompting.View().Content); !strings.Contains(view, "Pick database") || strings.Contains(view, "AskUser question") {
+		t.Fatalf("prompt refresh did not render main attach question UI:\n%s", view)
+	}
+}
+
+func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
+	}
+	attached := model.(APIAppModel)
+	partialText := "I found the workspace is a"
+	fullText := "I found the workspace is a monorepo with README docs."
+	firstSnapshot := server.RefreshSnapshot{
+		Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
+			ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+		}}},
+		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+			{Index: 0, Role: "assistant", Type: "text", Text: partialText},
+		}},
+	}
+
+	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: firstSnapshot})
+	attached = model.(APIAppModel)
+	if view := stripANSI(attached.View().Content); !strings.Contains(view, partialText) {
+		t.Fatalf("attach view missing partial transcript row:\n%s", view)
+	}
+
+	secondSnapshot := firstSnapshot
+	secondSnapshot.Transcript = &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+		{Index: 0, Role: "assistant", Type: "text", Text: fullText},
+	}}
+	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: secondSnapshot})
+	updated := model.(APIAppModel)
+	view := stripANSI(updated.View().Content)
+	if !strings.Contains(view, "monorepo with README docs") {
+		t.Fatalf("attach view did not update repeated transcript row:\n%s", view)
+	}
+	if count := strings.Count(view, partialText); count != 1 {
+		t.Fatalf("attach view rendered repeated transcript row %d times, want 1:\n%s", count, view)
 	}
 }
 
@@ -3357,6 +3462,62 @@ func TestAPIAppModelSelectionFetchesSelectedFeatureDetail(t *testing.T) {
 		if strings.Contains(view, stale) {
 			t.Fatalf("API app View() kept stale selected-feature content %q in:\n%s", stale, view)
 		}
+	}
+}
+
+func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
+	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: created}
+	published := server.FeatureSummary{ID: "published", Name: "Published work", Slug: "published-work", Status: "Published", CurrentPhase: "publish", CreatedAt: created.Add(-time.Minute)}
+	done := server.FeatureSummary{ID: "done", Name: "Done work", Slug: "done-work", Status: "Done", CurrentPhase: "publish", CreatedAt: created.Add(-2 * time.Minute)}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{done, published, active}},
+		detail:   server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{FeatureSummary: active}},
+		livePreview: server.LivePreviewResponse{
+			Feature: active,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		app = model.(APIAppModel)
+	}
+	if got := app.SelectedFeatureID(); got != "" {
+		t.Fatalf("SelectedFeatureID() = %q, want no feature while cursor is on completed section", got)
+	}
+	if got := app.selectedSection; got != "completed" {
+		t.Fatalf("selectedSection = %q, want completed", got)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter on completed section) returned command, want local section toggle")
+	}
+	app = model.(APIAppModel)
+	if !slices.Contains(app.runtimeConfig.UI.CollapsedSections, "completed") {
+		t.Fatalf("CollapsedSections = %v, want completed", app.runtimeConfig.UI.CollapsedSections)
+	}
+	view := stripANSI(app.View().Content)
+	if strings.Contains(view, "done-work") {
+		t.Fatalf("collapsed completed section still rendered done feature:\n%s", view)
+	}
+
+	model, cmd = app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if cmd != nil {
+		t.Fatal("Update(down after collapsed completed section) returned command, want no-op at list bottom")
+	}
+	app = model.(APIAppModel)
+	if got := app.selectedSection; got != "completed" {
+		t.Fatalf("selectedSection after down = %q, want completed", got)
+	}
+	if got := app.SelectedFeatureID(); got != "" {
+		t.Fatalf("SelectedFeatureID() after down = %q, want still on completed section", got)
 	}
 }
 

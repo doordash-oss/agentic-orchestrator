@@ -23,6 +23,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -254,6 +255,7 @@ type APIAppModel struct {
 	snapshot                   APIAppSnapshot
 	recoveryPanel              *apiRecoveryPanel
 	selectedFeature            string
+	selectedSection            string
 	width                      int
 	height                     int
 	ownedServer                bool
@@ -291,6 +293,7 @@ type APIAppModel struct {
 	askUserRequest             server.ControlRequestDTO
 	askUserAnswerDraft         string
 	askUserOptionCursor        int
+	attach                     *AttachModel
 	wizard                     *WizardModel
 	reviewComments             *apiReviewCommentsPanel
 	refactorPrompt             *apiRefactorPrompt
@@ -595,6 +598,9 @@ func (m APIAppModel) Init() tea.Cmd {
 }
 
 func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.attach != nil {
+		return m.updateAPIAttach(msg)
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -1072,36 +1078,70 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "h":
 		return m.openHelpPrompt(), nil
 	case "u":
+		if m.selectedFeature != "" && m.hasAPIAttachableSession(m.selectedFeature) {
+			return m.openAPIAttachForFeature(m.selectedFeature)
+		}
 		return m.openAskUserPrompt(), nil
 	}
 	switch msg.Code {
 	case tea.KeyEnter:
-		if m.selectedFeature == "" {
-			return m, nil
-		}
-		if m.focusPanel == 0 {
-			m.focusPanel = 1
-		}
-		return m, nil
+		return m.handleAPIDashboardListKey(msg)
 	case tea.KeyUp:
-		previous := m.selectedFeature
-		m.moveSelection(-1)
-		if m.selectedFeature != previous {
-			m.rebuildPresentation(m.selectedFeature)
-			return m, m.fetchFeatureDetailCmd(m.selectedFeature)
-		}
+		return m.handleAPIDashboardListKey(msg)
 	case tea.KeyDown:
-		previous := m.selectedFeature
-		m.moveSelection(1)
-		if m.selectedFeature != previous {
-			m.rebuildPresentation(m.selectedFeature)
-			return m, m.fetchFeatureDetailCmd(m.selectedFeature)
-		}
+		return m.handleAPIDashboardListKey(msg)
 	}
 	return m, nil
 }
 
+func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case apiRefreshSignalMsg:
+		if m.ownedServerShutdownPending {
+			return m, nil
+		}
+		return m, tea.Batch(m.fetchRefreshSnapshotCmd(msg.signal), m.listenForAPIEvents())
+	case apiRefreshSnapshotMsg:
+		if m.ownedServerShutdownPending && msg.err != nil {
+			return m, nil
+		}
+		if msg.err != nil {
+			return m, nil
+		}
+		m.ApplyRefreshSnapshot(msg.snapshot)
+		if msg.content != nil {
+			m.storeContent(*msg.content)
+		}
+		var cmd tea.Cmd
+		m, cmd = m.applyAPIAttachRefreshSnapshot(msg.snapshot)
+		return m, cmd
+	case apiEventErrorMsg:
+		return m, nil
+	case HelpResolvedMsg:
+		if msg.FeatureID != "" {
+			return m, m.fetchFeatureDetailCmd(msg.FeatureID)
+		}
+		return m, nil
+	}
+
+	updated, cmd := m.attach.Update(msg)
+	m.attach = &updated
+	if updated.Detached() || updated.Done() {
+		m.attach = nil
+		if m.selectedFeature != "" {
+			return m, tea.Batch(cmd, m.fetchFeatureDetailCmd(m.selectedFeature))
+		}
+		return m, cmd
+	}
+	return m, cmd
+}
+
 func (m APIAppModel) View() tea.View {
+	if m.attach != nil {
+		v := tea.NewView(m.attach.View())
+		v.AltScreen = true
+		return v
+	}
 	view := m.renderAPIDashboard()
 	w := max(m.width, 80)
 	h := max(m.height, 24)
@@ -1183,6 +1223,11 @@ func (m APIAppModel) View() tea.View {
 }
 
 func (m APIAppModel) renderAPIDashboard() string {
+	dashboard := m.apiDashboardModel()
+	return dashboard.View()
+}
+
+func (m APIAppModel) apiDashboardModel() DashboardModel {
 	features := m.apiDashboardFeatures()
 	dashboard := NewDashboardModel(features, m.runtimeConfig.Runtime.StateDir)
 	dashboard.width = max(m.width, 80)
@@ -1194,7 +1239,13 @@ func (m APIAppModel) renderAPIDashboard() string {
 	if len(m.runtimeConfig.UI.CollapsedSections) > 0 {
 		dashboard.SetCollapsedSections(m.runtimeConfig.UI.CollapsedSections)
 	}
-	dashboard.selectFeature(m.selectedFeature)
+	if m.selectedFeature != "" {
+		dashboard.selectFeature(m.selectedFeature)
+	} else if m.selectedSection != "" {
+		dashboard.selectSection(m.selectedSection)
+	} else {
+		dashboard.syncPreview()
+	}
 	m.applyAPIDashboardRefactorState(&dashboard)
 	if preview := m.snapshot.LivePreview; preview != nil {
 		if dashboard.livePreview.feature != nil && preview.CostUSD > 0 {
@@ -1203,7 +1254,7 @@ func (m APIAppModel) renderAPIDashboard() string {
 		dashboard.livePreview.contextPct = preview.ContextPct
 		dashboard.livePreview.session = newAPILivePreviewSession(*preview)
 	}
-	return dashboard.View()
+	return dashboard
 }
 
 func (m APIAppModel) applyAPIDashboardRefactorState(dashboard *DashboardModel) {
@@ -1248,7 +1299,7 @@ func (m APIAppModel) selectedAPIDashboardFeature() *feature.Feature {
 func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail server.FeatureDetailDTO, hasDetail bool) *feature.Feature {
 	models := m.runtimeConfig.Defaults
 	if hasDetail {
-		summary = detail.FeatureSummary
+		summary = mergeAPIFeatureSummary(summary, detail.FeatureSummary)
 		if detail.Models != (config.ModelConfig{}) {
 			models = detail.Models
 		}
@@ -1369,6 +1420,46 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	return f
 }
 
+func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureSummary {
+	if overlay.ID != "" {
+		base.ID = overlay.ID
+	}
+	if overlay.Name != "" {
+		base.Name = overlay.Name
+	}
+	if overlay.Slug != "" {
+		base.Slug = overlay.Slug
+	}
+	if overlay.Status != "" {
+		base.Status = overlay.Status
+	}
+	if overlay.CurrentPhase != "" {
+		base.CurrentPhase = overlay.CurrentPhase
+	}
+	if overlay.ActiveRun != 0 {
+		base.ActiveRun = overlay.ActiveRun
+	}
+	if overlay.RunCount != 0 {
+		base.RunCount = overlay.RunCount
+	}
+	if len(overlay.Repos) > 0 {
+		base.Repos = append([]string(nil), overlay.Repos...)
+	}
+	if !overlay.CreatedAt.IsZero() {
+		base.CreatedAt = overlay.CreatedAt
+	}
+	if overlay.Checkpoints != (server.CheckpointsDTO{}) {
+		base.Checkpoints = overlay.Checkpoints
+	}
+	if overlay.Progress != (server.FeatureProgress{}) {
+		base.Progress = overlay.Progress
+	}
+	if len(overlay.Warnings) > 0 {
+		base.Warnings = append([]server.WarningDTO(nil), overlay.Warnings...)
+	}
+	return base
+}
+
 func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, hasDetail bool) feature.FeatureRepo {
 	repo := feature.FeatureRepo{Name: name}
 	for _, cfgRepo := range m.runtimeConfig.Repos {
@@ -1417,10 +1508,10 @@ func (m APIAppModel) applyAPIAttention(f *feature.Feature) {
 	}
 }
 
-func (m *DashboardModel) selectFeature(featureID string) {
+func (m *DashboardModel) selectFeature(featureID string) bool {
 	if featureID == "" {
 		m.syncPreview()
-		return
+		return false
 	}
 	for i, item := range m.visibleItems {
 		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
@@ -1428,27 +1519,55 @@ func (m *DashboardModel) selectFeature(featureID string) {
 			m.computeCursorLine()
 			m.updateScrollState(0)
 			m.syncPreview()
-			return
+			return true
 		}
 	}
 	m.syncPreview()
+	return false
+}
+
+func (m *DashboardModel) selectSection(section string) bool {
+	if section == "" {
+		m.syncPreview()
+		return false
+	}
+	for i, item := range m.visibleItems {
+		if item.kind == listItemSectionHeader && item.section == section {
+			m.cursor = i
+			m.computeCursorLine()
+			m.updateScrollState(0)
+			m.syncPreview()
+			return true
+		}
+	}
+	m.syncPreview()
+	return false
 }
 
 type apiSessionView struct {
-	id         string
-	featureID  string
-	phase      feature.Phase
-	repo       string
-	kind       ports.SessionKind
-	label      string
-	status     ports.SessionStatus
-	startedAt  time.Time
-	iteration  int
-	provider   string
-	model      string
-	contextPct int
-	log        ports.MessageLog
-	cost       *llm.ResultMessage
+	id                    string
+	featureID             string
+	phase                 feature.Phase
+	repo                  string
+	kind                  ports.SessionKind
+	label                 string
+	status                ports.SessionStatus
+	startedAt             time.Time
+	iteration             int
+	provider              string
+	model                 string
+	contextPct            int
+	log                   ports.MessageLog
+	cost                  *llm.ResultMessage
+	client                APIClient
+	statusCh              chan string
+	attachCh              chan llm.SDKMessage
+	doneCh                chan struct{}
+	pending               []*llm.ControlRequestMessage
+	lastTranscriptMessage int
+	lastTranscriptRows    map[string]string
+	lastTranscriptTailKey string
+	mu                    sync.Mutex
 }
 
 func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionView {
@@ -1464,16 +1583,21 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 	if preview.CostUSD > 0 {
 		cost = &llm.ResultMessage{TotalCostUSD: preview.CostUSD}
 	}
-	return apiSessionView{
-		id:         preview.SessionID,
-		featureID:  preview.FeatureID,
-		phase:      feature.PhaseImplement,
-		kind:       ports.KindPhase,
-		label:      "Live Preview",
-		status:     ports.SessionRunning,
-		contextPct: preview.ContextPct,
-		log:        log,
-		cost:       cost,
+	return &apiSessionView{
+		id:                    preview.SessionID,
+		featureID:             preview.FeatureID,
+		phase:                 feature.PhaseImplement,
+		kind:                  ports.KindPhase,
+		label:                 "Live Preview",
+		status:                ports.SessionRunning,
+		contextPct:            preview.ContextPct,
+		log:                   log,
+		cost:                  cost,
+		statusCh:              make(chan string, 8),
+		attachCh:              make(chan llm.SDKMessage, 64),
+		doneCh:                make(chan struct{}),
+		lastTranscriptMessage: -1,
+		lastTranscriptRows:    map[string]string{},
 	}
 }
 
@@ -1526,71 +1650,634 @@ func apiToolNameFromActivity(activity string) string {
 	return strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(activity, "Using "), "..."))
 }
 
-func (s apiSessionView) ID() string { return s.id }
-func (s apiSessionView) FeatureID() string {
+func (s *apiSessionView) ID() string { return s.id }
+func (s *apiSessionView) FeatureID() string {
 	return s.featureID
 }
-func (s apiSessionView) Phase() feature.Phase { return s.phase }
-func (s apiSessionView) RepoName() string     { return s.repo }
-func (s apiSessionView) PermCacheScope() string {
-	return ""
+func (s *apiSessionView) Phase() feature.Phase { return s.phase }
+func (s *apiSessionView) RepoName() string     { return s.repo }
+func (s *apiSessionView) PermCacheScope() string {
+	return s.repo
 }
-func (s apiSessionView) Kind() ports.SessionKind     { return s.kind }
-func (s apiSessionView) Label() string               { return s.label }
-func (s apiSessionView) Status() ports.SessionStatus { return s.status }
-func (s apiSessionView) IsActive() bool {
-	return s.status == ports.SessionRunning || s.status == ports.SessionWaitingHelp || s.status == ports.SessionWaitingPermission
+func (s *apiSessionView) Kind() ports.SessionKind { return s.kind }
+func (s *apiSessionView) Label() string           { return s.label }
+func (s *apiSessionView) Status() ports.SessionStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.status
 }
-func (s apiSessionView) Iteration() int               { return s.iteration }
-func (s apiSessionView) StartedAt() time.Time         { return s.startedAt }
-func (s apiSessionView) InitialPrompt() string        { return "" }
-func (s apiSessionView) ProviderName() string         { return s.provider }
-func (s apiSessionView) Model() string                { return s.model }
-func (s apiSessionView) WorkDir() string              { return "" }
-func (s apiSessionView) MessageLog() ports.MessageLog { return s.log }
-func (s apiSessionView) Cost() *llm.ResultMessage     { return s.cost }
-func (s apiSessionView) LatestUsage() *llm.Usage      { return nil }
-func (s apiSessionView) AccumulatedUsage() llm.Usage  { return llm.Usage{} }
-func (s apiSessionView) LastControlRequest() *llm.ControlRequestMessage {
-	return nil
+func (s *apiSessionView) IsActive() bool {
+	status := s.Status()
+	return status == ports.SessionRunning || status == ports.SessionWaitingHelp || status == ports.SessionWaitingPermission
 }
-func (s apiSessionView) PendingControlRequests() []*llm.ControlRequestMessage {
-	return nil
+func (s *apiSessionView) Iteration() int               { return s.iteration }
+func (s *apiSessionView) StartedAt() time.Time         { return s.startedAt }
+func (s *apiSessionView) InitialPrompt() string        { return "" }
+func (s *apiSessionView) ProviderName() string         { return s.provider }
+func (s *apiSessionView) Model() string                { return s.model }
+func (s *apiSessionView) WorkDir() string              { return "" }
+func (s *apiSessionView) MessageLog() ports.MessageLog { return s.log }
+func (s *apiSessionView) Cost() *llm.ResultMessage     { return s.cost }
+func (s *apiSessionView) LatestUsage() *llm.Usage      { return nil }
+func (s *apiSessionView) AccumulatedUsage() llm.Usage  { return llm.Usage{} }
+func (s *apiSessionView) LastControlRequest() *llm.ControlRequestMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 {
+		return nil
+	}
+	return cloneControlRequestMessage(s.pending[len(s.pending)-1])
 }
-func (s apiSessionView) QALog() []ports.QAPair { return nil }
-func (s apiSessionView) LogFilePath() string   { return "" }
-func (s apiSessionView) ContextPercentage() int {
+func (s *apiSessionView) PendingControlRequests() []*llm.ControlRequestMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*llm.ControlRequestMessage, 0, len(s.pending))
+	for _, req := range s.pending {
+		out = append(out, cloneControlRequestMessage(req))
+	}
+	return out
+}
+func (s *apiSessionView) QALog() []ports.QAPair { return nil }
+func (s *apiSessionView) LogFilePath() string   { return "" }
+func (s *apiSessionView) ContextPercentage() int {
 	return s.contextPct
 }
-func (s apiSessionView) ErrorDetail() string    { return "" }
-func (s apiSessionView) ExitCodeDetail() string { return "" }
-func (s apiSessionView) LastStdoutAt() time.Time {
+func (s *apiSessionView) ErrorDetail() string    { return "" }
+func (s *apiSessionView) ExitCodeDetail() string { return "" }
+func (s *apiSessionView) LastStdoutAt() time.Time {
 	return time.Time{}
 }
-func (s apiSessionView) StatusCh() <-chan string         { return nil }
-func (s apiSessionView) AttachCh() <-chan llm.SDKMessage { return nil }
-func (s apiSessionView) Done() <-chan struct{}           { return nil }
-func (s apiSessionView) HasPendingAskUserQuestion() bool {
+func (s *apiSessionView) StatusCh() <-chan string         { return s.statusCh }
+func (s *apiSessionView) AttachCh() <-chan llm.SDKMessage { return s.attachCh }
+func (s *apiSessionView) Done() <-chan struct{}           { return s.doneCh }
+func (s *apiSessionView) HasPendingAskUserQuestion() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, req := range s.pending {
+		if req != nil && req.Request.ToolName == "AskUserQuestion" {
+			return true
+		}
+	}
 	return false
 }
-func (s apiSessionView) SendUserMessage(string) error {
-	return errors.New("api live preview session is read-only")
+func (s *apiSessionView) SendUserMessage(text string) error {
+	if s.client == nil {
+		return errors.New("api session client is not available")
+	}
+	_, err := s.client.SendHelp(context.Background(), server.HelpAnswerRequest{
+		FeatureID: s.featureID,
+		SessionID: s.id,
+		Message:   text,
+	})
+	return err
 }
-func (s apiSessionView) RespondToControl(string, bool, string) error {
-	return errors.New("api live preview session is read-only")
+func (s *apiSessionView) RespondToControl(requestID string, allow bool, _ string) error {
+	if s.client == nil {
+		return errors.New("api session client is not available")
+	}
+	decision := "deny"
+	if allow {
+		decision = "allow"
+	}
+	_, err := s.client.AnswerPermission(context.Background(), server.PermissionAnswerRequest{
+		RequestID: requestID,
+		SessionID: s.id,
+		Decision:  decision,
+	})
+	return err
 }
-func (s apiSessionView) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
-	return errors.New("api live preview session is read-only")
+func (s *apiSessionView) RespondToAskUser(requestID string, _ json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
+	if s.client == nil {
+		return errors.New("api session client is not available")
+	}
+	_, err := s.client.AnswerAskUser(context.Background(), server.AskUserAnswerRequest{
+		RequestID: requestID,
+		SessionID: s.id,
+		Answers:   answers,
+	})
+	return err
 }
-func (s apiSessionView) ClearPendingQuestion(string) {}
-func (s apiSessionView) ResetWaitingStatus()         {}
-func (s apiSessionView) Stop() error {
-	return errors.New("api live preview session is read-only")
+func (s *apiSessionView) ClearPendingQuestion(requestID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = slices.DeleteFunc(s.pending, func(req *llm.ControlRequestMessage) bool {
+		return req != nil && req.RequestID == requestID
+	})
 }
-func (s apiSessionView) Interrupt() error {
-	return errors.New("api live preview session is read-only")
+func (s *apiSessionView) ResetWaitingStatus() {
+	s.mu.Lock()
+	s.status = ports.SessionRunning
+	s.mu.Unlock()
 }
-func (s apiSessionView) Wait() {}
+func (s *apiSessionView) Stop() error {
+	if s.client == nil {
+		return errors.New("api session client is not available")
+	}
+	_, err := s.client.StopFeature(context.Background(), s.featureID)
+	return err
+}
+func (s *apiSessionView) Interrupt() error { return s.Stop() }
+func (s *apiSessionView) Wait()            {}
+
+func (m APIAppModel) apiAttachTabsForFeature(featureID string) []repoTab {
+	controlsBySession := m.apiPendingControlsBySession(featureID)
+	summariesByID := map[string]server.SessionSummaryDTO{}
+	var order []string
+	addSummary := func(summary server.SessionSummaryDTO) {
+		if summary.FeatureID != featureID || summary.ID == "" {
+			return
+		}
+		if !apiSessionDTOIsActive(summary) && len(controlsBySession[summary.ID]) == 0 {
+			return
+		}
+		if _, ok := summariesByID[summary.ID]; !ok {
+			order = append(order, summary.ID)
+		}
+		summariesByID[summary.ID] = summary
+	}
+	for _, summary := range m.sessionList.Sessions {
+		addSummary(summary)
+	}
+	for sessionID, controls := range controlsBySession {
+		if sessionID == "" || len(controls) == 0 {
+			continue
+		}
+		if _, ok := summariesByID[sessionID]; !ok {
+			addSummary(apiSessionSummaryFromControl(featureID, controls[0]))
+		}
+	}
+	if len(order) == 0 {
+		if preview, ok := m.livePreviews[featureID]; ok && preview.Session != nil {
+			addSummary(*preview.Session)
+		}
+	}
+
+	tabs := make([]repoTab, 0, len(order))
+	for _, sessionID := range order {
+		summary := summariesByID[sessionID]
+		detail := server.SessionDetailDTO{SessionSummaryDTO: summary, CanAttach: apiSessionDTOIsActive(summary)}
+		if cached, ok := m.sessionDetails[sessionID]; ok {
+			detail = cached.Session
+			if detail.ID == "" {
+				detail.SessionSummaryDTO = summary
+			}
+		}
+		transcript := server.TranscriptResponse{}
+		if cached, ok := m.transcripts[sessionID]; ok {
+			transcript = cached
+		}
+		controls := controlsBySession[sessionID]
+		if len(controls) == 0 {
+			controls = detail.PendingControls
+		}
+		sess := newAPIAttachSession(m.client, detail, transcript, controls)
+		repoName := firstNonEmpty(sess.RepoName(), sess.Label(), sess.ID())
+		if repoName == "" {
+			repoName = sessionID
+		}
+		tabs = append(tabs, repoTab{
+			repoName: repoName,
+			label:    sess.Label(),
+			kind:     sess.Kind(),
+			sess:     sess,
+			status:   apiAttachTabStatus(sess),
+		})
+	}
+	return tabs
+}
+
+func (m APIAppModel) apiPendingControlsBySession(featureID string) map[string][]server.ControlRequestDTO {
+	out := map[string][]server.ControlRequestDTO{}
+	add := func(req server.ControlRequestDTO) {
+		if req.FeatureID != featureID || !isPendingControlStatus(req.Status) {
+			return
+		}
+		out[req.SessionID] = append(out[req.SessionID], req)
+	}
+	for _, req := range m.prompts.AskUserQuestions {
+		add(req)
+	}
+	for _, req := range m.permissions.Requests {
+		add(req)
+	}
+	for _, detail := range m.sessionDetails {
+		if detail.Session.FeatureID != featureID {
+			continue
+		}
+		for _, req := range detail.Session.PendingControls {
+			add(req)
+		}
+	}
+	return out
+}
+
+func apiInitialAttachTab(tabs []repoTab) int {
+	for i, tab := range tabs {
+		if tab.sess != nil && firstPendingPermissionControlRequest(tab.sess) != nil {
+			return i
+		}
+	}
+	for i, tab := range tabs {
+		if tab.sess != nil && firstPendingAskUserControlRequest(tab.sess) != nil {
+			return i
+		}
+	}
+	return resolveInitialTab(tabs, "")
+}
+
+func apiAttachTabStatus(sess session.SessionView) presentationStatus {
+	if sess == nil {
+		return statusPending
+	}
+	switch sess.Status() {
+	case ports.SessionWaitingHelp, ports.SessionWaitingPermission:
+		return statusWaiting
+	case ports.SessionDone:
+		return statusReviewPassed
+	case ports.SessionFailed:
+		return statusFailed
+	default:
+		return statusImplementing
+	}
+}
+
+func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, transcript server.TranscriptResponse, controls []server.ControlRequestDTO) *apiSessionView {
+	log := session.NewMessageLog()
+	lastIndex := -1
+	lastRows := map[string]string{}
+	lastTailKey := ""
+	for _, row := range transcript.Messages {
+		if msg, ok := apiTranscriptRowToSDKMessage(row, detail.ID); ok {
+			log.Append(msg)
+			if row.Index > lastIndex {
+				lastIndex = row.Index
+				lastRows = map[string]string{}
+			}
+			if row.Index == lastIndex {
+				key := apiTranscriptRowKey(row)
+				lastRows[key] = apiTranscriptRowSignature(row)
+				lastTailKey = key
+			}
+		}
+	}
+	status := apiSessionStatus(detail.Status)
+	pending := apiControlRequestMessages(controls)
+	if len(pending) > 0 {
+		if firstPendingAskUserControlRequest(&apiSessionView{pending: pending}) != nil {
+			status = ports.SessionWaitingHelp
+		} else {
+			status = ports.SessionWaitingPermission
+		}
+	}
+	return &apiSessionView{
+		id:                    detail.ID,
+		featureID:             detail.FeatureID,
+		phase:                 apiFeaturePhase(detail.Phase),
+		repo:                  detail.Repo,
+		kind:                  apiSessionKind(detail.Kind),
+		label:                 detail.Label,
+		status:                status,
+		startedAt:             detail.StartedAt,
+		iteration:             detail.Iteration,
+		provider:              detail.Provider,
+		model:                 detail.Model,
+		contextPct:            detail.ContextPct,
+		log:                   log,
+		cost:                  &llm.ResultMessage{TotalCostUSD: detail.Usage.CostUSD},
+		client:                client,
+		statusCh:              make(chan string, 8),
+		attachCh:              make(chan llm.SDKMessage, 64),
+		doneCh:                make(chan struct{}),
+		pending:               pending,
+		lastTranscriptMessage: lastIndex,
+		lastTranscriptRows:    lastRows,
+		lastTranscriptTailKey: lastTailKey,
+	}
+}
+
+func apiSessionSummaryFromControl(featureID string, req server.ControlRequestDTO) server.SessionSummaryDTO {
+	status := "WaitingPermission"
+	if req.ToolName == "AskUserQuestion" {
+		status = "WaitingHelp"
+	}
+	return server.SessionSummaryDTO{
+		ID:        req.SessionID,
+		FeatureID: featureID,
+		Phase:     req.Phase,
+		Kind:      "phase",
+		Status:    status,
+	}
+}
+
+func apiSessionDTOIsActive(summary server.SessionSummaryDTO) bool {
+	status := apiSessionStatus(summary.Status)
+	return status == ports.SessionRunning || status == ports.SessionWaitingHelp || status == ports.SessionWaitingPermission
+}
+
+func apiSessionStatus(status string) ports.SessionStatus {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(status), "-", "_")) {
+	case "waitingpermission", "waiting_permission":
+		return ports.SessionWaitingPermission
+	case "waitinghelp", "waiting_help", "waiting":
+		return ports.SessionWaitingHelp
+	case "done", "completed", "success":
+		return ports.SessionDone
+	case "failed", "error":
+		return ports.SessionFailed
+	default:
+		return ports.SessionRunning
+	}
+}
+
+func apiSessionKind(kind string) ports.SessionKind {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(kind), "-", "_")) {
+	case "repo_impl":
+		return ports.KindRepoImpl
+	case "validator":
+		return ports.KindValidator
+	case "review_helper":
+		return ports.KindReviewHelper
+	case "tweak":
+		return ports.KindTweak
+	default:
+		return ports.KindPhase
+	}
+}
+
+func apiControlRequestMessages(requests []server.ControlRequestDTO) []*llm.ControlRequestMessage {
+	out := make([]*llm.ControlRequestMessage, 0, len(requests))
+	seen := map[string]bool{}
+	for _, req := range requests {
+		if req.RequestID == "" || seen[req.RequestID] {
+			continue
+		}
+		seen[req.RequestID] = true
+		out = append(out, apiControlRequestMessage(req))
+	}
+	return out
+}
+
+func apiControlRequestMessage(req server.ControlRequestDTO) *llm.ControlRequestMessage {
+	return &llm.ControlRequestMessage{
+		Type:      "control_request",
+		RequestID: req.RequestID,
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: req.ToolName,
+			Input:    apiControlRequestInput(req),
+		},
+	}
+}
+
+func apiControlRequestInput(req server.ControlRequestDTO) json.RawMessage {
+	if req.ToolName == "AskUserQuestion" {
+		type option struct {
+			Label       string   `json:"label,omitempty"`
+			Description string   `json:"description,omitempty"`
+			Confidence  *float64 `json:"confidence,omitempty"`
+		}
+		type question struct {
+			Question    string   `json:"question,omitempty"`
+			Header      string   `json:"header,omitempty"`
+			MultiSelect bool     `json:"multiSelect,omitempty"`
+			Options     []option `json:"options,omitempty"`
+		}
+		envelope := struct {
+			Questions []question `json:"questions"`
+		}{}
+		for _, q := range req.Questions {
+			converted := question{
+				Question:    q.Question,
+				Header:      q.Header,
+				MultiSelect: q.MultiSelect,
+			}
+			for _, opt := range q.Options {
+				converted.Options = append(converted.Options, option{
+					Label:       opt.Label,
+					Description: opt.Description,
+					Confidence:  opt.Confidence,
+				})
+			}
+			envelope.Questions = append(envelope.Questions, converted)
+		}
+		data, _ := json.Marshal(envelope)
+		return data
+	}
+	data, _ := json.Marshal(map[string]string{"summary": req.Summary})
+	return data
+}
+
+func cloneControlRequestMessage(req *llm.ControlRequestMessage) *llm.ControlRequestMessage {
+	if req == nil {
+		return nil
+	}
+	clone := *req
+	clone.Request.Input = append(json.RawMessage(nil), req.Request.Input...)
+	return &clone
+}
+
+func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID string) (llm.SDKMessage, bool) {
+	switch row.Type {
+	case "text":
+		text := strings.TrimSpace(row.Text)
+		if text == "" && row.Redacted {
+			text = "[redacted]"
+		}
+		if text == "" {
+			return llm.SDKMessage{}, false
+		}
+		if row.Role == "user" {
+			return llm.SDKMessage{
+				Type: "user",
+				User: &llm.UserMessage{
+					Type:      "user",
+					SessionID: sessionID,
+					Message: llm.ConversationMsg{
+						Role:    "user",
+						Content: []llm.ContentBlock{{Type: "text", Text: text}},
+					},
+				},
+			}, true
+		}
+		return llm.SDKMessage{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{
+				Type:      "assistant",
+				SessionID: sessionID,
+				Message: llm.ConversationMsg{
+					Role:    "assistant",
+					Content: []llm.ContentBlock{{Type: "text", Text: text}},
+				},
+			},
+		}, true
+	case "tool_use":
+		if row.Tool == "" {
+			return llm.SDKMessage{}, false
+		}
+		return llm.SDKMessage{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{
+				Type:      "assistant",
+				SessionID: sessionID,
+				Message: llm.ConversationMsg{
+					Role:    "assistant",
+					Content: []llm.ContentBlock{{Type: "tool_use", Name: row.Tool}},
+				},
+			},
+		}, true
+	case "result":
+		subtype := firstNonEmpty(row.Status, "success")
+		return llm.SDKMessage{
+			Type:   "result",
+			Result: &llm.ResultMessage{Type: "result", Subtype: subtype, SessionID: sessionID},
+		}, true
+	case "status":
+		return llm.SDKMessage{
+			Type:   "status",
+			Status: &llm.StatusMessage{Type: "status", SessionID: sessionID, Message: row.Text},
+		}, true
+	default:
+		return llm.SDKMessage{}, false
+	}
+}
+
+func apiTranscriptRowKey(row server.TranscriptMessageDTO) string {
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted)
+}
+
+func apiTranscriptRowSignature(row server.TranscriptMessageDTO) string {
+	return apiTranscriptRowKey(row) + "\x00" + row.Text
+}
+
+func apiCanUpdateLastTranscriptLogMessage(log ports.MessageLog) bool {
+	if log == nil {
+		return false
+	}
+	messages := log.Messages()
+	if len(messages) == 0 {
+		return true
+	}
+	return !messages[len(messages)-1].LocallyAppended
+}
+
+func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapshot) (APIAppModel, tea.Cmd) {
+	if m.attach == nil {
+		return m, nil
+	}
+	active, ok := m.attach.sess.(*apiSessionView)
+	if !ok || active == nil {
+		return m, nil
+	}
+	detail := server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
+		ID:         active.ID(),
+		FeatureID:  active.FeatureID(),
+		Phase:      active.Phase().String(),
+		Repo:       active.RepoName(),
+		Kind:       active.Kind().String(),
+		Label:      active.Label(),
+		Status:     active.Status().String(),
+		StartedAt:  active.StartedAt(),
+		Iteration:  active.Iteration(),
+		ContextPct: active.ContextPercentage(),
+	}}
+	var transcript *server.TranscriptResponse
+	if snapshot.Session != nil {
+		if snapshot.Session.Session.ID != active.ID() {
+			return m, nil
+		}
+		detail = snapshot.Session.Session
+		transcript = snapshot.Transcript
+	}
+	controls := detail.PendingControls
+	if len(controls) == 0 {
+		if bySession := m.apiPendingControlsBySession(active.FeatureID()); len(bySession) > 0 {
+			controls = bySession[active.ID()]
+		}
+	}
+	newMessages := active.applyAPISessionSnapshot(detail, transcript, controls)
+	var cmd tea.Cmd
+	if len(newMessages) > 0 {
+		updated, updateCmd := m.attach.Update(attachMsgsMsg{generation: m.attach.tabGeneration, messages: newMessages})
+		m.attach = &updated
+		cmd = updateCmd
+	}
+	if len(controls) > 0 {
+		m.attach.restorePendingAskUserQuestions(active)
+		if !m.attach.HasActiveQuestion() {
+			m.attach.restorePendingPermission(active)
+		}
+		m.attach.updateViewport()
+	}
+	return m, cmd
+}
+
+func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO, transcript *server.TranscriptResponse, controls []server.ControlRequestDTO) []llm.SDKMessage {
+	pending := apiControlRequestMessages(controls)
+	hasAskUser := false
+	for _, req := range pending {
+		if req != nil && req.Request.ToolName == "AskUserQuestion" {
+			hasAskUser = true
+			break
+		}
+	}
+	s.mu.Lock()
+	s.status = apiSessionStatus(detail.Status)
+	s.contextPct = detail.ContextPct
+	s.pending = pending
+	if len(s.pending) > 0 {
+		if hasAskUser {
+			s.status = ports.SessionWaitingHelp
+		} else {
+			s.status = ports.SessionWaitingPermission
+		}
+	}
+	s.mu.Unlock()
+	if transcript == nil {
+		return nil
+	}
+	var messages []llm.SDKMessage
+	if s.lastTranscriptRows == nil {
+		s.lastTranscriptRows = map[string]string{}
+	}
+	for _, row := range transcript.Messages {
+		if row.Index < s.lastTranscriptMessage {
+			continue
+		}
+		msg, ok := apiTranscriptRowToSDKMessage(row, s.id)
+		if !ok {
+			continue
+		}
+		key := apiTranscriptRowKey(row)
+		signature := apiTranscriptRowSignature(row)
+		if row.Index > s.lastTranscriptMessage {
+			s.log.Append(msg)
+			messages = append(messages, msg)
+			s.lastTranscriptMessage = row.Index
+			s.lastTranscriptRows = map[string]string{key: signature}
+			s.lastTranscriptTailKey = key
+			continue
+		}
+		if previous, ok := s.lastTranscriptRows[key]; ok {
+			if previous == signature {
+				continue
+			}
+			if key == s.lastTranscriptTailKey && apiCanUpdateLastTranscriptLogMessage(s.log) {
+				s.log.UpdateLast(msg)
+			} else {
+				s.log.Append(msg)
+				s.lastTranscriptTailKey = key
+			}
+			s.lastTranscriptRows[key] = signature
+			messages = append(messages, msg)
+			continue
+		}
+		s.log.Append(msg)
+		messages = append(messages, msg)
+		s.lastTranscriptRows[key] = signature
+		s.lastTranscriptTailKey = key
+	}
+	return messages
+}
 
 func (m APIAppModel) Close() {
 	if m.cancelEvents != nil {
@@ -1656,6 +2343,9 @@ func (m APIAppModel) ShowingNeedInputPrompt() bool {
 }
 
 func (m APIAppModel) ShowingPermissionPrompt() bool {
+	if m.attach != nil && m.attach.showPermMenu {
+		return true
+	}
 	return m.permissionPromptActive
 }
 
@@ -1664,6 +2354,9 @@ func (m APIAppModel) ShowingHelpPrompt() bool {
 }
 
 func (m APIAppModel) ShowingAskUserPrompt() bool {
+	if m.attach != nil && m.attach.HasActiveQuestion() {
+		return true
+	}
 	return m.askUserPromptActive
 }
 
@@ -1827,7 +2520,7 @@ func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
 	selected := preferredFeatureID
 	if !apiHasFeature(features, selected) {
 		selected = ""
-		if len(features) > 0 {
+		if len(features) > 0 && m.selectedSection == "" {
 			selected = features[0].ID
 		}
 	}
@@ -1872,6 +2565,9 @@ func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
 		Content:     content,
 	}
 	m.selectedFeature = selected
+	if selected != "" {
+		m.selectedSection = ""
+	}
 }
 
 func newAPIRecoveryPanel(snapshot server.RecoverySnapshotResponse) *apiRecoveryPanel {
@@ -2181,6 +2877,54 @@ func (m *APIAppModel) moveSelection(delta int) {
 		idx = len(m.snapshot.Features) - 1
 	}
 	m.selectedFeature = m.snapshot.Features[idx].ID
+}
+
+func (m APIAppModel) handleAPIDashboardListKey(msg tea.KeyPressMsg) (APIAppModel, tea.Cmd) {
+	previousFeature := m.selectedFeature
+	dashboard := m.apiDashboardModel()
+
+	switch msg.Code {
+	case tea.KeyUp:
+		if dashboard.focusPanel == 1 {
+			dashboard.MoveToAdjacentFeature(-1)
+		} else {
+			dashboard, _ = dashboard.Update(msg)
+		}
+	case tea.KeyDown:
+		if dashboard.focusPanel == 1 {
+			dashboard.MoveToAdjacentFeature(1)
+		} else {
+			dashboard, _ = dashboard.Update(msg)
+		}
+	case tea.KeyEnter:
+		dashboard, _ = dashboard.Update(msg)
+		if dashboard.ConsumeWantNewFeature() {
+			return m.openCreateFeaturePrompt(0), nil
+		}
+	default:
+		return m, nil
+	}
+
+	m = m.applyAPIDashboardListState(dashboard)
+	m.rebuildPresentation(m.selectedFeature)
+	if m.selectedFeature != "" && m.selectedFeature != previousFeature {
+		return m, m.fetchFeatureDetailCmd(m.selectedFeature)
+	}
+	return m, nil
+}
+
+func (m APIAppModel) applyAPIDashboardListState(dashboard DashboardModel) APIAppModel {
+	m.focusPanel = dashboard.focusPanel
+	m.rightPanelMode = dashboard.rightPanelMode
+	if f := dashboard.SelectedFeature(); f != nil {
+		m.selectedFeature = f.ID
+		m.selectedSection = ""
+	} else {
+		m.selectedFeature = ""
+		m.selectedSection = dashboard.SelectedSection()
+	}
+	m.runtimeConfig.UI.CollapsedSections = dashboard.CollapsedSectionsList()
+	return m
 }
 
 func (m APIAppModel) confirmSelectedFeatureAction(kind string) APIAppModel {
@@ -2744,19 +3488,38 @@ func (m APIAppModel) openSelectedDiff() (APIAppModel, tea.Cmd) {
 	}
 }
 
+func (m APIAppModel) hasAPIAttachableSession(featureID string) bool {
+	return len(m.apiAttachTabsForFeature(featureID)) > 0
+}
+
+func (m APIAppModel) openAPIAttachForFeature(featureID string) (tea.Model, tea.Cmd) {
+	tabs := m.apiAttachTabsForFeature(featureID)
+	if len(tabs) == 0 {
+		m.statusMessage = "No active sessions to watch."
+		return m, nil
+	}
+	initialIdx := apiInitialAttachTab(tabs)
+	if initialIdx < 0 {
+		m.statusMessage = "No active sessions to watch."
+		return m, nil
+	}
+	attach := NewAttachModel(tabs, initialIdx, featureID, m.width, m.height)
+	if f := m.selectedAPIDashboardFeature(); f != nil && f.ID == featureID {
+		attach.featureName = f.Name
+		attach.activeRun = f.ActiveRun
+	}
+	m.attach = &attach
+	m.statusMessage = ""
+	return m, attach.Init()
+}
+
 func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
 	if m.selectedFeature == "" {
 		m.statusMessage = "No feature selected"
 		return m, nil
 	}
-	if _, ok := m.selectedPendingPermission(m.selectedFeature); ok {
-		return m.openPermissionPrompt(), nil
-	}
-	if _, ok := m.selectedPendingAskUser(m.selectedFeature); ok {
-		return m.openAskUserPrompt(), nil
-	}
-	if _, ok := m.selectedPendingHelp(m.selectedFeature); ok {
-		return m.openHelpPrompt(), nil
+	if m.hasAPIAttachableSession(m.selectedFeature) {
+		return m.openAPIAttachForFeature(m.selectedFeature)
 	}
 	if _, ok := m.selectedNeedInputGate(m.selectedFeature); ok {
 		return m.openNeedInputPrompt(), nil

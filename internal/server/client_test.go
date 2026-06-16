@@ -29,7 +29,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-func TestClientFetchesTypedSnapshotsAndAcceptedMutations(t *testing.T) {
+func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	var sawTrustedHeader bool
 	var sawResumeTrustedHeader bool
 	var sawRecoveryTrustedHeader bool
@@ -71,8 +71,6 @@ func TestClientFetchesTypedSnapshotsAndAcceptedMutations(t *testing.T) {
 			writeJSON(w, http.StatusOK, TextContentResponse{APIVersion: APIVersion, ID: "session", Text: "log"})
 		case "GET /api/v1/features/feat-1/live-preview":
 			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}})
-		case "GET /api/v1/operations":
-			writeJSON(w, http.StatusOK, OperationSnapshotResponse{APIVersion: APIVersion, Operations: []OperationDTO{{ID: "op-1", Status: OperationStatusQueued}}})
 		case "GET /api/v1/recovery":
 			writeJSON(w, http.StatusOK, RecoverySnapshotResponse{
 				APIVersion: APIVersion,
@@ -95,7 +93,7 @@ func TestClientFetchesTypedSnapshotsAndAcceptedMutations(t *testing.T) {
 			if req.Name != "New feature" {
 				t.Errorf("create request name = %q, want New feature", req.Name)
 			}
-			writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{APIVersion: APIVersion, OperationID: "op-create", Status: OperationStatusQueued})
+			writeJSON(w, http.StatusCreated, CreateFeatureResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, FeatureID: "feat-created", Result: "created"})
 		case "POST /api/v1/features/feat-1/actions/resume":
 			sawResumeTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
 			var req map[string]any
@@ -105,7 +103,7 @@ func TestClientFetchesTypedSnapshotsAndAcceptedMutations(t *testing.T) {
 			if len(req) != 0 {
 				t.Errorf("resume request = %+v, want empty JSON object", req)
 			}
-			writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{APIVersion: APIVersion, OperationID: "op-resume", Status: OperationStatusQueued})
+			writeJSON(w, http.StatusOK, FeatureStartResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, FeatureID: "feat-1", Result: "started"})
 		case "POST /api/v1/recovery/actions":
 			sawRecoveryTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
 			var req RecoveryActionRequest
@@ -115,7 +113,7 @@ func TestClientFetchesTypedSnapshotsAndAcceptedMutations(t *testing.T) {
 			if req.SnapshotID != "recovery-snapshot-1" || req.Actions["feat-1:api"] != "resume" {
 				t.Errorf("recovery request = %+v, want snapshot action resume", req)
 			}
-			writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{APIVersion: APIVersion, OperationID: "op-recovery", Status: OperationStatusQueued})
+			writeJSON(w, http.StatusOK, RecoveryActionResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, Result: "recovered"})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -173,9 +171,6 @@ func TestClientFetchesTypedSnapshotsAndAcceptedMutations(t *testing.T) {
 	if _, err := client.LivePreview(ctx, "feat-1"); err != nil {
 		t.Fatalf("LivePreview() error = %v", err)
 	}
-	if _, err := client.Operations(ctx, OperationQuery{}); err != nil {
-		t.Fatalf("Operations() error = %v", err)
-	}
 	recovery, err := client.Recovery(ctx)
 	if err != nil {
 		t.Fatalf("Recovery() error = %v", err)
@@ -183,29 +178,29 @@ func TestClientFetchesTypedSnapshotsAndAcceptedMutations(t *testing.T) {
 	if recovery.SnapshotID != "recovery-snapshot-1" || len(recovery.Items) != 1 || recovery.Items[0].Key != "feat-1:api" {
 		t.Fatalf("Recovery() = %+v; want typed recovery snapshot", recovery)
 	}
-	accepted, err := client.CreateFeature(ctx, CreateFeatureRequest{Name: "New feature"})
+	created, err := client.CreateFeature(ctx, CreateFeatureRequest{Name: "New feature"})
 	if err != nil {
 		t.Fatalf("CreateFeature() error = %v", err)
 	}
-	if accepted.OperationID != "op-create" || !sawTrustedHeader {
-		t.Fatalf("CreateFeature() = %+v trusted=%v, want accepted with trusted header", accepted, sawTrustedHeader)
+	if created.FeatureID != "feat-created" || created.Result != "created" || !sawTrustedHeader {
+		t.Fatalf("CreateFeature() = %+v trusted=%v, want created with trusted header", created, sawTrustedHeader)
 	}
-	accepted, err = client.ResumeFeature(ctx, "feat-1")
+	resumed, err := client.ResumeFeature(ctx, "feat-1")
 	if err != nil {
 		t.Fatalf("ResumeFeature() error = %v", err)
 	}
-	if accepted.OperationID != "op-resume" || !sawResumeTrustedHeader {
-		t.Fatalf("ResumeFeature() = %+v trusted=%v, want accepted with trusted header", accepted, sawResumeTrustedHeader)
+	if resumed.FeatureID != "feat-1" || resumed.Result != "started" || !sawResumeTrustedHeader {
+		t.Fatalf("ResumeFeature() = %+v trusted=%v, want started with trusted header", resumed, sawResumeTrustedHeader)
 	}
-	accepted, err = client.ExecuteRecovery(ctx, RecoveryActionRequest{
+	recovered, err := client.ExecuteRecovery(ctx, RecoveryActionRequest{
 		SnapshotID: "recovery-snapshot-1",
 		Actions:    map[string]string{"feat-1:api": "resume"},
 	})
 	if err != nil {
 		t.Fatalf("ExecuteRecovery() error = %v", err)
 	}
-	if accepted.OperationID != "op-recovery" || !sawRecoveryTrustedHeader {
-		t.Fatalf("ExecuteRecovery() = %+v trusted=%v, want accepted with trusted header", accepted, sawRecoveryTrustedHeader)
+	if recovered.Result != "recovered" || !sawRecoveryTrustedHeader {
+		t.Fatalf("ExecuteRecovery() = %+v trusted=%v, want recovered with trusted header", recovered, sawRecoveryTrustedHeader)
 	}
 }
 
@@ -249,7 +244,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		}
 	})
 
-	t.Run("update_posts_typed_request_and_returns_accepted_operation", func(t *testing.T) {
+	t.Run("update_posts_typed_request_and_returns_action_result", func(t *testing.T) {
 		var sawTrustedHeader bool
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/config" {
@@ -266,10 +261,10 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 			if req.Inquireness != "always" || string(req.Pipeline) != "large" {
 				t.Fatalf("update request = %+v, want inquireness always pipeline large", req)
 			}
-			writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{
-				APIVersion:  APIVersion,
-				OperationID: "op-config",
-				Status:      OperationStatusQueued,
+			writeJSON(w, http.StatusOK, FeatureConfigUpdateResponse{
+				ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
+				FeatureID:          "feat-1",
+				Result:             "updated",
 			})
 		}))
 		defer srv.Close()
@@ -278,15 +273,15 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient() error = %v", err)
 		}
-		accepted, err := client.UpdateFeatureConfig(context.Background(), "feat-1", FeatureConfigMutationRequest{
+		updated, err := client.UpdateFeatureConfig(context.Background(), "feat-1", FeatureConfigMutationRequest{
 			Inquireness: "always",
 			Pipeline:    "large",
 		})
 		if err != nil {
 			t.Fatalf("UpdateFeatureConfig() error = %v", err)
 		}
-		if accepted.OperationID != "op-config" || accepted.Status != OperationStatusQueued || !sawTrustedHeader {
-			t.Fatalf("UpdateFeatureConfig() = %+v trusted=%v, want queued accepted operation with trusted header", accepted, sawTrustedHeader)
+		if updated.FeatureID != "feat-1" || updated.Result != "updated" || !sawTrustedHeader {
+			t.Fatalf("UpdateFeatureConfig() = %+v trusted=%v, want updated result with trusted header", updated, sawTrustedHeader)
 		}
 	})
 
@@ -298,8 +293,8 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 			writeJSON(w, http.StatusConflict, ErrorResponse{
 				APIVersion: APIVersion,
 				Error: ErrorDTO{
-					Code:    "operation_conflict",
-					Message: "operation already queued",
+					Code:    "conflict",
+					Message: "feature is busy",
 					Status:  http.StatusConflict,
 					Target:  map[string]any{"feature_id": "feat-1"},
 				},
@@ -316,7 +311,7 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		if !errors.As(err, &apiErr) {
 			t.Fatalf("UpdateFeatureConfig() error = %v, want APIError", err)
 		}
-		if apiErr.Code != "operation_conflict" || apiErr.Status != http.StatusConflict || apiErr.Method != http.MethodPost || apiErr.Path != "/api/v1/features/feat-1/config" {
+		if apiErr.Code != "conflict" || apiErr.Status != http.StatusConflict || apiErr.Method != http.MethodPost || apiErr.Path != "/api/v1/features/feat-1/config" {
 			t.Fatalf("APIError = %+v, want method/path scoped conflict", apiErr)
 		}
 		if apiErr.Target["feature_id"] != "feat-1" {
@@ -339,10 +334,9 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 		if req.WorkspaceRoots == nil || len(*req.WorkspaceRoots) != 2 || (*req.WorkspaceRoots)[0] != "/workspace/a" || (*req.WorkspaceRoots)[1] != "/workspace/b" {
 			t.Fatalf("workspace roots request = %+v, want supplied roots", req.WorkspaceRoots)
 		}
-		writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{
-			APIVersion:  APIVersion,
-			OperationID: "op-runtime",
-			Status:      OperationStatusQueued,
+		writeJSON(w, http.StatusOK, RuntimeConfigUpdateResponse{
+			ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
+			Result:             "updated",
 		})
 	}))
 	defer srv.Close()
@@ -352,12 +346,12 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	roots := []string{"/workspace/a", "/workspace/b"}
-	accepted, err := client.UpdateRuntimeConfig(context.Background(), RuntimeConfigMutationRequest{WorkspaceRoots: &roots})
+	updated, err := client.UpdateRuntimeConfig(context.Background(), RuntimeConfigMutationRequest{WorkspaceRoots: &roots})
 	if err != nil {
 		t.Fatalf("UpdateRuntimeConfig() error = %v", err)
 	}
-	if accepted.OperationID != "op-runtime" || !sawTrustedHeader {
-		t.Fatalf("UpdateRuntimeConfig() = %+v trusted=%v, want accepted trusted runtime op", accepted, sawTrustedHeader)
+	if updated.Result != "updated" || !sawTrustedHeader {
+		t.Fatalf("UpdateRuntimeConfig() = %+v trusted=%v, want updated trusted result", updated, sawTrustedHeader)
 	}
 }
 
@@ -375,10 +369,13 @@ func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 		if req.TargetPhase != "inquire" || req.RoadmapPhase != 2 || string(req.UpgradePipeline) != "large" {
 			t.Fatalf("rewind request = %+v, want inquire roadmap phase 2 large upgrade", req)
 		}
-		writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{
-			APIVersion:  APIVersion,
-			OperationID: "op-rewind",
-			Status:      OperationStatusQueued,
+		writeJSON(w, http.StatusOK, RewindFeatureResponse{
+			ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
+			FeatureID:          "feat-1",
+			Result:             "rewound",
+			TargetPhase:        "inquire",
+			RoadmapPhase:       2,
+			UpgradePipeline:    "large",
 		})
 	}))
 	defer srv.Close()
@@ -387,7 +384,7 @@ func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	accepted, err := client.RewindFeature(context.Background(), "feat-1", RewindFeatureRequest{
+	rewound, err := client.RewindFeature(context.Background(), "feat-1", RewindFeatureRequest{
 		TargetPhase:     "inquire",
 		RoadmapPhase:    2,
 		UpgradePipeline: "large",
@@ -395,12 +392,12 @@ func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RewindFeature() error = %v", err)
 	}
-	if accepted.OperationID != "op-rewind" || !sawTrustedHeader {
-		t.Fatalf("RewindFeature() = %+v trusted=%v, want accepted trusted rewind op", accepted, sawTrustedHeader)
+	if rewound.FeatureID != "feat-1" || rewound.Result != "rewound" || !sawTrustedHeader {
+		t.Fatalf("RewindFeature() = %+v trusted=%v, want rewound trusted result", rewound, sawTrustedHeader)
 	}
 }
 
-func TestClientShutdownPostsTrustedMutationAndReturnsAcceptedOperation(t *testing.T) {
+func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
 	var sawTrustedHeader bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/shutdown" {
@@ -417,10 +414,9 @@ func TestClientShutdownPostsTrustedMutationAndReturnsAcceptedOperation(t *testin
 		if len(req) != 0 {
 			t.Fatalf("shutdown request = %+v, want empty JSON object", req)
 		}
-		writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{
-			APIVersion:  APIVersion,
-			OperationID: "op-shutdown",
-			Status:      OperationStatusQueued,
+		writeJSON(w, http.StatusOK, ShutdownResponse{
+			ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
+			Result:             "shutdown_scheduled",
 		})
 	}))
 	defer srv.Close()
@@ -429,12 +425,12 @@ func TestClientShutdownPostsTrustedMutationAndReturnsAcceptedOperation(t *testin
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	accepted, err := client.Shutdown(context.Background())
+	shutdown, err := client.Shutdown(context.Background())
 	if err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	if accepted.OperationID != "op-shutdown" || accepted.Status != OperationStatusQueued || !sawTrustedHeader {
-		t.Fatalf("Shutdown() = %+v trusted=%v, want queued accepted operation with trusted header", accepted, sawTrustedHeader)
+	if shutdown.Result != "shutdown_scheduled" || !sawTrustedHeader {
+		t.Fatalf("Shutdown() = %+v trusted=%v, want shutdown_scheduled trusted result", shutdown, sawTrustedHeader)
 	}
 }
 
@@ -534,11 +530,13 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 				flusher.Flush()
 				return
 			}
-			_, _ = w.Write([]byte("id: 2\nevent: operation.updated\ndata: {\"api_version\":\"v1\",\"id\":\"2\",\"kind\":\"operation.updated\",\"resource\":{\"type\":\"operation\",\"id\":\"op-1\",\"feature_id\":\"feat-1\"},\"snapshot_required\":true}\n\n"))
+			_, _ = w.Write([]byte("id: 2\nevent: lifecycle.updated\ndata: {\"api_version\":\"v1\",\"id\":\"2\",\"kind\":\"lifecycle.updated\",\"resource\":{\"type\":\"feature\",\"feature_id\":\"feat-1\"},\"snapshot_required\":true}\n\n"))
 			flusher.Flush()
 			<-r.Context().Done()
-		case "/api/v1/operations":
-			writeJSON(w, http.StatusOK, OperationSnapshotResponse{APIVersion: APIVersion, Operations: []OperationDTO{{ID: "op-1", Status: OperationStatusSucceeded}}})
+		case "/api/v1/features/feat-1":
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: FeatureDetailDTO{FeatureSummary: FeatureSummary{ID: "feat-1"}}})
+		case "/api/v1/features/feat-1/live-preview":
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}})
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
@@ -559,15 +557,15 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 		t.Fatalf("first signal = %+v, want connected snapshot", first)
 	}
 	second := waitRefreshSignal(t, signals)
-	if second.Event.Kind != "operation.updated" || second.Resource.ID != "op-1" {
-		t.Fatalf("second signal = %+v, want operation update for op-1", second)
+	if second.Event.Kind != "lifecycle.updated" || second.Resource.FeatureID != "feat-1" {
+		t.Fatalf("second signal = %+v, want feature lifecycle update for feat-1", second)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), second)
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if snapshot.Operations == nil || len(snapshot.Operations.Operations) != 1 {
-		t.Fatalf("FetchRefreshSnapshot() = %+v, want operation snapshot", snapshot)
+	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != "feat-1" || snapshot.LivePreview == nil {
+		t.Fatalf("FetchRefreshSnapshot() = %+v, want feature and live preview snapshots", snapshot)
 	}
 	cancel()
 	select {
@@ -598,14 +596,19 @@ func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testin
 				flusher.Flush()
 				return
 			}
-			_, _ = w.Write([]byte("id: 2\nevent: operation.updated\ndata: {\"api_version\":\"v1\",\"id\":\"2\",\"kind\":\"operation.updated\",\"resource\":{\"type\":\"operation\",\"id\":\"op-recovered\",\"feature_id\":\"feat-1\"},\"snapshot_required\":true}\n\n"))
+			_, _ = w.Write([]byte("id: 2\nevent: lifecycle.updated\ndata: {\"api_version\":\"v1\",\"id\":\"2\",\"kind\":\"lifecycle.updated\",\"resource\":{\"type\":\"feature\",\"feature_id\":\"feat-1\"},\"snapshot_required\":true}\n\n"))
 			flusher.Flush()
 			<-r.Context().Done()
-		case "/api/v1/operations":
+		case "/api/v1/features/feat-1":
 			if r.Header.Get("X-Test-Client") == "snapshot" {
 				sawSnapshotClient.Store(true)
 			}
-			writeJSON(w, http.StatusOK, OperationSnapshotResponse{APIVersion: APIVersion, Operations: []OperationDTO{{ID: "op-recovered", Status: OperationStatusSucceeded}}})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: FeatureDetailDTO{FeatureSummary: FeatureSummary{ID: "feat-1"}}})
+		case "/api/v1/features/feat-1/live-preview":
+			if r.Header.Get("X-Test-Client") == "snapshot" {
+				sawSnapshotClient.Store(true)
+			}
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}})
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
@@ -631,15 +634,15 @@ func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testin
 		t.Fatalf("first signal = %+v, want connected snapshot", first)
 	}
 	second := waitRefreshSignal(t, signals)
-	if second.Event.Kind != "operation.updated" || second.Resource.ID != "op-recovered" {
-		t.Fatalf("second signal = %+v, want operation update for op-recovered", second)
+	if second.Event.Kind != "lifecycle.updated" || second.Resource.FeatureID != "feat-1" {
+		t.Fatalf("second signal = %+v, want feature lifecycle update for feat-1", second)
 	}
 	snapshot, err := snapshotClient.FetchRefreshSnapshot(context.Background(), second)
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if snapshot.Operations == nil || len(snapshot.Operations.Operations) != 1 || snapshot.Operations.Operations[0].ID != "op-recovered" {
-		t.Fatalf("FetchRefreshSnapshot() = %+v, want recovered operation snapshot", snapshot)
+	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != "feat-1" || snapshot.LivePreview == nil {
+		t.Fatalf("FetchRefreshSnapshot() = %+v, want feature snapshot", snapshot)
 	}
 	if !sawEventClient.Load() || !sawSnapshotClient.Load() {
 		t.Fatalf("request clients used: events=%v snapshot=%v; want both distinct clients", sawEventClient.Load(), sawSnapshotClient.Load())

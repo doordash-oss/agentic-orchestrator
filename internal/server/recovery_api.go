@@ -29,11 +29,11 @@ func (h *apiHandler) handleRecoveryRoute(w http.ResponseWriter, r *http.Request)
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
 		return
 	}
-	if h.mutations == nil || h.mutations.target == nil {
+	if h.mutations == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
 		return
 	}
-	items, err := h.mutations.target.ScanRecovery(r.Context())
+	items, err := h.mutations.ScanRecovery(r.Context())
 	if err != nil {
 		writeAPIError(w, http.StatusInternalServerError, "internal_error", "scan recovery", nil)
 		return
@@ -84,10 +84,15 @@ func (h *apiHandler) handleRecoveryActionRoute(w http.ResponseWriter, r *http.Re
 		writeAPIError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
 		return
 	}
-	admission, accepted := h.mutations.admit("recovery.execute", OperationTarget{Type: "runtime"}, func() (OperationResult, error) {
-		return h.mutations.target.ExecuteRecovery(context.Background(), items, actions)
-	})
-	h.writeMutationAdmission(w, admission, accepted)
+	resp, err := h.mutations.ExecuteRecovery(context.Background(), items, actions)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	if resp.Result == "" {
+		resp.Result = "recovered"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
 }
 
 func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {

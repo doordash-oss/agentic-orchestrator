@@ -52,9 +52,7 @@ type Options struct {
 	Sessions        ports.SessionManager
 	Events          <-chan interface{}
 	DomainEvents    <-chan ports.Event
-	Operations      *OperationRegistry
 	Mutations       MutationTarget
-	MutationLimits  MutationLimits
 	RequestShutdown func()
 }
 
@@ -70,9 +68,7 @@ type HandlerOptions struct {
 	Sessions        ports.SessionManager
 	Events          <-chan interface{}
 	DomainEvents    <-chan ports.Event
-	Operations      *OperationRegistry
 	Mutations       MutationTarget
-	MutationLimits  MutationLimits
 	RequestShutdown func()
 }
 
@@ -178,21 +174,22 @@ type FeatureDetailResponse struct {
 
 type FeatureDetailDTO struct {
 	FeatureSummary
-	Description     string            `json:"description,omitempty"`
-	Summary         string            `json:"summary,omitempty"`
-	Pipeline        string            `json:"pipeline,omitempty"`
-	ActiveRun       *RunSummaryDTO    `json:"active_run_detail,omitempty"`
-	HistoricalRuns  []RunSummaryDTO   `json:"historical_runs"`
-	RepoStatus      []RepoStatusDTO   `json:"repo_status"`
-	Cycle           *CycleDTO         `json:"cycle,omitempty"`
-	Timing          TimingDTO         `json:"timing"`
-	Cost            CostDTO           `json:"cost"`
-	ReviewGate      ReviewGateDTO     `json:"review_gate"`
-	Failure         *FailureDTO       `json:"failure,omitempty"`
-	NeedUserInput   *NeedInputGateDTO `json:"need_user_input,omitempty"`
-	Actions         []ActionDTO       `json:"actions"`
-	Revision        string            `json:"revision"`
-	CacheRevalidate string            `json:"cache_revalidate"`
+	Description     string             `json:"description,omitempty"`
+	Summary         string             `json:"summary,omitempty"`
+	Pipeline        string             `json:"pipeline,omitempty"`
+	Models          config.ModelConfig `json:"models"`
+	ActiveRun       *RunSummaryDTO     `json:"active_run_detail,omitempty"`
+	HistoricalRuns  []RunSummaryDTO    `json:"historical_runs"`
+	RepoStatus      []RepoStatusDTO    `json:"repo_status"`
+	Cycle           *CycleDTO          `json:"cycle,omitempty"`
+	Timing          TimingDTO          `json:"timing"`
+	Cost            CostDTO            `json:"cost"`
+	ReviewGate      ReviewGateDTO      `json:"review_gate"`
+	Failure         *FailureDTO        `json:"failure,omitempty"`
+	NeedUserInput   *NeedInputGateDTO  `json:"need_user_input,omitempty"`
+	Actions         []ActionDTO        `json:"actions"`
+	Revision        string             `json:"revision"`
+	CacheRevalidate string             `json:"cache_revalidate"`
 }
 
 type ActionDTO struct {
@@ -589,36 +586,222 @@ type ReviewCommentDTO struct {
 	InReplyTo int    `json:"in_reply_to_id,omitempty"`
 }
 
-type OperationSnapshotResponse struct {
-	APIVersion string             `json:"api_version"`
-	Meta       ResponseMeta       `json:"meta"`
-	Schema     OperationSchemaDTO `json:"schema"`
-	Operations []OperationDTO     `json:"operations"`
-	NextCursor string             `json:"next_cursor,omitempty"`
+type ActionResponseMeta struct {
+	APIVersion string `json:"api_version"`
 }
 
-type OperationSchemaDTO struct {
-	Version string   `json:"version"`
-	States  []string `json:"states"`
-	Filters []string `json:"filters"`
+func (m *ActionResponseMeta) setAPIVersion() {
+	if m.APIVersion == "" {
+		m.APIVersion = APIVersion
+	}
 }
 
-type OperationDTO struct {
-	ID          string            `json:"id"`
-	Kind        string            `json:"kind,omitempty"`
-	Target      OperationTarget   `json:"target,omitempty"`
-	RequestedAt time.Time         `json:"requested_at,omitempty"`
-	UpdatedAt   time.Time         `json:"updated_at,omitempty"`
-	CompletedAt *time.Time        `json:"completed_at,omitempty"`
-	Status      OperationStatus   `json:"status,omitempty"`
-	Result      map[string]string `json:"result,omitempty"`
-	Error       *OperationError   `json:"error,omitempty"`
+type CreateFeatureResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
 }
 
-type OperationAcceptedResponse struct {
-	APIVersion  string          `json:"api_version"`
-	OperationID string          `json:"operation_id"`
-	Status      OperationStatus `json:"status"`
+type FeatureStartResponse struct {
+	ActionResponseMeta
+	FeatureID  string   `json:"feature_id"`
+	Result     string   `json:"result"`
+	Phase      string   `json:"phase,omitempty"`
+	SessionIDs []string `json:"session_ids,omitempty"`
+}
+
+type FeatureStopResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type FeatureRestartResponse struct {
+	ActionResponseMeta
+	FeatureID      string   `json:"feature_id"`
+	Result         string   `json:"result"`
+	Phase          string   `json:"phase,omitempty"`
+	Dispatch       string   `json:"dispatch,omitempty"`
+	RepoCycleCount int      `json:"repo_cycle_count,omitempty"`
+	RefactorCount  int      `json:"refactor_count,omitempty"`
+	SessionIDs     []string `json:"session_ids,omitempty"`
+}
+
+type ReviewDecisionResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Decision  string `json:"decision"`
+	Result    string `json:"result"`
+}
+
+type FeatureConfigUpdateResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type NeedUserInputDecisionResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Decision  string `json:"decision"`
+	Result    string `json:"result"`
+}
+
+type NeedUserInputDraftResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type InputNotificationsToggleResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+	Muted     bool   `json:"muted"`
+}
+
+type PermissionAnswerResponse struct {
+	ActionResponseMeta
+	SessionID string `json:"session_id"`
+	RequestID string `json:"request_id"`
+	Decision  string `json:"decision"`
+	Result    string `json:"result"`
+}
+
+type AskUserAnswerResponse struct {
+	ActionResponseMeta
+	SessionID string `json:"session_id"`
+	RequestID string `json:"request_id"`
+	Result    string `json:"result"`
+}
+
+type HelpSendResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	SessionID string `json:"session_id"`
+	Result    string `json:"result"`
+}
+
+type RuntimeConfigUpdateResponse struct {
+	ActionResponseMeta
+	Result string `json:"result"`
+}
+
+type PublishFeatureResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type MergeFeatureResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type RewindFeatureResponse struct {
+	ActionResponseMeta
+	FeatureID       string `json:"feature_id"`
+	Result          string `json:"result"`
+	TargetPhase     string `json:"target_phase,omitempty"`
+	EffectivePhase  string `json:"effective_phase,omitempty"`
+	RoadmapPhase    int    `json:"roadmap_phase,omitempty"`
+	WarningCount    int    `json:"warning_count,omitempty"`
+	UpgradePipeline string `json:"upgrade_pipeline,omitempty"`
+}
+
+type RetryFeatureResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type RebaseStartResponse struct {
+	ActionResponseMeta
+	FeatureID     string   `json:"feature_id"`
+	Result        string   `json:"result"`
+	Repo          string   `json:"repo,omitempty"`
+	CycleType     string   `json:"cycle_type"`
+	RebaseTarget  string   `json:"rebase_target,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+	SessionID     string   `json:"session_id,omitempty"`
+}
+
+type ReviewCommentsStartResponse struct {
+	ActionResponseMeta
+	FeatureID    string `json:"feature_id"`
+	Result       string `json:"result"`
+	Repo         string `json:"repo"`
+	Mode         string `json:"mode"`
+	CycleType    string `json:"cycle_type"`
+	CommentCount int    `json:"comment_count,omitempty"`
+	SessionID    string `json:"session_id,omitempty"`
+	Source       string `json:"source,omitempty"`
+}
+
+type TweakStartResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+	CycleType string `json:"cycle_type"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+type TweakFinishResponse struct {
+	ActionResponseMeta
+	FeatureID  string `json:"feature_id"`
+	Result     string `json:"result"`
+	Decision   string `json:"decision"`
+	HadChanges bool   `json:"had_changes,omitempty"`
+}
+
+type RefactorStartResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+	Repo      string `json:"repo,omitempty"`
+	CycleType string `json:"cycle_type"`
+	Pipeline  string `json:"pipeline,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+type RefactorRestartResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+	Repo      string `json:"repo,omitempty"`
+	CycleType string `json:"cycle_type"`
+	Pipeline  string `json:"pipeline,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+type MarkDoneResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type CleanupFeatureResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+	Target    string `json:"target,omitempty"`
+}
+
+type DeleteFeatureResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type RecoveryActionResponse struct {
+	ActionResponseMeta
+	Result string `json:"result"`
+}
+
+type ShutdownResponse struct {
+	ActionResponseMeta
+	Result string `json:"result"`
 }
 
 type SSEEventDTO struct {

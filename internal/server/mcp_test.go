@@ -60,7 +60,6 @@ func TestMCPStreamableHTTPInitializeListAndReadTool(t *testing.T) {
 		"prompt_snapshot_get",
 		"permission_snapshot_get",
 		"session_list",
-		"operation_list",
 		"recovery_snapshot_get",
 		"feature_create",
 		"review_comments_fetch",
@@ -180,7 +179,6 @@ func TestMCPSchemasCoverRESTDTOFields(t *testing.T) {
 		"artifact_list":          {"feature_id", "run_number"},
 		"artifact_content_get":   {"feature_id", "run_number", "artifact_id", "offset", "limit"},
 		"log_content_get":        {"feature_id", "run_number", "log_id", "offset", "limit"},
-		"operation_list":         {"state", "feature_id", "kind", "cursor", "limit"},
 		"feature_create":         {"name", "description", "repos", "models", "exit_criteria", "risk_level", "pipeline"},
 		"feature_restart":        {"feature_id", "max_iterations_delta", "max_plan_iterations_delta"},
 		"review_decision_submit": {"feature_id", "decision", "phase", "phase_plan", "roadmap", "is_rewind", "comment"},
@@ -204,28 +202,40 @@ func TestMCPSchemasCoverRESTDTOFields(t *testing.T) {
 		tool := mcpToolByName(t, tools.Tools, name)
 		assertSchemaHasProperties(t, tool.InputSchema, name+" input", fields...)
 	}
-	for _, name := range operationAcceptedMCPTools() {
+	for name, fields := range map[string][]string{
+		"feature_create":         {"feature_id", "result"},
+		"feature_start":          {"feature_id", "result"},
+		"feature_restart":        {"feature_id", "result", "session_ids"},
+		"review_decision_submit": {"feature_id", "decision", "result"},
+		"feature_config_update":  {"feature_id", "result"},
+		"need_user_input_decide": {"feature_id", "decision", "result"},
+		"permission_answer":      {"request_id", "session_id", "decision", "result"},
+		"config_runtime_update":  {"result"},
+		"feature_publish":        {"feature_id", "result"},
+		"feature_rewind":         {"feature_id", "result", "target_phase"},
+		"rebase_start":           {"feature_id", "result", "repo", "cycle_type"},
+		"review_comments_start":  {"feature_id", "result", "repo", "mode", "cycle_type"},
+		"tweak_finish":           {"feature_id", "result", "decision"},
+		"runtime_shutdown":       {"result"},
+		"recovery_execute":       {"result"},
+	} {
 		tool := mcpToolByName(t, tools.Tools, name)
-		assertSchemaHasProperties(t, tool.OutputSchema, name+" output", "operation_id", "status")
+		assertSchemaHasProperties(t, tool.OutputSchema, name+" output", fields...)
 	}
 }
 
-func TestMCPMutationToolUsesRESTSemanticsAndOperationFollowUp(t *testing.T) {
+func TestMCPMutationToolUsesRESTSemanticsAndTypedResponse(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
-	ops := mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations"))
 	mutations := &fakeMutationTarget{}
 	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Operations: ops,
-		Mutations:  mutations,
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Mutations: mutations,
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	session := connectMCPClient(t, srv)
-	sseResp, sseReader := openOperationSSE(t, srv.Client(), srv.URL)
-	t.Cleanup(func() { sseResp.Body.Close() })
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
 		Name:      "feature_start",
@@ -237,24 +247,9 @@ func TestMCPMutationToolUsesRESTSemanticsAndOperationFollowUp(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("CallTool(feature_start) IsError = true; content = %s", mcpToolText(t, res))
 	}
-	accepted := structuredContentMap(t, res)
-	opID, ok := accepted["operation_id"].(string)
-	if !ok || opID == "" {
-		t.Fatalf("feature_start operation_id = %v; want non-empty", accepted["operation_id"])
-	}
-	if accepted["status"] != string(OperationStatusQueued) {
-		t.Fatalf("feature_start status = %v; want %s", accepted["status"], OperationStatusQueued)
-	}
-	t.Logf("mcp mutation feature_start accepted operation_id=%s status=%s", opID, accepted["status"])
-	if block := readSSEBlockContaining(t, sseReader, "operation.updated", opID); !strings.Contains(block, opID) {
-		t.Fatalf("operation SSE block = %s; want operation id %s", block, opID)
-	}
-	t.Logf("rest sse observed operation.updated for operation_id=%s", opID)
-
-	op := waitForMCPOperationStatus(t, session, opID, OperationStatusSucceeded)
-	t.Logf("mcp follow-up operation_list operation_id=%s status=%s", op["id"], op["status"])
-	if op["id"] != opID || op["status"] != string(OperationStatusSucceeded) {
-		t.Fatalf("operation_list op = %+v; want %s succeeded", op, opID)
+	body := structuredContentMap(t, res)
+	if body["api_version"] != APIVersion || body["feature_id"] != f.ID || body["result"] != "started" {
+		t.Fatalf("feature_start body = %+v; want typed start response for %s", body, f.ID)
 	}
 	mutations.mu.Lock()
 	startCalls := append([]string(nil), mutations.startCalls...)
@@ -269,10 +264,9 @@ func TestMCPShutdownToolUsesRESTMutationSemantics(t *testing.T) {
 	store, _ := seedReadFeature(t)
 	shutdownRequested := make(chan struct{}, 1)
 	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations")),
-		Mutations:  &fakeMutationTarget{},
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Mutations: &fakeMutationTarget{},
 		RequestShutdown: func() {
 			shutdownRequested <- struct{}{}
 		},
@@ -288,82 +282,62 @@ func TestMCPShutdownToolUsesRESTMutationSemantics(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("CallTool(runtime_shutdown) IsError = true; content = %s", mcpToolText(t, res))
 	}
-	accepted := structuredContentMap(t, res)
-	opID, ok := accepted["operation_id"].(string)
-	if !ok || opID == "" {
-		t.Fatalf("runtime_shutdown operation_id = %v; want non-empty", accepted["operation_id"])
-	}
-	if accepted["status"] != string(OperationStatusQueued) {
-		t.Fatalf("runtime_shutdown status = %v; want %s", accepted["status"], OperationStatusQueued)
+	body := structuredContentMap(t, res)
+	if body["api_version"] != APIVersion || body["result"] != "shutdown_scheduled" {
+		t.Fatalf("runtime_shutdown body = %+v; want shutdown_scheduled response", body)
 	}
 	select {
 	case <-shutdownRequested:
 	case <-time.After(time.Second):
-		t.Fatal("shutdown hook was not called after accepted MCP response")
-	}
-	op := waitForMCPOperationStatus(t, session, opID, OperationStatusSucceeded)
-	if op["kind"] != "runtime.shutdown" || op["target"].(map[string]any)["type"] != "runtime" {
-		t.Fatalf("operation_list shutdown op = %+v; want runtime.shutdown runtime target", op)
+		t.Fatal("shutdown hook was not called after MCP response")
 	}
 }
 
-func TestMCPConflictReturnsRejectedOperationStatusMatchingREST(t *testing.T) {
+func TestMCPPublishConflictReturnsRESTToolError(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	mutations := &fakeMutationTarget{startHook: func() {
-		close(started)
-		<-release
-	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations")),
-		Mutations:  mutations,
-		MutationLimits: MutationLimits{
-			FeatureQueue:   0,
-			RuntimeQueue:   0,
-			AggregateQueue: 10,
+	mutations := &fakeMutationTarget{
+		publishErr: &ActionConflictError{
+			Message: "publish conflict",
+			Target: map[string]any{
+				"repo":           "api",
+				"branch":         "feature/test",
+				"rebase_target":  "main",
+				"conflict_files": []string{},
+			},
 		},
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Mutations: mutations,
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	session := connectMCPClient(t, srv)
-	restClient := &http.Client{Timeout: time.Second}
-
-	first := postMutationHTTP(t, restClient, srv.URL+"/api/v1/features/"+f.ID+"/start", `{}`)
-	if first.StatusCode != http.StatusAccepted {
-		t.Fatalf("REST feature start status = %d; want 202", first.StatusCode)
-	}
-	firstID := decodeHTTPJSONMap(t, first)["operation_id"].(string)
-	<-started
 
 	res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
-		Name:      "feature_start",
-		Arguments: map[string]any{"feature_id": f.ID},
+		Name:      "feature_publish",
+		Arguments: map[string]any{"feature_id": f.ID, "repos": []string{"api"}},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(feature_start conflict) error = %v; want tool error result", err)
+		t.Fatalf("CallTool(feature_publish conflict) error = %v; want tool error result", err)
 	}
 	if !res.IsError {
-		t.Fatalf("CallTool(feature_start conflict) IsError = false; want tool error carrying rejected operation")
+		t.Fatalf("CallTool(feature_publish conflict) IsError = false; want REST conflict tool error")
 	}
 	conflictBody := decodeJSONStringMap(t, mcpToolText(t, res))
-	conflictID, _ := conflictBody["operation_id"].(string)
-	if conflictID == "" || conflictBody["status"] != string(OperationStatusRejected) {
-		t.Fatalf("MCP conflict body = %+v; want rejected operation status with operation_id", conflictBody)
+	errorBody := conflictBody["error"].(map[string]any)
+	if errorBody["code"] != "conflict" || errorBody["status"].(float64) != http.StatusConflict {
+		t.Fatalf("MCP conflict body = %+v; want 409 conflict", conflictBody)
 	}
-	op := waitForMCPOperationStatus(t, session, conflictID, OperationStatusRejected)
-	if op["status"] != string(OperationStatusRejected) {
-		t.Fatalf("MCP operation_list op = %+v; want rejected", op)
+	target := errorBody["target"].(map[string]any)
+	if target["repo"] != "api" || target["branch"] != "feature/test" || target["rebase_target"] != "main" {
+		t.Fatalf("MCP conflict target = %+v; want publish conflict metadata", target)
 	}
-
-	close(release)
-	waitForMCPOperationStatus(t, session, firstID, OperationStatusSucceeded)
 }
 
-func TestMCPReadToolsCoverSnapshotsTypedContentSessionsOperationsAndRecovery(t *testing.T) {
+func TestMCPReadToolsCoverSnapshotsTypedContentSessionsAndRecovery(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	runDir := store.RunDir(f.ID, 1)
@@ -422,11 +396,10 @@ func TestMCPReadToolsCoverSnapshotsTypedContentSessionsOperationsAndRecovery(t *
 		}},
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Sessions:   sessions,
-		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations")),
-		Mutations:  mutations,
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Sessions:  sessions,
+		Mutations: mutations,
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -447,7 +420,6 @@ func TestMCPReadToolsCoverSnapshotsTypedContentSessionsOperationsAndRecovery(t *
 		{name: "artifact_content_get", args: map[string]any{"feature_id": f.ID, "run_number": 1, "artifact_id": "plan", "offset": 6, "limit": 8}},
 		{name: "log_content_get", args: map[string]any{"feature_id": f.ID, "run_number": 1, "log_id": "session", "offset": 6, "limit": 6}},
 		{name: "live_preview_get", args: map[string]any{"feature_id": f.ID}},
-		{name: "operation_list", args: map[string]any{"limit": 20}},
 		{name: "recovery_snapshot_get"},
 	}
 	for _, call := range calls {
@@ -471,16 +443,14 @@ func TestMCPReadToolsCoverSnapshotsTypedContentSessionsOperationsAndRecovery(t *
 	}
 }
 
-func TestMCPMutationRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T) {
+func TestMCPMutationRejectsNonLoopbackBrowserOriginBeforeMutation(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
-	ops := mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations"))
 	mutations := &fakeMutationTarget{}
 	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Operations: ops,
-		Mutations:  mutations,
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Mutations: mutations,
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -510,7 +480,6 @@ func TestMCPMutationRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T)
 			t.Fatalf("tool error text = %s; want substring %s", text, want)
 		}
 	}
-	assertOperationCount(t, handler, 0)
 	mutations.mu.Lock()
 	startCalls := append([]string(nil), mutations.startCalls...)
 	mutations.mu.Unlock()
@@ -519,16 +488,14 @@ func TestMCPMutationRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T)
 	}
 }
 
-func TestMCPShutdownRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T) {
+func TestMCPShutdownRejectsNonLoopbackBrowserOriginBeforeShutdown(t *testing.T) {
 	t.Parallel()
 	store, _ := seedReadFeature(t)
-	ops := mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations"))
 	shutdownRequested := make(chan struct{}, 1)
 	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Operations: ops,
-		Mutations:  &fakeMutationTarget{},
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Mutations: &fakeMutationTarget{},
 		RequestShutdown: func() {
 			shutdownRequested <- struct{}{}
 		},
@@ -550,7 +517,6 @@ func TestMCPShutdownRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T)
 			t.Fatalf("tool error text = %s; want substring %s", text, want)
 		}
 	}
-	assertOperationCount(t, handler, 0)
 	select {
 	case <-shutdownRequested:
 		t.Fatal("shutdown hook was called before trusted-origin gate passed")
@@ -561,13 +527,11 @@ func TestMCPShutdownRejectsNonLoopbackBrowserOriginBeforeOperation(t *testing.T)
 func TestMCPMutationAllowsTrustedLoopbackBrowserOrigin(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
-	ops := mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations"))
 	mutations := &fakeMutationTarget{}
 	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Operations: ops,
-		Mutations:  mutations,
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Mutations: mutations,
 	})
 
 	origin := "http://127.0.0.1:5173"
@@ -588,7 +552,6 @@ func TestMCPMutationAllowsTrustedLoopbackBrowserOrigin(t *testing.T) {
 		"Access-Control-Allow-Headers": "Content-Type, Mcp-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name, Last-Event-ID",
 	})
 	t.Logf("trusted /mcp browser preflight origin=%s status=%d allow_headers=%q", origin, resp.StatusCode, resp.Header.Get("Access-Control-Allow-Headers"))
-	assertOperationCount(t, handler, 0)
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -613,13 +576,10 @@ func TestMCPMutationAllowsTrustedLoopbackBrowserOrigin(t *testing.T) {
 	if got := recorder.countHeader("Access-Control-Expose-Headers", "Mcp-Session-Id"); got <= exposedSessionHeadersBeforeCall {
 		t.Fatalf("actual /mcp exposed session headers = %d before call, %d after call; want tool call response to expose Mcp-Session-Id", exposedSessionHeadersBeforeCall, got)
 	}
-	accepted := structuredContentMap(t, res)
-	opID, ok := accepted["operation_id"].(string)
-	if !ok || opID == "" {
-		t.Fatalf("feature_start operation_id = %v; want non-empty", accepted["operation_id"])
+	body := structuredContentMap(t, res)
+	if body["feature_id"] != f.ID || body["result"] != "started" {
+		t.Fatalf("feature_start body = %+v; want typed start response", body)
 	}
-	t.Logf("trusted browser-origin MCP mutation accepted operation_id=%s status=%s", opID, accepted["status"])
-	waitForMCPOperationStatus(t, session, opID, OperationStatusSucceeded)
 	mutations.mu.Lock()
 	startCalls := append([]string(nil), mutations.startCalls...)
 	mutations.mu.Unlock()
@@ -725,10 +685,9 @@ func TestMCPRESTValidationFailuresReturnToolErrors(t *testing.T) {
 	t.Parallel()
 	store, _ := seedReadFeature(t)
 	handler := NewHandler(HandlerOptions{
-		Runtime:    RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features:   store,
-		Operations: mustOperationRegistry(t, filepath.Join(filepath.Dir(store.BaseDir), "operations")),
-		Mutations:  &fakeMutationTarget{},
+		Runtime:   RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:  store,
+		Mutations: &fakeMutationTarget{},
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -878,6 +837,158 @@ func (r *responseHeaderRecorder) countHeader(name, value string) int {
 	return count
 }
 
+func assertAccessControlHeaders(t *testing.T, header http.Header, want map[string]string) {
+	t.Helper()
+	for name, value := range want {
+		if got := header.Get(name); got != value {
+			t.Fatalf("%s = %q; want %q", name, got, value)
+		}
+	}
+}
+
+func assertNoAccessControlHeaders(t *testing.T, header http.Header) {
+	t.Helper()
+	for _, name := range []string{
+		"Access-Control-Allow-Origin",
+		"Access-Control-Allow-Methods",
+		"Access-Control-Allow-Headers",
+		"Access-Control-Expose-Headers",
+	} {
+		if got := header.Get(name); got != "" {
+			t.Fatalf("%s = %q; want empty", name, got)
+		}
+	}
+}
+
+type fakeMutationTarget struct {
+	mu            sync.Mutex
+	startCalls    []string
+	recoveryItems []ports.RecoveryItem
+	publishErr    error
+}
+
+func (f *fakeMutationTarget) CreateFeature(req CreateFeatureRequest) (CreateFeatureResponse, error) {
+	return CreateFeatureResponse{FeatureID: "created-feature", Result: "created"}, nil
+}
+
+func (f *fakeMutationTarget) StartFeature(featureID string) (FeatureStartResponse, error) {
+	f.mu.Lock()
+	f.startCalls = append(f.startCalls, featureID)
+	f.mu.Unlock()
+	return FeatureStartResponse{FeatureID: featureID, Result: "started"}, nil
+}
+
+func (f *fakeMutationTarget) StopFeature(featureID string) (FeatureStopResponse, error) {
+	return FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
+}
+
+func (f *fakeMutationTarget) RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error) {
+	return FeatureRestartResponse{FeatureID: featureID, Result: "restarted"}, nil
+}
+
+func (f *fakeMutationTarget) ReviewDecision(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error) {
+	return ReviewDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "submitted"}, nil
+}
+
+func (f *fakeMutationTarget) UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error) {
+	return FeatureConfigUpdateResponse{FeatureID: featureID, Result: "updated"}, nil
+}
+
+func (f *fakeMutationTarget) NeedUserInputDecision(featureID string, req NeedUserInputDecisionRequest) (NeedUserInputDecisionResponse, error) {
+	return NeedUserInputDecisionResponse{FeatureID: featureID, Decision: req.Decision, Result: "decided"}, nil
+}
+
+func (f *fakeMutationTarget) DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error) {
+	return NeedUserInputDraftResponse{FeatureID: featureID, Result: "drafted"}, nil
+}
+
+func (f *fakeMutationTarget) ToggleInputNotifications(featureID string) (InputNotificationsToggleResponse, error) {
+	return InputNotificationsToggleResponse{FeatureID: featureID, Result: "toggled"}, nil
+}
+
+func (f *fakeMutationTarget) AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error) {
+	return PermissionAnswerResponse{SessionID: req.SessionID, RequestID: req.RequestID, Decision: req.Decision, Result: "answered"}, nil
+}
+
+func (f *fakeMutationTarget) AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error) {
+	return AskUserAnswerResponse{SessionID: req.SessionID, RequestID: req.RequestID, Result: "answered"}, nil
+}
+
+func (f *fakeMutationTarget) SendHelp(req HelpAnswerRequest) (HelpSendResponse, error) {
+	return HelpSendResponse{FeatureID: req.FeatureID, SessionID: req.SessionID, Result: "sent"}, nil
+}
+
+func (f *fakeMutationTarget) RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
+	return RuntimeConfigUpdateResponse{Result: "updated"}, nil
+}
+
+func (f *fakeMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+	if f.publishErr != nil {
+		return PublishFeatureResponse{}, f.publishErr
+	}
+	return PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
+}
+
+func (f *fakeMutationTarget) MergeFeature(featureID string) (MergeFeatureResponse, error) {
+	return MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
+}
+
+func (f *fakeMutationTarget) RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error) {
+	return RewindFeatureResponse{FeatureID: featureID, Result: "rewound", TargetPhase: req.TargetPhase, RoadmapPhase: req.RoadmapPhase}, nil
+}
+
+func (f *fakeMutationTarget) RetryFeature(featureID string) (RetryFeatureResponse, error) {
+	return RetryFeatureResponse{FeatureID: featureID, Result: "retried"}, nil
+}
+
+func (f *fakeMutationTarget) StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error) {
+	return RebaseStartResponse{FeatureID: featureID, Result: "started", Repo: req.Repo, CycleType: "rebase", RebaseTarget: req.RebaseTarget}, nil
+}
+
+func (f *fakeMutationTarget) FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error) {
+	return ReviewCommentsFetchResponse{FeatureID: featureID, Repo: req.Repo, Comments: []ReviewCommentDTO{}}, nil
+}
+
+func (f *fakeMutationTarget) StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error) {
+	return ReviewCommentsStartResponse{FeatureID: featureID, Result: "started", Repo: req.Repo, Mode: req.Mode, CycleType: "review_comments"}, nil
+}
+
+func (f *fakeMutationTarget) StartTweak(featureID string, req TweakActionRequest) (TweakStartResponse, error) {
+	return TweakStartResponse{FeatureID: featureID, Result: "started", CycleType: "tweak"}, nil
+}
+
+func (f *fakeMutationTarget) FinishTweak(featureID string, req TweakFinishRequest) (TweakFinishResponse, error) {
+	return TweakFinishResponse{FeatureID: featureID, Result: "finished", Decision: req.Decision, HadChanges: req.HadChanges}, nil
+}
+
+func (f *fakeMutationTarget) StartRefactor(featureID string, req RefactorActionRequest) (RefactorStartResponse, error) {
+	return RefactorStartResponse{FeatureID: featureID, Result: "started", Repo: req.Repo, CycleType: "refactor", Pipeline: string(req.Pipeline)}, nil
+}
+
+func (f *fakeMutationTarget) RestartRefactor(featureID string, req RefactorActionRequest) (RefactorRestartResponse, error) {
+	return RefactorRestartResponse{FeatureID: featureID, Result: "restarted", Repo: req.Repo, CycleType: "refactor", Pipeline: string(req.Pipeline)}, nil
+}
+
+func (f *fakeMutationTarget) MarkDone(featureID string) (MarkDoneResponse, error) {
+	return MarkDoneResponse{FeatureID: featureID, Result: "marked_done"}, nil
+}
+
+func (f *fakeMutationTarget) CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error) {
+	return CleanupFeatureResponse{FeatureID: featureID, Result: "cleaned", Target: req.Target}, nil
+}
+
+func (f *fakeMutationTarget) DeleteFeature(featureID string) (DeleteFeatureResponse, error) {
+	return DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
+}
+
+func (f *fakeMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
+	return f.recoveryItems, nil
+}
+
+func (f *fakeMutationTarget) ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error) {
+	return RecoveryActionResponse{Result: "executed"}, nil
+}
+
 func expectedMCPToolNames() []string {
 	names := []string{
 		"artifact_content_get",
@@ -908,7 +1019,6 @@ func expectedMCPToolNames() []string {
 		"model_catalog_get",
 		"need_user_input_decide",
 		"need_user_input_draft",
-		"operation_list",
 		"permission_answer",
 		"permission_snapshot_get",
 		"prompt_snapshot_get",
@@ -930,40 +1040,6 @@ func expectedMCPToolNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func operationAcceptedMCPTools() []string {
-	return []string{
-		"ask_user_answer",
-		"config_runtime_update",
-		"feature_cleanup",
-		"feature_config_update",
-		"feature_create",
-		"feature_delete",
-		"feature_interrupt",
-		"feature_mark_done",
-		"feature_merge",
-		"feature_publish",
-		"feature_restart",
-		"feature_resume",
-		"feature_rewind",
-		"feature_retry",
-		"feature_start",
-		"feature_stop",
-		"help_send",
-		"need_user_input_decide",
-		"need_user_input_draft",
-		"permission_answer",
-		"rebase_start",
-		"recovery_execute",
-		"refactor_restart",
-		"refactor_start",
-		"review_comments_start",
-		"review_decision_submit",
-		"runtime_shutdown",
-		"tweak_finish",
-		"tweak_start",
-	}
 }
 
 func mcpToolNamesFromResult(result *mcp.ListToolsResult) []string {
@@ -1067,31 +1143,4 @@ func mcpToolText(t *testing.T, result *mcp.CallToolResult) string {
 		t.Fatalf("marshal content: %v", err)
 	}
 	return string(data)
-}
-
-func waitForMCPOperationStatus(t *testing.T, session *mcp.ClientSession, opID string, want OperationStatus) map[string]any {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		res, err := session.CallTool(t.Context(), &mcp.CallToolParams{
-			Name:      "operation_list",
-			Arguments: map[string]any{"limit": 200},
-		})
-		if err != nil {
-			t.Fatalf("CallTool(operation_list) error = %v", err)
-		}
-		if res.IsError {
-			t.Fatalf("CallTool(operation_list) IsError = true; content = %s", mcpToolText(t, res))
-		}
-		body := structuredContentMap(t, res)
-		for _, raw := range body["operations"].([]any) {
-			op := raw.(map[string]any)
-			if op["id"] == opID && op["status"] == string(want) {
-				return op
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("operation %s did not reach status %s", opID, want)
-	return nil
 }

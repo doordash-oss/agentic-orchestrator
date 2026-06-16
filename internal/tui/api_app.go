@@ -53,37 +53,36 @@ type APIClient interface {
 	ArtifactContent(context.Context, string, int, string, server.TextQuery) (server.TextContentResponse, error)
 	LogContent(context.Context, string, int, string, server.TextQuery) (server.TextContentResponse, error)
 	LivePreview(context.Context, string) (server.LivePreviewResponse, error)
-	Operations(context.Context, server.OperationQuery) (server.OperationSnapshotResponse, error)
-	CreateFeature(context.Context, server.CreateFeatureRequest) (server.OperationAcceptedResponse, error)
-	StartFeature(context.Context, string) (server.OperationAcceptedResponse, error)
-	ResumeFeature(context.Context, string) (server.OperationAcceptedResponse, error)
-	RestartFeature(context.Context, string, server.RestartFeatureRequest) (server.OperationAcceptedResponse, error)
-	StopFeature(context.Context, string) (server.OperationAcceptedResponse, error)
-	DeleteFeature(context.Context, string) (server.OperationAcceptedResponse, error)
-	PublishFeature(context.Context, string, server.PublishFeatureRequest) (server.OperationAcceptedResponse, error)
-	MergeFeature(context.Context, string) (server.OperationAcceptedResponse, error)
-	RewindFeature(context.Context, string, server.RewindFeatureRequest) (server.OperationAcceptedResponse, error)
-	RetryFeature(context.Context, string) (server.OperationAcceptedResponse, error)
-	StartRebase(context.Context, string, server.RebaseActionRequest) (server.OperationAcceptedResponse, error)
-	MarkDone(context.Context, string) (server.OperationAcceptedResponse, error)
-	CleanupFeature(context.Context, string, server.CleanupActionRequest) (server.OperationAcceptedResponse, error)
-	UpdateFeatureConfig(context.Context, string, server.FeatureConfigMutationRequest) (server.OperationAcceptedResponse, error)
-	UpdateRuntimeConfig(context.Context, server.RuntimeConfigMutationRequest) (server.OperationAcceptedResponse, error)
-	ExecuteRecovery(context.Context, server.RecoveryActionRequest) (server.OperationAcceptedResponse, error)
-	NeedUserInputDecision(context.Context, string, server.NeedUserInputDecisionRequest) (server.OperationAcceptedResponse, error)
-	DraftNeedUserInputAnswers(context.Context, string, server.NeedUserInputDraftRequest) (server.OperationAcceptedResponse, error)
-	ToggleInputNotifications(context.Context, string) (server.OperationAcceptedResponse, error)
-	ReviewDecision(context.Context, string, server.ReviewDecisionRequest) (server.OperationAcceptedResponse, error)
+	CreateFeature(context.Context, server.CreateFeatureRequest) (server.CreateFeatureResponse, error)
+	StartFeature(context.Context, string) (server.FeatureStartResponse, error)
+	ResumeFeature(context.Context, string) (server.FeatureStartResponse, error)
+	RestartFeature(context.Context, string, server.RestartFeatureRequest) (server.FeatureRestartResponse, error)
+	StopFeature(context.Context, string) (server.FeatureStopResponse, error)
+	DeleteFeature(context.Context, string) (server.DeleteFeatureResponse, error)
+	PublishFeature(context.Context, string, server.PublishFeatureRequest) (server.PublishFeatureResponse, error)
+	MergeFeature(context.Context, string) (server.MergeFeatureResponse, error)
+	RewindFeature(context.Context, string, server.RewindFeatureRequest) (server.RewindFeatureResponse, error)
+	RetryFeature(context.Context, string) (server.RetryFeatureResponse, error)
+	StartRebase(context.Context, string, server.RebaseActionRequest) (server.RebaseStartResponse, error)
+	MarkDone(context.Context, string) (server.MarkDoneResponse, error)
+	CleanupFeature(context.Context, string, server.CleanupActionRequest) (server.CleanupFeatureResponse, error)
+	UpdateFeatureConfig(context.Context, string, server.FeatureConfigMutationRequest) (server.FeatureConfigUpdateResponse, error)
+	UpdateRuntimeConfig(context.Context, server.RuntimeConfigMutationRequest) (server.RuntimeConfigUpdateResponse, error)
+	ExecuteRecovery(context.Context, server.RecoveryActionRequest) (server.RecoveryActionResponse, error)
+	NeedUserInputDecision(context.Context, string, server.NeedUserInputDecisionRequest) (server.NeedUserInputDecisionResponse, error)
+	DraftNeedUserInputAnswers(context.Context, string, server.NeedUserInputDraftRequest) (server.NeedUserInputDraftResponse, error)
+	ToggleInputNotifications(context.Context, string) (server.InputNotificationsToggleResponse, error)
+	ReviewDecision(context.Context, string, server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error)
 	FetchReviewComments(context.Context, string, server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error)
-	StartReviewComments(context.Context, string, server.ReviewCommentsActionRequest) (server.OperationAcceptedResponse, error)
-	StartTweak(context.Context, string, server.TweakActionRequest) (server.OperationAcceptedResponse, error)
-	FinishTweak(context.Context, string, server.TweakFinishRequest) (server.OperationAcceptedResponse, error)
-	StartRefactor(context.Context, string, server.RefactorActionRequest) (server.OperationAcceptedResponse, error)
-	RestartRefactor(context.Context, string, server.RefactorActionRequest) (server.OperationAcceptedResponse, error)
-	AnswerPermission(context.Context, server.PermissionAnswerRequest) (server.OperationAcceptedResponse, error)
-	SendHelp(context.Context, server.HelpAnswerRequest) (server.OperationAcceptedResponse, error)
-	AnswerAskUser(context.Context, server.AskUserAnswerRequest) (server.OperationAcceptedResponse, error)
-	Shutdown(context.Context) (server.OperationAcceptedResponse, error)
+	StartReviewComments(context.Context, string, server.ReviewCommentsActionRequest) (server.ReviewCommentsStartResponse, error)
+	StartTweak(context.Context, string, server.TweakActionRequest) (server.TweakStartResponse, error)
+	FinishTweak(context.Context, string, server.TweakFinishRequest) (server.TweakFinishResponse, error)
+	StartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorStartResponse, error)
+	RestartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorRestartResponse, error)
+	AnswerPermission(context.Context, server.PermissionAnswerRequest) (server.PermissionAnswerResponse, error)
+	SendHelp(context.Context, server.HelpAnswerRequest) (server.HelpSendResponse, error)
+	AnswerAskUser(context.Context, server.AskUserAnswerRequest) (server.AskUserAnswerResponse, error)
+	Shutdown(context.Context) (server.ShutdownResponse, error)
 	SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error)
 	FetchRefreshSnapshot(context.Context, server.RefreshSignal) (server.RefreshSnapshot, error)
 }
@@ -112,7 +111,6 @@ type APIAppSnapshot struct {
 	LivePreview *APILivePreviewPresentation
 	Transcript  *APITranscriptPresentation
 	Content     *APIContentPresentation
-	Operations  []APIOperationPresentation
 }
 
 type APIRuntimePresentation struct {
@@ -133,13 +131,6 @@ type APIFeaturePresentation struct {
 	CreatedAt      time.Time
 	AttentionCount int
 	Progress       server.FeatureProgress
-}
-
-type APIOperationPresentation struct {
-	ID        string
-	Kind      string
-	FeatureID string
-	Status    string
 }
 
 type APISessionPresentation struct {
@@ -257,7 +248,6 @@ type APIAppModel struct {
 	livePreviews               map[string]server.LivePreviewResponse
 	transcripts                map[string]server.TranscriptResponse
 	contents                   map[string]apiFeatureContentSnapshot
-	operations                 server.OperationSnapshotResponse
 	recovery                   server.RecoverySnapshotResponse
 	launchPolicy               server.LaunchPolicy
 	snapshot                   APIAppSnapshot
@@ -375,16 +365,14 @@ type apiEventErrorMsg struct {
 	err error
 }
 
-type apiOperationAcceptedMsg struct {
+type apiMutationResultMsg struct {
 	kind      string
 	featureID string
-	accepted  server.OperationAcceptedResponse
 	err       error
 }
 
 type apiRuntimeConfigMutationMsg struct {
 	kind            string
-	accepted        server.OperationAcceptedResponse
 	config          server.RuntimeConfigResponse
 	createdRepoPath string
 	err             error
@@ -395,8 +383,8 @@ type apiOwnedServerStoppedMsg struct {
 }
 
 type apiResumeAllResultMsg struct {
-	accepted []apiOperationAcceptedMsg
-	failed   []string
+	succeeded []string
+	failed    []string
 }
 
 type apiRecoveryPanel struct {
@@ -553,10 +541,6 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 	if err != nil {
 		return APIAppModel{}, fmt.Errorf("load session snapshot: %w", err)
 	}
-	operations, err := client.Operations(ctx, server.OperationQuery{Limit: 20})
-	if err != nil {
-		return APIAppModel{}, fmt.Errorf("load operation snapshot: %w", err)
-	}
 	recovery, err := client.Recovery(ctx)
 	if err != nil {
 		return APIAppModel{}, fmt.Errorf("load recovery snapshot: %w", err)
@@ -567,7 +551,6 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 	app.prompts = prompts
 	app.permissions = permissions
 	app.sessionList = sessions
-	app.operations = operations
 	app.recovery = recovery
 	if len(recovery.Items) > 0 {
 		app.recoveryPanel = newAPIRecoveryPanel(recovery)
@@ -725,8 +708,11 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Event stream failed: " + firstLine(msg.err.Error())
 		}
 		return m, nil
-	case apiOperationAcceptedMsg:
+	case apiMutationResultMsg:
 		if msg.err != nil {
+			if msg.kind == "feature.create" && msg.featureID != "" {
+				m.clearCreatePrompt()
+			}
 			if msg.kind == "feature.config.update" && m.configEditor != nil {
 				m.configEditor.saving = false
 				m.configEditor.saveErr = firstLine(msg.err.Error())
@@ -735,7 +721,6 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Mutation failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
-		m.upsertAcceptedOperation(msg.kind, msg.featureID, msg.accepted)
 		if msg.kind == "recovery.execute" {
 			m.recoveryPanel = nil
 			m.recovery = server.RecoverySnapshotResponse{}
@@ -764,7 +749,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.kind == "feature.review_comments" {
 			m.reviewComments = nil
 		}
-		m.statusMessage = apiAcceptedOperationStatus(msg.kind, msg.accepted.OperationID)
+		m.statusMessage = fmt.Sprintf("Completed %s", apiMutationKindLabel(msg.kind))
 		m.rebuildPresentation(m.selectedFeature)
 		return m, nil
 	case apiRuntimeConfigMutationMsg:
@@ -773,7 +758,6 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Runtime config update failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
-		m.upsertAcceptedOperation(msg.kind, "", msg.accepted)
 		m.runtimeConfig = msg.config
 		ApplyKeyboardLayout(m.runtimeConfig.UI.KeyboardLayout)
 		if m.workspaceManager != nil {
@@ -782,7 +766,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.wizard != nil {
 			m.refreshAPIWizardRepos(msg.createdRepoPath)
 		}
-		m.statusMessage = apiAcceptedOperationStatus(msg.kind, msg.accepted.OperationID)
+		m.statusMessage = fmt.Sprintf("Completed %s", apiMutationKindLabel(msg.kind))
 		m.rebuildPresentation(m.selectedFeature)
 		return m, nil
 	case PlanReviewDecisionMsg:
@@ -804,14 +788,11 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case apiResumeAllResultMsg:
 		m.resumeAllConfirmActive = false
 		m.resumeAllFeatureIDs = nil
-		for _, accepted := range msg.accepted {
-			m.upsertAcceptedOperation(accepted.kind, accepted.featureID, accepted.accepted)
-		}
 		switch {
-		case len(msg.accepted) > 0 && len(msg.failed) > 0:
-			m.statusMessage = fmt.Sprintf("Accepted resume all for %d feature(s); %d failed", len(msg.accepted), len(msg.failed))
-		case len(msg.accepted) > 0:
-			m.statusMessage = fmt.Sprintf("Accepted resume all for %d feature(s)", len(msg.accepted))
+		case len(msg.succeeded) > 0 && len(msg.failed) > 0:
+			m.statusMessage = fmt.Sprintf("Resumed %d feature(s); %d failed", len(msg.succeeded), len(msg.failed))
+		case len(msg.succeeded) > 0:
+			m.statusMessage = fmt.Sprintf("Resumed %d feature(s)", len(msg.succeeded))
 		case len(msg.failed) > 0:
 			m.statusMessage = "Resume all failed: " + strings.Join(msg.failed, "; ")
 		default:
@@ -995,7 +976,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.toggleAPIInputNotificationsCmd(m.selectedFeature)
 	case key.Matches(msg, keys.Chat):
-		m.statusMessage = "Ask chat requires a REST chat operation"
+		m.statusMessage = "Ask chat requires a REST chat endpoint"
 		return m, nil
 	case msg.Text == "a":
 		return m.openAPIContextualAction()
@@ -1241,8 +1222,12 @@ func (m APIAppModel) selectedAPIDashboardFeature() *feature.Feature {
 }
 
 func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail server.FeatureDetailDTO, hasDetail bool) *feature.Feature {
+	models := m.runtimeConfig.Defaults
 	if hasDetail {
 		summary = detail.FeatureSummary
+		if detail.Models != (config.ModelConfig{}) {
+			models = detail.Models
+		}
 	}
 	f := &feature.Feature{
 		ID:                  summary.ID,
@@ -1253,17 +1238,18 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		Created:             summary.CreatedAt,
 		ActiveRun:           summary.ActiveRun,
 		RunCount:            summary.RunCount,
-		Models:              m.runtimeConfig.Defaults,
+		Models:              models,
 		CurrentIteration:    summary.Progress.CurrentIteration,
 		CurrentRoadmapPhase: summary.Progress.CurrentRoadmapPhase,
 		TotalRoadmapPhases:  summary.Progress.TotalRoadmapPhases,
 		CurrentPhaseStatus:  summary.Progress.CurrentPhaseStatus,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview:  summary.Checkpoints.InquiryReview,
-			ResearchReview: summary.Checkpoints.ResearchReview,
-			DesignReview:   summary.Checkpoints.DesignReview,
-			PlanReview:     summary.Checkpoints.PlanReview,
-			ManualPublish:  summary.Checkpoints.ManualPublish,
+			InquiryReview:   summary.Checkpoints.InquiryReview,
+			ResearchReview:  summary.Checkpoints.ResearchReview,
+			DesignReview:    summary.Checkpoints.DesignReview,
+			RoadmapReview:   summary.Checkpoints.RoadmapReview,
+			PhasePlanReview: summary.Checkpoints.PhasePlanReview,
+			ManualPublish:   summary.Checkpoints.ManualPublish,
 		},
 		RepoStates:   map[string]*feature.RepoState{},
 		RepoCycles:   map[string]*feature.RepoCycleState{},
@@ -1593,7 +1579,6 @@ func (m APIAppModel) Snapshot() APIAppSnapshot {
 	out.Runtime.Providers = append([]string(nil), out.Runtime.Providers...)
 	out.Features = append([]APIFeaturePresentation(nil), out.Features...)
 	out.Sessions = append([]APISessionPresentation(nil), out.Sessions...)
-	out.Operations = append([]APIOperationPresentation(nil), out.Operations...)
 	if out.LivePreview != nil {
 		preview := *out.LivePreview
 		preview.Attention = append([]string(nil), preview.Attention...)
@@ -1683,9 +1668,6 @@ func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	}
 	if snapshot.Sessions != nil {
 		m.sessionList = *snapshot.Sessions
-	}
-	if snapshot.Operations != nil {
-		m.operations = *snapshot.Operations
 	}
 	if snapshot.Feature != nil {
 		m.storeFeatureDetail(*snapshot.Feature)
@@ -1787,32 +1769,6 @@ func (m *APIAppModel) storeContent(content apiFeatureContentSnapshot) {
 	m.contents[content.FeatureID] = content
 }
 
-func (m *APIAppModel) upsertAcceptedOperation(kind, featureID string, accepted server.OperationAcceptedResponse) {
-	if accepted.OperationID == "" {
-		return
-	}
-	status := accepted.Status
-	if status == "" {
-		status = server.OperationStatusQueued
-	}
-	dto := server.OperationDTO{
-		ID:     accepted.OperationID,
-		Kind:   kind,
-		Target: server.OperationTarget{FeatureID: featureID},
-		Status: status,
-	}
-	for i := range m.operations.Operations {
-		if m.operations.Operations[i].ID == accepted.OperationID {
-			m.operations.Operations[i] = dto
-			return
-		}
-	}
-	m.operations.Operations = append([]server.OperationDTO{dto}, m.operations.Operations...)
-	if len(m.operations.Operations) > 20 {
-		m.operations.Operations = m.operations.Operations[:20]
-	}
-}
-
 func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
 	attention := apiAttentionCounts(m.prompts, m.permissions)
 	features := make([]APIFeaturePresentation, 0, len(m.featureList.Features))
@@ -1890,7 +1846,6 @@ func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
 		LivePreview: livePreview,
 		Transcript:  transcript,
 		Content:     content,
-		Operations:  apiOperationPresentations(m.operations),
 	}
 	m.selectedFeature = selected
 }
@@ -2352,55 +2307,18 @@ func (m APIAppModel) persistRuntimeWorkspaceRootsCmd(roots []string, createdRepo
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 
-		accepted, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
+		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
 			WorkspaceRoots: &roots,
 		})
 		if err != nil {
-			return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", accepted: accepted, createdRepoPath: createdRepoPath, err: err}
-		}
-		if err := waitForAPIOperation(ctx, m.client, accepted.OperationID); err != nil {
-			return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", accepted: accepted, createdRepoPath: createdRepoPath, err: err}
+			return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", createdRepoPath: createdRepoPath, err: err}
 		}
 		cfg, err := m.client.RuntimeConfig(ctx)
 		return apiRuntimeConfigMutationMsg{
 			kind:            "runtime.config.update",
-			accepted:        accepted,
 			config:          cfg,
 			createdRepoPath: createdRepoPath,
 			err:             err,
-		}
-	}
-}
-
-func waitForAPIOperation(ctx context.Context, client APIClient, operationID string) error {
-	if operationID == "" {
-		return nil
-	}
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		ops, err := client.Operations(ctx, server.OperationQuery{Limit: 50})
-		if err != nil {
-			return err
-		}
-		for _, op := range ops.Operations {
-			if op.ID != operationID {
-				continue
-			}
-			switch op.Status {
-			case server.OperationStatusSucceeded:
-				return nil
-			case server.OperationStatusFailed, server.OperationStatusRejected, server.OperationStatusInterrupted:
-				if op.Error != nil && op.Error.Message != "" {
-					return errors.New(op.Error.Message)
-				}
-				return fmt.Errorf("operation %s %s", operationID, op.Status)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
 		}
 	}
 }
@@ -2670,25 +2588,18 @@ func (m APIAppModel) resumeAllCmd(featureIDs []string) tea.Cmd {
 			if kind == "" {
 				continue
 			}
-			var (
-				accepted server.OperationAcceptedResponse
-				err      error
-			)
+			var err error
 			switch kind {
 			case "feature.resume":
-				accepted, err = m.client.ResumeFeature(ctx, featureID)
+				_, err = m.client.ResumeFeature(ctx, featureID)
 			case "feature.retry":
-				accepted, err = m.client.RetryFeature(ctx, featureID)
+				_, err = m.client.RetryFeature(ctx, featureID)
 			}
 			if err != nil {
 				result.failed = append(result.failed, fmt.Sprintf("%s: %s", featureID, firstLine(err.Error())))
 				continue
 			}
-			result.accepted = append(result.accepted, apiOperationAcceptedMsg{
-				kind:      kind,
-				featureID: featureID,
-				accepted:  accepted,
-			})
+			result.succeeded = append(result.succeeded, featureID)
 		}
 		return result
 	}
@@ -2700,11 +2611,10 @@ func (m APIAppModel) toggleAPIInputNotificationsCmd(featureID string) tea.Cmd {
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.ToggleInputNotifications(ctx, featureID)
-		return apiOperationAcceptedMsg{
+		_, err := m.client.ToggleInputNotifications(ctx, featureID)
+		return apiMutationResultMsg{
 			kind:      "feature.input_notifications.toggle",
 			featureID: featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -3556,26 +3466,6 @@ func appendIndentedText(b *strings.Builder, text string) {
 	}
 }
 
-func (m APIAppModel) renderAPIOperations() string {
-	var b strings.Builder
-	b.WriteString("Operations\n")
-	for _, op := range m.snapshot.Operations {
-		label := op.Kind
-		if label == "" {
-			label = "operation"
-		}
-		if friendly := apiMutationKindLabel(op.Kind); friendly != "" {
-			label = friendly
-		}
-		b.WriteString(fmt.Sprintf("  %s  %s  %s", op.ID, label, op.Status))
-		if op.FeatureID != "" {
-			b.WriteString("  " + op.FeatureID)
-		}
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
 func (m APIAppModel) renderFeatureActionConfirm() string {
 	title := "Confirm " + apiMutationKindLabel(m.actionConfirmKind)
 	if m.actionConfirmKind == "feature.rewind" {
@@ -3601,11 +3491,11 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 	case "feature.publish":
 		b.WriteString(WarningStyle.Render("  This will publish the selected feature."))
 		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Review the server operation result before continuing."))
+		b.WriteString(WarningStyle.Render("  Review the server result before continuing."))
 	case "feature.merge":
 		b.WriteString(WarningStyle.Render("  This will merge the selected feature to the base branch."))
 		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Review the server operation result before continuing."))
+		b.WriteString(WarningStyle.Render("  Review the server result before continuing."))
 	case "feature.restart":
 		b.WriteString(WarningStyle.Render("  This will restart the selected feature phase."))
 		b.WriteString("\n")
@@ -3625,11 +3515,11 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 	case "feature.rebase":
 		b.WriteString(WarningStyle.Render("  This will start a rebase cycle for the selected feature."))
 		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Conflict handling and push results will be reported by the server operation."))
+		b.WriteString(WarningStyle.Render("  Conflict handling and push results will be reported by the server."))
 	case "feature.tweak.start":
 		b.WriteString(WarningStyle.Render("  This will start an interactive tweak session for the selected feature."))
 		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Finish and review decisions will be handled through server operations."))
+		b.WriteString(WarningStyle.Render("  Finish and review decisions will be handled by the server."))
 	case "feature.stop":
 		b.WriteString(WarningStyle.Render("  This will interrupt the current phase."))
 		b.WriteString("\n")
@@ -4461,11 +4351,24 @@ func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 			RiskLevel:               feature.RiskLevel(result.RiskLevel),
 			Pipeline:                result.Pipeline,
 		}
-		accepted, err := m.client.CreateFeature(ctx, req)
-		return apiOperationAcceptedMsg{
-			kind:     "feature.create",
-			accepted: accepted,
-			err:      err,
+		created, err := m.client.CreateFeature(ctx, req)
+		if err != nil {
+			return apiMutationResultMsg{
+				kind: "feature.create",
+				err:  err,
+			}
+		}
+		if created.FeatureID == "" {
+			return apiMutationResultMsg{
+				kind: "feature.create",
+				err:  errors.New("create feature response missing feature_id"),
+			}
+		}
+		_, err = m.client.StartFeature(ctx, created.FeatureID)
+		return apiMutationResultMsg{
+			kind:      "feature.create",
+			featureID: created.FeatureID,
+			err:       err,
 		}
 	}
 }
@@ -4551,22 +4454,18 @@ func (m APIAppModel) primarySelectedFeatureActionCmd(kind, featureID string) tea
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		var (
-			accepted server.OperationAcceptedResponse
-			err      error
-		)
+		var err error
 		switch kind {
 		case "feature.resume":
-			accepted, err = m.client.ResumeFeature(ctx, featureID)
+			_, err = m.client.ResumeFeature(ctx, featureID)
 		case "feature.start":
-			accepted, err = m.client.StartFeature(ctx, featureID)
+			_, err = m.client.StartFeature(ctx, featureID)
 		default:
 			err = fmt.Errorf("unsupported primary feature action %s", kind)
 		}
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      kind,
 			featureID: featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -4582,29 +4481,26 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 		if len(argsOpt) > 0 {
 			args = argsOpt[0]
 		}
-		var (
-			accepted server.OperationAcceptedResponse
-			err      error
-		)
+		var err error
 		switch kind {
 		case "feature.publish":
-			accepted, err = m.client.PublishFeature(ctx, featureID, server.PublishFeatureRequest{Repos: append([]string(nil), args.Repos...)})
+			_, err = m.client.PublishFeature(ctx, featureID, server.PublishFeatureRequest{Repos: append([]string(nil), args.Repos...)})
 		case "feature.merge":
-			accepted, err = m.client.MergeFeature(ctx, featureID)
+			_, err = m.client.MergeFeature(ctx, featureID)
 		case "feature.restart":
-			accepted, err = m.client.RestartFeature(ctx, featureID, server.RestartFeatureRequest{})
+			_, err = m.client.RestartFeature(ctx, featureID, server.RestartFeatureRequest{})
 		case "feature.retry":
-			accepted, err = m.client.RetryFeature(ctx, featureID)
+			_, err = m.client.RetryFeature(ctx, featureID)
 		case "feature.mark-done":
-			accepted, err = m.client.MarkDone(ctx, featureID)
+			_, err = m.client.MarkDone(ctx, featureID)
 		case "feature.rebase":
 			repo := args.Repo
 			if repo == "" {
 				repo = m.selectedRebaseRepo(featureID)
 			}
-			accepted, err = m.client.StartRebase(ctx, featureID, server.RebaseActionRequest{Repo: repo})
+			_, err = m.client.StartRebase(ctx, featureID, server.RebaseActionRequest{Repo: repo})
 		case "feature.cleanup":
-			accepted, err = m.client.CleanupFeature(ctx, featureID, server.CleanupActionRequest{Target: "worktrees", Repo: args.Repo})
+			_, err = m.client.CleanupFeature(ctx, featureID, server.CleanupActionRequest{Target: "worktrees", Repo: args.Repo})
 		case "feature.rewind":
 			targetPhase := args.TargetPhase
 			if targetPhase == "" {
@@ -4614,24 +4510,23 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 				err = errors.New("selected feature has no rewind target phase")
 				break
 			}
-			accepted, err = m.client.RewindFeature(ctx, featureID, server.RewindFeatureRequest{
+			_, err = m.client.RewindFeature(ctx, featureID, server.RewindFeatureRequest{
 				TargetPhase:     targetPhase,
 				RoadmapPhase:    args.RoadmapPhase,
 				UpgradePipeline: args.UpgradePipeline,
 			})
 		case "feature.tweak.start":
-			accepted, err = m.client.StartTweak(ctx, featureID, server.TweakActionRequest{})
+			_, err = m.client.StartTweak(ctx, featureID, server.TweakActionRequest{})
 		case "feature.stop":
-			accepted, err = m.client.StopFeature(ctx, featureID)
+			_, err = m.client.StopFeature(ctx, featureID)
 		case "feature.delete":
-			accepted, err = m.client.DeleteFeature(ctx, featureID)
+			_, err = m.client.DeleteFeature(ctx, featureID)
 		default:
 			err = fmt.Errorf("unsupported feature action %s", kind)
 		}
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      kind,
 			featureID: featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -4643,14 +4538,13 @@ func (m APIAppModel) finishTweakDecisionCmd(featureID, decision string, hadChang
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.FinishTweak(ctx, featureID, server.TweakFinishRequest{
+		_, err := m.client.FinishTweak(ctx, featureID, server.TweakFinishRequest{
 			Decision:   decision,
 			HadChanges: hadChanges,
 		})
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      "feature.tweak.finish",
 			featureID: featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -4658,11 +4552,11 @@ func (m APIAppModel) finishTweakDecisionCmd(featureID, decision string, hadChang
 
 func (m APIAppModel) executeRecoveryCmd(panel apiRecoveryPanel) tea.Cmd {
 	return func() tea.Msg {
-		accepted, err := m.client.ExecuteRecovery(context.Background(), server.RecoveryActionRequest{
+		_, err := m.client.ExecuteRecovery(context.Background(), server.RecoveryActionRequest{
 			SnapshotID: panel.snapshotID,
 			Actions:    copyStringMapValues(panel.actions),
 		})
-		return apiOperationAcceptedMsg{kind: "recovery.execute", accepted: accepted, err: err}
+		return apiMutationResultMsg{kind: "recovery.execute", err: err}
 	}
 }
 
@@ -5140,16 +5034,15 @@ func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 			ctx = m.eventCtx
 		}
 		snap := editor.editor.Snapshot()
-		accepted, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
+		_, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
 			Models:      snap.Models,
 			Inquireness: string(snap.Inquireness),
 			Checkpoints: snap.Checkpoints,
 			Pipeline:    editor.pipeline,
 		})
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      "feature.config.update",
 			featureID: editor.featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5161,13 +5054,12 @@ func (m APIAppModel) saveRuntimeConfigCmd(editor apiRuntimeConfigEditor) tea.Cmd
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
+		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
 			Defaults: config.DefaultsConfig{Models: editor.draft},
 		})
-		return apiOperationAcceptedMsg{
-			kind:     "runtime.config.update",
-			accepted: accepted,
-			err:      err,
+		return apiMutationResultMsg{
+			kind: "runtime.config.update",
+			err:  err,
 		}
 	}
 }
@@ -5178,15 +5070,14 @@ func (m APIAppModel) startReviewCommentsCmd(panel apiReviewCommentsPanel) tea.Cm
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.StartReviewComments(ctx, panel.featureID, server.ReviewCommentsActionRequest{
+		_, err := m.client.StartReviewComments(ctx, panel.featureID, server.ReviewCommentsActionRequest{
 			Repo:     panel.repo,
 			Mode:     panel.mode,
 			Comments: append([]server.ReviewCommentDTO(nil), panel.comments...),
 		})
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      "feature.review_comments",
 			featureID: panel.featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5208,20 +5099,16 @@ func (m APIAppModel) startRefactorCmd(panel apiRefactorPipelinePanel) tea.Cmd {
 			Pipeline: pipeline,
 		}
 		kind := "feature.refactor.start"
-		var (
-			accepted server.OperationAcceptedResponse
-			err      error
-		)
+		var err error
 		if panel.restart {
 			kind = "feature.refactor.restart"
-			accepted, err = m.client.RestartRefactor(ctx, panel.featureID, req)
+			_, err = m.client.RestartRefactor(ctx, panel.featureID, req)
 		} else {
-			accepted, err = m.client.StartRefactor(ctx, panel.featureID, req)
+			_, err = m.client.StartRefactor(ctx, panel.featureID, req)
 		}
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      kind,
 			featureID: panel.featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5233,11 +5120,10 @@ func (m APIAppModel) needUserInputDecisionCmd(featureID, decision string) tea.Cm
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.NeedUserInputDecision(ctx, featureID, server.NeedUserInputDecisionRequest{Decision: decision})
-		return apiOperationAcceptedMsg{
+		_, err := m.client.NeedUserInputDecision(ctx, featureID, server.NeedUserInputDecisionRequest{Decision: decision})
+		return apiMutationResultMsg{
 			kind:      "feature.need_user_input.decision",
 			featureID: featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5249,11 +5135,10 @@ func (m APIAppModel) reviewDecisionCmd(featureID string, req server.ReviewDecisi
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.ReviewDecision(ctx, featureID, req)
-		return apiOperationAcceptedMsg{
+		_, err := m.client.ReviewDecision(ctx, featureID, req)
+		return apiMutationResultMsg{
 			kind:      "feature.review_decision",
 			featureID: featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5265,15 +5150,14 @@ func (m APIAppModel) permissionAnswerCmd(req server.ControlRequestDTO, decision 
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.AnswerPermission(ctx, server.PermissionAnswerRequest{
+		_, err := m.client.AnswerPermission(ctx, server.PermissionAnswerRequest{
 			RequestID: req.RequestID,
 			SessionID: req.SessionID,
 			Decision:  decision,
 		})
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      "permission.answer",
 			featureID: req.FeatureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5285,14 +5169,13 @@ func (m APIAppModel) helpAnswerCmd(featureID, answer string) tea.Cmd {
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.SendHelp(ctx, server.HelpAnswerRequest{
+		_, err := m.client.SendHelp(ctx, server.HelpAnswerRequest{
 			FeatureID: featureID,
 			Message:   answer,
 		})
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      "help.send",
 			featureID: featureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5304,15 +5187,14 @@ func (m APIAppModel) askUserAnswerCmd(req server.ControlRequestDTO, question, an
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
-		accepted, err := m.client.AnswerAskUser(ctx, server.AskUserAnswerRequest{
+		_, err := m.client.AnswerAskUser(ctx, server.AskUserAnswerRequest{
 			RequestID: req.RequestID,
 			SessionID: req.SessionID,
 			Answers:   map[string]string{question: answer},
 		})
-		return apiOperationAcceptedMsg{
+		return apiMutationResultMsg{
 			kind:      "ask_user.answer",
 			featureID: req.FeatureID,
-			accepted:  accepted,
 			err:       err,
 		}
 	}
@@ -5595,11 +5477,12 @@ func apiFeatureFromConfig(featureID, featureName string, response server.Feature
 		Models:      current.Models,
 		Inquireness: feature.Inquireness(current.Inquireness),
 		Checkpoints: feature.Checkpoints{
-			InquiryReview:  current.Checkpoints.InquiryReview,
-			ResearchReview: current.Checkpoints.ResearchReview,
-			DesignReview:   current.Checkpoints.DesignReview,
-			PlanReview:     current.Checkpoints.PlanReview,
-			ManualPublish:  current.Checkpoints.ManualPublish,
+			InquiryReview:   current.Checkpoints.InquiryReview,
+			ResearchReview:  current.Checkpoints.ResearchReview,
+			DesignReview:    current.Checkpoints.DesignReview,
+			RoadmapReview:   current.Checkpoints.RoadmapReview,
+			PhasePlanReview: current.Checkpoints.PhasePlanReview,
+			ManualPublish:   current.Checkpoints.ManualPublish,
 		},
 		Pipeline: pipeline,
 		Repos:    apiFeatureConfigRepos(response.Publish),
@@ -6581,23 +6464,6 @@ func apiMutationKindLabel(kind string) string {
 	default:
 		return strings.TrimSpace(kind)
 	}
-}
-
-func apiAcceptedOperationStatus(kind, operationID string) string {
-	return fmt.Sprintf("Accepted %s operation %s", apiMutationKindLabel(kind), operationID)
-}
-
-func apiOperationPresentations(resp server.OperationSnapshotResponse) []APIOperationPresentation {
-	out := make([]APIOperationPresentation, 0, len(resp.Operations))
-	for _, op := range resp.Operations {
-		out = append(out, APIOperationPresentation{
-			ID:        op.ID,
-			Kind:      op.Kind,
-			FeatureID: op.Target.FeatureID,
-			Status:    string(op.Status),
-		})
-	}
-	return out
 }
 
 func truncatePlain(s string, maxWidth int) string {

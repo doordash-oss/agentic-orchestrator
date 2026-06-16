@@ -51,7 +51,6 @@ type RefreshSnapshot struct {
 	Session       *SessionDetailResponse
 	Transcript    *TranscriptResponse
 	LivePreview   *LivePreviewResponse
-	Operations    *OperationSnapshotResponse
 }
 
 const refreshTranscriptLimit = 50
@@ -200,9 +199,6 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		resource = evt.Resource
 	}
 	switch {
-	case evt.Kind == "operation.updated" || resource.Type == "operation":
-		ops, err := c.Operations(ctx, OperationQuery{FeatureID: resource.FeatureID})
-		return RefreshSnapshot{Operations: &ops}, err
 	case evt.Kind == "config.updated":
 		if resource.FeatureID != "" {
 			cfg, err := c.FeatureConfig(ctx, resource.FeatureID)

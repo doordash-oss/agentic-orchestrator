@@ -66,9 +66,6 @@ func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
 			{ID: "sess-1", FeatureID: "active", Phase: "implement", Repo: "agentic-orchestrator", Kind: "agent", Label: "Implement", Provider: "codex", Model: "gpt-5.4", Status: "running", ContextPct: 42},
 		}},
-		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
-			{ID: "op-1", Kind: "feature.start", Status: server.OperationStatusRunning, Target: server.OperationTarget{FeatureID: "active"}},
-		}},
 		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
 			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"},
 			Description:    "Render selected feature detail from REST.",
@@ -95,7 +92,7 @@ func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 
-	if got, want := strings.Join(client.calls, ","), "Features,RuntimeConfig,ModelCatalog,Prompts,Permissions,Sessions,Operations,Recovery,FeatureDetail,LivePreview"; got != want {
+	if got, want := strings.Join(client.calls, ","), "Features,RuntimeConfig,ModelCatalog,Prompts,Permissions,Sessions,Recovery,FeatureDetail,LivePreview"; got != want {
 		t.Fatalf("API calls = %s, want %s", got, want)
 	}
 	if got := strings.Join(client.detailFeatureIDs, ","); got != "active" {
@@ -169,6 +166,52 @@ func TestAPIAppModelDashboardKeepsManualPublishCodeReady(t *testing.T) {
 	}
 	if strings.Contains(row, "Publishing") {
 		t.Fatalf("dashboard row = %q; should not show Publishing for manual publish CodeReady", row)
+	}
+}
+
+func TestAPIAppModelDashboardFeatureUsesDetailModels(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "feature-1",
+		Name:         "Model override",
+		Slug:         "model-override",
+		Status:       "Created",
+		CurrentPhase: "research",
+		CreatedAt:    time.Now(),
+	}
+	selected := config.ModelConfig{
+		Research:       "selected-research",
+		Planning:       "selected-planning",
+		Implementation: "selected-implementation",
+		Review:         "selected-review",
+		KBBuild:        "selected-kb",
+	}
+	app := APIAppModel{
+		runtimeConfig: server.RuntimeConfigResponse{
+			Defaults: config.ModelConfig{
+				Research:       "default-research",
+				Planning:       "default-planning",
+				Implementation: "default-implementation",
+				Review:         "default-review",
+				KBBuild:        "default-kb",
+			},
+		},
+		featureList: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: {Feature: server.FeatureDetailDTO{
+				FeatureSummary: summary,
+				Models:         selected,
+			}},
+		},
+	}
+
+	features := app.apiDashboardFeatures()
+	if len(features) != 1 {
+		t.Fatalf("apiDashboardFeatures length = %d, want 1", len(features))
+	}
+	if got := features[0].Models; got != selected {
+		t.Fatalf("dashboard feature models = %+v, want detail models %+v", got, selected)
 	}
 }
 
@@ -247,10 +290,7 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 				AllowedActions: []string{"resume", "kill", "skip"},
 			}},
 		},
-		executeRecoveryAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-recovery",
-			Status:      server.OperationStatusQueued,
-		},
+		executeRecoveryAccepted: apiTestActionResponse{Result: "executed"},
 	}
 
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -288,12 +328,11 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 	if got := client.executeRecoveryRequests[0].Actions["feat-recover:api"]; got != "resume" {
 		t.Fatalf("ExecuteRecovery action = %q, want resume", got)
 	}
-	snapshot := submitted.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-recovery" || snapshot.Operations[0].Kind != "recovery.execute" {
-		t.Fatalf("Operations after recovery execute = %+v, want accepted recovery operation", snapshot.Operations)
-	}
 	if strings.Contains(stripANSI(submitted.View().Content), "Session Recovery") {
 		t.Fatalf("API app View() still shows recovery panel after accepted submit:\n%s", stripANSI(submitted.View().Content))
+	}
+	if !strings.Contains(submitted.statusMessage, "Completed Recovery") {
+		t.Fatalf("statusMessage = %q, want completed recovery status", submitted.statusMessage)
 	}
 }
 
@@ -317,7 +356,7 @@ func TestAPIAppModelRecoveryTweakShowsKillOnlyAffordance(t *testing.T) {
 				AllowedActions: []string{"kill"},
 			}},
 		},
-		executeRecoveryAccepted: server.OperationAcceptedResponse{OperationID: "op-recovery", Status: server.OperationStatusQueued},
+		executeRecoveryAccepted: apiTestActionResponse{Result: "executed"},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -880,7 +919,6 @@ func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 		catalog:     server.ModelCatalogResponse{},
 		prompts:     server.PromptSnapshotResponse{},
 		permissions: server.PermissionSnapshotResponse{},
-		operations:  server.OperationSnapshotResponse{},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
 	if err != nil {
@@ -929,15 +967,9 @@ func TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection(t *testing.T) {
 		catalog:     server.ModelCatalogResponse{},
 		prompts:     server.PromptSnapshotResponse{},
 		permissions: server.PermissionSnapshotResponse{},
-		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
-			{ID: "op-1", Kind: "feature.start", Status: server.OperationStatusRunning, Target: server.OperationTarget{FeatureID: "active"}},
-		}},
 		refreshSnapshot: server.RefreshSnapshot{
 			Feature: &server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
 				FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()},
-			}},
-			Operations: &server.OperationSnapshotResponse{Operations: []server.OperationDTO{
-				{ID: "op-1", Kind: "feature.start", Status: server.OperationStatusSucceeded, Target: server.OperationTarget{FeatureID: "active"}},
 			}},
 		},
 	}
@@ -952,7 +984,7 @@ func TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection(t *testing.T) {
 	initialTranscriptCalls := countString(client.calls, "Transcript")
 
 	signal := server.RefreshSignal{
-		Resource:         server.ResourceDTO{Type: "operation", ID: "op-1", FeatureID: "active"},
+		Resource:         server.ResourceDTO{Type: "feature", ID: "active", FeatureID: "active"},
 		SnapshotRequired: true,
 	}
 	msg := app.fetchRefreshSnapshotCmd(signal)()
@@ -962,18 +994,14 @@ func TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection(t *testing.T) {
 	if got := recovered.SelectedFeatureID(); got != "active" {
 		t.Fatalf("SelectedFeatureID() after reconnect snapshot = %q, want active", got)
 	}
-	snapshot := recovered.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].Status != string(server.OperationStatusSucceeded) {
-		t.Fatalf("Operations after reconnect snapshot = %+v, want op-1 succeeded", snapshot.Operations)
-	}
-	if len(client.refreshSignals) != 1 || client.refreshSignals[0].Resource.ID != "op-1" {
-		t.Fatalf("refresh signals = %+v, want targeted op-1 refresh", client.refreshSignals)
+	if len(client.refreshSignals) != 1 || client.refreshSignals[0].Resource.ID != "active" {
+		t.Fatalf("refresh signals = %+v, want targeted active feature refresh", client.refreshSignals)
 	}
 	if got := countString(client.calls, "Sessions"); got != initialSessionCalls {
-		t.Fatalf("Sessions calls after operation refresh = %d, want unchanged %d", got, initialSessionCalls)
+		t.Fatalf("Sessions calls after feature refresh = %d, want unchanged %d", got, initialSessionCalls)
 	}
 	if got := countString(client.calls, "Transcript"); got != initialTranscriptCalls {
-		t.Fatalf("Transcript calls after operation refresh = %d, want unchanged %d", got, initialTranscriptCalls)
+		t.Fatalf("Transcript calls after feature refresh = %d, want unchanged %d", got, initialTranscriptCalls)
 	}
 }
 
@@ -989,7 +1017,6 @@ func TestAPIAppModelRecoveryRefreshRehydratesPanel(t *testing.T) {
 		catalog:     server.ModelCatalogResponse{},
 		prompts:     server.PromptSnapshotResponse{},
 		permissions: server.PermissionSnapshotResponse{},
-		operations:  server.OperationSnapshotResponse{},
 		recovery:    server.RecoverySnapshotResponse{},
 		refreshSnapshot: server.RefreshSnapshot{
 			Recovery: &server.RecoverySnapshotResponse{
@@ -1033,7 +1060,7 @@ func TestAPIAppModelRecoveryRefreshRehydratesPanel(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelStartSelectedFeatureUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelStartSelectedFeatureUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1041,10 +1068,7 @@ func TestAPIAppModelStartSelectedFeatureUsesRESTMutationAndTracksOperation(t *te
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{ID: "queued", Name: "Queued work", Slug: "queued-work", Status: "Created", CurrentPhase: "research", CreatedAt: time.Now()},
 		}},
-		startAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-start",
-			Status:      server.OperationStatusQueued,
-		},
+		startAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
 	if err != nil {
@@ -1067,19 +1091,15 @@ func TestAPIAppModelStartSelectedFeatureUsesRESTMutationAndTracksOperation(t *te
 	if got := strings.Join(client.startFeatureIDs, ","); got != "queued" {
 		t.Fatalf("StartFeature calls = %q, want queued", got)
 	}
-	snapshot := started.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-start" || snapshot.Operations[0].Kind != "feature.start" {
-		t.Fatalf("Operations after start = %+v, want accepted start operation", snapshot.Operations)
-	}
 	view := stripANSI(started.View().Content)
-	for _, want := range []string{"Accepted Start operation op-start", "op-start", "queued"} {
+	for _, want := range []string{"Completed Start", "queued"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 }
 
-func TestAPIAppModelResumeSelectedFeatureUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelResumeSelectedFeatureUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
@@ -1093,10 +1113,7 @@ func TestAPIAppModelResumeSelectedFeatureUsesRESTMutationAndTracksOperation(t *t
 				{ID: "resume", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
 			},
 		}},
-		resumeAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-resume",
-			Status:      server.OperationStatusQueued,
-		},
+		resumeAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
 	if err != nil {
@@ -1122,29 +1139,22 @@ func TestAPIAppModelResumeSelectedFeatureUsesRESTMutationAndTracksOperation(t *t
 	if len(client.startFeatureIDs) != 0 {
 		t.Fatalf("StartFeature calls = %v, want none for resume action", client.startFeatureIDs)
 	}
-	snapshot := resumed.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-resume" || snapshot.Operations[0].Kind != "feature.resume" {
-		t.Fatalf("Operations after resume = %+v, want accepted resume operation", snapshot.Operations)
-	}
 	view := stripANSI(resumed.View().Content)
-	for _, want := range []string{"Accepted Resume operation op-resume", "op-resume", "paused"} {
+	for _, want := range []string{"Completed Resume", "paused"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 }
 
-func TestAPIAppModelContextualRetryUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelContextualRetryUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
-		retryAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-retry",
-			Status:      server.OperationStatusQueued,
-		},
+		retryAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1162,12 +1172,8 @@ func TestAPIAppModelContextualRetryUsesRESTMutationAndTracksOperation(t *testing
 	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
 		t.Fatalf("RetryFeature calls = %q, want failed", got)
 	}
-	snapshot := retried.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-retry" || snapshot.Operations[0].Kind != "feature.retry" {
-		t.Fatalf("Operations after retry = %+v, want accepted retry operation", snapshot.Operations)
-	}
-	if view := stripANSI(retried.View().Content); !strings.Contains(view, "Accepted Retry operation op-retry") {
-		t.Fatalf("API app View() missing retry accepted status in:\n%s", view)
+	if view := stripANSI(retried.View().Content); !strings.Contains(view, "Completed Retry") {
+		t.Fatalf("API app View() missing retry completed status in:\n%s", view)
 	}
 }
 
@@ -1178,10 +1184,7 @@ func TestAPIAppModelDetailContextualRetryUsesAWithoutResumeAll(t *testing.T) {
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
-		retryAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-retry",
-			Status:      server.OperationStatusQueued,
-		},
+		retryAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1203,12 +1206,12 @@ func TestAPIAppModelDetailContextualRetryUsesAWithoutResumeAll(t *testing.T) {
 	if retried.resumeAllConfirmActive {
 		t.Fatal("contextual retry in detail opened resume-all confirmation")
 	}
-	if view := stripANSI(retried.View().Content); !strings.Contains(view, "Accepted Retry operation op-retry") {
-		t.Fatalf("API app View() missing retry accepted status in:\n%s", view)
+	if view := stripANSI(retried.View().Content); !strings.Contains(view, "Completed Retry") {
+		t.Fatalf("API app View() missing retry completed status in:\n%s", view)
 	}
 }
 
-func TestAPIAppModelResumeAllUsesRESTMutationsAndTracksOperations(t *testing.T) {
+func TestAPIAppModelResumeAllUsesRESTMutations(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -1216,14 +1219,8 @@ func TestAPIAppModelResumeAllUsesRESTMutationsAndTracksOperations(t *testing.T) 
 			{ID: "paused", Name: "Paused work", Slug: "paused-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now()},
 			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now().Add(-time.Minute)},
 		}},
-		resumeAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-resume",
-			Status:      server.OperationStatusQueued,
-		},
-		retryAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-retry",
-			Status:      server.OperationStatusQueued,
-		},
+		resumeAccepted: apiTestActionResponse{},
+		retryAccepted:  apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1261,12 +1258,8 @@ func TestAPIAppModelResumeAllUsesRESTMutationsAndTracksOperations(t *testing.T) 
 	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
 		t.Fatalf("RetryFeature calls = %q, want failed", got)
 	}
-	snapshot := resumed.Snapshot()
-	if len(snapshot.Operations) != 2 {
-		t.Fatalf("Operations after resume all = %+v, want two accepted operations", snapshot.Operations)
-	}
-	if view := stripANSI(resumed.View().Content); !strings.Contains(view, "Accepted resume all for 2 feature(s)") {
-		t.Fatalf("API app View() missing resume-all accepted status in:\n%s", view)
+	if view := stripANSI(resumed.View().Content); !strings.Contains(view, "Resumed 2 feature(s)") {
+		t.Fatalf("API app View() missing resume-all completed status in:\n%s", view)
 	}
 }
 
@@ -1277,10 +1270,7 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
-		toggleInputAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-input-alerts",
-			Status:      server.OperationStatusQueued,
-		},
+		toggleInputAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1307,11 +1297,11 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 
 	model, cmd = overview.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	if cmd != nil {
-		t.Fatal("Update(/) returned command without REST chat operation")
+		t.Fatal("Update(/) returned command without REST chat support")
 	}
 	chat := model.(APIAppModel)
-	if !strings.Contains(chat.statusMessage, "REST chat operation") {
-		t.Fatalf("status after / = %q, want REST chat operation gap", chat.statusMessage)
+	if !strings.Contains(chat.statusMessage, "REST chat endpoint") {
+		t.Fatalf("status after / = %q, want chat unavailable status", chat.statusMessage)
 	}
 
 	model, cmd = chat.Update(tea.KeyPressMsg{Code: 'N', Text: "N"})
@@ -1324,8 +1314,8 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 	if got := strings.Join(client.toggleInputFeatureIDs, ","); got != "active" {
 		t.Fatalf("ToggleInputNotifications calls = %q, want active", got)
 	}
-	if view := stripANSI(toggled.View().Content); !strings.Contains(view, "Accepted Input Alerts operation op-input-alerts") {
-		t.Fatalf("API app View() missing input-alert accepted status in:\n%s", view)
+	if view := stripANSI(toggled.View().Content); !strings.Contains(view, "Completed Input Alerts") {
+		t.Fatalf("API app View() missing input-alert completed status in:\n%s", view)
 	}
 
 	model, cmd = toggled.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
@@ -1338,7 +1328,7 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelCreateFeatureUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelCreateFeatureUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -1356,10 +1346,7 @@ func TestAPIAppModelCreateFeatureUsesRESTMutationAndTracksOperation(t *testing.T
 			},
 			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
 		},
-		createAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-create",
-			Status:      server.OperationStatusQueued,
-		},
+		createAccepted: apiTestActionResponse{FeatureID: "feat-created"},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1431,12 +1418,17 @@ func TestAPIAppModelCreateFeatureUsesRESTMutationAndTracksOperation(t *testing.T
 			t.Fatalf("CreateFeature implementation model = %q, want gpt-5.4", got[0].Models.Implementation)
 		}
 	}
+	if got := strings.Join(client.startFeatureIDs, ","); got != "feat-created" {
+		t.Fatalf("StartFeature calls = %q, want feat-created auto-start after create", got)
+	}
+	if got := strings.Join(client.calls[len(client.calls)-2:], ","); got != "CreateFeature,StartFeature" {
+		t.Fatalf("last API calls = %q, want CreateFeature,StartFeature", got)
+	}
 	if created.ShowingCreateFeaturePrompt() {
 		t.Fatal("create prompt remained open after accepted create")
 	}
-	snapshot := created.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-create" || snapshot.Operations[0].Kind != "feature.create" {
-		t.Fatalf("Operations after create = %+v, want accepted feature.create operation", snapshot.Operations)
+	if !strings.Contains(created.statusMessage, "Completed Create") {
+		t.Fatalf("statusMessage = %q, want create completed status", created.statusMessage)
 	}
 }
 
@@ -1453,13 +1445,7 @@ func TestAPIAppModelWorkspaceManagerUsesRuntimeConfigMutation(t *testing.T) {
 			WorkspaceRoots: []string{rootA},
 			Repos:          testRuntimeConfigRepos(nil, []string{rootA}),
 		},
-		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
-			{ID: "op-workspaces", Kind: "runtime.config.update", Status: server.OperationStatusSucceeded},
-		}},
-		updateRuntimeConfigAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-workspaces",
-			Status:      server.OperationStatusQueued,
-		},
+		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1524,13 +1510,7 @@ func TestAPIAppModelWizardBrowseRootPersistsAndRefreshesRepos(t *testing.T) {
 			},
 			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
 		},
-		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
-			{ID: "op-workspaces", Kind: "runtime.config.update", Status: server.OperationStatusSucceeded},
-		}},
-		updateRuntimeConfigAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-workspaces",
-			Status:      server.OperationStatusQueued,
-		},
+		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1581,13 +1561,7 @@ func TestAPIAppModelWizardCreateRepoPersistsRootRescansAndAutoSelects(t *testing
 			},
 			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
 		},
-		operations: server.OperationSnapshotResponse{Operations: []server.OperationDTO{
-			{ID: "op-workspaces", Kind: "runtime.config.update", Status: server.OperationStatusSucceeded},
-		}},
-		updateRuntimeConfigAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-workspaces",
-			Status:      server.OperationStatusQueued,
-		},
+		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -1632,7 +1606,7 @@ func makeGitRepoDir(t *testing.T, root, name string) {
 	}
 }
 
-func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *testing.T) {
+func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -1640,7 +1614,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 		key        tea.KeyPressMsg
 		actionID   string
 		wantKind   string
-		accepted   server.OperationAcceptedResponse
+		accepted   apiTestActionResponse
 		cycle      *server.CycleDTO
 		disabled   bool
 		assertCall func(t *testing.T, client *fakeTUIAPIClient)
@@ -1650,10 +1624,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 'M', Text: "M"},
 			actionID: "merge",
 			wantKind: "feature.merge",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-merge",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.mergeFeatureIDs, ","); got != "active" {
@@ -1666,10 +1637,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 'D', Text: "D"},
 			actionID: "mark-done",
 			wantKind: "feature.mark-done",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-mark-done",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.markDoneFeatureIDs, ","); got != "active" {
@@ -1682,10 +1650,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 'b', Text: "b"},
 			actionID: "rebase",
 			wantKind: "feature.rebase",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-rebase",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.startRebaseFeatureIDs, ","); got != "active" {
@@ -1701,10 +1666,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 'c', Text: "c"},
 			actionID: "cleanup",
 			wantKind: "feature.cleanup",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-cleanup",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.cleanupFeatureIDs, ","); got != "active" {
@@ -1720,10 +1682,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 't', Text: "t"},
 			actionID: "tweak",
 			wantKind: "feature.tweak.start",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-tweak-start",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.startTweakFeatureIDs, ","); got != "active" {
@@ -1739,10 +1698,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl},
 			actionID: "rewind",
 			wantKind: "feature.rewind",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-rewind",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.rewindFeatureIDs, ","); got != "active" {
@@ -1758,10 +1714,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 'r', Text: "r"},
 			actionID: "restart",
 			wantKind: "feature.restart",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-restart",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.restartFeatureIDs, ","); got != "active" {
@@ -1774,10 +1727,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 's', Text: "s"},
 			actionID: "pause-stop",
 			wantKind: "feature.stop",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-stop",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.stopFeatureIDs, ","); got != "active" {
@@ -1790,10 +1740,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			key:      tea.KeyPressMsg{Code: 'd', Text: "d"},
 			actionID: "delete",
 			wantKind: "feature.delete",
-			accepted: server.OperationAcceptedResponse{
-				OperationID: "op-delete",
-				Status:      server.OperationStatusQueued,
-			},
+			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.deleteFeatureIDs, ","); got != "active" {
@@ -1863,12 +1810,8 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutationAndTrackOperation(t *
 			accepted := model.(APIAppModel)
 
 			tt.assertCall(t, client)
-			snapshot := accepted.Snapshot()
-			if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != tt.accepted.OperationID || snapshot.Operations[0].Kind != tt.wantKind {
-				t.Fatalf("Operations after %s = %+v, want accepted %s operation", tt.name, snapshot.Operations, tt.wantKind)
-			}
 			view := stripANSI(accepted.View().Content)
-			for _, want := range []string{"Accepted " + apiMutationKindLabel(tt.wantKind) + " operation " + tt.accepted.OperationID, tt.accepted.OperationID, "active"} {
+			for _, want := range []string{"Completed " + apiMutationKindLabel(tt.wantKind), "active"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("API app View() missing %q in:\n%s", want, view)
 				}
@@ -1885,27 +1828,23 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 		key            tea.KeyPressMsg
 		wantDecision   string
 		wantHadChanges bool
-		wantOperation  string
 	}{
 		{
 			name:           "review",
 			key:            tea.KeyPressMsg{Code: 'y', Text: "y"},
 			wantDecision:   "final-review",
 			wantHadChanges: true,
-			wantOperation:  "op-tweak-review",
 		},
 		{
 			name:           "skip_review",
 			key:            tea.KeyPressMsg{Code: 'n', Text: "n"},
 			wantDecision:   "skip-review",
 			wantHadChanges: true,
-			wantOperation:  "op-tweak-skip",
 		},
 		{
-			name:          "restore",
-			key:           tea.KeyPressMsg{Code: tea.KeyEscape},
-			wantDecision:  "restore-from-review",
-			wantOperation: "op-tweak-restore",
+			name:         "restore",
+			key:          tea.KeyPressMsg{Code: tea.KeyEscape},
+			wantDecision: "restore-from-review",
 		},
 	}
 
@@ -1927,10 +1866,7 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 						{ID: "tweak", Enabled: false, Scope: server.ActionScopeDTO{Type: "feature"}},
 					},
 				}},
-				finishTweakAccepted: server.OperationAcceptedResponse{
-					OperationID: tt.wantOperation,
-					Status:      server.OperationStatusQueued,
-				},
+				finishTweakAccepted: apiTestActionResponse{Result: "finished"},
 			}
 			app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 			if err != nil {
@@ -1969,9 +1905,8 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 			if got := client.finishTweakRequests; len(got) != 1 || got[0].Decision != tt.wantDecision || got[0].HadChanges != tt.wantHadChanges {
 				t.Fatalf("FinishTweak requests = %+v, want decision %q had_changes %v", got, tt.wantDecision, tt.wantHadChanges)
 			}
-			snapshot := accepted.Snapshot()
-			if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != tt.wantOperation || snapshot.Operations[0].Kind != "feature.tweak.finish" {
-				t.Fatalf("Operations after %s = %+v, want accepted feature.tweak.finish operation %s", tt.name, snapshot.Operations, tt.wantOperation)
+			if !strings.Contains(accepted.statusMessage, "Completed Finish Tweak") {
+				t.Fatalf("statusMessage = %q, want tweak finish completed status", accepted.statusMessage)
 			}
 		})
 	}
@@ -2008,17 +1943,14 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 			Current: server.FeatureConfigDTO{
 				Models:      config.ModelConfig{Research: "codex:gpt-5.4", Planning: "codex:gpt-5.4", Implementation: "codex:gpt-5.4", Review: "codex:gpt-5.4", KBBuild: "codex:gpt-5.4"},
 				Inquireness: "targeted",
-				Checkpoints: server.CheckpointsDTO{PlanReview: true, ManualPublish: true},
+				Checkpoints: server.CheckpointsDTO{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 				Pipeline:    "large",
 			},
 			Defaults: server.FeatureConfigDTO{
 				Models: config.ModelConfig{Research: "codex:gpt-5.4"},
 			},
 		},
-		updateFeatureConfigAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-config",
-			Status:      server.OperationStatusQueued,
-		},
+		updateFeatureConfigAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2061,15 +1993,11 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 	if got := strings.Join(client.updateFeatureConfigIDs, ","); got != "active" {
 		t.Fatalf("UpdateFeatureConfig calls = %q, want active", got)
 	}
-	if got := client.updateFeatureConfigRequests; len(got) != 1 || got[0].Models.Research != "codex:gpt-5.5" || got[0].Pipeline != "large" || got[0].Inquireness != "targeted" || !got[0].Checkpoints.PlanReview || !got[0].Checkpoints.ManualPublish {
+	if got := client.updateFeatureConfigRequests; len(got) != 1 || got[0].Models.Research != "codex:gpt-5.5" || got[0].Pipeline != "large" || got[0].Inquireness != "targeted" || !got[0].Checkpoints.RoadmapReview || !got[0].Checkpoints.PhasePlanReview || !got[0].Checkpoints.ManualPublish {
 		t.Fatalf("UpdateFeatureConfig requests = %+v, want edited research model and preserved config axes", got)
 	}
-	snapshot := saved.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-config" || snapshot.Operations[0].Kind != "feature.config.update" {
-		t.Fatalf("Operations after config save = %+v, want accepted feature.config.update operation", snapshot.Operations)
-	}
 	view = stripANSI(saved.View().Content)
-	for _, want := range []string{"Accepted Feature Config operation op-config", "op-config", "active"} {
+	for _, want := range []string{"Completed Feature Config", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2102,7 +2030,7 @@ func TestAPIAppModelFeatureConfigEditorRequiresQuiescentFeature(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelRuntimeConfigEditorSavesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -2131,10 +2059,7 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutationAndTracksOperation(t *te
 				"Research": {"codex": {"codex:gpt-5.4", "codex:gpt-5.5"}},
 			},
 		},
-		updateRuntimeConfigAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-runtime-config",
-			Status:      server.OperationStatusQueued,
-		},
+		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2169,19 +2094,15 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutationAndTracksOperation(t *te
 	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Research != "codex:gpt-5.5" {
 		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited research default model", got)
 	}
-	snapshot := saved.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-runtime-config" || snapshot.Operations[0].Kind != "runtime.config.update" {
-		t.Fatalf("Operations after runtime config save = %+v, want accepted runtime.config.update operation", snapshot.Operations)
-	}
 	view = stripANSI(saved.View().Content)
-	for _, want := range []string{"Accepted Runtime Config operation op-runtime-config", "op-runtime-config"} {
+	for _, want := range []string{"Completed Runtime Config"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 }
 
-func TestAPIAppModelNeedUserInputDecisionUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -2192,10 +2113,7 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutationAndTracksOperation(t *t
 			FeatureSummary: server.FeatureSummary{ID: "blocked", Name: "Blocked work", Slug: "blocked-work", Status: "NeedUserInput", CurrentPhase: "implement"},
 			NeedUserInput:  &server.NeedInputGateDTO{FeatureID: "blocked", Open: true, Scope: "feature", Iteration: 3},
 		}},
-		needUserInputAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-need-input",
-			Status:      server.OperationStatusQueued,
-		},
+		needUserInputAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2237,19 +2155,15 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutationAndTracksOperation(t *t
 	if decided.ShowingNeedInputPrompt() {
 		t.Fatal("need-user-input prompt remained open after accepted decision")
 	}
-	snapshot := decided.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-need-input" || snapshot.Operations[0].Kind != "feature.need_user_input.decision" {
-		t.Fatalf("Operations after need-user-input decision = %+v, want accepted decision operation", snapshot.Operations)
-	}
 	view = stripANSI(decided.View().Content)
-	for _, want := range []string{"Accepted Need Input Decision operation op-need-input", "op-need-input", "blocked"} {
+	for _, want := range []string{"Completed Need Input Decision", "blocked"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 }
 
-func TestAPIAppModelPermissionAnswerUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -2259,10 +2173,7 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutationAndTracksOperation(t *testin
 		permissions: server.PermissionSnapshotResponse{Requests: []server.ControlRequestDTO{
 			{RequestID: "perm-1", SessionID: "sess-1", FeatureID: "active", ToolName: "Bash", Status: "pending", Summary: "go test ./internal/tui"},
 		}},
-		permissionAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-permission",
-			Status:      server.OperationStatusQueued,
-		},
+		permissionAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2301,19 +2212,15 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutationAndTracksOperation(t *testin
 	if answered.ShowingPermissionPrompt() {
 		t.Fatal("permission prompt remained open after accepted answer")
 	}
-	snapshot := answered.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-permission" || snapshot.Operations[0].Kind != "permission.answer" || snapshot.Operations[0].FeatureID != "active" {
-		t.Fatalf("Operations after permission answer = %+v, want accepted permission answer operation", snapshot.Operations)
-	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Accepted Permission Answer operation op-permission", "op-permission", "active"} {
+	for _, want := range []string{"Completed Permission Answer", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 }
 
-func TestAPIAppModelHelpMessageUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelHelpMessageUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -2323,10 +2230,7 @@ func TestAPIAppModelHelpMessageUsesRESTMutationAndTracksOperation(t *testing.T) 
 		prompts: server.PromptSnapshotResponse{HelpQueue: []server.HelpQueueDTO{
 			{FeatureID: "active", Question: "Which implementation path?", Pending: true},
 		}},
-		helpAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-help",
-			Status:      server.OperationStatusQueued,
-		},
+		helpAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2372,19 +2276,15 @@ func TestAPIAppModelHelpMessageUsesRESTMutationAndTracksOperation(t *testing.T) 
 	if answered.ShowingHelpPrompt() {
 		t.Fatal("help prompt remained open after accepted answer")
 	}
-	snapshot := answered.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-help" || snapshot.Operations[0].Kind != "help.send" || snapshot.Operations[0].FeatureID != "active" {
-		t.Fatalf("Operations after help answer = %+v, want accepted help.send operation", snapshot.Operations)
-	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Accepted Help Reply operation op-help", "op-help", "active"} {
+	for _, want := range []string{"Completed Help Reply", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 }
 
-func TestAPIAppModelAskUserAnswerUsesRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -2402,10 +2302,7 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutationAndTracksOperation(t *testing.T
 				Questions: []server.AskUserQuestionDTO{{Question: "Which database?"}},
 			},
 		}},
-		askUserAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-ask",
-			Status:      server.OperationStatusQueued,
-		},
+		askUserAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2451,12 +2348,8 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutationAndTracksOperation(t *testing.T
 	if answered.ShowingAskUserPrompt() {
 		t.Fatal("ask-user prompt remained open after accepted answer")
 	}
-	snapshot := answered.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-ask" || snapshot.Operations[0].Kind != "ask_user.answer" || snapshot.Operations[0].FeatureID != "active" {
-		t.Fatalf("Operations after ask-user answer = %+v, want accepted ask_user.answer operation", snapshot.Operations)
-	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Accepted AskUser Answer operation op-ask", "op-ask", "active"} {
+	for _, want := range []string{"Completed AskUser Answer", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2487,7 +2380,7 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 				}},
 			},
 		}},
-		askUserAccepted: server.OperationAcceptedResponse{OperationID: "op-ask", Status: server.OperationStatusQueued},
+		askUserAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2515,7 +2408,7 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelReviewDecisionsUseRESTMutationAndTrackOperation(t *testing.T) {
+func TestAPIAppModelReviewDecisionsUseRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -2567,11 +2460,8 @@ func TestAPIAppModelReviewDecisionsUseRESTMutationAndTrackOperation(t *testing.T
 				features: server.FeatureListResponse{Features: []server.FeatureSummary{
 					{ID: "active", Name: "Active work", Slug: "active-work", Status: "PlanNeedsReview", CurrentPhase: "plan", CreatedAt: time.Now()},
 				}},
-				detail: tt.detail,
-				reviewAccepted: server.OperationAcceptedResponse{
-					OperationID: "op-review",
-					Status:      server.OperationStatusQueued,
-				},
+				detail:         tt.detail,
+				reviewAccepted: apiTestActionResponse{},
 			}
 			app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 			if err != nil {
@@ -2592,12 +2482,8 @@ func TestAPIAppModelReviewDecisionsUseRESTMutationAndTrackOperation(t *testing.T
 			if len(client.reviewRequests) != 1 || client.reviewRequests[0] != tt.wantReq {
 				t.Fatalf("ReviewDecision requests = %+v, want %+v", client.reviewRequests, tt.wantReq)
 			}
-			snapshot := reviewed.Snapshot()
-			if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-review" || snapshot.Operations[0].Kind != "feature.review_decision" {
-				t.Fatalf("Operations after review decision = %+v, want accepted review-decision operation", snapshot.Operations)
-			}
 			view := stripANSI(reviewed.View().Content)
-			for _, want := range []string{"Accepted Review Decision operation op-review", "op-review", "active"} {
+			for _, want := range []string{"Completed Review Decision", "active"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("API app View() missing %q in:\n%s", want, view)
 				}
@@ -2637,10 +2523,7 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 				{ID: 101, Type: "review", Path: "internal/tui/api_app.go", Line: 42, Body: "use REST DTOs here", UserLogin: "reviewer", DiffHunk: "@@ -1 +1 @@\n-old\n+new"},
 			},
 		},
-		startReviewCommentsAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-review-comments",
-			Status:      server.OperationStatusQueued,
-		},
+		startReviewCommentsAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2696,12 +2579,8 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	if got := client.startReviewCommentsRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Mode != "auto" || len(got[0].Comments) != 1 || got[0].Comments[0].ID != 101 || got[0].Comments[0].DiffHunk == "" {
 		t.Fatalf("StartReviewComments requests = %+v, want agentic-orchestrator auto with previewed comment", got)
 	}
-	snapshot := started.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-review-comments" || snapshot.Operations[0].Kind != "feature.review_comments" {
-		t.Fatalf("Operations after review-comments start = %+v, want accepted review-comments operation", snapshot.Operations)
-	}
 	view = stripANSI(started.View().Content)
-	for _, want := range []string{"Accepted Review Comments operation op-review-comments", "op-review-comments", "active"} {
+	for _, want := range []string{"Completed Review Comments", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2733,10 +2612,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 				},
 			},
 		}},
-		startRefactorAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-refactor",
-			Status:      server.OperationStatusQueued,
-		},
+		startRefactorAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2785,12 +2661,8 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Prompt != "extract transport boundary" || got[0].Pipeline != feature.PipelineLarge {
 		t.Fatalf("StartRefactor requests = %+v, want agentic-orchestrator prompt with large pipeline", got)
 	}
-	snapshot := started.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-refactor" || snapshot.Operations[0].Kind != "feature.refactor.start" {
-		t.Fatalf("Operations after refactor start = %+v, want accepted refactor operation", snapshot.Operations)
-	}
 	view = stripANSI(started.View().Content)
-	for _, want := range []string{"Accepted Refactor operation op-refactor", "op-refactor", "active"} {
+	for _, want := range []string{"Completed Refactor", "active"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2856,10 +2728,7 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 				}},
 			},
 		}},
-		deleteAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-delete",
-			Status:      server.OperationStatusQueued,
-		},
+		deleteAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2882,7 +2751,7 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelPublishConfirmsBeforeRESTMutationAndTracksOperation(t *testing.T) {
+func TestAPIAppModelPublishConfirmsBeforeRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -2895,10 +2764,7 @@ func TestAPIAppModelPublishConfirmsBeforeRESTMutationAndTracksOperation(t *testi
 				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
 			},
 		}},
-		publishAccepted: server.OperationAcceptedResponse{
-			OperationID: "op-publish",
-			Status:      server.OperationStatusQueued,
-		},
+		publishAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -2928,12 +2794,8 @@ func TestAPIAppModelPublishConfirmsBeforeRESTMutationAndTracksOperation(t *testi
 	if got := strings.Join(client.publishFeatureIDs, ","); got != "ready" {
 		t.Fatalf("PublishFeature calls = %q, want ready", got)
 	}
-	snapshot := published.Snapshot()
-	if len(snapshot.Operations) != 1 || snapshot.Operations[0].ID != "op-publish" || snapshot.Operations[0].Kind != "feature.publish" {
-		t.Fatalf("Operations after publish = %+v, want accepted publish operation", snapshot.Operations)
-	}
 	view := stripANSI(published.View().Content)
-	for _, want := range []string{"Accepted Publish operation op-publish", "op-publish", "ready"} {
+	for _, want := range []string{"Completed Publish", "ready"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2957,7 +2819,7 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
 			},
 		}},
-		publishAccepted: server.OperationAcceptedResponse{OperationID: "op-publish", Status: server.OperationStatusQueued},
+		publishAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -3009,7 +2871,7 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 		key        tea.KeyPressMsg
 		actionID   string
 		wantTitle  string
-		accepted   server.OperationAcceptedResponse
+		accepted   apiTestActionResponse
 		assertCall func(t *testing.T, client *fakeTUIAPIClient)
 	}{
 		{
@@ -3017,7 +2879,7 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 			key:       tea.KeyPressMsg{Code: 'b', Text: "b"},
 			actionID:  "rebase",
 			wantTitle: "Confirm Rebase",
-			accepted:  server.OperationAcceptedResponse{OperationID: "op-rebase", Status: server.OperationStatusQueued},
+			accepted:  apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := client.startRebaseRequests; len(got) != 1 || got[0].Repo != "web" {
@@ -3030,7 +2892,7 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 			key:       tea.KeyPressMsg{Code: 't', Text: "t"},
 			actionID:  "tweak",
 			wantTitle: "Confirm Tweak",
-			accepted:  server.OperationAcceptedResponse{OperationID: "op-tweak", Status: server.OperationStatusQueued},
+			accepted:  apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := len(client.startTweakRequests); got != 1 {
@@ -3090,7 +2952,7 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 	t.Run("review comments", func(t *testing.T) {
 		t.Parallel()
 
-		client := apiRepoSelectorClient("review-comments", server.OperationAcceptedResponse{OperationID: "op-review-comments", Status: server.OperationStatusQueued})
+		client := apiRepoSelectorClient("review-comments", apiTestActionResponse{})
 		client.reviewCommentsResponse = server.ReviewCommentsFetchResponse{FeatureID: "active", Repo: "web"}
 		app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 		if err != nil {
@@ -3116,7 +2978,7 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 	t.Run("refactor", func(t *testing.T) {
 		t.Parallel()
 
-		client := apiRepoSelectorClient("refactor", server.OperationAcceptedResponse{OperationID: "op-refactor", Status: server.OperationStatusQueued})
+		client := apiRepoSelectorClient("refactor", apiTestActionResponse{})
 		app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 		if err != nil {
 			t.Fatalf("NewAPIAppModel() error = %v", err)
@@ -3175,7 +3037,7 @@ func TestAPIAppModelRewindPhaseSelectorUsesChosenTarget(t *testing.T) {
 				},
 			},
 		}},
-		rewindAccepted: server.OperationAcceptedResponse{OperationID: "op-rewind", Status: server.OperationStatusQueued},
+		rewindAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -3233,7 +3095,7 @@ func TestAPIAppModelRewindPipelineUpgradeUsesUpgradeRequest(t *testing.T) {
 				},
 			},
 		}},
-		rewindAccepted: server.OperationAcceptedResponse{OperationID: "op-rewind", Status: server.OperationStatusQueued},
+		rewindAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -3286,7 +3148,7 @@ func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
 				},
 			},
 		}},
-		rewindAccepted: server.OperationAcceptedResponse{OperationID: "op-rewind", Status: server.OperationStatusQueued},
+		rewindAccepted: apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -3396,7 +3258,7 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
-		shutdownAccepted: server.OperationAcceptedResponse{OperationID: "op-shutdown", Status: server.OperationStatusQueued},
+		shutdownAccepted: apiTestActionResponse{},
 	}
 	var fallbackCalls int
 	attached, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -3489,7 +3351,7 @@ func TestAPIAppModelOwnedServerShutdownErrorKeepsTUIOpen(t *testing.T) {
 	}
 }
 
-func apiRepoSelectorClient(actionID string, accepted server.OperationAcceptedResponse) *fakeTUIAPIClient {
+func apiRepoSelectorClient(actionID string, accepted apiTestActionResponse) *fakeTUIAPIClient {
 	action := server.ActionDTO{
 		ID:      actionID,
 		Enabled: true,
@@ -3529,6 +3391,35 @@ func apiRepoSelectorClient(actionID string, accepted server.OperationAcceptedRes
 	return client
 }
 
+type apiTestActionResponse struct {
+	FeatureID    string
+	Result       string
+	Decision     string
+	SessionID    string
+	RequestID    string
+	Repo         string
+	Mode         string
+	CycleType    string
+	TargetPhase  string
+	RoadmapPhase int
+	Muted        bool
+	HadChanges   bool
+}
+
+func (r apiTestActionResponse) result(defaultResult string) string {
+	if r.Result != "" {
+		return r.Result
+	}
+	return defaultResult
+}
+
+func (r apiTestActionResponse) featureID(defaultFeatureID string) string {
+	if r.FeatureID != "" {
+		return r.FeatureID
+	}
+	return defaultFeatureID
+}
+
 type fakeTUIAPIClient struct {
 	calls                         []string
 	features                      server.FeatureListResponse
@@ -3541,94 +3432,93 @@ type fakeTUIAPIClient struct {
 	livePreview                   server.LivePreviewResponse
 	livePreviewsByID              map[string]server.LivePreviewResponse
 	livePreviewFeatureIDs         []string
-	operations                    server.OperationSnapshotResponse
-	executeRecoveryAccepted       server.OperationAcceptedResponse
+	executeRecoveryAccepted       apiTestActionResponse
 	executeRecoveryErr            error
 	executeRecoverySnapshotIDs    []string
 	executeRecoveryRequests       []server.RecoveryActionRequest
 	refreshSnapshot               server.RefreshSnapshot
 	refreshSignals                []server.RefreshSignal
-	startAccepted                 server.OperationAcceptedResponse
+	startAccepted                 apiTestActionResponse
 	startErr                      error
 	startFeatureIDs               []string
-	createAccepted                server.OperationAcceptedResponse
+	createAccepted                apiTestActionResponse
 	createErr                     error
 	createRequests                []server.CreateFeatureRequest
-	resumeAccepted                server.OperationAcceptedResponse
+	resumeAccepted                apiTestActionResponse
 	resumeErr                     error
 	resumeFeatureIDs              []string
-	restartAccepted               server.OperationAcceptedResponse
+	restartAccepted               apiTestActionResponse
 	restartErr                    error
 	restartFeatureIDs             []string
-	stopAccepted                  server.OperationAcceptedResponse
+	stopAccepted                  apiTestActionResponse
 	stopErr                       error
 	stopFeatureIDs                []string
-	deleteAccepted                server.OperationAcceptedResponse
+	deleteAccepted                apiTestActionResponse
 	deleteErr                     error
 	deleteFeatureIDs              []string
-	publishAccepted               server.OperationAcceptedResponse
+	publishAccepted               apiTestActionResponse
 	publishErr                    error
 	publishFeatureIDs             []string
 	publishRequests               []server.PublishFeatureRequest
-	mergeAccepted                 server.OperationAcceptedResponse
+	mergeAccepted                 apiTestActionResponse
 	mergeErr                      error
 	mergeFeatureIDs               []string
-	retryAccepted                 server.OperationAcceptedResponse
+	retryAccepted                 apiTestActionResponse
 	retryErr                      error
 	retryFeatureIDs               []string
-	markDoneAccepted              server.OperationAcceptedResponse
+	markDoneAccepted              apiTestActionResponse
 	markDoneErr                   error
 	markDoneFeatureIDs            []string
-	cleanupAccepted               server.OperationAcceptedResponse
+	cleanupAccepted               apiTestActionResponse
 	cleanupErr                    error
 	cleanupFeatureIDs             []string
 	cleanupRequests               []server.CleanupActionRequest
-	startTweakAccepted            server.OperationAcceptedResponse
+	startTweakAccepted            apiTestActionResponse
 	startTweakErr                 error
 	startTweakFeatureIDs          []string
 	startTweakRequests            []server.TweakActionRequest
-	finishTweakAccepted           server.OperationAcceptedResponse
+	finishTweakAccepted           apiTestActionResponse
 	finishTweakErr                error
 	finishTweakFeatureIDs         []string
 	finishTweakRequests           []server.TweakFinishRequest
-	startRebaseAccepted           server.OperationAcceptedResponse
+	startRebaseAccepted           apiTestActionResponse
 	startRebaseErr                error
 	startRebaseFeatureIDs         []string
 	startRebaseRequests           []server.RebaseActionRequest
-	startRefactorAccepted         server.OperationAcceptedResponse
+	startRefactorAccepted         apiTestActionResponse
 	startRefactorErr              error
 	startRefactorFeatureIDs       []string
 	startRefactorRequests         []server.RefactorActionRequest
-	restartRefactorAccepted       server.OperationAcceptedResponse
+	restartRefactorAccepted       apiTestActionResponse
 	restartRefactorErr            error
 	restartRefactorFeatureIDs     []string
 	restartRefactorRequests       []server.RefactorActionRequest
-	rewindAccepted                server.OperationAcceptedResponse
+	rewindAccepted                apiTestActionResponse
 	rewindErr                     error
 	rewindFeatureIDs              []string
 	rewindRequests                []server.RewindFeatureRequest
 	featureConfig                 server.FeatureConfigResponse
 	featureConfigErr              error
 	featureConfigIDs              []string
-	updateFeatureConfigAccepted   server.OperationAcceptedResponse
+	updateFeatureConfigAccepted   apiTestActionResponse
 	updateFeatureConfigErr        error
 	updateFeatureConfigIDs        []string
 	updateFeatureConfigRequests   []server.FeatureConfigMutationRequest
-	updateRuntimeConfigAccepted   server.OperationAcceptedResponse
+	updateRuntimeConfigAccepted   apiTestActionResponse
 	updateRuntimeConfigErr        error
 	updateRuntimeConfigRequests   []server.RuntimeConfigMutationRequest
-	needUserInputAccepted         server.OperationAcceptedResponse
+	needUserInputAccepted         apiTestActionResponse
 	needUserInputErr              error
 	needUserInputFeatureIDs       []string
 	needUserInputRequests         []server.NeedUserInputDecisionRequest
-	needUserInputDraftAccepted    server.OperationAcceptedResponse
+	needUserInputDraftAccepted    apiTestActionResponse
 	needUserInputDraftErr         error
 	needUserInputDraftFeatureIDs  []string
 	needUserInputDraftRequests    []server.NeedUserInputDraftRequest
-	toggleInputAccepted           server.OperationAcceptedResponse
+	toggleInputAccepted           apiTestActionResponse
 	toggleInputErr                error
 	toggleInputFeatureIDs         []string
-	reviewAccepted                server.OperationAcceptedResponse
+	reviewAccepted                apiTestActionResponse
 	reviewErr                     error
 	reviewFeatureIDs              []string
 	reviewRequests                []server.ReviewDecisionRequest
@@ -3636,20 +3526,20 @@ type fakeTUIAPIClient struct {
 	reviewCommentsErr             error
 	reviewCommentsFeatureIDs      []string
 	reviewCommentsFetchRequests   []server.ReviewCommentsFetchRequest
-	startReviewCommentsAccepted   server.OperationAcceptedResponse
+	startReviewCommentsAccepted   apiTestActionResponse
 	startReviewCommentsErr        error
 	startReviewCommentsFeatureIDs []string
 	startReviewCommentsRequests   []server.ReviewCommentsActionRequest
-	permissionAccepted            server.OperationAcceptedResponse
+	permissionAccepted            apiTestActionResponse
 	permissionErr                 error
 	permissionAnswers             []server.PermissionAnswerRequest
-	helpAccepted                  server.OperationAcceptedResponse
+	helpAccepted                  apiTestActionResponse
 	helpErr                       error
 	helpRequests                  []server.HelpAnswerRequest
-	askUserAccepted               server.OperationAcceptedResponse
+	askUserAccepted               apiTestActionResponse
 	askUserErr                    error
 	askUserAnswers                []server.AskUserAnswerRequest
-	shutdownAccepted              server.OperationAcceptedResponse
+	shutdownAccepted              apiTestActionResponse
 	shutdownErr                   error
 	shutdownCalls                 int
 	detail                        server.FeatureDetailResponse
@@ -3780,11 +3670,6 @@ func (f *fakeTUIAPIClient) LivePreview(_ context.Context, featureID string) (ser
 	return f.livePreview, nil
 }
 
-func (f *fakeTUIAPIClient) Operations(context.Context, server.OperationQuery) (server.OperationSnapshotResponse, error) {
-	f.calls = append(f.calls, "Operations")
-	return f.operations, nil
-}
-
 func (f *fakeTUIAPIClient) FeatureDetail(_ context.Context, featureID string) (server.FeatureDetailResponse, error) {
 	f.calls = append(f.calls, "FeatureDetail")
 	f.detailFeatureIDs = append(f.detailFeatureIDs, featureID)
@@ -3794,114 +3679,114 @@ func (f *fakeTUIAPIClient) FeatureDetail(_ context.Context, featureID string) (s
 	return f.detail, nil
 }
 
-func (f *fakeTUIAPIClient) CreateFeature(_ context.Context, req server.CreateFeatureRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) CreateFeature(_ context.Context, req server.CreateFeatureRequest) (server.CreateFeatureResponse, error) {
 	f.calls = append(f.calls, "CreateFeature")
 	f.createRequests = append(f.createRequests, req)
-	return f.createAccepted, f.createErr
+	return server.CreateFeatureResponse{FeatureID: f.createAccepted.featureID("created"), Result: f.createAccepted.result("created")}, f.createErr
 }
 
-func (f *fakeTUIAPIClient) StartFeature(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) StartFeature(_ context.Context, featureID string) (server.FeatureStartResponse, error) {
 	f.calls = append(f.calls, "StartFeature")
 	f.startFeatureIDs = append(f.startFeatureIDs, featureID)
-	return f.startAccepted, f.startErr
+	return server.FeatureStartResponse{FeatureID: f.startAccepted.featureID(featureID), Result: f.startAccepted.result("started")}, f.startErr
 }
 
-func (f *fakeTUIAPIClient) ResumeFeature(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) ResumeFeature(_ context.Context, featureID string) (server.FeatureStartResponse, error) {
 	f.calls = append(f.calls, "ResumeFeature")
 	f.resumeFeatureIDs = append(f.resumeFeatureIDs, featureID)
-	return f.resumeAccepted, f.resumeErr
+	return server.FeatureStartResponse{FeatureID: f.resumeAccepted.featureID(featureID), Result: f.resumeAccepted.result("resumed")}, f.resumeErr
 }
 
-func (f *fakeTUIAPIClient) RestartFeature(_ context.Context, featureID string, _ server.RestartFeatureRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) RestartFeature(_ context.Context, featureID string, _ server.RestartFeatureRequest) (server.FeatureRestartResponse, error) {
 	f.calls = append(f.calls, "RestartFeature")
 	f.restartFeatureIDs = append(f.restartFeatureIDs, featureID)
-	return f.restartAccepted, f.restartErr
+	return server.FeatureRestartResponse{FeatureID: f.restartAccepted.featureID(featureID), Result: f.restartAccepted.result("restarted")}, f.restartErr
 }
 
-func (f *fakeTUIAPIClient) StopFeature(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) StopFeature(_ context.Context, featureID string) (server.FeatureStopResponse, error) {
 	f.calls = append(f.calls, "StopFeature")
 	f.stopFeatureIDs = append(f.stopFeatureIDs, featureID)
-	return f.stopAccepted, f.stopErr
+	return server.FeatureStopResponse{FeatureID: f.stopAccepted.featureID(featureID), Result: f.stopAccepted.result("stopped")}, f.stopErr
 }
 
-func (f *fakeTUIAPIClient) DeleteFeature(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) DeleteFeature(_ context.Context, featureID string) (server.DeleteFeatureResponse, error) {
 	f.calls = append(f.calls, "DeleteFeature")
 	f.deleteFeatureIDs = append(f.deleteFeatureIDs, featureID)
-	return f.deleteAccepted, f.deleteErr
+	return server.DeleteFeatureResponse{FeatureID: f.deleteAccepted.featureID(featureID), Result: f.deleteAccepted.result("deleted")}, f.deleteErr
 }
 
-func (f *fakeTUIAPIClient) PublishFeature(_ context.Context, featureID string, req server.PublishFeatureRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) PublishFeature(_ context.Context, featureID string, req server.PublishFeatureRequest) (server.PublishFeatureResponse, error) {
 	f.calls = append(f.calls, "PublishFeature")
 	f.publishFeatureIDs = append(f.publishFeatureIDs, featureID)
 	f.publishRequests = append(f.publishRequests, req)
-	return f.publishAccepted, f.publishErr
+	return server.PublishFeatureResponse{FeatureID: f.publishAccepted.featureID(featureID), Result: f.publishAccepted.result("published")}, f.publishErr
 }
 
-func (f *fakeTUIAPIClient) MergeFeature(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) MergeFeature(_ context.Context, featureID string) (server.MergeFeatureResponse, error) {
 	f.calls = append(f.calls, "MergeFeature")
 	f.mergeFeatureIDs = append(f.mergeFeatureIDs, featureID)
-	return f.mergeAccepted, f.mergeErr
+	return server.MergeFeatureResponse{FeatureID: f.mergeAccepted.featureID(featureID), Result: f.mergeAccepted.result("merged")}, f.mergeErr
 }
 
-func (f *fakeTUIAPIClient) RetryFeature(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) RetryFeature(_ context.Context, featureID string) (server.RetryFeatureResponse, error) {
 	f.calls = append(f.calls, "RetryFeature")
 	f.retryFeatureIDs = append(f.retryFeatureIDs, featureID)
-	return f.retryAccepted, f.retryErr
+	return server.RetryFeatureResponse{FeatureID: f.retryAccepted.featureID(featureID), Result: f.retryAccepted.result("retried")}, f.retryErr
 }
 
-func (f *fakeTUIAPIClient) MarkDone(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) MarkDone(_ context.Context, featureID string) (server.MarkDoneResponse, error) {
 	f.calls = append(f.calls, "MarkDone")
 	f.markDoneFeatureIDs = append(f.markDoneFeatureIDs, featureID)
-	return f.markDoneAccepted, f.markDoneErr
+	return server.MarkDoneResponse{FeatureID: f.markDoneAccepted.featureID(featureID), Result: f.markDoneAccepted.result("marked_done")}, f.markDoneErr
 }
 
-func (f *fakeTUIAPIClient) CleanupFeature(_ context.Context, featureID string, req server.CleanupActionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) CleanupFeature(_ context.Context, featureID string, req server.CleanupActionRequest) (server.CleanupFeatureResponse, error) {
 	f.calls = append(f.calls, "CleanupFeature")
 	f.cleanupFeatureIDs = append(f.cleanupFeatureIDs, featureID)
 	f.cleanupRequests = append(f.cleanupRequests, req)
-	return f.cleanupAccepted, f.cleanupErr
+	return server.CleanupFeatureResponse{FeatureID: f.cleanupAccepted.featureID(featureID), Result: f.cleanupAccepted.result("cleaned"), Target: req.Target}, f.cleanupErr
 }
 
-func (f *fakeTUIAPIClient) StartTweak(_ context.Context, featureID string, req server.TweakActionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) StartTweak(_ context.Context, featureID string, req server.TweakActionRequest) (server.TweakStartResponse, error) {
 	f.calls = append(f.calls, "StartTweak")
 	f.startTweakFeatureIDs = append(f.startTweakFeatureIDs, featureID)
 	f.startTweakRequests = append(f.startTweakRequests, req)
-	return f.startTweakAccepted, f.startTweakErr
+	return server.TweakStartResponse{FeatureID: f.startTweakAccepted.featureID(featureID), Result: f.startTweakAccepted.result("started"), CycleType: f.startTweakAccepted.CycleType}, f.startTweakErr
 }
 
-func (f *fakeTUIAPIClient) FinishTweak(_ context.Context, featureID string, req server.TweakFinishRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) FinishTweak(_ context.Context, featureID string, req server.TweakFinishRequest) (server.TweakFinishResponse, error) {
 	f.calls = append(f.calls, "FinishTweak")
 	f.finishTweakFeatureIDs = append(f.finishTweakFeatureIDs, featureID)
 	f.finishTweakRequests = append(f.finishTweakRequests, req)
-	return f.finishTweakAccepted, f.finishTweakErr
+	return server.TweakFinishResponse{FeatureID: f.finishTweakAccepted.featureID(featureID), Result: f.finishTweakAccepted.result("finished"), Decision: req.Decision, HadChanges: req.HadChanges}, f.finishTweakErr
 }
 
-func (f *fakeTUIAPIClient) StartRebase(_ context.Context, featureID string, req server.RebaseActionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) StartRebase(_ context.Context, featureID string, req server.RebaseActionRequest) (server.RebaseStartResponse, error) {
 	f.calls = append(f.calls, "StartRebase")
 	f.startRebaseFeatureIDs = append(f.startRebaseFeatureIDs, featureID)
 	f.startRebaseRequests = append(f.startRebaseRequests, req)
-	return f.startRebaseAccepted, f.startRebaseErr
+	return server.RebaseStartResponse{FeatureID: f.startRebaseAccepted.featureID(featureID), Result: f.startRebaseAccepted.result("started"), Repo: req.Repo, CycleType: f.startRebaseAccepted.CycleType}, f.startRebaseErr
 }
 
-func (f *fakeTUIAPIClient) StartRefactor(_ context.Context, featureID string, req server.RefactorActionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) StartRefactor(_ context.Context, featureID string, req server.RefactorActionRequest) (server.RefactorStartResponse, error) {
 	f.calls = append(f.calls, "StartRefactor")
 	f.startRefactorFeatureIDs = append(f.startRefactorFeatureIDs, featureID)
 	f.startRefactorRequests = append(f.startRefactorRequests, req)
-	return f.startRefactorAccepted, f.startRefactorErr
+	return server.RefactorStartResponse{FeatureID: f.startRefactorAccepted.featureID(featureID), Result: f.startRefactorAccepted.result("started"), Repo: req.Repo, CycleType: f.startRefactorAccepted.CycleType, Pipeline: string(req.Pipeline)}, f.startRefactorErr
 }
 
-func (f *fakeTUIAPIClient) RestartRefactor(_ context.Context, featureID string, req server.RefactorActionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) RestartRefactor(_ context.Context, featureID string, req server.RefactorActionRequest) (server.RefactorRestartResponse, error) {
 	f.calls = append(f.calls, "RestartRefactor")
 	f.restartRefactorFeatureIDs = append(f.restartRefactorFeatureIDs, featureID)
 	f.restartRefactorRequests = append(f.restartRefactorRequests, req)
-	return f.restartRefactorAccepted, f.restartRefactorErr
+	return server.RefactorRestartResponse{FeatureID: f.restartRefactorAccepted.featureID(featureID), Result: f.restartRefactorAccepted.result("restarted"), Repo: req.Repo, CycleType: f.restartRefactorAccepted.CycleType, Pipeline: string(req.Pipeline)}, f.restartRefactorErr
 }
 
-func (f *fakeTUIAPIClient) RewindFeature(_ context.Context, featureID string, req server.RewindFeatureRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) RewindFeature(_ context.Context, featureID string, req server.RewindFeatureRequest) (server.RewindFeatureResponse, error) {
 	f.calls = append(f.calls, "RewindFeature")
 	f.rewindFeatureIDs = append(f.rewindFeatureIDs, featureID)
 	f.rewindRequests = append(f.rewindRequests, req)
-	return f.rewindAccepted, f.rewindErr
+	return server.RewindFeatureResponse{FeatureID: f.rewindAccepted.featureID(featureID), Result: f.rewindAccepted.result("rewound"), TargetPhase: req.TargetPhase, RoadmapPhase: req.RoadmapPhase}, f.rewindErr
 }
 
 func (f *fakeTUIAPIClient) FeatureConfig(_ context.Context, featureID string) (server.FeatureConfigResponse, error) {
@@ -3910,21 +3795,21 @@ func (f *fakeTUIAPIClient) FeatureConfig(_ context.Context, featureID string) (s
 	return f.featureConfig, f.featureConfigErr
 }
 
-func (f *fakeTUIAPIClient) UpdateFeatureConfig(_ context.Context, featureID string, req server.FeatureConfigMutationRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) UpdateFeatureConfig(_ context.Context, featureID string, req server.FeatureConfigMutationRequest) (server.FeatureConfigUpdateResponse, error) {
 	f.calls = append(f.calls, "UpdateFeatureConfig")
 	f.updateFeatureConfigIDs = append(f.updateFeatureConfigIDs, featureID)
 	f.updateFeatureConfigRequests = append(f.updateFeatureConfigRequests, req)
-	return f.updateFeatureConfigAccepted, f.updateFeatureConfigErr
+	return server.FeatureConfigUpdateResponse{FeatureID: f.updateFeatureConfigAccepted.featureID(featureID), Result: f.updateFeatureConfigAccepted.result("updated")}, f.updateFeatureConfigErr
 }
 
-func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.RuntimeConfigMutationRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.RuntimeConfigMutationRequest) (server.RuntimeConfigUpdateResponse, error) {
 	f.calls = append(f.calls, "UpdateRuntimeConfig")
 	f.updateRuntimeConfigRequests = append(f.updateRuntimeConfigRequests, req)
 	if req.WorkspaceRoots != nil {
 		f.runtime.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
 		f.runtime.Repos = testRuntimeConfigRepos(f.runtime.Repos, f.runtime.WorkspaceRoots)
 	}
-	return f.updateRuntimeConfigAccepted, f.updateRuntimeConfigErr
+	return server.RuntimeConfigUpdateResponse{Result: f.updateRuntimeConfigAccepted.result("updated")}, f.updateRuntimeConfigErr
 }
 
 func testRuntimeConfigRepos(existing []server.ConfigRepoDTO, workspaceRoots []string) []server.ConfigRepoDTO {
@@ -3956,38 +3841,38 @@ func testRuntimeConfigRepos(existing []server.ConfigRepoDTO, workspaceRoots []st
 	return repos
 }
 
-func (f *fakeTUIAPIClient) ExecuteRecovery(_ context.Context, req server.RecoveryActionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) ExecuteRecovery(_ context.Context, req server.RecoveryActionRequest) (server.RecoveryActionResponse, error) {
 	f.calls = append(f.calls, "ExecuteRecovery")
 	f.executeRecoverySnapshotIDs = append(f.executeRecoverySnapshotIDs, req.SnapshotID)
 	f.executeRecoveryRequests = append(f.executeRecoveryRequests, req)
-	return f.executeRecoveryAccepted, f.executeRecoveryErr
+	return server.RecoveryActionResponse{Result: f.executeRecoveryAccepted.result("executed")}, f.executeRecoveryErr
 }
 
-func (f *fakeTUIAPIClient) NeedUserInputDecision(_ context.Context, featureID string, req server.NeedUserInputDecisionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) NeedUserInputDecision(_ context.Context, featureID string, req server.NeedUserInputDecisionRequest) (server.NeedUserInputDecisionResponse, error) {
 	f.calls = append(f.calls, "NeedUserInputDecision")
 	f.needUserInputFeatureIDs = append(f.needUserInputFeatureIDs, featureID)
 	f.needUserInputRequests = append(f.needUserInputRequests, req)
-	return f.needUserInputAccepted, f.needUserInputErr
+	return server.NeedUserInputDecisionResponse{FeatureID: f.needUserInputAccepted.featureID(featureID), Decision: req.Decision, Result: f.needUserInputAccepted.result("decided")}, f.needUserInputErr
 }
 
-func (f *fakeTUIAPIClient) DraftNeedUserInputAnswers(_ context.Context, featureID string, req server.NeedUserInputDraftRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) DraftNeedUserInputAnswers(_ context.Context, featureID string, req server.NeedUserInputDraftRequest) (server.NeedUserInputDraftResponse, error) {
 	f.calls = append(f.calls, "DraftNeedUserInputAnswers")
 	f.needUserInputDraftFeatureIDs = append(f.needUserInputDraftFeatureIDs, featureID)
 	f.needUserInputDraftRequests = append(f.needUserInputDraftRequests, req)
-	return f.needUserInputDraftAccepted, f.needUserInputDraftErr
+	return server.NeedUserInputDraftResponse{FeatureID: f.needUserInputDraftAccepted.featureID(featureID), Result: f.needUserInputDraftAccepted.result("drafted")}, f.needUserInputDraftErr
 }
 
-func (f *fakeTUIAPIClient) ToggleInputNotifications(_ context.Context, featureID string) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) ToggleInputNotifications(_ context.Context, featureID string) (server.InputNotificationsToggleResponse, error) {
 	f.calls = append(f.calls, "ToggleInputNotifications")
 	f.toggleInputFeatureIDs = append(f.toggleInputFeatureIDs, featureID)
-	return f.toggleInputAccepted, f.toggleInputErr
+	return server.InputNotificationsToggleResponse{FeatureID: f.toggleInputAccepted.featureID(featureID), Result: f.toggleInputAccepted.result("toggled"), Muted: f.toggleInputAccepted.Muted}, f.toggleInputErr
 }
 
-func (f *fakeTUIAPIClient) ReviewDecision(_ context.Context, featureID string, req server.ReviewDecisionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) ReviewDecision(_ context.Context, featureID string, req server.ReviewDecisionRequest) (server.ReviewDecisionResponse, error) {
 	f.calls = append(f.calls, "ReviewDecision")
 	f.reviewFeatureIDs = append(f.reviewFeatureIDs, featureID)
 	f.reviewRequests = append(f.reviewRequests, req)
-	return f.reviewAccepted, f.reviewErr
+	return server.ReviewDecisionResponse{FeatureID: f.reviewAccepted.featureID(featureID), Decision: req.Decision, Result: f.reviewAccepted.result("submitted")}, f.reviewErr
 }
 
 func (f *fakeTUIAPIClient) FetchReviewComments(_ context.Context, featureID string, req server.ReviewCommentsFetchRequest) (server.ReviewCommentsFetchResponse, error) {
@@ -3997,35 +3882,35 @@ func (f *fakeTUIAPIClient) FetchReviewComments(_ context.Context, featureID stri
 	return f.reviewCommentsResponse, f.reviewCommentsErr
 }
 
-func (f *fakeTUIAPIClient) StartReviewComments(_ context.Context, featureID string, req server.ReviewCommentsActionRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) StartReviewComments(_ context.Context, featureID string, req server.ReviewCommentsActionRequest) (server.ReviewCommentsStartResponse, error) {
 	f.calls = append(f.calls, "StartReviewComments")
 	f.startReviewCommentsFeatureIDs = append(f.startReviewCommentsFeatureIDs, featureID)
 	f.startReviewCommentsRequests = append(f.startReviewCommentsRequests, req)
-	return f.startReviewCommentsAccepted, f.startReviewCommentsErr
+	return server.ReviewCommentsStartResponse{FeatureID: f.startReviewCommentsAccepted.featureID(featureID), Result: f.startReviewCommentsAccepted.result("started"), Repo: req.Repo, Mode: req.Mode, CycleType: f.startReviewCommentsAccepted.CycleType}, f.startReviewCommentsErr
 }
 
-func (f *fakeTUIAPIClient) AnswerPermission(_ context.Context, req server.PermissionAnswerRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) AnswerPermission(_ context.Context, req server.PermissionAnswerRequest) (server.PermissionAnswerResponse, error) {
 	f.calls = append(f.calls, "AnswerPermission")
 	f.permissionAnswers = append(f.permissionAnswers, req)
-	return f.permissionAccepted, f.permissionErr
+	return server.PermissionAnswerResponse{SessionID: req.SessionID, RequestID: req.RequestID, Decision: req.Decision, Result: f.permissionAccepted.result("answered")}, f.permissionErr
 }
 
-func (f *fakeTUIAPIClient) SendHelp(_ context.Context, req server.HelpAnswerRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) SendHelp(_ context.Context, req server.HelpAnswerRequest) (server.HelpSendResponse, error) {
 	f.calls = append(f.calls, "SendHelp")
 	f.helpRequests = append(f.helpRequests, req)
-	return f.helpAccepted, f.helpErr
+	return server.HelpSendResponse{FeatureID: req.FeatureID, SessionID: req.SessionID, Result: f.helpAccepted.result("sent")}, f.helpErr
 }
 
-func (f *fakeTUIAPIClient) AnswerAskUser(_ context.Context, req server.AskUserAnswerRequest) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) AnswerAskUser(_ context.Context, req server.AskUserAnswerRequest) (server.AskUserAnswerResponse, error) {
 	f.calls = append(f.calls, "AnswerAskUser")
 	f.askUserAnswers = append(f.askUserAnswers, req)
-	return f.askUserAccepted, f.askUserErr
+	return server.AskUserAnswerResponse{SessionID: req.SessionID, RequestID: req.RequestID, Result: f.askUserAccepted.result("answered")}, f.askUserErr
 }
 
-func (f *fakeTUIAPIClient) Shutdown(context.Context) (server.OperationAcceptedResponse, error) {
+func (f *fakeTUIAPIClient) Shutdown(context.Context) (server.ShutdownResponse, error) {
 	f.calls = append(f.calls, "Shutdown")
 	f.shutdownCalls++
-	return f.shutdownAccepted, f.shutdownErr
+	return server.ShutdownResponse{Result: f.shutdownAccepted.result("shutdown_scheduled")}, f.shutdownErr
 }
 
 func (f *fakeTUIAPIClient) SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error) {

@@ -74,14 +74,6 @@ type TextQuery struct {
 	Limit  int64 `json:"limit,omitempty"`
 }
 
-type OperationQuery struct {
-	State     OperationStatus `json:"state,omitempty"`
-	FeatureID string          `json:"feature_id,omitempty"`
-	Kind      string          `json:"kind,omitempty"`
-	Cursor    string          `json:"cursor,omitempty"`
-	Limit     int             `json:"limit,omitempty"`
-}
-
 func NewClient(opts ClientOptions) (*Client, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {
@@ -198,98 +190,130 @@ func (c *Client) LivePreview(ctx context.Context, featureID string) (LivePreview
 	return out, err
 }
 
-func (c *Client) Operations(ctx context.Context, query OperationQuery) (OperationSnapshotResponse, error) {
-	var out OperationSnapshotResponse
-	err := c.getJSON(ctx, "/api/v1/operations", operationValues(query), &out)
-	return out, err
-}
-
 func (c *Client) Recovery(ctx context.Context) (RecoverySnapshotResponse, error) {
 	var out RecoverySnapshotResponse
 	err := c.getJSON(ctx, "/api/v1/recovery", nil, &out)
 	return out, err
 }
 
-func (c *Client) CreateFeature(ctx context.Context, req CreateFeatureRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features", req)
+func (c *Client) CreateFeature(ctx context.Context, req CreateFeatureRequest) (CreateFeatureResponse, error) {
+	var out CreateFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) StartFeature(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/start", map[string]any{})
+func (c *Client) StartFeature(ctx context.Context, featureID string) (FeatureStartResponse, error) {
+	var out FeatureStartResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/start", nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) ResumeFeature(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "resume", map[string]any{})
+func (c *Client) ResumeFeature(ctx context.Context, featureID string) (FeatureStartResponse, error) {
+	var out FeatureStartResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "resume"), nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) StopFeature(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/stop", map[string]any{})
+func (c *Client) StopFeature(ctx context.Context, featureID string) (FeatureStopResponse, error) {
+	var out FeatureStopResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/stop", nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) InterruptFeature(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/interrupt", map[string]any{})
+func (c *Client) InterruptFeature(ctx context.Context, featureID string) (FeatureStopResponse, error) {
+	var out FeatureStopResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/interrupt", nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) RestartFeature(ctx context.Context, featureID string, req RestartFeatureRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/restart", req)
+func (c *Client) RestartFeature(ctx context.Context, featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error) {
+	var out FeatureRestartResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/restart", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) ReviewDecision(ctx context.Context, featureID string, req ReviewDecisionRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/review-decision", req)
+func (c *Client) ReviewDecision(ctx context.Context, featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error) {
+	var out ReviewDecisionResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/review-decision", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req FeatureConfigMutationRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/config", req)
+func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error) {
+	var out FeatureConfigUpdateResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/config", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) NeedUserInputDecision(ctx context.Context, featureID string, req NeedUserInputDecisionRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/need-user-input", req)
+func (c *Client) NeedUserInputDecision(ctx context.Context, featureID string, req NeedUserInputDecisionRequest) (NeedUserInputDecisionResponse, error) {
+	var out NeedUserInputDecisionResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/need-user-input", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) DraftNeedUserInputAnswers(ctx context.Context, featureID string, req NeedUserInputDraftRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/need-user-input-draft", req)
+func (c *Client) DraftNeedUserInputAnswers(ctx context.Context, featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error) {
+	var out NeedUserInputDraftResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/need-user-input-draft", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) ToggleInputNotifications(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/features/"+pathSegment(featureID)+"/input-notifications", map[string]any{})
+func (c *Client) ToggleInputNotifications(ctx context.Context, featureID string) (InputNotificationsToggleResponse, error) {
+	var out InputNotificationsToggleResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/input-notifications", nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) AnswerPermission(ctx context.Context, req PermissionAnswerRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/permissions/answer", req)
+func (c *Client) AnswerPermission(ctx context.Context, req PermissionAnswerRequest) (PermissionAnswerResponse, error) {
+	var out PermissionAnswerResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/permissions/answer", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) AnswerAskUser(ctx context.Context, req AskUserAnswerRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/prompts/ask-user/answer", req)
+func (c *Client) AnswerAskUser(ctx context.Context, req AskUserAnswerRequest) (AskUserAnswerResponse, error) {
+	var out AskUserAnswerResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/prompts/ask-user/answer", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) SendHelp(ctx context.Context, req HelpAnswerRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/prompts/help/send", req)
+func (c *Client) SendHelp(ctx context.Context, req HelpAnswerRequest) (HelpSendResponse, error) {
+	var out HelpSendResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/prompts/help/send", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) UpdateRuntimeConfig(ctx context.Context, req RuntimeConfigMutationRequest) (OperationAcceptedResponse, error) {
-	var out OperationAcceptedResponse
+func (c *Client) UpdateRuntimeConfig(ctx context.Context, req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
+	var out RuntimeConfigUpdateResponse
 	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/config/runtime", nil, req, &out, true)
 	return out, err
 }
 
-func (c *Client) PublishFeature(ctx context.Context, featureID string, req PublishFeatureRequest) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "publish", req)
+func (c *Client) PublishFeature(ctx context.Context, featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+	var out PublishFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "publish"), nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) MergeFeature(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "merge", map[string]any{})
+func (c *Client) MergeFeature(ctx context.Context, featureID string) (MergeFeatureResponse, error) {
+	var out MergeFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "merge"), nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) RewindFeature(ctx context.Context, featureID string, req RewindFeatureRequest) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "rewind", req)
+func (c *Client) RewindFeature(ctx context.Context, featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error) {
+	var out RewindFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "rewind"), nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) RetryFeature(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "retry", map[string]any{})
+func (c *Client) RetryFeature(ctx context.Context, featureID string) (RetryFeatureResponse, error) {
+	var out RetryFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "retry"), nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) StartRebase(ctx context.Context, featureID string, req RebaseActionRequest) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "rebase", req)
+func (c *Client) StartRebase(ctx context.Context, featureID string, req RebaseActionRequest) (RebaseStartResponse, error) {
+	var out RebaseStartResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "rebase"), nil, req, &out, true)
+	return out, err
 }
 
 func (c *Client) FetchReviewComments(ctx context.Context, featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error) {
@@ -298,57 +322,63 @@ func (c *Client) FetchReviewComments(ctx context.Context, featureID string, req 
 	return out, err
 }
 
-func (c *Client) StartReviewComments(ctx context.Context, featureID string, req ReviewCommentsActionRequest) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "review-comments", req)
+func (c *Client) StartReviewComments(ctx context.Context, featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error) {
+	var out ReviewCommentsStartResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "review-comments"), nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) StartTweak(ctx context.Context, featureID string, req TweakActionRequest) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "tweak", req)
+func (c *Client) StartTweak(ctx context.Context, featureID string, req TweakActionRequest) (TweakStartResponse, error) {
+	var out TweakStartResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "tweak"), nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) FinishTweak(ctx context.Context, featureID string, req TweakFinishRequest) (OperationAcceptedResponse, error) {
-	var out OperationAcceptedResponse
+func (c *Client) FinishTweak(ctx context.Context, featureID string, req TweakFinishRequest) (TweakFinishResponse, error) {
+	var out TweakFinishResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "tweak")+"/finish", nil, req, &out, true)
 	return out, err
 }
 
-func (c *Client) StartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "refactor", req)
+func (c *Client) StartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorStartResponse, error) {
+	var out RefactorStartResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "refactor"), nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) RestartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (OperationAcceptedResponse, error) {
-	var out OperationAcceptedResponse
+func (c *Client) RestartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorRestartResponse, error) {
+	var out RefactorRestartResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "refactor")+"/restart", nil, req, &out, true)
 	return out, err
 }
 
-func (c *Client) MarkDone(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "mark-done", map[string]any{})
+func (c *Client) MarkDone(ctx context.Context, featureID string) (MarkDoneResponse, error) {
+	var out MarkDoneResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "mark-done"), nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) CleanupFeature(ctx context.Context, featureID string, req CleanupActionRequest) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "cleanup", req)
+func (c *Client) CleanupFeature(ctx context.Context, featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error) {
+	var out CleanupFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "cleanup"), nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) DeleteFeature(ctx context.Context, featureID string) (OperationAcceptedResponse, error) {
-	return c.postFeatureAction(ctx, featureID, "delete", map[string]any{})
+func (c *Client) DeleteFeature(ctx context.Context, featureID string) (DeleteFeatureResponse, error) {
+	var out DeleteFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "delete"), nil, map[string]any{}, &out, true)
+	return out, err
 }
 
-func (c *Client) ExecuteRecovery(ctx context.Context, req RecoveryActionRequest) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/recovery/actions", req)
+func (c *Client) ExecuteRecovery(ctx context.Context, req RecoveryActionRequest) (RecoveryActionResponse, error) {
+	var out RecoveryActionResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/recovery/actions", nil, req, &out, true)
+	return out, err
 }
 
-func (c *Client) Shutdown(ctx context.Context) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, "/api/v1/shutdown", map[string]any{})
-}
-
-func (c *Client) postFeatureAction(ctx context.Context, featureID, action string, in any) (OperationAcceptedResponse, error) {
-	return c.postMutation(ctx, featureActionPath(featureID, action), in)
-}
-
-func (c *Client) postMutation(ctx context.Context, path string, in any) (OperationAcceptedResponse, error) {
-	var out OperationAcceptedResponse
-	err := c.doJSON(ctx, http.MethodPost, path, nil, in, &out, true)
+func (c *Client) Shutdown(ctx context.Context) (ShutdownResponse, error) {
+	var out ShutdownResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/shutdown", nil, map[string]any{}, &out, true)
 	return out, err
 }
 
@@ -435,26 +465,6 @@ func textValues(query TextQuery) url.Values {
 	}
 	if query.Limit > 0 {
 		values.Set("limit", strconv.FormatInt(query.Limit, 10))
-	}
-	return values
-}
-
-func operationValues(query OperationQuery) url.Values {
-	values := url.Values{}
-	if query.State != "" {
-		values.Set("state", string(query.State))
-	}
-	if query.FeatureID != "" {
-		values.Set("feature_id", query.FeatureID)
-	}
-	if query.Kind != "" {
-		values.Set("kind", query.Kind)
-	}
-	if query.Cursor != "" {
-		values.Set("cursor", query.Cursor)
-	}
-	if query.Limit > 0 {
-		values.Set("limit", strconv.Itoa(query.Limit))
 	}
 	return values
 }

@@ -144,7 +144,7 @@ func (h *apiHandler) newMCPServer() *mcp.Server {
 		Title:   "Agentico",
 		Version: APIVersion,
 	}, &mcp.ServerOptions{
-		Instructions: "Agentico MCP tools adapt the local REST API version " + APIVersion + ". Mutating tools return operation IDs; use operation_list to observe progress.",
+		Instructions: "Agentico MCP tools adapt the local REST API version " + APIVersion + ". Mutating tools run synchronously and return endpoint-specific result bodies.",
 	})
 	h.registerMCPTools(server)
 	return server

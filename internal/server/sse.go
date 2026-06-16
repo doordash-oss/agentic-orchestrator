@@ -142,13 +142,6 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *apiHandler) publishOperationUpdate(rec OperationRecord) {
-	if h == nil || h.broker == nil {
-		return
-	}
-	h.broker.publish(operationSSEEvent(h.broker.newID(), rec))
-}
-
 func heartbeatInterval(r *http.Request) time.Duration {
 	ms, err := strconv.Atoi(r.URL.Query().Get("heartbeat_ms"))
 	if err != nil || ms <= 0 {
@@ -203,7 +196,7 @@ func eventDTOFromRuntime(msg interface{}, id string) SSEEventDTO {
 	case session.SessionDoneMsg:
 		return snapshotRequiredEvent(id, "session.updated", ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 	default:
-		return snapshotRequiredEvent(id, "operation.updated", ResourceDTO{Type: "runtime"})
+		return snapshotRequiredEvent(id, "lifecycle.updated", ResourceDTO{Type: "runtime"})
 	}
 }
 

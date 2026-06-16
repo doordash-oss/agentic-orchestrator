@@ -86,12 +86,10 @@ func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *
 			if !jsonEqual(call.originalInput, input) {
 				t.Fatalf("RespondToControl original input = %s, want %s", call.originalInput, input)
 			}
-			assertMetadata(t, result.Metadata, map[string]string{
-				"request_id": "perm-1",
-				"session_id": "session-permission",
-				"decision":   tc.decision,
-			})
-			assertMetadataDoesNotContain(t, result.Metadata, "go test ./cmd/agentico")
+			if result.RequestID != "perm-1" || result.SessionID != "session-permission" || result.Decision != tc.decision || result.Result != "answered" {
+				t.Fatalf("AnswerPermission() result = %+v; want request/session/decision answer", result)
+			}
+			assertJSONDoesNotContain(t, result, "go test ./cmd/agentico")
 		})
 	}
 }
@@ -146,11 +144,10 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 	if !reflect.DeepEqual(call.answers, answers) {
 		t.Fatalf("RespondToAskUser answers = %v, want %v", call.answers, answers)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"request_id": "ask-1",
-		"session_id": "session-ask",
-	})
-	assertMetadataDoesNotContain(t, result.Metadata, "Postgres with read replicas", "Dark launch first")
+	if result.RequestID != "ask-1" || result.SessionID != "session-ask" || result.Result != "answered" {
+		t.Fatalf("AnswerAskUser() result = %+v; want request/session answer", result)
+	}
+	assertJSONDoesNotContain(t, result, "Postgres with read replicas", "Dark launch first")
 }
 
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
@@ -179,11 +176,10 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 	if !reflect.DeepEqual(sess.sentMessages, []string{"Please use the existing migration path."}) {
 		t.Fatalf("SendUserMessage calls = %v, want addressed help text", sess.sentMessages)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id": "feat-help",
-		"session_id": "session-help",
-	})
-	assertMetadataDoesNotContain(t, result.Metadata, "Please use the existing migration path.")
+	if result.FeatureID != "feat-help" || result.SessionID != "session-help" || result.Result != "sent" {
+		t.Fatalf("SendHelp() result = %+v; want feature/session sent", result)
+	}
+	assertJSONDoesNotContain(t, result, "Please use the existing migration path.")
 }
 
 func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPromptAndIndex(t *testing.T) {
@@ -245,7 +241,9 @@ func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPr
 	if updated.Questions[0].Answer != "Use Postgres first." || updated.Questions[1].Answer != "Start with one internal workspace." {
 		t.Fatalf("Answers = %+v, want prompt and index updates", updated.Questions)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{"feature_id": "feat-need-input"})
+	if result.FeatureID != "feat-need-input" || result.Result != "drafted" {
+		t.Fatalf("DraftNeedUserInputAnswers() result = %+v; want drafted feature", result)
+	}
 }
 
 func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *testing.T) {
@@ -302,7 +300,9 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 		!loaded.Defaults.Checkpoints.PhasePlanReview {
 		t.Fatalf("persisted defaults = %+v, want requested changes", loaded.Defaults)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{"status": "updated"})
+	if result.Result != "updated" {
+		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
+	}
 }
 
 func TestServerMutationTargetRuntimeConfigPersistsWorkspaceRootsAndDiscoversRepos(t *testing.T) {
@@ -339,7 +339,9 @@ func TestServerMutationTargetRuntimeConfigPersistsWorkspaceRootsAndDiscoversRepo
 	if len(loaded.WorkspaceRoots) != 1 || loaded.WorkspaceRoots[0] != root {
 		t.Fatalf("persisted workspace roots = %+v, want %q", loaded.WorkspaceRoots, root)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{"status": "updated"})
+	if result.Result != "updated" {
+		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
+	}
 }
 
 func TestServerMutationTargetRuntimeConfigRediscoverReposWhenWorkspaceRootsUnchanged(t *testing.T) {
@@ -367,7 +369,9 @@ func TestServerMutationTargetRuntimeConfigRediscoverReposWhenWorkspaceRootsUncha
 	if got := cfg.DiscoveredRepos["new-service"].Path; got != filepath.Join(root, "new-service") {
 		t.Fatalf("discovered new-service path = %q, want repo under unchanged workspace root", got)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{"status": "unchanged"})
+	if result.Result != "unchanged" {
+		t.Fatalf("RuntimeConfig() result = %+v; want unchanged", result)
+	}
 }
 
 func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing.T) {
@@ -426,9 +430,9 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	if err != nil {
 		t.Fatalf("CreateFeature() error = %v", err)
 	}
-	featureID := result.Metadata["feature_id"]
+	featureID := result.FeatureID
 	if featureID == "" {
-		t.Fatalf("result metadata = %v; want feature_id", result.Metadata)
+		t.Fatalf("result = %+v; want feature_id", result)
 	}
 
 	created, err := store.Load(featureID)
@@ -531,7 +535,9 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	if err != nil {
 		t.Fatalf("UpdateFeatureConfig() error = %v", err)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{"feature_id": f.ID})
+	if result.FeatureID != f.ID || result.Result != "updated" {
+		t.Fatalf("UpdateFeatureConfig() result = %+v; want updated feature", result)
+	}
 
 	updated, err := store.Load(f.ID)
 	if err != nil {
@@ -584,12 +590,10 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 	if updated.Status != feature.StatusPublished {
 		t.Fatalf("feature status = %s, want Published", updated.Status)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id": f.ID,
-		"action":     "publish",
-		"status":     "published",
-	})
-	assertMetadataDoesNotContain(t, result.Metadata, "https://github.com/acme/repo-a/pull/12")
+	if result.FeatureID != f.ID || result.Result != "published" {
+		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
+	}
+	assertJSONDoesNotContain(t, result, "https://github.com/acme/repo-a/pull/12")
 }
 
 func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *testing.T) {
@@ -610,19 +614,18 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 	if !errors.As(err, &conflict) {
 		t.Fatalf("publishAction() error = %T %v, want PublishConflictError", err, err)
 	}
-	var opFailure serverruntime.OperationFailureError
-	if !errors.As(err, &opFailure) || opFailure.OperationFailure() == nil || opFailure.OperationFailure().Code != "conflict" {
-		t.Fatalf("publishAction() operation failure = %+v; want conflict metadata wrapper", opFailure.OperationFailure())
+	var actionConflict *serverruntime.ActionConflictError
+	if !errors.As(err, &actionConflict) {
+		t.Fatalf("publishAction() error = %T %v; want ActionConflictError", err, err)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id":     f.ID,
-		"action":         "publish",
-		"status":         "conflict",
-		"conflict":       "publish",
-		"repo":           "repo-a",
-		"branch":         "feature/publish-conflict",
-		"rebase_target":  "main",
-		"conflict_files": "0",
+	if result.FeatureID != f.ID || result.Result != "conflict" {
+		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
+	}
+	assertTarget(t, actionConflict.Target, map[string]any{
+		"conflict":      "publish",
+		"repo":          "repo-a",
+		"branch":        "feature/publish-conflict",
+		"rebase_target": "main",
 	})
 }
 
@@ -663,13 +666,9 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 	if updated.Status != feature.StatusPlanNeedsReview || !updated.IsRewind {
 		t.Fatalf("rewound feature status/is_rewind = %s/%v, want PlanNeedsReview/true", updated.Status, updated.IsRewind)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id":      f.ID,
-		"action":          "rewind",
-		"target_phase":    "implement",
-		"effective_phase": "implement",
-		"warning_count":   "0",
-	})
+	if result.FeatureID != f.ID || result.TargetPhase != "implement" || result.EffectivePhase != "implement" || result.WarningCount != 0 {
+		t.Fatalf("RewindFeature() result = %+v; want effective implement rewind", result)
+	}
 }
 
 func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T) {
@@ -776,15 +775,9 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 	if got := strings.Join(sessions.stopCalls, ","); got != "session-upgrade-rewind" {
 		t.Fatalf("StopSession calls = %q, want session-upgrade-rewind", got)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id":       f.ID,
-		"action":           "rewind",
-		"target_phase":     "inquire",
-		"upgrade_pipeline": "large",
-		"effective_phase":  feature.PhaseKnowledgeBase.DirName(),
-		"status":           "rewound",
-		"warning_count":    "0",
-	})
+	if result.FeatureID != f.ID || result.TargetPhase != "inquire" || result.UpgradePipeline != "large" || result.EffectivePhase != feature.PhaseKnowledgeBase.DirName() || result.Result != "rewound" {
+		t.Fatalf("RewindFeature() result = %+v; want large KB rewind", result)
+	}
 }
 
 func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testing.T) {
@@ -838,14 +831,9 @@ func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testi
 	if updated.Pipeline != feature.PipelineMoonshot || updated.Status != feature.StatusImplementing {
 		t.Fatalf("feature pipeline/status = %s/%s, want unchanged moonshot/implementing", updated.Pipeline, updated.Status)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id":       f.ID,
-		"action":           "rewind",
-		"target_phase":     "inquire",
-		"upgrade_pipeline": "large",
-		"status":           "failed",
-		"failed_stage":     "upgrade_pipeline",
-	})
+	if result.FeatureID != f.ID || result.TargetPhase != "inquire" || result.UpgradePipeline != "large" || result.Result != "failed" {
+		t.Fatalf("RewindFeature() failure result = %+v; want failed upgrade response", result)
+	}
 }
 
 func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
@@ -899,146 +887,10 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	if updated.Status != feature.StatusImplementing || updated.CurrentPhase != feature.PhaseImplement {
 		t.Fatalf("restarted feature status/phase = %s/%s, want Implementing/Implement", updated.Status, updated.CurrentPhase)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id": f.ID,
-		"phase":      feature.PhaseImplement.String(),
-		"dispatch":   "phase",
-	})
-	assertMetadataDoesNotContain(t, result.Metadata, "do-not-leak", planPath)
-}
-
-func TestRuntimeOperationReconcilerMapsRecoveredFeatureState(t *testing.T) {
-	store := feature.NewStore(t.TempDir())
-	saveRecoveredFeature := func(id string, status feature.Status, phase feature.Phase) {
-		t.Helper()
-		f := &feature.Feature{
-			ID:                       id,
-			Name:                     id,
-			Slug:                     id,
-			Status:                   status,
-			CurrentPhase:             phase,
-			ActiveRun:                3,
-			RunCount:                 3,
-			CurrentRoadmapPhase:      7,
-			LastError:                "raw prompt secret=do-not-leak /tmp/private-agentico",
-			PendingNeedUserInputPath: "/tmp/private-agentico/need-user-input.yaml",
-		}
-		if err := store.Save(f); err != nil {
-			t.Fatalf("Save(%s) error = %v", id, err)
-		}
+	if result.FeatureID != f.ID || result.Phase != feature.PhaseImplement.String() || result.Dispatch != "phase" {
+		t.Fatalf("RestartFeature() result = %+v; want phase dispatch", result)
 	}
-	saveRecoveredFeature("feat-running", feature.StatusImplementing, feature.PhaseImplement)
-	saveRecoveredFeature("feat-failed", feature.StatusFailed, feature.PhasePlan)
-	saveRecoveredFeature("feat-interrupted", feature.StatusInterrupted, feature.PhaseResearch)
-
-	reconcile := runtimeOperationReconciler(store)
-	tests := []struct {
-		name       string
-		record     serverruntime.OperationRecord
-		wantStatus serverruntime.OperationStatus
-		wantResult map[string]string
-		wantErr    string
-	}{
-		{
-			name: "running feature means dispatched mutation succeeded",
-			record: serverruntime.OperationRecord{
-				Kind:   "feature.restart",
-				Status: serverruntime.OperationStatusRunning,
-				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-running", RunNumber: 2},
-			},
-			wantStatus: serverruntime.OperationStatusSucceeded,
-			wantResult: map[string]string{
-				"feature_id":    "feat-running",
-				"status":        feature.StatusImplementing.String(),
-				"phase":         feature.PhaseImplement.String(),
-				"run_number":    "3",
-				"roadmap_phase": "7",
-			},
-		},
-		{
-			name: "queued feature mutation did not start before restart",
-			record: serverruntime.OperationRecord{
-				Kind:   "feature.restart",
-				Status: serverruntime.OperationStatusQueued,
-				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-running", RunNumber: 2},
-			},
-			wantStatus: serverruntime.OperationStatusInterrupted,
-			wantErr:    "interrupted",
-		},
-		{
-			name: "failed feature fails stale mutation",
-			record: serverruntime.OperationRecord{
-				Kind:   "feature.restart",
-				Status: serverruntime.OperationStatusRunning,
-				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-failed"},
-			},
-			wantStatus: serverruntime.OperationStatusFailed,
-			wantErr:    "failed",
-		},
-		{
-			name: "interrupted feature interrupts stale non-stop mutation",
-			record: serverruntime.OperationRecord{
-				Kind:   "feature.restart",
-				Status: serverruntime.OperationStatusRunning,
-				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-interrupted"},
-			},
-			wantStatus: serverruntime.OperationStatusInterrupted,
-			wantErr:    "interrupted",
-		},
-		{
-			name: "interrupted feature completes stale stop mutation",
-			record: serverruntime.OperationRecord{
-				Kind:   "feature.stop",
-				Status: serverruntime.OperationStatusRunning,
-				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-interrupted"},
-			},
-			wantStatus: serverruntime.OperationStatusSucceeded,
-			wantResult: map[string]string{
-				"feature_id": "feat-interrupted",
-				"status":     feature.StatusInterrupted.String(),
-				"phase":      feature.PhaseResearch.String(),
-				"run_number": "3",
-				"action":     "stop",
-			},
-		},
-		{
-			name: "missing feature interrupts stale mutation with public id only",
-			record: serverruntime.OperationRecord{
-				Kind:   "feature.start",
-				Status: serverruntime.OperationStatusRunning,
-				Target: serverruntime.OperationTarget{Type: "feature", FeatureID: "feat-missing"},
-			},
-			wantStatus: serverruntime.OperationStatusInterrupted,
-			wantErr:    "interrupted",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := reconcile(tt.record)
-			if got.Status != tt.wantStatus {
-				t.Fatalf("runtimeOperationReconciler(%s).Status = %s, want %s", tt.record.Target.FeatureID, got.Status, tt.wantStatus)
-			}
-			for k, want := range tt.wantResult {
-				if got.Result[k] != want {
-					t.Fatalf("runtimeOperationReconciler(%s).Result[%s] = %q, want %q; result=%v", tt.record.Target.FeatureID, k, got.Result[k], want, got.Result)
-				}
-			}
-			if tt.wantErr != "" {
-				if got.Error == nil || got.Error.Code != tt.wantErr {
-					t.Fatalf("runtimeOperationReconciler(%s).Error = %+v, want code %q", tt.record.Target.FeatureID, got.Error, tt.wantErr)
-				}
-			}
-			raw, err := json.Marshal(got)
-			if err != nil {
-				t.Fatalf("Marshal reconciliation: %v", err)
-			}
-			for _, leaked := range []string{"do-not-leak", "raw prompt", "/tmp/private-agentico"} {
-				if strings.Contains(string(raw), leaked) {
-					t.Fatalf("runtimeOperationReconciler leaked %q in %s", leaked, raw)
-				}
-			}
-		})
-	}
+	assertJSONDoesNotContain(t, result, "do-not-leak", planPath)
 }
 
 func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
@@ -1062,14 +914,9 @@ func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing
 	if err == nil {
 		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id": f.ID,
-		"action":     "review-comments",
-		"cycle_type": string(feature.CycleReviewComments),
-		"repo":       "repo-a",
-		"mode":       "address_all",
-		"status":     "failed",
-	})
+	if result.FeatureID != f.ID || result.Repo != "repo-a" || result.Mode != "address_all" || result.CycleType != string(feature.CycleReviewComments) || result.Result != "failed" {
+		t.Fatalf("StartReviewComments() result = %+v; want failed staged review-comments", result)
+	}
 	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a")
 	if err != nil {
 		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
@@ -1104,16 +951,9 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	if reviewer.fetchCalls != 0 {
 		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", reviewer.fetchCalls)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id":    f.ID,
-		"action":        "review-comments",
-		"cycle_type":    string(feature.CycleReviewComments),
-		"repo":          "repo-a",
-		"mode":          "auto",
-		"source":        "provided",
-		"comment_count": "1",
-		"status":        "failed",
-	})
+	if result.FeatureID != f.ID || result.Repo != "repo-a" || result.Mode != "auto" || result.Source != "provided" || result.CommentCount != 1 || result.Result != "failed" {
+		t.Fatalf("StartReviewComments() result = %+v; want failed provided preview", result)
+	}
 	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a")
 	if err != nil {
 		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
@@ -1130,13 +970,9 @@ func TestServerMutationTargetFinishTweakFinalReviewStartsCycleReview(t *testing.
 	if err != nil {
 		t.Fatalf("FinishTweak(final-review) error = %v", err)
 	}
-	assertMetadata(t, result.Metadata, map[string]string{
-		"feature_id":  f.ID,
-		"action":      "tweak.finish",
-		"decision":    "final-review",
-		"had_changes": "true",
-		"status":      "review_started",
-	})
+	if result.FeatureID != f.ID || result.Decision != "final-review" || !result.HadChanges || result.Result != "review_started" {
+		t.Fatalf("FinishTweak() result = %+v; want review_started final-review", result)
+	}
 	if got := countMockCalls(publisher.Calls, "CommitAll"); got != 0 {
 		t.Fatalf("CommitAll calls = %d; want 0 because final-review follows the commit decision", got)
 	}
@@ -1160,12 +996,9 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if err != nil {
 			t.Fatalf("CleanupFeature(cycles) error = %v", err)
 		}
-		assertMetadata(t, result.Metadata, map[string]string{
-			"feature_id": f.ID,
-			"action":     "cleanup",
-			"target":     "cycles",
-			"status":     "cleaned",
-		})
+		if result.FeatureID != f.ID || result.Target != "cycles" || result.Result != "cleaned" {
+			t.Fatalf("CleanupFeature(cycles) result = %+v; want cleaned cycles", result)
+		}
 		updated, err := store.Load(f.ID)
 		if err != nil {
 			t.Fatalf("Load feature after cleanup: %v", err)
@@ -1182,12 +1015,9 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if err != nil {
 			t.Fatalf("CleanupFeature(worktrees) error = %v", err)
 		}
-		assertMetadata(t, result.Metadata, map[string]string{
-			"feature_id": f.ID,
-			"action":     "cleanup",
-			"target":     "worktrees",
-			"status":     "cleaned",
-		})
+		if result.FeatureID != f.ID || result.Target != "worktrees" || result.Result != "cleaned" {
+			t.Fatalf("CleanupFeature(worktrees) result = %+v; want cleaned worktrees", result)
+		}
 		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != "/tmp/repo-a-worktree" || worktrees.removeCalls[0].deleteBranch {
 			t.Fatalf("worktree remove calls = %+v; want one non-branch-deleting cleanup", worktrees.removeCalls)
 		}
@@ -1207,11 +1037,9 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if err != nil {
 			t.Fatalf("DeleteFeature() error = %v", err)
 		}
-		assertMetadata(t, result.Metadata, map[string]string{
-			"feature_id": f.ID,
-			"action":     "delete",
-			"status":     "deleted",
-		})
+		if result.FeatureID != f.ID || result.Result != "deleted" {
+			t.Fatalf("DeleteFeature() result = %+v; want deleted feature", result)
+		}
 		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != "/tmp/repo-a-worktree" || !worktrees.removeCalls[0].deleteBranch {
 			t.Fatalf("worktree remove calls = %+v; want one branch-deleting delete", worktrees.removeCalls)
 		}
@@ -1221,7 +1049,7 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 	})
 }
 
-func TestServerMutationTargetConflictMetadataWrapsRebaseFailure(t *testing.T) {
+func TestServerMutationTargetActionConflictErrorWrapsRebaseFailure(t *testing.T) {
 	err := &orchestrator.RebaseConflictError{
 		FeatureID:     "feat-rebase",
 		RepoName:      "repo-a",
@@ -1229,32 +1057,26 @@ func TestServerMutationTargetConflictMetadataWrapsRebaseFailure(t *testing.T) {
 		RebaseTarget:  "main",
 		ConflictFiles: []string{"a.go", "b.go"},
 	}
-	metadata := actionMetadata("feat-rebase", "rebase")
-	addConflictMetadata(metadata, err)
-	wrapped := operationFailureForMetadata(err, metadata)
+	wrapped := actionConflictError(err)
 
 	var rebaseConflict *orchestrator.RebaseConflictError
 	if !errors.As(wrapped, &rebaseConflict) {
 		t.Fatalf("wrapped error = %T %v; want RebaseConflictError", wrapped, wrapped)
 	}
-	var opFailure serverruntime.OperationFailureError
-	if !errors.As(wrapped, &opFailure) || opFailure.OperationFailure() == nil {
-		t.Fatalf("wrapped operation failure = %+v; want OperationFailureError", opFailure.OperationFailure())
+	var actionConflict *serverruntime.ActionConflictError
+	if !errors.As(wrapped, &actionConflict) {
+		t.Fatalf("wrapped error = %T %v; want ActionConflictError", wrapped, wrapped)
 	}
-	failure := opFailure.OperationFailure()
-	if failure.Code != "conflict" {
-		t.Fatalf("operation failure code = %q; want conflict", failure.Code)
-	}
-	assertMetadata(t, failure.Metadata, map[string]string{
-		"feature_id":     "feat-rebase",
-		"action":         "rebase",
-		"status":         "conflict",
-		"conflict":       "rebase",
-		"repo":           "repo-a",
-		"branch":         "feature/rebase",
-		"rebase_target":  "main",
-		"conflict_files": "2",
+	assertTarget(t, actionConflict.Target, map[string]any{
+		"conflict":      "rebase",
+		"repo":          "repo-a",
+		"branch":        "feature/rebase",
+		"rebase_target": "main",
 	})
+	files, ok := actionConflict.Target["conflict_files"].([]string)
+	if !ok || !reflect.DeepEqual(files, []string{"a.go", "b.go"}) {
+		t.Fatalf("conflict_files = %#v; want a.go,b.go", actionConflict.Target["conflict_files"])
+	}
 }
 
 func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manager, *feature.Store, *feature.Feature) {
@@ -1655,22 +1477,24 @@ func (s *mutationTargetSessionView) Stop() error         { return nil }
 func (s *mutationTargetSessionView) Interrupt() error    { return nil }
 func (s *mutationTargetSessionView) Wait()               {}
 
-func assertMetadata(t *testing.T, got map[string]string, want map[string]string) {
+func assertJSONDoesNotContain(t *testing.T, value any, banned ...string) {
 	t.Helper()
-	for k, wantValue := range want {
-		if got[k] != wantValue {
-			t.Fatalf("metadata[%q] = %q, want %q; metadata = %v", k, got[k], wantValue, got)
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("Marshal(%T): %v", value, err)
+	}
+	for _, b := range banned {
+		if b != "" && strings.Contains(string(raw), b) {
+			t.Fatalf("response leaked %q in %s", b, raw)
 		}
 	}
 }
 
-func assertMetadataDoesNotContain(t *testing.T, metadata map[string]string, banned ...string) {
+func assertTarget(t *testing.T, got map[string]any, want map[string]any) {
 	t.Helper()
-	for _, v := range metadata {
-		for _, b := range banned {
-			if b != "" && strings.Contains(v, b) {
-				t.Fatalf("metadata leaked %q in %v", b, metadata)
-			}
+	for k, wantValue := range want {
+		if got[k] != wantValue {
+			t.Fatalf("target[%q] = %#v, want %#v; target = %#v", k, got[k], wantValue, got)
 		}
 	}
 }

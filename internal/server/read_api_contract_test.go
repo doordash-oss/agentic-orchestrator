@@ -71,6 +71,10 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	if detail["feature"].(map[string]any)["id"] != f.ID {
 		t.Fatalf("detail feature id = %v; want %s", detail["feature"], f.ID)
 	}
+	models := detail["feature"].(map[string]any)["models"].(map[string]any)
+	if models["implementation"] != f.Models.Implementation {
+		t.Fatalf("detail feature models.implementation = %v; want %s", models["implementation"], f.Models.Implementation)
+	}
 	rawDetail := mustMarshalJSON(t, detail)
 	for _, forbidden := range []string{"/repo/path", "/worktree/path", "feature/secret"} {
 		if strings.Contains(rawDetail, forbidden) {
@@ -85,7 +89,7 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	}
 }
 
-func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
+func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	f.PendingNeedUserInputPath = filepath.Join(store.RunDir(f.ID, 1), "phase-02", "implement", "need-user-input.yaml")
@@ -142,7 +146,6 @@ func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
 		"/api/v1/catalog/models",
 		"/api/v1/prompts",
 		"/api/v1/permissions",
-		"/api/v1/operations",
 	} {
 		body := getJSONMap(t, handler, path)
 		raw := mustMarshalJSON(t, body)
@@ -195,10 +198,6 @@ func TestConfigCatalogPromptPermissionAndOperationSnapshots(t *testing.T) {
 	detailGate := detail["feature"].(map[string]any)["need_user_input"].(map[string]any)
 	if detailGate["feature_id"] != f.ID {
 		t.Fatalf("detail need user input feature_id = %v; want %s", detailGate["feature_id"], f.ID)
-	}
-	ops := getJSONMap(t, handler, "/api/v1/operations")
-	if got := len(ops["operations"].([]any)); got != 0 {
-		t.Fatalf("operations length = %d; want empty schema-first list", got)
 	}
 }
 

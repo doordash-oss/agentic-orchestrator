@@ -30,7 +30,6 @@ type RuntimeServer struct {
 	startedAt time.Time
 	srv       *http.Server
 	broker    *eventBroker
-	mutations *mutationExecutor
 	done      chan error
 }
 
@@ -53,9 +52,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Sessions:        opts.Sessions,
 		Events:          opts.Events,
 		DomainEvents:    opts.DomainEvents,
-		Operations:      opts.Operations,
 		Mutations:       opts.Mutations,
-		MutationLimits:  opts.MutationLimits,
 		RequestShutdown: opts.RequestShutdown,
 	})
 	httpServer := &http.Server{
@@ -69,7 +66,6 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		startedAt: startedAt,
 		srv:       httpServer,
 		broker:    handler.broker,
-		mutations: handler.mutations,
 		done:      make(chan error, 1),
 	}
 	go func() {
@@ -110,9 +106,6 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	s.srv = nil
 	if s.broker != nil {
 		s.broker.publish(eventDTOFromDomain(ports.Event{Type: ports.RuntimeShutdownStarted}, s.broker.newID()))
-	}
-	if s.mutations != nil {
-		s.mutations.shutdown()
 	}
 	shutdownErr := srv.Shutdown(ctx)
 	var serveErr error

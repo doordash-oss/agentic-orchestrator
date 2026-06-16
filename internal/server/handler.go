@@ -46,8 +46,7 @@ type apiHandler struct {
 	registry        *llm.Registry
 	sessions        ports.SessionManager
 	broker          *eventBroker
-	operations      *OperationRegistry
-	mutations       *mutationExecutor
+	mutations       MutationTarget
 	requestShutdown func()
 
 	recoveryMu        sync.Mutex
@@ -80,11 +79,8 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		registry:        opts.Registry,
 		sessions:        opts.Sessions,
 		broker:          newEventBroker(opts.Events, opts.DomainEvents),
-		operations:      opts.Operations,
+		mutations:       opts.Mutations,
 		requestShutdown: opts.RequestShutdown,
-	}
-	if opts.Operations != nil && opts.Mutations != nil {
-		handler.mutations = newMutationExecutor(opts.Operations, opts.Mutations, opts.MutationLimits, handler.publishOperationUpdate)
 	}
 	return handler
 }
@@ -110,7 +106,6 @@ func (h *apiHandler) routesWithMCP(includeMCP bool) http.Handler {
 	mux.HandleFunc("/api/v1/permissions/", h.handlePermissionMutationRoutes)
 	mux.HandleFunc("/api/v1/sessions", methodHandler(http.MethodGet, h.handleSessionList))
 	mux.HandleFunc("/api/v1/sessions/", methodHandler(http.MethodGet, h.handleSessionRoutes))
-	mux.HandleFunc("/api/v1/operations", methodHandler(http.MethodGet, h.handleOperations))
 	mux.HandleFunc("/api/v1/recovery", h.handleRecoveryRoute)
 	mux.HandleFunc("/api/v1/recovery/actions", h.handleRecoveryActionRoute)
 	mux.HandleFunc("/api/v1/shutdown", h.handleShutdownMutationRoute)

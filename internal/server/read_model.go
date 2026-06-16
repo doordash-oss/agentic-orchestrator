@@ -21,7 +21,6 @@ import (
 	"net/http"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +55,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		Description:    safeDisplayText(f.Description, 500),
 		Summary:        safeDisplayText(f.Summary, 500),
 		Pipeline:       string(f.Pipeline),
+		Models:         f.Models,
 		ActiveRun:      &active,
 		HistoricalRuns: history,
 		RepoStatus:     repoStatusDTOs(f),
@@ -431,51 +431,6 @@ func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 func (h *apiHandler) handlePermissions(w http.ResponseWriter, r *http.Request) {
 	_, perms := h.pendingControls()
 	resp := PermissionSnapshotResponse{APIVersion: APIVersion, Requests: perms}
-	revision := revisionForAny(resp)
-	resp.Meta = responseMeta(revision)
-	writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
-}
-
-func (h *apiHandler) handleOperations(w http.ResponseWriter, r *http.Request) {
-	state := r.URL.Query().Get("state")
-	if state != "" && !validOperationState(state) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid operation state filter", map[string]any{"state": state})
-		return
-	}
-	limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
-	if r.URL.Query().Get("limit") == "" {
-		limit = 0
-	} else if err != nil || limit < 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid operation limit", nil)
-		return
-	}
-	operations := []OperationDTO{}
-	nextCursor := ""
-	if h.operations != nil {
-		page, err := h.operations.List(OperationListOptions{
-			State:     OperationStatus(state),
-			FeatureID: r.URL.Query().Get("feature_id"),
-			Kind:      r.URL.Query().Get("kind"),
-			Cursor:    r.URL.Query().Get("cursor"),
-			Limit:     limit,
-		})
-		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid operation list request", nil)
-			return
-		}
-		operations = page.Operations
-		nextCursor = page.NextCursor
-	}
-	resp := OperationSnapshotResponse{
-		APIVersion: APIVersion,
-		Schema: OperationSchemaDTO{
-			Version: "phase3",
-			States:  []string{"queued", "running", "succeeded", "failed", "rejected", "interrupted"},
-			Filters: []string{"state", "feature_id", "kind"},
-		},
-		Operations: operations,
-		NextCursor: nextCursor,
-	}
 	revision := revisionForAny(resp)
 	resp.Meta = responseMeta(revision)
 	writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
@@ -886,15 +841,6 @@ func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {
 		questions = append(questions, question)
 	}
 	return questions
-}
-
-func validOperationState(state string) bool {
-	switch state {
-	case "queued", "running", "succeeded", "failed", "rejected", "interrupted":
-		return true
-	default:
-		return false
-	}
 }
 
 func safeDisplayText(s string, limit int) string {

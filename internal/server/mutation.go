@@ -18,13 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
-	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -34,69 +30,62 @@ import (
 const MaxMutationBodyBytes = 64 * 1024
 const MaxActionTextBytes = 4000
 
-type MutationLimits struct {
-	FeatureQueue   int
-	RuntimeQueue   int
-	AggregateQueue int
-}
-
 type MutationTarget interface {
-	CreateFeature(CreateFeatureRequest) (OperationResult, error)
-	StartFeature(featureID string) (OperationResult, error)
-	StopFeature(featureID string) (OperationResult, error)
-	RestartFeature(featureID string, req RestartFeatureRequest) (OperationResult, error)
-	ReviewDecision(featureID string, req ReviewDecisionRequest) (OperationResult, error)
-	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (OperationResult, error)
-	NeedUserInputDecision(featureID string, req NeedUserInputDecisionRequest) (OperationResult, error)
-	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (OperationResult, error)
-	ToggleInputNotifications(featureID string) (OperationResult, error)
-	AnswerPermission(req PermissionAnswerRequest) (OperationResult, error)
-	AnswerAskUser(req AskUserAnswerRequest) (OperationResult, error)
-	SendHelp(req HelpAnswerRequest) (OperationResult, error)
-	RuntimeConfig(req RuntimeConfigMutationRequest) (OperationResult, error)
-	PublishFeature(featureID string, req PublishFeatureRequest) (OperationResult, error)
-	MergeFeature(featureID string) (OperationResult, error)
-	RewindFeature(featureID string, req RewindFeatureRequest) (OperationResult, error)
-	RetryFeature(featureID string) (OperationResult, error)
-	StartRebase(featureID string, req RebaseActionRequest) (OperationResult, error)
+	CreateFeature(CreateFeatureRequest) (CreateFeatureResponse, error)
+	StartFeature(featureID string) (FeatureStartResponse, error)
+	StopFeature(featureID string) (FeatureStopResponse, error)
+	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error)
+	ReviewDecision(featureID string, req ReviewDecisionRequest) (ReviewDecisionResponse, error)
+	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error)
+	NeedUserInputDecision(featureID string, req NeedUserInputDecisionRequest) (NeedUserInputDecisionResponse, error)
+	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error)
+	ToggleInputNotifications(featureID string) (InputNotificationsToggleResponse, error)
+	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
+	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
+	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
+	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
+	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
+	MergeFeature(featureID string) (MergeFeatureResponse, error)
+	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
+	RetryFeature(featureID string) (RetryFeatureResponse, error)
+	StartRebase(featureID string, req RebaseActionRequest) (RebaseStartResponse, error)
 	FetchReviewComments(featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error)
-	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (OperationResult, error)
-	StartTweak(featureID string, req TweakActionRequest) (OperationResult, error)
-	FinishTweak(featureID string, req TweakFinishRequest) (OperationResult, error)
-	StartRefactor(featureID string, req RefactorActionRequest) (OperationResult, error)
-	RestartRefactor(featureID string, req RefactorActionRequest) (OperationResult, error)
-	MarkDone(featureID string) (OperationResult, error)
-	CleanupFeature(featureID string, req CleanupActionRequest) (OperationResult, error)
-	DeleteFeature(featureID string) (OperationResult, error)
+	StartReviewComments(featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error)
+	StartTweak(featureID string, req TweakActionRequest) (TweakStartResponse, error)
+	FinishTweak(featureID string, req TweakFinishRequest) (TweakFinishResponse, error)
+	StartRefactor(featureID string, req RefactorActionRequest) (RefactorStartResponse, error)
+	RestartRefactor(featureID string, req RefactorActionRequest) (RefactorRestartResponse, error)
+	MarkDone(featureID string) (MarkDoneResponse, error)
+	CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error)
+	DeleteFeature(featureID string) (DeleteFeatureResponse, error)
 	ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error)
-	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (OperationResult, error)
+	ExecuteRecovery(ctx context.Context, items []ports.RecoveryItem, actions map[string]ports.RecoveryAction) (RecoveryActionResponse, error)
 }
 
-type OperationResult struct {
-	Metadata map[string]string
-}
-
-type OperationFailureError struct {
+type ActionConflictError struct {
 	Err     error
-	Failure *OperationError
+	Message string
+	Target  map[string]any
 }
 
-func (e OperationFailureError) Error() string {
+func (e *ActionConflictError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
 	if e.Err != nil {
 		return e.Err.Error()
 	}
-	if e.Failure != nil {
-		return e.Failure.Message
+	return "conflict"
+}
+
+func (e *ActionConflictError) Unwrap() error {
+	if e == nil {
+		return nil
 	}
-	return "operation failed"
-}
-
-func (e OperationFailureError) Unwrap() error {
 	return e.Err
-}
-
-func (e OperationFailureError) OperationFailure() *OperationError {
-	return e.Failure
 }
 
 type CreateFeatureRequest struct {
@@ -217,386 +206,26 @@ type CleanupActionRequest struct {
 	Repo   string `json:"repo,omitempty"`
 }
 
-type mutationExecutor struct {
-	mu        sync.Mutex
-	registry  *OperationRegistry
-	target    MutationTarget
-	limits    MutationLimits
-	publish   func(OperationRecord)
-	active    map[string]string
-	activeAll int
-	queued    map[string][]queuedMutation
-	queuedAll int
-	closing   bool
+type actionResponse interface {
+	setAPIVersion()
 }
 
-type queuedMutation struct {
-	record OperationRecord
-	work   func() (OperationResult, error)
+func writeActionJSON(w http.ResponseWriter, status int, resp actionResponse) {
+	resp.setAPIVersion()
+	writeJSON(w, status, resp)
 }
 
-type mutationAdmission struct {
-	record OperationRecord
-	status int
-	err    *OperationError
-}
-
-func newMutationExecutor(registry *OperationRegistry, target MutationTarget, limits MutationLimits, publish func(OperationRecord)) *mutationExecutor {
-	if limits.AggregateQueue <= 0 {
-		limits.AggregateQueue = 100
-	}
-	return &mutationExecutor{
-		registry: registry,
-		target:   target,
-		limits:   limits,
-		publish:  publish,
-		active:   map[string]string{},
-		queued:   map[string][]queuedMutation{},
-	}
-}
-
-func (e *mutationExecutor) admit(kind string, target OperationTarget, work func() (OperationResult, error)) (mutationAdmission, bool) {
-	if e == nil || e.registry == nil || e.target == nil {
-		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "unavailable", Message: "mutation service unavailable"}}, false
-	}
-	lane := mutationLane(kind, target)
-	e.mu.Lock()
-	if e.closing {
-		e.mu.Unlock()
-		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "shutdown", Message: "server is shutting down"}}, false
-	}
-	if activeID := e.active[lane]; activeID != "" {
-		laneLimit := e.laneQueueLimit(lane)
-		if laneLimit <= 0 {
-			rec, err := e.registry.Create(kind, target)
-			if err != nil {
-				e.mu.Unlock()
-				return mutationAdmission{status: http.StatusInternalServerError, err: &OperationError{Code: "failed", Message: "operation failed"}}, false
-			}
-			_ = activeID
-			opErr := &OperationError{Code: "conflict", Message: "feature operation already active"}
-			_ = e.registry.Complete(rec.ID, OperationStatusRejected, nil, opErr)
-			page, _ := e.registry.List(OperationListOptions{Limit: 1})
-			if len(page.Operations) == 1 {
-				rec.Status = page.Operations[0].Status
-				rec.Error = page.Operations[0].Error
-				rec.CompletedAt = page.Operations[0].CompletedAt
-			}
-			e.mu.Unlock()
-			e.publishRecordID(rec.ID)
-			return mutationAdmission{record: rec, status: http.StatusConflict, err: opErr}, false
-		}
-		if len(e.queued[lane]) >= laneLimit || e.activeAll+e.queuedAll >= e.limits.AggregateQueue {
-			e.mu.Unlock()
-			return mutationAdmission{status: http.StatusTooManyRequests, err: &OperationError{Code: "backpressure", Message: "operation queue is full"}}, false
-		}
-		rec, err := e.registry.Create(kind, target)
-		if err != nil {
-			e.mu.Unlock()
-			return mutationAdmission{status: http.StatusInternalServerError, err: &OperationError{Code: "failed", Message: "operation failed"}}, false
-		}
-		e.queued[lane] = append(e.queued[lane], queuedMutation{record: rec, work: work})
-		e.queuedAll++
-		e.mu.Unlock()
-		return mutationAdmission{record: rec, status: http.StatusAccepted}, true
-	}
-	if e.activeAll+e.queuedAll >= e.limits.AggregateQueue {
-		e.mu.Unlock()
-		return mutationAdmission{status: http.StatusTooManyRequests, err: &OperationError{Code: "backpressure", Message: "operation queue is full"}}, false
-	}
-	rec, err := e.registry.Create(kind, target)
-	if err != nil {
-		e.mu.Unlock()
-		return mutationAdmission{status: http.StatusInternalServerError, err: &OperationError{Code: "failed", Message: "operation failed"}}, false
-	}
-	e.active[lane] = rec.ID
-	e.activeAll++
-	e.mu.Unlock()
-
-	go e.run(rec, lane, work)
-	return mutationAdmission{record: rec, status: http.StatusAccepted}, true
-}
-
-func (e *mutationExecutor) run(rec OperationRecord, lane string, work func() (OperationResult, error)) {
-	if !e.beginRun(lane, rec.ID) {
-		return
-	}
-	_ = e.registry.UpdateStatus(rec.ID, OperationStatusRunning)
-	e.publishRecordID(rec.ID)
-	result, err := work()
-	status := OperationStatusSucceeded
-	var opErr *OperationError
-	if err != nil {
-		status = OperationStatusFailed
-		opErr = operationErrorFromError(err)
-	}
-	next, shouldComplete := e.finishLane(lane, rec.ID)
-	if !shouldComplete {
-		return
-	}
-	_ = e.registry.Complete(rec.ID, status, result.Metadata, opErr)
-	e.publishRecordID(rec.ID)
-	e.runQueued(lane, next)
-}
-
-func (e *mutationExecutor) beginRun(lane, id string) bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.active[lane] == id
-}
-
-func (e *mutationExecutor) finishLane(lane, id string) (queuedMutation, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.active[lane] != id {
-		return queuedMutation{}, false
-	}
-	delete(e.active, lane)
-	if e.activeAll > 0 {
-		e.activeAll--
-	}
-	if e.closing {
-		return queuedMutation{}, true
-	}
-	var next queuedMutation
-	if queue := e.queued[lane]; len(queue) > 0 {
-		next = queue[0]
-		if len(queue) == 1 {
-			delete(e.queued, lane)
-		} else {
-			e.queued[lane] = queue[1:]
-		}
-		e.queuedAll--
-		e.active[lane] = next.record.ID
-		e.activeAll++
-	}
-	return next, true
-}
-
-func (e *mutationExecutor) runQueued(lane string, next queuedMutation) {
-	if next.record.ID == "" {
-		return
-	}
-	go e.run(next.record, lane, next.work)
-}
-
-func (e *mutationExecutor) publishRecordID(id string) {
-	if e == nil || e.publish == nil {
-		return
-	}
-	page, err := e.registry.List(OperationListOptions{Limit: e.limits.AggregateQueue})
-	if err != nil {
-		return
-	}
-	for _, dto := range page.Operations {
-		if dto.ID == id {
-			e.publish(OperationRecord{
-				ID:          dto.ID,
-				Kind:        dto.Kind,
-				Target:      dto.Target,
-				RequestedAt: dto.RequestedAt,
-				UpdatedAt:   dto.UpdatedAt,
-				CompletedAt: dto.CompletedAt,
-				Status:      dto.Status,
-				Result:      dto.Result,
-				Error:       dto.Error,
-			})
-			return
-		}
-	}
-}
-
-func (e *mutationExecutor) runSynchronous(kind string, target OperationTarget, work func() (OperationResult, error)) (mutationAdmission, bool) {
-	admission, accepted := e.reserve(kind, target)
-	if !accepted {
-		return admission, false
-	}
-	lane := mutationLane(kind, target)
-	e.runReserved(admission.record, lane, work)
-	return mutationAdmission{record: admission.record, status: http.StatusAccepted}, true
-}
-
-func (e *mutationExecutor) reserve(kind string, target OperationTarget) (mutationAdmission, bool) {
-	if e == nil || e.registry == nil || e.target == nil {
-		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "unavailable", Message: "mutation service unavailable"}}, false
-	}
-	lane := mutationLane(kind, target)
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.closing {
-		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "shutdown", Message: "server is shutting down"}}, false
-	}
-	if e.active[lane] != "" {
-		rec, err := e.registry.Create(kind, target)
-		if err != nil {
-			return mutationAdmission{status: http.StatusInternalServerError, err: &OperationError{Code: "failed", Message: "operation failed"}}, false
-		}
-		opErr := &OperationError{Code: "conflict", Message: "feature operation already active"}
-		_ = e.registry.Complete(rec.ID, OperationStatusRejected, nil, opErr)
-		rec.Status = OperationStatusRejected
-		rec.Error = safeOperationError(opErr)
-		return mutationAdmission{record: rec, status: http.StatusConflict, err: opErr}, false
-	}
-	if e.activeAll+e.queuedAll >= e.limits.AggregateQueue {
-		return mutationAdmission{status: http.StatusTooManyRequests, err: &OperationError{Code: "backpressure", Message: "operation queue is full"}}, false
-	}
-	rec, err := e.registry.Create(kind, target)
-	if err != nil {
-		return mutationAdmission{status: http.StatusInternalServerError, err: &OperationError{Code: "failed", Message: "operation failed"}}, false
-	}
-	e.active[lane] = rec.ID
-	e.activeAll++
-	return mutationAdmission{record: rec, status: http.StatusAccepted}, true
-}
-
-func (e *mutationExecutor) runReserved(rec OperationRecord, lane string, work func() (OperationResult, error)) {
-	if !e.beginRun(lane, rec.ID) {
-		return
-	}
-	_ = e.registry.UpdateStatus(rec.ID, OperationStatusRunning)
-	e.publishRecordID(rec.ID)
-	result, err := work()
-	status := OperationStatusSucceeded
-	var opErr *OperationError
-	if err != nil {
-		status = OperationStatusFailed
-		opErr = operationErrorFromError(err)
-	}
-	next, shouldComplete := e.finishLane(lane, rec.ID)
-	if !shouldComplete {
-		return
-	}
-	_ = e.registry.Complete(rec.ID, status, result.Metadata, opErr)
-	e.publishRecordID(rec.ID)
-	e.runQueued(lane, next)
-}
-
-func (e *mutationExecutor) admitShutdown(kind string, target OperationTarget) (mutationAdmission, []string, bool) {
-	if e == nil || e.registry == nil || e.target == nil {
-		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "unavailable", Message: "mutation service unavailable"}}, nil, false
-	}
-	e.mu.Lock()
-	if e.closing {
-		e.mu.Unlock()
-		return mutationAdmission{status: http.StatusServiceUnavailable, err: &OperationError{Code: "shutdown", Message: "server is shutting down"}}, nil, false
-	}
-	rec, err := e.registry.Create(kind, target)
-	if err != nil {
-		e.mu.Unlock()
-		return mutationAdmission{status: http.StatusInternalServerError, err: &OperationError{Code: "failed", Message: "operation failed"}}, nil, false
-	}
-	e.closing = true
-	interrupted := e.interruptedOperationIDsLocked()
-	e.active = map[string]string{}
-	e.activeAll = 0
-	e.queued = map[string][]queuedMutation{}
-	e.queuedAll = 0
-	e.mu.Unlock()
-	return mutationAdmission{record: rec, status: http.StatusAccepted}, interrupted, true
-}
-
-func (e *mutationExecutor) interruptedOperationIDsLocked() []string {
-	interrupted := make([]string, 0, e.activeAll+e.queuedAll)
-	for _, id := range e.active {
-		if id != "" {
-			interrupted = append(interrupted, id)
-		}
-	}
-	for _, queue := range e.queued {
-		for _, queued := range queue {
-			if queued.record.ID != "" {
-				interrupted = append(interrupted, queued.record.ID)
-			}
-		}
-	}
-	return interrupted
-}
-
-func (e *mutationExecutor) completeShutdown(rec OperationRecord, interrupted []string) {
-	if e == nil || e.registry == nil || rec.ID == "" {
-		return
-	}
-	_ = e.registry.UpdateStatus(rec.ID, OperationStatusRunning)
-	e.publishRecordID(rec.ID)
-	_ = e.registry.Complete(rec.ID, OperationStatusSucceeded, map[string]string{"status": "accepted"}, nil)
-	e.publishRecordID(rec.ID)
-	opErr := &OperationError{Code: "interrupted", Message: "operation interrupted by server shutdown"}
-	for _, id := range interrupted {
-		_ = e.registry.Complete(id, OperationStatusInterrupted, nil, opErr)
-		e.publishRecordID(id)
-	}
-}
-
-func operationErrorFromError(err error) *OperationError {
+func writeMutationError(w http.ResponseWriter, err error) {
 	if err == nil {
-		return nil
-	}
-	var failure interface {
-		OperationFailure() *OperationError
-	}
-	if errors.As(err, &failure) && failure.OperationFailure() != nil {
-		return failure.OperationFailure()
-	}
-	return &OperationError{Code: "failed", Message: err.Error()}
-}
-
-func (e *mutationExecutor) shutdown() {
-	if e == nil || e.registry == nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "mutation failed", nil)
 		return
 	}
-	e.mu.Lock()
-	if e.closing {
-		e.mu.Unlock()
+	var conflict *ActionConflictError
+	if errors.As(err, &conflict) {
+		writeAPIError(w, http.StatusConflict, "conflict", conflict.Error(), conflict.Target)
 		return
 	}
-	e.closing = true
-	ids := e.interruptedOperationIDsLocked()
-	e.active = map[string]string{}
-	e.queued = map[string][]queuedMutation{}
-	e.activeAll = 0
-	e.queuedAll = 0
-	e.mu.Unlock()
-
-	opErr := &OperationError{Code: "interrupted", Message: "operation interrupted by server shutdown"}
-	for _, id := range ids {
-		_ = e.registry.Complete(id, OperationStatusInterrupted, nil, opErr)
-		e.publishRecordID(id)
-	}
-}
-
-func (e *mutationExecutor) laneQueueLimit(lane string) int {
-	if lane == "runtime" {
-		return e.limits.RuntimeQueue
-	}
-	if strings.HasPrefix(lane, "feature:") {
-		return e.limits.FeatureQueue
-	}
-	return 0
-}
-
-func mutationLane(kind string, target OperationTarget) string {
-	if kind == "feature.config.update" {
-		return "runtime"
-	}
-	if target.Type == "feature" && target.FeatureID != "" {
-		return "feature:" + target.FeatureID
-	}
-	if target.Type == "session" {
-		if target.FeatureID != "" {
-			return "feature:" + target.FeatureID
-		}
-		if target.SessionID != "" {
-			return "session:" + target.SessionID
-		}
-		if target.RequestID != "" {
-			return "session-request:" + target.RequestID
-		}
-		return "session"
-	}
-	if strings.HasPrefix(kind, "runtime.") || target.Type == "runtime" {
-		return "runtime"
-	}
-	return "runtime"
+	writeAPIError(w, http.StatusBadRequest, "bad_request", err.Error(), nil)
 }
 
 func (h *apiHandler) handleMutationPreflight(w http.ResponseWriter, r *http.Request) bool {
@@ -673,7 +302,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return nil, false
 	}
 	switch parts[1] {
-	case "start", "resume", "stop", "interrupt", "restart", "review-decision", "config", "need-user-input", "need-user-input-draft":
+	case "start", "resume", "stop", "interrupt", "restart", "review-decision", "config", "need-user-input", "need-user-input-draft", "input-notifications":
 		return []string{http.MethodPost}, true
 	case "actions":
 		if len(parts) < 3 || len(parts) > 4 {
@@ -754,10 +383,15 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
-	admission, accepted := h.mutations.admit("feature.create", OperationTarget{Type: "runtime"}, func() (OperationResult, error) {
-		return h.mutations.target.CreateFeature(req)
-	})
-	h.writeMutationAdmission(w, admission, accepted)
+	resp, err := h.mutations.CreateFeature(req)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	if resp.Result == "" {
+		resp.Result = "created"
+	}
+	writeActionJSON(w, http.StatusCreated, &resp)
 }
 
 func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.Request, featureID string, parts []string) bool {
@@ -774,25 +408,30 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 	case "start", "resume":
 		h.handleStartFeatureMutation(w, r, featureID)
 	case "stop", "interrupt":
-		h.handleSimpleFeatureMutation(w, r, "feature.stop", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StopFeature(featureID)
-		})
+		h.handleStopFeatureMutation(w, r, featureID)
 	case "restart":
 		var req RestartFeatureRequest
 		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.restart", featureID, func() (OperationResult, error) {
-			return h.mutations.target.RestartFeature(featureID, req)
-		})
+		h.writeRestartFeature(w, featureID, req)
 	case "review-decision":
 		var req ReviewDecisionRequest
 		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.review_decision", featureID, func() (OperationResult, error) {
-			return h.mutations.target.ReviewDecision(featureID, req)
-		})
+		resp, err := h.mutations.ReviewDecision(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "submitted"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "config":
 		var req FeatureConfigMutationRequest
 		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
@@ -801,9 +440,18 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		if !validatePipelineProfile(w, req.Pipeline) {
 			return true
 		}
-		h.handleFeatureConfigMutationWithDecoded(w, featureID, func() (OperationResult, error) {
-			return h.mutations.target.UpdateFeatureConfig(featureID, req)
-		})
+		resp, err := h.mutations.UpdateFeatureConfig(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "updated"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "need-user-input":
 		var req NeedUserInputDecisionRequest
 		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
@@ -813,9 +461,18 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, "bad_request", "decision must be resume or abort", nil)
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.need_user_input.decision", featureID, func() (OperationResult, error) {
-			return h.mutations.target.NeedUserInputDecision(featureID, req)
-		})
+		resp, err := h.mutations.NeedUserInputDecision(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "decided"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "need-user-input-draft":
 		var req NeedUserInputDraftRequest
 		if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
@@ -825,13 +482,20 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, "bad_request", "answers are required", nil)
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.need_user_input.draft", featureID, func() (OperationResult, error) {
-			return h.mutations.target.DraftNeedUserInputAnswers(featureID, req)
-		})
+		resp, err := h.mutations.DraftNeedUserInputAnswers(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "drafted"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "input-notifications":
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.input_notifications.toggle", featureID, func() (OperationResult, error) {
-			return h.mutations.target.ToggleInputNotifications(featureID)
-		})
+		h.handleToggleInputNotifications(w, r, featureID)
 	default:
 		return false
 	}
@@ -851,27 +515,16 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		return true
 	}
 	switch action {
-	case "start":
+	case "start", "resume":
 		if subaction != "" {
 			return false
 		}
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.start", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StartFeature(featureID)
-		})
+		h.handleStartFeatureMutationTrusted(w, r, featureID)
 	case "pause-stop":
 		if subaction != "" {
 			return false
 		}
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.stop", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StopFeature(featureID)
-		})
-	case "resume":
-		if subaction != "" {
-			return false
-		}
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.resume", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StartFeature(featureID)
-		})
+		h.handleStopFeatureMutationTrusted(w, r, featureID)
 	case "restart":
 		if subaction != "" {
 			return false
@@ -880,9 +533,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) {
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.restart", featureID, func() (OperationResult, error) {
-			return h.mutations.target.RestartFeature(featureID, req)
-		})
+		h.writeRestartFeature(w, featureID, req)
 	case "publish":
 		if subaction != "" {
 			return false
@@ -891,16 +542,38 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) || !validateRepoList(w, req.Repos, false) {
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.publish", featureID, func() (OperationResult, error) {
-			return h.mutations.target.PublishFeature(featureID, req)
-		})
+		resp, err := h.mutations.PublishFeature(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "published"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "merge":
 		if subaction != "" {
 			return false
 		}
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.merge", featureID, func() (OperationResult, error) {
-			return h.mutations.target.MergeFeature(featureID)
-		})
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.MergeFeature(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "merged"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "rewind":
 		if subaction != "" {
 			return false
@@ -912,16 +585,38 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			!validatePipelineProfile(w, req.UpgradePipeline) {
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.rewind", featureID, func() (OperationResult, error) {
-			return h.mutations.target.RewindFeature(featureID, req)
-		})
+		resp, err := h.mutations.RewindFeature(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "rewound"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "retry":
 		if subaction != "" {
 			return false
 		}
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.retry", featureID, func() (OperationResult, error) {
-			return h.mutations.target.RetryFeature(featureID)
-		})
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.RetryFeature(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "retried"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "rebase":
 		if subaction != "" {
 			return false
@@ -930,87 +625,44 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, false) || !validateSafeOptionalToken(w, "rebase_target", req.RebaseTarget) || !validateConflictFiles(w, req.ConflictFiles) {
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.rebase", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StartRebase(featureID, req)
-		})
+		resp, err := h.mutations.StartRebase(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "started"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "review-comments":
-		if subaction == "fetch" {
-			var req ReviewCommentsFetchRequest
-			if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) {
-				return true
-			}
-			resp, err := h.mutations.target.FetchReviewComments(featureID, req)
-			if err != nil {
-				writeAPIError(w, http.StatusBadRequest, "bad_request", "fetch review comments failed", nil)
-				return true
-			}
-			if resp.APIVersion == "" {
-				resp.APIVersion = APIVersion
-			}
-			if resp.FeatureID == "" {
-				resp.FeatureID = featureID
-			}
-			if resp.Comments == nil {
-				resp.Comments = []ReviewCommentDTO{}
-			}
-			writeJSON(w, http.StatusOK, resp)
-			return true
-		}
-		if subaction != "" {
-			return false
-		}
-		var req ReviewCommentsActionRequest
-		if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) || !validateReviewCommentsMode(w, req.Mode) {
-			return true
-		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.review_comments", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StartReviewComments(featureID, req)
-		})
+		return h.handleReviewCommentsAction(w, r, featureID, subaction)
 	case "tweak":
-		if subaction == "finish" {
-			var req TweakFinishRequest
-			if !decodeMutationJSON(w, r, &req) || !validateTweakDecision(w, req.Decision) {
-				return true
-			}
-			h.handleSimpleFeatureMutationWithDecoded(w, "feature.tweak.finish", featureID, func() (OperationResult, error) {
-				return h.mutations.target.FinishTweak(featureID, req)
-			})
-			return true
-		}
-		if subaction != "" {
-			return false
-		}
-		var req TweakActionRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.tweak.start", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StartTweak(featureID, req)
-		})
+		return h.handleTweakAction(w, r, featureID, subaction)
 	case "refactor":
-		var req RefactorActionRequest
-		if !decodeMutationJSON(w, r, &req) || !validateRefactorRequest(w, req) {
-			return true
-		}
-		if subaction == "restart" {
-			h.handleSimpleFeatureMutationWithDecoded(w, "feature.refactor.restart", featureID, func() (OperationResult, error) {
-				return h.mutations.target.RestartRefactor(featureID, req)
-			})
-			return true
-		}
-		if subaction != "" {
-			return false
-		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.refactor.start", featureID, func() (OperationResult, error) {
-			return h.mutations.target.StartRefactor(featureID, req)
-		})
+		return h.handleRefactorAction(w, r, featureID, subaction)
 	case "mark-done":
 		if subaction != "" {
 			return false
 		}
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.mark_done", featureID, func() (OperationResult, error) {
-			return h.mutations.target.MarkDone(featureID)
-		})
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.MarkDone(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "done"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "cleanup":
 		if subaction != "" {
 			return false
@@ -1019,28 +671,42 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) || !validateCleanupRequest(w, req) {
 			return true
 		}
-		h.handleSimpleFeatureMutationWithDecoded(w, "feature.cleanup", featureID, func() (OperationResult, error) {
-			return h.mutations.target.CleanupFeature(featureID, req)
-		})
+		resp, err := h.mutations.CleanupFeature(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "cleaned"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "delete":
 		if subaction != "" {
 			return false
 		}
-		h.decodeAndAdmitEmptyFeatureAction(w, r, "feature.delete", featureID, func() (OperationResult, error) {
-			return h.mutations.target.DeleteFeature(featureID)
-		})
+		var req map[string]any
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		resp, err := h.mutations.DeleteFeature(featureID)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "deleted"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		return false
 	}
 	return true
-}
-
-func (h *apiHandler) decodeAndAdmitEmptyFeatureAction(w http.ResponseWriter, r *http.Request, kind, featureID string, work func() (OperationResult, error)) {
-	var req map[string]any
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	h.handleSimpleFeatureMutationWithDecoded(w, kind, featureID, work)
 }
 
 func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Request) {
@@ -1055,10 +721,15 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) {
 			return
 		}
-		admission, accepted := h.mutations.admit("runtime.config.update", OperationTarget{Type: "runtime"}, func() (OperationResult, error) {
-			return h.mutations.target.RuntimeConfig(req)
-		})
-		h.writeMutationAdmission(w, admission, accepted)
+		resp, err := h.mutations.RuntimeConfig(req)
+		if err != nil {
+			writeMutationError(w, err)
+			return
+		}
+		if resp.Result == "" {
+			resp.Result = "updated"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
 		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
@@ -1078,22 +749,13 @@ func (h *apiHandler) handleShutdownMutationRoute(w http.ResponseWriter, r *http.
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	if h.mutations == nil {
-		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
-		return
+	resp := ShutdownResponse{Result: "shutdown_scheduled"}
+	writeActionJSON(w, http.StatusOK, &resp)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
 	}
-	admission, interrupted, accepted := h.mutations.admitShutdown("runtime.shutdown", OperationTarget{Type: "runtime"})
-	h.writeMutationAdmission(w, admission, accepted)
-	if accepted {
-		if flusher, ok := w.(http.Flusher); ok {
-			flusher.Flush()
-		}
-		go func() {
-			h.mutations.completeShutdown(admission.record, interrupted)
-			if h.requestShutdown != nil {
-				h.requestShutdown()
-			}
-		}()
+	if h.requestShutdown != nil {
+		go h.requestShutdown()
 	}
 }
 
@@ -1120,11 +782,15 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "decision must be allow or deny", nil)
 		return
 	}
-	target := OperationTarget{Type: "session", SessionID: req.SessionID, RequestID: req.RequestID}
-	admission, accepted := h.mutations.admit("permission.answer", target, func() (OperationResult, error) {
-		return h.mutations.target.AnswerPermission(req)
-	})
-	h.writeMutationAdmission(w, admission, accepted)
+	resp, err := h.mutations.AnswerPermission(req)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	if resp.Result == "" {
+		resp.Result = "answered"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
 }
 
 func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.Request) {
@@ -1151,11 +817,15 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, "bad_request", "answers are required", nil)
 			return
 		}
-		target := OperationTarget{Type: "session", SessionID: req.SessionID, RequestID: req.RequestID}
-		admission, accepted := h.mutations.admit("ask_user.answer", target, func() (OperationResult, error) {
-			return h.mutations.target.AnswerAskUser(req)
-		})
-		h.writeMutationAdmission(w, admission, accepted)
+		resp, err := h.mutations.AnswerAskUser(req)
+		if err != nil {
+			writeMutationError(w, err)
+			return
+		}
+		if resp.Result == "" {
+			resp.Result = "answered"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	case "help/send":
 		var req HelpAnswerRequest
 		if !decodeMutationJSON(w, r, &req) {
@@ -1169,11 +839,15 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, "bad_request", "session_id or feature_id is required", nil)
 			return
 		}
-		target := OperationTarget{Type: "session", FeatureID: req.FeatureID, SessionID: req.SessionID}
-		admission, accepted := h.mutations.admit("help.send", target, func() (OperationResult, error) {
-			return h.mutations.target.SendHelp(req)
-		})
-		h.writeMutationAdmission(w, admission, accepted)
+		resp, err := h.mutations.SendHelp(req)
+		if err != nil {
+			writeMutationError(w, err)
+			return
+		}
+		if resp.Result == "" {
+			resp.Result = "sent"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
 	}
@@ -1183,16 +857,55 @@ func (h *apiHandler) handleStartFeatureMutation(w http.ResponseWriter, r *http.R
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
+	h.handleStartFeatureMutationTrusted(w, r, featureID)
+}
+
+func (h *apiHandler) handleStartFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
 	var req map[string]any
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	h.handleSimpleFeatureMutationWithDecoded(w, "feature.start", featureID, func() (OperationResult, error) {
-		return h.mutations.target.StartFeature(featureID)
-	})
+	resp, err := h.mutations.StartFeature(featureID)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	if resp.FeatureID == "" {
+		resp.FeatureID = featureID
+	}
+	if resp.Result == "" {
+		resp.Result = "started"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
 }
 
-func (h *apiHandler) handleSimpleFeatureMutation(w http.ResponseWriter, r *http.Request, kind, featureID string, work func() (OperationResult, error)) {
+func (h *apiHandler) handleStopFeatureMutation(w http.ResponseWriter, r *http.Request, featureID string) {
+	if !h.requireTrustedMutation(w, r) {
+		return
+	}
+	h.handleStopFeatureMutationTrusted(w, r, featureID)
+}
+
+func (h *apiHandler) handleStopFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
+	var req map[string]any
+	if !decodeMutationJSON(w, r, &req) {
+		return
+	}
+	resp, err := h.mutations.StopFeature(featureID)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	if resp.FeatureID == "" {
+		resp.FeatureID = featureID
+	}
+	if resp.Result == "" {
+		resp.Result = "stopped"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
+}
+
+func (h *apiHandler) handleToggleInputNotifications(w http.ResponseWriter, r *http.Request, featureID string) {
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
@@ -1200,17 +913,158 @@ func (h *apiHandler) handleSimpleFeatureMutation(w http.ResponseWriter, r *http.
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	h.handleSimpleFeatureMutationWithDecoded(w, kind, featureID, work)
+	resp, err := h.mutations.ToggleInputNotifications(featureID)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	if resp.FeatureID == "" {
+		resp.FeatureID = featureID
+	}
+	if resp.Result == "" {
+		resp.Result = "updated"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
 }
 
-func (h *apiHandler) handleSimpleFeatureMutationWithDecoded(w http.ResponseWriter, kind, featureID string, work func() (OperationResult, error)) {
-	admission, accepted := h.mutations.admit(kind, OperationTarget{Type: "feature", FeatureID: featureID}, work)
-	h.writeMutationAdmission(w, admission, accepted)
+func (h *apiHandler) writeRestartFeature(w http.ResponseWriter, featureID string, req RestartFeatureRequest) {
+	resp, err := h.mutations.RestartFeature(featureID, req)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	if resp.FeatureID == "" {
+		resp.FeatureID = featureID
+	}
+	if resp.Result == "" {
+		resp.Result = "restarted"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
 }
 
-func (h *apiHandler) handleFeatureConfigMutationWithDecoded(w http.ResponseWriter, featureID string, work func() (OperationResult, error)) {
-	admission, accepted := h.mutations.admit("feature.config.update", OperationTarget{Type: "feature", FeatureID: featureID}, work)
-	h.writeMutationAdmission(w, admission, accepted)
+func (h *apiHandler) handleReviewCommentsAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
+	if subaction == "fetch" {
+		var req ReviewCommentsFetchRequest
+		if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) {
+			return true
+		}
+		resp, err := h.mutations.FetchReviewComments(featureID, req)
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "fetch review comments failed", nil)
+			return true
+		}
+		if resp.APIVersion == "" {
+			resp.APIVersion = APIVersion
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Comments == nil {
+			resp.Comments = []ReviewCommentDTO{}
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return true
+	}
+	if subaction != "" {
+		return false
+	}
+	var req ReviewCommentsActionRequest
+	if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, true) || !validateReviewCommentsMode(w, req.Mode) {
+		return true
+	}
+	resp, err := h.mutations.StartReviewComments(featureID, req)
+	if err != nil {
+		writeMutationError(w, err)
+		return true
+	}
+	if resp.FeatureID == "" {
+		resp.FeatureID = featureID
+	}
+	if resp.Result == "" {
+		resp.Result = "started"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
+	return true
+}
+
+func (h *apiHandler) handleTweakAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
+	if subaction == "finish" {
+		var req TweakFinishRequest
+		if !decodeMutationJSON(w, r, &req) || !validateTweakDecision(w, req.Decision) {
+			return true
+		}
+		resp, err := h.mutations.FinishTweak(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "finished"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
+		return true
+	}
+	if subaction != "" {
+		return false
+	}
+	var req TweakActionRequest
+	if !decodeMutationJSON(w, r, &req) {
+		return true
+	}
+	resp, err := h.mutations.StartTweak(featureID, req)
+	if err != nil {
+		writeMutationError(w, err)
+		return true
+	}
+	if resp.FeatureID == "" {
+		resp.FeatureID = featureID
+	}
+	if resp.Result == "" {
+		resp.Result = "started"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
+	return true
+}
+
+func (h *apiHandler) handleRefactorAction(w http.ResponseWriter, r *http.Request, featureID, subaction string) bool {
+	var req RefactorActionRequest
+	if !decodeMutationJSON(w, r, &req) || !validateRefactorRequest(w, req) {
+		return true
+	}
+	if subaction == "restart" {
+		resp, err := h.mutations.RestartRefactor(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		if resp.FeatureID == "" {
+			resp.FeatureID = featureID
+		}
+		if resp.Result == "" {
+			resp.Result = "restarted"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
+		return true
+	}
+	if subaction != "" {
+		return false
+	}
+	resp, err := h.mutations.StartRefactor(featureID, req)
+	if err != nil {
+		writeMutationError(w, err)
+		return true
+	}
+	if resp.FeatureID == "" {
+		resp.FeatureID = featureID
+	}
+	if resp.Result == "" {
+		resp.Result = "started"
+	}
+	writeActionJSON(w, http.StatusOK, &resp)
+	return true
 }
 
 func validatePipelineProfile(w http.ResponseWriter, profile feature.PipelineProfile) bool {
@@ -1392,28 +1246,6 @@ func safeRelativePathToken(value string) bool {
 	return !strings.HasPrefix(value, "/")
 }
 
-func (h *apiHandler) writeMutationAdmission(w http.ResponseWriter, admission mutationAdmission, accepted bool) {
-	if accepted {
-		writeJSON(w, http.StatusAccepted, OperationAcceptedResponse{APIVersion: APIVersion, OperationID: admission.record.ID, Status: OperationStatusQueued})
-		return
-	}
-	if admission.record.ID != "" && admission.err != nil && admission.err.Code == "conflict" {
-		writeJSON(w, admission.status, OperationAcceptedResponse{APIVersion: APIVersion, OperationID: admission.record.ID, Status: OperationStatusRejected})
-		return
-	}
-	status := admission.status
-	if status == 0 {
-		status = http.StatusInternalServerError
-	}
-	code := "internal_error"
-	message := "mutation failed"
-	if admission.err != nil {
-		code = admission.err.Code
-		message = admission.err.Message
-	}
-	writeAPIError(w, status, code, message, nil)
-}
-
 func (h *apiHandler) requireTrustedMutation(w http.ResponseWriter, r *http.Request) bool {
 	if h.mutations == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)
@@ -1460,36 +1292,10 @@ func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 		writeAPIError(w, status, code, message, nil)
 		return false
 	}
-	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "request body must contain one JSON object", nil)
+	var extra struct{}
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid JSON request", nil)
 		return false
 	}
 	return true
-}
-
-func isLoopbackOrigin(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil || u.Hostname() == "" {
-		return false
-	}
-	host := u.Hostname()
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-func operationSSEEvent(id string, rec OperationRecord) SSEEventDTO {
-	resource := ResourceDTO{Type: "operation", ID: rec.ID, FeatureID: rec.Target.FeatureID}
-	return SSEEventDTO{
-		APIVersion:       APIVersion,
-		ID:               id,
-		Kind:             "operation.updated",
-		At:               rec.UpdatedAt,
-		Resource:         resource,
-		Revision:         revisionForAny(resource),
-		SnapshotRequired: true,
-		Summary:          fmt.Sprintf("%s %s", rec.Kind, rec.Status),
-	}
 }

@@ -201,6 +201,19 @@ func isLoopbackBaseURL(raw string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func isLoopbackOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func discoveryHealthOK(ctx context.Context, client *http.Client, baseURL string) bool {
 	_, ok, _ := discoveryHealth(ctx, client, baseURL)
 	return ok

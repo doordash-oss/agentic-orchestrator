@@ -288,10 +288,10 @@ records that are unreadable, unsafe for the current user, stale, non-loopback, o
 for a different runtime identity or launch policy. MCP requests also enforce
 localhost host-header protection when the server is reached on loopback.
 
-Operation records, structured errors, DTOs, MCP tool errors, and shutdown events
-are metadata surfaces. They should expose operation IDs, feature IDs, repo names,
-status, and bounded summaries, not raw prompts, secret values, credentials, full
-private paths, or oversized error payloads.
+Action results, structured errors, DTOs, MCP tool errors, and shutdown events
+are metadata surfaces. They should expose feature IDs, repo names, status, and
+bounded summaries, not raw prompts, secret values, credentials, full private
+paths, or oversized error payloads.
 
 ### Updating
 

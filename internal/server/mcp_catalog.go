@@ -176,9 +176,6 @@ func (h *apiHandler) registerMCPTools(server *mcp.Server) {
 	addRESTTool[featureIDMCPArgs, LivePreviewResponse](server, h, "live_preview_get", "Get feature live preview.", http.MethodGet, func(in featureIDMCPArgs) string {
 		return "/api/v1/features/" + pathSegment(in.FeatureID) + "/live-preview"
 	}, nil, nil, false)
-	addRESTTool[OperationQuery, OperationSnapshotResponse](server, h, "operation_list", "List operation records.", http.MethodGet, func(OperationQuery) string {
-		return "/api/v1/operations"
-	}, operationValues, nil, false)
 	addRESTTool[noMCPArgs, RecoverySnapshotResponse](server, h, "recovery_snapshot_get", "Scan recoverable sessions.", http.MethodGet, func(noMCPArgs) string {
 		return "/api/v1/recovery"
 	}, nil, nil, false)
@@ -187,58 +184,58 @@ func (h *apiHandler) registerMCPTools(server *mcp.Server) {
 }
 
 func (h *apiHandler) registerMCPMutationTools(server *mcp.Server) {
-	addRESTTool[CreateFeatureRequest, OperationAcceptedResponse](server, h, "feature_create", "Create a feature.", http.MethodPost, func(CreateFeatureRequest) string {
+	addRESTTool[CreateFeatureRequest, CreateFeatureResponse](server, h, "feature_create", "Create a feature.", http.MethodPost, func(CreateFeatureRequest) string {
 		return "/api/v1/features"
 	}, nil, func(in CreateFeatureRequest) any { return in }, true)
-	addFeatureEmptyMutation(server, h, "feature_start", "Start a feature.", "start")
-	addFeatureEmptyMutation(server, h, "feature_resume", "Resume a feature.", "resume")
-	addFeatureEmptyMutation(server, h, "feature_stop", "Stop or pause a feature.", "pause-stop")
-	addFeatureEmptyMutation(server, h, "feature_interrupt", "Interrupt a feature.", "pause-stop")
-	addRESTTool[featureRestartMCPArgs, OperationAcceptedResponse](server, h, "feature_restart", "Restart a feature.", http.MethodPost, func(in featureRestartMCPArgs) string {
+	addFeatureEmptyMutation[FeatureStartResponse](server, h, "feature_start", "Start a feature.", "start")
+	addFeatureEmptyMutation[FeatureStartResponse](server, h, "feature_resume", "Resume a feature.", "resume")
+	addFeatureEmptyMutation[FeatureStopResponse](server, h, "feature_stop", "Stop or pause a feature.", "pause-stop")
+	addFeatureEmptyMutation[FeatureStopResponse](server, h, "feature_interrupt", "Interrupt a feature.", "pause-stop")
+	addRESTTool[featureRestartMCPArgs, FeatureRestartResponse](server, h, "feature_restart", "Restart a feature.", http.MethodPost, func(in featureRestartMCPArgs) string {
 		return featureActionPath(in.FeatureID, "restart")
 	}, nil, func(in featureRestartMCPArgs) any {
 		return in.RestartFeatureRequest
 	}, true)
-	addRESTTool[reviewDecisionMCPArgs, OperationAcceptedResponse](server, h, "review_decision_submit", "Submit a review gate decision.", http.MethodPost, func(in reviewDecisionMCPArgs) string {
+	addRESTTool[reviewDecisionMCPArgs, ReviewDecisionResponse](server, h, "review_decision_submit", "Submit a review gate decision.", http.MethodPost, func(in reviewDecisionMCPArgs) string {
 		return "/api/v1/features/" + pathSegment(in.FeatureID) + "/review-decision"
 	}, nil, func(in reviewDecisionMCPArgs) any { return in.ReviewDecisionRequest }, true)
-	addRESTTool[featureConfigMutationMCPArgs, OperationAcceptedResponse](server, h, "feature_config_update", "Update feature configuration.", http.MethodPost, func(in featureConfigMutationMCPArgs) string {
+	addRESTTool[featureConfigMutationMCPArgs, FeatureConfigUpdateResponse](server, h, "feature_config_update", "Update feature configuration.", http.MethodPost, func(in featureConfigMutationMCPArgs) string {
 		return "/api/v1/features/" + pathSegment(in.FeatureID) + "/config"
 	}, nil, func(in featureConfigMutationMCPArgs) any { return in.FeatureConfigMutationRequest }, true)
-	addRESTTool[needUserInputDecisionMCPArgs, OperationAcceptedResponse](server, h, "need_user_input_decide", "Resume or abort a need-user-input gate.", http.MethodPost, func(in needUserInputDecisionMCPArgs) string {
+	addRESTTool[needUserInputDecisionMCPArgs, NeedUserInputDecisionResponse](server, h, "need_user_input_decide", "Resume or abort a need-user-input gate.", http.MethodPost, func(in needUserInputDecisionMCPArgs) string {
 		return "/api/v1/features/" + pathSegment(in.FeatureID) + "/need-user-input"
 	}, nil, func(in needUserInputDecisionMCPArgs) any { return in.NeedUserInputDecisionRequest }, true)
-	addRESTTool[needUserInputDraftMCPArgs, OperationAcceptedResponse](server, h, "need_user_input_draft", "Draft need-user-input answers.", http.MethodPost, func(in needUserInputDraftMCPArgs) string {
+	addRESTTool[needUserInputDraftMCPArgs, NeedUserInputDraftResponse](server, h, "need_user_input_draft", "Draft need-user-input answers.", http.MethodPost, func(in needUserInputDraftMCPArgs) string {
 		return "/api/v1/features/" + pathSegment(in.FeatureID) + "/need-user-input-draft"
 	}, nil, func(in needUserInputDraftMCPArgs) any { return in.NeedUserInputDraftRequest }, true)
-	addRESTTool[PermissionAnswerRequest, OperationAcceptedResponse](server, h, "permission_answer", "Answer a permission request.", http.MethodPost, func(PermissionAnswerRequest) string {
+	addRESTTool[PermissionAnswerRequest, PermissionAnswerResponse](server, h, "permission_answer", "Answer a permission request.", http.MethodPost, func(PermissionAnswerRequest) string {
 		return "/api/v1/permissions/answer"
 	}, nil, func(in PermissionAnswerRequest) any { return in }, true)
-	addRESTTool[AskUserAnswerRequest, OperationAcceptedResponse](server, h, "ask_user_answer", "Answer an ask-user prompt.", http.MethodPost, func(AskUserAnswerRequest) string {
+	addRESTTool[AskUserAnswerRequest, AskUserAnswerResponse](server, h, "ask_user_answer", "Answer an ask-user prompt.", http.MethodPost, func(AskUserAnswerRequest) string {
 		return "/api/v1/prompts/ask-user/answer"
 	}, nil, func(in AskUserAnswerRequest) any { return in }, true)
-	addRESTTool[HelpAnswerRequest, OperationAcceptedResponse](server, h, "help_send", "Send help text to a waiting request.", http.MethodPost, func(HelpAnswerRequest) string {
+	addRESTTool[HelpAnswerRequest, HelpSendResponse](server, h, "help_send", "Send help text to a waiting request.", http.MethodPost, func(HelpAnswerRequest) string {
 		return "/api/v1/prompts/help/send"
 	}, nil, func(in HelpAnswerRequest) any { return in }, true)
-	addRESTTool[RuntimeConfigMutationRequest, OperationAcceptedResponse](server, h, "config_runtime_update", "Update runtime configuration.", http.MethodPatch, func(RuntimeConfigMutationRequest) string {
+	addRESTTool[RuntimeConfigMutationRequest, RuntimeConfigUpdateResponse](server, h, "config_runtime_update", "Update runtime configuration.", http.MethodPatch, func(RuntimeConfigMutationRequest) string {
 		return "/api/v1/config/runtime"
 	}, nil, func(in RuntimeConfigMutationRequest) any { return in }, true)
-	addRESTTool[noMCPArgs, OperationAcceptedResponse](server, h, "runtime_shutdown", "Shut down the runtime server.", http.MethodPost, func(noMCPArgs) string {
+	addRESTTool[noMCPArgs, ShutdownResponse](server, h, "runtime_shutdown", "Shut down the runtime server.", http.MethodPost, func(noMCPArgs) string {
 		return "/api/v1/shutdown"
 	}, nil, func(noMCPArgs) any { return emptyBody() }, true)
-	addRESTTool[publishFeatureMCPArgs, OperationAcceptedResponse](server, h, "feature_publish", "Publish a feature.", http.MethodPost, func(in publishFeatureMCPArgs) string {
+	addRESTTool[publishFeatureMCPArgs, PublishFeatureResponse](server, h, "feature_publish", "Publish a feature.", http.MethodPost, func(in publishFeatureMCPArgs) string {
 		return featureActionPath(in.FeatureID, "publish")
 	}, nil, func(in publishFeatureMCPArgs) any {
 		return in.PublishFeatureRequest
 	}, true)
-	addFeatureEmptyMutation(server, h, "feature_merge", "Merge a local-only feature.", "merge")
-	addRESTTool[rewindFeatureMCPArgs, OperationAcceptedResponse](server, h, "feature_rewind", "Rewind a feature.", http.MethodPost, func(in rewindFeatureMCPArgs) string {
+	addFeatureEmptyMutation[MergeFeatureResponse](server, h, "feature_merge", "Merge a local-only feature.", "merge")
+	addRESTTool[rewindFeatureMCPArgs, RewindFeatureResponse](server, h, "feature_rewind", "Rewind a feature.", http.MethodPost, func(in rewindFeatureMCPArgs) string {
 		return featureActionPath(in.FeatureID, "rewind")
 	}, nil, func(in rewindFeatureMCPArgs) any {
 		return in.RewindFeatureRequest
 	}, true)
-	addFeatureEmptyMutation(server, h, "feature_retry", "Retry a failed feature.", "retry")
-	addRESTTool[rebaseMCPArgs, OperationAcceptedResponse](server, h, "rebase_start", "Start a rebase cycle.", http.MethodPost, func(in rebaseMCPArgs) string {
+	addFeatureEmptyMutation[RetryFeatureResponse](server, h, "feature_retry", "Retry a failed feature.", "retry")
+	addRESTTool[rebaseMCPArgs, RebaseStartResponse](server, h, "rebase_start", "Start a rebase cycle.", http.MethodPost, func(in rebaseMCPArgs) string {
 		return featureActionPath(in.FeatureID, "rebase")
 	}, nil, func(in rebaseMCPArgs) any {
 		return in.RebaseActionRequest
@@ -246,37 +243,37 @@ func (h *apiHandler) registerMCPMutationTools(server *mcp.Server) {
 	addRESTTool[reviewCommentsFetchMCPArgs, ReviewCommentsFetchResponse](server, h, "review_comments_fetch", "Fetch review comments.", http.MethodPost, func(in reviewCommentsFetchMCPArgs) string {
 		return featureActionPath(in.FeatureID, "review-comments") + "/fetch"
 	}, nil, func(in reviewCommentsFetchMCPArgs) any { return in.ReviewCommentsFetchRequest }, true)
-	addRESTTool[reviewCommentsActionMCPArgs, OperationAcceptedResponse](server, h, "review_comments_start", "Start a review-comments cycle.", http.MethodPost, func(in reviewCommentsActionMCPArgs) string {
+	addRESTTool[reviewCommentsActionMCPArgs, ReviewCommentsStartResponse](server, h, "review_comments_start", "Start a review-comments cycle.", http.MethodPost, func(in reviewCommentsActionMCPArgs) string {
 		return featureActionPath(in.FeatureID, "review-comments")
 	}, nil, func(in reviewCommentsActionMCPArgs) any {
 		return in.ReviewCommentsActionRequest
 	}, true)
-	addFeatureEmptyMutation(server, h, "tweak_start", "Start a tweak cycle.", "tweak")
-	addRESTTool[tweakFinishMCPArgs, OperationAcceptedResponse](server, h, "tweak_finish", "Finish a tweak cycle.", http.MethodPost, func(in tweakFinishMCPArgs) string {
+	addFeatureEmptyMutation[TweakStartResponse](server, h, "tweak_start", "Start a tweak cycle.", "tweak")
+	addRESTTool[tweakFinishMCPArgs, TweakFinishResponse](server, h, "tweak_finish", "Finish a tweak cycle.", http.MethodPost, func(in tweakFinishMCPArgs) string {
 		return featureActionPath(in.FeatureID, "tweak") + "/finish"
 	}, nil, func(in tweakFinishMCPArgs) any { return in.TweakFinishRequest }, true)
-	addRESTTool[refactorMCPArgs, OperationAcceptedResponse](server, h, "refactor_start", "Start a refactor cycle.", http.MethodPost, func(in refactorMCPArgs) string {
+	addRESTTool[refactorMCPArgs, RefactorStartResponse](server, h, "refactor_start", "Start a refactor cycle.", http.MethodPost, func(in refactorMCPArgs) string {
 		return featureActionPath(in.FeatureID, "refactor")
 	}, nil, func(in refactorMCPArgs) any {
 		return in.RefactorActionRequest
 	}, true)
-	addRESTTool[refactorMCPArgs, OperationAcceptedResponse](server, h, "refactor_restart", "Restart a refactor cycle.", http.MethodPost, func(in refactorMCPArgs) string {
+	addRESTTool[refactorMCPArgs, RefactorRestartResponse](server, h, "refactor_restart", "Restart a refactor cycle.", http.MethodPost, func(in refactorMCPArgs) string {
 		return featureActionPath(in.FeatureID, "refactor") + "/restart"
 	}, nil, func(in refactorMCPArgs) any { return in.RefactorActionRequest }, true)
-	addFeatureEmptyMutation(server, h, "feature_mark_done", "Mark a feature done.", "mark-done")
-	addRESTTool[cleanupMCPArgs, OperationAcceptedResponse](server, h, "feature_cleanup", "Clean up feature runtime artifacts.", http.MethodPost, func(in cleanupMCPArgs) string {
+	addFeatureEmptyMutation[MarkDoneResponse](server, h, "feature_mark_done", "Mark a feature done.", "mark-done")
+	addRESTTool[cleanupMCPArgs, CleanupFeatureResponse](server, h, "feature_cleanup", "Clean up feature runtime artifacts.", http.MethodPost, func(in cleanupMCPArgs) string {
 		return featureActionPath(in.FeatureID, "cleanup")
 	}, nil, func(in cleanupMCPArgs) any {
 		return in.CleanupActionRequest
 	}, true)
-	addFeatureEmptyMutation(server, h, "feature_delete", "Delete a feature.", "delete")
-	addRESTTool[RecoveryActionRequest, OperationAcceptedResponse](server, h, "recovery_execute", "Execute recovery actions.", http.MethodPost, func(RecoveryActionRequest) string {
+	addFeatureEmptyMutation[DeleteFeatureResponse](server, h, "feature_delete", "Delete a feature.", "delete")
+	addRESTTool[RecoveryActionRequest, RecoveryActionResponse](server, h, "recovery_execute", "Execute recovery actions.", http.MethodPost, func(RecoveryActionRequest) string {
 		return "/api/v1/recovery/actions"
 	}, nil, func(in RecoveryActionRequest) any { return in }, true)
 }
 
-func addFeatureEmptyMutation(server *mcp.Server, h *apiHandler, name, description, action string) {
-	addRESTTool[featureIDMCPArgs, OperationAcceptedResponse](server, h, name, description, http.MethodPost, featureActionPathFor(action), nil, func(featureIDMCPArgs) any {
+func addFeatureEmptyMutation[Out any](server *mcp.Server, h *apiHandler, name, description, action string) {
+	addRESTTool[featureIDMCPArgs, Out](server, h, name, description, http.MethodPost, featureActionPathFor(action), nil, func(featureIDMCPArgs) any {
 		return emptyBody()
 	}, true)
 }

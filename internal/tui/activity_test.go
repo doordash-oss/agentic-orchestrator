@@ -73,7 +73,7 @@ func TestExtractActivityLinesFiltersNoise(t *testing.T) {
 
 func TestExtractActivityLinesAllowsToolOutput(t *testing.T) {
 	t.Parallel()
-	raw := "Read internal/tui/styles.go\nEdit internal/tui/app.go\nBash go test ./...\nok  pkg/foo 0.5s\n"
+	raw := "Read internal/tui/styles.go\nEdit internal/tui/api_app.go\nBash go test ./...\nok  pkg/foo 0.5s\n"
 	lines := extractActivityLines(raw, 10)
 	if len(lines) < 3 {
 		t.Errorf("expected at least 3 tool output lines, got %d: %v", len(lines), lines)

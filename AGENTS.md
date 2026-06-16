@@ -58,10 +58,10 @@ extended **Race regression** gate, not the everyday unit command. The baseline
 timing report lives at `docs/testing-baseline.md`.
 
 TUI package tests in `internal/tui` are part of the fast suite and must stay at
-the model layer: drive `AppModel.Init`, `Update`, `View`, subcomponent reducers,
-keyboard handlers, and event translators directly. Full Bubble Tea program
-drivers, `teatest`, and terminal-lifecycle smoke flows belong in the extended
-`test/e2e` gate with `testing.Short` guards.
+the model layer: drive `APIAppModel.Init`, `Update`, `View`, subcomponent
+reducers, keyboard handlers, and event translators directly. Full Bubble Tea
+program drivers, `teatest`, and terminal-lifecycle smoke flows belong in the
+extended `test/e2e` gate with `testing.Short` guards.
 
 ## Test isolation and parallelism
 

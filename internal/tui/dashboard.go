@@ -128,7 +128,7 @@ func NewDashboardModel(features []*feature.Feature, stateDir string) DashboardMo
 }
 
 // ConsumeWantNewFeature returns true once if Enter was pressed on the ghost CTA,
-// then resets the flag. The caller (app.go) uses this to trigger the wizard.
+// then resets the flag. The caller uses this to trigger the wizard.
 func (m *DashboardModel) ConsumeWantNewFeature() bool {
 	if m.wantNewFeature {
 		m.wantNewFeature = false

@@ -710,7 +710,7 @@ type AttachModel struct {
 
 	// Tweak session state
 	isTweakSession   bool // true when attached to a tweak session
-	tweakFinishing   bool // set by Ctrl+D or finish prompt, read by AppModel during detach
+	tweakFinishing   bool // set by Ctrl+D or finish prompt, read by the parent model during detach
 	showFinishPrompt bool // true when Esc finish/detach prompt is visible
 
 	// Transient toast shown after the Stop option in the finish prompt.
@@ -946,6 +946,22 @@ func NewAttachModel(tabs []repoTab, initialIdx int, featureID string, width, hei
 	m.restoreThinkingLine()
 	m.updateViewport()
 	return m
+}
+
+func resolveInitialTab(tabs []repoTab, lastAttachedRepo string) int {
+	if lastAttachedRepo != "" {
+		for i, t := range tabs {
+			if t.repoName == lastAttachedRepo && t.sess != nil {
+				return i
+			}
+		}
+	}
+	for i, t := range tabs {
+		if t.sess != nil {
+			return i
+		}
+	}
+	return -1
 }
 
 // attachLayout computes viewport width, viewport height, and input width
@@ -1431,7 +1447,7 @@ func (m *AttachModel) forwardToViewport(msg tea.Msg) tea.Cmd {
 }
 
 // HasActiveQuestion is the exported form of hasActiveQuestion, used by the
-// parent AppModel to toggle bubbletea mouse capture on only while a question
+// parent model to toggle bubbletea mouse capture on only while a question
 // is pending — so the wheel scrolls the viewport instead of being synthesized
 // into arrow keys by the terminal's alt-screen-scroll fallback.
 func (m AttachModel) HasActiveQuestion() bool {

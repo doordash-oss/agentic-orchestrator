@@ -27,25 +27,15 @@ import (
 var expectedTUISmokeTests = []string{
 	"TestConcurrentPlainAgenticoColdStart",
 	"TestConcurrentPlainAgenticoStaleDiscoveryRepair",
-	"TestDashboardRendersEmptyState",
-	"TestDashboardShowsFeature",
-	"TestDefaultCommandLaunchesDirectTUI",
-	"TestFreshFeatureSkeletonInvariants",
+	"TestDefaultCommandLaunchesAPIBackedTUI",
 	"TestLauncherFailureClassification",
-	"TestMediumWizardGateProjectionSmoke",
-	"TestNeedUserInputPauseResumeSmoke",
 	"TestPlainAgenticoCLIRouting",
 	"TestPlainAgenticoReusePolicyMismatch",
 	"TestPreCutoverRuntimeCompatibility",
-	"TestTUI_ConcurrentFeatures",
-	"TestTUI_FeatureFailsMidChain",
-	"TestTUI_HelpInputBlocking",
-	"TestTUI_PermissionPromptSurfaced",
 	"TestTUIReconnectSnapshotRecovery",
-	"TestTUI_SessionCrashInterrupted",
 }
 
-func TestDefaultCommandLaunchesDirectTUI(t *testing.T) {
+func TestDefaultCommandLaunchesAPIBackedTUI(t *testing.T) {
 	runRepoGoTest(t, "./cmd/agentico", "^TestRunArgsLaunchesClientServerByDefault$")
 }
 
@@ -96,16 +86,12 @@ func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 
 	targets := e2eSmokeRunTargets(t, script)
 	for _, want := range []string{
-		"TestFreshFeatureSkeletonInvariants",
-		"TestMediumWizardGateProjectionSmoke",
-		"TestNeedUserInputPauseResumeSmoke",
+		"TestDefaultCommandLaunchesAPIBackedTUI",
+		"TestTUIReconnectSnapshotRecovery",
 	} {
 		if !targets[want] {
 			t.Fatalf("smoke.sh must run %s", want)
 		}
-	}
-	if !strings.Contains(script, "go test ./internal/tui -run '^TestInquirePhase_GrillMe_AutoPickSmokeEndToEnd$'") {
-		t.Fatal("smoke.sh must run TestInquirePhase_GrillMe_AutoPickSmokeEndToEnd")
 	}
 
 	existing := e2eTestNames(t)

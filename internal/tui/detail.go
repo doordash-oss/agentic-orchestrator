@@ -36,14 +36,14 @@ type DetailModel struct {
 	width          int
 	height         int
 
-	// Refactor overlay — set by parent (AppModel) when refactor input is active.
+	// Refactor overlay — set by parent when refactor input is active.
 	// When refactorActive is true, View/ViewCompact render a refactor input panel
 	// instead of the normal detail content.
 	refactorActive      bool
 	refactorInputView   string // pre-rendered textarea.View() output
 	refactorFeatureName string
 
-	// Refactor pipeline selector — set by parent (AppModel) after refactor
+	// Refactor pipeline selector — set by parent after refactor
 	// prompt is submitted. Shows pipeline selection overlay.
 	refactorPipelineActive bool
 	refactorPipelineView   string // pre-rendered pipeline selector output

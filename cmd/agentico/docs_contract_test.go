@@ -21,7 +21,7 @@ import (
 	"testing"
 )
 
-// Guards live docs contract: direct TUI plus foreground server launch guidance.
+// Guards live docs contract: API-backed TUI plus foreground server launch guidance.
 func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	docs := []string{"README.md"}
@@ -46,6 +46,8 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 		"feature create     Create a new feature",
 		"agentico feature create",
 		"`agentico feature create`",
+		"direct TUI",
+		"starts the direct TUI",
 		"--name <name>",
 		"--repo <path>",
 		"--jira <ticket>",
@@ -95,6 +97,9 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 		}
 		if !strings.Contains(text, "agentico server") {
 			t.Fatalf("%s missing server launch guidance", rel)
+		}
+		if rel == "README.md" && !strings.Contains(text, "local loopback REST/MCP runtime") {
+			t.Fatalf("%s missing API-backed launch guidance", rel)
 		}
 	}
 }

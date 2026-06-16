@@ -582,61 +582,6 @@ func TestArtifactReview_DetachReattachKeepsChatSession(t *testing.T) {
 	}
 }
 
-func TestArtifactReviewAppDetachKeepsChatSession(t *testing.T) {
-	m, _ := newTestArtifactReview(t, "# Plan\ncontent", "plan")
-	m.showMenu = true
-	m.menuChoice = 2 // Detach
-	m.sessionStarted = true
-	m.sess = session.NewSession("feat-1-artifact-review", "feat-1", feature.PhasePlan)
-
-	app := AppModel{
-		currentView:    ViewArtifactReview,
-		artifactReview: m,
-	}
-
-	updatedModel, _ := app.updateArtifactReview(tea.KeyPressMsg{Code: tea.KeyEnter})
-	updated := updatedModel.(AppModel)
-
-	if updated.currentView != ViewDashboard {
-		t.Fatalf("currentView = %v, want dashboard after detach", updated.currentView)
-	}
-	if !updated.artifactReview.Detached() {
-		t.Fatal("artifact review should be detached")
-	}
-	if !updated.artifactReview.sessionStarted {
-		t.Fatal("detaching an open review should keep the chat session started")
-	}
-	if updated.artifactReview.sess == nil {
-		t.Fatal("detaching an open review should keep the chat session handle")
-	}
-}
-
-func TestArtifactReviewAppDecisionStopsChatSession(t *testing.T) {
-	m, _ := newTestArtifactReview(t, "# Plan\ncontent", "plan")
-	m.showMenu = true
-	m.menuChoice = 1 // Proceed
-	m.sessionStarted = true
-	m.sess = session.NewSession("feat-1-artifact-review", "feat-1", feature.PhasePlan)
-
-	app := AppModel{
-		currentView:    ViewArtifactReview,
-		artifactReview: m,
-	}
-
-	updatedModel, _ := app.updateArtifactReview(tea.KeyPressMsg{Code: tea.KeyEnter})
-	updated := updatedModel.(AppModel)
-
-	if !updated.artifactReview.Decided() {
-		t.Fatal("artifact review should be decided")
-	}
-	if updated.artifactReview.sessionStarted {
-		t.Fatal("terminal review decision should stop the chat session")
-	}
-	if updated.artifactReview.sess != nil {
-		t.Fatal("terminal review decision should clear the chat session handle")
-	}
-}
-
 func TestArtifactReview_StopSessionCleansUpStarting(t *testing.T) {
 	// Regression: StopSession must also cancel sessions that are still
 	// in the "starting" state (async startSessionCmd in-flight).
@@ -744,7 +689,7 @@ func TestArtifactReview_RejectClearsHighlights(t *testing.T) {
 }
 
 func TestArtifactReview_SessionStartedMsgMatchGuard(t *testing.T) {
-	// Regression: app.go must validate msg.generation == m.artifactReview.sessionGeneration
+	// Regression: parent model must validate msg.generation against the active session generation.
 	// before binding the session. This test verifies the guard condition used
 	// in the artifactReviewSessionStartedMsg case.
 	m, _ := newTestArtifactReview(t, "# Plan", "plan")
@@ -776,7 +721,7 @@ func TestArtifactReview_SessionStartedMsgMatchGuard(t *testing.T) {
 
 func TestArtifactReview_StaleStartStopsArrivingSession(t *testing.T) {
 	// Regression: when a stale artifactReviewSessionStartedMsg arrives
-	// (from a previous generation or different feature), app.go must stop
+	// (from a previous generation or different feature), the parent model must stop
 	// the arriving session's concrete object — NOT the active model's session.
 	mA, _ := newTestArtifactReview(t, "# Plan A", "plan")
 
@@ -796,7 +741,7 @@ func TestArtifactReview_StaleStartStopsArrivingSession(t *testing.T) {
 	}
 
 	// The active model is B on generation 1. The arriving session has generation 0.
-	// app.go guard: msg.generation == m.artifactReview.sessionGeneration
+	// parent guard: msg.generation == m.artifactReview.sessionGeneration
 	shouldBind := staleMsg.generation == mB.sessionGeneration && !mB.sessionStarted
 	if shouldBind {
 		t.Fatal("stale session from A (generation 0) must not bind to model B (generation 1)")
@@ -876,7 +821,7 @@ func TestArtifactReview_DoubleSendQueuesMessages(t *testing.T) {
 func TestArtifactReview_DuplicateSessionStartedMsgRejected(t *testing.T) {
 	// Regression: if a session with the same ID arrives after one is already
 	// bound (sessionStarted == true), it must be rejected. This simulates the
-	// app.go guard: !m.artifactReview.sessionStarted.
+	// parent guard: !m.artifactReview.sessionStarted.
 	m, _ := newTestArtifactReview(t, "# Plan", "plan")
 
 	// First session startup — should succeed
@@ -890,7 +835,7 @@ func TestArtifactReview_DuplicateSessionStartedMsgRejected(t *testing.T) {
 		t.Fatal("sess should be bound to firstSess")
 	}
 
-	// Simulate app.go guard: check sessionStarted before allowing bind
+	// Simulate parent guard: check sessionStarted before allowing bind.
 	duplicateSess := session.NewSession(m.sessionID, "", 0)
 	shouldBind := duplicateSess.ID() == m.sessionID && !m.sessionStarted
 	if shouldBind {
@@ -1052,7 +997,7 @@ func TestArtifactReview_DetachDuringStartupStaleSessionRejected(t *testing.T) {
 		generation: gen1,
 	}
 
-	// The app.go guard checks: msg.generation == m.artifactReview.sessionGeneration
+	// The parent guard checks: msg.generation == m.artifactReview.sessionGeneration
 	shouldBind := staleMsg.generation == m.sessionGeneration && !m.sessionStarted
 	if shouldBind {
 		t.Error("stale session from generation 1 must NOT bind when model is on generation 2")
@@ -1219,7 +1164,7 @@ func TestArtifactReview_StopSessionClearsPendingMessages(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 
 	// Simulate session started — use handleSessionStarted directly (the
-	// generation check is done in app.go, not in artifact_review.go).
+	// generation check is done by the parent model, not in artifact_review.go).
 	fakeSess := session.NewSession("", "", 0)
 	m, _ = m.handleSessionStarted(fakeSess)
 

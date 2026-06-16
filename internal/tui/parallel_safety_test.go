@@ -29,16 +29,12 @@ import (
 //
 // Serial / parallel-ineligible until their global or external-state ownership
 // is narrowed:
-//   - app_test.go, grill_me_smoke_test.go, qa_persistence_gate_test.go:
-//     exercise real feature stores, session managers, artifact gates, or
-//     background goroutines.
 //   - artifact_review_test.go, attach_test.go, attach_askuser_test.go,
 //     chat_test.go, editconfig_test.go, help_test.go, need_user_input_test.go,
-//     observe_test.go, orchestrator_bridge_test.go, publish_test.go,
-//     recovery_test.go, roadmap_rewind_test.go, welcome_test.go, wizard_test.go,
+//     publish_test.go, recovery_test.go, welcome_test.go, wizard_test.go,
 //     wizard_delegation_test.go: use temp files, session fakes, callback
-//     behavior, real-git coverage, or orchestration fakes that need a Phase 10
-//     audit before parallel execution.
+//     behavior, real-git coverage, or runtime fakes that need a Phase 10 audit
+//     before parallel execution.
 //   - autocomplete_test.go, dirpicker_test.go, fileindex_test.go,
 //     filepicker_test.go, markdown_editor_test.go, skillpicker_test.go,
 //     workspace_manager_test.go: scan or mutate test-scoped filesystem trees
@@ -65,12 +61,11 @@ import (
 //   - repos_block_test.go
 //   - simpletextarea_test.go
 //   - styles_test.go
-//   - tui_boundary_test.go
+//   - test_helpers_test.go
 //   - tweak_removal_test.go
 //   - vocabulary_test.go
 
 var tuiParallelIneligibleTestFiles = []string{
-	"app_test.go",
 	"artifact_review_test.go",
 	"attach_test.go",
 	"attach_askuser_test.go",
@@ -81,7 +76,6 @@ var tuiParallelIneligibleTestFiles = []string{
 	"editconfig_test.go",
 	"fileindex_test.go",
 	"filepicker_test.go",
-	"grill_me_smoke_test.go",
 	"help_test.go",
 	"icons_test.go",
 	"keys_test.go",
@@ -89,12 +83,8 @@ var tuiParallelIneligibleTestFiles = []string{
 	"markdown_editor_test.go",
 	"need_user_input_test.go",
 	"notify_test.go",
-	"observe_test.go",
-	"orchestrator_bridge_test.go",
 	"publish_test.go",
-	"qa_persistence_gate_test.go",
 	"recovery_test.go",
-	"roadmap_rewind_test.go",
 	"skillpicker_test.go",
 	"welcome_test.go",
 	"wizard_delegation_test.go",
@@ -108,7 +98,6 @@ var tuiParallelCandidateTestFiles = []string{
 	"attention_test.go",
 	"branding_test.go",
 	"configeditor_test.go",
-	"cycle_dispatch_test.go",
 	"dashboard_test.go",
 	"design_snapshot_test.go",
 	"design_surfaces_test.go",
@@ -121,7 +110,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"repos_block_test.go",
 	"simpletextarea_test.go",
 	"styles_test.go",
-	"tui_boundary_test.go",
+	"test_helpers_test.go",
 	"tweak_removal_test.go",
 	"vocabulary_test.go",
 }

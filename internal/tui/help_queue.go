@@ -26,6 +26,8 @@ const (
 	legacyAPIErrorHelpSuffix      = " — attach with 'a' to respond"
 	apiErrorHelpPrefix            = "API error:"
 	apiErrorHelpSuffix            = " — press 'a' to answer"
+	waitingInputHelpMessage       = "Agent is waiting for input — press 'a' to answer"
+	questionHelpMessage           = "Agent has a question — press 'a' to answer"
 )
 
 func normalizeManagedHelpQuestion(question string) string {
@@ -60,4 +62,28 @@ func normalizeManagedHelpQueue(f *feature.Feature) bool {
 		changed = true
 	}
 	return changed
+}
+
+func hasHelpRequestMessage(f *feature.Feature, question string) bool {
+	if f == nil {
+		return false
+	}
+	for _, h := range f.HelpQueue {
+		if sameManagedHelpMessage(h.Question, question) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
+	if f == nil {
+		return false
+	}
+	for _, h := range f.HelpQueue {
+		if sameManagedHelpMessage(h.Question, question) && h.Pending {
+			return true
+		}
+	}
+	return false
 }

@@ -266,8 +266,9 @@ Flags:
   --version, -v                    Show version
 ```
 
-`agentico` starts the direct TUI. `agentico server` starts the foreground
-loopback HTTP server for the selected runtime and uses the same launch flags.
+`agentico` starts a local loopback REST/MCP runtime and connects the terminal UI
+through the API-backed client. `agentico server` starts the foreground loopback
+HTTP server for the selected runtime and uses the same launch flags.
 
 ### Local API Security Boundary
 

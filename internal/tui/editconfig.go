@@ -87,8 +87,8 @@ type EditConfigModel struct {
 // provisionalPublishable is derived from f.IsPublishable().
 //
 // Re-entrancy + crash recovery: constructor only, no persisted state. Safe
-// to call repeatedly; state lives in memory until save dispatches through
-// AppModel's saveConfigCmd.
+// to call repeatedly; state lives in memory until the parent model dispatches
+// a save.
 func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPublishable bool) EditConfigModel {
 	repos := make([]string, 0, len(f.Repos))
 	for _, repo := range f.Repos {
@@ -160,7 +160,7 @@ func workspaceDefaultsFeature(cfg *config.Config) *feature.Feature {
 //   - Behavior delegates value changes to the embedded editor.
 //   - Gates owns an explicit gate → on/off focus chain.
 //
-// AppModel.Update owns enter/esc/save dispatch on top of this — those keys
+// The parent model owns enter/esc/save dispatch on top of this — those keys
 // are short-circuited before reaching here.
 func (m EditConfigModel) Update(msg tea.Msg) (EditConfigModel, tea.Cmd) {
 	if m.activeTab == tabModels && m.editor.ModelFilteringActive() {
@@ -631,7 +631,7 @@ func (m EditConfigModel) renderHintBar() string {
 // diffSummary builds the per-axis header summary string. When there are
 // no changes it reads "No changes"; otherwise all three fragments always
 // render (zero-count fragments still print). The string is intentionally
-// stable — AppModel's save/test paths treat it as part of the header.
+// stable — save/test paths treat it as part of the header.
 func (m EditConfigModel) diffSummary() string {
 	if !m.editor.HasChanges() {
 		return "No changes"

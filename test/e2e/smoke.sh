@@ -68,25 +68,14 @@ if [ -d "commands" ]; then
 fi
 echo "PASS: commands/ directory correctly removed"
 
-# 8. Fresh-feature state-shape smoke: assert current schema stamping,
-# per-repo state initialization, and absence of legacy flat session.pid.
-go test ./test/e2e -run '^TestFreshFeatureSkeletonInvariants$' -race -timeout 120s
-echo "PASS: fresh-feature state-shape invariants (TestFreshFeatureSkeletonInvariants)"
+# 8. Default launch smoke: plain agentico starts the API-backed TUI path.
+go test ./test/e2e -run '^TestDefaultCommandLaunchesAPIBackedTUI$' -race -timeout 120s
+echo "PASS: default API-backed TUI launch (TestDefaultCommandLaunchesAPIBackedTUI)"
 
-# 9. Medium wizard gate projection smoke: verify wizard-selected gates are
-# projected into feature checkpoints and saved config.
-go test ./test/e2e -run '^TestMediumWizardGateProjectionSmoke$' -race -timeout 120s
-echo "PASS: medium wizard gate projection (TestMediumWizardGateProjectionSmoke)"
-
-# 10. Need-user-input smoke: drive an iteration to NEED_USER_INPUT and
-# exercise persisted resume/abort handling through AppModel.
-go test ./test/e2e -run '^TestNeedUserInputPauseResumeSmoke$' -race -timeout 120s
-echo "PASS: need-user-input pause/resume flow (TestNeedUserInputPauseResumeSmoke)"
-
-# 11. Grill-me auto-pick smoke: exercise the real session response path,
-# attach silence, and harness-owned qa-answers.md annotation.
-go test ./internal/tui -run '^TestInquirePhase_GrillMe_AutoPickSmokeEndToEnd$' -race -timeout 120s
-echo "PASS: grill-me auto-pick silence and Q&A annotation (TestInquirePhase_GrillMe_AutoPickSmokeEndToEnd)"
+# 9. TUI reconnect smoke: APIAppModel preserves selected recovery state after
+# snapshot reconnect.
+go test ./test/e2e -run '^TestTUIReconnectSnapshotRecovery$' -race -timeout 120s
+echo "PASS: API-backed TUI reconnect recovery (TestTUIReconnectSnapshotRecovery)"
 
 echo ""
 echo "PASS: all smoke tests passed"

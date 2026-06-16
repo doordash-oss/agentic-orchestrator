@@ -60,7 +60,7 @@ func (m ReviewCommentsModel) Update(msg tea.Msg) (ReviewCommentsModel, tea.Cmd) 
 		m.viewport.SetWidth(max(msg.Width-6, 40))
 		m.viewport.SetHeight(max(msg.Height-8, 10))
 	case tea.KeyPressMsg:
-		// Scrolling is handled by viewport; action keys handled by parent AppModel
+		// Scrolling is handled by viewport; action keys are handled by the parent model.
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m, cmd

@@ -3458,6 +3458,59 @@ func TestAPIAppModelOwnedServerShutdownErrorKeepsTUIOpen(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelOwnedServerShutdownSuppressesRefreshNoise(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := &fakeTUIAPIClient{}
+	owned, err := NewAPIAppModel(ctx, client, APIAppOptions{OwnedServer: true})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel(owned) error = %v", err)
+	}
+	cancelledEvents := false
+	owned.cancelEvents = func() {
+		cancelledEvents = true
+	}
+
+	model, _ := owned.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("owned Update(y) returned nil command, want shutdown command")
+	}
+	shutdownCmd := cmd
+	shuttingDown := model.(APIAppModel)
+	if shuttingDown.ShowingOwnedServerQuitPrompt() {
+		t.Fatal("owned Update(y) left quit prompt visible")
+	}
+	if !cancelledEvents {
+		t.Fatal("owned Update(y) did not cancel event subscription")
+	}
+
+	model, cmd = shuttingDown.Update(apiRefreshSignalMsg{signal: server.RefreshSignal{
+		Event: server.SSEEventDTO{Kind: "shutdown.updated"},
+		Resource: server.ResourceDTO{
+			Type: "runtime",
+		},
+		SnapshotRequired: true,
+	}})
+	if cmd != nil {
+		t.Fatal("shutdown refresh signal returned command while shutdown is pending")
+	}
+	model, _ = model.(APIAppModel).Update(apiRefreshSnapshotMsg{err: errors.New("api GET /api/v1/health: connection refused")})
+	model, _ = model.(APIAppModel).Update(apiEventErrorMsg{err: errors.New("connect event stream: connection refused")})
+	updated := model.(APIAppModel)
+	if strings.Contains(updated.statusMessage, "health") ||
+		strings.Contains(updated.statusMessage, "Refresh failed") ||
+		strings.Contains(updated.statusMessage, "Event stream failed") {
+		t.Fatalf("statusMessage = %q, want shutdown noise suppressed", updated.statusMessage)
+	}
+
+	model, cmd = updated.Update(shutdownCmd())
+	if cmd == nil {
+		t.Fatal("owned shutdown completion did not return quit command")
+	}
+}
+
 func apiRepoSelectorClient(actionID string, accepted apiTestActionResponse) *fakeTUIAPIClient {
 	action := server.ActionDTO{
 		ID:      actionID,

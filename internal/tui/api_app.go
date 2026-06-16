@@ -259,6 +259,7 @@ type APIAppModel struct {
 	ownedServer                bool
 	waitForOwnedServerShutdown func(context.Context) error
 	quitOwnedServerPrompt      bool
+	ownedServerShutdownPending bool
 	actionConfirmActive        bool
 	actionConfirmKind          string
 	actionConfirmFeatureID     string
@@ -620,8 +621,14 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.helpOverlayActive = false
 		return m, nil
 	case apiRefreshSignalMsg:
+		if m.ownedServerShutdownPending {
+			return m, nil
+		}
 		return m, tea.Batch(m.fetchRefreshSnapshotCmd(msg.signal), m.listenForAPIEvents())
 	case apiRefreshSnapshotMsg:
+		if m.ownedServerShutdownPending && msg.err != nil {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.statusMessage = "Refresh failed: " + firstLine(msg.err.Error())
 			return m, nil
@@ -708,6 +715,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = fmt.Sprintf("Fetched %d review comments from %s", len(msg.response.Comments), repo)
 		return m, nil
 	case apiEventErrorMsg:
+		if m.ownedServerShutdownPending {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.statusMessage = "Event stream failed: " + firstLine(msg.err.Error())
 		}
@@ -787,6 +797,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 	case apiOwnedServerStoppedMsg:
 		if msg.err != nil {
+			m.ownedServerShutdownPending = false
 			m.statusMessage = "Server shutdown failed: " + firstLine(msg.err.Error())
 			m.quitOwnedServerPrompt = false
 			return m, nil
@@ -827,6 +838,12 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.quitOwnedServerPrompt {
 		switch strings.ToLower(msg.Text) {
 		case "y":
+			m.quitOwnedServerPrompt = false
+			m.ownedServerShutdownPending = true
+			m.statusMessage = "Stopping server..."
+			if m.cancelEvents != nil {
+				m.cancelEvents()
+			}
 			return m, m.stopOwnedServerCmd()
 		case "n":
 			return m, tea.Quit

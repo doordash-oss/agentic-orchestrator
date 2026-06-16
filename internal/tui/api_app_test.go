@@ -1811,10 +1811,16 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 
 			tt.assertCall(t, client)
 			view := stripANSI(accepted.View().Content)
-			for _, want := range []string{"Completed " + apiMutationKindLabel(tt.wantKind), "active"} {
-				if !strings.Contains(view, want) {
-					t.Fatalf("API app View() missing %q in:\n%s", want, view)
+			wantStatus := "Completed " + apiMutationKindLabel(tt.wantKind)
+			if !strings.Contains(view, wantStatus) {
+				t.Fatalf("API app View() missing %q in:\n%s", wantStatus, view)
+			}
+			if tt.wantKind == "feature.delete" {
+				if strings.Contains(view, "active") {
+					t.Fatalf("API app View() still shows deleted feature:\n%s", view)
 				}
+			} else if !strings.Contains(view, "active") {
+				t.Fatalf("API app View() missing %q in:\n%s", "active", view)
 			}
 		})
 	}
@@ -2748,6 +2754,107 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 	}
 	if view := stripANSI(updated.View().Content); !strings.Contains(view, "Delete is unavailable") {
 		t.Fatalf("View() missing disabled-action status in:\n%s", view)
+	}
+}
+
+func TestAPIAppModelDeleteEvictsFeatureBeforeRefresh(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
+	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created}
+	next := server.FeatureSummary{ID: "next", Name: "Next work", Slug: "next-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created.Add(-time.Minute)}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{active, next}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: active,
+			Actions: []server.ActionDTO{
+				{ID: "delete", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+			},
+		}},
+		detailsByID: map[string]server.FeatureDetailResponse{
+			"active": {Feature: server.FeatureDetailDTO{
+				FeatureSummary: active,
+				Actions: []server.ActionDTO{
+					{ID: "delete", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+				},
+			}},
+			"next": {Feature: server.FeatureDetailDTO{FeatureSummary: next}},
+		},
+		livePreviewsByID: map[string]server.LivePreviewResponse{
+			"active": {Feature: active},
+			"next":   {Feature: next},
+		},
+		deleteAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	if got := app.SelectedFeatureID(); got != "active" {
+		t.Fatalf("SelectedFeatureID() = %q, want active precondition", got)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if cmd != nil {
+		t.Fatal("Update(d) returned command before confirmation")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("Update(y) returned nil command, want delete mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	updated := model.(APIAppModel)
+
+	if got := strings.Join(client.deleteFeatureIDs, ","); got != "active" {
+		t.Fatalf("DeleteFeature calls = %q, want active", got)
+	}
+	if got := updated.SelectedFeatureID(); got != "next" {
+		t.Fatalf("SelectedFeatureID() = %q, want next after delete", got)
+	}
+	view := stripANSI(updated.View().Content)
+	if strings.Contains(view, "active-work") {
+		t.Fatalf("API app View() still shows deleted feature:\n%s", view)
+	}
+	if !strings.Contains(view, "Completed Delete") {
+		t.Fatalf("API app View() missing delete completion status:\n%s", view)
+	}
+}
+
+func TestAPIAppModelIgnoresStaleDetailErrorForRemovedFeature(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
+	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created}
+	next := server.FeatureSummary{ID: "next", Name: "Next work", Slug: "next-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created.Add(-time.Minute)}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{active, next}},
+		detail:   server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{FeatureSummary: active}},
+		livePreview: server.LivePreviewResponse{
+			Feature: active,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
+		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{next}},
+	})
+	if got := app.SelectedFeatureID(); got != "next" {
+		t.Fatalf("SelectedFeatureID() = %q, want next after refresh removed active", got)
+	}
+
+	model, _ := app.Update(apiFeatureDetailMsg{
+		featureID: "active",
+		err:       errors.New("api GET /api/v1/features/active: not_found (404): feature not found"),
+	})
+	updated := model.(APIAppModel)
+	if strings.Contains(updated.statusMessage, "Detail refresh failed") {
+		t.Fatalf("statusMessage = %q, want stale detail error ignored", updated.statusMessage)
+	}
+	if got := updated.SelectedFeatureID(); got != "next" {
+		t.Fatalf("SelectedFeatureID() = %q, want next after stale detail error", got)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -647,6 +648,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = ""
 		return m, nil
 	case apiFeatureDetailMsg:
+		if msg.featureID != "" && msg.featureID != m.selectedFeature {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.statusMessage = "Detail refresh failed: " + firstLine(msg.err.Error())
 			return m, nil
@@ -748,6 +752,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.kind == "feature.review_comments" {
 			m.reviewComments = nil
+		}
+		if msg.kind == "feature.delete" {
+			m.removeFeatureState(msg.featureID)
 		}
 		m.statusMessage = fmt.Sprintf("Completed %s", apiMutationKindLabel(msg.kind))
 		m.rebuildPresentation(m.selectedFeature)
@@ -2047,6 +2054,82 @@ func (m *APIAppModel) upsertFeatureSummary(summary server.FeatureSummary) {
 		}
 	}
 	m.featureList.Features = append(m.featureList.Features, summary)
+}
+
+func (m *APIAppModel) removeFeatureState(featureID string) {
+	if featureID == "" {
+		return
+	}
+	m.featureList.Features = slices.DeleteFunc(m.featureList.Features, func(summary server.FeatureSummary) bool {
+		return summary.ID == featureID
+	})
+	delete(m.featureDetails, featureID)
+	delete(m.livePreviews, featureID)
+	delete(m.contents, featureID)
+
+	removedSessionIDs := map[string]struct{}{}
+	m.sessionList.Sessions = slices.DeleteFunc(m.sessionList.Sessions, func(summary server.SessionSummaryDTO) bool {
+		if summary.FeatureID != featureID {
+			return false
+		}
+		if summary.ID != "" {
+			removedSessionIDs[summary.ID] = struct{}{}
+		}
+		return true
+	})
+	for sessionID := range removedSessionIDs {
+		delete(m.sessionDetails, sessionID)
+		delete(m.transcripts, sessionID)
+	}
+
+	m.prompts.AskUserQuestions = slices.DeleteFunc(m.prompts.AskUserQuestions, func(req server.ControlRequestDTO) bool {
+		return req.FeatureID == featureID
+	})
+	m.prompts.HelpQueue = slices.DeleteFunc(m.prompts.HelpQueue, func(item server.HelpQueueDTO) bool {
+		return item.FeatureID == featureID
+	})
+	m.prompts.NeedUserInputs = slices.DeleteFunc(m.prompts.NeedUserInputs, func(gate server.NeedInputGateDTO) bool {
+		return gate.FeatureID == featureID
+	})
+	m.permissions.Requests = slices.DeleteFunc(m.permissions.Requests, func(req server.ControlRequestDTO) bool {
+		return req.FeatureID == featureID
+	})
+	m.recovery.Items = slices.DeleteFunc(m.recovery.Items, func(item server.RecoveryItemDTO) bool {
+		return item.FeatureID == featureID
+	})
+	if m.recoveryPanel != nil {
+		m.recoveryPanel = mergeAPIRecoveryPanel(m.recoveryPanel, m.recovery)
+	}
+	if m.reviewComments != nil && m.reviewComments.featureID == featureID {
+		m.reviewComments = nil
+	}
+	if m.configEditor != nil && m.configEditor.featureID == featureID {
+		m.configEditor = nil
+	}
+	if m.refactorPrompt != nil && m.refactorPrompt.featureID == featureID {
+		m.refactorPrompt = nil
+	}
+	if m.refactorPipeline != nil && m.refactorPipeline.featureID == featureID {
+		m.refactorPipeline = nil
+	}
+	if m.needInputFeatureID == featureID {
+		m.clearNeedInputPrompt()
+	}
+	if m.permissionFeatureID == featureID {
+		m.clearPermissionPrompt()
+	}
+	if m.helpFeatureID == featureID {
+		m.clearHelpPrompt()
+	}
+	if m.askUserFeatureID == featureID {
+		m.clearAskUserPrompt()
+	}
+	if m.actionConfirmFeatureID == featureID {
+		m.clearActionConfirm()
+	}
+	if m.tweakReviewFeatureID == featureID {
+		m.clearTweakReviewModal()
+	}
 }
 
 func (m *APIAppModel) upsertSessionSummary(summary server.SessionSummaryDTO) {

@@ -1,39 +1,39 @@
 # Agentic Orchestrator
 
-### One-shot the moonshot — then do it ten times in parallel.
+### Fai u moonshot cu nu sulu colpu — poi fallu deci voti in parallilu.
 
-Agentic Orchestrator is an AI development workflow orchestrator that turns any engineer into a force multiplier. Describe your features, make the high-level decisions, and AI handles the rest — research, planning, implementation, code review, pull request — all running concurrently from a single terminal.
+Agentic Orchestrator è nu orchestraturi di workflow di sviluppu cu IA ca trasfurma ogni ingigneri nta nu multiplicaturi di forza. Dicci li tò feature, pigghia li decisioni àrri, e l'IA fa tuttu u restu — ricerca, pianificazzioni, implementazzioni, rivisioni di còdici, pull request — tuttu in parallilu da nu sulu terminali.
 
-> The local CLI is `agentico`
+> U CLI lucali è `agentico`
 
-<img width="3000" height="1800" alt="agentico-basic-flow-3000x1800" src="https://github.com/user-attachments/assets/b61ccb6e-3b0d-4b29-9b74-ade9a3917e82" />
+<img width="3000" height="1800" alt="flussu-basìcu-agentico-3000x1800" src="https://github.com/user-attachments/assets/b61ccb6e-3b0d-4b29-9b74-ade9a3917e82" />
 
-## Why Agentic Orchestrator?
+## Pirchì Agentic Orchestrator?
 
-The hard part of agentic coding is not asking a model to edit files. The hard part is getting from a vague, high-level feature request to a reviewable PR without losing context, skipping design work, or letting a bad plan produce a huge diff. Left unmanaged, this is how teams get AI slop: plausible-looking code produced faster than the context, tests, and review process needed to make it trustworthy. Agentic Orchestrator is built around that problem: it turns one feature prompt into a durable engineering workflow that gathers context, asks questions, designs the approach, decomposes the work, implements it, verifies it, reviews it, and publishes it.
+Lu puntu diffìcili dâ programmazzioni agentica nun è dumannari a nu mudellu di canciari file. Lu puntu diffìcili è arrivari di na dumanna di feature vaga e ad altu livellu a na pull request rivisabbili senza perdiri cuntestu, saltari u travagghiu di disignu, o lassari ca nu pianu scarsu produci na diff gigantesca. Lasciatu senza cuntrollu, chista è la via pi cui li squadri finisciunu cu AI slop: còdici ca pari fidatu ma è statu pruduciutu cchiù in fretta dâ quantità di cuntestu, testi e prucidura di rivisioni nicissaria pi fari lu fidatu. Agentic Orchestrator è custruitu apposta pi chistu prubbrema: pigghia na dumanna di feature e la trasforma in nu workflow d'ingignirìa dutàtuli ca racogghi cuntestu, fa dumanni, disigna l'approcciu, scumparti u travagghiu, lu implementa, lu verifica, lu rividi e lu pubblica.
 
-That is the real "oneshot" value: an engineer can describe a large feature once, then supervise the checkpoints where judgment matters instead of manually shepherding every prompt, terminal session, worktree, test run, review pass, and PR step.
+Chistu è lu veru valuri di "oneshot": nu ingigneri po discrìviri na feature granni na vota sula, poi suprintènniri sulu li punti di cuntrollu unni lu giudiziu conta cchiù, invece di mannari a manu ogni prompt, sessioni di terminali, worktree, esecuzzioni di testi, passaggi di rivisioni e fasi di PR.
 
-- **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
-- **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
-- **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
-- **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
-- **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
-- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add a second to split the work. By default Claude handles context gathering, planning, and implementation while Codex handles independent review, but models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
+- **Lu cuntestu si custruisci, nun si spera** — Li feature Large e Moonshot accàttanu prima na knowledge base pi ogni repo, poi passanu pi fasi di inquire, research e design prima dâ pianificazzioni. L'agenti di implementazzioni lèggi artefatti strutturati invece di cuntari sulu supra na storia di chat troppu carica.
+- **La cumplicità è fasata** — La pianificazzioni pruduci na roadmap, poi ogni fasi dâ roadmap avi u so pianu detallatu. Na fasi tracer-bullet traccia la strata; li fasi cchiù tardivi di TDD riempinu li stub e allarganu la cupertura.
+- **Li barri di qualità succedinu prima ca la diff diventa carusa** — Li validatori di pianu rivìdinu architittura, scopu, struttura e, pi u travagghiu ad altu risicu, sicurizza, prestazzioni e testi. Li cicli di implementazzioni e Final Review usanunu prova di verifica esplicita prima ca la feature diventa pubblicabbili.
+- **L'attenzioni umana è risirbata pi li decisioni** — Li punti di pausa opzziunali fermanu supra inquire, research, design, plan, user-input e publish. Tu appruvi la direzzioni, chiedi na iterazzioni, o rispunni a dumanni mirati; l'orchestraturi manteni u statu dû workflow.
+- **Lu parallilismu è lu moltiplicaturi, nun lu puntu di partenza** — Siccomu ogni feature havi worktree, branch, sessioni e artefatti isolati, po fari curriri cchiù workflow cunchiusi nta lu stissu tempu senza mischjà statu o bluccari la tò checkout principali.
+- **L'orchestrazzioni dû provider è esplicita** — Un sulu provider è abbastanza pi fari curriri tuttu u workflow; aggiungine un secunnu pi spartiri lu travagghiu. Di difettu Claude gestisci cuntestu, pianificazzioni e implementazzioni mentri Codex gestisci rivisioni indipinnenti, ma li mudelli ponnu essiri rimpiazzati pi fasi e canciati a tempu di run. Usa `--providers` pi limitari l'orchestraturi sulu a li CLI ca teni davveru installati.
 
-The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
+Lu disignu segui li patroni discritti nta l'articulu di Anthropic [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents): prompt chaining, parallelization, orchestrator-workers, e evaluator-optimizer loops. Codifica puru u workflow di Claude Code [explore → plan → code](https://code.claude.com/docs/en/best-practices) e la guida di OpenAI supra orchestration e guardrails pi agenti: [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
-## Quick Start
+## Avviu Rapidu
 
-Use Homebrew if you have it; otherwise grab the prebuilt binary. Build from source only if you're working on agentico itself.
+Usa Homebrew si lu hai; altrimenti pigghia lu binariu precompilatu. Custruisci di a surgenti sulu si stai travagghiannu supra agentico stissu.
 
-**Homebrew** (recommended — macOS/Linux):
+**Homebrew** (cunsigliatu — macOS/Linux):
 
 ```bash
 brew install doordash-oss/agentic-orchestrator/agentico
 ```
 
-**Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):
+**Binariu precompilatu** — senza Homebrew o Go (macOS/Linux, amd64/arm64):
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -44,166 +44,166 @@ curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/downlo
 # ensure ~/.local/bin is on your PATH
 ```
 
-**From source** — for contributing to agentico (Go 1.25+):
+**Dâ surgenti** — pi cuntribbuiri a agentico (Go 1.25+):
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 # or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-Then run `agentico`. Update any time with `agentico update` — it uses the right method for how you installed.
+Poi esegui `agentico`. Aggiorna quannu voli cu `agentico update` — usa lu mètudu giustu pi comu l'hai installatu.
 
-On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
+Quannu avii la prima vota, Agentic Orchestrator ti guida dâ manera di accuglienza pi scegghiri li tò dirizzatorî di travagghiu. Doppu di chissu, sì supra lu cruscottu.
 
-**Three keys to remember**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Everything else is discoverable from the help overlay.
+**Tri tasti da arricurdari**: `n` (nova feature), `?` (ajutu), `a` (guarda u travagghiu attivu; rispunni, appruva, o rividi quannu ti veni dumandatu). Tuttu u restu si po scopriri dâ strata di ajutu.
 
-## Prerequisites
+## Prerequisiti
 
-### Required
+### Necessarii
 
-| Tool | Purpose | Install |
+| Strumentu | Scopu | Installazzioni |
 |------|---------|---------|
-| **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
-| **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
+| **`git`** | Operazzioni di worktree, branch, commit e rebase | Già installatu supra assai sistemi |
+| **`gh` CLI** | Creazzioni di PR e aggiornamenti cross-repo di u corpu dâ PR durante Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), poi `gh auth login` |
 
-### Provider CLIs — install at least one
+### CLI di provider — nstalla almenu unu
 
-Agentic Orchestrator needs **at least one** AI provider CLI.
+Agentic Orchestrator avi bisognu di **almenu un** CLI di provider IA.
 
-| Tool | Role | Install |
+| Strumentu | Rolu | Installazzioni |
 |------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend predefinitu pi KB, inquire, research, design, planning, implementation e chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) o `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Backend predefinitu pi Final Review e mudelli di rivisioni basati supra Codex | [Codex CLI setup](https://developers.openai.com/codex/cli) o `npm i -g @openai/codex@latest` |
 
-### Optional
+### Opziunali
 
-| Tool | Purpose | Install |
+| Strumentu | Scopu | Installazzioni |
 |------|---------|---------|
-| **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
-| **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
+| **Go 1.25+** | Serve sulu pi custruiri `agentico` di a surgenti — nun è nicissariu quannu usi na [release binaria precompilata](#avviu-rapidu) | [go.dev](https://go.dev/dl/) |
+| **Node.js 18+ e npm** | Serve sulu quannu installi Claude Code o Codex attraversu npm | [nodejs.org](https://nodejs.org/) |
 
-After installing your provider CLI(s), run `claude auth status` and/or `codex login status`, plus `gh auth status`, before launching `agentico`.
+Doppu ca hai installatu lu/i tò provider CLI, esegui `claude auth status` e/o `codex login status`, cchiù `gh auth status`, prima di lanciari `agentico`.
 
-## How It Works
+## Cumu Funziona
 
-### The Feature Lifecycle
+### U Ciclu di Vita dâ Feature
 
-The lifecycle is profile-dependent and checkpoint-driven. Medium starts at planning. Large and Moonshot first build context, clarify intent, and explore design options. All profiles then enter the roadmap loop: create a roadmap, plan one roadmap phase at a time, implement it, commit phase anchors, and continue until the final phase reaches Final Review.
+Lu ciclu dipenni dâ prufundità dâ pipeline e si basa supra checkpoint. Medium accumencia dâ pianificazzioni. Large e Moonshot custruiscinu prima u cuntestu, chiarìscinu l'intenzioni e esplòranu opzioni di disignu. Poi tutti li prufili entranu nta lu ciclu roadmap: creazzioni di na roadmap, pianificazzioni di na fasi di roadmap alla vota, implementazzioni, commit d'ancraggi di fasi, e avanti finu a quannu l'ultima fasi arriva a Final Review.
 
-<img width="1051" height="570" alt="image" src="https://github.com/user-attachments/assets/00eb8559-0b0c-4000-a029-2210aa50f920" />
+<img width="1051" height="570" alt="diagramma-dâ-feature" src="https://github.com/user-attachments/assets/00eb8559-0b0c-4000-a029-2210aa50f920" />
 
-**Knowledge Base Build** — Builds or refreshes a per-repo knowledge base covering architecture, conventions, API surface, dependencies, and verification. Fresh KBs are reused and the phase is skipped.
+**Custruzzioni dâ Knowledge Base** — Custruisci o agghiorna na knowledge base pi ogni repo ca copri architittura, cunvinzioni, API surface, dipindenzi e verificazzioni. Li KB freschi si riusanu e la fasi veni saltata.
 
-**Inquire, Research, Design** — Turns a high-level request into explicit answers, research findings, and a design direction. Q&A artifacts are persisted and fed forward so later phases do not depend on memory alone.
+**Inquire, Research, Design** — Trasforma na dumanna ad altu livellu nta risposti espliciti, risultati di ricerca e na direzzioni di disignu. Li artefatti di Q&A sunnu priservati e passati avanti accussì li fasi dopu nun dipènninu sulu dâ memoria.
 
-**Roadmap and Phase Planning** — Creates the top-level roadmap, then a detailed plan for each roadmap phase. Large and Moonshot run plan validators; Medium skips plan critics for lower overhead.
+**Roadmap e Pianificazzioni di Fasi** — Crea la roadmap di livellu cchiù àutu, poi na pianificazzioni dettagliata pi ogni fasi dâ roadmap. Large e Moonshot usanu criticu di pianu; Medium salta li critics di pianu pi aviri menu overhead.
 
-**Implementation** — Runs a unified phase implementation loop across the phase-scoped repo set. Medium and Large rely on Final Review; Moonshot also keeps per-iteration review during implementation.
+**Implementazzioni** — Esegui na fasi unificata di implementazzioni supra lu set di repo di la fasi. Medium e Large si fìdanu di Final Review; Moonshot manteni puru rivisioni pi ogni iterazzioni durante l'implementazzioni.
 
-**Final Review** — Runs once after the last roadmap phase, across every touched repo that has not already been published. The phase contains its own review/fix loop. Passing Final Review moves the feature to `CodeReady`; exhausting the loop or violating the phase contract fails the feature.
+**Final Review** — Si fa na vota sola doppu l'ultima fasi dâ roadmap, supra ogni repo toccatu ca nun è già statu pubblicatu. La fasi havi u so ciclu di rivisioni e fix. Si Final Review passa, la feature và a `CodeReady`; si finisci u ciclu o si viola lu cuntrattu dâ fasi, la feature fallisci.
 
-**Publishing** — If auto-publish is enabled, Agentic Orchestrator commits, rebases, pushes, creates PRs, and injects cross-repo PR links automatically. If manual publish is enabled, the TUI pauses at `CodeReady` so you can review the diff and PR description first.
+**Pubblicazzioni** — Si l'auto-publish è attivu, Agentic Orchestrator fa commit, rebase, push, crea PR e injecta automaticamente li ligami cross-repo dâ PR. Si manual publish è attivu, lu TUI si ferma a `CodeReady` accussì puoi rivìdiri la diff e la discrizzioni dâ PR prima.
 
-### Pipeline Profiles
+### Prufili dâ Pipeline
 
-When creating a feature, choose a pipeline depth:
+Quannu crii na feature, scegghi na prufunnità di pipeline:
 
-| Profile | Phases | Best for |
+| Prufilu | Fasi | Ideali pi |
 |---------|--------|----------|
-| **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
-| **Large** | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features (default) |
-| **Moonshot** | Same phase sequence as Large, with max effort, plan-review defaults, and per-iteration implementation review | High-risk or highly ambiguous changes |
+| **Medium** | Roadmap plan → ciclu plan/implement di ogni fasi → Final Review → Publish | Canciamenti picculi e ben caputi unni già sapi l'approcciu |
+| **Large** | KB → Inquire → Research → Design → ciclu roadmap → Final Review → Publish | La maiò parti dî feature cumplicati (predefinitu) |
+| **Moonshot** | Stissa sequenza di fasi di Large, ma cu max effort, valori predefiniti di plan-review, e rivisioni di implementazzioni pi ogni iterazzioni | Travagghi ad altu risicu o assai ambigui |
 
-### Worktree Isolation
+### Isulamentu dâ Worktree
 
-Each feature runs in its own git worktree under `~/.agentic-orchestrator/worktrees/` (legacy installs continue to use `~/.agentic-workflow/worktrees/` until you opt in). This means:
-- Multiple features can work on the same repo simultaneously
-- No branch conflicts between concurrent features
-- Your main working copy stays untouched
-- Worktrees are cleaned up with `c` after completion
+Ogni feature gira nta la so worktree git sottu `~/.agentic-orchestrator/worktrees/` (li installazzioni legacy cuntìnuanu a usari `~/.agentic-workflow/worktrees/` finu a quannu scegli di passari). Chistu voli diri:
+- Più feature ponnu travagghiari supra u stissu repo in simultanea
+- Nenti cunflittu di branch tra feature concurrenti
+- La tò checkout principali resta micca tuccata
+- Li worktree si pulìscinu cu `c` quannu finisci
 
-### Multiple Repositories
+### Più Repositori
 
-Every feature targets one or more repositories with the same lifecycle and state machine. When a feature spans more than one repo, Agentic Orchestrator:
-- Creates worktrees in each target repo
-- Builds an execution plan with dependency ordering across repos
-- Runs implementation per-repo (sequentially or in parallel based on dependencies)
-- Cross-references PRs across repos automatically
+Ogni feature mira unu o cchiù repositori cu la stissa lifecycle e state machine. Quannu na feature tocca cchiù di un repo, Agentic Orchestrator:
+- Crea worktree nta ognunu dî repo mirati
+- Custruisci un pianu d'esecuzzioni cu ordine di dipindenza tra repo
+- Esegui l'implementazzioni pi repo (in sequenza o in parallilu secunnu li dipindenzi)
+- Cross-reference automaticamenti li PR
 
-When a feature targets a single repo, the per-repo Repo Progress panel, the cycle-selector modal, and the cross-reference PR table collapse — the rest of the lifecycle is identical.
+Quannu na feature mira un sulu repo, u panel Repo Progress pi ogni repo, lu modal cycle-selector e la tavula cross-reference dâ PR si ridùcinu — u restu dâ lifecycle resta identicu.
 
 ### Knowledge Base
 
-Before diving into a feature, Agentic Orchestrator can build a per-repo knowledge base — a structured document graph covering architecture, conventions, API surface, dependencies, and verification methods. The KB is cached and incrementally updated (only when HEAD changes), so subsequent features in the same repo start faster.
+Prima di affruntari na feature, Agentic Orchestrator po custruiri na knowledge base pi ogni repo — na grapha di ducumenti strutturati ca copri architittura, cunvinzioni, API surface, dipindenzi e mètudi di verificazzioni. La KB veni cacheata e agghiornata incrementalmenti (sulu quannu HEAD cancia), accussì li feature successivi nta lu stissu repo accumincianu cchiù veloci.
 
-### Plan Validation Gate
+### Porta di Validazzioni di Pianu
 
-Plans are reviewed by specialized AI critics before implementation begins:
+Li piani sunnu rivisti di criticu IA specializzati prima ca l'implementazzioni accumencia:
 
-| Critic | Focus | When Active |
-|--------|-------|-------------|
-| **Architecture** | Roadmap-level pattern consistency, module boundaries, dependency direction | Large/Moonshot, all risk levels |
-| **Structural** | Phase-plan completeness, required sections, executable task shape | Large/Moonshot, all risk levels |
-| **Scope** | Requirement coverage, phase sizing, over-engineering detection | Large/Moonshot, all risk levels |
-| **Security** | Auth, injection, data protection calibrated to project context | Large/Moonshot, high risk |
-| **Performance** | Scalability, query efficiency, resource management | Large/Moonshot, high risk |
-| **Testing** | Coverage adequacy, edge cases, regression protection | Large/Moonshot phase plans, high risk |
+| Criticu | Focu | Quannu è attivu |
+|--------|------|----------------|
+| **Architittura** | Cunsistenza dî patroni a livellu roadmap, cunfini di moduli, direzzioni dâ dipindenza | Large/Moonshot, tutti li livelli di risicu |
+| **Strutturali** | Cumpiutezza dâ phase-plan, furmatu attivabbili di task richiesti | Large/Moonshot, tutti li livelli di risicu |
+| **Scopu** | Cupertura dî richiesti, tagghiu di la fasi, rilevazzioni di over-engineering | Large/Moonshot, tutti li livelli di risicu |
+| **Sicurizza** | Auth, injection, prutezzioni di dati calibrata supra lu cuntestu dû prughjettu | Large/Moonshot, risicu àutu |
+| **Prestazzioni** | Scalabilità, efficienza di query, gestioni di risorsi | Large/Moonshot, risicu àutu |
+| **Testi** | Adeguatezza dâ cupertura, casi estremi, prutezzioni di regressioni | Large/Moonshot phase plans, risicu àutu |
 
-Critics run in parallel and produce independent verdicts. If any critic requests changes, the plan is revised and re-validated automatically. Medium skips plan critics but still runs Final Review before publish.
+Li critics currunu in parallilu e prudùcinu verditti indipinnenti. Si ogni criticu dumanna canciamenti, lu pianu veni rivistu e validatu di novu in automaticu. Medium salta li critics di pianu ma manteni Final Review prima dâ pubblicazzioni.
 
-## Usage
+## Usu
 
-### TUI Dashboard
+### Cruscottu TUI
 
-Launch with `agentico`. The dashboard shows all features organized by status:
+Lancia cu `agentico`. U cruscottu mostra tutti li feature urganizzati pi statu:
 
-- **In Progress** — actively being worked on (researching, planning, implementing)
-- **Published** — PR created, awaiting merge
-- **Completed** — marked as done
+- **In Progress** — travagghiu attivamenti in corsu (researching, planning, implementation)
+- **Published** — PR criata, aspetta merge
+- **Completed** — marcatu comu finitu
 
-Features needing your attention (pending permissions, help requests) show a warning indicator.
+Li feature ca avìssiru bisognu di la tò attinzioni (permessi pendenti, richiesti di ajutu) mustranu n'allarme.
 
-### Creating a Feature
+### Criari na Feature
 
-Press `n` from the dashboard to open the wizard:
+Pressa `n` dû cruscottu pi apiri lu wizard:
 
-1. **What** — Name and describe the feature. Supports pasting images (`Ctrl+V`) and attaching files (`@`).
-2. **Where** — Select target repo(s). Browse for new directories or create repos on the fly.
-3. **Pipeline** — Choose Medium, Large, or Moonshot. Toggle individual checkpoints (inquiry review, research review, design review, plan review, manual publish).
-4. **Review** — Adjust risk level, models per phase, exit criteria. Submit to start.
+1. **Cosa** — Nnomi e discrizzioni dâ feature. Supporta incollari immagini (`Ctrl+V`) e `attaching files` (`@`).
+2. **Unni** — Scegghi lu/i repo destinazzioni. Sfogghia pi carteddi novi o crea repo sul locu.
+3. **Pipeline** — Scegghi Medium, Large, o Moonshot. Attiva o disattiva checkpoint individuali (inquiry review, research review, design review, plan review, manual publish).
+4. **Rivisioni** — Regula risicu, mudelli pi fasi, exit criteria. Manna pi accumincia.
 
-### Interacting with Agents
+### Interagiri cu l'Agenti
 
-**Watch** (`a`) — Open active live work in real time. The same key becomes **Answer**, **Approve**, or **Review** when the agent needs input.
+**Guarda** (`a`) — Apre u travagliu attivu live. La stissa chiavi diventa **Risponni**, **Appruva**, o **Rividi** quannu l'agenti ti dumanna.
 
-**Overview** (`o`) — Switch the dashboard right panel from Live Preview to the detailed overview. Press `l` from Overview to return to Live Preview; outside Overview, `l` still opens logs.
+**Panorama** (`o`) — Cambia lu panel dirittu di lu cruscottu dâ Anteprima Live a la panoramica dettagliata. Pressa `l` dâ Panorama pi turnari a l'Anteprima Live; fora di Panorama, `l` apre ancora li logs.
 
-**Stop watching** (`Esc/Ctrl+]`) — Return to the dashboard. The agent keeps running.
+**Ferma di guardari** (`Esc/Ctrl+]`) — Torna a lu cruscottu. L'agenti cuntìnuanu a travagghiari.
 
-### Post-Implementation Actions
+### Azzioni Doppu l'Implementazzioni
 
-Once a feature reaches code-ready or published state:
+Quannu na feature arriva a code-ready o published:
 
-| Key | Action |
+| Tasti | Azzioni |
 |-----|--------|
-| `p` | Publish as PR (diff review → commit log → PR description → confirm) |
-| `t` | Tweak — make a targeted change without re-running the full pipeline |
-| `Shift+F` | Refactor — apply a refactoring prompt to the implementation |
-| `b` | Rebase on main |
-| `g` | View and resolve PR review comments |
-| `D` | Mark as done |
+| `p` | Pubblica comu PR (rivisioni dâ diff → commit log → discrizzioni dâ PR → cunferma) |
+| `t` | Tweak — fa na mudìfica mirata senza rifari tuttu u pipeline |
+| `Shift+F` | Refactor — applica nu prompt di rifatturazzioni all'implementazzioni |
+| `b` | Rebase supra main |
+| `g` | Vidi e risolvi li cummenti di rivisioni dâ PR |
+| `D` | Marca comu finitu |
 
-### Ask Me Anything
+### Dumanna-mi Cchiù Cose
 
-Press `/` anywhere to open the built-in AI chat. It's a read-only Claude session that can explain how Agentic Orchestrator works, debug issues by reading feature logs and artifacts, search the codebase, and answer questions — without modifying any files.
+Pressa `/` nta ogni puntu pi apiri la chat IA interna. È na sessioni Claude sulu in lettura ca po spiegari comu funziuna Agentic Orchestrator, debuggari prublemi leggennu logs e artefatti di feature, circari nta lu codebase, e rispùnniri a dumanni — senza canciari nudda file.
 
 ### Keybindings
 
-> For the complete reference, see [docs/keybindings.md](docs/keybindings.md).
+> Pi la rifferenza cumplèta, vidi [docs/keybindings.md](docs/keybindings.md).
 
-## Configuration
+## Cunnfigurazzioni
 
-Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first launch). If a legacy `~/.agentic-workflow/` directory already exists, it is reused in place so existing installs keep working without a manual copy.
+La cunnfigurazzioni stannu ntô `~/.agentic-orchestrator/config.yaml` (criatu automaticamenti a la prima accensioni). Si già esisti na directory legacy `~/.agentic-workflow/`, veni riusata cchiuttostu ca nun fari n'aria manuali.
 
 ```yaml
 defaults:
@@ -236,11 +236,11 @@ workspace_roots:
   - /home/user/projects      # Scanned for git repos on startup
 ```
 
-### Model Overrides
+### Override di Mudellu
 
-Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`) or as bare aliases that are automatically routed to the best-matching provider.
+Ogni feature po rimpiazzari li mudelli predefiniti durante la creazzioni via lu wizard (passu 4). Li mudelli ponnu essiri specificati cu prefissi espliciti di provider (pi esempiu, `claude:opus[1M]`, `codex:gpt-5.4[272K]`) o comu alias senza prefissu ca sunnu routati automaticamenti versu lu provider megghiu currispundenti.
 
-### Launch Flags
+### Flags di Lanciu
 
 ```text
 agentico [flags]
@@ -254,18 +254,18 @@ Flags:
   --version, -v                    Show version
 ```
 
-### Updating
+### Agghiurnamenti
 
 ```text
 agentico update [--check|-n]
 ```
 
-Run `agentico update` to upgrade to the latest stable release. Use
-`agentico update --check` (alias `-n`) to report the current and latest
-available versions without installing anything; it exits `0` and prints an
-already-up-to-date message when you are on the newest release.
+Esegui `agentico update` pi agghiurnari a l'ùrtima release stabile. Usa
+`agentico update --check` (alias `-n`) pi dirici la versioni attuali e la cchiù
+nova dispunibbili senza installari nenti; torna `0` e stampa nu missaggiu già
+aggiornatu quannu sì supra l'ùrtima release.
 
-## Development
+## Sviluppu
 
 ```bash
 # Build
@@ -281,39 +281,35 @@ make test-fast
 go generate ./internal/tui/...
 ```
 
-Verification is split into named tiers so everyday checks stay fast while
-extended coverage remains available.
+La verificazzioni è spartuta nta tiers nominati accussì li cuntrolli quotidiani ristanu veloci mentri la cupertura stinnuta ristà dispunibbili.
 
-| Tier | Command | Current wall time | Purpose |
+| Tier | Cumannu | Tempu attuali di wall | Scopu |
 |------|---------|-------------------|---------|
-| Fast suite | `make test-fast` | 23s, target <=30s | Everyday all-package short-mode check before handoff. |
-| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Builds the binary and checks CLI flags plus embedded skill layout. |
-| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Lifecycle, state-machine, and protocol-violation coverage. |
-| E2E Go (TUI / teatest) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Full TUI and teatest behavior with the race detector. |
-| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Observer-backed TUI event and feature-span integration coverage. |
-| Race regression | `go test ./... -count=1 -race` | 158.82s | Extended all-package race/regression sweep. |
-| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Live skill/guideline discovery against real LLM CLIs. |
+| Fast suite | `make test-fast` | 23s, target <=30s | Verifica cutidiana short-mode pi tutti li package prima dâ consegna. |
+| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Custruisci lu binariu e controlla li flags di CLI cchiù la disposizione embeddeda dî skill. |
+| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Cupertura di lifecycle, state-machine, e protocol-violation. |
+| E2E Go (TUI / teatest) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Cumportamentu cumpletu di TUI e teatest cu lu race detector. |
+| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Cupertura d'integrazioni TUI event e feature-span cun Observer. |
+| Race regression | `go test ./... -count=1 -race` | 158.82s | Sweep all-package estisu pi race/regression. |
+| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Discovery live di skill/guideline supra CLI LLM reali. |
 
-`go vet ./...` and `go build ./...` remain required static and build checks.
-The tagged **TUI observability** tier is the explicit opt-in gate for slower
-observer-backed TUI integration coverage. The race-enabled all-package sweep is
-the **Race regression** tier, not the ordinary unit command. See
-[AGENTS.md](AGENTS.md) and
-[docs/testing-baseline.md](docs/testing-baseline.md) for timing details, and
-see AGENTS.md for the isolated-run pattern for running a second instance without
-colliding with the first.
+`go vet ./...` e `go build ./...` ristanu cuntrolli statici e di build richiesti.
+U tier marcatu **TUI observability** è lu gate esplicitu opt-in pi la cupertura cchiù lenta d'integrazione TUI basata supra observer. Lu sweep all-package cu race attivu è lu tier **Race regression**, nun lu cumannu unitariu d'ogni jornu. Vidi [AGENTS.md](AGENTS.md) e
+[docs/testing-baseline.md](docs/testing-baseline.md) pi li dittagghi di tempu, e
+vidi AGENTS.md pi lu patruni di run isolatu pi eseguiriri na secunna istanza senza
+culissioni cu la prima.
 
-## Contributing
+## Cuntribbuti
 
-Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, branch and commit conventions.
+Li pull request sunnu benvenuti. Vidi [CONTRIBUTING.md](CONTRIBUTING.md) pi la cunfigurazzioni di sviluppu, e cunvenzioni di branch e commit.
 
-Contributions to this project require agreeing to the DoorDash Contributor License Agreement.
-See [CONTRIBUTOR_LICENSE_AGREEMENT.md](CLA.md).
+Li cuntribbuti a stu prughjettu richèdinu d'accittari lu DoorDash Contributor License Agreement.
+Vidi [CONTRIBUTOR_LICENSE_AGREEMENT.md](CLA.md).
 
-## License
+## Licenza
 
-Agentic Orchestrator is licensed under the [Apache License, Version 2.0](LICENSE.txt).
+Agentic Orchestrator è licinziatu sutta la [Apache License, Version 2.0](LICENSE.txt).
 
-## Notices
+## Noti
 
-See [NOTICE.txt](NOTICE.txt) for third-party components and attributions.
+Vidi [NOTICE.txt](NOTICE.txt) pi li cumpunenti di terzi e li attribuzzioni.

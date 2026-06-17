@@ -33,6 +33,8 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	var sawTrustedHeader bool
 	var sawResumeTrustedHeader bool
 	var sawRecoveryTrustedHeader bool
+	var sawChatTrustedHeader bool
+	var sawPublishDescriptionTrustedHeader bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/health":
@@ -114,6 +116,26 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 				t.Errorf("recovery request = %+v, want snapshot action resume", req)
 			}
 			writeJSON(w, http.StatusOK, RecoveryActionResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, Result: "recovered"})
+		case "POST /api/v1/prompts/chat/start":
+			sawChatTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+			var req ChatStartRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode chat request: %v", err)
+			}
+			if req.Message != "What is running?" {
+				t.Errorf("chat request message = %q, want prompt", req.Message)
+			}
+			writeJSON(w, http.StatusOK, ChatStartResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, SessionID: "chat-1", Result: "started"})
+		case "POST /api/v1/features/feat-1/actions/publish/description":
+			sawPublishDescriptionTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+			var req PublishDescriptionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode publish description request: %v", err)
+			}
+			if req.Model != "sonnet" || req.FeatureName != "Client cutover" {
+				t.Errorf("publish description request = %+v, want model and feature context", req)
+			}
+			writeJSON(w, http.StatusOK, PublishDescriptionResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, FeatureID: "feat-1", Title: "Client cutover", Body: "AI body", Result: "generated"})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -201,6 +223,20 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	}
 	if recovered.Result != "recovered" || !sawRecoveryTrustedHeader {
 		t.Fatalf("ExecuteRecovery() = %+v trusted=%v, want recovered with trusted header", recovered, sawRecoveryTrustedHeader)
+	}
+	chat, err := client.StartChat(ctx, ChatStartRequest{Message: "What is running?"})
+	if err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+	if chat.SessionID != "chat-1" || chat.Result != "started" || !sawChatTrustedHeader {
+		t.Fatalf("StartChat() = %+v trusted=%v, want chat session with trusted header", chat, sawChatTrustedHeader)
+	}
+	desc, err := client.GeneratePublishDescription(ctx, "feat-1", PublishDescriptionRequest{Model: "sonnet", FeatureName: "Client cutover"})
+	if err != nil {
+		t.Fatalf("GeneratePublishDescription() error = %v", err)
+	}
+	if desc.FeatureID != "feat-1" || desc.Title != "Client cutover" || desc.Body != "AI body" || desc.Result != "generated" || !sawPublishDescriptionTrustedHeader {
+		t.Fatalf("GeneratePublishDescription() = %+v trusted=%v, want generated description with trusted header", desc, sawPublishDescriptionTrustedHeader)
 	}
 }
 
@@ -713,6 +749,56 @@ func TestClientFetchRefreshSnapshotIncludesLivePreviewForSessionOutput(t *testin
 	}
 	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" || snapshot.LivePreview.Activity != "Using Bash..." {
 		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want feat-1 preview", snapshot.LivePreview, sawLivePreview)
+	}
+}
+
+func TestClientFetchRefreshSnapshotSkipsLivePreviewForChatSession(t *testing.T) {
+	var sawSessionDetail bool
+	var sawTranscript bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/sessions/__chat__":
+			sawSessionDetail = true
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
+				SessionSummaryDTO: SessionSummaryDTO{ID: "__chat__", FeatureID: "__chat__"},
+				TranscriptCursor:  CursorDTO{Total: 2, Start: 0, End: 2},
+			}})
+		case "GET /api/v1/sessions/__chat__/transcript":
+			sawTranscript = true
+			writeJSON(w, http.StatusOK, TranscriptResponse{
+				APIVersion: APIVersion,
+				Cursor:     CursorDTO{Total: 2, Start: 0, End: 2},
+				Messages: []TranscriptMessageDTO{
+					{Index: 0, Role: "assistant", Type: "text", Text: "monthly spend limit"},
+					{Index: 1, Role: "system", Type: "result", Status: "error", Redacted: true},
+				},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event:    SSEEventDTO{Kind: "session.updated"},
+		Resource: ResourceDTO{Type: "session", ID: "__chat__", FeatureID: "__chat__"},
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "__chat__" {
+		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want chat detail", snapshot.Session, sawSessionDetail)
+	}
+	if !sawTranscript || snapshot.Transcript == nil || len(snapshot.Transcript.Messages) != 2 {
+		t.Fatalf("FetchRefreshSnapshot() transcript = %+v, sawTranscript=%v; want chat transcript", snapshot.Transcript, sawTranscript)
+	}
+	if snapshot.LivePreview != nil {
+		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, want nil for chat utility session", snapshot.LivePreview)
 	}
 }
 

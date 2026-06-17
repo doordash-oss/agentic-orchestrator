@@ -43,7 +43,9 @@ type MutationTarget interface {
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
+	StartChat(req ChatStartRequest) (ChatStartResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
+	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
 	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
 	MergeFeature(featureID string) (MergeFeatureResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
@@ -155,6 +157,10 @@ type HelpAnswerRequest struct {
 	Message   string `json:"message"`
 }
 
+type ChatStartRequest struct {
+	Message string `json:"message"`
+}
+
 type RuntimeConfigMutationRequest struct {
 	Defaults       config.DefaultsConfig  `json:"defaults,omitempty"`
 	WorkspaceRoots *[]string              `json:"workspace_roots,omitempty"`
@@ -164,6 +170,17 @@ type RuntimeConfigMutationRequest struct {
 
 type PublishFeatureRequest struct {
 	Repos []string `json:"repos,omitempty"`
+	Title string   `json:"title,omitempty"`
+	Body  string   `json:"body,omitempty"`
+}
+
+type PublishDescriptionRequest struct {
+	Model              string `json:"model,omitempty"`
+	FeatureName        string `json:"feature_name,omitempty"`
+	FeatureDescription string `json:"feature_description,omitempty"`
+	Roadmap            string `json:"roadmap,omitempty"`
+	CommitBodies       string `json:"commit_bodies,omitempty"`
+	DiffStat           string `json:"diff_stat,omitempty"`
 }
 
 type RewindFeatureRequest struct {
@@ -291,7 +308,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case "/api/v1/shutdown":
 		return []string{http.MethodPost}, true
-	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send":
+	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start":
 		return []string{http.MethodPost}, true
 	}
 	if !strings.HasPrefix(path, "/api/v1/features/") {
@@ -313,7 +330,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
-			if (parts[2] == "review-comments" && parts[3] == "fetch") ||
+			if (parts[2] == "publish" && parts[3] == "description") ||
+				(parts[2] == "review-comments" && parts[3] == "fetch") ||
 				(parts[2] == "tweak" && parts[3] == "finish") ||
 				(parts[2] == "refactor" && parts[3] == "restart") {
 				return []string{http.MethodPost}, true
@@ -535,6 +553,25 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		}
 		h.writeRestartFeature(w, featureID, req)
 	case "publish":
+		if subaction == "description" {
+			var req PublishDescriptionRequest
+			if !decodeMutationJSON(w, r, &req) {
+				return true
+			}
+			resp, err := h.mutations.GeneratePublishDescription(featureID, req)
+			if err != nil {
+				writeMutationError(w, err)
+				return true
+			}
+			if resp.FeatureID == "" {
+				resp.FeatureID = featureID
+			}
+			if resp.Result == "" {
+				resp.Result = "generated"
+			}
+			writeActionJSON(w, http.StatusOK, &resp)
+			return true
+		}
 		if subaction != "" {
 			return false
 		}
@@ -846,6 +883,24 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		}
 		if resp.Result == "" {
 			resp.Result = "sent"
+		}
+		writeActionJSON(w, http.StatusOK, &resp)
+	case "chat/start":
+		var req ChatStartRequest
+		if !decodeMutationJSON(w, r, &req) {
+			return
+		}
+		if strings.TrimSpace(req.Message) == "" {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "message is required", nil)
+			return
+		}
+		resp, err := h.mutations.StartChat(req)
+		if err != nil {
+			writeMutationError(w, err)
+			return
+		}
+		if resp.Result == "" {
+			resp.Result = "started"
 		}
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:

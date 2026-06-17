@@ -1078,6 +1078,47 @@ func TestDashboardOverviewModeUsesCompactDetailForEligibleFeature(t *testing.T) 
 	}
 }
 
+func TestDashboardOverviewModeShowsRefactorCycleSubphase(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-refactor",
+		Name:         "Refactor Feature",
+		Slug:         "refactor-feature",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Created:      time.Now(),
+		Repos:        []feature.FeatureRepo{{Name: "api"}},
+		RepoCycles: map[string]*feature.RepoCycleState{
+			"api": {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
+		},
+		ActiveCycle: &feature.CycleState{
+			Type:   feature.CycleRefactor,
+			Status: feature.RepoCycleRunning,
+			Count:  1,
+		},
+		PhaseTimings: map[string]time.Duration{
+			"implement": 5 * time.Minute,
+		},
+	}
+	f.SetRefactorCount(1)
+	m := dashboardWithSelectedFeature(f)
+	m.focusPanel = 1
+	m.rightPanelMode = dashboardRightPanelOverview
+	m.spinnerView = "spin"
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Info", "Phase Progress", "Refactor #1", "in progress", "[l] Live Preview"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("refactor cycle overview missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Feature ID", "Current: Refactoring", "[o] Overview"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("refactor cycle overview contained live-preview copy %q in:\n%s", notWant, view)
+		}
+	}
+}
+
 func TestDashboardLivePreviewConstrainedCollapseKeepsFooter(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{

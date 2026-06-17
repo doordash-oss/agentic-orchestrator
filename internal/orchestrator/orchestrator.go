@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -1830,6 +1831,19 @@ func (o *Orchestrator) tryCompleteAndEmit(featureID string) (bool, error) {
 // publishRepo calls, aggregates results, emits PublishStarted/PublishCompleted
 // events, and delegates FeatureCompleted emission to tryCompleteAndEmit.
 func (o *Orchestrator) Publish(featureID string) error {
+	return o.PublishWithOptions(featureID, PublishOptions{})
+}
+
+type PublishOptions struct {
+	Repos []string
+	Title string
+	Body  string
+}
+
+// PublishWithOptions runs the publish pipeline for all repos, or for the
+// selected repos when Repos is non-empty. Title and Body override generated PR
+// metadata for manual publish flows that already reviewed those fields.
+func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
@@ -1839,6 +1853,10 @@ func (o *Orchestrator) Publish(featureID string) error {
 	}
 	if len(f.Repos) == 0 {
 		return fmt.Errorf("publish: no repos configured for feature %s", featureID)
+	}
+	requestedRepos, err := publishRepoSelection(f, opts.Repos)
+	if err != nil {
+		return err
 	}
 
 	o.emitEvent(ports.Event{Type: ports.PublishStarted, FeatureID: featureID})
@@ -1855,6 +1873,9 @@ func (o *Orchestrator) Publish(featureID string) error {
 	var firstErr error
 	var conflictErr *PublishConflictError
 	for _, repo := range f.Repos {
+		if len(requestedRepos) > 0 && !requestedRepos[repo.Name] {
+			continue
+		}
 		// Skip repos already published (sibling goroutines may have updated)
 		// or untouched (no phase ever touched them, no PR to open).
 		freshF, freshErr := o.deps.Lifecycle.Get(featureID)
@@ -1870,7 +1891,13 @@ func (o *Orchestrator) Publish(featureID string) error {
 			}
 		}
 
-		prURL, repoErr := publishRepo(featureID, repo.Name)
+		var prURL string
+		var repoErr error
+		if o.publishRepoFn != nil {
+			prURL, repoErr = publishRepo(featureID, repo.Name)
+		} else {
+			prURL, repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
+		}
 		if repoErr != nil {
 			var ce *PublishConflictError
 			if errors.As(repoErr, &ce) {
@@ -1907,6 +1934,29 @@ func (o *Orchestrator) Publish(featureID string) error {
 		o.hooks.OnPublishCompleted(featureID, prURLs, finalErr)
 	}
 	return finalErr
+}
+
+func publishRepoSelection(f *feature.Feature, repos []string) (map[string]bool, error) {
+	requested := map[string]bool{}
+	for _, repo := range repos {
+		repo = strings.TrimSpace(repo)
+		if repo != "" {
+			requested[repo] = true
+		}
+	}
+	if len(requested) == 0 {
+		return nil, nil
+	}
+	known := map[string]bool{}
+	for _, repo := range f.Repos {
+		known[repo.Name] = true
+	}
+	for repo := range requested {
+		if !known[repo] {
+			return nil, fmt.Errorf("publish: repo %q not found in feature %s", repo, f.ID)
+		}
+	}
+	return requested, nil
 }
 
 // ScanRecovery / ExecuteRecovery live in recovery.go

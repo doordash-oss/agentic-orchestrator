@@ -54,6 +54,11 @@ type RefreshSnapshot struct {
 }
 
 const refreshTranscriptLimit = 50
+const chatUtilityFeatureID = "__chat__"
+
+func isUtilityFeatureID(featureID string) bool {
+	return featureID == chatUtilityFeatureID
+}
 
 func (c *Client) SubscribeEvents(ctx context.Context, opts EventSubscriptionOptions) (<-chan RefreshSignal, <-chan error) {
 	signals := make(chan RefreshSignal, 16)
@@ -242,7 +247,7 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 			}
 			snapshot.Sessions = &sessions
 		}
-		if resource.FeatureID != "" {
+		if resource.FeatureID != "" && !isUtilityFeatureID(resource.FeatureID) {
 			preview, err := c.LivePreview(ctx, resource.FeatureID)
 			if err != nil {
 				return snapshot, err

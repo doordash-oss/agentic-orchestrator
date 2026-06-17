@@ -47,6 +47,10 @@ func readFileSafe(path string) (string, error) {
 // Returns a *PublishConflictError on pull-rebase conflicts so callers can
 // distinguish them with errors.Is(err, ErrPublishConflict) / errors.As.
 func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
+	return o.publishRepoWithOptions(featureID, repoName, PublishOptions{})
+}
+
+func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts PublishOptions) (string, error) {
 	if o.deps.Publisher == nil {
 		return "", fmt.Errorf("publishRepo: Publisher port is nil")
 	}
@@ -83,7 +87,17 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 	// description-generation agent. The raw diff is intentionally excluded —
 	// for large features it overflows the CLI prompt budget.
 	prCtx := o.buildPRContext(f, workDir, repo.BaseBranch)
-	title, body := o.generatePRDescription(f, prCtx)
+	title := strings.TrimSpace(opts.Title)
+	body := strings.TrimSpace(opts.Body)
+	if title == "" || body == "" {
+		generatedTitle, generatedBody := o.generatePRDescription(f, prCtx)
+		if title == "" {
+			title = generatedTitle
+		}
+		if body == "" {
+			body = generatedBody
+		}
+	}
 
 	// Pull-rebase before push. A conflict surfaces as *PublishConflictError
 	// so callers can route to conflict-resolution flows with errors.Is.

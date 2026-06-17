@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -180,6 +182,64 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 		t.Fatalf("SendHelp() result = %+v; want feature/session sent", result)
 	}
 	assertJSONDoesNotContain(t, result, "Please use the existing migration path.")
+}
+
+func TestServerMutationTargetStartChatStartsReadOnlyInteractiveUtilitySession(t *testing.T) {
+	stateDir := t.TempDir()
+	skillsDir := filepath.Join(stateDir, "skills")
+	var captured []agent.BuildSessionOpts
+	phaseRunner := &agent.PhaseRunner{
+		StateDir:  stateDir,
+		SkillsDir: skillsDir,
+		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			captured = append(captured, opts)
+			return []string{"agent"}, []string{"AGENT_TEST=1"}, &ports.SessionOpts{}, nil
+		},
+	}
+	cfg := config.NewDefault()
+	cfg.Defaults.Models.Utilities = "cheap-chat"
+	sessions := &mutationTargetSessionManager{}
+	target := serverMutationTarget{
+		cfg:          cfg,
+		sessions:     sessions,
+		phaseRunner:  phaseRunner,
+		workspaceDir: "/workspace",
+	}
+
+	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "What is running?"})
+	if err != nil {
+		t.Fatalf("StartChat() error = %v", err)
+	}
+
+	if result.SessionID != serverChatSessionID || result.Result != "started" {
+		t.Fatalf("StartChat() result = %+v, want chat session started", result)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("BuildSession calls = %d, want 1", len(captured))
+	}
+	build := captured[0]
+	if build.Model != "cheap-chat" || build.WorkDir != "/workspace" || build.Phase != utilskill.PhaseAll || build.TurnMode != ports.TurnModeInteractive {
+		t.Fatalf("BuildSession opts = %+v, want utility interactive chat in workspace", build)
+	}
+	for _, tool := range []string{"Edit", "Write", "NotebookEdit", "Bash"} {
+		if !slices.Contains(build.DisallowedTools, tool) {
+			t.Fatalf("BuildSession DisallowedTools = %v, missing %s", build.DisallowedTools, tool)
+		}
+	}
+	if !strings.Contains(build.Prompt, "What is running?") || !strings.Contains(build.Prompt, filepath.Join(skillsDir, "chat", "SKILL.md")) {
+		t.Fatalf("BuildSession prompt = %q, want chat skill instruction and user message", build.Prompt)
+	}
+	if len(sessions.startCalls) != 1 {
+		t.Fatalf("StartSession calls = %d, want 1", len(sessions.startCalls))
+	}
+	start := sessions.startCalls[0]
+	if start.id != serverChatSessionID || start.featureID != serverChatSessionID || start.phase != feature.PhaseResearch || start.workdir != "/workspace" {
+		t.Fatalf("StartSession call = %+v, want chat utility identity and research session in workspace", start)
+	}
+	if start.opts == nil || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != "chat" || start.opts.InitialPrompt != build.Prompt {
+		t.Fatalf("StartSession opts = %+v, want interactive labeled chat with initial prompt", start.opts)
+	}
+	assertJSONDoesNotContain(t, result, "What is running?")
 }
 
 func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPromptAndIndex(t *testing.T) {
@@ -1362,13 +1422,39 @@ func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orc
 }
 
 type mutationTargetSessionManager struct {
-	sessions  []ports.SessionView
-	stopCalls []string
-	onStop    func(string)
+	sessions   []ports.SessionView
+	stopCalls  []string
+	startCalls []mutationTargetStartSessionCall
+	onStop     func(string)
 }
 
-func (m *mutationTargetSessionManager) StartSession(string, string, feature.Phase, []string, string, []string, ...*ports.SessionOpts) (ports.SessionHandle, error) {
-	return nil, nil
+type mutationTargetStartSessionCall struct {
+	id        string
+	featureID string
+	phase     feature.Phase
+	command   []string
+	workdir   string
+	env       []string
+	opts      *ports.SessionOpts
+}
+
+func (m *mutationTargetSessionManager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+	var opt *ports.SessionOpts
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	m.startCalls = append(m.startCalls, mutationTargetStartSessionCall{
+		id:        id,
+		featureID: featureID,
+		phase:     phase,
+		command:   append([]string(nil), command...),
+		workdir:   workdir,
+		env:       append([]string(nil), env...),
+		opts:      opt,
+	})
+	sess := &mutationTargetSessionView{id: id, featureID: featureID, phase: phase, status: ports.SessionRunning, active: true}
+	m.sessions = append(m.sessions, sess)
+	return sess, nil
 }
 func (m *mutationTargetSessionManager) StopSession(id string) error {
 	m.stopCalls = append(m.stopCalls, id)
@@ -1528,6 +1614,16 @@ func (s *mutationTargetSessionView) ResetWaitingStatus() {}
 func (s *mutationTargetSessionView) Stop() error         { return nil }
 func (s *mutationTargetSessionView) Interrupt() error    { return nil }
 func (s *mutationTargetSessionView) Wait()               {}
+func (s *mutationTargetSessionView) SetStatus(status ports.SessionStatus) {
+	s.status = status
+}
+func (s *mutationTargetSessionView) SetLogFile(*os.File)                            {}
+func (s *mutationTargetSessionView) AddCleanupFunc(func())                          {}
+func (s *mutationTargetSessionView) SetHasUnansweredQuestion(bool)                  {}
+func (s *mutationTargetSessionView) CloseStdin()                                    {}
+func (s *mutationTargetSessionView) SetOnToolAllowed(func(string, json.RawMessage)) {}
+func (s *mutationTargetSessionView) SetOnFileRead(func(llm.FileReadEvent))          {}
+func (s *mutationTargetSessionView) SetOnSubagentEvent(func(llm.SDKMessage))        {}
 
 func assertJSONDoesNotContain(t *testing.T, value any, banned ...string) {
 	t.Helper()

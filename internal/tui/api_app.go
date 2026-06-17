@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -65,6 +66,7 @@ type APIClient interface {
 	StopFeature(context.Context, string) (server.FeatureStopResponse, error)
 	DeleteFeature(context.Context, string) (server.DeleteFeatureResponse, error)
 	PublishFeature(context.Context, string, server.PublishFeatureRequest) (server.PublishFeatureResponse, error)
+	GeneratePublishDescription(context.Context, string, server.PublishDescriptionRequest) (server.PublishDescriptionResponse, error)
 	MergeFeature(context.Context, string) (server.MergeFeatureResponse, error)
 	RewindFeature(context.Context, string, server.RewindFeatureRequest) (server.RewindFeatureResponse, error)
 	RetryFeature(context.Context, string) (server.RetryFeatureResponse, error)
@@ -86,6 +88,7 @@ type APIClient interface {
 	RestartRefactor(context.Context, string, server.RefactorActionRequest) (server.RefactorRestartResponse, error)
 	AnswerPermission(context.Context, server.PermissionAnswerRequest) (server.PermissionAnswerResponse, error)
 	SendHelp(context.Context, server.HelpAnswerRequest) (server.HelpSendResponse, error)
+	StartChat(context.Context, server.ChatStartRequest) (server.ChatStartResponse, error)
 	AnswerAskUser(context.Context, server.AskUserAnswerRequest) (server.AskUserAnswerResponse, error)
 	Shutdown(context.Context) (server.ShutdownResponse, error)
 	SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error)
@@ -256,6 +259,9 @@ type APIAppModel struct {
 	permissions                server.PermissionSnapshotResponse
 	sessionList                server.SessionListResponse
 	sessionDetails             map[string]server.SessionDetailResponse
+	chat                       ChatModel
+	chatReady                  bool
+	chatOpen                   bool
 	livePreviews               map[string]server.LivePreviewResponse
 	transcripts                map[string]server.TranscriptResponse
 	contents                   map[string]apiFeatureContentSnapshot
@@ -279,6 +285,7 @@ type APIAppModel struct {
 	actionConfirmFeatureID     string
 	actionConfirmFeatureName   string
 	actionConfirmArgs          apiFeatureActionArgs
+	publish                    *PublishModel
 	repoActionPanel            *apiRepoActionPanel
 	rewindPanel                *apiRewindPanel
 	rewindPhasePicker          *apiRoadmapRewindPanel
@@ -324,6 +331,8 @@ type APIAppModel struct {
 	focusPanel                 int
 	rightPanelMode             dashboardRightPanelMode
 	contentPanelActive         bool
+	contentViewport            *reviewViewportModel
+	diffReview                 *reviewViewportModel
 	textPanelActive            bool
 	textPanelTitle             string
 	textPanelContent           string
@@ -347,11 +356,16 @@ type apiRefreshSnapshotMsg struct {
 type apiContentSelectionMsg struct {
 	featureID string
 	content   apiFeatureContentSnapshot
+	status    string
 	err       error
 }
 
 type apiTextPanelMsg struct {
 	title   string
+	content string
+}
+
+type apiDiffReviewMsg struct {
 	content string
 }
 
@@ -434,6 +448,8 @@ type apiReviewCommentsPanel struct {
 type apiFeatureActionArgs struct {
 	Repo            string
 	Repos           []string
+	Title           string
+	Body            string
 	TargetPhase     string
 	RoadmapPhase    int
 	UpgradePipeline feature.PipelineProfile
@@ -633,7 +649,17 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.attach != nil && m.attach.thinkingLine != "" {
 			m.attach.spinnerView = m.spinner.View()
 		}
+		if m.publish != nil {
+			m.publish.spinnerView = m.spinnerView()
+		}
+		if m.chatReady && m.chat.responding {
+			m.chat.spinnerView = m.spinner.View()
+			m.chat.rebuildViewport()
+		}
 		return m, cmd
+	}
+	if m.chatReady && apiChatOwnsMsg(msg) {
+		return m.updateAPIChat(msg)
 	}
 	if m.artifactReview != nil && !m.artifactReview.Detached() && apiArtifactReviewOwnsMsg(msg) {
 		return m.updateAPIArtifactReview(msg)
@@ -645,6 +671,19 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.publish != nil {
+			updated, _ := m.publish.Update(msg)
+			m.publish = &updated
+		}
+		if m.diffReview != nil {
+			m.diffReview.Resize(msg.Width, msg.Height)
+		}
+		if m.contentViewport != nil {
+			m.contentViewport.Resize(msg.Width, msg.Height)
+		}
+		if m.chatOpen {
+			m.chat = m.chat.resize(msg.Width, chatPanelHeight(msg.Height))
+		}
 		if m.welcome != nil {
 			welcome, _ := m.welcome.Update(msg)
 			m.welcome = &welcome
@@ -687,21 +726,34 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.content != nil {
 			m.storeContent(*msg.content)
 			m.rebuildPresentation(m.selectedFeature)
+			m.syncAPIContentViewport()
 		}
-		return m, nil
+		var cmd tea.Cmd
+		m, cmd = m.applyAPIChatRefreshSnapshot(msg.snapshot)
+		return m, cmd
 	case apiContentSelectionMsg:
 		if msg.err != nil {
 			m.statusMessage = "Content load failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
 		m.storeContent(msg.content)
-		m.statusMessage = ""
+		m.statusMessage = msg.status
 		m.rebuildPresentation(msg.featureID)
+		m.syncAPIContentViewport()
 		return m, nil
 	case apiTextPanelMsg:
 		m.textPanelActive = true
 		m.textPanelTitle = msg.title
 		m.textPanelContent = msg.content
+		m.statusMessage = ""
+		return m, nil
+	case apiDiffReviewMsg:
+		if m.diffReview == nil {
+			vp := newReviewViewportModel(m.width, m.height, "")
+			m.diffReview = &vp
+		}
+		m.diffReview.SetContent(msg.content)
+		m.diffReview.GotoTop()
 		m.statusMessage = ""
 		return m, nil
 	case apiFeatureDetailMsg:
@@ -750,6 +802,13 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.configEditor = newAPIEditConfigModel(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiPhaseModelCatalog(m.catalog))
 		m.statusMessage = ""
 		return m, nil
+	case publishDescGeneratedMsg:
+		if m.publish == nil {
+			return m, nil
+		}
+		updated, cmd := m.publish.Update(msg)
+		m.publish = &updated
+		return m, cmd
 	case apiReviewCommentsFetchedMsg:
 		if msg.err != nil {
 			m.statusMessage = "Review comments fetch failed: " + firstLine(msg.err.Error())
@@ -787,6 +846,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case apiMutationResultMsg:
 		if msg.err != nil {
+			if msg.kind == "feature.publish" {
+				m.publish = nil
+			}
 			if msg.kind == "feature.create" && msg.featureID != "" {
 				m.clearCreatePrompt()
 			}
@@ -832,9 +894,16 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.kind == "feature.delete" {
 			m.removeFeatureState(msg.featureID)
 		}
-		m.statusMessage = fmt.Sprintf("Completed %s", apiMutationKindLabel(msg.kind))
+		if msg.kind == "feature.publish" {
+			m.publish = nil
+		}
+		m.statusMessage = apiMutationSuccessMessage(msg.kind)
 		if msg.kind == "feature.rewind" && msg.featureID != "" {
 			delete(m.contents, msg.featureID)
+			m.rebuildPresentation(m.selectedFeature)
+			return m, m.fetchFeatureDetailCmd(msg.featureID)
+		}
+		if apiMutationRefreshesFeatureDetail(msg.kind) && msg.featureID != "" {
 			m.rebuildPresentation(m.selectedFeature)
 			return m, m.fetchFeatureDetailCmd(msg.featureID)
 		}
@@ -933,8 +1002,21 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.workspaceManager != nil {
 		return m.updateAPIWorkspaceManager(msg)
 	}
+	if m.chatOpen {
+		return m.updateAPIChat(msg)
+	}
 	if m.welcome != nil {
 		return m.updateAPIWelcome(msg)
+	}
+	if m.contentPanelActive && msg.Code == tea.KeyEscape {
+		m.closeAPIContentView()
+		return m, nil
+	}
+	if m.diffReview != nil {
+		return m.handleAPIDiffReviewKey(msg)
+	}
+	if m.publish != nil {
+		return m.handleAPIPublishKey(msg)
 	}
 	if m.runtimeConfigEditor != nil {
 		return m.handleAPIRuntimeConfigEditorKey(msg)
@@ -1002,10 +1084,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.textPanelContent = ""
 		return m, nil
 	}
-	if m.contentPanelActive && msg.Code == tea.KeyEscape {
-		m.contentPanelActive = false
-		return m, nil
-	}
 	if m.tweakReviewModalActive {
 		featureID := m.tweakReviewFeatureID
 		switch strings.ToLower(msg.Text) {
@@ -1044,6 +1122,9 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, keys.HelpOverlay) {
 		return m.transitionToAPIHelpOverlay()
 	}
+	if m.contentPanelActive {
+		return m.handleAPIContentKey(msg)
+	}
 	if msg.Code == 'r' && msg.Mod.Contains(tea.ModCtrl) {
 		return m.openRewindPanel(), nil
 	}
@@ -1080,8 +1161,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.toggleAPIInputNotificationsCmd(m.selectedFeature)
 	case key.Matches(msg, keys.Chat):
-		m.statusMessage = "Ask chat requires a REST chat endpoint"
-		return m, nil
+		return m.transitionToAPIChat()
 	case msg.Text == "a":
 		return m.openAPIContextualAction()
 	case msg.Text == "o":
@@ -1261,6 +1341,39 @@ func (m APIAppModel) updateAPIArtifactReview(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func apiChatOwnsMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case chatSessionStartedMsg, chatMsgsMsg, chatDoneMsg, chatSendErrorMsg, chatRecoveryTickMsg, ChatExitMsg:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(ChatExitMsg); ok {
+		m.chatOpen = false
+		return m, nil
+	}
+	updated, cmd := m.chat.Update(msg)
+	m.chat = updated
+	return m, cmd
+}
+
+func (m APIAppModel) transitionToAPIChat() (tea.Model, tea.Cmd) {
+	chatH := chatPanelHeight(m.height)
+	if !m.chatReady {
+		m.chat = NewAPIChatModel(m.width, chatH, m.client)
+		m.chatReady = true
+	} else {
+		m.chat = m.chat.resize(m.width, chatH)
+		m.chat.input.Focus()
+	}
+	m.chatOpen = true
+	m.statusMessage = ""
+	return m, textarea.Blink
+}
+
 func (m APIAppModel) View() tea.View {
 	if m.artifactReview != nil && !m.artifactReview.Detached() {
 		v := tea.NewView(m.artifactReview.View())
@@ -1277,7 +1390,40 @@ func (m APIAppModel) View() tea.View {
 		v.AltScreen = true
 		return v
 	}
+	if m.publish != nil {
+		v := tea.NewView(m.publish.View())
+		v.AltScreen = true
+		return v
+	}
+	if m.diffReview != nil {
+		v := tea.NewView(renderReviewViewportScreen(
+			m.width,
+			"Diff Review",
+			"",
+			"Diff Review",
+			*m.diffReview,
+			" [esc] Close   [↑/↓] Scroll",
+		))
+		v.AltScreen = true
+		return v
+	}
+	if m.contentPanelActive && m.snapshot.Content != nil {
+		view := m.renderAPIContentScreen()
+		if m.helpOverlayActive {
+			w := max(m.width, 80)
+			h := max(m.height, 24)
+			view = overlayModal(view, m.helpOverlay.View(), w, h)
+		}
+		v := tea.NewView(view)
+		v.AltScreen = true
+		return v
+	}
 	view := m.renderAPIDashboard()
+	if m.chatOpen {
+		view += m.chat.View()
+	} else if m.chatReady && m.chat.responding {
+		view += lipgloss.NewStyle().Foreground(colorBrand).Render("  * Chat thinking... press " + ChatKeyHint() + " to view")
+	}
 	w := max(m.width, 80)
 	h := max(m.height, 24)
 	if m.recoveryPanel != nil {
@@ -1315,9 +1461,6 @@ func (m APIAppModel) View() tea.View {
 	}
 	if m.rewindPhasePicker != nil {
 		view = overlayModal(view, m.renderAPIRoadmapRewindPanel(min(w-4, 84)), w, h)
-	}
-	if m.contentPanelActive && m.snapshot.Content != nil {
-		view = overlayModal(view, panelStyle(true).Width(min(w-4, 96)).Render(m.renderAPIContent()), w, h)
 	}
 	if m.textPanelActive {
 		view = overlayModal(view, panelStyle(true).Width(min(w-4, 96)).Render(m.renderAPITextPanel()), w, h)
@@ -1367,6 +1510,11 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 	dashboard := NewDashboardModel(features, m.runtimeConfig.Runtime.StateDir)
 	dashboard.width = max(m.width, 80)
 	dashboard.height = max(m.height, 24)
+	if m.chatOpen {
+		dashboard.height = max(m.height-chatPanelHeight(m.height), 6)
+	} else if m.chatReady && m.chat.responding {
+		dashboard.height = max(m.height-1, 6)
+	}
 	dashboard.focusPanel = m.focusPanel
 	dashboard.rightPanelMode = m.rightPanelMode
 	dashboard.dangerouslySkipPerms = m.snapshot.Runtime.DangerouslySkipPermissions
@@ -2152,6 +2300,25 @@ func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, trans
 	}
 }
 
+func newAPIChatSession(client APIClient, sessionID string) *apiSessionView {
+	return &apiSessionView{
+		id:                    sessionID,
+		featureID:             chatSessionID,
+		phase:                 feature.PhaseResearch,
+		kind:                  ports.KindPhase,
+		label:                 "chat",
+		status:                ports.SessionRunning,
+		startedAt:             time.Now(),
+		log:                   session.NewMessageLog(),
+		client:                client,
+		statusCh:              make(chan string, 8),
+		attachCh:              make(chan llm.SDKMessage, 64),
+		doneCh:                make(chan struct{}),
+		lastTranscriptMessage: -1,
+		lastTranscriptRows:    map[string]string{},
+	}
+}
+
 func apiSessionSummaryFromControl(featureID string, req server.ControlRequestDTO) server.SessionSummaryDTO {
 	status := "WaitingPermission"
 	if req.ToolName == "AskUserQuestion" {
@@ -2444,6 +2611,27 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 		}
 		m.attach.updateViewport()
 	}
+	return m, cmd
+}
+
+func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot) (APIAppModel, tea.Cmd) {
+	if !m.chatReady || m.chat.sess == nil {
+		return m, nil
+	}
+	active, ok := m.chat.sess.(*apiSessionView)
+	if !ok || active == nil {
+		return m, nil
+	}
+	if snapshot.Session == nil || snapshot.Session.Session.ID != active.ID() {
+		return m, nil
+	}
+	detail := snapshot.Session.Session
+	newMessages := active.applyAPISessionSnapshot(detail, snapshot.Transcript, detail.PendingControls)
+	if len(newMessages) == 0 {
+		return m, nil
+	}
+	updated, cmd := m.chat.Update(chatMsgsMsg{messages: newMessages})
+	m.chat = updated
 	return m, cmd
 }
 
@@ -3639,21 +3827,78 @@ func (m APIAppModel) openPublishAction() APIAppModel {
 		m.statusMessage = "No feature selected"
 		return m
 	}
-	if !m.selectedActionReady("feature.publish") {
+	f := m.selectedAPIDashboardFeature()
+	if f == nil || f.Status != feature.StatusCodeReady || f.Checkpoints.AutoPublish() || !f.IsPublishable() {
 		m.statusMessage = apiMutationKindLabel("feature.publish") + " is unavailable"
 		return m
 	}
-	repos := m.selectedRepoActionOptions("feature.publish")
-	if len(repos) > 1 {
-		m.repoActionPanel = newAPIRepoActionPanel(m.selectedFeature, m.selectedFeatureName(), "feature.publish", repos, true)
-		m.statusMessage = ""
+	if saved, ok := m.loadSavedFeatureForDiff(f.ID); ok {
+		f = apiMergeSavedPublishFeature(f, saved)
+	}
+	repos := apiPublishRepoEntries(f)
+	if len(repos) == 0 {
+		m.statusMessage = "Publish is unavailable: no repos configured"
 		return m
 	}
-	args := apiFeatureActionArgs{}
-	if len(repos) == 1 {
-		args.Repos = []string{repos[0].Name}
+	planText := apiPublishPlanText(f)
+	publish := NewPublishModel(f, repos, planText, f.Models.Planning, m.width, m.height)
+	publish.prCtx = apiPublishPRContext(f, publish.worktreeDir, publish.baseBranch, planText)
+	publish.runDesc = func(ctx context.Context, model string, prCtx agent.PRContext) (string, string, error) {
+		return m.runAPIPublishDescription(ctx, f.ID, model, prCtx)
 	}
-	return m.confirmSelectedFeatureActionWithArgs("feature.publish", args)
+	publish.publishable = f.IsPublishable()
+	publish.spinnerView = m.spinnerView()
+	m.publish = &publish
+	m.statusMessage = ""
+	return m
+}
+
+func (m APIAppModel) handleAPIPublishKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.publish == nil {
+		return m, nil
+	}
+	if m.publish.step == publishStepConfirm && key.Matches(msg, keys.Enter) {
+		args := apiFeatureActionArgs{
+			Title: strings.TrimSpace(m.publish.prTitle),
+			Body:  strings.TrimSpace(m.publish.prBody),
+		}
+		if m.publish.hasRepoSelect && strings.TrimSpace(m.publish.repoName) != "" {
+			args.Repos = []string{m.publish.repoName}
+		}
+		m.publish.step = publishStepExecute
+		return m, m.selectedFeatureActionCmd("feature.publish", m.publish.featureID, args)
+	}
+
+	updated, cmd := m.publish.Update(msg)
+	if updated.IsDone() {
+		m.publish = nil
+		return m, nil
+	}
+	m.publish = &updated
+	return m, cmd
+}
+
+func (m APIAppModel) runAPIPublishDescription(ctx context.Context, featureID, model string, prCtx agent.PRContext) (string, string, error) {
+	resp, err := m.client.GeneratePublishDescription(ctx, featureID, server.PublishDescriptionRequest{
+		Model:              model,
+		FeatureName:        prCtx.FeatureName,
+		FeatureDescription: prCtx.FeatureDescription,
+		Roadmap:            prCtx.Roadmap,
+		CommitBodies:       prCtx.CommitBodies,
+		DiffStat:           prCtx.DiffStat,
+	})
+	title := strings.TrimSpace(resp.Title)
+	body := strings.TrimSpace(resp.Body)
+	if title == "" || body == "" {
+		fallbackTitle, fallbackBody := agent.BuildPRDescriptionFallback(prCtx)
+		if title == "" {
+			title = fallbackTitle
+		}
+		if body == "" {
+			body = fallbackBody
+		}
+	}
+	return title, body, err
 }
 
 func (m APIAppModel) openRepoCycleAction(kind string) APIAppModel {
@@ -3836,9 +4081,11 @@ func (m APIAppModel) openSelectedDiff() (APIAppModel, tea.Cmd) {
 		m.statusMessage = "Diff is only available for Code Ready features with a worktree"
 		return m, nil
 	}
-	m.textPanelActive = true
-	m.textPanelTitle = fmt.Sprintf("Diff: %s", firstNonEmpty(f.Slug, f.Name, f.ID))
-	m.textPanelContent = MutedStyle.Render("Loading diff...")
+	vp := newReviewViewportModel(m.width, m.height, MutedStyle.Render("Loading diff..."))
+	m.diffReview = &vp
+	m.textPanelActive = false
+	m.textPanelTitle = ""
+	m.textPanelContent = ""
 	return m, func() tea.Msg {
 		diff, err := git.DiffSummary(repo.WorktreePath, repo.BaseBranch)
 		if err != nil || strings.TrimSpace(diff) == "" {
@@ -3846,8 +4093,21 @@ func (m APIAppModel) openSelectedDiff() (APIAppModel, tea.Cmd) {
 		} else {
 			diff = colorizeDiff(diff)
 		}
-		return apiTextPanelMsg{title: fmt.Sprintf("Diff: %s", firstNonEmpty(f.Slug, f.Name, f.ID)), content: diff}
+		return apiDiffReviewMsg{content: diff}
 	}
+}
+
+func (m APIAppModel) handleAPIDiffReviewKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.diffReview == nil {
+		return m, nil
+	}
+	if msg.Code == tea.KeyEscape {
+		m.diffReview = nil
+		return m, nil
+	}
+	updated, cmd := m.diffReview.Update(msg)
+	m.diffReview = &updated
+	return m, cmd
 }
 
 func (m APIAppModel) selectedDiffRepo(f *feature.Feature) (feature.FeatureRepo, bool) {
@@ -3909,6 +4169,158 @@ func mergeFeatureRepoForDiff(base, overlay feature.FeatureRepo) feature.FeatureR
 		base.Publishable = overlay.Publishable
 	}
 	return base
+}
+
+func apiMergeSavedPublishFeature(base, saved *feature.Feature) *feature.Feature {
+	if base == nil {
+		return saved
+	}
+	merged := *base
+	merged.Repos = append([]feature.FeatureRepo(nil), base.Repos...)
+	merged.RepoStates = copyFeatureRepoStates(base.RepoStates)
+	merged.RepoCycles = copyFeatureRepoCycles(base.RepoCycles)
+	if saved == nil {
+		return &merged
+	}
+	if merged.Description == "" {
+		merged.Description = saved.Description
+	}
+	if merged.Summary == "" {
+		merged.Summary = saved.Summary
+	}
+	if merged.Models == (config.ModelConfig{}) {
+		merged.Models = saved.Models
+	}
+	if len(saved.Artifacts) > 0 {
+		merged.Artifacts = copyStringMap(saved.Artifacts)
+	}
+	if len(merged.Repos) == 0 {
+		merged.Repos = append([]feature.FeatureRepo(nil), saved.Repos...)
+	} else {
+		for i := range merged.Repos {
+			if savedRepo, ok := featureRepoByName(saved.Repos, merged.Repos[i].Name); ok {
+				merged.Repos[i] = mergeFeatureRepoForDiff(merged.Repos[i], savedRepo)
+			}
+		}
+	}
+	if len(saved.RepoStates) > 0 {
+		merged.RepoStates = copyFeatureRepoStates(saved.RepoStates)
+	}
+	return &merged
+}
+
+func apiPublishRepoEntries(f *feature.Feature) []publishRepoEntry {
+	if f == nil {
+		return nil
+	}
+	entries := make([]publishRepoEntry, 0, len(f.Repos))
+	for _, repo := range f.Repos {
+		worktreeDir := repo.WorktreePath
+		if worktreeDir == "" {
+			worktreeDir = repo.Path
+		}
+		branch := repo.Branch
+		if branch == "" && f.Slug != "" {
+			branch = "feature/" + f.Slug
+		}
+		entry := publishRepoEntry{
+			Name:        repo.Name,
+			Branch:      branch,
+			WorktreeDir: worktreeDir,
+			RepoPath:    repo.Path,
+			BaseBranch:  repo.BaseBranch,
+			PRStatus:    "pending",
+		}
+		if state := f.RepoStates[repo.Name]; state != nil {
+			if state.PRURL != "" {
+				entry.PRStatus = "published"
+				entry.PRURL = state.PRURL
+			}
+			if state.LastError != "" {
+				entry.PRStatus = "failed"
+			}
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func apiPublishPlanText(f *feature.Feature) string {
+	if f == nil {
+		return ""
+	}
+	for _, key := range []string{"roadmap", "plan"} {
+		path := strings.TrimSpace(f.Artifacts[key])
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
+}
+
+func apiPublishPRContext(f *feature.Feature, worktreeDir, baseBranch, planText string) agent.PRContext {
+	if f == nil {
+		return agent.PRContext{Roadmap: planText}
+	}
+	prCtx := agent.PRContext{
+		FeatureName:        f.Name,
+		FeatureDescription: f.Description,
+		Roadmap:            planText,
+	}
+	if worktreeDir != "" {
+		if bodies, err := git.CommitBodies(worktreeDir, baseBranch); err == nil {
+			prCtx.CommitBodies = bodies
+		}
+		if stat, err := git.DiffStat(worktreeDir, baseBranch); err == nil {
+			prCtx.DiffStat = stat
+		}
+	}
+	return prCtx
+}
+
+func copyFeatureRepoStates(in map[string]*feature.RepoState) map[string]*feature.RepoState {
+	if len(in) == 0 {
+		return map[string]*feature.RepoState{}
+	}
+	out := make(map[string]*feature.RepoState, len(in))
+	for name, state := range in {
+		if state == nil {
+			continue
+		}
+		copyState := *state
+		out[name] = &copyState
+	}
+	return out
+}
+
+func copyFeatureRepoCycles(in map[string]*feature.RepoCycleState) map[string]*feature.RepoCycleState {
+	if len(in) == 0 {
+		return map[string]*feature.RepoCycleState{}
+	}
+	out := make(map[string]*feature.RepoCycleState, len(in))
+	for name, state := range in {
+		if state == nil {
+			continue
+		}
+		copyState := *state
+		out[name] = &copyState
+	}
+	return out
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 func (m APIAppModel) hasAPIAttachableSession(featureID string) bool {
@@ -4112,7 +4524,7 @@ func (m APIAppModel) cycleSelectedArtifact(delta int) (APIAppModel, tea.Cmd) {
 		m.statusMessage = "No run content for selected feature"
 		return m, nil
 	}
-	m.contentPanelActive = true
+	m.openAPIContentView()
 	artifacts := availableTextArtifacts(content.Artifacts)
 	if len(artifacts) == 0 {
 		m.statusMessage = "No text artifacts for selected run"
@@ -4132,8 +4544,57 @@ func (m APIAppModel) cycleSelectedLog() (APIAppModel, tea.Cmd) {
 		m.statusMessage = "No run content for selected feature"
 		return m, nil
 	}
-	m.contentPanelActive = true
+	m.openAPIContentView()
 	return m, m.fetchNextLogContentCmd(content)
+}
+
+func (m *APIAppModel) openAPIContentView() {
+	m.contentPanelActive = true
+	m.syncAPIContentViewport()
+	if m.contentViewport != nil {
+		m.contentViewport.GotoTop()
+	}
+}
+
+func (m *APIAppModel) closeAPIContentView() {
+	m.contentPanelActive = false
+	m.contentViewport = nil
+}
+
+func (m APIAppModel) handleAPIContentKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, keys.Back):
+		m.closeAPIContentView()
+		return m, nil
+	case key.Matches(msg, keys.ViewLogs):
+		return m.cycleSelectedLog()
+	case msg.Text == "[":
+		return m.cycleSelectedArtifact(-1)
+	case msg.Text == "]":
+		return m.cycleSelectedArtifact(1)
+	}
+	if m.contentViewport == nil {
+		m.openAPIContentView()
+	}
+	if m.contentViewport == nil {
+		return m, nil
+	}
+	updated, cmd := m.contentViewport.Update(msg)
+	m.contentViewport = &updated
+	return m, cmd
+}
+
+func (m *APIAppModel) syncAPIContentViewport() {
+	if !m.contentPanelActive || m.snapshot.Content == nil {
+		return
+	}
+	if m.contentViewport == nil {
+		vp := newReviewViewportModel(m.width, m.height, "")
+		m.contentViewport = &vp
+	} else {
+		m.contentViewport.Resize(m.width, m.height)
+	}
+	m.contentViewport.SetContent(m.renderAPIContentBody())
 }
 
 func (m APIAppModel) selectedContentSnapshot() (apiFeatureContentSnapshot, bool) {
@@ -4836,12 +5297,46 @@ func (m APIAppModel) renderAPITranscript() string {
 }
 
 func (m APIAppModel) renderAPIContent() string {
+	var b strings.Builder
+	b.WriteString("Run Content\n")
+	b.WriteString(m.renderAPIContentBody())
+	b.WriteByte('\n')
+	b.WriteString(KeyHelpStyle.Render(apiContentFooter()))
+	return b.String()
+}
+
+func (m APIAppModel) renderAPIContentScreen() string {
+	vp := m.contentViewport
+	if vp == nil {
+		temp := newReviewViewportModel(m.width, m.height, m.renderAPIContentBody())
+		vp = &temp
+	}
+	w := m.width
+	if w < 40 {
+		w = 80
+	}
+
+	var b strings.Builder
+	box := renderReviewViewportBox(w-2, "Run Content", *vp)
+	b.WriteString(" " + strings.ReplaceAll(box, "\n", "\n "))
+	b.WriteString("\n")
+	b.WriteString(renderReviewViewportScrollPercent(*vp))
+	b.WriteString("\n")
+	b.WriteString(KeyHelpStyle.Render(apiContentFooter() + "   [↑/↓] Scroll"))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func apiContentFooter() string {
+	return " [l] Next log   [[] Prev artifact   []] Next artifact   [esc] Close"
+}
+
+func (m APIAppModel) renderAPIContentBody() string {
 	content := m.snapshot.Content
 	if content == nil {
 		return ""
 	}
 	var b strings.Builder
-	b.WriteString("Run Content\n")
 	if content.RunNumber > 0 {
 		b.WriteString(fmt.Sprintf("  Run: %d\n", content.RunNumber))
 	}
@@ -4872,8 +5367,6 @@ func (m APIAppModel) renderAPIContent() string {
 		b.WriteByte('\n')
 		appendIndentedText(&b, content.Artifact.Text)
 	}
-	b.WriteByte('\n')
-	b.WriteString(KeyHelpStyle.Render(" [l] Next log   [[] Prev artifact   []] Next artifact   [esc] Close"))
 	return b.String()
 }
 
@@ -5708,6 +6201,7 @@ func (m APIAppModel) fetchNextLogContentCmd(content apiFeatureContentSnapshot) t
 		}
 		logIDs := cycleLogIDs(content.LogID)
 		var lastErr error
+		sawMissingLog := false
 		for _, logID := range logIDs {
 			query := server.TextQuery{Limit: apiContentTailLimit}
 			if logID == content.LogID && content.Log != nil {
@@ -5715,6 +6209,10 @@ func (m APIAppModel) fetchNextLogContentCmd(content apiFeatureContentSnapshot) t
 			}
 			resp, err := m.client.LogContent(ctx, content.FeatureID, content.RunNumber, logID, query)
 			if err != nil {
+				if apiMissingRunLogError(err) {
+					sawMissingLog = true
+					continue
+				}
 				lastErr = err
 				continue
 			}
@@ -5724,6 +6222,13 @@ func (m APIAppModel) fetchNextLogContentCmd(content apiFeatureContentSnapshot) t
 			next.ContentLoaded = true
 			return apiContentSelectionMsg{featureID: content.FeatureID, content: next}
 		}
+		if sawMissingLog && lastErr == nil {
+			return apiContentSelectionMsg{
+				featureID: content.FeatureID,
+				content:   content,
+				status:    "No run logs available for selected run",
+			}
+		}
 		if lastErr == nil {
 			lastErr = errors.New("no selectable logs")
 		}
@@ -5732,6 +6237,14 @@ func (m APIAppModel) fetchNextLogContentCmd(content apiFeatureContentSnapshot) t
 			err:       fmt.Errorf("load next run log: %w", lastErr),
 		}
 	}
+}
+
+func apiMissingRunLogError(err error) bool {
+	var apiErr *server.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.Status == http.StatusNotFound && apiErr.Code == "not_found"
 }
 
 func (m APIAppModel) shouldRefreshSelectedContent(signal server.RefreshSignal) bool {
@@ -5947,7 +6460,11 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 		var err error
 		switch kind {
 		case "feature.publish":
-			_, err = m.client.PublishFeature(ctx, featureID, server.PublishFeatureRequest{Repos: append([]string(nil), args.Repos...)})
+			_, err = m.client.PublishFeature(ctx, featureID, server.PublishFeatureRequest{
+				Repos: append([]string(nil), args.Repos...),
+				Title: args.Title,
+				Body:  args.Body,
+			})
 		case "feature.merge":
 			_, err = m.client.MergeFeature(ctx, featureID)
 		case "feature.restart":
@@ -7968,6 +8485,30 @@ func apiMutationKindLabel(kind string) string {
 		return "Recovery"
 	default:
 		return strings.TrimSpace(kind)
+	}
+}
+
+func apiMutationSuccessMessage(kind string) string {
+	switch kind {
+	case "feature.refactor.restart":
+		return "Restarted Refactor"
+	case "feature.rebase", "feature.tweak.start", "feature.review_comments", "feature.refactor.start":
+		return "Started " + apiMutationKindLabel(kind)
+	default:
+		return "Completed " + apiMutationKindLabel(kind)
+	}
+}
+
+func apiMutationRefreshesFeatureDetail(kind string) bool {
+	switch kind {
+	case "feature.rebase",
+		"feature.tweak.start",
+		"feature.review_comments",
+		"feature.refactor.start",
+		"feature.refactor.restart":
+		return true
+	default:
+		return false
 	}
 }
 

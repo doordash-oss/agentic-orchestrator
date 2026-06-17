@@ -15,6 +15,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 )
@@ -109,6 +111,8 @@ type ChatModel struct {
 	buildSession     agent.BuildSessionFunc
 	chatModel        string
 	skillsDir        string
+	startSession     func(string) tea.Msg
+	pollSession      bool
 }
 
 func NewChatModel(width, height int, sm *session.Manager, workDir string, systemPrompt string, buildSession agent.BuildSessionFunc, chatModel string, skillsDir string) ChatModel {
@@ -140,9 +144,34 @@ func NewChatModel(width, height int, sm *session.Manager, workDir string, system
 		buildSession: buildSession,
 		chatModel:    chatModel,
 		skillsDir:    skillsDir,
+		pollSession:  true,
 	}
 	m = m.resize(width, height)
 	return m
+}
+
+func NewAPIChatModel(width, height int, client APIClient) ChatModel {
+	m := NewChatModel(width, height, nil, "", "", nil, "", "")
+	m.startSession = func(initialQuestion string) tea.Msg {
+		resp, err := client.StartChat(context.Background(), server.ChatStartRequest{Message: initialQuestion})
+		if err != nil {
+			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}
+		}
+		return chatSessionStartedMsg{sess: newAPIChatSession(client, resp.SessionID)}
+	}
+	m.pollSession = false
+	return m
+}
+
+func chatPanelHeight(totalHeight int) int {
+	h := totalHeight * 35 / 100
+	if h < 10 {
+		h = 10
+	}
+	if h > 18 {
+		h = 18
+	}
+	return h
 }
 
 // resize recalculates layout dimensions for the bottom-panel layout.
@@ -229,7 +258,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// Append user message to history
 			m.history += "\n" + chatUserStyle.Render("You: "+question) + "\n\n"
 
-			if m.sessionMgr == nil {
+			if m.sessionMgr == nil && m.startSession == nil {
 				m.history += "  Error: no session manager available\n"
 				m.rebuildViewport()
 				return m, nil
@@ -252,15 +281,16 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			// new Result lands on the session (even if attachCh drops it).
 			m.turnCostBaseline = m.sess.Cost()
 			sess := m.sess
-			return m, tea.Batch(
-				func() tea.Msg {
-					if err := sess.SendUserMessage(question); err != nil {
-						return chatSendErrorMsg{err: err}
-					}
-					return nil
-				},
-				chatRecoveryTickCmd(sess, m.turnCostBaseline),
-			)
+			sendCmd := func() tea.Msg {
+				if err := sess.SendUserMessage(question); err != nil {
+					return chatSendErrorMsg{err: err}
+				}
+				return nil
+			}
+			if !m.pollSession {
+				return m, sendCmd
+			}
+			return m, tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
 		}
 
 	case chatSessionStartedMsg:
@@ -269,12 +299,25 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		// but don't rely on it). Arm the recovery tick so a dropped first-turn
 		// Result still clears responding.
 		m.turnCostBaseline = msg.sess.Cost()
-		return m, tea.Batch(
-			pollChatChCmd(msg.sess),
-			chatRecoveryTickCmd(msg.sess, m.turnCostBaseline),
-		)
+		if !m.pollSession {
+			return m, nil
+		}
+		return m, tea.Batch(pollChatChCmd(msg.sess), chatRecoveryTickCmd(msg.sess, m.turnCostBaseline))
 
 	case chatMsgsMsg:
+		if text, ok := chatErrorResponseText(msg.messages); ok {
+			if m.partialText != "" {
+				m.partialText = ""
+			}
+			m.responding = false
+			m.thinkingLine = ""
+			m.history += ErrorStyle.Render(text) + "\n"
+			if m.sess != nil {
+				m.turnCostBaseline = m.sess.Cost()
+			}
+			m.rebuildViewport()
+			return m, nil
+		}
 		for _, sdkMsg := range msg.messages {
 			if sdkMsg.Assistant != nil {
 				hasText := false
@@ -335,7 +378,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 		}
 		m.rebuildViewport()
-		if m.sess != nil {
+		if m.pollSession && m.sess != nil {
 			cmds = append(cmds, pollChatChCmd(m.sess))
 		}
 
@@ -387,7 +430,18 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.responding = false
 		m.thinkingLine = ""
 		m.sess = nil
-		m.history += "  [session ended — send your message again to reconnect]\n"
+		if m.partialText != "" {
+			m.history += m.partialText
+			m.partialText = ""
+		}
+		detail := ""
+		if msg.err != nil {
+			detail = strings.TrimSpace(msg.err.Error())
+		}
+		if detail == "" {
+			detail = "session ended"
+		}
+		m.history += "  " + ErrorStyle.Render(detail) + "\n"
 		m.rebuildViewport()
 		return m, nil
 
@@ -420,6 +474,9 @@ type chatSessionStartedMsg struct {
 // startSessionCmd launches the interactive claude session for the chat.
 func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 	return func() tea.Msg {
+		if m.startSession != nil {
+			return m.startSession(initialQuestion)
+		}
 		prompt := initialQuestion
 		skillInstruction := chatSkillInstruction(m.skillsDir)
 		if skillInstruction != "" {
@@ -436,26 +493,12 @@ func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 			TurnMode:        ports.TurnModeInteractive,
 		})
 		if err != nil {
-			return chatMsgsMsg{messages: []llm.SDKMessage{
-				{Type: "assistant", Assistant: &llm.AssistantMessage{
-					Message: llm.ConversationMsg{
-						Role:    "assistant",
-						Content: []llm.ContentBlock{{Type: "text", Text: "Error starting session: " + err.Error()}},
-					},
-				}},
-			}}
+			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}
 		}
 		sessOpts.InitialPrompt = prompt
 		sess, err := m.sessionMgr.StartSession(chatSessionID, "", feature.PhaseResearch, cmd, m.workDir, env, sessOpts)
 		if err != nil {
-			return chatMsgsMsg{messages: []llm.SDKMessage{
-				{Type: "assistant", Assistant: &llm.AssistantMessage{
-					Message: llm.ConversationMsg{
-						Role:    "assistant",
-						Content: []llm.ContentBlock{{Type: "text", Text: "Error starting session: " + err.Error()}},
-					},
-				}},
-			}}
+			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}
 		}
 		return chatSessionStartedMsg{sess: sess}
 	}
@@ -466,6 +509,40 @@ func chatSkillInstruction(skillsDir string) string {
 		return ""
 	}
 	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", filepath.Join(skillsDir, "chat", "SKILL.md"))
+}
+
+func chatErrorResponseText(messages []llm.SDKMessage) (string, bool) {
+	var lastText string
+	var hasErrorResult bool
+	for _, msg := range messages {
+		if msg.Assistant != nil {
+			for _, block := range msg.Assistant.Message.Content {
+				if block.IsText() && strings.TrimSpace(block.Text) != "" {
+					lastText = strings.TrimSpace(block.Text)
+				}
+			}
+		}
+		if msg.Result != nil && chatResultIsError(msg.Result) {
+			hasErrorResult = true
+			if strings.TrimSpace(msg.Result.Result) != "" {
+				lastText = strings.TrimSpace(msg.Result.Result)
+			}
+		}
+	}
+	if !hasErrorResult {
+		return "", false
+	}
+	if lastText == "" {
+		lastText = "Session error"
+	}
+	return lastText, true
+}
+
+func chatResultIsError(result *llm.ResultMessage) bool {
+	if result == nil {
+		return false
+	}
+	return result.IsError || result.Subtype == "error" || result.Subtype == "max_budget"
 }
 
 // chatRecoveryTickCmd schedules a chatRecoveryTickMsg after chatRecoveryInterval.

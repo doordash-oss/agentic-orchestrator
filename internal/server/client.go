@@ -280,6 +280,12 @@ func (c *Client) SendHelp(ctx context.Context, req HelpAnswerRequest) (HelpSendR
 	return out, err
 }
 
+func (c *Client) StartChat(ctx context.Context, req ChatStartRequest) (ChatStartResponse, error) {
+	var out ChatStartResponse
+	err := c.doJSON(ctx, http.MethodPost, "/api/v1/prompts/chat/start", nil, req, &out, true)
+	return out, err
+}
+
 func (c *Client) UpdateRuntimeConfig(ctx context.Context, req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
 	var out RuntimeConfigUpdateResponse
 	err := c.doJSON(ctx, http.MethodPatch, "/api/v1/config/runtime", nil, req, &out, true)
@@ -289,6 +295,12 @@ func (c *Client) UpdateRuntimeConfig(ctx context.Context, req RuntimeConfigMutat
 func (c *Client) PublishFeature(ctx context.Context, featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
 	var out PublishFeatureResponse
 	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "publish"), nil, req, &out, true)
+	return out, err
+}
+
+func (c *Client) GeneratePublishDescription(ctx context.Context, featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error) {
+	var out PublishDescriptionResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "publish")+"/description", nil, req, &out, true)
 	return out, err
 }
 

@@ -687,6 +687,12 @@ type HelpSendResponse struct {
 	Result    string `json:"result"`
 }
 
+type ChatStartResponse struct {
+	ActionResponseMeta
+	SessionID string `json:"session_id"`
+	Result    string `json:"result"`
+}
+
 type RuntimeConfigUpdateResponse struct {
 	ActionResponseMeta
 	Result string `json:"result"`
@@ -695,6 +701,14 @@ type RuntimeConfigUpdateResponse struct {
 type PublishFeatureResponse struct {
 	ActionResponseMeta
 	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+type PublishDescriptionResponse struct {
+	ActionResponseMeta
+	FeatureID string `json:"feature_id"`
+	Title     string `json:"title"`
+	Body      string `json:"body"`
 	Result    string `json:"result"`
 }
 

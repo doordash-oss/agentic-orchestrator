@@ -214,6 +214,33 @@ func TestChatMsgsMsgStreaming(t *testing.T) {
 	}
 }
 
+func TestChatMsgsMsgSnapshotDrivenModeDoesNotPollSessionChannel(t *testing.T) {
+	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
+	m.responding = true
+	m.pollSession = false
+	m.sess = session.NewSession("", "", 0)
+
+	updated, cmd := m.Update(chatMsgsMsg{
+		messages: []llm.SDKMessage{
+			{
+				Type: "assistant",
+				Assistant: &llm.AssistantMessage{
+					Message: llm.ConversationMsg{
+						Content: []llm.ContentBlock{{Type: "text", Text: "Snapshot answer"}},
+					},
+				},
+			},
+		},
+	})
+
+	if !strings.Contains(updated.history, "Snapshot answer") {
+		t.Fatalf("expected snapshot answer in history, got %q", updated.history)
+	}
+	if cmd != nil {
+		t.Fatal("expected nil cmd in snapshot-driven mode")
+	}
+}
+
 func TestChatDoneMsgResetsState(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
 	m.responding = true
@@ -325,12 +352,12 @@ func TestChatStartSessionUsesCallback(t *testing.T) {
 	if !reflect.DeepEqual(capturedOpts.DisallowedTools, expectedDisallowed) {
 		t.Errorf("expected disallowed tools %v, got %v", expectedDisallowed, capturedOpts.DisallowedTools)
 	}
-	// Verify it returned an error message (since our callback returned an error)
-	chatMsgs, ok := msg.(chatMsgsMsg)
+	// Verify it returned a terminal error message (since our callback returned an error).
+	errMsg, ok := msg.(chatSendErrorMsg)
 	if !ok {
-		t.Fatalf("expected chatMsgsMsg, got %T", msg)
+		t.Fatalf("expected chatSendErrorMsg, got %T", msg)
 	}
-	if len(chatMsgs.messages) == 0 {
+	if errMsg.err == nil || !strings.Contains(errMsg.err.Error(), "test: stop here") {
 		t.Fatal("expected error message")
 	}
 }

@@ -53,6 +53,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui"
 	"github.com/doordash-oss/agentic-orchestrator/internal/tui/markdown"
+	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"go.uber.org/fx"
 	"golang.org/x/term"
 )
@@ -729,13 +730,15 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 }
 
 type serverMutationTarget struct {
-	mu         sync.Mutex
-	orch       *orchestrator.Orchestrator
-	cfg        *config.Config
-	configPath string
-	store      *feature.Store
-	sessions   ports.SessionManager
-	reviewer   ports.ReviewCommentOperator
+	mu           sync.Mutex
+	orch         *orchestrator.Orchestrator
+	cfg          *config.Config
+	configPath   string
+	store        *feature.Store
+	sessions     ports.SessionManager
+	phaseRunner  *agent.PhaseRunner
+	workspaceDir string
+	reviewer     ports.ReviewCommentOperator
 }
 
 func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (serverruntime.CreateFeatureResponse, error) {
@@ -954,6 +957,104 @@ func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (se
 	return serverruntime.HelpSendResponse{FeatureID: sess.FeatureID(), SessionID: sess.ID(), Result: "sent"}, nil
 }
 
+const serverChatSessionID = "__chat__"
+
+func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (serverruntime.ChatStartResponse, error) {
+	message := strings.TrimSpace(req.Message)
+	if message == "" {
+		return serverruntime.ChatStartResponse{}, errors.New("message is required")
+	}
+	if t.sessions == nil {
+		return serverruntime.ChatStartResponse{}, errors.New("session manager is not available")
+	}
+	if sess := t.sessions.GetSession(serverChatSessionID); sess != nil && sess.IsActive() {
+		if err := sess.SendUserMessage(message); err != nil {
+			return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
+		}
+		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: "sent"}, nil
+	}
+	if t.phaseRunner == nil {
+		return serverruntime.ChatStartResponse{}, errors.New("phase runner is not available")
+	}
+
+	prompt := message
+	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
+		prompt = instruction + "\n\n" + prompt
+	}
+	model := "sonnet"
+	if t.cfg != nil && t.cfg.Defaults.Models.Utilities != "" {
+		model = t.cfg.Defaults.Models.Utilities
+	}
+	model = t.phaseRunner.ModelForRole(model, llm.PhaseChat)
+	workDir := t.workspaceDir
+	if workDir == "" {
+		workDir = t.phaseRunner.StateDir
+	}
+	chatDir := filepath.Join(t.phaseRunner.StateDir, "chat")
+	if err := os.MkdirAll(chatDir, 0o755); err != nil {
+		return serverruntime.ChatStartResponse{}, fmt.Errorf("prepare chat state: %w", err)
+	}
+	cmd, env, sessOpts, err := t.phaseRunner.BuildSession(agent.BuildSessionOpts{
+		Model:           model,
+		Prompt:          prompt,
+		SystemPrompt:    t.buildChatContext(),
+		DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "Bash"},
+		WorkDir:         workDir,
+		PIDDir:          chatDir,
+		PermHandler:     &session.ReadOnlyHandler{},
+		Phase:           utilskill.PhaseAll,
+		TurnMode:        ports.TurnModeInteractive,
+	})
+	if err != nil {
+		return serverruntime.ChatStartResponse{}, fmt.Errorf("build chat session: %w", err)
+	}
+	if sessOpts == nil {
+		sessOpts = &ports.SessionOpts{}
+	}
+	sessOpts.InitialPrompt = prompt
+	sessOpts.TurnMode = ports.TurnModeInteractive
+	sessOpts.Label = "chat"
+	sessOpts.LogPath = filepath.Join(chatDir, "output.txt")
+	sess, err := t.sessions.StartSession(serverChatSessionID, serverChatSessionID, feature.PhaseResearch, cmd, workDir, env, sessOpts)
+	if err != nil {
+		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
+	}
+	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: "started"}, nil
+}
+
+func serverChatSkillInstruction(skillsDir string) string {
+	if strings.TrimSpace(skillsDir) == "" {
+		return ""
+	}
+	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", filepath.Join(skillsDir, "chat", "SKILL.md"))
+}
+
+func (t *serverMutationTarget) buildChatContext() string {
+	if t.store == nil {
+		return ""
+	}
+	features, err := t.store.List()
+	if err != nil || len(features) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n## Current Features\n\n")
+	for _, f := range features {
+		if f == nil {
+			continue
+		}
+		fmt.Fprintf(&b, "- **%s** (ID: %s): %s - Status: %s\n", f.Name, f.ID, f.Description, f.Status)
+		if len(f.Repos) > 0 {
+			fmt.Fprintf(&b, "  Repo: %s", f.Repos[0].Path)
+			if f.Repos[0].WorktreePath != "" {
+				fmt.Fprintf(&b, ", Worktree: %s", f.Repos[0].WorktreePath)
+			}
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
 func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMutationRequest) (serverruntime.RuntimeConfigUpdateResponse, error) {
 	if t.configPath == "" {
 		return serverruntime.RuntimeConfigUpdateResponse{}, errors.New("config path is not available")
@@ -1038,19 +1139,37 @@ func (t *serverMutationTarget) ExecuteRecovery(ctx context.Context, items []port
 }
 
 func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.PublishFeatureResponse, error) {
-	if err := t.ensureWholeFeatureRepoSelection(featureID, req.Repos, "publish"); err != nil {
-		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "unsupported"}, err
-	}
 	if t.orch == nil {
 		return serverruntime.PublishFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
-	if err := t.orch.Publish(featureID); err != nil {
+	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
+		Repos: req.Repos,
+		Title: req.Title,
+		Body:  req.Body,
+	}); err != nil {
 		if conflict := actionConflictError(err); conflict != nil {
 			return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "conflict"}, conflict
 		}
 		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "failed"}, err
 	}
 	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
+}
+
+func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
+	if t.phaseRunner == nil {
+		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("phase runner is not available")
+	}
+	title, body, err := t.phaseRunner.RunDescriptionGeneration(context.Background(), req.Model, agent.PRContext{
+		FeatureName:        req.FeatureName,
+		FeatureDescription: req.FeatureDescription,
+		Roadmap:            req.Roadmap,
+		CommitBodies:       req.CommitBodies,
+		DiffStat:           req.DiffStat,
+	})
+	if err != nil {
+		return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, err
+	}
+	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, nil
 }
 
 func (t *serverMutationTarget) MergeFeature(featureID string) (serverruntime.MergeFeatureResponse, error) {
@@ -2521,12 +2640,14 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Events:       boot.eventCh,
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: &serverMutationTarget{
-			orch:       boot.orchestrator,
-			cfg:        boot.cfg,
-			configPath: boot.runtime.Config,
-			store:      boot.featureManager.Store,
-			sessions:   boot.sessionManager,
-			reviewer:   &git.ReviewCommentAdapter{},
+			orch:         boot.orchestrator,
+			cfg:          boot.cfg,
+			configPath:   boot.runtime.Config,
+			store:        boot.featureManager.Store,
+			sessions:     boot.sessionManager,
+			phaseRunner:  boot.phaseRunner,
+			workspaceDir: boot.workspaceDir,
+			reviewer:     &git.ReviewCommentAdapter{},
 		},
 		RequestShutdown: requestShutdown,
 	})

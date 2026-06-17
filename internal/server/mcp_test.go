@@ -918,8 +918,16 @@ func (f *fakeMutationTarget) SendHelp(req HelpAnswerRequest) (HelpSendResponse, 
 	return HelpSendResponse{FeatureID: req.FeatureID, SessionID: req.SessionID, Result: "sent"}, nil
 }
 
+func (f *fakeMutationTarget) StartChat(ChatStartRequest) (ChatStartResponse, error) {
+	return ChatStartResponse{SessionID: "chat-1", Result: "started"}, nil
+}
+
 func (f *fakeMutationTarget) RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
 	return RuntimeConfigUpdateResponse{Result: "updated"}, nil
+}
+
+func (f *fakeMutationTarget) GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error) {
+	return PublishDescriptionResponse{FeatureID: featureID, Title: "Generated title", Body: "Generated body", Result: "generated"}, nil
 }
 
 func (f *fakeMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {

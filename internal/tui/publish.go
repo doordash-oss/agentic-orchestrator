@@ -25,7 +25,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -97,7 +96,7 @@ type PublishModel struct {
 	prCtx       agent.PRContext // lean context for PR description generation; filled by caller
 	runDesc     publishDescriptionRunner
 	spinnerView string // set by parent from app-level spinner
-	viewport    viewport.Model
+	viewport    reviewViewportModel
 	titleInput  textinput.Model
 	bodyInput   textarea.Model
 	editingBody bool // true when body textarea is focused
@@ -121,13 +120,8 @@ type PublishModel struct {
 // textarea used by every publish model. The trio's dimensions and behavior
 // are identical for single- and multi-repo publish flows; only the gating
 // of the repo-select step (driven by len(f.Repos) > 1) differs across N.
-func newPublishViewport(width, height int, prTitle, prBody, diff string) (viewport.Model, textinput.Model, textarea.Model) {
-	vpW := max(width-6, 40)
-	vpH := max(height-8, 10)
-	vp := viewport.New(viewport.WithWidth(vpW), viewport.WithHeight(vpH))
-	vp.SoftWrap = true
-	vp.SetContent(colorizeDiff(diff))
-
+func newPublishViewport(width, height int, prTitle, prBody, diff string) (reviewViewportModel, textinput.Model, textarea.Model) {
+	vp := newReviewViewportModel(width, height, colorizeDiff(diff))
 	ti := textinput.New()
 	ti.Placeholder = "PR title"
 	ti.CharLimit = 120
@@ -343,8 +337,7 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.viewport.SetWidth(max(msg.Width-6, 40))
-		m.viewport.SetHeight(max(msg.Height-8, 10))
+		m.viewport.Resize(msg.Width, msg.Height)
 		m.bodyInput.SetWidth(max(msg.Width-8, 40))
 		m.bodyInput.SetHeight(max(msg.Height-14, 8))
 	}
@@ -674,14 +667,17 @@ func (m PublishModel) View() string {
 	}
 
 	box := panelStyle(true).Width(boxWidth).Render(content)
-	box = renderBorderTitle(box, title, TitleStyle)
+	if m.step == publishStepDiff || m.step == publishStepCommits {
+		box = renderReviewViewportBox(boxWidth, title, m.viewport)
+	} else {
+		box = renderBorderTitle(box, title, TitleStyle)
+	}
 	b.WriteString(" " + strings.ReplaceAll(box, "\n", "\n "))
 
 	// Scroll indicator for viewport steps
 	if m.step == publishStepDiff || m.step == publishStepCommits {
-		pct := m.viewport.ScrollPercent()
 		b.WriteString("\n")
-		b.WriteString(MutedStyle.Render(fmt.Sprintf("  %3.0f%%", pct*100)))
+		b.WriteString(renderReviewViewportScrollPercent(m.viewport))
 	}
 
 	b.WriteString("\n")

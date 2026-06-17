@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -384,13 +385,33 @@ func TestAPIAppModelDiffUsesSavedFeatureBaseBranch(t *testing.T) {
 		t.Fatal("openSelectedDiff returned nil command")
 	}
 	rawMsg := cmd()
-	msg, ok := rawMsg.(apiTextPanelMsg)
+	msg, ok := rawMsg.(apiDiffReviewMsg)
 	if !ok {
-		t.Fatalf("openSelectedDiff command returned %T, want apiTextPanelMsg", rawMsg)
+		t.Fatalf("openSelectedDiff command returned %T, want apiDiffReviewMsg", rawMsg)
 	}
 	content := stripANSI(msg.content)
 	if !strings.Contains(content, "-release-base") || strings.Contains(content, "-main-base") {
 		t.Fatalf("diff content should be based on saved feature base branch release:\n%s", content)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	if cmd == nil {
+		t.Fatal("Update(v) returned nil command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	view := stripANSI(model.(APIAppModel).View().Content)
+	for _, want := range []string{"Diff Review", "-release-base", "0%"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("diff review view missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Diff: base-aware-diff") {
+		t.Fatalf("diff review rendered generic text panel title instead of review chrome:\n%s", view)
+	}
+
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if model.(APIAppModel).diffReview != nil {
+		t.Fatal("Escape did not close diff review")
 	}
 }
 
@@ -1256,6 +1277,121 @@ func TestAPIAppModelContentKeysCycleArtifactsAndLogsThroughREST(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelContentViewRendersFullScreen(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
+			ActiveRun:      &server.RunSummaryDTO{RunNumber: 7, CurrentPhase: "implement", ArtifactCount: 1},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "plan", RunNumber: 7, Phase: "plan", Size: 16, ContentAvailable: true},
+		}},
+		logContent: server.TextContentResponse{
+			ID:     "session",
+			Offset: 0,
+			Limit:  apiContentTailLimit,
+			Size:   21,
+			Text:   "content view log tail",
+		},
+		artifactContent: server.TextContentResponse{
+			ID:     "plan",
+			Offset: 0,
+			Limit:  apiContentTailLimit,
+			Size:   16,
+			Text:   "content artifact",
+		},
+	}
+	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if cmd == nil {
+		t.Fatal("Update(l) returned nil command, want log content fetch command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	view := stripANSI(model.(APIAppModel).View().Content)
+
+	for _, want := range []string{"Run Content", "content view log tail", "content artifact", "Next log"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("content view missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Features", "Client cutover", "IN PROGRESS"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("content view included dashboard chrome %q:\n%s", notWant, view)
+		}
+	}
+}
+
+func TestAPIAppModelMissingRunLogsDoNotShowRawAPIError(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	notFoundLogErr := func(logID string) error {
+		return &server.APIError{
+			Status:  http.StatusNotFound,
+			Code:    "not_found",
+			Message: "content not found",
+			Method:  http.MethodGet,
+			Path:    "/api/v1/features/active/runs/7/logs/" + logID,
+		}
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
+			ActiveRun:      &server.RunSummaryDTO{RunNumber: 7, CurrentPhase: "implement", ArtifactCount: 1},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "plan", RunNumber: 7, Phase: "plan", Size: 16, ContentAvailable: true},
+		}},
+		artifactContent: server.TextContentResponse{
+			ID:     "plan",
+			Offset: 0,
+			Limit:  apiContentTailLimit,
+			Size:   16,
+			Text:   "content artifact",
+		},
+		logContentErrByID: map[string]error{
+			"session": notFoundLogErr("session"),
+			"phase":   notFoundLogErr("phase"),
+			"observe": notFoundLogErr("observe"),
+		},
+	}
+	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	if cmd == nil {
+		t.Fatal("Update(l) returned nil command, want log content fetch command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	updated := model.(APIAppModel)
+
+	if got := updated.statusMessage; got != "No run logs available for selected run" {
+		t.Fatalf("statusMessage = %q, want friendly missing-log status", got)
+	}
+	if strings.Contains(updated.statusMessage, "api GET") || strings.Contains(updated.statusMessage, "not_found") {
+		t.Fatalf("statusMessage leaked raw API error: %q", updated.statusMessage)
+	}
+	view := stripANSI(updated.View().Content)
+	if !strings.Contains(view, "content artifact") {
+		t.Fatalf("content view lost artifact after missing logs:\n%s", view)
+	}
+}
+
 func TestAPIAppModelContentRefreshPreservesSelectedArtifactAndLog(t *testing.T) {
 	t.Parallel()
 
@@ -1796,15 +1932,42 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 	}
 
 	model, cmd = overview.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
-	if cmd != nil {
-		t.Fatal("Update(/) returned command without REST chat support")
+	chatting := model.(APIAppModel)
+	if !chatting.chatOpen {
+		t.Fatal("Update(/) did not open AMA chat")
 	}
-	chat := model.(APIAppModel)
-	if !strings.Contains(chat.statusMessage, "REST chat endpoint") {
-		t.Fatalf("status after / = %q, want chat unavailable status", chat.statusMessage)
+	if view := stripANSI(chatting.View().Content); !strings.Contains(view, "Ask me Anything") {
+		t.Fatalf("chat view missing AMA panel:\n%s", view)
 	}
 
-	model, cmd = chat.Update(tea.KeyPressMsg{Code: 'N', Text: "N"})
+	chatting.chat.input.SetValue("what is running?")
+	model, cmd = chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start mutation")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	startedChat := model.(APIAppModel)
+	if got := client.startChatRequests; len(got) != 1 || got[0].Message != "what is running?" {
+		t.Fatalf("StartChat requests = %+v, want first AMA message", got)
+	}
+	if startedChat.chat.sess == nil || startedChat.chat.sess.ID() != chatSessionID {
+		t.Fatalf("chat session = %#v, want %s", startedChat.chat.sess, chatSessionID)
+	}
+	if got := startedChat.chat.sess.FeatureID(); got != chatSessionID {
+		t.Fatalf("chat session FeatureID() = %q, want utility identity %q", got, chatSessionID)
+	}
+
+	model, cmd = startedChat.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("Update(esc) returned nil command, want ChatExitMsg")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	closedChat := model.(APIAppModel)
+	if closedChat.chatOpen {
+		t.Fatal("ChatExitMsg did not close AMA panel")
+	}
+
+	model, cmd = closedChat.Update(tea.KeyPressMsg{Code: 'N', Text: "N"})
 	if cmd == nil {
 		t.Fatal("Update(Shift+N) returned nil command, want input-alert mutation")
 	}
@@ -1825,6 +1988,95 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 	helping := model.(APIAppModel)
 	if !helping.helpOverlayActive {
 		t.Fatal("Update(?) did not open help overlay")
+	}
+}
+
+func TestAPIAppModelChatStartErrorStopsRespondingAndRendersError(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		startChatErr: errors.New("monthly spend limit"),
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("yo")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	failed := model.(APIAppModel)
+
+	if failed.chat.responding {
+		t.Fatal("chat remained responding after start error")
+	}
+	view := stripANSI(failed.View().Content)
+	if !strings.Contains(view, "Error starting session: monthly spend limit") {
+		t.Fatalf("chat view missing start error:\n%s", view)
+	}
+	if strings.Contains(view, "Thinking") || strings.Contains(view, "[esc] Background") {
+		t.Fatalf("chat view still shows responding UI after start error:\n%s", view)
+	}
+}
+
+func TestAPIAppModelChatRefreshRendersResultErrorAsRedResponse(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("yo")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	started := model.(APIAppModel)
+	const errorText = "You've hit your org's monthly spend limit."
+
+	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{
+			SessionSummaryDTO: server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "failed"},
+			TranscriptCursor:  server.CursorDTO{Total: 2, Start: 0, End: 2},
+		}},
+		Transcript: &server.TranscriptResponse{
+			Cursor: server.CursorDTO{Total: 2, Start: 0, End: 2},
+			Messages: []server.TranscriptMessageDTO{
+				{Index: 0, Role: "assistant", Type: "text", Text: errorText},
+				{Index: 1, Role: "system", Type: "result", Status: "error", Redacted: true},
+			},
+		},
+	}})
+	failed := model.(APIAppModel)
+
+	if failed.chat.responding {
+		t.Fatal("chat remained responding after transcript result error")
+	}
+	if !strings.Contains(failed.chat.history, ErrorStyle.Render(errorText)) {
+		t.Fatalf("chat history missing red error response: %q", failed.chat.history)
+	}
+	view := stripANSI(failed.View().Content)
+	if !strings.Contains(view, errorText) {
+		t.Fatalf("chat view missing transcript error:\n%s", view)
+	}
+	if strings.Contains(view, "Refresh failed") || strings.Contains(view, "Thinking") {
+		t.Fatalf("chat view rendered refresh/thinking noise after transcript error:\n%s", view)
 	}
 }
 
@@ -2110,13 +2362,17 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		key        tea.KeyPressMsg
-		actionID   string
-		wantKind   string
-		accepted   apiTestActionResponse
-		cycle      *server.CycleDTO
-		disabled   bool
+		name     string
+		key      tea.KeyPressMsg
+		actionID string
+		wantKind string
+		accepted apiTestActionResponse
+		cycle    *server.CycleDTO
+		disabled bool
+		refresh  struct {
+			cycleType string
+			wantLabel string
+		}
 		assertCall func(t *testing.T, client *fakeTUIAPIClient)
 	}{
 		{
@@ -2151,6 +2407,10 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			actionID: "rebase",
 			wantKind: "feature.rebase",
 			accepted: apiTestActionResponse{},
+			refresh: struct {
+				cycleType string
+				wantLabel string
+			}{cycleType: "rebase", wantLabel: "Rebasing"},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.startRebaseFeatureIDs, ","); got != "active" {
@@ -2183,6 +2443,10 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			actionID: "tweak",
 			wantKind: "feature.tweak.start",
 			accepted: apiTestActionResponse{},
+			refresh: struct {
+				cycleType string
+				wantLabel string
+			}{cycleType: "tweak", wantLabel: "Tweaking"},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
 				if got := strings.Join(client.startTweakFeatureIDs, ","); got != "active" {
@@ -2306,14 +2570,36 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 				t.Fatalf("Update(y) for %s returned nil command, want REST mutation command", tt.name)
 			}
 			msg := cmd()
-			model, _ = model.(APIAppModel).Update(msg)
+			model, cmd = model.(APIAppModel).Update(msg)
 			accepted := model.(APIAppModel)
 
 			tt.assertCall(t, client)
+
+			if tt.refresh.wantLabel != "" {
+				if cmd == nil {
+					t.Fatalf("%s mutation result returned nil command, want immediate feature detail refresh", tt.name)
+				}
+				client.detail = server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+					FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "CodeReady", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+					RepoStatus: []server.RepoStatusDTO{
+						{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: tt.refresh.cycleType, CycleStatus: "running"},
+					},
+				}}
+				msg = cmd()
+				model, _ = accepted.Update(msg)
+				accepted = model.(APIAppModel)
+			}
+
 			view := stripANSI(accepted.View().Content)
 			wantStatus := "Completed " + apiMutationKindLabel(tt.wantKind)
+			if tt.refresh.wantLabel != "" {
+				wantStatus = "Started " + apiMutationKindLabel(tt.wantKind)
+			}
 			if !strings.Contains(view, wantStatus) {
 				t.Fatalf("API app View() missing %q in:\n%s", wantStatus, view)
+			}
+			if tt.refresh.wantLabel != "" && !strings.Contains(view, tt.refresh.wantLabel) {
+				t.Fatalf("API app View() missing refreshed cycle label %q in:\n%s", tt.refresh.wantLabel, view)
 			}
 			if tt.wantKind == "feature.delete" {
 				if strings.Contains(view, "active") {
@@ -3636,7 +3922,7 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 		t.Fatal("Update(Shift+A) returned nil command, want review-comments start mutation")
 	}
 	msg = cmd()
-	model, _ = model.(APIAppModel).Update(msg)
+	model, cmd = model.(APIAppModel).Update(msg)
 	started := model.(APIAppModel)
 
 	if got := strings.Join(client.startReviewCommentsFeatureIDs, ","); got != "active" {
@@ -3645,8 +3931,22 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	if got := client.startReviewCommentsRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Mode != "auto" || len(got[0].Comments) != 1 || got[0].Comments[0].ID != 101 || got[0].Comments[0].DiffHunk == "" {
 		t.Fatalf("StartReviewComments requests = %+v, want agentic-orchestrator auto with previewed comment", got)
 	}
+	if cmd == nil {
+		t.Fatal("review-comments mutation result returned nil command, want immediate feature detail refresh")
+	}
+
+	client.detail = server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+		FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		RepoStatus: []server.RepoStatusDTO{
+			{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "review-comments", CycleStatus: "running"},
+		},
+	}}
+	msg = cmd()
+	model, _ = started.Update(msg)
+	started = model.(APIAppModel)
+
 	view = stripANSI(started.View().Content)
-	for _, want := range []string{"Completed Review Comments", "active"} {
+	for _, want := range []string{"Started Review Comments", "active", "Addressing Review Comments"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -3718,7 +4018,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 		t.Fatal("Update(enter) returned nil command, want refactor start mutation")
 	}
 	msg := cmd()
-	model, _ = model.(APIAppModel).Update(msg)
+	model, cmd = model.(APIAppModel).Update(msg)
 	started := model.(APIAppModel)
 
 	if got := strings.Join(client.startRefactorFeatureIDs, ","); got != "active" {
@@ -3727,8 +4027,22 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Prompt != "extract transport boundary" || got[0].Pipeline != feature.PipelineLarge {
 		t.Fatalf("StartRefactor requests = %+v, want agentic-orchestrator prompt with large pipeline", got)
 	}
-	view = stripANSI(started.View().Content)
-	for _, want := range []string{"Completed Refactor", "active"} {
+	if cmd == nil {
+		t.Fatal("refactor mutation result returned nil command, want immediate feature detail refresh")
+	}
+
+	client.detail = server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+		FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		RepoStatus: []server.RepoStatusDTO{
+			{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "refactor", CycleStatus: "running"},
+		},
+	}}
+	msg = cmd()
+	model, _ = started.Update(msg)
+	refreshed := model.(APIAppModel)
+
+	view = stripANSI(refreshed.View().Content)
+	for _, want := range []string{"Started Refactor", "active", "Refactoring"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4021,20 +4335,28 @@ func TestAPIAppModelIgnoresStaleDetailErrorForRemovedFeature(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelPublishConfirmsBeforeRESTMutation(t *testing.T) {
+func TestAPIAppModelPublishOpensReviewFlowBeforeRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
 		}},
 		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "implement"},
+			FeatureSummary: server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
+			RepoStatus: []server.RepoStatusDTO{
+				{Name: "api", Publishable: true, Touched: true},
+			},
 			Actions: []server.ActionDTO{
 				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
 			},
 		}},
-		publishAccepted: apiTestActionResponse{},
+		runtime: server.RuntimeConfigResponse{
+			Repos: []server.ConfigRepoDTO{{Name: "api", Path: "/tmp/api"}},
+		},
+		publishDescriptionTitle: "AI: Ready to publish",
+		publishDescriptionBody:  "AI generated commit summary with implementation details.",
+		publishAccepted:         apiTestActionResponse{},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -4043,32 +4365,73 @@ func TestAPIAppModelPublishConfirmsBeforeRESTMutation(t *testing.T) {
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	if cmd != nil {
-		t.Fatal("Update(p) returned command before confirmation")
+		t.Fatal("Update(p) returned command before publish review")
 	}
-	confirming := model.(APIAppModel)
-	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Confirm Publish") {
-		t.Fatalf("View() missing publish confirmation in:\n%s", view)
+	reviewing := model.(APIAppModel)
+	view := stripANSI(reviewing.View().Content)
+	for _, want := range []string{"Publish Feature", "Diff Review"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("publish review missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Confirm Publish") {
+		t.Fatalf("publish opened generic confirmation instead of review flow:\n%s", view)
 	}
 	if len(client.publishFeatureIDs) != 0 {
-		t.Fatalf("PublishFeature calls = %v before confirmation, want none", client.publishFeatureIDs)
+		t.Fatalf("PublishFeature calls = %v before publish review confirmation, want none", client.publishFeatureIDs)
 	}
 
-	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if cmd == nil {
-		t.Fatal("Update(y) returned nil command, want publish mutation command")
+	model, cmd = reviewing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter on diff) returned command before commit review")
 	}
-	msg := cmd()
-	model, _ = model.(APIAppModel).Update(msg)
+	commits := model.(APIAppModel)
+	if view := stripANSI(commits.View().Content); !strings.Contains(view, "Commit Log") {
+		t.Fatalf("publish review did not advance to commit log:\n%s", view)
+	}
+
+	model, cmd = commits.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter on commits) returned nil command, want PR description generation")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	describing := model.(APIAppModel)
+	if view := stripANSI(describing.View().Content); !strings.Contains(view, "PR Description") {
+		t.Fatalf("publish review did not advance to PR description:\n%s", view)
+	} else if !strings.Contains(view, client.publishDescriptionBody) {
+		t.Fatalf("publish PR description missing generated AI body %q in:\n%s", client.publishDescriptionBody, view)
+	}
+	if got := client.publishDescriptionFeatureIDs; strings.Join(got, ",") != "ready" {
+		t.Fatalf("GeneratePublishDescription feature IDs = %v, want ready", got)
+	}
+	if got := client.publishDescriptionRequests; len(got) != 1 || got[0].FeatureName != "Ready to publish" || strings.TrimSpace(got[0].Model) == "" {
+		t.Fatalf("GeneratePublishDescription requests = %+v, want publish context with model", got)
+	}
+
+	model, cmd = describing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter on PR description) returned command before final confirmation")
+	}
+	confirming := model.(APIAppModel)
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Ready to push and create PR?") {
+		t.Fatalf("publish review did not show final confirmation:\n%s", view)
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter on final confirmation) returned nil command, want publish mutation command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
 	published := model.(APIAppModel)
 
 	if got := strings.Join(client.publishFeatureIDs, ","); got != "ready" {
 		t.Fatalf("PublishFeature calls = %q, want ready", got)
 	}
-	view := stripANSI(published.View().Content)
-	for _, want := range []string{"Completed Publish", "ready"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("API app View() missing %q in:\n%s", want, view)
-		}
+	if got := client.publishRequests; len(got) != 1 || len(got[0].Repos) != 0 || got[0].Title != client.publishDescriptionTitle || got[0].Body != client.publishDescriptionBody {
+		t.Fatalf("PublishFeature requests = %+v, want whole-feature request with generated title/body", got)
+	}
+	if view := stripANSI(published.View().Content); !strings.Contains(view, "Completed Publish") {
+		t.Fatalf("API app View() missing completed publish status:\n%s", view)
 	}
 }
 
@@ -4077,10 +4440,10 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "implement", Repos: []string{"api", "web"}, CreatedAt: time.Now()},
+			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api", "web"}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
 		}},
 		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "implement", Repos: []string{"api", "web"}},
+			FeatureSummary: server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api", "web"}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
 			RepoStatus: []server.RepoStatusDTO{
 				{Name: "api", Publishable: true},
 				{Name: "web", Publishable: true},
@@ -4102,32 +4465,44 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 	}
 	selecting := model.(APIAppModel)
 	view := stripANSI(selecting.View().Content)
-	for _, want := range []string{"Select repo — Publish", "[x] api", "[x] web"} {
+	for _, want := range []string{"Publish Feature", "Select Repository", "api", "web"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("repo selector missing %q in:\n%s", want, view)
 		}
 	}
 
-	model, _ = selecting.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	model, _ = selecting.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "j"})
 	selecting = model.(APIAppModel)
 	model, cmd = selecting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
-		t.Fatal("Update(enter) returned command before publish confirmation")
+		t.Fatal("Update(enter) returned command before diff review")
 	}
-	confirming := model.(APIAppModel)
-	view = stripANSI(confirming.View().Content)
-	for _, want := range []string{"Confirm Publish", "Repos: web"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("publish confirmation missing %q in:\n%s", want, view)
-		}
+	reviewing := model.(APIAppModel)
+	if view := stripANSI(reviewing.View().Content); !strings.Contains(view, "Diff Review") {
+		t.Fatalf("publish selector did not advance to diff review:\n%s", view)
 	}
 
-	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if cmd == nil {
-		t.Fatal("Update(y) returned nil command, want publish mutation")
+	model, cmd = reviewing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter on diff) returned command before commit review")
 	}
-	msg := cmd()
-	model, _ = model.(APIAppModel).Update(msg)
+	commits := model.(APIAppModel)
+	model, cmd = commits.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter on commits) returned nil command, want PR description generation")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	describing := model.(APIAppModel)
+	model, cmd = describing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter on PR description) returned command before final confirmation")
+	}
+	confirming := model.(APIAppModel)
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter on final confirmation) returned nil command, want publish mutation")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
 	if got := client.publishRequests; len(got) != 1 || !slices.Equal(got[0].Repos, []string{"web"}) {
 		t.Fatalf("PublishFeature requests = %+v, want repos [web]", got)
 	}
@@ -5023,6 +5398,11 @@ type fakeTUIAPIClient struct {
 	publishErr                    error
 	publishFeatureIDs             []string
 	publishRequests               []server.PublishFeatureRequest
+	publishDescriptionFeatureIDs  []string
+	publishDescriptionRequests    []server.PublishDescriptionRequest
+	publishDescriptionTitle       string
+	publishDescriptionBody        string
+	publishDescriptionErr         error
 	mergeAccepted                 apiTestActionResponse
 	mergeErr                      error
 	mergeFeatureIDs               []string
@@ -5099,6 +5479,9 @@ type fakeTUIAPIClient struct {
 	helpAccepted                  apiTestActionResponse
 	helpErr                       error
 	helpRequests                  []server.HelpAnswerRequest
+	startChatAccepted             apiTestActionResponse
+	startChatErr                  error
+	startChatRequests             []server.ChatStartRequest
 	askUserAccepted               apiTestActionResponse
 	askUserErr                    error
 	askUserAnswers                []server.AskUserAnswerRequest
@@ -5127,6 +5510,8 @@ type fakeTUIAPIClient struct {
 	artifactContentQueries        []server.TextQuery
 	logContent                    server.TextContentResponse
 	logContentByID                map[string]server.TextContentResponse
+	logContentErrByID             map[string]error
+	logContentErr                 error
 	logContentFeatureIDs          []string
 	logContentRunNumbers          []int
 	logContentIDs                 []string
@@ -5222,8 +5607,14 @@ func (f *fakeTUIAPIClient) LogContent(_ context.Context, featureID string, runNu
 	f.logContentRunNumbers = append(f.logContentRunNumbers, runNumber)
 	f.logContentIDs = append(f.logContentIDs, logID)
 	f.logContentQueries = append(f.logContentQueries, query)
+	if err, ok := f.logContentErrByID[logID]; ok {
+		return server.TextContentResponse{}, err
+	}
 	if content, ok := f.logContentByID[logID]; ok {
 		return content, nil
+	}
+	if f.logContentErr != nil {
+		return server.TextContentResponse{}, f.logContentErr
 	}
 	return f.logContent, nil
 }
@@ -5287,6 +5678,18 @@ func (f *fakeTUIAPIClient) PublishFeature(_ context.Context, featureID string, r
 	f.publishFeatureIDs = append(f.publishFeatureIDs, featureID)
 	f.publishRequests = append(f.publishRequests, req)
 	return server.PublishFeatureResponse{FeatureID: f.publishAccepted.featureID(featureID), Result: f.publishAccepted.result("published")}, f.publishErr
+}
+
+func (f *fakeTUIAPIClient) GeneratePublishDescription(_ context.Context, featureID string, req server.PublishDescriptionRequest) (server.PublishDescriptionResponse, error) {
+	f.calls = append(f.calls, "GeneratePublishDescription")
+	f.publishDescriptionFeatureIDs = append(f.publishDescriptionFeatureIDs, featureID)
+	f.publishDescriptionRequests = append(f.publishDescriptionRequests, req)
+	return server.PublishDescriptionResponse{
+		FeatureID: featureID,
+		Title:     f.publishDescriptionTitle,
+		Body:      f.publishDescriptionBody,
+		Result:    "generated",
+	}, f.publishDescriptionErr
 }
 
 func (f *fakeTUIAPIClient) MergeFeature(_ context.Context, featureID string) (server.MergeFeatureResponse, error) {
@@ -5469,6 +5872,16 @@ func (f *fakeTUIAPIClient) SendHelp(_ context.Context, req server.HelpAnswerRequ
 	f.calls = append(f.calls, "SendHelp")
 	f.helpRequests = append(f.helpRequests, req)
 	return server.HelpSendResponse{FeatureID: req.FeatureID, SessionID: req.SessionID, Result: f.helpAccepted.result("sent")}, f.helpErr
+}
+
+func (f *fakeTUIAPIClient) StartChat(_ context.Context, req server.ChatStartRequest) (server.ChatStartResponse, error) {
+	f.calls = append(f.calls, "StartChat")
+	f.startChatRequests = append(f.startChatRequests, req)
+	sessionID := f.startChatAccepted.SessionID
+	if sessionID == "" {
+		sessionID = chatSessionID
+	}
+	return server.ChatStartResponse{SessionID: sessionID, Result: f.startChatAccepted.result("started")}, f.startChatErr
 }
 
 func (f *fakeTUIAPIClient) AnswerAskUser(_ context.Context, req server.AskUserAnswerRequest) (server.AskUserAnswerResponse, error) {

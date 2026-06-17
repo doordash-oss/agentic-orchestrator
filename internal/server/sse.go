@@ -235,6 +235,8 @@ func safeEventSummary(ev ports.Event) string {
 	switch ev.Type {
 	case ports.FeatureFailed:
 		return "feature failed"
+	case ports.FeatureRewound:
+		return "feature rewound"
 	case ports.PhaseCompleted:
 		return "phase completed"
 	case ports.PhaseStarted:

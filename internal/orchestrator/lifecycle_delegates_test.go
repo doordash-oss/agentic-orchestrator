@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -162,6 +163,14 @@ func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T)
 	}
 	if gotSourceRun != 1 || gotNewRun != 2 {
 		t.Errorf("hook source/new run = %d/%d, want 1/2", gotSourceRun, gotNewRun)
+	}
+	select {
+	case ev := <-o.Events():
+		if ev.Type != ports.FeatureRewound || ev.FeatureID != "feat-rewind" || ev.Phase != feature.PhaseImplement {
+			t.Fatalf("event = %+v, want FeatureRewound for feat-rewind implement", ev)
+		}
+	default:
+		t.Fatal("RewindWithRequest emitted no domain event, want FeatureRewound")
 	}
 }
 

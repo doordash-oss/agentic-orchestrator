@@ -1041,6 +1041,15 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 		switch completed.Item.Type {
 		case "agentMessage":
+			if strings.TrimSpace(completed.Item.Text) == "" {
+				p.mu.Lock()
+				if p.deltaBuf != nil {
+					delete(p.deltaBuf, completed.Item.ID)
+				}
+				p.mu.Unlock()
+				return llm.SDKMessage{}, false
+			}
+
 			p.mu.Lock()
 			previousText := p.lastAssistantText
 			if p.deltaBuf != nil {

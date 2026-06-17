@@ -735,7 +735,7 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 	lastKey := ""
 
 	appendRow := func(row livePreviewTranscriptRow) {
-		row.text = singleLine(row.text)
+		row.text = normalizeLivePreviewTranscriptRowText(row)
 		if row.text == "" {
 			return
 		}
@@ -796,6 +796,13 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 		}
 	}
 	return rows
+}
+
+func normalizeLivePreviewTranscriptRowText(row livePreviewTranscriptRow) string {
+	if row.kind == livePreviewTranscriptAssistant && !row.truncate {
+		return strings.TrimSpace(row.text)
+	}
+	return singleLine(row.text)
 }
 
 func livePreviewToolUseRow(block llm.ContentBlock) livePreviewTranscriptRow {
@@ -948,6 +955,10 @@ func livePreviewTaskNotificationRow(msg *llm.TaskNotificationMessage) livePrevie
 }
 
 func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) []string {
+	if row.kind == livePreviewTranscriptAssistant && !row.truncate {
+		return renderLivePreviewAssistantTranscriptRow(row.text, width)
+	}
+
 	glyph := livePreviewTranscriptGlyph(row.kind)
 	style := livePreviewTranscriptStyle(row.kind)
 	if row.truncate {
@@ -958,6 +969,28 @@ func renderLivePreviewTranscriptRow(row livePreviewTranscriptRow, width int) []s
 		return []string{line}
 	}
 	return livePreviewWrapRenderedBody("  ", glyph+" "+row.text, style.Render, width, "    ")
+}
+
+func renderLivePreviewAssistantTranscriptRow(text string, width int) []string {
+	prefix := "  "
+	renderWidth := width
+	if width > 0 {
+		renderWidth = max(width-lipgloss.Width(prefix), 1)
+	}
+	rendered := strings.TrimRight(renderMarkdown(text, renderWidth), "\n")
+	if strings.TrimSpace(rendered) == "" {
+		return nil
+	}
+	rawLines := strings.Split(rendered, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, line := range rawLines {
+		out := prefix + line
+		if width > 0 && lipgloss.Width(out) > width {
+			out = ansi.Truncate(out, width, "…")
+		}
+		lines = append(lines, out)
+	}
+	return lines
 }
 
 func livePreviewTranscriptStyle(kind livePreviewTranscriptKind) lipgloss.Style {

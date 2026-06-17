@@ -39,6 +39,8 @@ import (
 //     filepicker_test.go, markdown_editor_test.go, skillpicker_test.go,
 //     workspace_manager_test.go: scan or mutate test-scoped filesystem trees
 //     and should stay serial until the filesystem fixtures are narrowed.
+//   - live_preview_markdown_test.go: mutates the package-level Markdown
+//     renderer seam.
 //   - icons_test.go and notify_test.go: mutate terminal-related environment
 //     with t.Setenv.
 //   - clipboard_test.go: probes host clipboard integration.
@@ -79,6 +81,7 @@ var tuiParallelIneligibleTestFiles = []string{
 	"help_test.go",
 	"icons_test.go",
 	"keys_test.go",
+	"live_preview_markdown_test.go",
 	"markdown/markdown_test.go",
 	"markdown_editor_test.go",
 	"need_user_input_test.go",

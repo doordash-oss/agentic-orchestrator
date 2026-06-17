@@ -349,7 +349,7 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 			messages: []llm.SDKMessage{
 				assistantMessage(llm.ContentBlock{Type: "text", Text: "Finished repo scan\nready for implementation."}),
 			},
-			want: []string{"Finished repo scan ready for implementation."},
+			want: []string{"Finished repo scan", "ready for implementation."},
 		},
 		{
 			name: "tool use with arguments",

@@ -377,6 +377,7 @@ func (o *Orchestrator) RewindToPhase(featureID string, targetPhase feature.Phase
 		return warnings, effectiveTarget, err
 	}
 	o.fireFeatureRewoundHook(featureID, feature.RewindRequest{TargetPhase: targetPhase}, effectiveTarget, sourceRun)
+	o.emitEventBlocking(ports.Event{Type: ports.FeatureRewound, FeatureID: featureID, Phase: effectiveTarget})
 	return warnings, effectiveTarget, nil
 }
 
@@ -389,6 +390,7 @@ func (o *Orchestrator) RewindWithRequest(featureID string, request feature.Rewin
 		return warnings, effectiveTarget, err
 	}
 	o.fireFeatureRewoundHook(featureID, request, effectiveTarget, sourceRun)
+	o.emitEventBlocking(ports.Event{Type: ports.FeatureRewound, FeatureID: featureID, Phase: effectiveTarget})
 	return warnings, effectiveTarget, nil
 }
 

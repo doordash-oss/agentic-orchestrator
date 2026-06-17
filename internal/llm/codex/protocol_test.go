@@ -797,6 +797,24 @@ func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
 	}
 }
 
+func completedAgentMessageParams(t *testing.T, threadID, itemID, text string) json.RawMessage {
+	t.Helper()
+	payload := ItemCompletedParams{
+		ThreadID: threadID,
+		TurnID:   "turn-1",
+		Item: ItemUnion{
+			ID:   itemID,
+			Type: "agentMessage",
+			Text: text,
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal item/completed: %v", err)
+	}
+	return raw
+}
+
 func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
@@ -825,6 +843,63 @@ func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {
 	p.mu.Unlock()
 	if retry != 0 {
 		t.Errorf("formatRetryCount = %d, want 0 after well-formed turn", retry)
+	}
+}
+
+func TestTurnCompleted_BlankAgentMessageDoesNotEraseWellFormedQuestion(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+
+	question := "How broad should the translation be?\n" +
+		"1. README only (Recommended): Translate just the top-level README and leave docs untouched. [confidence: 0.94]\n" +
+		"2. README + user docs: Translate the README plus user-facing docs like docs/. [confidence: 0.34]\n" +
+		"3. Whole repo markdown: Translate every Markdown file in the repo. [confidence: 0.12]"
+	msg, ok := p.parseNotification("item/completed", completedAgentMessageParams(t, "thread-1", "msg-question", question))
+	if !ok {
+		t.Fatal("question item parseNotification ok = false, want true")
+	}
+	if msg.Type != "assistant" {
+		t.Fatalf("question item Type = %q, want assistant", msg.Type)
+	}
+
+	msg, ok = p.parseNotification("item/completed", completedAgentMessageParams(t, "thread-1", "msg-empty", ""))
+	if ok {
+		t.Fatalf("blank item parseNotification ok = true (msg=%+v), want false", msg)
+	}
+
+	msg, ok = p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("turn/completed parseNotification ok = false, want true")
+	}
+	if msg.Type != "control_request" || msg.ControlRequest == nil {
+		t.Fatalf("got Type=%q ControlRequest=%v, want AskUserQuestion control_request", msg.Type, msg.ControlRequest)
+	}
+	if msg.ControlRequest.Request.ToolName != "AskUserQuestion" {
+		t.Fatalf("ToolName = %q, want AskUserQuestion", msg.ControlRequest.Request.ToolName)
+	}
+
+	var parsed struct {
+		Questions []struct {
+			Question string           `json:"question"`
+			Options  []map[string]any `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(msg.ControlRequest.Request.Input, &parsed); err != nil {
+		t.Fatalf("unmarshal control request input: %v", err)
+	}
+	if len(parsed.Questions) != 1 {
+		t.Fatalf("questions len = %d, want 1", len(parsed.Questions))
+	}
+	if parsed.Questions[0].Question != "How broad should the translation be?" {
+		t.Errorf("question = %q", parsed.Questions[0].Question)
+	}
+	if len(parsed.Questions[0].Options) != 3 {
+		t.Errorf("options len = %d, want 3", len(parsed.Questions[0].Options))
+	}
+	if buf.Len() != 0 {
+		t.Errorf("unexpected follow-up turn written to stdin: %s", buf.String())
 	}
 }
 

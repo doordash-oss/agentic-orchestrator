@@ -814,6 +814,56 @@ func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	}
 }
 
+func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	msgs := []llm.SDKMessage{{
+		Type: "tool_progress",
+		ToolProgress: &llm.ToolProgressMessage{
+			Type:      "tool_progress",
+			ToolUseID: "toolu-bash-1",
+			ToolName:  "Bash",
+			Data:      "private-token output must stay redacted",
+		},
+	}}
+	for i := 1; i <= 6; i++ {
+		msgs = append(msgs, llm.SDKMessage{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{{Type: "text", Text: "preview line " + twoDigit(i)}},
+			}},
+		})
+	}
+	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id: "sess-live", featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: "codex",
+		messages: msgs,
+	}}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	preview := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
+	transcript := preview["transcript"].([]any)
+	if len(transcript) != len(msgs) {
+		t.Fatalf("live preview transcript len = %d; want %d rows (%+v)", len(transcript), len(msgs), transcript)
+	}
+	raw := mustMarshalJSON(t, preview)
+	if !strings.Contains(raw, "preview line 01") || !strings.Contains(raw, "preview line 06") {
+		t.Fatalf("live preview transcript did not include extended tail: %s", raw)
+	}
+	if strings.Contains(raw, "private-token") {
+		t.Fatalf("live preview transcript leaked tool progress output: %s", raw)
+	}
+	tool := transcript[0].(map[string]any)
+	if tool["type"] != "tool_progress" || tool["tool"] != "Bash" || tool["redacted"] != true {
+		t.Fatalf("tool progress transcript row = %+v; want redacted Bash tool_progress row", tool)
+	}
+}
+
 func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -864,6 +914,43 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 		if strings.Contains(raw, "private-token") || strings.Contains(raw, "raw prompt") {
 			t.Fatalf("%s leaks redacted content in %s", path, raw)
 		}
+	}
+}
+
+func TestArtifactReadsAllowAbsolutePathsWithinSameRun(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	runDir := store.RunDir(f.ID, 1)
+	roadmapPath := filepath.Join(runDir, "roadmap", "roadmap.md")
+	writeFile(t, roadmapPath, "# Roadmap\n\nTranslate README.\n")
+	f.Status = feature.StatusPlanNeedsReview
+	f.CurrentPhase = feature.PhasePlan
+	f.Artifacts = map[string]string{"roadmap": roadmapPath}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+	})
+
+	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
+	rawArtifacts := list["artifacts"].([]any)
+	if len(rawArtifacts) != 1 {
+		t.Fatalf("artifacts len = %d; want 1 (%+v)", len(rawArtifacts), rawArtifacts)
+	}
+	artifact := rawArtifacts[0].(map[string]any)
+	if artifact["id"] != "roadmap" || artifact["path"] != roadmapPath || artifact["content_available"] != true {
+		t.Fatalf("roadmap artifact = %+v; want available roadmap with absolute path", artifact)
+	}
+	if artifact["phase"] != "roadmap" {
+		t.Fatalf("roadmap artifact phase = %v; want roadmap", artifact["phase"])
+	}
+
+	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/roadmap?offset=2&limit=7")
+	if content["text"] != "Roadmap" {
+		t.Fatalf("roadmap content = %q; want Roadmap", content["text"])
 	}
 }
 

@@ -217,6 +217,65 @@ func TestAPIAppModelDashboardRestoresMainBranchSpinnerVisuals(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
+	t.Parallel()
+
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	workDir := filepath.Join(runtimeDir, "worktrees", "translate-readme-in-sicilian", "agentic-orchestrator")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("create workdir: %v", err)
+	}
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Translate README in Sicilian",
+		Slug:         "translate-readme-in-sicilian",
+		Status:       "Planning",
+		CurrentPhase: "plan",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    time.Now(),
+	}
+	app := APIAppModel{
+		width:          160,
+		height:         40,
+		focusPanel:     0,
+		rightPanelMode: dashboardRightPanelOverview,
+		featureList:    server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: {Feature: server.FeatureDetailDTO{
+				FeatureSummary: summary,
+				RepoStatus: []server.RepoStatusDTO{
+					{Name: "agentic-orchestrator", Publishable: true},
+				},
+			}},
+		},
+		runtimeConfig: server.RuntimeConfigResponse{
+			Runtime: server.RuntimeIdentity{StateDir: stateDir},
+			Repos: []server.ConfigRepoDTO{
+				{Name: "agentic-orchestrator", Path: "/repo/path"},
+			},
+		},
+	}
+	app.rebuildPresentation(summary.ID)
+
+	features := app.apiDashboardFeatures()
+	if len(features) != 1 || len(features[0].Repos) != 1 {
+		t.Fatalf("apiDashboardFeatures repos = %+v, want one feature repo", features)
+	}
+	if got := features[0].Repos[0].WorktreePath; got != workDir {
+		t.Fatalf("dashboard repo WorktreePath = %q, want %q", got, workDir)
+	}
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{"WorkDir", "worktrees/translate-readme-in-sicilian", "agentic-orchestrator"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API dashboard View() missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "/repo/path") {
+		t.Fatalf("API dashboard View() rendered original repo path instead of feature workdir:\n%s", view)
+	}
+}
+
 func TestAPIAppModelDashboardFeatureUsesDetailModels(t *testing.T) {
 	t.Parallel()
 
@@ -587,15 +646,101 @@ func TestAPIAppModelLivePreviewPreservesTranscriptToolRowsFromREST(t *testing.T)
 	}
 
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"> Preparing patch", "$ Bash", "? AskUser:"} {
+	for _, want := range []string{"Preparing patch", "$ Bash", "? AskUser:"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API live preview missing typed transcript row %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"> Bash", "> AskUserQuestion"} {
+	for _, notWant := range []string{"> Preparing patch", "> Bash", "> AskUserQuestion"} {
 		if strings.Contains(view, notWant) {
 			t.Fatalf("API live preview rendered tool row as assistant text %q in:\n%s", notWant, view)
 		}
+	}
+}
+
+func TestAPIAppModelLivePreviewPreservesToolProgressRowsFromREST(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		livePreview: server.LivePreviewResponse{
+			Feature: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"},
+			Session: &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Label: "Implement", Provider: "codex", Status: "running"},
+			Transcript: []server.TranscriptMessageDTO{
+				{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+				{Index: 2, Role: "assistant", Type: "text", Text: "Continuing after tool use"},
+			},
+		},
+	}
+	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{"$ Bash", "Continuing after tool use"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API live preview missing tool-progress transcript row %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"> Bash", "> Continuing after tool use"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("API live preview rendered row with assistant glyph %q in:\n%s", notWant, view)
+		}
+	}
+}
+
+func TestAPITranscriptRowToSDKMessagePreservesToolProgress(t *testing.T) {
+	t.Parallel()
+
+	msg, ok := apiTranscriptRowToSDKMessage(server.TranscriptMessageDTO{
+		Index:    1,
+		Role:     "system",
+		Type:     "tool_progress",
+		Tool:     "Bash",
+		Redacted: true,
+	}, "sess-live")
+	if !ok {
+		t.Fatal("apiTranscriptRowToSDKMessage(tool_progress) returned !ok")
+	}
+	if msg.ToolProgress == nil {
+		t.Fatalf("apiTranscriptRowToSDKMessage(tool_progress) = %+v, want ToolProgress message", msg)
+	}
+	if msg.Assistant != nil {
+		t.Fatalf("tool_progress row should not reconstruct as assistant tool use: %+v", msg.Assistant)
+	}
+	if msg.ToolProgress.ToolName != "Bash" || msg.ToolProgress.SessionID != "sess-live" {
+		t.Fatalf("ToolProgress = %+v, want Bash in sess-live", msg.ToolProgress)
+	}
+}
+
+func TestAPILivePreviewSessionCarriesProviderFromREST(t *testing.T) {
+	t.Parallel()
+
+	presentation := apiLivePreviewPresentation("active", server.LivePreviewResponse{
+		Session: &server.SessionSummaryDTO{
+			ID:       "sess-live",
+			Phase:    "implement",
+			Kind:     "agent",
+			Provider: "codex",
+			Model:    "gpt-5-codex",
+		},
+		Transcript: []server.TranscriptMessageDTO{
+			{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+		},
+	})
+	sess := newAPILivePreviewSession(presentation)
+	if sess == nil {
+		t.Fatal("newAPILivePreviewSession returned nil")
+	}
+	if got := sess.ProviderName(); got != "codex" {
+		t.Fatalf("ProviderName() = %q, want codex", got)
+	}
+	if got := sess.Model(); got != "gpt-5-codex" {
+		t.Fatalf("Model() = %q, want gpt-5-codex", got)
 	}
 }
 
@@ -3104,6 +3249,82 @@ func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testin
 	}
 }
 
+func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	descPath := filepath.Join(tmp, "description-review.md")
+	if err := os.WriteFile(descPath, []byte("translate readme in Sicilian"), 0o644); err != nil {
+		t.Fatalf("write description review: %v", err)
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "DesignNeedsReview",
+				CurrentPhase: "design",
+				ActiveRun:    2,
+				RunCount:     2,
+				CreatedAt:    time.Now(),
+			},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "DesignNeedsReview",
+				CurrentPhase: "design",
+				ActiveRun:    2,
+				RunCount:     2,
+			},
+			Pipeline: "medium",
+			ActiveRun: &server.RunSummaryDTO{
+				RunNumber:          2,
+				CurrentPhase:       "design",
+				PendingReviewPhase: "plan",
+				IsRewind:           true,
+				ArtifactCount:      1,
+			},
+			Models: config.ModelConfig{Utilities: "test-utility"},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "description-review", RunNumber: 2, Phase: "description", Path: descPath, Size: 27, ContentAvailable: true},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	delete(app.contents, "active")
+	app.rebuildPresentation("active")
+	initialArtifactListCalls := len(client.artifactListFeatureIDs)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatalf("pressing a returned nil command; statusMessage=%q", model.(APIAppModel).statusMessage)
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	updated := model.(APIAppModel)
+
+	if updated.artifactReview == nil {
+		t.Fatalf("review artifact load did not open review; statusMessage=%q", updated.statusMessage)
+	}
+	if got := updated.artifactReview.ReviewMode(); got != "rewind" {
+		t.Fatalf("artifactReview.ReviewMode() = %q, want rewind", got)
+	}
+	if got := updated.artifactReview.ArtifactPath(); got != descPath {
+		t.Fatalf("artifactReview.ArtifactPath() = %q, want %q", got, descPath)
+	}
+	if got := len(client.artifactListFeatureIDs); got <= initialArtifactListCalls {
+		t.Fatalf("ArtifactList calls = %d, want more than initial %d", got, initialArtifactListCalls)
+	}
+}
+
 func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	t.Parallel()
 
@@ -3999,6 +4220,92 @@ func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
 	_, _ = model.(APIAppModel).Update(msg)
 	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "implement" || got[0].RoadmapPhase != 2 {
 		t.Fatalf("RewindFeature requests = %+v, want implement roadmap phase 2", got)
+	}
+}
+
+func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *testing.T) {
+	t.Parallel()
+
+	run1Detail := server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+		FeatureSummary: server.FeatureSummary{
+			ID:           "active",
+			Name:         "Active work",
+			Slug:         "active-work",
+			Status:       "Implementing",
+			CurrentPhase: "implement",
+			ActiveRun:    1,
+			RunCount:     1,
+			CreatedAt:    time.Now(),
+		},
+		ActiveRun: &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: "implement", ArtifactCount: 1},
+		Actions: []server.ActionDTO{
+			{ID: "rewind", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+		},
+	}}
+	run2Detail := server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+		FeatureSummary: server.FeatureSummary{
+			ID:           "active",
+			Name:         "Active work",
+			Slug:         "active-work",
+			Status:       "PlanNeedsReview",
+			CurrentPhase: "design",
+			ActiveRun:    2,
+			RunCount:     2,
+			CreatedAt:    run1Detail.Feature.CreatedAt,
+		},
+		ActiveRun: &server.RunSummaryDTO{
+			RunNumber:          2,
+			CurrentPhase:       "design",
+			PendingReviewPhase: "plan",
+			IsRewind:           true,
+			ArtifactCount:      1,
+		},
+		Actions: []server.ActionDTO{
+			{ID: "rewind", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+		},
+	}}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{run1Detail.Feature.FeatureSummary}},
+		detail:   run1Detail,
+		artifactListByRun: map[int]server.ArtifactListResponse{
+			1: {Artifacts: []server.ArtifactDTO{
+				{ID: "old-plan", RunNumber: 1, Phase: "plan", Size: 18, ContentAvailable: true},
+			}},
+			2: {Artifacts: []server.ArtifactDTO{
+				{ID: "description-review", RunNumber: 2, Phase: "description", Size: 24, ContentAvailable: true},
+			}},
+		},
+		artifactContentByID: map[string]server.TextContentResponse{
+			"old-plan":           {ID: "old-plan", Text: "old run plan artifact", Size: 18},
+			"description-review": {ID: "description-review", Text: "new rewind review artifact", Size: 24},
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	if got := app.snapshot.Content; got == nil || got.RunNumber != 1 || got.Artifact == nil || got.Artifact.ID != "old-plan" {
+		t.Fatalf("initial content = %+v, want run 1 old-plan", got)
+	}
+
+	client.detail = run2Detail
+	model, cmd := app.Update(apiMutationResultMsg{kind: "feature.rewind", featureID: "active"})
+	if cmd == nil {
+		t.Fatal("rewind mutation result returned nil command, want immediate feature detail refresh")
+	}
+	afterRewind := model.(APIAppModel)
+	if got, ok := afterRewind.contents["active"]; ok {
+		t.Fatalf("rewind mutation retained stale content = %+v, want content cleared until run 2 loads", got)
+	}
+
+	msg := cmd()
+	model, _ = afterRewind.Update(msg)
+	refreshed := model.(APIAppModel)
+	if got := refreshed.snapshot.Content; got == nil || got.RunNumber != 2 || got.Artifact == nil || got.Artifact.ID != "description-review" {
+		t.Fatalf("refreshed content = %+v, want run 2 description-review", got)
+	}
+	if got := refreshed.snapshot.Detail; got == nil || got.ID != "active" {
+		t.Fatalf("refreshed detail = %+v, want active feature detail", got)
 	}
 }
 

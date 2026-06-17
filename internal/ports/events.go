@@ -26,6 +26,10 @@ const (
 	FeatureCompleted
 	FeatureFailed
 	FeatureInterrupted
+	// FeatureRewound fires after a successful rewind forks a fresh active run.
+	// Subscribers should refresh feature detail and run-scoped artifacts because
+	// ActiveRun and carried artifact maps may have changed.
+	FeatureRewound
 	PhaseStarted
 	PhaseCompleted
 	ReviewRequired

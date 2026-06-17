@@ -49,8 +49,9 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 	artifacts := make([]ArtifactDTO, 0, len(ids))
 	for _, id := range ids {
 		rel := run.Artifacts[id]
-		dto := ArtifactDTO{ID: id, Type: artifactType(rel), Category: artifactCategory(rel), RunNumber: runNumber, Phase: artifactPhase(rel)}
-		if path, ok := safeJoin(runDir, rel); ok {
+		phasePath := runRelativeArtifactPath(runDir, rel)
+		dto := ArtifactDTO{ID: id, Type: artifactType(rel), Category: artifactCategory(rel), RunNumber: runNumber, Phase: artifactPhase(phasePath)}
+		if path, ok := resolveRunArtifactPath(runDir, rel); ok {
 			dto.Path = path
 			if info, err := os.Stat(path); err == nil && !info.IsDir() {
 				dto.Size = info.Size()
@@ -94,7 +95,7 @@ func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{"artifact_id": artifactID})
 		return
 	}
-	path, ok := safeJoin(h.store.RunDir(featureID, runNumber), rel)
+	path, ok := resolveRunArtifactPath(h.store.RunDir(featureID, runNumber), rel)
 	if !ok {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid artifact target", map[string]any{"artifact_id": artifactID})
 		return
@@ -261,7 +262,7 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 		for _, req := range sess.PendingControlRequests() {
 			resp.Attention = append(resp.Attention, controlRequestDTO(sess, req))
 		}
-		resp.Transcript = transcriptDTOs(sess.MessageLog().LastN(5), 0)
+		resp.Transcript = transcriptDTOs(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), 0)
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = responseMeta(revision)
@@ -309,6 +310,20 @@ func safeJoin(base, rel string) (string, bool) {
 		return "", false
 	}
 	path := filepath.Join(base, rel)
+	return safePathUnderBase(base, path)
+}
+
+func resolveRunArtifactPath(runDir, target string) (string, bool) {
+	if strings.TrimSpace(target) == "" {
+		return "", false
+	}
+	if filepath.IsAbs(target) {
+		return safePathUnderBase(runDir, target)
+	}
+	return safeJoin(runDir, target)
+}
+
+func safePathUnderBase(base, path string) (string, bool) {
 	cleanBase, err := filepath.Abs(base)
 	if err != nil {
 		return "", false
@@ -321,6 +336,21 @@ func safeJoin(base, rel string) (string, bool) {
 		return "", false
 	}
 	return cleanPath, true
+}
+
+func runRelativeArtifactPath(runDir, target string) string {
+	if !filepath.IsAbs(target) {
+		return target
+	}
+	path, ok := safePathUnderBase(runDir, target)
+	if !ok {
+		return target
+	}
+	rel, err := filepath.Rel(runDir, path)
+	if err != nil || rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "..") {
+		return target
+	}
+	return rel
 }
 
 func artifactType(path string) string {

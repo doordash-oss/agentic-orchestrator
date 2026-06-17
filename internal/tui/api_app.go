@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -157,6 +158,8 @@ type APISessionPresentation struct {
 type APILivePreviewPresentation struct {
 	FeatureID      string
 	SessionID      string
+	Provider       string
+	Model          string
 	Activity       string
 	ContextPct     int
 	CostUSD        float64
@@ -359,6 +362,13 @@ type apiFeatureDetailMsg struct {
 	transcript  *server.TranscriptResponse
 	content     *apiFeatureContentSnapshot
 	err         error
+}
+
+type apiReviewArtifactMsg struct {
+	featureID string
+	detail    server.FeatureDetailResponse
+	artifact  server.ArtifactDTO
+	err       error
 }
 
 type apiFeatureConfigMsg struct {
@@ -718,6 +728,19 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildPresentation(msg.featureID)
 		return m, nil
+	case apiReviewArtifactMsg:
+		if msg.featureID != "" && msg.featureID != m.selectedFeature {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.statusMessage = "Review artifact load failed: " + firstLine(msg.err.Error())
+			return m, nil
+		}
+		m.storeFeatureDetail(msg.detail)
+		m.upsertFeatureSummary(msg.detail.Feature.FeatureSummary)
+		f := m.apiDashboardFeature(msg.detail.Feature.FeatureSummary, msg.detail.Feature, true)
+		m.rebuildPresentation(msg.featureID)
+		return m.openAPIReviewModel(f, msg.artifact)
 	case apiFeatureConfigMsg:
 		if msg.err != nil {
 			m.statusMessage = "Config load failed: " + firstLine(msg.err.Error())
@@ -809,6 +832,11 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.removeFeatureState(msg.featureID)
 		}
 		m.statusMessage = fmt.Sprintf("Completed %s", apiMutationKindLabel(msg.kind))
+		if msg.kind == "feature.rewind" && msg.featureID != "" {
+			delete(m.contents, msg.featureID)
+			m.rebuildPresentation(m.selectedFeature)
+			return m, m.fetchFeatureDetailCmd(msg.featureID)
+		}
 		m.rebuildPresentation(m.selectedFeature)
 		return m, nil
 	case apiRuntimeConfigMutationMsg:
@@ -1503,13 +1531,13 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		}
 	}
 	for _, repoName := range summary.Repos {
-		f.Repos = append(f.Repos, m.apiDashboardRepo(repoName, repoStatuses[repoName], hasDetail))
+		f.Repos = append(f.Repos, m.apiDashboardRepo(repoName, repoStatuses[repoName], hasDetail, f.Slug))
 	}
 	for _, repo := range detail.RepoStatus {
 		if repo.Name == "" || apiHasRepo(f.Repos, repo.Name) {
 			continue
 		}
-		f.Repos = append(f.Repos, m.apiDashboardRepo(repo.Name, repo, true))
+		f.Repos = append(f.Repos, m.apiDashboardRepo(repo.Name, repo, true, f.Slug))
 	}
 	for _, repo := range f.Repos {
 		dto := repoStatuses[repo.Name]
@@ -1596,20 +1624,32 @@ func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureS
 	return base
 }
 
-func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, hasDetail bool) feature.FeatureRepo {
+func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, hasDetail bool, featureSlug string) feature.FeatureRepo {
 	repo := feature.FeatureRepo{Name: name}
 	for _, cfgRepo := range m.runtimeConfig.Repos {
 		if cfgRepo.Name == name {
 			repo.Path = cfgRepo.Path
-			repo.WorktreePath = cfgRepo.Path
 			break
 		}
 	}
+	repo.WorktreePath = m.apiDashboardWorktreePath(featureSlug, name)
 	if hasDetail {
 		publishable := status.Publishable
 		repo.Publishable = &publishable
 	}
 	return repo
+}
+
+func (m APIAppModel) apiDashboardWorktreePath(featureSlug, repoName string) string {
+	if featureSlug == "" || repoName == "" || m.runtimeConfig.Runtime.StateDir == "" {
+		return ""
+	}
+	candidate := filepath.Join(filepath.Dir(m.runtimeConfig.Runtime.StateDir), "worktrees", featureSlug, repoName)
+	info, err := os.Stat(candidate)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return candidate
 }
 
 func (m APIAppModel) applyAPIAttention(f *feature.Feature) {
@@ -1735,6 +1775,8 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 		kind:                  ports.KindPhase,
 		label:                 "Live Preview",
 		status:                ports.SessionRunning,
+		provider:              preview.Provider,
+		model:                 preview.Model,
 		contextPct:            preview.ContextPct,
 		log:                   log,
 		cost:                  cost,
@@ -2272,6 +2314,19 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 				},
 			},
 		}, true
+	case "tool_progress":
+		if row.Tool == "" {
+			return llm.SDKMessage{}, false
+		}
+		return llm.SDKMessage{
+			Type: "tool_progress",
+			ToolProgress: &llm.ToolProgressMessage{
+				Type:      "tool_progress",
+				ToolName:  row.Tool,
+				Data:      row.Text,
+				SessionID: sessionID,
+			},
+		}, true
 	case "result":
 		subtype := firstNonEmpty(row.Status, "success")
 		return llm.SDKMessage{
@@ -2596,7 +2651,17 @@ func (m *APIAppModel) storeFeatureDetail(detail server.FeatureDetailResponse) {
 	if m.featureDetails == nil {
 		m.featureDetails = map[string]server.FeatureDetailResponse{}
 	}
-	m.featureDetails[detail.Feature.ID] = detail
+	featureID := detail.Feature.ID
+	newRun := apiActiveRunNumber(detail.Feature)
+	if existing, ok := m.featureDetails[featureID]; ok {
+		oldRun := apiActiveRunNumber(existing.Feature)
+		if oldRun > 0 && newRun > 0 && oldRun != newRun {
+			delete(m.contents, featureID)
+		}
+	} else if content, ok := m.contents[featureID]; ok && content.RunNumber > 0 && newRun > 0 && content.RunNumber != newRun {
+		delete(m.contents, featureID)
+	}
+	m.featureDetails[featureID] = detail
 }
 
 func (m *APIAppModel) storeSessionDetail(detail server.SessionDetailResponse) {
@@ -3839,7 +3904,17 @@ func (m APIAppModel) openAPIReviewAttention(f *feature.Feature) (tea.Model, tea.
 	}
 	artifact, ok, reason := m.reviewArtifactForFeature(f)
 	if !ok {
-		m.statusMessage = reason
+		m.statusMessage = "Loading review artifact"
+		if reason != "" && reason != "Review artifact is still loading" {
+			m.statusMessage = reason
+		}
+		return m, m.fetchReviewArtifactCmd(f.ID)
+	}
+	return m.openAPIReviewModel(f, artifact)
+}
+
+func (m APIAppModel) openAPIReviewModel(f *feature.Feature, artifact server.ArtifactDTO) (tea.Model, tea.Cmd) {
+	if f == nil {
 		return m, nil
 	}
 	reviewMode := "plan"
@@ -3864,8 +3939,15 @@ func (m APIAppModel) reviewArtifactForFeature(f *feature.Feature) (server.Artifa
 	if !ok || len(content.Artifacts.Artifacts) == 0 {
 		return server.ArtifactDTO{}, false, "Review artifact is still loading"
 	}
+	return selectReviewArtifact(f, content.Artifacts)
+}
+
+func selectReviewArtifact(f *feature.Feature, resp server.ArtifactListResponse) (server.ArtifactDTO, bool, string) {
+	if len(resp.Artifacts) == 0 {
+		return server.ArtifactDTO{}, false, "Review artifact is unavailable"
+	}
 	preferred := reviewArtifactIDs(f)
-	artifacts := availableTextArtifacts(content.Artifacts)
+	artifacts := availableTextArtifacts(resp)
 	for _, id := range preferred {
 		for _, artifact := range artifacts {
 			if artifact.ID == id && strings.TrimSpace(artifact.Path) != "" {
@@ -5483,6 +5565,36 @@ func (m APIAppModel) fetchFeatureDetailCmd(featureID string) tea.Cmd {
 		}
 		msg.content = loadAPISelectedContent(ctx, m.client, featureID, detail, previous)
 		return msg
+	}
+}
+
+func (m APIAppModel) fetchReviewArtifactCmd(featureID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if m.eventCtx != nil {
+			ctx = m.eventCtx
+		}
+		detail, err := m.client.FeatureDetail(ctx, featureID)
+		if err != nil {
+			return apiReviewArtifactMsg{featureID: featureID, err: err}
+		}
+		runNumber := apiActiveRunNumber(detail.Feature)
+		if runNumber <= 0 {
+			return apiReviewArtifactMsg{featureID: featureID, err: fmt.Errorf("active run is unavailable")}
+		}
+		artifacts, err := m.client.ArtifactList(ctx, featureID, runNumber)
+		if err != nil {
+			return apiReviewArtifactMsg{featureID: featureID, err: err}
+		}
+		f := m.apiDashboardFeature(detail.Feature.FeatureSummary, detail.Feature, true)
+		artifact, ok, reason := selectReviewArtifact(f, artifacts)
+		if !ok {
+			if reason == "" {
+				reason = "Review artifact is unavailable"
+			}
+			return apiReviewArtifactMsg{featureID: featureID, err: errors.New(reason)}
+		}
+		return apiReviewArtifactMsg{featureID: featureID, detail: detail, artifact: artifact}
 	}
 }
 
@@ -7608,6 +7720,8 @@ func apiLivePreviewPresentation(featureID string, dto server.LivePreviewResponse
 	}
 	if dto.Session != nil {
 		out.SessionID = dto.Session.ID
+		out.Provider = dto.Session.Provider
+		out.Model = dto.Session.Model
 	}
 	for _, req := range dto.Attention {
 		summary := strings.TrimSpace(req.Summary)

@@ -23,7 +23,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-const maxSessionListRecentSessions = 50
+const (
+	maxSessionListRecentSessions      = 50
+	livePreviewTranscriptMessageLimit = 80
+)
 
 func (h *apiHandler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	sessions := h.allSessions()
@@ -188,6 +191,8 @@ func transcriptDTOs(messages []llm.SDKMessage, start int) []TranscriptMessageDTO
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "control_request", Tool: msg.ControlRequest.Request.ToolName, Status: "pending", Redacted: true})
 		case msg.Result != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "result", Status: msg.Result.Subtype, Redacted: true})
+		case msg.ToolProgress != nil:
+			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "tool_progress", Tool: msg.ToolProgress.ToolName, Redacted: true})
 		default:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: msg.Type, Redacted: true})
 		}

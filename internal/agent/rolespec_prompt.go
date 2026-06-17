@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -83,8 +84,20 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 		OutputRoots:          rootViews,
 		MarkerPath:           spec.MarkerPath(rt),
 		SkillPath:            skillPath,
+		ArtifactPreflight:    artifactPreflightCommand(spec, in.IterationDir),
 		Preflight:            buildPreflightInput(spec.Phase, in.SkillsDir, in.KBInfos, in.GuidelinesDir),
 		ReadOnlyOutsideRoots: spec.ReadOnlyOutsideRoots,
 		AskingClause:         askingClause,
 	})
+}
+
+func artifactPreflightCommand(spec RoleSpec, iterationDir string) string {
+	if spec.NoOp || spec.Role == "" || iterationDir == "" {
+		return ""
+	}
+	return fmt.Sprintf(`"$AGENTICO_BIN" validate-artifacts --phase %s --role %s --dir %q`,
+		spec.Phase.DirName(),
+		string(spec.Role),
+		iterationDir,
+	)
 }

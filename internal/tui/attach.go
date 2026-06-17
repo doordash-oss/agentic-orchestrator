@@ -3710,12 +3710,21 @@ func (m AttachModel) ActiveRepoName() string {
 	return m.repoTabs[m.activeTabIdx].repoName
 }
 
+func registerAttachConsumer(sess session.SessionView) func() {
+	if registrar, ok := sess.(ports.AttachConsumerRegistrar); ok {
+		return registrar.RegisterAttachConsumer()
+	}
+	return func() {}
+}
+
 // drainAndPollAttachChCmd discards stale messages from the attach channel
 // before blocking for the first fresh message. Use this on initial attach —
 // restoreThinkingLine() already established the correct spinner state from
 // the message log, so stale buffered messages can only corrupt it.
 func drainAndPollAttachChCmd(sess session.SessionView, gen int) tea.Cmd {
 	return func() tea.Msg {
+		unregister := registerAttachConsumer(sess)
+		defer unregister()
 		ch := sess.AttachCh()
 		// Drain stale buffered messages.
 		for len(ch) > 0 {
@@ -3730,6 +3739,8 @@ func drainAndPollAttachChCmd(sess session.SessionView, gen int) tea.Cmd {
 
 func pollAttachChCmd(sess session.SessionView, gen int) tea.Cmd {
 	return func() tea.Msg {
+		unregister := registerAttachConsumer(sess)
+		defer unregister()
 		return pollAttachCh(sess.AttachCh(), gen)
 	}
 }

@@ -482,6 +482,8 @@ func chatRecoveryTickCmd(sess session.SessionView, baseline *llm.ResultMessage) 
 // pollChatChCmd reads messages from the session's AttachCh in batches.
 func pollChatChCmd(sess session.SessionView) tea.Cmd {
 	return func() tea.Msg {
+		unregister := registerAttachConsumer(sess)
+		defer unregister()
 		ch := sess.AttachCh()
 		msg, ok := <-ch
 		if !ok {

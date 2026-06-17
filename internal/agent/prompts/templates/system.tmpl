@@ -31,6 +31,19 @@ When the task is complete, create this marker file as the very last action:
 `{{ .MarkerPath }}`
 
 The file contents do not matter. Its presence is the signal that the harness should parse the role's output files. If you end your turn without creating this file and without asking a properly formatted question, the harness treats the run as a protocol violation.
+{{- if .ArtifactPreflight }}
+
+## Artifact Preflight
+
+`AGENTICO_BIN` is set to the current Agentico executable. To catch malformed output before the harness sees it, run it before creating `phase_complete`:
+
+```bash
+{{ .ArtifactPreflight }}
+```
+
+If validation fails, fix the reported artifact and rerun the command before creating `phase_complete`.
+
+{{ end }}
 
 ## Skill
 

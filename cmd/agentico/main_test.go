@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -27,9 +28,35 @@ import (
 	"time"
 
 	"github.com/charmbracelet/colorprofile"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
+
+func failingLauncher(t *testing.T) tuiLauncher {
+	t.Helper()
+	return func(string, string, bool, []string) {
+		t.Fatal("TUI launcher invoked unexpectedly")
+	}
+}
+
+func writeReviewFeedback(t *testing.T, path, findings, verdict string) {
+	t.Helper()
+	body := strings.Join([]string{
+		"## Findings",
+		findings,
+		"",
+		"## Suggestions",
+		"- (none)",
+		"",
+		"## Verdict",
+		verdict,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write review feedback: %v", err)
+	}
+}
 
 // stubProvider is a minimal LLMProvider for testing checkRequiredProviders.
 type stubProvider struct {
@@ -355,6 +382,74 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
 		t.Fatalf("stdout = %q stderr = %q, want both empty", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunArgsValidateArtifactsCatchesMalformedYAML(t *testing.T) {
+	iterDir := t.TempDir()
+	writeReviewFeedback(t, filepath.Join(iterDir, "review-feedback.md"), "- **High**: needs work", "CHANGES_REQUESTED")
+	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(strings.Join([]string{
+		"version: 2",
+		"additional_checks:",
+		"  - name: Source comparison spot-check",
+		"    command: manual: compare translated README against English source",
+		"    mode: manual",
+		"    status: failed",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("write malformed report: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	var launchedTUI, updateCalled bool
+	code := runArgs(
+		[]string{"validate-artifacts", "--phase", "review", "--role", string(agent.RoleFinalReviewer), "--dir", iterDir},
+		&stdout,
+		&stderr,
+		func(string, string, bool, []string) {
+			launchedTUI = true
+		},
+		func(bool, io.Writer, io.Writer) int {
+			updateCalled = true
+			return 0
+		},
+	)
+	if code != 1 {
+		t.Fatalf("runArgs() code = %d, want validation failure 1", code)
+	}
+	if launchedTUI || updateCalled {
+		t.Fatalf("validate-artifacts launched unrelated path: tui=%v update=%v", launchedTUI, updateCalled)
+	}
+	if got := stderr.String(); !strings.Contains(got, "verification-report.yaml") || !strings.Contains(got, "unparseable") {
+		t.Fatalf("stderr = %q, want verification-report.yaml unparseable violation", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty on validation failure", stdout.String())
+	}
+}
+
+func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
+	iterDir := t.TempDir()
+	writeReviewFeedback(t, filepath.Join(iterDir, "review-feedback.md"), "- (none)", "APPROVED")
+	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
+		t.Fatalf("write verification report: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runArgs(
+		[]string{"validate-artifacts", "--phase", "review", "--role", string(agent.RoleFinalReviewer), "--dir", iterDir},
+		&stdout,
+		&stderr,
+		failingLauncher(t),
+		failingUpdater(t),
+	)
+	if code != 0 {
+		t.Fatalf("runArgs() code = %d; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "artifacts OK") {
+		t.Fatalf("stdout = %q, want OK confirmation", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 

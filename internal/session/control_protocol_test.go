@@ -531,6 +531,84 @@ func TestRespondToAskUser_CapturesQALogInPresentedOrderWithNotes(t *testing.T) {
 	}
 }
 
+func TestRespondToAskUser_AppendsLocalDisplayMessagesInPresentedOrder(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+	defer r.Close()
+
+	s := &Session{
+		stdin:      w,
+		status:     SessionWaitingHelp,
+		done:       make(chan struct{}),
+		messageLog: NewMessageLog(),
+	}
+
+	questions := json.RawMessage(`{"questions":[{"question":"Zeta?"},{"question":"Alpha?"}]}`)
+	answers := map[string]string{
+		"Alpha?": "second answer",
+		"Zeta?":  "first answer",
+	}
+	if err := s.RespondToAskUser("req-ordered", questions, answers, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	msgs := s.MessageLog().Messages()
+	if len(msgs) != 2 {
+		t.Fatalf("MessageLog() length = %d, want 2 local answer messages: %+v", len(msgs), msgs)
+	}
+	for i, want := range []string{"first answer", "second answer"} {
+		msg := msgs[i]
+		if msg.User == nil || !msg.LocallyAppended || msg.AutoPicked {
+			t.Fatalf("MessageLog()[%d] = %+v, want local manual user message", i, msg)
+		}
+		if got := msg.User.Message.Content[0].Text; got != want {
+			t.Fatalf("MessageLog()[%d] text = %q, want %q", i, got, want)
+		}
+	}
+}
+
+func TestRespondToAskUser_DoesNotDuplicateExistingLocalDisplayMessages(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("creating pipe: %v", err)
+	}
+	defer r.Close()
+
+	s := &Session{
+		stdin:      w,
+		status:     SessionWaitingHelp,
+		done:       make(chan struct{}),
+		messageLog: NewMessageLog(),
+	}
+	for _, text := range []string{"first answer", "second answer"} {
+		s.messageLog.Append(llm.SDKMessage{
+			Type:            "user",
+			LocallyAppended: true,
+			User: &llm.UserMessage{
+				Message: llm.ConversationMsg{
+					Role:    "user",
+					Content: []llm.ContentBlock{{Type: "text", Text: text}},
+				},
+			},
+		})
+	}
+
+	questions := json.RawMessage(`{"questions":[{"question":"Zeta?"},{"question":"Alpha?"}]}`)
+	answers := map[string]string{
+		"Alpha?": "second answer",
+		"Zeta?":  "first answer",
+	}
+	if err := s.RespondToAskUser("req-ordered", questions, answers, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	if got := s.MessageLog().Len(); got != 2 {
+		t.Fatalf("MessageLog().Len() = %d, want existing local answer echoes left unduplicated", got)
+	}
+}
+
 func TestSendUserMessage_ClearsLastControlRequest(t *testing.T) {
 	s := &Session{
 		hasUnansweredQuestion: true,

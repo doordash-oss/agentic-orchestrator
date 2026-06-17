@@ -16,6 +16,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -28,6 +29,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
@@ -511,6 +513,42 @@ func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 	for _, want := range []string{"Live Preview", "Using Bash...", "42%", "$0.42", "Ready to patch live preview"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestAPIAppModelLivePreviewPreservesTranscriptToolRowsFromREST(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		livePreview: server.LivePreviewResponse{
+			Feature: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"},
+			Session: &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Label: "Implement", Status: "running"},
+			Transcript: []server.TranscriptMessageDTO{
+				{Index: 1, Role: "assistant", Type: "text", Text: "Preparing patch"},
+				{Index: 2, Role: "assistant", Type: "tool_use", Tool: "Bash", Redacted: true},
+				{Index: 3, Role: "assistant", Type: "tool_use", Tool: "AskUserQuestion", Redacted: true},
+			},
+		},
+	}
+	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{"> Preparing patch", "$ Bash", "? AskUser:"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API live preview missing typed transcript row %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"> Bash", "> AskUserQuestion"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("API live preview rendered tool row as assistant text %q in:\n%s", notWant, view)
 		}
 	}
 }
@@ -2401,6 +2439,86 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 	}
 }
 
+func TestAPIAttachSessionRendersRestoredLocalUserTranscriptAsYou(t *testing.T) {
+	t.Parallel()
+
+	sess := newAPIAttachSession(nil, server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        "sess-1",
+			FeatureID: "active",
+			Phase:     "implement",
+			Kind:      "phase",
+			Status:    "Running",
+		},
+	}, server.TranscriptResponse{
+		Messages: []server.TranscriptMessageDTO{
+			{Index: 0, Role: "assistant", Type: "text", Text: "Which database?"},
+			{Index: 1, Role: "user", Type: "text", Text: "PostgreSQL"},
+			{Index: 2, Role: "assistant", Type: "text", Text: "Active work"},
+		},
+	}, nil)
+
+	m := attachModelFromSession(sess, 120, 40)
+	view := stripANSI(m.View())
+	for _, want := range []string{"[you] PostgreSQL", "Active work"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("reattached API transcript missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestAPIAttachRefreshDoesNotDuplicateRestoredLocalUserEcho(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{askUserAccepted: apiTestActionResponse{}}
+	sess := newAPIAttachSession(client, server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        "sess-1",
+			FeatureID: "active",
+			Phase:     "implement",
+			Kind:      "phase",
+			Status:    "Running",
+		},
+	}, server.TranscriptResponse{}, nil)
+	sess.MessageLog().Append(llm.SDKMessage{
+		Type:            "user",
+		LocallyAppended: true,
+		User: &llm.UserMessage{
+			Message: llm.ConversationMsg{
+				Role:    "user",
+				Content: []llm.ContentBlock{{Type: "text", Text: "PostgreSQL"}},
+			},
+		},
+	})
+	if err := sess.RespondToAskUser("ask-1", json.RawMessage(`{"questions":[{"question":"Which database?"}]}`), map[string]string{
+		"Which database?": "PostgreSQL",
+	}, nil); err != nil {
+		t.Fatalf("RespondToAskUser: %v", err)
+	}
+
+	newMessages := sess.applyAPISessionSnapshot(server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        "sess-1",
+			FeatureID: "active",
+			Phase:     "implement",
+			Kind:      "phase",
+			Status:    "Running",
+		},
+	}, &server.TranscriptResponse{
+		Messages: []server.TranscriptMessageDTO{
+			{Index: 0, Role: "user", Type: "text", Text: "PostgreSQL"},
+		},
+	}, nil)
+
+	if len(newMessages) != 0 {
+		t.Fatalf("applyAPISessionSnapshot returned %d messages, want duplicate local echo skipped", len(newMessages))
+	}
+	view := stripANSI(renderAttachMessages(sess.MessageLog().Messages(), filterAll, 120, nil))
+	if got := strings.Count(view, "[you] PostgreSQL"); got != 1 {
+		t.Fatalf("rendered [you] PostgreSQL count = %d, want 1 in:\n%s", got, view)
+	}
+}
+
 func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 	t.Parallel()
 
@@ -2621,6 +2739,44 @@ func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
 	}
 	if count := strings.Count(view, partialText); count != 1 {
 		t.Fatalf("attach view rendered repeated transcript row %d times, want 1:\n%s", count, view)
+	}
+}
+
+func TestAPIAppModelAttachRendersSessionInitialPrompt(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	app.storeSessionDetail(server.SessionDetailResponse{Session: server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+		},
+		InitialPrompt: "Implement the user-visible attach header.",
+	}})
+	app.storeTranscript("sess-1", server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+		{Index: 0, Role: "assistant", Type: "text", Text: "Working on it."},
+	}})
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
+	}
+	view := stripANSI(model.(APIAppModel).View().Content)
+	if !strings.Contains(view, "Implement the user-visible attach header.") {
+		t.Fatalf("attach view missing initial prompt:\n%s", view)
+	}
+	if !strings.Contains(view, "Working on it.") {
+		t.Fatalf("attach view missing transcript row:\n%s", view)
 	}
 }
 

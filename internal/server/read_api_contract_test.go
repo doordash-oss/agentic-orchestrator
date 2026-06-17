@@ -729,6 +729,50 @@ func TestSessionDetailAndTranscriptDoNotScanFeatureSessionsOnLookupMiss(t *testi
 	}
 }
 
+func TestSessionTranscriptExposesLocalUserEchoesButRedactsProtocolUserMessages(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sessions := fakeSessionManager{
+		views: []ports.SessionView{&fakeSessionView{
+			id: "sess-local-echo", featureID: f.ID, phase: feature.PhaseImplement,
+			kind: ports.KindPhase, status: ports.SessionRunning,
+			messages: []llm.SDKMessage{
+				{Type: "user", User: &llm.UserMessage{Message: llm.ConversationMsg{
+					Role:    "user",
+					Content: []llm.ContentBlock{{Type: "text", Text: "raw prompt private-token"}},
+				}}},
+				{Type: "user", LocallyAppended: true, User: &llm.UserMessage{Message: llm.ConversationMsg{
+					Role:    "user",
+					Content: []llm.ContentBlock{{Type: "text", Text: "PostgreSQL"}},
+				}}},
+			},
+		}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	body := getJSONMap(t, handler, "/api/v1/sessions/sess-local-echo/transcript")
+	raw := mustMarshalJSON(t, body)
+	if strings.Contains(raw, "raw prompt private-token") {
+		t.Fatalf("transcript leaked protocol user content: %s", raw)
+	}
+	messages := body["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("messages length = %d, want protocol redaction and local echo rows", len(messages))
+	}
+	redacted := messages[0].(map[string]any)
+	if redacted["text"] != "[redacted]" || redacted["redacted"] != true {
+		t.Fatalf("protocol user row = %+v, want redacted placeholder", redacted)
+	}
+	local := messages[1].(map[string]any)
+	if local["text"] != "PostgreSQL" || local["redacted"] == true {
+		t.Fatalf("local user echo row = %+v, want visible non-redacted text", local)
+	}
+}
+
 func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -809,6 +853,10 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	preview := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
 	if preview["feature"].(map[string]any)["id"] != f.ID {
 		t.Fatalf("live preview feature = %+v; want %s", preview["feature"], f.ID)
+	}
+	detail := getJSONMap(t, handler, "/api/v1/sessions/sess-1")
+	if got, want := detail["session"].(map[string]any)["initial_prompt"], "[redacted] initial prompt"; got != want {
+		t.Fatalf("session detail initial_prompt = %q; want %q", got, want)
 	}
 
 	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/sess-1", "/api/v1/sessions/sess-1/transcript?limit=10"} {

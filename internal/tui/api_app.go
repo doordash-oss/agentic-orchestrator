@@ -160,6 +160,7 @@ type APILivePreviewPresentation struct {
 	ContextPct     int
 	CostUSD        float64
 	Attention      []string
+	TranscriptRows []server.TranscriptMessageDTO
 	TranscriptTail []string
 }
 
@@ -1665,6 +1666,7 @@ type apiSessionView struct {
 	iteration             int
 	provider              string
 	model                 string
+	initialPrompt         string
 	contextPct            int
 	log                   ports.MessageLog
 	cost                  *llm.ResultMessage
@@ -1680,12 +1682,20 @@ type apiSessionView struct {
 }
 
 func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionView {
-	if preview.SessionID == "" && preview.Activity == "" && len(preview.TranscriptTail) == 0 {
+	if preview.SessionID == "" && preview.Activity == "" && len(preview.TranscriptRows) == 0 && len(preview.TranscriptTail) == 0 {
 		return nil
 	}
 	log := session.NewMessageLog()
-	for _, line := range preview.TranscriptTail {
-		appendAPILivePreviewText(log, line)
+	if len(preview.TranscriptRows) > 0 {
+		for _, row := range preview.TranscriptRows {
+			if msg, ok := apiTranscriptRowToSDKMessage(row, preview.SessionID); ok {
+				log.Append(msg)
+			}
+		}
+	} else {
+		for _, line := range preview.TranscriptTail {
+			appendAPILivePreviewText(log, line)
+		}
 	}
 	appendAPILivePreviewActivity(log, preview.Activity)
 	var cost *llm.ResultMessage
@@ -1781,7 +1791,7 @@ func (s *apiSessionView) IsActive() bool {
 }
 func (s *apiSessionView) Iteration() int               { return s.iteration }
 func (s *apiSessionView) StartedAt() time.Time         { return s.startedAt }
-func (s *apiSessionView) InitialPrompt() string        { return "" }
+func (s *apiSessionView) InitialPrompt() string        { return s.initialPrompt }
 func (s *apiSessionView) ProviderName() string         { return s.provider }
 func (s *apiSessionView) Model() string                { return s.model }
 func (s *apiSessionView) WorkDir() string              { return "" }
@@ -2050,6 +2060,7 @@ func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, trans
 		iteration:             detail.Iteration,
 		provider:              detail.Provider,
 		model:                 detail.Model,
+		initialPrompt:         detail.InitialPrompt,
 		contextPct:            detail.ContextPct,
 		log:                   log,
 		cost:                  &llm.ResultMessage{TotalCostUSD: detail.Usage.CostUSD},
@@ -2197,7 +2208,8 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 		}
 		if row.Role == "user" {
 			return llm.SDKMessage{
-				Type: "user",
+				Type:            "user",
+				LocallyAppended: !row.Redacted,
 				User: &llm.UserMessage{
 					Type:      "user",
 					SessionID: sessionID,
@@ -2256,6 +2268,31 @@ func apiTranscriptRowKey(row server.TranscriptMessageDTO) string {
 
 func apiTranscriptRowSignature(row server.TranscriptMessageDTO) string {
 	return apiTranscriptRowKey(row) + "\x00" + row.Text
+}
+
+func apiVisibleUserTranscriptRow(row server.TranscriptMessageDTO) bool {
+	return row.Role == "user" && row.Type == "text" && !row.Redacted && strings.TrimSpace(row.Text) != ""
+}
+
+func apiHasLocalUserEcho(log ports.MessageLog, text string) bool {
+	if log == nil {
+		return false
+	}
+	want := strings.TrimSpace(text)
+	if want == "" {
+		return false
+	}
+	for _, msg := range log.Messages() {
+		if !msg.LocallyAppended || msg.User == nil {
+			continue
+		}
+		for _, block := range msg.User.Message.Content {
+			if block.IsText() && strings.TrimSpace(block.Text) == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func apiCanUpdateLastTranscriptLogMessage(log ports.MessageLog) bool {
@@ -2332,6 +2369,7 @@ func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO,
 	s.mu.Lock()
 	s.status = apiSessionStatus(detail.Status)
 	s.contextPct = detail.ContextPct
+	s.initialPrompt = detail.InitialPrompt
 	s.pending = pending
 	if len(s.pending) > 0 {
 		if hasAskUser {
@@ -2358,6 +2396,17 @@ func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO,
 		}
 		key := apiTranscriptRowKey(row)
 		signature := apiTranscriptRowSignature(row)
+		if apiVisibleUserTranscriptRow(row) && apiHasLocalUserEcho(s.log, row.Text) {
+			if row.Index > s.lastTranscriptMessage {
+				s.lastTranscriptMessage = row.Index
+				s.lastTranscriptRows = map[string]string{}
+			}
+			if row.Index == s.lastTranscriptMessage {
+				s.lastTranscriptRows[key] = signature
+				s.lastTranscriptTailKey = key
+			}
+			continue
+		}
 		if row.Index > s.lastTranscriptMessage {
 			s.log.Append(msg)
 			messages = append(messages, msg)
@@ -2402,6 +2451,7 @@ func (m APIAppModel) Snapshot() APIAppSnapshot {
 	if out.LivePreview != nil {
 		preview := *out.LivePreview
 		preview.Attention = append([]string(nil), preview.Attention...)
+		preview.TranscriptRows = append([]server.TranscriptMessageDTO(nil), preview.TranscriptRows...)
 		preview.TranscriptTail = append([]string(nil), preview.TranscriptTail...)
 		out.LivePreview = &preview
 	}
@@ -7555,6 +7605,7 @@ func apiLivePreviewPresentation(featureID string, dto server.LivePreviewResponse
 		if text == "" {
 			continue
 		}
+		out.TranscriptRows = append(out.TranscriptRows, msg)
 		out.TranscriptTail = append(out.TranscriptTail, firstLine(text))
 	}
 	return out

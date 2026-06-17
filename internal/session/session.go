@@ -1441,6 +1441,7 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 // Claude Agent SDK `annotations` field of `updatedInput`.
 func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
 	s.captureAskUserResponse(requestID, questions, answers, annotations, nil)
+	s.appendManualAskUserMessages(questions, answers)
 
 	if s.protocol != nil {
 		return s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
@@ -1484,6 +1485,64 @@ func (s *Session) appendAutoPickedAskUserMessages(questions json.RawMessage, ans
 			},
 		})
 	}
+}
+
+func (s *Session) appendManualAskUserMessages(questions json.RawMessage, answers map[string]string) {
+	if len(answers) == 0 || s.messageLog == nil {
+		return
+	}
+	keys := askUserAnswerKeysInPresentedOrder(questions, answers)
+	if len(keys) == 0 || s.hasTrailingManualAskUserMessages(keys, answers) {
+		return
+	}
+	for _, q := range keys {
+		answer := answers[q]
+		if answer == "" {
+			continue
+		}
+		s.messageLog.Append(llm.SDKMessage{
+			Type:            "user",
+			LocallyAppended: true,
+			User: &llm.UserMessage{
+				Message: llm.ConversationMsg{
+					Role:    "user",
+					Content: []llm.ContentBlock{{Type: "text", Text: answer}},
+				},
+			},
+		})
+	}
+}
+
+func (s *Session) hasTrailingManualAskUserMessages(keys []string, answers map[string]string) bool {
+	if s.messageLog == nil {
+		return false
+	}
+	want := make([]string, 0, len(keys))
+	for _, q := range keys {
+		if answer := answers[q]; answer != "" {
+			want = append(want, answer)
+		}
+	}
+	if len(want) == 0 {
+		return true
+	}
+	msgs := s.messageLog.Messages()
+	if len(msgs) < len(want) {
+		return false
+	}
+	msgs = msgs[len(msgs)-len(want):]
+	for i, msg := range msgs {
+		if msg.User == nil || !msg.LocallyAppended || msg.AutoPicked {
+			return false
+		}
+		if len(msg.User.Message.Content) != 1 || !msg.User.Message.Content[0].IsText() {
+			return false
+		}
+		if msg.User.Message.Content[0].Text != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Session) captureAskUserResponse(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation, confidenceByQuestion map[string]float64) {

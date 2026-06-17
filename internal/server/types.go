@@ -535,6 +535,7 @@ type SessionDetailDTO struct {
 	SessionSummaryDTO
 	TranscriptCursor CursorDTO           `json:"transcript_cursor"`
 	PendingControls  []ControlRequestDTO `json:"pending_controls"`
+	InitialPrompt    string              `json:"initial_prompt,omitempty"`
 	CanAttach        bool                `json:"can_attach"`
 	LogAvailable     bool                `json:"log_available"`
 	SafeError        string              `json:"safe_error,omitempty"`

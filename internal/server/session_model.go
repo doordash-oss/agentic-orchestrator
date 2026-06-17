@@ -53,6 +53,7 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 			End:   sess.MessageLog().Len(),
 		},
 		PendingControls: pendingControlDTOs(sess),
+		InitialPrompt:   safeDisplayText(sess.InitialPrompt(), 2000),
 		CanAttach:       sess.IsActive(),
 		LogAvailable:    fileExists(sess.LogFilePath()),
 		SafeError:       safeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240),
@@ -178,6 +179,10 @@ func transcriptDTOs(messages []llm.SDKMessage, start int) []TranscriptMessageDTO
 		case msg.Assistant != nil:
 			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content)...)
 		case msg.User != nil:
+			if msg.LocallyAppended {
+				out = append(out, conversationDTOs(index, "user", msg.User.Message.Content)...)
+				continue
+			}
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "user", Type: "text", Text: "[redacted]", Redacted: true})
 		case msg.ControlRequest != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "control_request", Tool: msg.ControlRequest.Request.ToolName, Status: "pending", Redacted: true})

@@ -24,16 +24,18 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const (
-	defaultTextLimit = int64(64 * 1024)
-	maxTextLimit     = int64(256 * 1024)
+	defaultTextLimit          = int64(64 * 1024)
+	maxTextLimit              = int64(256 * 1024)
+	descriptionReviewArtifact = "description-review"
 )
 
 func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
-	_, run, err := h.featureAndRun(featureID, runNumber)
+	f, run, err := h.featureAndRun(featureID, runNumber)
 	if err != nil {
 		writeStoreError(w, err, "feature", featureID)
 		return
@@ -58,6 +60,9 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 		}
 		artifacts = append(artifacts, dto)
 	}
+	if dto, ok := h.descriptionReviewArtifactDTO(f, run, runNumber); ok {
+		artifacts = append(artifacts, dto)
+	}
 	revision := revisionForAny(artifacts)
 	writeRevisionedJSON(w, r, http.StatusOK, revision, ArtifactListResponse{
 		APIVersion: APIVersion,
@@ -71,9 +76,17 @@ func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid artifact id", nil)
 		return
 	}
-	_, run, err := h.featureAndRun(featureID, runNumber)
+	f, run, err := h.featureAndRun(featureID, runNumber)
 	if err != nil {
 		writeStoreError(w, err, "feature", featureID)
+		return
+	}
+	if artifactID == descriptionReviewArtifact {
+		if path, ok := h.descriptionReviewArtifactPath(f, run); ok {
+			h.writeTextFileSlice(w, r, artifactID, path)
+			return
+		}
+		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{"artifact_id": artifactID})
 		return
 	}
 	rel, ok := run.Artifacts[artifactID]
@@ -87,6 +100,60 @@ func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	h.writeTextFileSlice(w, r, artifactID, path)
+}
+
+func (h *apiHandler) descriptionReviewArtifactDTO(f *feature.Feature, run *feature.Run, runNumber int) (ArtifactDTO, bool) {
+	if f == nil || run == nil {
+		return ArtifactDTO{}, false
+	}
+	path, ok := h.descriptionReviewArtifactPath(f, run)
+	if !ok {
+		return ArtifactDTO{}, false
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return ArtifactDTO{}, false
+	}
+	return ArtifactDTO{
+		ID:               descriptionReviewArtifact,
+		Type:             artifactType(path),
+		Category:         "artifact",
+		RunNumber:        runNumber,
+		Phase:            "description",
+		Path:             path,
+		Size:             info.Size(),
+		ModifiedAt:       info.ModTime().UTC(),
+		ContentAvailable: textArtifact(path, info.Size()),
+	}, true
+}
+
+func (h *apiHandler) descriptionReviewArtifactPath(f *feature.Feature, run *feature.Run) (string, bool) {
+	if h == nil || h.store == nil || f == nil || run == nil || !run.IsRewind || run.PendingReviewPhase == nil {
+		return "", false
+	}
+	switch *run.PendingReviewPhase {
+	case feature.PhaseInquire:
+	case feature.PhasePlan:
+		if f.EffectivePipeline() != feature.PipelineMedium {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	featureDir := filepath.Dir(filepath.Dir(h.store.RunDir(f.ID, run.RunNumber)))
+	path := filepath.Join(featureDir, "description-review.md")
+	cleanBase, err := filepath.Abs(featureDir)
+	if err != nil {
+		return "", false
+	}
+	cleanPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	if cleanPath != cleanBase && !strings.HasPrefix(cleanPath, cleanBase+string(os.PathSeparator)) {
+		return "", false
+	}
+	return cleanPath, true
 }
 
 func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, featureID string, runNumber int, logID string) {

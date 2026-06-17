@@ -1325,6 +1325,12 @@ func needsReviewBanner(f *feature.Feature) string {
 
 // needsReviewLabel returns a human-readable label for the artifact awaiting review.
 func needsReviewLabel(f *feature.Feature) string {
+	if f.PendingReviewPhase != nil {
+		if f.IsRewind {
+			return WarningStyle.Bold(true).Render(fmt.Sprintf("Rewind to %s", f.PendingReviewPhase.String()))
+		}
+		return WarningStyle.Bold(true).Render(fmt.Sprintf("%s gate", f.PendingReviewPhase.String()))
+	}
 	switch f.Status {
 	case feature.StatusPlanNeedsReview:
 		if f.CurrentRoadmapPhase == 0 {
@@ -1435,6 +1441,13 @@ func formatDetailStatus(f *feature.Feature) string {
 			msg = "Failed (" + formatFailureType(f.FailureType) + ")"
 		}
 		return ErrorStyle.Render(msg + " — press [r] to restart, [l] logs")
+	}
+	if f.Status.IsNeedsReview() && f.PendingReviewPhase != nil {
+		label := f.PendingReviewPhase.String()
+		if f.IsRewind {
+			return WarningStyle.Render(fmt.Sprintf("Rewind to %s needs review — [a] Review", label))
+		}
+		return WarningStyle.Render(fmt.Sprintf("%s gate needs review — [a] Review", label))
 	}
 	switch f.Status {
 	case feature.StatusSettingUpWorktrees:

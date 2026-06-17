@@ -483,6 +483,58 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	}
 }
 
+func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("rewind review via REST", "old desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{Pipeline: feature.PipelineMedium})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	pending := feature.PhasePlan
+	if err := store.Modify(f.ID, func(f *feature.Feature) error {
+		f.Status = feature.StatusDesignNeedsReview
+		f.CurrentPhase = feature.PhaseDesign
+		f.PendingReviewPhase = &pending
+		f.IsRewind = true
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare rewind review: %v", err)
+	}
+	writePath := filepath.Join(store.BaseDir, f.ID, "description-review.md")
+	if err := os.WriteFile(writePath, []byte("edited desc"), 0o644); err != nil {
+		t.Fatalf("write description review: %v", err)
+	}
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		store: store,
+	}
+
+	if _, err := target.ReviewDecision(f.ID, serverruntime.ReviewDecisionRequest{
+		Decision: "proceed",
+		Phase:    "plan",
+		IsRewind: true,
+	}); err != nil {
+		t.Fatalf("ReviewDecision() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Description != "edited desc" {
+		t.Fatalf("Description = %q; want edited desc", updated.Description)
+	}
+	if updated.IsRewind || updated.PendingReviewPhase != nil {
+		t.Fatalf("rewind gate = is_rewind:%v pending:%v; want cleared", updated.IsRewind, updated.PendingReviewPhase)
+	}
+	if updated.Status != feature.StatusPlanning {
+		t.Fatalf("Status = %s; want Planning", updated.Status)
+	}
+}
+
 func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *testing.T) {
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")

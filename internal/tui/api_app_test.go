@@ -2556,6 +2556,15 @@ func TestAPIAppModelReviewDecisionsUseRESTMutation(t *testing.T) {
 				Phase:    "implement",
 			},
 		},
+		{
+			name: "rewind proceeds with target phase",
+			msg:  RewindReviewDecisionMsg{FeatureID: "active", Phase: feature.PhasePlan, Decision: "proceed"},
+			wantReq: server.ReviewDecisionRequest{
+				Decision: "proceed",
+				Phase:    "plan",
+				IsRewind: true,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2696,6 +2705,93 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(cmd())
 
 	wantReq := server.ReviewDecisionRequest{Decision: "proceed", Roadmap: true}
+	if len(client.reviewRequests) != 1 || client.reviewRequests[0] != wantReq {
+		t.Fatalf("reviewRequests = %+v, want %+v", client.reviewRequests, wantReq)
+	}
+}
+
+func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	descPath := filepath.Join(tmp, "description-review.md")
+	if err := os.WriteFile(descPath, []byte("translate readme in Sicilian"), 0o644); err != nil {
+		t.Fatalf("write description review: %v", err)
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "DesignNeedsReview",
+				CurrentPhase: "design",
+				ActiveRun:    2,
+				RunCount:     2,
+				CreatedAt:    time.Now(),
+			},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "DesignNeedsReview",
+				CurrentPhase: "design",
+				ActiveRun:    2,
+				RunCount:     2,
+			},
+			Pipeline: "medium",
+			ActiveRun: &server.RunSummaryDTO{
+				RunNumber:          2,
+				CurrentPhase:       "design",
+				PendingReviewPhase: "plan",
+				IsRewind:           true,
+				ArtifactCount:      1,
+			},
+			Models: config.ModelConfig{Utilities: "test-utility"},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: filepath.Join(tmp, "roadmap.md"), Size: 1, ContentAvailable: true},
+			{ID: "description-review", RunNumber: 2, Phase: "description", Path: descPath, Size: 27, ContentAvailable: true},
+		}},
+		reviewAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	if view := stripANSI(app.View().Content); !strings.Contains(view, "Rewind to Plan needs review") {
+		t.Fatalf("API app View() missing rewind review hint:\n%s", view)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	updated := model.(APIAppModel)
+	if updated.artifactReview == nil {
+		t.Fatalf("pressing a did not open artifact review; statusMessage=%q", updated.statusMessage)
+	}
+	if got := updated.artifactReview.ReviewMode(); got != "rewind" {
+		t.Fatalf("artifactReview.ReviewMode() = %q, want rewind", got)
+	}
+	if got := updated.artifactReview.ArtifactPath(); got != descPath {
+		t.Fatalf("artifactReview.ArtifactPath() = %q, want %q", got, descPath)
+	}
+
+	model, _ = updated.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("artifact review proceed returned nil command")
+	}
+	msg := cmd()
+	model, cmd = model.(APIAppModel).Update(msg)
+	if cmd == nil {
+		t.Fatal("rewind review decision message returned nil REST command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+
+	wantReq := server.ReviewDecisionRequest{Decision: "proceed", Phase: "plan", IsRewind: true}
 	if len(client.reviewRequests) != 1 || client.reviewRequests[0] != wantReq {
 		t.Fatalf("reviewRequests = %+v, want %+v", client.reviewRequests, wantReq)
 	}

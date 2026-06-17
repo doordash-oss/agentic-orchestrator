@@ -220,17 +220,20 @@ type ActionDisabledReasonDTO struct {
 }
 
 type RunSummaryDTO struct {
-	RunNumber       int        `json:"run_number"`
-	StartedAt       *time.Time `json:"started_at,omitempty"`
-	SealedAt        *time.Time `json:"sealed_at,omitempty"`
-	SealReason      string     `json:"seal_reason,omitempty"`
-	CurrentPhase    string     `json:"current_phase,omitempty"`
-	PhaseStatus     string     `json:"phase_status,omitempty"`
-	Iteration       int        `json:"iteration,omitempty"`
-	RoadmapPhase    int        `json:"roadmap_phase,omitempty"`
-	RoadmapTotal    int        `json:"roadmap_total,omitempty"`
-	ArtifactCount   int        `json:"artifact_count"`
-	HasNeedUserGate bool       `json:"has_need_user_gate,omitempty"`
+	RunNumber                       int        `json:"run_number"`
+	StartedAt                       *time.Time `json:"started_at,omitempty"`
+	SealedAt                        *time.Time `json:"sealed_at,omitempty"`
+	SealReason                      string     `json:"seal_reason,omitempty"`
+	CurrentPhase                    string     `json:"current_phase,omitempty"`
+	PhaseStatus                     string     `json:"phase_status,omitempty"`
+	Iteration                       int        `json:"iteration,omitempty"`
+	RoadmapPhase                    int        `json:"roadmap_phase,omitempty"`
+	RoadmapTotal                    int        `json:"roadmap_total,omitempty"`
+	PendingReviewPhase              string     `json:"pending_review_phase,omitempty"`
+	PendingRewindReviewRoadmapPhase int        `json:"pending_rewind_review_roadmap_phase,omitempty"`
+	IsRewind                        bool       `json:"is_rewind,omitempty"`
+	ArtifactCount                   int        `json:"artifact_count"`
+	HasNeedUserGate                 bool       `json:"has_need_user_gate,omitempty"`
 }
 
 type RepoStatusDTO struct {

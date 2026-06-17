@@ -494,7 +494,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 	}
 }
 
-func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesUpgradeTargets(t *testing.T) {
+func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTargets(t *testing.T) {
 	t.Parallel()
 	publishable := true
 	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
@@ -503,6 +503,10 @@ func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesUpgradeTargets(t *t
 	rewind := actionDTOByID(t, actionCatalogDTOs(f), "rewind")
 	if !rewind.Enabled {
 		t.Fatalf("rewind enabled = false; want true")
+	}
+	targetOptions := actionInputDTOByName(t, rewind, "target_phase").Options
+	if got, want := strings.Join(targetOptions, ","), "plan"; got != want {
+		t.Fatalf("target_phase options = %q; want %q", got, want)
 	}
 	upgradeOptions := actionInputDTOByName(t, rewind, "upgrade_pipeline").Options
 	if got, want := strings.Join(upgradeOptions, ","), "large,moonshot"; got != want {
@@ -812,6 +816,50 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 		if strings.Contains(raw, "private-token") || strings.Contains(raw, "raw prompt") {
 			t.Fatalf("%s leaks redacted content in %s", path, raw)
 		}
+	}
+}
+
+func TestRewindDescriptionReviewArtifactAndStateExposed(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	pending := feature.PhasePlan
+	f.Status = feature.StatusDesignNeedsReview
+	f.CurrentPhase = feature.PhaseDesign
+	f.Pipeline = feature.PipelineMedium
+	f.PendingReviewPhase = &pending
+	f.IsRewind = true
+	f.Artifacts = nil
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	writeFile(t, filepath.Join(store.BaseDir, f.ID, "description-review.md"), "initial prompt")
+
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+	})
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	activeRun := detail["feature"].(map[string]any)["active_run_detail"].(map[string]any)
+	if activeRun["pending_review_phase"] != "plan" {
+		t.Fatalf("pending_review_phase = %v; want plan", activeRun["pending_review_phase"])
+	}
+	if activeRun["is_rewind"] != true {
+		t.Fatalf("is_rewind = %v; want true", activeRun["is_rewind"])
+	}
+
+	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
+	rawArtifacts := list["artifacts"].([]any)
+	if len(rawArtifacts) != 1 {
+		t.Fatalf("artifacts len = %d; want 1 (%+v)", len(rawArtifacts), rawArtifacts)
+	}
+	artifact := rawArtifacts[0].(map[string]any)
+	if artifact["id"] != "description-review" || artifact["content_available"] != true {
+		t.Fatalf("description review artifact = %+v; want available description-review", artifact)
+	}
+	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/description-review?offset=8&limit=6")
+	if content["text"] != "prompt" {
+		t.Fatalf("description-review content = %q; want prompt", content["text"])
 	}
 }
 

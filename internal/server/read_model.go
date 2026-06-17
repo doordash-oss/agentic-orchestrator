@@ -284,7 +284,7 @@ func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummaryDTO {
 	if run == nil {
 		return RunSummaryDTO{}
 	}
-	return RunSummaryDTO{
+	dto := RunSummaryDTO{
 		RunNumber:       run.RunNumber,
 		StartedAt:       run.StartedAt,
 		SealedAt:        run.SealedAt,
@@ -297,6 +297,14 @@ func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummaryDTO {
 		ArtifactCount:   len(run.Artifacts),
 		HasNeedUserGate: run.PendingNeedUserInputPath != "",
 	}
+	if run.PendingReviewPhase != nil {
+		dto.PendingReviewPhase = run.PendingReviewPhase.DirName()
+	}
+	if run.PendingRewindReviewRoadmapPhase != nil {
+		dto.PendingRewindReviewRoadmapPhase = *run.PendingRewindReviewRoadmapPhase
+	}
+	dto.IsRewind = run.IsRewind
+	return dto
 }
 
 func repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {

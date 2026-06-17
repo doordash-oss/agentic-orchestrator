@@ -1369,6 +1369,10 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 		return nil
 	}
 
+	if d.IsRewind && d.Decision == "proceed" {
+		return o.ProceedFromRewindReview(featureID, d.TargetPhase)
+	}
+
 	switch d.Decision {
 	case "proceed":
 		return o.reviewProceed(featureID, f, d)

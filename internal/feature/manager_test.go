@@ -3952,6 +3952,23 @@ func TestRewindChoicesForFeature_MediumAtPlanning(t *testing.T) {
 	}
 }
 
+func TestRewindChoicesForFeature_MediumPlanNeedsReviewIncludesPlan(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure lifecycle helper over an isolated feature value.
+	f := &feature.Feature{
+		Status:   feature.StatusPlanNeedsReview,
+		Pipeline: feature.PipelineMedium,
+	}
+
+	choices := feature.RewindChoicesForFeature(f)
+	if len(choices) != 1 {
+		t.Fatalf("got %d choices, want 1", len(choices))
+	}
+	if choices[0].Phase != feature.PhasePlan {
+		t.Fatalf("choice = %v, want Plan", choices[0].Phase)
+	}
+}
+
 func TestRewindToPhase_MediumRejectsNonMediumPhase(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

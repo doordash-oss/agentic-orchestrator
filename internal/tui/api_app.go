@@ -812,6 +812,12 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Decision: msg.Decision,
 			Phase:    strings.ToLower(msg.Phase.String()),
 		})
+	case RewindReviewDecisionMsg:
+		return m, m.reviewDecisionCmd(msg.FeatureID, server.ReviewDecisionRequest{
+			Decision: msg.Decision,
+			Phase:    msg.Phase.DirName(),
+			IsRewind: true,
+		})
 	case apiOwnedServerStoppedMsg:
 		if msg.err != nil {
 			m.ownedServerShutdownPending = false
@@ -1417,6 +1423,15 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 			if detail.ActiveRun.CurrentPhase != "" {
 				f.CurrentPhase = apiFeaturePhase(detail.ActiveRun.CurrentPhase)
 			}
+			if detail.ActiveRun.PendingReviewPhase != "" {
+				phase := apiFeaturePhase(detail.ActiveRun.PendingReviewPhase)
+				f.PendingReviewPhase = &phase
+			}
+			if detail.ActiveRun.PendingRewindReviewRoadmapPhase > 0 {
+				roadmapPhase := detail.ActiveRun.PendingRewindReviewRoadmapPhase
+				f.PendingRewindReviewRoadmapPhase = &roadmapPhase
+			}
+			f.IsRewind = detail.ActiveRun.IsRewind
 		}
 		if detail.Failure != nil {
 			f.FailureType = detail.Failure.Type
@@ -1467,18 +1482,21 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	}
 	m.applyAPIAttention(f)
 	f.SetRun(&feature.Run{
-		RunNumber:           f.ActiveRun,
-		CurrentIteration:    f.CurrentIteration,
-		CurrentRoadmapPhase: f.CurrentRoadmapPhase,
-		TotalRoadmapPhases:  f.TotalRoadmapPhases,
-		CurrentPhaseStatus:  f.CurrentPhaseStatus,
-		RepoStates:          f.RepoStates,
-		RepoCycles:          f.RepoCycles,
-		ActiveCycle:         f.ActiveCycle,
-		PhaseTimings:        f.PhaseTimings,
-		PhaseCosts:          f.PhaseCosts,
-		LastError:           f.LastError,
-		FailureType:         f.FailureType,
+		RunNumber:                       f.ActiveRun,
+		CurrentIteration:                f.CurrentIteration,
+		CurrentRoadmapPhase:             f.CurrentRoadmapPhase,
+		TotalRoadmapPhases:              f.TotalRoadmapPhases,
+		CurrentPhaseStatus:              f.CurrentPhaseStatus,
+		PendingReviewPhase:              f.PendingReviewPhase,
+		PendingRewindReviewRoadmapPhase: f.PendingRewindReviewRoadmapPhase,
+		IsRewind:                        f.IsRewind,
+		RepoStates:                      f.RepoStates,
+		RepoCycles:                      f.RepoCycles,
+		ActiveCycle:                     f.ActiveCycle,
+		PhaseTimings:                    f.PhaseTimings,
+		PhaseCosts:                      f.PhaseCosts,
+		LastError:                       f.LastError,
+		FailureType:                     f.FailureType,
 	})
 	return f
 }
@@ -3627,6 +3645,14 @@ func (m APIAppModel) openAPIReviewAttention(f *feature.Feature) (tea.Model, tea.
 	}
 	reviewMode := "plan"
 	rewindPhase := feature.PhasePlan
+	if f.PendingReviewPhase != nil {
+		rewindPhase = *f.PendingReviewPhase
+		if f.IsRewind {
+			reviewMode = "rewind"
+		} else {
+			reviewMode = "gate"
+		}
+	}
 	model := NewArtifactReviewModel(artifact.Path, f.ID, reviewMode, rewindPhase, m.width, m.height, m.sessionManager, "", m.buildSession)
 	model.utilityModel = m.apiUtilityModelForFeature(f.ID)
 	m.artifactReview = &model
@@ -3659,6 +3685,26 @@ func (m APIAppModel) reviewArtifactForFeature(f *feature.Feature) (server.Artifa
 func reviewArtifactIDs(f *feature.Feature) []string {
 	if f == nil {
 		return nil
+	}
+	if f.IsRewind && f.PendingReviewPhase != nil {
+		switch *f.PendingReviewPhase {
+		case feature.PhaseInquire:
+			return []string{"description-review", "prompt"}
+		case feature.PhasePlan:
+			if f.EffectivePipeline() == feature.PipelineMedium {
+				return []string{"description-review", "prompt"}
+			}
+			return []string{"design", "research"}
+		case feature.PhaseResearch:
+			return []string{"inquire"}
+		case feature.PhaseDesign:
+			return []string{"research"}
+		case feature.PhaseImplement:
+			if f.PendingRewindReviewRoadmapPhase != nil && *f.PendingRewindReviewRoadmapPhase > 0 {
+				return []string{fmt.Sprintf("phase-%d-plan", *f.PendingRewindReviewRoadmapPhase), "plan"}
+			}
+			return []string{"plan", "roadmap"}
+		}
 	}
 	switch f.Status {
 	case feature.StatusPlanNeedsReview:

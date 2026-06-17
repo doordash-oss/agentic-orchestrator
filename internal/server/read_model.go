@@ -69,14 +69,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		},
 		Actions: actionCatalogDTOs(f),
 	}
-	if f.ActiveCycle != nil {
-		detail.Cycle = &CycleDTO{
-			Type:      string(f.ActiveCycle.Type),
-			Status:    f.ActiveCycle.Status,
-			Count:     f.ActiveCycle.Count,
-			Iteration: f.ActiveCycle.Iteration,
-		}
-	}
+	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
 		detail.Failure = &FailureDTO{
 			Type:    f.FailureType,
@@ -87,6 +80,89 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		detail.NeedUserInput = &NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: "feature", Iteration: f.CurrentIteration}
 	}
 	return detail
+}
+
+func activeCycleDTO(f *feature.Feature) *CycleDTO {
+	if f == nil {
+		return nil
+	}
+	if f.ActiveCycle != nil {
+		return &CycleDTO{
+			Type:      string(f.ActiveCycle.Type),
+			Status:    f.ActiveCycle.Status,
+			Count:     f.ActiveCycle.Count,
+			Iteration: f.ActiveCycle.Iteration,
+		}
+	}
+	for _, repo := range f.Repos {
+		if dto := activeRepoCycleDTO(f, f.RepoCycles[repo.Name]); dto != nil {
+			return dto
+		}
+	}
+	if len(f.RepoCycles) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(f.RepoCycles))
+	for repoName := range f.RepoCycles {
+		names = append(names, repoName)
+	}
+	sort.Strings(names)
+	for _, repoName := range names {
+		if dto := activeRepoCycleDTO(f, f.RepoCycles[repoName]); dto != nil {
+			return dto
+		}
+	}
+	return nil
+}
+
+func activeRepoCycleDTO(f *feature.Feature, cycle *feature.RepoCycleState) *CycleDTO {
+	if cycle == nil || !isActiveRepoCycleStatus(cycle.Status) {
+		return nil
+	}
+	return &CycleDTO{
+		Type:      string(cycle.Type),
+		Status:    cycle.Status,
+		Count:     activeCycleCount(f, cycle),
+		Iteration: cycle.Iteration,
+	}
+}
+
+func isActiveRepoCycleStatus(status string) bool {
+	switch status {
+	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
+		return true
+	default:
+		return false
+	}
+}
+
+func activeCycleCount(f *feature.Feature, cycle *feature.RepoCycleState) int {
+	if f == nil || cycle == nil {
+		return 0
+	}
+	count := cycle.Count
+	switch cycle.Type {
+	case feature.CycleRebase:
+		if f.RebaseCount() > count {
+			count = f.RebaseCount()
+		}
+	case feature.CycleTweak:
+		if f.TweakCount() > count {
+			count = f.TweakCount()
+		}
+	case feature.CycleRefactor:
+		if f.RefactorCount() > count {
+			count = f.RefactorCount()
+		}
+	case feature.CycleReviewComments:
+		if f.ReviewCommentsCount() > count {
+			count = f.ReviewCommentsCount()
+		}
+	}
+	if count <= 0 && cycle.Type != "" {
+		return 1
+	}
+	return count
 }
 
 func actionCatalogDTOs(f *feature.Feature) []ActionDTO {

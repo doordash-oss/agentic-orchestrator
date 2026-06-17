@@ -89,6 +89,39 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	}
 }
 
+func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusCodeReady
+		ff.CurrentPhase = feature.PhasePublish
+		ff.SetRefactorCount(1)
+		ff.ActiveCycle = nil
+		ff.SetActiveCycleType("")
+		ff.RepoCycles = map[string]*feature.RepoCycleState{
+			"agentic-orchestrator": {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify() error = %v", err)
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features: store,
+	})
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	featureDTO := detail["feature"].(map[string]any)
+	cycle, ok := featureDTO["cycle"].(map[string]any)
+	if !ok {
+		t.Fatalf("detail feature cycle missing in %+v", featureDTO)
+	}
+	if cycle["type"] != "refactor" || cycle["status"] != "running" || cycle["count"].(float64) != 1 {
+		t.Fatalf("detail feature cycle = %+v, want running refactor #1", cycle)
+	}
+}
+
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

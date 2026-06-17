@@ -461,6 +461,65 @@ func TestAPIAppModelDashboardFeatureUsesDetailModels(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Sicilian README",
+		Slug:         "translate-in-sicilian",
+		Status:       "CodeReady",
+		CurrentPhase: "publish",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    time.Now(),
+	}
+	app := APIAppModel{
+		width:           160,
+		height:          40,
+		focusPanel:      1,
+		rightPanelMode:  dashboardRightPanelOverview,
+		selectedFeature: summary.ID,
+		featureList:     server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: {Feature: server.FeatureDetailDTO{
+				FeatureSummary: summary,
+				Cycle:          &server.CycleDTO{Type: "refactor", Status: "running", Count: 1, Iteration: 1},
+				Timing:         server.TimingDTO{ByPhase: map[string]int64{"implement": 300}},
+				RepoStatus: []server.RepoStatusDTO{
+					{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "refactor", CycleStatus: "running"},
+				},
+			}},
+		},
+	}
+
+	features := app.apiDashboardFeatures()
+	if len(features) != 1 {
+		t.Fatalf("apiDashboardFeatures length = %d, want 1", len(features))
+	}
+	f := features[0]
+	if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRefactor || f.ActiveCycle.Status != feature.RepoCycleRunning || f.ActiveCycle.Count != 1 {
+		t.Fatalf("ActiveCycle = %+v, want running refactor #1", f.ActiveCycle)
+	}
+	if got := f.RefactorCount(); got != 1 {
+		t.Fatalf("RefactorCount = %d, want 1 from REST cycle count", got)
+	}
+	if got := f.ActiveCycleType(); got != feature.CycleRefactor {
+		t.Fatalf("ActiveCycleType = %q, want refactor", got)
+	}
+
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{"Info", "Phase Progress", "Refactor #1", "in progress", "[l] Live Preview"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("REST refactor cycle overview missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Feature ID", "Current: Refactoring", "[o] Overview"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("REST refactor cycle overview contained live-preview copy %q in:\n%s", notWant, view)
+		}
+	}
+}
+
 func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 	t.Parallel()
 

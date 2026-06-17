@@ -1674,6 +1674,35 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 			f.Status = feature.StatusNeedUserInput
 		}
 	}
+	activeCycleType := feature.RepoCycleType("")
+	rebaseCount := 0
+	tweakCount := 0
+	refactorCount := 0
+	reviewCommentsCount := 0
+	if hasDetail && detail.Cycle != nil && (detail.Cycle.Type != "" || detail.Cycle.Status != "") {
+		cycleType := feature.RepoCycleType(detail.Cycle.Type)
+		cycleCount := detail.Cycle.Count
+		if cycleCount <= 0 && cycleType != "" {
+			cycleCount = 1
+		}
+		f.ActiveCycle = &feature.CycleState{
+			Type:      cycleType,
+			Status:    detail.Cycle.Status,
+			Count:     cycleCount,
+			Iteration: detail.Cycle.Iteration,
+		}
+		activeCycleType = cycleType
+		switch cycleType {
+		case feature.CycleRebase:
+			rebaseCount = cycleCount
+		case feature.CycleTweak:
+			tweakCount = cycleCount
+		case feature.CycleRefactor:
+			refactorCount = cycleCount
+		case feature.CycleReviewComments:
+			reviewCommentsCount = cycleCount
+		}
+	}
 	repoStatuses := map[string]server.RepoStatusDTO{}
 	if hasDetail {
 		for _, repo := range detail.RepoStatus {
@@ -1697,13 +1726,21 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 			LastError: dto.LastError,
 		}
 		if dto.CycleType != "" || dto.CycleStatus != "" {
+			cycleType := feature.RepoCycleType(dto.CycleType)
 			cycle := &feature.RepoCycleState{
-				Type:   feature.RepoCycleType(dto.CycleType),
+				Type:   cycleType,
 				Status: dto.CycleStatus,
+			}
+			if f.ActiveCycle != nil && f.ActiveCycle.Type == cycleType {
+				cycle.Count = f.ActiveCycle.Count
+				cycle.Iteration = f.ActiveCycle.Iteration
 			}
 			f.RepoCycles[repo.Name] = cycle
 			if f.ActiveCycle == nil && cycle.Status != "" {
 				f.ActiveCycle = &feature.CycleState{Type: cycle.Type, Status: cycle.Status, Count: cycle.Count}
+			}
+			if activeCycleType == "" && cycle.Status != "" {
+				activeCycleType = cycle.Type
 			}
 		}
 	}
@@ -1723,6 +1760,11 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		PendingReviewPhase:              f.PendingReviewPhase,
 		PendingRewindReviewRoadmapPhase: f.PendingRewindReviewRoadmapPhase,
 		IsRewind:                        f.IsRewind,
+		ActiveCycleType:                 activeCycleType,
+		RebaseCount:                     rebaseCount,
+		TweakCount:                      tweakCount,
+		RefactorCount:                   refactorCount,
+		ReviewCommentsCount:             reviewCommentsCount,
 		RepoStates:                      f.RepoStates,
 		RepoCycles:                      f.RepoCycles,
 		ActiveCycle:                     f.ActiveCycle,

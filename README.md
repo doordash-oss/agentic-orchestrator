@@ -1,6 +1,6 @@
 # Agentic Orchestrator
 
-### Spara u moonshot cu nu sulu colpu — poi rifallu deci voti in parallilu.
+### Spara u moonshot. Poi rifallu deci voti in parallilu.
 
 Agentic Orchestrator è nu orchestraturi di workflow di sviluppu cu IA ca trasfurma ogni ingigneri nta nu multiplicaturi di forza. Deskrivi li tò feature, pigghia li decisioni di livellu àutu, e l'IA fa tuttu u restu — ricerca, pianificazzioni, implementazzioni, rivisioni di còdici, pull request — tuttu in parallilu da nu sulu terminali.
 
@@ -8,7 +8,7 @@ Agentic Orchestrator è nu orchestraturi di workflow di sviluppu cu IA ca trasfu
 
 <img width="3000" height="1800" alt="flussu-basìcu-agentico-3000x1800" src="https://github.com/user-attachments/assets/b61ccb6e-3b0d-4b29-9b74-ade9a3917e82" />
 
-## Pirchì propriu Agentic Orchestrator?
+## Pirchì Agentic Orchestrator?
 
 Lu puntu diffìcili dâ programmazzioni agentica nun è dumannari a nu mudellu di canciari file. Lu puntu diffìcili è arrivari di na dumanna di feature vaga e ad altu livellu a na pull request rivisabili senza perdiri cuntestu, saltari u travagghiu di disignu, o lassari ca nu pianu scarsu produci na diff gigantesca. Lassatu senza cuntrollu, chista è la via pi cui li squadri finisciunu cu AI slop: còdici ca pari fidatu ma è statu pruduciutu cchiù in fretta dâ quantità di cuntestu, testi e prucidura di rivisioni nicissaria pi fari lu fidatu. Agentic Orchestrator è custruitu apposta pi chistu prubbrema: pigghia na dumanna di feature e la trasforma in nu workflow d'ingignirìa dutàtuli ca racogghi cuntestu, fa dumanni, disigna l'approcciu, scumparti u travagghiu, lu implementa, lu verifica, lu rividi e lu pubblica.
 
@@ -23,17 +23,17 @@ Chistu è lu veru valuri di "oneshot": nu ingigneri po discrìviri na feature gr
 
 Lu disignu segui li patroni discritti nta l'articulu di Anthropic [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents): prompt chaining, parallelization, orchestrator-workers, e evaluator-optimizer loops. Codifica puru u workflow di Claude Code [explore → plan → code](https://code.claude.com/docs/en/best-practices) e la guida di OpenAI supra l'orchestration e li guardrails di l'agenti [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
-## Parti subitu
+## Parti ora
 
 Usa Homebrew si lu hai; altrimenti pigghia lu binariu precompilatu. Custruisci di surgenti sulu si stai travagghiannu supra agentico stissu.
 
-**Homebrew** (cunsigliatu — macOS/Linux):
+**Homebrew** (cunsigliatu, macOS/Linux):
 
 ```bash
 brew install doordash-oss/agentic-orchestrator/agentico
 ```
 
-**Binariu precompilatu** — senza Homebrew o Go (macOS/Linux, amd64/arm64):
+**Binariu precompilatu** (senza Homebrew o Go, macOS/Linux, amd64/arm64):
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -44,7 +44,7 @@ curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/downlo
 # ensure ~/.local/bin is on your PATH
 ```
 
-**Dâ surgenti** — pi cuntribbuiri a agentico (Go 1.25+):
+**Dâ surgenti** (pi cuntribbuiri a agentico, Go 1.25+):
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
@@ -55,18 +55,18 @@ Poi esegui `agentico`. Aggiorna quannu ti servi cu `agentico update` — usa lu 
 
 Quannu lanci la prima vota, Agentic Orchestrator ti guida nta nu flussu di benvenuta pi scegghiri li tò carteddi di travagghiu. Doppu di chissu, sì supra lu cruscottu.
 
-**Tri tasti da arricurdari**: `n` (nova feature), `?` (ajutu), `a` (guarda u travagghiu attivu; rispunni, appruva, o rividi quannu ti veni dumandatu). Tuttu u restu si po scopriri dâ superfici d'ajutu.
+**Tri tasti**: `n` (nova feature), `?` (ajutu), `a` (guarda u travagghiu attivu; rispunni, appruva, o rividi quannu ti veni dumandatu). Tuttu u restu si po scopriri dâ superfici d'ajutu.
 
-## Chì ti servi
+## Cosa ti servi
 
-### Strettamenti necessarii
+### Necessari
 
 | Strumentu | Scopu | Installazzioni |
 |------|---------|---------|
 | **`git`** | Operazzioni di worktree, branch, commit e rebase | Già installatu supra assai sistemi |
 | **`gh` CLI** | Creazzioni di PR e aggiornamenti cross-repo di u corpu dâ PR durante Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), poi `gh auth login` |
 
-### CLI di provider — nstalla almenu unu
+### CLI di provider
 
 Agentic Orchestrator avi bisognu di **almenu un** CLI di provider IA.
 
@@ -75,7 +75,7 @@ Agentic Orchestrator avi bisognu di **almenu un** CLI di provider IA.
 | **Claude Code CLI >= 2.1.81** (`claude`) | Backend predefinitu pi KB, inquire, research, design, planning, implementation e chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) o `npm install -g @anthropic-ai/claude-code@latest` |
 | **Codex CLI >= 0.116.0** (`codex`) | Backend predefinitu pi Final Review e mudelli di rivisioni basati supra Codex | [Codex CLI setup](https://developers.openai.com/codex/cli) o `npm i -g @openai/codex@latest` |
 
-### Pi aviri cchiù cunfortu
+### Facultativi
 
 | Strumentu | Scopu | Installazzioni |
 |------|---------|---------|
@@ -84,9 +84,9 @@ Agentic Orchestrator avi bisognu di **almenu un** CLI di provider IA.
 
 Doppu ca hai installatu li tò provider CLI, esegui `claude auth status` e/o `codex login status`, cchiù `gh auth status`, prima di lanciari `agentico`.
 
-## Comu gira
+## Comu funziona
 
-### U ciclu di vita dâ feature
+### Ciclu dâ feature
 
 Lu ciclu dipenni dû prufilu e di li checkpoint. Medium accumencia dâ fase di pianificazzioni. Large e Moonshot custruiscinu prima u cuntestu, chiarìscinu l'intenzioni e esplòranu opzioni di disignu. Poi tutti li prufili entranu nta lu ciclu roadmap: creazzioni di na roadmap, pianificazzioni di na fasi di roadmap alla vota, implementazzioni, commit di ancore di fase, e avanti finu a quannu l'ultima fasi arriva a Final Review.
 
@@ -104,7 +104,7 @@ Lu ciclu dipenni dû prufilu e di li checkpoint. Medium accumencia dâ fase di p
 
 **Pubblicazzioni** — Si l'auto-publish è attivu, Agentic Orchestrator fa commit, rebase, push, crea PR e inserisci automaticamente li ligami cross-repo dâ PR. Si manual publish è attivu, lu TUI si ferma a `CodeReady` accussì puoi rivìdiri la diff e la discrizzioni dâ PR prima.
 
-### I prufili dâ pipeline
+### Prufili di pipeline
 
 Quannu crii na feature, scegghi nu livellu di pipeline:
 
@@ -114,7 +114,7 @@ Quannu crii na feature, scegghi nu livellu di pipeline:
 | **Large** | KB → Inquire → Research → Design → ciclu roadmap → Final Review → Publish | La maiò parti dî feature cumplicati (predefinitu) |
 | **Moonshot** | Stissa sequenza di fasi di Large, ma cu max effort, valori predefiniti di plan-review, e rivisioni di implementazzioni pi ogni iterazzioni | Travagghi ad altu risicu o assai ambigui |
 
-### Worktree senza mischiu
+### Worktree puliti
 
 Ogni feature gira nta la so git worktree sottu `~/.agentic-orchestrator/worktrees/` (li installazzioni legacy cuntìnuanu a usari `~/.agentic-workflow/worktrees/` finu a quannu decidi di passari). Chistu voli diri:
 - Più feature ponnu travagghiari supra u stissu repo in simultanea
@@ -122,7 +122,7 @@ Ogni feature gira nta la so git worktree sottu `~/.agentic-orchestrator/worktree
 - La tò checkout principali resta micca tuccata
 - Li worktree si pulìscinu cu `c` quannu finisci
 
-### Cchiù repositori, stissu ritmu
+### Multi-repo, stissu ritmu
 
 Ogni feature mira unu o cchiù repositori cu la stissa lifecycle e state machine. Quannu na feature tocca cchiù di un repo, Agentic Orchestrator:
 - Crea worktree nta ognunu dî repo mirati
@@ -132,11 +132,11 @@ Ogni feature mira unu o cchiù repositori cu la stissa lifecycle e state machine
 
 Quannu na feature mira un sulu repo, u panel Repo Progress, lu modal cycle-selector e la cross-reference PR table si ridùcinu — u restu dâ lifecycle resta identicu.
 
-### Na Knowledge Base pi ogni repo
+### Na KB pi ogni repo
 
 Prima di affruntari na feature, Agentic Orchestrator po custruiri na Knowledge Base pi ogni repo — na grafa di ducumenti strutturati ca cupri architittura, cunvinzioni, API surface, dipindenzi e mètudi di verificazzioni. La KB veni cacheata e agghiornata incrementalmenti (sulu quannu HEAD cancia), accussì li feature successivi nta lu stissu repo accumincianu cchiù veloci.
 
-### U cancellu di validazzioni dû pianu
+### Cancellu di pianu
 
 Li piani sunnu rivisti di valutaturi IA specializzati prima ca l'implementazzioni accumencia:
 
@@ -153,7 +153,7 @@ Li valutaturi currunu in parallilu e prudùcinu verditti indipinnenti. Si ogni v
 
 ## Comu si usa
 
-### U cruscottu TUI
+### Cruscottu TUI
 
 Lancia cu `agentico`. U cruscottu mostra tutti li feature urganizzati pi statu:
 
@@ -163,7 +163,7 @@ Lancia cu `agentico`. U cruscottu mostra tutti li feature urganizzati pi statu:
 
 Li feature ca avìssiru bisognu di la tò attinzioni (permessi pendenti, richiesti d'aiutu) mustranu n'avvisu.
 
-### Metti na feature in marcia
+### Avvia na feature
 
 Pressa `n` dû cruscottu pi apiri lu wizard:
 
@@ -172,7 +172,7 @@ Pressa `n` dû cruscottu pi apiri lu wizard:
 3. **Pipeline** — Scegghi Medium, Large, o Moonshot. Attiva o disattiva checkpoint individuali (inquiry review, research review, design review, plan review, manual publish).
 4. **Rivisioni** — Regula risicu, mudelli pi fasi, exit criteria. Manna pi accumincia.
 
-### Parlari cu l'agenti
+### Cu l'agenti
 
 **Guarda** (`a`) — Apre u travagliu attivu live. La stissa tasta diventa **Risponni**, **Appruva**, o **Rividi** quannu l'agenti ti dumanna.
 
@@ -180,7 +180,7 @@ Pressa `n` dû cruscottu pi apiri lu wizard:
 
 **Ferma di guardari** (`Esc/Ctrl+]`) — Torna a lu cruscottu. L'agenti cuntìnuanu a travagghiari.
 
-### Cosa fari doppu l'implementazzioni
+### Dopu l'implementazzioni
 
 Quannu na feature arriva a code-ready o published:
 
@@ -193,11 +193,11 @@ Quannu na feature arriva a code-ready o published:
 | `g` | Vidi e risolvi li cummenti di rivisioni dâ PR |
 | `D` | Marca comu finitu |
 
-### Dumannami cchiù cose
+### Dumanna cchiù
 
 Pressa `/` nta ogni puntu pi apiri la chat IA interna. È na sessione Claude sulu in lettura ca po spiegari comu funziuna Agentic Orchestrator, debuggari prublemi leggennu li registri e artefatti di feature, circari nta la base di còdici, e rispùnniri a dumanni — senza canciari nuddu file.
 
-### Tasti Scurciaturi
+### Scurciaturi
 
 > Pi la referenza cumplèta, vidi [docs/keybindings.md](docs/keybindings.md).
 
@@ -236,11 +236,11 @@ workspace_roots:
   - /home/user/projects      # Scanned for git repos on startup
 ```
 
-### Mudelli a modu tò
+### Mudelli tùi
 
 Ogni feature po rimpiazzari li mudelli predefiniti durante la creazzioni via lu wizard (passu 4). Li mudelli ponnu essiri specificati cu prefissi espliciti di provider (pi esempiu, `claude:opus[1M]`, `codex:gpt-5.4[272K]`) o comu alias senza prefissu ca sunnu indirizzati automaticamenti versu lu provider cchiù adattu.
 
-### Flags di partenza
+### Flags iniziali
 
 ```text
 agentico [flags]
@@ -254,7 +254,7 @@ Flags:
   --version, -v                    Show version
 ```
 
-### Aggiornamenti
+### Aggiornamentu
 
 ```text
 agentico update [--check|-n]
@@ -299,7 +299,7 @@ Lu tier marcatu **TUI observability** è lu gate esplicitu opt-in pi la cupertur
 vidi AGENTS.md pi lu patruni di run isolatu pi eseguiri na secunna istanza senza
 collisioni cu la prima.
 
-## Cuntribbuisce
+## Cuntribbuisci
 
 Li pull request sunnu benvenuti. Vidi [CONTRIBUTING.md](CONTRIBUTING.md) pi la cunnfigurazzioni di sviluppu e li cunvenzioni di branch e commit.
 

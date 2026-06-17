@@ -404,6 +404,20 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 			},
 		},
 		{
+			name: "medium created cannot rewind just because upgrade targets exist",
+			f: func() *feature.Feature {
+				f := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable, nil)
+				f.Pipeline = feature.PipelineMedium
+				return f
+			}(),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"rewind": {disabledCode: "no_rewind_targets"},
+			},
+		},
+		{
 			name: "published",
 			f:    actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, nil),
 			want: map[string]struct {
@@ -442,6 +456,20 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				"delete":  {disabledCode: "running"},
 			},
 		},
+		{
+			name: "medium plan review can still open rewind upgrade",
+			f: func() *feature.Feature {
+				f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
+				f.Pipeline = feature.PipelineMedium
+				return f
+			}(),
+			want: map[string]struct {
+				enabled      bool
+				disabledCode string
+			}{
+				"rewind": {enabled: true},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -463,6 +491,22 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesUpgradeTargets(t *testing.T) {
+	t.Parallel()
+	publishable := true
+	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
+	f.Pipeline = feature.PipelineMedium
+
+	rewind := actionDTOByID(t, actionCatalogDTOs(f), "rewind")
+	if !rewind.Enabled {
+		t.Fatalf("rewind enabled = false; want true")
+	}
+	upgradeOptions := actionInputDTOByName(t, rewind, "upgrade_pipeline").Options
+	if got, want := strings.Join(upgradeOptions, ","), "large,moonshot"; got != want {
+		t.Fatalf("upgrade_pipeline options = %q; want %q", got, want)
 	}
 }
 
@@ -1041,6 +1085,17 @@ func actionInputByName(t *testing.T, action map[string]any, name string) map[str
 	}
 	t.Fatalf("action %s missing input %q", action["id"], name)
 	return nil
+}
+
+func actionInputDTOByName(t *testing.T, action ActionDTO, name string) ActionInputDTO {
+	t.Helper()
+	for _, input := range action.RequiredInputs {
+		if input.Name == name {
+			return input
+		}
+	}
+	t.Fatalf("action %s missing input %q", action.ID, name)
+	return ActionInputDTO{}
 }
 
 func assertActionInputRequired(t *testing.T, action map[string]any, name string, want bool) {

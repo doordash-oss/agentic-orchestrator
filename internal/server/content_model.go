@@ -49,6 +49,7 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 		rel := run.Artifacts[id]
 		dto := ArtifactDTO{ID: id, Type: artifactType(rel), Category: artifactCategory(rel), RunNumber: runNumber, Phase: artifactPhase(rel)}
 		if path, ok := safeJoin(runDir, rel); ok {
+			dto.Path = path
 			if info, err := os.Stat(path); err == nil && !info.IsDir() {
 				dto.Size = info.Size()
 				dto.ModifiedAt = info.ModTime().UTC()

@@ -2603,6 +2603,104 @@ func TestAPIAppModelReviewDecisionsUseRESTMutation(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	roadmapPath := filepath.Join(tmp, "roadmap.md")
+	if err := os.WriteFile(roadmapPath, []byte("# Roadmap\n\nTranslate README.\n"), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "PlanNeedsReview",
+				CurrentPhase: "plan",
+				ActiveRun:    1,
+				CreatedAt:    time.Now(),
+				Progress: server.FeatureProgress{
+					CurrentRoadmapPhase: 0,
+					TotalRoadmapPhases:  3,
+				},
+			},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "PlanNeedsReview",
+				CurrentPhase: "plan",
+				ActiveRun:    1,
+				Progress: server.FeatureProgress{
+					CurrentRoadmapPhase: 0,
+					TotalRoadmapPhases:  3,
+				},
+			},
+			ActiveRun: &server.RunSummaryDTO{
+				RunNumber:     1,
+				CurrentPhase:  "plan",
+				RoadmapPhase:  0,
+				RoadmapTotal:  3,
+				ArtifactCount: 1,
+			},
+			Models: config.ModelConfig{Utilities: "test-utility"},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "roadmap", RunNumber: 1, Phase: "plan", Path: roadmapPath, Size: 28, ContentAvailable: true},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	if view := stripANSI(app.View().Content); !strings.Contains(view, "Roadmap needs review") {
+		t.Fatalf("API app View() missing review hint before action:\n%s", view)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	updated := model.(APIAppModel)
+
+	if updated.artifactReview == nil {
+		t.Fatalf("pressing a did not open artifact review; statusMessage=%q", updated.statusMessage)
+	}
+	if got := updated.artifactReview.FeatureID(); got != "active" {
+		t.Fatalf("artifactReview.FeatureID() = %q, want active", got)
+	}
+	if got := updated.artifactReview.ReviewMode(); got != "plan" {
+		t.Fatalf("artifactReview.ReviewMode() = %q, want plan", got)
+	}
+	if got := updated.artifactReview.ArtifactPath(); got != roadmapPath {
+		t.Fatalf("artifactReview.ArtifactPath() = %q, want %q", got, roadmapPath)
+	}
+	if strings.Contains(updated.statusMessage, "No contextual action") {
+		t.Fatalf("statusMessage = %q, want artifact review opened", updated.statusMessage)
+	}
+
+	model, _ = updated.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("artifact review proceed returned nil command")
+	}
+	msg := cmd()
+	model, cmd = model.(APIAppModel).Update(msg)
+	if cmd == nil {
+		t.Fatal("review decision message returned nil REST command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+
+	wantReq := server.ReviewDecisionRequest{Decision: "proceed", Roadmap: true}
+	if len(client.reviewRequests) != 1 || client.reviewRequests[0] != wantReq {
+		t.Fatalf("reviewRequests = %+v, want %+v", client.reviewRequests, wantReq)
+	}
+}
+
 func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	t.Parallel()
 

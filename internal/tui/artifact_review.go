@@ -918,6 +918,11 @@ func (m ArtifactReviewModel) FeatureID() string {
 	return m.featureID
 }
 
+// ArtifactPath returns the artifact file path under review.
+func (m ArtifactReviewModel) ArtifactPath() string {
+	return m.artifactPath
+}
+
 // ReviewMode returns the review mode ("plan" or "rewind").
 func (m ArtifactReviewModel) ReviewMode() string {
 	return m.reviewMode

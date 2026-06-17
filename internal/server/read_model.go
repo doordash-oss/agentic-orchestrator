@@ -135,7 +135,7 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canRestart := !running
 	canPublish := f.IsPublishable() && status == feature.StatusCodeReady && f.Checkpoints.AutoPublish()
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
-	canRewind := !running && len(feature.RewindChoicesForFeature(f)) > 0
+	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishCycle := publishedOrManualReady && !activeCycle
 	canRefactor := publishedOrManualReady && !activeCycle
 	canRetry := status == feature.StatusFailed
@@ -243,6 +243,26 @@ func rewindUpgradePipelineOptions(f *feature.Feature) []string {
 	default:
 		return nil
 	}
+}
+
+func hasRewindUpgradeTarget(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	current := f.EffectivePipeline()
+	for _, option := range rewindUpgradePipelineOptions(f) {
+		upgraded := *f
+		upgraded.Pipeline = feature.PipelineProfile(option)
+		if upgraded.PipelineUpgradedFrom == "" {
+			upgraded.PipelineUpgradedFrom = current
+		}
+		for _, choice := range feature.RewindChoicesForFeature(&upgraded) {
+			if choice.Phase == feature.PhaseInquire {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func boundedHistoricalRunNumbers(activeRun, runCount, limit int) []int {

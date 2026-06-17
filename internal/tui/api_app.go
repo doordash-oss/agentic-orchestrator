@@ -30,6 +30,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -94,6 +95,8 @@ type APIAppOptions struct {
 	LaunchPolicy               server.LaunchPolicy
 	OwnedServer                bool
 	EventOptions               server.EventSubscriptionOptions
+	SessionManager             *session.Manager
+	BuildSession               agent.BuildSessionFunc
 	WaitForOwnedServerShutdown func(context.Context) error
 	StopOwnedServer            func(context.Context) error
 }
@@ -250,6 +253,8 @@ type APIAppModel struct {
 	livePreviews               map[string]server.LivePreviewResponse
 	transcripts                map[string]server.TranscriptResponse
 	contents                   map[string]apiFeatureContentSnapshot
+	sessionManager             *session.Manager
+	buildSession               agent.BuildSessionFunc
 	recovery                   server.RecoverySnapshotResponse
 	launchPolicy               server.LaunchPolicy
 	snapshot                   APIAppSnapshot
@@ -294,6 +299,7 @@ type APIAppModel struct {
 	askUserAnswerDraft         string
 	askUserOptionCursor        int
 	attach                     *AttachModel
+	artifactReview             *ArtifactReviewModel
 	wizard                     *WizardModel
 	reviewComments             *apiReviewCommentsPanel
 	refactorPrompt             *apiRefactorPrompt
@@ -515,6 +521,8 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 		livePreviews:               map[string]server.LivePreviewResponse{},
 		transcripts:                map[string]server.TranscriptResponse{},
 		contents:                   map[string]apiFeatureContentSnapshot{},
+		sessionManager:             opts.SessionManager,
+		buildSession:               opts.BuildSession,
 		width:                      100,
 		height:                     30,
 		ownedServer:                opts.OwnedServer,
@@ -598,6 +606,9 @@ func (m APIAppModel) Init() tea.Cmd {
 }
 
 func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.artifactReview != nil && !m.artifactReview.Detached() && apiArtifactReviewOwnsMsg(msg) {
+		return m.updateAPIArtifactReview(msg)
+	}
 	if m.attach != nil {
 		return m.updateAPIAttach(msg)
 	}
@@ -1136,7 +1147,59 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func apiArtifactReviewOwnsMsg(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyPressMsg,
+		tea.WindowSizeMsg,
+		tea.PasteMsg,
+		artifactReviewSessionStartedMsg,
+		artifactReviewMsgsMsg,
+		artifactReviewDoneMsg,
+		artifactReviewStartErrorMsg,
+		artifactReviewSendErrorMsg:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m APIAppModel) updateAPIArtifactReview(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+	case artifactReviewSessionStartedMsg:
+		if m.artifactReview != nil && msg.sess != nil &&
+			msg.generation == m.artifactReview.sessionGeneration &&
+			!m.artifactReview.sessionStarted {
+			updated, cmd := m.artifactReview.handleSessionStarted(msg.sess)
+			m.artifactReview = &updated
+			return m, cmd
+		}
+		if msg.sess != nil {
+			_ = msg.sess.Stop()
+		}
+		return m, nil
+	}
+
+	updated, cmd := m.artifactReview.Update(msg)
+	m.artifactReview = &updated
+	if updated.Detached() {
+		if updated.Decided() {
+			updated.StopSession()
+			m.artifactReview = &updated
+		}
+		return m, cmd
+	}
+	return m, cmd
+}
+
 func (m APIAppModel) View() tea.View {
+	if m.artifactReview != nil && !m.artifactReview.Detached() {
+		v := tea.NewView(m.artifactReview.View())
+		v.AltScreen = true
+		return v
+	}
 	if m.attach != nil {
 		v := tea.NewView(m.attach.View())
 		v.AltScreen = true
@@ -3518,6 +3581,9 @@ func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
 		m.statusMessage = "No feature selected"
 		return m, nil
 	}
+	if f := m.selectedAPIDashboardFeature(); f != nil && f.Status.IsNeedsReview() {
+		return m.openAPIReviewAttention(f)
+	}
 	if m.hasAPIAttachableSession(m.selectedFeature) {
 		return m.openAPIAttachForFeature(m.selectedFeature)
 	}
@@ -3540,6 +3606,88 @@ func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
 	}
 	m.statusMessage = "No contextual action for selected feature"
 	return m, nil
+}
+
+func (m APIAppModel) openAPIReviewAttention(f *feature.Feature) (tea.Model, tea.Cmd) {
+	if f == nil || !f.Status.IsNeedsReview() {
+		return m, nil
+	}
+	if m.artifactReview != nil &&
+		m.artifactReview.FeatureID() == f.ID &&
+		m.artifactReview.Detached() &&
+		!m.artifactReview.Decided() {
+		cmd := m.artifactReview.Reattach()
+		m.statusMessage = ""
+		return m, cmd
+	}
+	artifact, ok, reason := m.reviewArtifactForFeature(f)
+	if !ok {
+		m.statusMessage = reason
+		return m, nil
+	}
+	reviewMode := "plan"
+	rewindPhase := feature.PhasePlan
+	model := NewArtifactReviewModel(artifact.Path, f.ID, reviewMode, rewindPhase, m.width, m.height, m.sessionManager, "", m.buildSession)
+	model.utilityModel = m.apiUtilityModelForFeature(f.ID)
+	m.artifactReview = &model
+	m.statusMessage = ""
+	return m, model.editor.Focus()
+}
+
+func (m APIAppModel) reviewArtifactForFeature(f *feature.Feature) (server.ArtifactDTO, bool, string) {
+	content, ok := m.selectedContentSnapshot()
+	if !ok || len(content.Artifacts.Artifacts) == 0 {
+		return server.ArtifactDTO{}, false, "Review artifact is still loading"
+	}
+	preferred := reviewArtifactIDs(f)
+	artifacts := availableTextArtifacts(content.Artifacts)
+	for _, id := range preferred {
+		for _, artifact := range artifacts {
+			if artifact.ID == id && strings.TrimSpace(artifact.Path) != "" {
+				return artifact, true, ""
+			}
+		}
+	}
+	for _, artifact := range artifacts {
+		if strings.TrimSpace(artifact.Path) != "" {
+			return artifact, true, ""
+		}
+	}
+	return server.ArtifactDTO{}, false, "Review artifact path is unavailable"
+}
+
+func reviewArtifactIDs(f *feature.Feature) []string {
+	if f == nil {
+		return nil
+	}
+	switch f.Status {
+	case feature.StatusPlanNeedsReview:
+		ids := make([]string, 0, 3)
+		switch {
+		case f.CurrentRoadmapPhase == 0:
+			ids = append(ids, "roadmap")
+		case f.CurrentRoadmapPhase > 0:
+			ids = append(ids, fmt.Sprintf("phase-%d-plan", f.CurrentRoadmapPhase))
+		}
+		return append(ids, "plan")
+	case feature.StatusInquiryNeedsReview:
+		return []string{"inquire"}
+	case feature.StatusResearchNeedsReview:
+		return []string{"research"}
+	case feature.StatusDesignNeedsReview:
+		return []string{"design"}
+	case feature.StatusPromptNeedsReview:
+		return []string{"prompt"}
+	default:
+		return []string{"plan", "roadmap"}
+	}
+}
+
+func (m APIAppModel) apiUtilityModelForFeature(featureID string) string {
+	if detail, ok := m.featureDetails[featureID]; ok && strings.TrimSpace(detail.Feature.Models.Utilities) != "" {
+		return detail.Feature.Models.Utilities
+	}
+	return m.runtimeConfig.Defaults.Utilities
 }
 
 func (m APIAppModel) showAPIOverview() APIAppModel {
@@ -6070,6 +6218,14 @@ func (m APIAppModel) planReviewDecisionRequest(featureID, decision string) serve
 			req.PhasePlan = true
 			return req
 		}
+		if progress.CurrentRoadmapPhase == 0 && progress.TotalRoadmapPhases > 0 {
+			req.Roadmap = true
+			return req
+		}
+	}
+	if m.featureHasArtifact(featureID, "roadmap") {
+		req.Roadmap = true
+		return req
 	}
 	if decision == "proceed" {
 		req.Phase = "implement"
@@ -6099,6 +6255,22 @@ func (m APIAppModel) featureProgress(featureID string) (server.FeatureProgress, 
 		}
 	}
 	return server.FeatureProgress{}, false
+}
+
+func (m APIAppModel) featureHasArtifact(featureID, artifactID string) bool {
+	if featureID == "" || artifactID == "" {
+		return false
+	}
+	content, ok := m.contents[featureID]
+	if !ok {
+		return false
+	}
+	for _, artifact := range content.Artifacts.Artifacts {
+		if artifact.ID == artifactID {
+			return true
+		}
+	}
+	return false
 }
 
 func (m APIAppModel) selectedNeedInputGate(featureID string) (server.NeedInputGateDTO, bool) {

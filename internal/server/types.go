@@ -466,6 +466,7 @@ type ArtifactDTO struct {
 	RunNumber        int       `json:"run_number"`
 	Phase            string    `json:"phase,omitempty"`
 	Iteration        int       `json:"iteration,omitempty"`
+	Path             string    `json:"path,omitempty"`
 	Size             int64     `json:"size,omitempty"`
 	ModifiedAt       time.Time `json:"modified_at,omitempty"`
 	ContentAvailable bool      `json:"content_available"`

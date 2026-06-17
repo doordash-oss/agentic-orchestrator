@@ -1990,6 +1990,49 @@ func TestAttachMsgs_SkipsAlreadyResolvedControlRequest(t *testing.T) {
 	}
 }
 
+func TestAttachMsgs_ProgressAfterAskUserAnswerDoesNotRenderWaitingTitle(t *testing.T) {
+	sess := session.NewSession("progress-after-ask", "feat", 0)
+	sess.SetStatus(session.SessionWaitingHelp)
+	sess.SetLastControlRequest(pendingAskUserControlRequest("ask-1", "Continue?"))
+	sess.CloseDone()
+
+	m := attachModelFromSession(sess, 120, 40)
+	if !m.hasActiveQuestion() {
+		t.Fatal("setup: AskUserQuestion should be active")
+	}
+
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated
+	if cmd != nil {
+		t.Fatal("first Enter should move to recap without dispatching")
+	}
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated
+	if cmd == nil {
+		t.Fatal("second Enter should dispatch AskUser answer")
+	}
+	_ = cmd()
+	if m.awaitingInput {
+		t.Fatal("setup: submitting AskUser answer should clear awaitingInput")
+	}
+
+	m, _ = m.Update(attachMsgsMsg{
+		generation: m.tabGeneration,
+		messages: []llm.SDKMessage{
+			{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}},
+			{Type: "system", Subtype: "task_started", TaskStarted: &llm.TaskStartedMessage{
+				Description: "continuing plan",
+				TaskType:    "local_agent",
+			}},
+		},
+	})
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "waiting for your response") {
+		t.Fatalf("progress after AskUser answer should render running title, got:\n%s", view)
+	}
+}
+
 // TestParallelAskUserQuestion_DuplicateRequestIDIgnored guards against
 // double-activation when the same control_request is replayed (e.g.,
 // during re-attach the constructor sees both the live message and the

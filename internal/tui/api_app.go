@@ -298,6 +298,8 @@ type APIAppModel struct {
 	askUserRequest             server.ControlRequestDTO
 	askUserAnswerDraft         string
 	askUserOptionCursor        int
+	welcome                    *WelcomeModel
+	welcomeSkipped             bool
 	attach                     *AttachModel
 	artifactReview             *ArtifactReviewModel
 	wizard                     *WizardModel
@@ -379,6 +381,7 @@ type apiEventErrorMsg struct {
 type apiMutationResultMsg struct {
 	kind      string
 	featureID string
+	requestID string
 	err       error
 }
 
@@ -567,6 +570,9 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 	app.recovery = recovery
 	if len(recovery.Items) > 0 {
 		app.recoveryPanel = newAPIRecoveryPanel(recovery)
+	} else if len(runtimeConfig.WorkspaceRoots) == 0 {
+		welcome := NewWelcomeModel()
+		app.welcome = &welcome
 	}
 	app.rebuildPresentation("")
 	if app.selectedFeature != "" {
@@ -616,6 +622,10 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.welcome != nil {
+			welcome, _ := m.welcome.Update(msg)
+			m.welcome = &welcome
+		}
 		if m.helpOverlayActive {
 			m.helpOverlay = NewHelpOverlayModel(m.helpOverlay.context, msg.Width, msg.Height)
 		}
@@ -762,6 +772,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.kind == "runtime.config.update" {
 			m.runtimeConfigEditor = nil
 		}
+		if msg.requestID != "" {
+			m.clearResolvedControlRequest(msg.requestID)
+		}
 		if msg.kind == "feature.need_user_input.decision" {
 			m.clearNeedInputPrompt()
 		}
@@ -878,6 +891,9 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.workspaceManager != nil {
 		return m.updateAPIWorkspaceManager(msg)
+	}
+	if m.welcome != nil {
+		return m.updateAPIWelcome(msg)
 	}
 	if m.runtimeConfigEditor != nil {
 		return m.handleAPIRuntimeConfigEditorKey(msg)
@@ -1135,6 +1151,10 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case apiEventErrorMsg:
 		return m, nil
 	case HelpResolvedMsg:
+		if msg.RequestID != "" {
+			m.clearResolvedControlRequest(msg.RequestID)
+			m.rebuildPresentation(m.selectedFeature)
+		}
 		if msg.FeatureID != "" {
 			return m, m.fetchFeatureDetailCmd(msg.FeatureID)
 		}
@@ -1208,6 +1228,11 @@ func (m APIAppModel) View() tea.View {
 	}
 	if m.attach != nil {
 		v := tea.NewView(m.attach.View())
+		v.AltScreen = true
+		return v
+	}
+	if m.welcome != nil {
+		v := tea.NewView(m.welcome.View())
 		v.AltScreen = true
 		return v
 	}
@@ -1305,6 +1330,9 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 	dashboard.rightPanelMode = m.rightPanelMode
 	dashboard.dangerouslySkipPerms = m.snapshot.Runtime.DangerouslySkipPermissions
 	dashboard.statusMessage = m.statusMessage
+	if m.welcomeSkipped {
+		dashboard.SetWelcomeSkipped()
+	}
 	if len(m.runtimeConfig.UI.CollapsedSections) > 0 {
 		dashboard.SetCollapsedSections(m.runtimeConfig.UI.CollapsedSections)
 	}
@@ -2962,6 +2990,7 @@ func (m *APIAppModel) moveSelection(delta int) {
 
 func (m APIAppModel) handleAPIDashboardListKey(msg tea.KeyPressMsg) (APIAppModel, tea.Cmd) {
 	previousFeature := m.selectedFeature
+	previousCollapsed := append([]string(nil), m.runtimeConfig.UI.CollapsedSections...)
 	dashboard := m.apiDashboardModel()
 
 	switch msg.Code {
@@ -2988,10 +3017,14 @@ func (m APIAppModel) handleAPIDashboardListKey(msg tea.KeyPressMsg) (APIAppModel
 
 	m = m.applyAPIDashboardListState(dashboard)
 	m.rebuildPresentation(m.selectedFeature)
-	if m.selectedFeature != "" && m.selectedFeature != previousFeature {
-		return m, m.fetchFeatureDetailCmd(m.selectedFeature)
+	var cmds []tea.Cmd
+	if msg.Code == tea.KeyEnter && !slices.Equal(previousCollapsed, m.runtimeConfig.UI.CollapsedSections) {
+		cmds = append(cmds, m.persistRuntimeUICmd(m.runtimeConfig.UI))
 	}
-	return m, nil
+	if m.selectedFeature != "" && m.selectedFeature != previousFeature {
+		cmds = append(cmds, m.fetchFeatureDetailCmd(m.selectedFeature))
+	}
+	return m, tea.Batch(cmds...)
 }
 
 func (m APIAppModel) applyAPIDashboardListState(dashboard DashboardModel) APIAppModel {
@@ -3008,12 +3041,49 @@ func (m APIAppModel) applyAPIDashboardListState(dashboard DashboardModel) APIApp
 	return m
 }
 
+func (m APIAppModel) updateAPIWelcome(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.welcome == nil {
+		return m, nil
+	}
+	welcome, cmd := m.welcome.Update(msg)
+	m.welcome = &welcome
+	var cmds []tea.Cmd
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	if root := m.welcome.ConsumePendingRoot(); root != "" {
+		roots := append([]string(nil), m.runtimeConfig.WorkspaceRoots...)
+		if !containsRootExpanded(roots, root) {
+			roots = append(roots, root)
+			m.runtimeConfig.WorkspaceRoots = roots
+			cmds = append(cmds, m.persistRuntimeWorkspaceRootsCmd(roots, ""))
+		}
+	}
+
+	if m.welcome.IsDone() {
+		if m.welcome.IsCancelled() {
+			m.welcomeSkipped = true
+			m.statusMessage = "You can add workspace roots later by pressing W"
+		} else {
+			m.statusMessage = ""
+		}
+		m.welcome = nil
+		m.rebuildPresentation(m.selectedFeature)
+	}
+	return m, tea.Batch(cmds...)
+}
+
 func (m APIAppModel) confirmSelectedFeatureAction(kind string) APIAppModel {
 	return m.confirmSelectedFeatureActionWithArgs(kind, apiFeatureActionArgs{})
 }
 
 func (m APIAppModel) confirmSelectedFeatureActionWithArgs(kind string, args apiFeatureActionArgs) APIAppModel {
 	if m.selectedFeature == "" {
+		return m
+	}
+	if blocked, message := m.selectedFeatureActionLocallyBlocked(kind); blocked {
+		m.statusMessage = message
 		return m
 	}
 	if !m.selectedActionReady(kind) {
@@ -3085,6 +3155,31 @@ func (m *APIAppModel) clearAskUserPrompt() {
 	m.askUserQuestion = ""
 	m.askUserRequest = server.ControlRequestDTO{}
 	m.askUserAnswerDraft = ""
+}
+
+func (m *APIAppModel) clearResolvedControlRequest(requestID string) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return
+	}
+	m.prompts.AskUserQuestions = slices.DeleteFunc(m.prompts.AskUserQuestions, func(req server.ControlRequestDTO) bool {
+		return req.RequestID == requestID
+	})
+	m.permissions.Requests = slices.DeleteFunc(m.permissions.Requests, func(req server.ControlRequestDTO) bool {
+		return req.RequestID == requestID
+	})
+	for id, detail := range m.sessionDetails {
+		detail.Session.PendingControls = slices.DeleteFunc(detail.Session.PendingControls, func(req server.ControlRequestDTO) bool {
+			return req.RequestID == requestID
+		})
+		m.sessionDetails[id] = detail
+	}
+	if m.permissionRequest.RequestID == requestID {
+		m.clearPermissionPrompt()
+	}
+	if m.askUserRequest.RequestID == requestID {
+		m.clearAskUserPrompt()
+	}
 }
 
 func (m *APIAppModel) clearCreatePrompt() {
@@ -3244,6 +3339,30 @@ func (m APIAppModel) persistRuntimeWorkspaceRootsCmd(roots []string, createdRepo
 			config:          cfg,
 			createdRepoPath: createdRepoPath,
 			err:             err,
+		}
+	}
+}
+
+func (m APIAppModel) persistRuntimeUICmd(ui config.UIConfig) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		if m.eventCtx != nil {
+			ctx = m.eventCtx
+		}
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+
+		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
+			UI: &ui,
+		})
+		if err != nil {
+			return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", err: err}
+		}
+		cfg, err := m.client.RuntimeConfig(ctx)
+		return apiRuntimeConfigMutationMsg{
+			kind:   "runtime.config.update",
+			config: cfg,
+			err:    err,
 		}
 	}
 }
@@ -3412,6 +3531,10 @@ func (m APIAppModel) openRepoCycleAction(kind string) APIAppModel {
 func (m APIAppModel) openRewindPanel() APIAppModel {
 	if m.selectedFeature == "" {
 		m.statusMessage = "No feature selected"
+		return m
+	}
+	if blocked, message := m.selectedFeatureActionLocallyBlocked("feature.rewind"); blocked {
+		m.statusMessage = message
 		return m
 	}
 	if !m.selectedActionReady("feature.rewind") {
@@ -4205,6 +4328,23 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 		return m.selectedFeature != ""
 	}
 	return false
+}
+
+func (m APIAppModel) selectedFeatureActionLocallyBlocked(kind string) (bool, string) {
+	f := m.selectedAPIDashboardFeature()
+	if f == nil || !hasActiveRepoCycles(f) {
+		return false, ""
+	}
+	switch kind {
+	case "feature.delete":
+		return true, "Stop active repo cycles before deleting"
+	case "feature.rewind":
+		return true, "Stop active repo cycles before rewinding"
+	case "feature.mark-done":
+		return true, "Cannot mark done while repo cycles are active"
+	default:
+		return false, ""
+	}
 }
 
 func (m APIAppModel) selectedFeatureHasTweakCycle(featureID string) bool {
@@ -6215,6 +6355,7 @@ func (m APIAppModel) permissionAnswerCmd(req server.ControlRequestDTO, decision 
 		return apiMutationResultMsg{
 			kind:      "permission.answer",
 			featureID: req.FeatureID,
+			requestID: req.RequestID,
 			err:       err,
 		}
 	}
@@ -6252,6 +6393,7 @@ func (m APIAppModel) askUserAnswerCmd(req server.ControlRequestDTO, question, an
 		return apiMutationResultMsg{
 			kind:      "ask_user.answer",
 			featureID: req.FeatureID,
+			requestID: req.RequestID,
 			err:       err,
 		}
 	}
@@ -7025,6 +7167,8 @@ func apiFeatureStatus(status string) feature.Status {
 		return feature.StatusDone
 	case "buildingkb", "building_kb", "building-kb":
 		return feature.StatusBuildingKB
+	case "settingupworktrees", "setting_up_worktrees", "setting-up-worktrees":
+		return feature.StatusSettingUpWorktrees
 	case "planneedsreview", "plan_needs_review", "plan-needs-review":
 		return feature.StatusPlanNeedsReview
 	case "inquiring":
@@ -7112,7 +7256,7 @@ func apiPhaseCosts(byPhase map[string]float64, total float64, current feature.Ph
 
 func apiFeatureCanStop(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "researching", "planning", "implementing", "reviewing", "publishing", "running":
+	case "researching", "planning", "implementing", "reviewing", "publishing", "running", "settingupworktrees", "setting_up_worktrees", "setting-up-worktrees":
 		return true
 	default:
 		return false

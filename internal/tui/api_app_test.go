@@ -267,6 +267,44 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelShowsWelcomeWhenWorkspaceRootsEmpty(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features:                 server.FeatureListResponse{},
+		runtime:                  server.RuntimeConfigResponse{},
+		allowEmptyWorkspaceRoots: true,
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{
+		"Agentic Orchestrator helps you manage AI-assisted development workflows.",
+		"To get started, add a workspace directory containing your git repositories.",
+		"enter select workspace directory",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("first-run API app view missing %q in:\n%s", want, view)
+		}
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd != nil {
+		t.Fatal("Update(esc welcome) returned command, want local skip")
+	}
+	app = model.(APIAppModel)
+	view = stripANSI(app.View().Content)
+	if !strings.Contains(view, "You can add workspace roots later by pressing W") {
+		t.Fatalf("skipped welcome view missing workspace guidance:\n%s", view)
+	}
+	if strings.Contains(view, "To get started, add a workspace directory") {
+		t.Fatalf("welcome intro still rendered after skip:\n%s", view)
+	}
+}
+
 func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 	t.Parallel()
 
@@ -2466,6 +2504,73 @@ func TestAPIAppModelAttachRefreshActivatesAskUserPrompt(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelAttachAskUserAnswerDoesNotReactivateCachedPrompt(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "plan", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "active", Phase: "plan", Kind: "phase", Status: "WaitingHelp"},
+		}},
+		prompts: server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
+			{
+				RequestID: "ask-1",
+				SessionID: "sess-1",
+				FeatureID: "active",
+				ToolName:  "AskUserQuestion",
+				Status:    "pending",
+				Summary:   "Which README?",
+				Questions: []server.AskUserQuestionDTO{{
+					Question: "Which README?",
+					Options:  []server.AskUserOptionDTO{{Label: "Root README"}},
+				}},
+			},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
+	}
+	attached := model.(APIAppModel)
+	if !attached.ShowingAskUserPrompt() {
+		t.Fatal("attach should start with cached AskUser prompt")
+	}
+
+	model, cmd = attached.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("first Enter should move to recap without dispatching")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("second Enter should dispatch AskUser answer")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	answered := model.(APIAppModel)
+	if answered.ShowingAskUserPrompt() {
+		t.Fatal("AskUser prompt remained active after answer")
+	}
+
+	model, _ = answered.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	detached := model.(APIAppModel)
+	if detached.attach != nil {
+		t.Fatal("Esc should detach from attach view")
+	}
+
+	model, _ = detached.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	reattached := model.(APIAppModel)
+	if reattached.ShowingAskUserPrompt() {
+		t.Fatalf("answered AskUser prompt reactivated from cached prompts:\n%s", stripANSI(reattached.View().Content))
+	}
+}
+
 func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
 	t.Parallel()
 
@@ -3053,6 +3158,109 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 	}
 	if view := stripANSI(updated.View().Content); !strings.Contains(view, "Delete is unavailable") {
 		t.Fatalf("View() missing disabled-action status in:\n%s", view)
+	}
+}
+
+func TestAPIAppModelDestructiveActionsGuardActiveRepoCycles(t *testing.T) {
+	t.Parallel()
+
+	makeApp := func(t *testing.T) (APIAppModel, *fakeTUIAPIClient) {
+		t.Helper()
+		summary := server.FeatureSummary{
+			ID:           "active",
+			Name:         "Published work",
+			Slug:         "published-work",
+			Status:       "Published",
+			CurrentPhase: "publish",
+			CreatedAt:    time.Now(),
+			Repos:        []string{"api"},
+		}
+		client := &fakeTUIAPIClient{
+			features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+			detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+				FeatureSummary: summary,
+				RepoStatus: []server.RepoStatusDTO{
+					{Name: "api", Publishable: true, CycleType: "rebase", CycleStatus: "running"},
+				},
+				Actions: []server.ActionDTO{
+					{ID: "delete", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+					{ID: "mark-done", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+					{ID: "rewind", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}, RequiredInputs: []server.ActionInputDTO{
+						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"implement"}},
+					}},
+				},
+			}},
+			deleteAccepted:   apiTestActionResponse{},
+			markDoneAccepted: apiTestActionResponse{},
+			rewindAccepted:   apiTestActionResponse{},
+		}
+		app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+		if err != nil {
+			t.Fatalf("NewAPIAppModel() error = %v", err)
+		}
+		return app, client
+	}
+
+	tests := []struct {
+		name       string
+		key        tea.KeyPressMsg
+		wantStatus string
+		assert     func(t *testing.T, client *fakeTUIAPIClient)
+	}{
+		{
+			name:       "delete",
+			key:        tea.KeyPressMsg{Code: 'd', Text: "d"},
+			wantStatus: "Stop active repo cycles before deleting",
+			assert: func(t *testing.T, client *fakeTUIAPIClient) {
+				t.Helper()
+				if len(client.deleteFeatureIDs) != 0 {
+					t.Fatalf("DeleteFeature calls = %v, want none", client.deleteFeatureIDs)
+				}
+			},
+		},
+		{
+			name:       "mark done",
+			key:        tea.KeyPressMsg{Code: 'D', Text: "D"},
+			wantStatus: "Cannot mark done while repo cycles are active",
+			assert: func(t *testing.T, client *fakeTUIAPIClient) {
+				t.Helper()
+				if len(client.markDoneFeatureIDs) != 0 {
+					t.Fatalf("MarkDone calls = %v, want none", client.markDoneFeatureIDs)
+				}
+			},
+		},
+		{
+			name:       "rewind",
+			key:        tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl},
+			wantStatus: "Stop active repo cycles before rewinding",
+			assert: func(t *testing.T, client *fakeTUIAPIClient) {
+				t.Helper()
+				if len(client.rewindFeatureIDs) != 0 {
+					t.Fatalf("RewindFeature calls = %v, want none", client.rewindFeatureIDs)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			app, client := makeApp(t)
+			model, cmd := app.Update(tt.key)
+			if cmd != nil {
+				msg := cmd()
+				model, _ = model.(APIAppModel).Update(msg)
+			}
+			updated := model.(APIAppModel)
+			if updated.ShowingFeatureActionConfirm() {
+				t.Fatalf("Update(%s) showed confirmation despite active repo cycle", tt.name)
+			}
+			view := stripANSI(updated.View().Content)
+			if !strings.Contains(view, tt.wantStatus) {
+				t.Fatalf("View() missing %q in:\n%s", tt.wantStatus, view)
+			}
+			tt.assert(t, client)
+		})
 	}
 }
 
@@ -3690,9 +3898,11 @@ func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
 	}
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatal("Update(enter on completed section) returned command, want local section toggle")
+	if cmd == nil {
+		t.Fatal("Update(enter on completed section) returned nil command, want runtime config persistence")
 	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
 	app = model.(APIAppModel)
 	if !slices.Contains(app.runtimeConfig.UI.CollapsedSections, "completed") {
 		t.Fatalf("CollapsedSections = %v, want completed", app.runtimeConfig.UI.CollapsedSections)
@@ -3712,6 +3922,52 @@ func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
 	}
 	if got := app.SelectedFeatureID(); got != "" {
 		t.Fatalf("SelectedFeatureID() after down = %q, want still on completed section", got)
+	}
+}
+
+func TestAPIAppModelDashboardSectionCollapsePersistsThroughREST(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
+	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: created}
+	published := server.FeatureSummary{ID: "published", Name: "Published work", Slug: "published-work", Status: "Published", CurrentPhase: "publish", CreatedAt: created.Add(-time.Minute)}
+	done := server.FeatureSummary{ID: "done", Name: "Done work", Slug: "done-work", Status: "Done", CurrentPhase: "publish", CreatedAt: created.Add(-2 * time.Minute)}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{done, published, active}},
+		detail:   server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{FeatureSummary: active}},
+		livePreview: server.LivePreviewResponse{
+			Feature: active,
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		app = model.(APIAppModel)
+	}
+	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter on completed section) returned nil command, want runtime config persistence")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	app = model.(APIAppModel)
+
+	if len(client.updateRuntimeConfigRequests) != 1 {
+		t.Fatalf("UpdateRuntimeConfig calls = %d, want 1", len(client.updateRuntimeConfigRequests))
+	}
+	req := client.updateRuntimeConfigRequests[0]
+	if req.UI == nil {
+		t.Fatalf("UpdateRuntimeConfig request UI = nil, want collapsed section persisted")
+	}
+	if !slices.Contains(req.UI.CollapsedSections, "completed") {
+		t.Fatalf("persisted CollapsedSections = %v, want completed", req.UI.CollapsedSections)
+	}
+	if !slices.Contains(app.runtimeConfig.UI.CollapsedSections, "completed") {
+		t.Fatalf("runtime CollapsedSections after persistence = %v, want completed", app.runtimeConfig.UI.CollapsedSections)
 	}
 }
 
@@ -3939,6 +4195,7 @@ type fakeTUIAPIClient struct {
 	calls                         []string
 	features                      server.FeatureListResponse
 	runtime                       server.RuntimeConfigResponse
+	allowEmptyWorkspaceRoots      bool
 	catalog                       server.ModelCatalogResponse
 	prompts                       server.PromptSnapshotResponse
 	permissions                   server.PermissionSnapshotResponse
@@ -4092,7 +4349,11 @@ func (f *fakeTUIAPIClient) Features(context.Context) (server.FeatureListResponse
 
 func (f *fakeTUIAPIClient) RuntimeConfig(context.Context) (server.RuntimeConfigResponse, error) {
 	f.calls = append(f.calls, "RuntimeConfig")
-	return f.runtime, nil
+	runtime := f.runtime
+	if !f.allowEmptyWorkspaceRoots && len(runtime.WorkspaceRoots) == 0 {
+		runtime.WorkspaceRoots = []string{"/tmp/agentico-test-workspace"}
+	}
+	return runtime, nil
 }
 
 func (f *fakeTUIAPIClient) ModelCatalog(context.Context) (server.ModelCatalogResponse, error) {
@@ -4323,6 +4584,9 @@ func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.Run
 	if req.WorkspaceRoots != nil {
 		f.runtime.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
 		f.runtime.Repos = testRuntimeConfigRepos(f.runtime.Repos, f.runtime.WorkspaceRoots)
+	}
+	if req.UI != nil {
+		f.runtime.UI = *req.UI
 	}
 	return server.RuntimeConfigUpdateResponse{Result: f.updateRuntimeConfigAccepted.result("updated")}, f.updateRuntimeConfigErr
 }

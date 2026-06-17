@@ -16,7 +16,10 @@ package tui
 
 import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
-type HelpResolvedMsg struct{ FeatureID string }
+type HelpResolvedMsg struct {
+	FeatureID string
+	RequestID string
+}
 
 type PlanReviewDecisionMsg struct {
 	FeatureID string

@@ -1474,6 +1474,13 @@ func (m *AttachModel) syncInputMode() {
 	}
 }
 
+func (m *AttachModel) markAgentProgress() {
+	m.turnActive = true
+	if !m.hasActiveQuestion() && !m.showPermMenu {
+		m.awaitingInput = false
+	}
+}
+
 func (m *AttachModel) restorePendingAskUserQuestions(sess session.SessionView) {
 	if sess == nil {
 		return
@@ -1979,7 +1986,7 @@ func (m *AttachModel) submitAllAnswers() tea.Cmd {
 		} else if fallback != "" {
 			_ = m.sess.SendUserMessage(fallback)
 		}
-		return HelpResolvedMsg{FeatureID: featureID}
+		return HelpResolvedMsg{FeatureID: featureID, RequestID: requestID}
 	}
 }
 
@@ -2566,7 +2573,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			// arrives before tool_use — clearing on text would blank the
 			// spinner between every text+tool pair. Result clears it instead.
 			if sdkMsg.Assistant != nil {
-				m.turnActive = true
+				m.markAgentProgress()
 				for _, block := range sdkMsg.Assistant.Message.Content {
 					if block.IsThinking() {
 						m.thinkingLine = "Thinking..."
@@ -2578,19 +2585,19 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			}
 			// Stream delta events drive the spinner during streaming.
 			if sdkMsg.StreamDeltaType != "" {
-				m.turnActive = true
+				m.markAgentProgress()
 				if sdkMsg.StreamDeltaType == "thinking" {
 					m.thinkingLine = "Thinking..."
 				}
 			}
 			if sdkMsg.ToolProgress != nil {
-				m.turnActive = true
+				m.markAgentProgress()
 				m.thinkingLine = fmt.Sprintf("Using %s...", sdkMsg.ToolProgress.ToolName)
 			}
 			// Subagent (Task tool) lifecycle messages arrive while the main
 			// agent is blocked — treat them as definitive progress.
 			if sdkMsg.TaskStarted != nil || sdkMsg.TaskProgress != nil || sdkMsg.TaskNotification != nil {
-				m.turnActive = true
+				m.markAgentProgress()
 			}
 			if sdkMsg.Result != nil {
 				m.thinkingLine = ""
@@ -3476,7 +3483,7 @@ func (m *AttachModel) executePermChoice() tea.Cmd {
 		return func() tea.Msg {
 			_ = m.sess.RespondToControl(reqID, true, "")
 			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID}
+			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
 		}
 	case 1: // Allow & Remember
 		return func() tea.Msg {
@@ -3485,13 +3492,13 @@ func (m *AttachModel) executePermChoice() tea.Cmd {
 				m.permCache.RememberAllow(toolName, toolInput, repoName)
 			}
 			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID}
+			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
 		}
 	case 2: // Deny
 		return func() tea.Msg {
 			_ = m.sess.RespondToControl(reqID, false, "denied by user")
 			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID}
+			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
 		}
 	}
 	return nil

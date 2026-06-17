@@ -608,6 +608,31 @@ func TestLivePreviewValidatorStatusStyles(t *testing.T) {
 	assertForeground(t, livePreviewValidatorStatusStyle("running"), colorOverlay)
 }
 
+func TestLivePreviewFinalReviewingUsesLifecyclePhase(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:           "feat-final-review",
+		Status:       feature.StatusFinalReviewing,
+		CurrentPhase: feature.PhaseFinalReview,
+	}
+	sess := newLivePreviewSession("feat-final-review-final-review-01", feature.PhaseReview,
+		assistantMessage(llm.ContentBlock{Type: "text", Text: "reviewing cumulative diff"}),
+	)
+
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
+	for _, want := range []string{"Phase", "Final Review", "Current: Final Review", "reviewing cumulative diff"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("final review live preview missing %q in:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"Phase        Review", "Current: Review", "Current: Implement"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("final review live preview should not show %q in:\n%s", notWant, view)
+		}
+	}
+}
+
 func TestLivePreviewTranscriptTailCollapsesWhenConstrained(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}

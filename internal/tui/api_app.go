@@ -158,6 +158,7 @@ type APISessionPresentation struct {
 type APILivePreviewPresentation struct {
 	FeatureID      string
 	SessionID      string
+	Phase          string
 	Provider       string
 	Model          string
 	Activity       string
@@ -1772,7 +1773,7 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 	return &apiSessionView{
 		id:                    preview.SessionID,
 		featureID:             preview.FeatureID,
-		phase:                 feature.PhaseImplement,
+		phase:                 apiLivePreviewPhase(preview.Phase),
 		kind:                  ports.KindPhase,
 		label:                 "Live Preview",
 		status:                ports.SessionRunning,
@@ -1787,6 +1788,13 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 		lastTranscriptMessage: -1,
 		lastTranscriptRows:    map[string]string{},
 	}
+}
+
+func apiLivePreviewPhase(phase string) feature.Phase {
+	if strings.TrimSpace(phase) == "" {
+		return feature.PhaseImplement
+	}
+	return apiFeaturePhase(phase)
 }
 
 func appendAPILivePreviewActivity(log ports.MessageLog, activity string) {
@@ -3690,6 +3698,13 @@ func (m APIAppModel) openRewindPanel() APIAppModel {
 	}
 	if len(choices) == 1 {
 		choice := choices[0]
+		if choice.UpgradePipeline == "" && apiFeaturePhase(choice.TargetPhase) == feature.PhaseImplement {
+			if next, ok := m.newAPIRoadmapRewindPanel(m.selectedFeature, m.selectedFeatureName()); ok {
+				m.rewindPhasePicker = next
+				m.statusMessage = ""
+				return m
+			}
+		}
 		return m.confirmSelectedFeatureActionWithArgs("feature.rewind", apiFeatureActionArgs{
 			TargetPhase:     choice.TargetPhase,
 			UpgradePipeline: choice.UpgradePipeline,
@@ -3816,7 +3831,8 @@ func (m APIAppModel) openSelectedDiff() (APIAppModel, tea.Cmd) {
 		m.statusMessage = "No feature selected"
 		return m, nil
 	}
-	if f.Status != feature.StatusCodeReady || len(f.Repos) == 0 || f.Repos[0].WorktreePath == "" {
+	repo, ok := m.selectedDiffRepo(f)
+	if f.Status != feature.StatusCodeReady || !ok || repo.WorktreePath == "" {
 		m.statusMessage = "Diff is only available for Code Ready features with a worktree"
 		return m, nil
 	}
@@ -3824,7 +3840,7 @@ func (m APIAppModel) openSelectedDiff() (APIAppModel, tea.Cmd) {
 	m.textPanelTitle = fmt.Sprintf("Diff: %s", firstNonEmpty(f.Slug, f.Name, f.ID))
 	m.textPanelContent = MutedStyle.Render("Loading diff...")
 	return m, func() tea.Msg {
-		diff, err := git.DiffSummary(f.Repos[0].WorktreePath, f.Repos[0].BaseBranch)
+		diff, err := git.DiffSummary(repo.WorktreePath, repo.BaseBranch)
 		if err != nil || strings.TrimSpace(diff) == "" {
 			diff = MutedStyle.Render("No changes found")
 		} else {
@@ -3832,6 +3848,67 @@ func (m APIAppModel) openSelectedDiff() (APIAppModel, tea.Cmd) {
 		}
 		return apiTextPanelMsg{title: fmt.Sprintf("Diff: %s", firstNonEmpty(f.Slug, f.Name, f.ID)), content: diff}
 	}
+}
+
+func (m APIAppModel) selectedDiffRepo(f *feature.Feature) (feature.FeatureRepo, bool) {
+	if f == nil || len(f.Repos) == 0 {
+		return feature.FeatureRepo{}, false
+	}
+	repo := f.Repos[0]
+	if saved, ok := m.loadSavedFeatureForDiff(f.ID); ok {
+		if savedRepo, ok := featureRepoByName(saved.Repos, repo.Name); ok {
+			repo = mergeFeatureRepoForDiff(repo, savedRepo)
+		}
+	}
+	return repo, true
+}
+
+func (m APIAppModel) loadSavedFeatureForDiff(featureID string) (*feature.Feature, bool) {
+	stateDir := strings.TrimSpace(m.runtimeConfig.Runtime.StateDir)
+	if featureID == "" || stateDir == "" {
+		return nil, false
+	}
+	f, err := feature.NewStore(stateDir).Load(featureID)
+	if err != nil {
+		return nil, false
+	}
+	return f, true
+}
+
+func featureRepoByName(repos []feature.FeatureRepo, name string) (feature.FeatureRepo, bool) {
+	if name != "" {
+		for _, repo := range repos {
+			if repo.Name == name {
+				return repo, true
+			}
+		}
+	}
+	if len(repos) == 0 {
+		return feature.FeatureRepo{}, false
+	}
+	return repos[0], true
+}
+
+func mergeFeatureRepoForDiff(base, overlay feature.FeatureRepo) feature.FeatureRepo {
+	if overlay.Name != "" {
+		base.Name = overlay.Name
+	}
+	if overlay.Path != "" {
+		base.Path = overlay.Path
+	}
+	if overlay.WorktreePath != "" {
+		base.WorktreePath = overlay.WorktreePath
+	}
+	if overlay.Branch != "" {
+		base.Branch = overlay.Branch
+	}
+	if overlay.BaseBranch != "" {
+		base.BaseBranch = overlay.BaseBranch
+	}
+	if overlay.Publishable != nil {
+		base.Publishable = overlay.Publishable
+	}
+	return base
 }
 
 func (m APIAppModel) hasAPIAttachableSession(featureID string) bool {
@@ -7151,7 +7228,7 @@ func (m APIAppModel) selectedRewindChoices() []apiRewindChoice {
 		}
 		choices = append(choices, apiRewindChoice{
 			TargetPhase: option,
-			Label:       apiRewindChoiceLabel(option),
+			Label:       m.apiRewindChoiceLabel(option),
 		})
 	}
 	addUpgrade := func(option string) {
@@ -7192,6 +7269,15 @@ func (m APIAppModel) selectedRewindChoices() []apiRewindChoice {
 		return choices
 	}
 	return nil
+}
+
+func (m APIAppModel) apiRewindChoiceLabel(phase string) string {
+	if apiFeaturePhase(phase) == feature.PhaseImplement {
+		if _, total := m.selectedRoadmapProgress(m.selectedFeature); total > 1 {
+			return "Choose Implement roadmap phase"
+		}
+	}
+	return apiRewindChoiceLabel(phase)
 }
 
 func (m APIAppModel) newAPIRoadmapRewindPanel(featureID, featureName string) (*apiRoadmapRewindPanel, bool) {
@@ -7715,12 +7801,14 @@ func apiLivePreviewPresentation(featureID string, dto server.LivePreviewResponse
 	}
 	out := APILivePreviewPresentation{
 		FeatureID:  featureID,
+		Phase:      dto.Feature.CurrentPhase,
 		Activity:   strings.TrimSpace(dto.Activity),
 		ContextPct: dto.Context.Percentage,
 		CostUSD:    dto.Cost.TotalUSD,
 	}
 	if dto.Session != nil {
 		out.SessionID = dto.Session.ID
+		out.Phase = firstNonEmpty(dto.Session.Phase, out.Phase)
 		out.Provider = dto.Session.Provider
 		out.Model = dto.Session.Model
 	}

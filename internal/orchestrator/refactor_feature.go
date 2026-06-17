@@ -56,9 +56,11 @@ func (o *Orchestrator) startFeatureRefactor(
 		return "", errors.New("phase runner not configured")
 	}
 
-	// Defensive: refactor cycles are only valid for Published features.
-	if f.Status != feature.StatusPublished {
-		return "", fmt.Errorf("feature not in published state (status=%s)", f.Status)
+	// Defensive: refactor cycles are valid once final review has passed.
+	// CodeReady is the manual-publish steady state; Published is the
+	// auto-publish / already-published steady state.
+	if f.Status != feature.StatusCodeReady && f.Status != feature.StatusPublished {
+		return "", fmt.Errorf("feature not in code-ready or published state (status=%s)", f.Status)
 	}
 
 	if prompt == "" {

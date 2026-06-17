@@ -810,8 +810,8 @@ func (o *Orchestrator) DispatchRepoCycle(
 // Feature.Repos worktree, and the refactor-plan step's `**Repo:** <name>` tags
 // determine the staged subset.
 //
-// Validates StatusPublished, blocks concurrent refactor cycles on the
-// same feature, and dispatches the loop in a background goroutine. The
+// Validates StatusCodeReady/StatusPublished, blocks concurrent refactor cycles
+// on the same feature, and dispatches the loop in a background goroutine. The
 // inner loop owns RefactorCount increment, ActiveCycle stamping, and
 // the refactor-plan + iterative implement state machine. Result routing
 // flows through handleFeatureRefactorDone, which mirrors the legacy

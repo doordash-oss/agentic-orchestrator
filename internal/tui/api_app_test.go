@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -33,6 +34,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
@@ -273,6 +275,122 @@ func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 	}
 	if strings.Contains(view, "/repo/path") {
 		t.Fatalf("API dashboard View() rendered original repo path instead of feature workdir:\n%s", view)
+	}
+}
+
+func TestAPIAppModelDiffUsesSavedFeatureBaseBranch(t *testing.T) {
+	t.Parallel()
+
+	runGit := func(t *testing.T, dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(testutil.GitTestEnv(),
+			"GIT_AUTHOR_NAME=Test",
+			"GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=Test",
+			"GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	writeReadme := func(t *testing.T, dir, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write README: %v", err)
+		}
+	}
+
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	const (
+		featureID = "active"
+		slug      = "base-aware-diff"
+		repoName  = "agentic-orchestrator"
+	)
+	workDir := filepath.Join(runtimeDir, "worktrees", slug, repoName)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("create workdir: %v", err)
+	}
+	runGit(t, workDir, "init", "-b", "main")
+	runGit(t, workDir, "config", "user.email", "test@test.com")
+	runGit(t, workDir, "config", "user.name", "Test")
+	runGit(t, workDir, "config", "commit.gpgsign", "false")
+	runGit(t, workDir, "config", "tag.gpgsign", "false")
+	writeReadme(t, workDir, "main-base\n")
+	runGit(t, workDir, "add", "README.md")
+	runGit(t, workDir, "commit", "-m", "main base")
+
+	bareDir := filepath.Join(runtimeDir, "origin.git")
+	runGit(t, runtimeDir, "init", "--bare", bareDir)
+	runGit(t, bareDir, "symbolic-ref", "HEAD", "refs/heads/main")
+	runGit(t, workDir, "remote", "add", "origin", bareDir)
+	runGit(t, workDir, "push", "-u", "origin", "main")
+	runGit(t, workDir, "remote", "set-head", "origin", "main")
+
+	runGit(t, workDir, "checkout", "-b", "release")
+	writeReadme(t, workDir, "release-base\n")
+	runGit(t, workDir, "add", "README.md")
+	runGit(t, workDir, "commit", "-m", "release base")
+	runGit(t, workDir, "checkout", "-b", "feature/base-aware-diff")
+	writeReadme(t, workDir, "feature-change\n")
+	runGit(t, workDir, "add", "README.md")
+	runGit(t, workDir, "commit", "-m", "feature change")
+
+	store := feature.NewStore(stateDir)
+	if err := store.Save(&feature.Feature{
+		ID:            featureID,
+		Name:          "Base Aware Diff",
+		Slug:          slug,
+		Status:        feature.StatusCodeReady,
+		CurrentPhase:  feature.PhasePublish,
+		Created:       time.Now(),
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{{
+			Name:         repoName,
+			Path:         workDir,
+			WorktreePath: workDir,
+			Branch:       "feature/base-aware-diff",
+			BaseBranch:   "release",
+		}},
+	}); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	summary := server.FeatureSummary{
+		ID:           featureID,
+		Name:         "Base Aware Diff",
+		Slug:         slug,
+		Status:       "CodeReady",
+		CurrentPhase: "publish",
+		Repos:        []string{repoName},
+		CreatedAt:    time.Now(),
+	}
+	app := APIAppModel{
+		width:           160,
+		height:          40,
+		selectedFeature: featureID,
+		featureList:     server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails:  map[string]server.FeatureDetailResponse{},
+		runtimeConfig: server.RuntimeConfigResponse{
+			Runtime: server.RuntimeIdentity{StateDir: stateDir},
+			Repos:   []server.ConfigRepoDTO{{Name: repoName, Path: workDir}},
+		},
+	}
+
+	_, cmd := app.openSelectedDiff()
+	if cmd == nil {
+		t.Fatal("openSelectedDiff returned nil command")
+	}
+	rawMsg := cmd()
+	msg, ok := rawMsg.(apiTextPanelMsg)
+	if !ok {
+		t.Fatalf("openSelectedDiff command returned %T, want apiTextPanelMsg", rawMsg)
+	}
+	content := stripANSI(msg.content)
+	if !strings.Contains(content, "-release-base") || strings.Contains(content, "-main-base") {
+		t.Fatalf("diff content should be based on saved feature base branch release:\n%s", content)
 	}
 }
 
@@ -837,6 +955,25 @@ func TestAPILivePreviewSessionCarriesProviderFromREST(t *testing.T) {
 	}
 	if got := sess.Model(); got != "gpt-5-codex" {
 		t.Fatalf("Model() = %q, want gpt-5-codex", got)
+	}
+}
+
+func TestAPILivePreviewSessionCarriesPhaseFromREST(t *testing.T) {
+	t.Parallel()
+
+	presentation := apiLivePreviewPresentation("active", server.LivePreviewResponse{
+		Session: &server.SessionSummaryDTO{
+			ID:     "sess-live",
+			Phase:  "Final Review",
+			Status: "running",
+		},
+	})
+	sess := newAPILivePreviewSession(presentation)
+	if sess == nil {
+		t.Fatal("newAPILivePreviewSession returned nil")
+	}
+	if got := sess.Phase(); got != feature.PhaseFinalReview {
+		t.Fatalf("Phase() = %s, want Final Review", got)
 	}
 }
 
@@ -4289,6 +4426,9 @@ func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
 	}
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
+	if view := stripANSI(model.(APIAppModel).View().Content); !strings.Contains(view, "Choose Implement roadmap phase") {
+		t.Fatalf("rewind selector should advertise roadmap phase choice:\n%s", view)
+	}
 	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
@@ -4316,6 +4456,52 @@ func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
 	_, _ = model.(APIAppModel).Update(msg)
 	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "implement" || got[0].RoadmapPhase != 2 {
 		t.Fatalf("RewindFeature requests = %+v, want implement roadmap phase 2", got)
+	}
+}
+
+func TestAPIAppModelRewindSingleImplementTargetOpensRoadmapPhasePicker(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now(), Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
+			Actions: []server.ActionDTO{
+				{
+					ID:      "rewind",
+					Enabled: true,
+					Scope:   server.ActionScopeDTO{Type: "feature"},
+					RequiredInputs: []server.ActionInputDTO{
+						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"implement"}},
+					},
+				},
+			},
+		}},
+		rewindAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Update(ctrl+r) returned command before roadmap phase picker")
+	}
+	picking := model.(APIAppModel)
+	if view := stripANSI(picking.View().Content); !strings.Contains(view, "Choose Roadmap Phase") || !strings.Contains(view, "Phase 2/3") || !strings.Contains(view, "current phase") {
+		t.Fatalf("single implement rewind target should open roadmap phase picker:\n%s", view)
+	}
+
+	model, cmd = picking.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("roadmap phase selection returned command before confirmation")
+	}
+	confirming := model.(APIAppModel)
+	if view := stripANSI(confirming.View().Content); !strings.Contains(view, "Rewind Implement to roadmap Phase 2") {
+		t.Fatalf("roadmap rewind confirmation missing selected phase:\n%s", view)
 	}
 }
 

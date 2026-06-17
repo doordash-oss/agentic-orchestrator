@@ -169,14 +169,7 @@ func livePreviewContextWindow(f *feature.Feature, sess session.SessionView) int 
 			return window
 		}
 	}
-	var phase feature.Phase
-	if f != nil {
-		phase = f.CurrentPhase
-	}
-	if sess != nil {
-		phase = sess.Phase()
-	}
-	return llm.ParseModelContextWindow(livePreviewConfiguredPhaseModel(f, phase))
+	return llm.ParseModelContextWindow(livePreviewConfiguredPhaseModel(f, livePreviewDisplayPhase(f, sess)))
 }
 
 func livePreviewContextText(contextPct, contextWindow int) string {
@@ -464,24 +457,15 @@ func livePreviewWrapRenderedBody(prefix, body string, render func(...string) str
 }
 
 func livePreviewPhaseLabel(f *feature.Feature, sess session.SessionView) string {
-	if sess != nil {
-		return sess.Phase().String()
-	}
-	if f == nil {
+	phase := livePreviewDisplayPhase(f, sess)
+	if phase == feature.Phase(-1) {
 		return "Unknown"
 	}
-	return f.CurrentPhase.String()
+	return phase.String()
 }
 
 func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string {
-	var phase feature.Phase
-	if f != nil {
-		phase = f.CurrentPhase
-	}
-	if sess != nil {
-		phase = sess.Phase()
-	}
-	configuredModel := livePreviewConfiguredPhaseModel(f, phase)
+	configuredModel := livePreviewConfiguredPhaseModel(f, livePreviewDisplayPhase(f, sess))
 	if sess != nil {
 		if model := firstNonEmpty(sess.Model()); model != "" {
 			return livePreviewSessionModelLabel(model, configuredModel)
@@ -632,11 +616,9 @@ func workingOnPhaseLine(f *feature.Feature, sess session.SessionView) string {
 }
 
 func livePreviewPhaseName(f *feature.Feature, sess session.SessionView) string {
-	if sess != nil {
-		return sess.Phase().String()
-	}
-	if f != nil {
-		return f.CurrentPhase.String()
+	phase := livePreviewDisplayPhase(f, sess)
+	if phase != feature.Phase(-1) {
+		return phase.String()
 	}
 	return "feature"
 }
@@ -1039,12 +1021,7 @@ func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) st
 		return "Current: " + validation
 	}
 
-	phase := feature.Phase(-1)
-	if sess != nil {
-		phase = sess.Phase()
-	} else if f != nil {
-		phase = f.CurrentPhase
-	}
+	phase := livePreviewDisplayPhase(f, sess)
 	if phase == feature.Phase(-1) {
 		return "Current: Unknown"
 	}
@@ -1063,6 +1040,19 @@ func livePreviewTailBannerLabel(f *feature.Feature, sess session.SessionView) st
 		}
 	}
 	return "Current: " + strings.Join(parts, " · ")
+}
+
+func livePreviewDisplayPhase(f *feature.Feature, sess session.SessionView) feature.Phase {
+	if f != nil && f.Status == feature.StatusFinalReviewing && f.CurrentPhase == feature.PhaseFinalReview {
+		return feature.PhaseFinalReview
+	}
+	if sess != nil {
+		return sess.Phase()
+	}
+	if f != nil {
+		return f.CurrentPhase
+	}
+	return feature.Phase(-1)
 }
 
 func livePreviewValidationTitle(f *feature.Feature, sess session.SessionView) string {

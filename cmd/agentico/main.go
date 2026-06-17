@@ -287,7 +287,7 @@ Run 'agentico server' to start the foreground loopback HTTP server.
 Run 'agentico update' to upgrade the binary, or 'agentico update --check'
 (alias -n) to report the latest available release without installing.
 Run 'agentico validate-artifacts' from agent sessions before phase_complete
-to parse and validate role output artifacts without starting the TUI.
+to parse and validate role output artifacts without starting the TUI/server.
 
 Flags:
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
@@ -305,7 +305,7 @@ runtime parent is used in place so legacy installs remain discoverable.`)
 }
 
 func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Writer) int {
-	phase, err := parseValidateArtifactsPhase(opts.phase)
+	phase, err := parseServerPhaseStrict(opts.phase)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -325,28 +325,6 @@ func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Write
 	}
 	fmt.Fprintln(stdout, "artifacts OK")
 	return 0
-}
-
-func parseValidateArtifactsPhase(value string) (feature.Phase, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	for _, phase := range []feature.Phase{
-		feature.PhaseResearch,
-		feature.PhasePlan,
-		feature.PhaseImplement,
-		feature.PhasePublish,
-		feature.PhaseReview,
-		feature.PhaseKnowledgeBase,
-		feature.PhaseInquire,
-		feature.PhaseDesign,
-	} {
-		if normalized == strings.ToLower(phase.DirName()) || normalized == strings.ToLower(phase.String()) {
-			return phase, nil
-		}
-	}
-	if normalized == strings.ToLower(feature.PhaseFinalReview.String()) {
-		return feature.PhaseReview, nil
-	}
-	return 0, fmt.Errorf("unknown validate-artifacts phase: %s", value)
 }
 
 const providerReadinessTimeout = 5 * time.Second

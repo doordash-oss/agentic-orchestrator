@@ -31,7 +31,7 @@ When the task is complete, create this marker file as the very last action:
 `{{ .MarkerPath }}`
 
 The file contents do not matter. Its presence is the signal that the harness should parse the role's output files. If you end your turn without creating this file and without asking a properly formatted question, the harness treats the run as a protocol violation.
-{{- if .ArtifactPreflight }}
+{{ if .ArtifactPreflight }}
 
 ## Artifact Preflight
 
@@ -44,7 +44,6 @@ The file contents do not matter. Its presence is the signal that the harness sho
 If validation fails, fix the reported artifact and rerun the command before creating `phase_complete`.
 
 {{ end }}
-
 ## Skill
 
 {{ if .SkillPath }}Read the SKILL.md file completely before taking any other action.

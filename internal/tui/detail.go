@@ -50,7 +50,7 @@ type DetailModel struct {
 }
 
 func NewDetailModel(f *feature.Feature, stateDir string) DetailModel {
-	return DetailModel{feature: f, stateDir: stateDir}
+	return DetailModel{feature: f, stateDir: stateDir, contextPct: -1}
 }
 
 func (m DetailModel) Init() tea.Cmd {

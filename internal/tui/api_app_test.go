@@ -622,6 +622,102 @@ func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelOverviewUsesLivePreviewContextPct(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Client cutover",
+		Slug:         "client-cutover",
+		Status:       "Implementing",
+		CurrentPhase: "implement",
+		CreatedAt:    time.Now(),
+		Progress: server.FeatureProgress{
+			CurrentIteration: 1,
+		},
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		detail:   server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{FeatureSummary: summary}},
+		livePreview: server.LivePreviewResponse{
+			Feature: summary,
+			Session: &server.SessionSummaryDTO{
+				ID:        "sess-live",
+				FeatureID: "active",
+				Phase:     "implement",
+				Status:    "running",
+			},
+			Context: server.ContextDTO{Percentage: 42},
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	app.rightPanelMode = dashboardRightPanelOverview
+	dashboard := app.apiDashboardModel()
+	if got := dashboard.preview.contextPct; got != 42 {
+		t.Fatalf("overview contextPct = %d, want live preview context 42", got)
+	}
+	view := stripANSI(dashboard.View())
+	if !strings.Contains(view, "context window: 42%") {
+		t.Fatalf("overview missing live preview context in:\n%s", view)
+	}
+	if strings.Contains(view, "context window: 0%") {
+		t.Fatalf("overview rendered stale zero context in:\n%s", view)
+	}
+}
+
+func TestAPIAppModelOverviewParsesFinalReviewPhaseFromREST(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Translate README",
+		Slug:         "translate-readme",
+		Status:       "FinalReviewing",
+		CurrentPhase: "Final Review",
+		CreatedAt:    time.Now(),
+		Repos:        []string{"agentic-orchestrator"},
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: summary,
+			Pipeline:       "medium",
+			ActiveRun:      &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: "Final Review"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	app.rightPanelMode = dashboardRightPanelOverview
+	dashboard := app.apiDashboardModel()
+	if got := dashboard.preview.feature.CurrentPhase; got != feature.PhaseFinalReview {
+		t.Fatalf("overview CurrentPhase = %s, want Final Review", got)
+	}
+	view := stripANSI(dashboard.View())
+	finalReviewLine := ""
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Final Review") && !strings.Contains(line, "Status") {
+			finalReviewLine = line
+			break
+		}
+	}
+	if finalReviewLine == "" {
+		t.Fatalf("overview missing Final Review progress row in:\n%s", view)
+	}
+	if strings.Contains(finalReviewLine, "pending") {
+		t.Fatalf("Final Review row rendered as pending: %q\nview:\n%s", finalReviewLine, view)
+	}
+	if !strings.Contains(finalReviewLine, "reviewing") {
+		t.Fatalf("Final Review row = %q, want reviewing state\nview:\n%s", finalReviewLine, view)
+	}
+}
+
 func TestAPIAppModelLivePreviewPreservesTranscriptToolRowsFromREST(t *testing.T) {
 	t.Parallel()
 

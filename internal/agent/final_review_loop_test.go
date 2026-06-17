@@ -473,6 +473,94 @@ fi`,
 	}
 }
 
+func TestRunFeatureFinalReviewLoop_ChangesRequestedWithMalformedReportStillRunsFix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-malformed-report-fix", []string{"api", "web"})
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	malformedReport := fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
+cat > "$_d/verification-report.yaml" << 'REPORT'
+version: 2
+additional_checks:
+  - name: Source comparison spot-check
+    command: manual: compare translated README against English source
+    mode: manual
+    status: failed
+REPORT
+`, artDir)
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
+		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
+%s
+%s
+%s
+else
+%s
+%s
+%s
+%s
+fi`,
+			artDir,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewApproved(artDir),
+			testutil.JSONLSuccess,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: README still contains untranslated text"),
+			malformedReport+testutil.TouchPhaseComplete(artDir),
+			testutil.JSONLSuccess))
+
+	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
+		fmt.Sprintf(`%s
+for _d in "%s"/iteration-*; do :; done
+if grep -q 'command: manual: compare' "$_d/verification-report.yaml"; then
+  echo "malformed reviewer verification report leaked to final fixer" >&2
+  exit 1
+fi
+%s
+%s
+`,
+			testutil.JSONLInit,
+			artDir,
+			testutil.WriteFinalReviewFixSuccessArtifacts(artDir),
+			testutil.JSONLSuccess))
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  5,
+		MaxConsecFails: 3,
+		BuildSession: mockBuildSessionByModel(map[string]string{
+			"reviewer": reviewScript,
+			"agent":    fixScript,
+		}),
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
+	}
+	if result.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2", result.Iterations)
+	}
+}
+
 // TestRunFeatureFinalReviewLoop_FixAgentSeesAllReposInAddDir verifies that
 // when the fix agent runs after CHANGES_REQUESTED, BuildSessionOpts mounts
 // every Feature.Repos worktree via AdditionalDirs. Same workspace shape as

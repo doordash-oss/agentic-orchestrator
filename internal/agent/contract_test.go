@@ -945,6 +945,36 @@ func TestContractRegistryFinalReviewerAllowsChangesRequestedWithOnlyReviewFeedba
 	}
 }
 
+func TestContractRegistryFinalReviewerAllowsChangesRequestedWithMalformedVerificationReport(t *testing.T) {
+	iterDir := t.TempDir()
+	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("- needs work", "", "CHANGES_REQUESTED"))
+	report := strings.Join([]string{
+		"version: 2",
+		"additional_checks:",
+		"  - name: Source comparison spot-check",
+		"    command: manual: compare translated README against English source",
+		"    mode: manual",
+		"    status: failed",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(report), 0o644); err != nil {
+		t.Fatalf("write malformed verification report: %v", err)
+	}
+
+	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(violations) != 0 || !out.OK || out.ReviewFeedback == nil {
+		t.Fatalf("Validate() = (%+v, %v), want CHANGES_REQUESTED feedback to route despite malformed verification report", out, violations)
+	}
+	if out.ReviewFeedback.Verdict != ReviewChangesRequested {
+		t.Fatalf("ReviewFeedback.Verdict = %s, want CHANGES_REQUESTED", out.ReviewFeedback.Verdict)
+	}
+	if out.VerificationReport != nil {
+		t.Fatalf("VerificationReport = %+v, want nil when malformed report is tolerated for CHANGES_REQUESTED", out.VerificationReport)
+	}
+}
+
 func TestContractRegistryFinalReviewerReportsMissingReviewFeedback(t *testing.T) {
 	iterDir := t.TempDir()
 

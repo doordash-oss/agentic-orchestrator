@@ -586,6 +586,11 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	if outcome.ReviewFeedback == nil {
 		return ReviewFailed, "", fmt.Errorf("validating final reviewer contract: validated without review feedback")
 	}
+	if outcome.ReviewFeedback.Verdict == ReviewChangesRequested && outcome.VerificationReport == nil {
+		if err := s.reseedVerificationReportFromContract(iterDir); err != nil {
+			return ReviewFailed, "", fmt.Errorf("resetting final-review verification report for fix: %w", err)
+		}
+	}
 	return outcome.ReviewFeedback.Verdict, strings.TrimSpace(outcome.ReviewFeedback.Body), nil
 }
 
@@ -691,6 +696,14 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		MissingArtifacts:     []string{"verification-report.yaml"},
 	}).Status
 	return agentStatus, nil
+}
+
+func (s *featureFinalReviewLoopState) reseedVerificationReportFromContract(iterDir string) error {
+	contract, err := ReadTestingContract(s.contractPath)
+	if err != nil {
+		return fmt.Errorf("reading final-review testing contract: %w", err)
+	}
+	return WriteVerificationReportStubFromContract(filepath.Join(iterDir, "verification-report.yaml"), s.contractPath, contract)
 }
 
 func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string, iteration int, violations []ProtocolViolation, consecutiveFailures *int) *FeatureFinalReviewResult {

@@ -666,6 +666,40 @@ func TestLivePreviewActivityRendersInPhasePreviewTitle(t *testing.T) {
 	}
 }
 
+func TestLivePreviewPhaseTitleHandlesStyledLongActivity(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:                  "feat-long-activity",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentIteration:    2,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+	}
+	longStatus := "Running 12:32:37 session ab1d1ed7fe2af11e-final-review-02: dropped critical SDK message (type=result) after 5s on full attachCh"
+	sess := newLivePreviewSession("long-activity", feature.PhaseImplement,
+		llm.SDKMessage{Type: "status", Status: &llm.StatusMessage{Type: "status", Message: longStatus}},
+	)
+	model := newLivePreviewModel(f).
+		withSession(sess).
+		withHeight(24)
+	model.spinnerView = lipgloss.NewStyle().Foreground(colorInfo).Render("⠴")
+	view := model.ViewCompact(100)
+
+	for _, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := lipgloss.Width(line); got > 96 {
+			t.Fatalf("live preview line width = %d, want <= 96; line=%q", got, stripANSI(line))
+		}
+	}
+	plain := stripANSI(view)
+	for _, leaked := range []string{"38;2", "38:2", ":::20"} {
+		if strings.Contains(plain, leaked) {
+			t.Fatalf("live preview leaked ANSI fragment %q in:\n%s", leaked, plain)
+		}
+	}
+}
+
 func TestLivePreviewAttentionRendersQuestionBox(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{

@@ -345,7 +345,7 @@ func (m DashboardModel) View() string {
 			Height(panelHeight + 2).
 			Render(leftContent)
 		leftBox = renderBorderTitle(leftBox, "Features", lipgloss.NewStyle().Foreground(colorBrand))
-		return header + leftBox + "\n" + footer + "\n"
+		return truncateRenderedLines(header+leftBox+"\n"+footer+"\n", w)
 	}
 
 	// Split mode: calculate widths based on layout
@@ -423,7 +423,7 @@ func (m DashboardModel) View() string {
 
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, leftBox, rightBox)
 
-	return header + panels + "\n" + footer + "\n"
+	return truncateRenderedLines(header+panels+"\n"+footer+"\n", w)
 }
 
 // renderHeader renders a branded block-element header inspired by K9s.
@@ -605,12 +605,7 @@ func (m DashboardModel) renderFooter() string {
 	brandHint := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	rightHints := MutedStyle.Render("Layout: "+KeyboardLayoutHint()) + "  " + brandHint.Render("["+ChatKeyHint()+"] Ask") + "  " + brandHint.Render("["+HelpKeyHint()+"] Help")
 
-	gap := m.width - lipgloss.Width(leftPart) - lipgloss.Width(rightHints) - 1
-	if gap < 2 {
-		gap = 2
-	}
-
-	footer := leftPart + strings.Repeat(" ", gap) + rightHints
+	footer := renderDashboardFooterLine(leftPart, rightHints, m.width)
 	if m.statusMessage != "" {
 		statusStyle := lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
 		if strings.HasPrefix(m.statusMessage, "\u2717") {
@@ -626,6 +621,30 @@ func (m DashboardModel) renderFooter() string {
 		footer = " " + statusStyle.Render(msg) + "\n" + footer
 	}
 	return footer
+}
+
+func renderDashboardFooterLine(leftPart, rightHints string, width int) string {
+	const minGap = 2
+	prefix := ""
+	leftLine := leftPart
+	if idx := strings.LastIndex(leftPart, "\n"); idx >= 0 {
+		prefix = leftPart[:idx+1]
+		leftLine = leftPart[idx+1:]
+	}
+
+	rightWidth := ansi.StringWidth(rightHints)
+	leftWidth := ansi.StringWidth(leftLine)
+	if leftWidth+minGap+rightWidth > width {
+		if leftWidth > width {
+			leftLine = ansi.Truncate(leftLine, width, "")
+		}
+		if rightWidth > width {
+			return prefix + leftLine + "\n" + ansi.Truncate(rightHints, width, "")
+		}
+		return prefix + leftLine + "\n" + strings.Repeat(" ", width-rightWidth) + rightHints
+	}
+	gap := width - leftWidth - rightWidth
+	return prefix + leftLine + strings.Repeat(" ", gap) + rightHints
 }
 
 // sectionMeta holds metadata for a feature section during buildVisibleItems.

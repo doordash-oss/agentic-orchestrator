@@ -306,6 +306,11 @@ func RenderRoleSpecOutputFilesSection(spec RoleSpec) string {
 func validateFinalReviewVerificationReportArtifact(_ string, path string, out *Outcome) ([]ProtocolViolation, error) {
 	report, err := ReadVerificationReport(path)
 	if err != nil {
+		// A blocking final-review verdict is enough to route into the fix leg;
+		// APPROVED still requires a parseable, contract-backed report below.
+		if out != nil && out.ReviewFeedback != nil && out.ReviewFeedback.Verdict == ReviewChangesRequested {
+			return nil, nil
+		}
 		if errors.Is(err, os.ErrNotExist) {
 			return []ProtocolViolation{{Artifact: "verification-report.yaml", Reason: missingArtifactReason("verification-report.yaml", filepath.Dir(path))}}, nil
 		}

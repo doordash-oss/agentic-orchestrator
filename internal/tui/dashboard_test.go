@@ -57,6 +57,36 @@ func TestDashboardSelectFeature(t *testing.T) {
 	}
 }
 
+func TestDashboardClipsLongFailureDetailLinesToTerminalWidth(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:           "feat-failed",
+		Name:         "Translate in Sicilian",
+		Slug:         "translate-in-sicilian",
+		Status:       feature.StatusFailed,
+		CurrentPhase: feature.PhaseFinalReview,
+		FailureType:  feature.FailureProtocolViolation,
+		LastError:    "protocol violation: final_review_reviewer @ /Users/ivar.lazzaro/.agentic-workflow/worktrees/agentico-mcp-server/agentic-orchestrator/runs/run-001/final-review/iteration-02: dropped critical SDK message (type=result) after 5s on full attachCh",
+		Repos:        []feature.FeatureRepo{{Name: "agentic-orchestrator"}},
+		RepoStates: map[string]*feature.RepoState{
+			"agentic-orchestrator": {Touched: true, LastError: "dropped critical SDK message (type=result) after 5s on full attachCh"},
+		},
+	}
+	m := dashboardWithSelectedFeature(f)
+	m.width = 120
+	m.height = 18
+	m.focusPanel = 1
+	m.syncPreview()
+
+	view := m.View()
+	for i, line := range strings.Split(strings.TrimRight(view, "\n"), "\n") {
+		if got := ansi.StringWidth(line); got > m.width {
+			t.Fatalf("dashboard line %d width = %d, want <= %d; line=%q\nview:\n%s", i, got, m.width, ansi.Strip(line), ansi.Strip(view))
+		}
+	}
+}
+
 func TestDashboardSortFeatures(t *testing.T) {
 	t.Parallel()
 	features := []*feature.Feature{

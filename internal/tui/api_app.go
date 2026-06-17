@@ -1392,6 +1392,7 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 		if dashboard.livePreview.feature != nil && preview.CostUSD > 0 {
 			dashboard.livePreview.feature.PhaseCosts = apiPhaseCosts(nil, preview.CostUSD, dashboard.livePreview.feature.CurrentPhase)
 		}
+		dashboard.preview.contextPct = preview.ContextPct
 		dashboard.livePreview.contextPct = preview.ContextPct
 		dashboard.livePreview.session = newAPILivePreviewSession(*preview)
 	}
@@ -7388,7 +7389,7 @@ func apiFeatureStatus(status string) feature.Status {
 
 func apiFeaturePhase(phase string) feature.Phase {
 	switch strings.ToLower(strings.TrimSpace(phase)) {
-	case "knowledgebase", "knowledge_base", "knowledge-base", "kb":
+	case "knowledgebase", "knowledge_base", "knowledge-base", "knowledge base", "kb":
 		return feature.PhaseKnowledgeBase
 	case "inquire", "inquiry":
 		return feature.PhaseInquire
@@ -7402,7 +7403,7 @@ func apiFeaturePhase(phase string) feature.Phase {
 		return feature.PhaseImplement
 	case "review":
 		return feature.PhaseReview
-	case "finalreview", "final_review", "final-review":
+	case "finalreview", "final_review", "final-review", "final review":
 		return feature.PhaseFinalReview
 	case "publish", "publishing":
 		return feature.PhasePublish

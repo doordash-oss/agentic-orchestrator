@@ -26,7 +26,9 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -168,6 +170,50 @@ func TestAPIAppModelDashboardKeepsManualPublishCodeReady(t *testing.T) {
 	}
 	if strings.Contains(row, "Publishing") {
 		t.Fatalf("dashboard row = %q; should not show Publishing for manual publish CodeReady", row)
+	}
+}
+
+func TestAPIAppModelDashboardRestoresMainBranchSpinnerVisuals(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Translate README in Sicilian",
+		Slug:         "translate-readme-in-sicilian",
+		Status:       "Planning",
+		CurrentPhase: "plan",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    time.Now(),
+		Progress: server.FeatureProgress{
+			CurrentRoadmapPhase: 0,
+			TotalRoadmapPhases:  3,
+			CurrentPhaseStatus:  "running",
+		},
+	}
+	app := APIAppModel{
+		width:          160,
+		height:         40,
+		focusPanel:     0,
+		rightPanelMode: dashboardRightPanelOverview,
+		featureList:    server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: {Feature: server.FeatureDetailDTO{FeatureSummary: summary}},
+		},
+		runtimeConfig: server.RuntimeConfigResponse{
+			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+		},
+	}
+	app.rebuildPresentation(summary.ID)
+
+	dot := spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(colorInfo)))
+	wantSpinner := stripANSI(dot.View())
+	if wantSpinner == "" {
+		t.Fatal("test spinner frame is empty")
+	}
+
+	view := stripANSI(app.View().Content)
+	if got := strings.Count(view, wantSpinner); got < 2 {
+		t.Fatalf("API dashboard spinner count = %d, want at least 2 for left row and overview phase row; spinner %q view:\n%s", got, wantSpinner, view)
 	}
 }
 

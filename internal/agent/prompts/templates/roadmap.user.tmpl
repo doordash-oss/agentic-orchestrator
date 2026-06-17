@@ -8,9 +8,10 @@
   suppress the redundant Feature / Visual References blocks. In Medium
   mode (no design doc) those blocks ARE the spec, so they render.
 
-  Multi-repo repo-task routing lives in the later phase plan, where
-  `**Repo:** <name>` task tags are the source of truth. The roadmap prompt
-  only signals the feature-wide repo set.
+  Repo-task routing lives in the later phase plan, where `**Repo:** <name>`
+  task tags are the source of truth. The roadmap prompt only signals the
+  authoritative feature-wide repo set so agents do not infer scope from
+  sibling directories in the worktree parent.
 */ -}}
 {{- define "roadmap.user" -}}
 # Planning Context
@@ -26,9 +27,9 @@
 **Description**:
 > {{ blockquote .Description }}
 
-{{ template "visual_references" .VisualReferences }}{{ end }}{{ template "qa_files" .QAFiles }}{{ if and .MultiRepo (gt (len .Repos) 1) }}## Target Repositories
+{{ template "visual_references" .VisualReferences }}{{ end }}{{ template "qa_files" .QAFiles }}{{ if .Repos }}## Target Repositories
 
-This is a multi-repo feature spanning these repositories:
+This feature targets the repositories below. Treat this list as authoritative; ignore sibling directories that are not listed here.
 {{ range .Repos }}- **{{ .Name }}** ({{ .Path }})
 {{ end }}
 {{ end }}{{ template "grillme_inquireness" .Inquireness }}

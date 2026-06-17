@@ -265,14 +265,19 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 			t.Error("roadmap prompt should not include an Execution Order section")
 		}
 	})
-	t.Run("single_repo_omits_target_repositories", func(t *testing.T) {
+	t.Run("single_repo_includes_target_repositories", func(t *testing.T) {
 		f := &feature.Feature{
 			Name:  "test-feature",
-			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a"}},
+			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a", WorktreePath: "/worktree/a"}},
 		}
 		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
-		if strings.Contains(prompt, "Target Repositories") {
-			t.Error("single-repo should not have Target Repositories section")
+		for _, want := range []string{"Target Repositories", "repo-a", "/worktree/a"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("single-repo prompt missing %q:\n%s", want, prompt)
+			}
+		}
+		if strings.Contains(prompt, "/path/a") {
+			t.Error("should use worktree path instead of original path for repo-a")
 		}
 	})
 	t.Run("multi_repo_uses_worktree_path_when_available", func(t *testing.T) {

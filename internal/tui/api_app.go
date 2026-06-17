@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -264,6 +265,7 @@ type APIAppModel struct {
 	selectedSection            string
 	width                      int
 	height                     int
+	spinner                    spinner.Model
 	ownedServer                bool
 	waitForOwnedServerShutdown func(context.Context) error
 	quitOwnedServerPrompt      bool
@@ -529,6 +531,7 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 		buildSession:               opts.BuildSession,
 		width:                      100,
 		height:                     30,
+		spinner:                    newAPIAppSpinner(),
 		ownedServer:                opts.OwnedServer,
 		waitForOwnedServerShutdown: waitForOwnedServerShutdown,
 		launchPolicy:               opts.LaunchPolicy,
@@ -609,10 +612,18 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 }
 
 func (m APIAppModel) Init() tea.Cmd {
-	return m.listenForAPIEvents()
+	return tea.Batch(m.listenForAPIEvents(), m.spinner.Tick)
 }
 
 func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if msg, ok := msg.(spinner.TickMsg); ok {
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		if m.attach != nil && m.attach.thinkingLine != "" {
+			m.attach.spinnerView = m.spinner.View()
+		}
+		return m, cmd
+	}
 	if m.artifactReview != nil && !m.artifactReview.Detached() && apiArtifactReviewOwnsMsg(msg) {
 		return m.updateAPIArtifactReview(msg)
 	}
@@ -1345,6 +1356,10 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 		dashboard.syncPreview()
 	}
 	m.applyAPIDashboardRefactorState(&dashboard)
+	spinnerView := m.spinnerView()
+	dashboard.spinnerView = spinnerView
+	dashboard.preview.spinnerView = spinnerView
+	dashboard.livePreview.spinnerView = spinnerView
 	if preview := m.snapshot.LivePreview; preview != nil {
 		if dashboard.livePreview.feature != nil && preview.CostUSD > 0 {
 			dashboard.livePreview.feature.PhaseCosts = apiPhaseCosts(nil, preview.CostUSD, dashboard.livePreview.feature.CurrentPhase)
@@ -1353,6 +1368,17 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 		dashboard.livePreview.session = newAPILivePreviewSession(*preview)
 	}
 	return dashboard
+}
+
+func newAPIAppSpinner() spinner.Model {
+	return spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(colorInfo)))
+}
+
+func (m APIAppModel) spinnerView() string {
+	if view := m.spinner.View(); view != "" && view != "(error)" {
+		return view
+	}
+	return newAPIAppSpinner().View()
 }
 
 func (m APIAppModel) applyAPIDashboardRefactorState(dashboard *DashboardModel) {

@@ -701,6 +701,8 @@ func TestSessionResultDeliveredUnderBackpressure(t *testing.T) {
 	// parallel-candidate: in-process protocol replay with per-test attach buffer.
 	s := NewSession("bp-test", "feat-1", feature.PhaseImplement)
 	s.setCriticalAttachSendTimeoutForTest(time.Second)
+	unregister := registerAttachConsumerForTest(t, s)
+	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}
@@ -740,6 +742,17 @@ func TestSessionResultDeliveredUnderBackpressure(t *testing.T) {
 			t.Fatal("Result SDKMessage was not delivered via AttachCh under backpressure")
 		}
 	}
+}
+
+func registerAttachConsumerForTest(t *testing.T, s *Session) func() {
+	t.Helper()
+	registrar, ok := any(s).(interface {
+		RegisterAttachConsumer() func()
+	})
+	if !ok {
+		t.Fatal("Session does not expose RegisterAttachConsumer")
+	}
+	return registrar.RegisterAttachConsumer()
 }
 
 func TestSession_OnSubagentEventFires(t *testing.T) {
@@ -1729,6 +1742,35 @@ func (r *recordingAttachDropReporter) snapshot() []attachDropCall {
 	return out
 }
 
+func TestSession_NoAttachConsumerSuppressesCriticalDropReport(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: in-process protocol replay with per-test attach buffer.
+	wantTimeout := 200 * time.Millisecond
+
+	s := NewSession("headless-drop-test", "feat-headless", feature.PhaseImplement)
+	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	for i := 0; i < cap(s.attachCh); i++ {
+		s.attachCh <- llm.SDKMessage{Type: "assistant"}
+	}
+
+	reporter := &recordingAttachDropReporter{}
+	s.SetAttachDropReporter(reporter)
+
+	started := time.Now()
+	runMockSession(t, s, []llm.SDKMessage{
+		{Type: "system", Subtype: "init", Init: &llm.SystemInitMessage{SessionID: "s1", Model: "m"}},
+		{Type: "result", Result: &llm.ResultMessage{Type: "result", Subtype: "success", SessionID: "s1", TotalCostUSD: 0.01}},
+	}, func(llm.SDKMessage) {})
+	elapsed := time.Since(started)
+
+	if calls := reporter.snapshot(); len(calls) != 0 {
+		t.Fatalf("expected no AttachDrop reports without an attach consumer; got %d", len(calls))
+	}
+	if elapsed >= wantTimeout/2 {
+		t.Fatalf("headless critical drop waited %s; want it to skip the %s timeout", elapsed, wantTimeout)
+	}
+}
+
 // TestSession_AttachDropReporterFiresOnCriticalDrop simulates a stuck
 // attachCh consumer. The CLI emits a Result message while the attachCh
 // is full — the bounded blocking send at the drop site must time out,
@@ -1741,6 +1783,8 @@ func TestSession_AttachDropReporterFiresOnCriticalDrop(t *testing.T) {
 
 	s := NewSession("drop-test", "feat-9", feature.PhaseImplement)
 	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	unregister := registerAttachConsumerForTest(t, s)
+	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}
@@ -1791,6 +1835,8 @@ func TestSession_AttachDropReporterSilentWithoutReporter(t *testing.T) {
 
 	s := NewSession("quiet-test", "feat-9", feature.PhaseImplement)
 	s.setCriticalAttachSendTimeoutForTest(timeout)
+	unregister := registerAttachConsumerForTest(t, s)
+	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}

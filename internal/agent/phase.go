@@ -1267,6 +1267,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("building command for %s: %w", prov.Name(), err)
 	}
+	env = appendAgenticoBinEnv(env)
 
 	contextWindow := 0
 	if cc, ok := prov.(llm.CostCalculator); ok {
@@ -1297,6 +1298,33 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		TurnMode:          opts.TurnMode,
 	}
 	return cmd, env, sessOpts, nil
+}
+
+func appendAgenticoBinEnv(env []string) []string {
+	path := currentAgenticoBinPath()
+	if path == "" {
+		return env
+	}
+	entry := "AGENTICO_BIN=" + path
+	out := append([]string(nil), env...)
+	for i, existing := range out {
+		if strings.HasPrefix(existing, "AGENTICO_BIN=") {
+			out[i] = entry
+			return out
+		}
+	}
+	return append(out, entry)
+}
+
+func currentAgenticoBinPath() string {
+	path, err := os.Executable()
+	if err != nil || strings.TrimSpace(path) == "" {
+		path = os.Args[0]
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return strings.TrimSpace(path)
 }
 
 // AskingClauseForModel returns the asking-questions clause for a given model.

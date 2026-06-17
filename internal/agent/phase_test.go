@@ -1201,10 +1201,7 @@ func TestBuildSession_Claude(t *testing.T) {
 		t.Errorf("expected claude command, got %v", cmd)
 	}
 
-	// Claude provider returns nil env
-	if env != nil {
-		t.Errorf("expected nil env for claude, got %v", env)
-	}
+	requireOnlyAgenticoBinEnv(t, env)
 
 	// Session opts should have protocol set (registry path)
 	if sessOpts.Protocol == nil {
@@ -1216,6 +1213,29 @@ func TestBuildSession_Claude(t *testing.T) {
 	if sessOpts.InitialPrompt != "research this" {
 		t.Errorf("expected InitialPrompt 'research this', got %q", sessOpts.InitialPrompt)
 	}
+}
+
+func TestBuildSessionInjectsAgenticoBinEnv(t *testing.T) {
+	dir := t.TempDir()
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	store := feature.NewStore(dir)
+	pr := NewPhaseRunner(sm, store, dir)
+	pr.Registry = newRegistryWithProviders()
+
+	_, env, _, err := pr.BuildSession(BuildSessionOpts{
+		Model:        "opus",
+		Prompt:       "research this",
+		SystemPrompt: "you are a researcher",
+		PIDDir:       filepath.Join(dir, "pid"),
+		PermHandler:  permHandlerFor(false, nil, ""),
+		WorkDir:      dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+
+	requireOnlyAgenticoBinEnv(t, env)
 }
 
 // TestBuildSession_PinsPermissionModeForGrillingPhases verifies that
@@ -1633,10 +1653,7 @@ func TestBuildSession_Codex_UsesProviderNilEnv(t *testing.T) {
 		t.Errorf("expected [codex app-server], got %v", cmd)
 	}
 
-	// Codex provider should use the nil-env contract.
-	if env != nil {
-		t.Errorf("expected nil env, got %v", env)
-	}
+	requireOnlyAgenticoBinEnv(t, env)
 
 	// Session opts should have protocol set (registry path).
 	if sessOpts.Protocol == nil {
@@ -1674,9 +1691,7 @@ func TestBuildSession_Codex_IgnoresAgentNamesSelection(t *testing.T) {
 	if got := findArgValue(cmd, "--agents"); got != "" {
 		t.Fatalf("BuildSession() emitted --agents=%q for codex command %v", got, cmd)
 	}
-	if env != nil {
-		t.Fatalf("BuildSession() env = %v, want nil", env)
-	}
+	requireOnlyAgenticoBinEnv(t, env)
 	if sessOpts.ProviderName != "codex" {
 		t.Fatalf("BuildSession() ProviderName = %q, want codex", sessOpts.ProviderName)
 	}

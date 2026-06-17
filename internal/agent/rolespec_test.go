@@ -174,6 +174,24 @@ func TestRoleSpecCarriesRequiredPhasesAndAskingClauseProvider(t *testing.T) {
 	}
 }
 
+func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
+	got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+		Spec:         FinalReviewerRoleSpec(),
+		IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
+		SkillsDir:    "/skills",
+	})
+	for _, want := range []string{
+		"## Artifact Preflight",
+		"`AGENTICO_BIN` is set to the current Agentico executable",
+		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_reviewer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
+		"run it before creating `phase_complete`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("BuildRoleSystemPrompt() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestPlanningRoleSpecsDeriveContractPaths(t *testing.T) {
 	base := t.TempDir()
 	roadmapAttemptDir := filepath.Join(base, "roadmap", "attempt-02")

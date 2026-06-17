@@ -245,6 +245,14 @@ type MessageLog interface {
 	ToolUseBlocks() []llm.ContentBlock
 }
 
+// AttachConsumerRegistrar is an optional interface implemented by session
+// handles that can track whether anything is actively draining AttachCh().
+// Callers that block on AttachCh should register for the lifetime of that read
+// loop and invoke the returned cleanup when the loop exits.
+type AttachConsumerRegistrar interface {
+	RegisterAttachConsumer() func()
+}
+
 // SessionView is the read-oriented interface external packages (TUI, agent)
 // use to observe a session.
 type SessionView interface {

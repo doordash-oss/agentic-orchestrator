@@ -72,6 +72,7 @@ type RoleSystemInput struct {
 	OutputRoots          []OutputRootView
 	MarkerPath           string
 	SkillPath            string
+	ArtifactPreflight    string
 	Preflight            PreflightInput
 	ReadOnlyOutsideRoots bool
 

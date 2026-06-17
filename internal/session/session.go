@@ -52,11 +52,13 @@ const (
 var _ = fmt.Sprintf // keep fmt import used elsewhere in the package
 
 // criticalAttachSendTimeout is the default bound for blocking forward of Result
-// messages onto attachCh. Without it, a stuck consumer would deadlock
-// readMessages indefinitely; with it, the CLI continues reading after
-// the bound. 5s is long enough for any normal TUI event-loop hitch and
-// short enough that a genuine deadlock surfaces quickly. Result drops
-// are recoverable — the next assistant message clears the spinner.
+// messages onto attachCh when an attach consumer is registered. Without it, a
+// stuck consumer would deadlock readMessages indefinitely; with it, the CLI
+// continues reading after the bound. 5s is long enough for any normal TUI
+// event-loop hitch and short enough that a genuine deadlock surfaces quickly.
+// If no consumer is registered, a full attachCh is treated as headless
+// backpressure and the Result is dropped without waiting or logging. Result
+// drops are recoverable — the next assistant message clears the spinner.
 //
 // ControlRequest messages no longer share this path — they take a
 // dedicated controlCh routed through forwardControlRequests, which
@@ -156,6 +158,7 @@ type Session struct {
 	// For attach mode: subscribers receive copies of messages
 	attachCh                  chan llm.SDKMessage
 	criticalAttachSendTimeout time.Duration
+	attachConsumers           atomic.Int64
 
 	// controlCh buffers ControlRequest messages on a dedicated path so a
 	// burst of stream/result traffic on attachCh cannot starve them. The
@@ -518,6 +521,25 @@ func NewSession(id, featureID string, phase feature.Phase) *Session {
 
 func (s *Session) setCriticalAttachSendTimeoutForTest(timeout time.Duration) {
 	s.criticalAttachSendTimeout = timeout
+}
+
+// RegisterAttachConsumer marks a goroutine as actively draining AttachCh. The
+// returned cleanup is idempotent and must be called when the read loop exits.
+func (s *Session) RegisterAttachConsumer() func() {
+	if s == nil {
+		return func() {}
+	}
+	s.attachConsumers.Add(1)
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.attachConsumers.Add(-1)
+		})
+	}
+}
+
+func (s *Session) hasAttachConsumer() bool {
+	return s != nil && s.attachConsumers.Load() > 0
 }
 
 func (s *Session) setResultShutdownGraceForTest(grace time.Duration) {
@@ -1071,26 +1093,33 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				// Session shutting down; drop is fine.
 			}
 		} else if msg.Result != nil {
-			attachTimeout := s.criticalAttachTimeout()
-			criticalSendTimer := time.NewTimer(attachTimeout)
-			select {
-			case s.attachCh <- msg:
-			case <-criticalSendTimer.C:
-				log.Printf("session %s: dropped critical SDK message (type=%s) after %s on full attachCh", s.id, msg.Type, attachTimeout)
-				// Additive metric: surface the drop to observability so
-				// dashboards / watchdogs can alert on a stuck consumer
-				// without having to grep agentic.log. The log line above
-				// is intentionally preserved — the reporter is additive.
-				s.mu.Lock()
-				reporter := s.attachDropReporter
-				featureID := s.featureID
-				phaseName := s.phase.String()
-				s.mu.Unlock()
-				if reporter != nil {
-					reporter.ReportAttachDrop(s.id, featureID, phaseName, msg.Type, attachTimeout)
+			if !s.hasAttachConsumer() {
+				select {
+				case s.attachCh <- msg:
+				default:
 				}
+			} else {
+				attachTimeout := s.criticalAttachTimeout()
+				criticalSendTimer := time.NewTimer(attachTimeout)
+				select {
+				case s.attachCh <- msg:
+				case <-criticalSendTimer.C:
+					log.Printf("session %s: dropped critical SDK message (type=%s) after %s on full attachCh", s.id, msg.Type, attachTimeout)
+					// Additive metric: surface the drop to observability so
+					// dashboards / watchdogs can alert on a stuck consumer
+					// without having to grep agentic.log. The log line above
+					// is intentionally preserved — the reporter is additive.
+					s.mu.Lock()
+					reporter := s.attachDropReporter
+					featureID := s.featureID
+					phaseName := s.phase.String()
+					s.mu.Unlock()
+					if reporter != nil {
+						reporter.ReportAttachDrop(s.id, featureID, phaseName, msg.Type, attachTimeout)
+					}
+				}
+				criticalSendTimer.Stop()
 			}
-			criticalSendTimer.Stop()
 		} else {
 			select {
 			case s.attachCh <- msg:

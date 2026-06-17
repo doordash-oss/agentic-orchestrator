@@ -145,6 +145,65 @@ func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []Protoc
 	return out, violations, nil
 }
 
+// ValidateArtifactsPreflight runs cheap artifact checks intended for agents to
+// execute before creating phase_complete. It is intentionally stricter than
+// Validate for YAML syntax so self-checks catch malformed reports even when the
+// harness would tolerate a blocking CHANGES_REQUESTED verdict to route a fix.
+func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) (Outcome, []ProtocolViolation, error) {
+	contract, ok := Lookup(phase, role)
+	if !ok {
+		return Outcome{}, []ProtocolViolation{{Artifact: string(role), Reason: "no contract registered"}}, nil
+	}
+	if contract.NoOp {
+		return Outcome{OK: true}, nil, nil
+	}
+
+	var violations []ProtocolViolation
+	for _, artifact := range contract.Required {
+		path := artifact.ResolvePath(iterDir)
+		violations = append(violations, validateYAMLArtifactSyntax(artifact.DisplayPath, path, true)...)
+	}
+	for _, artifact := range contract.Optional {
+		path := artifact.ResolvePath(iterDir)
+		violations = append(violations, validateYAMLArtifactSyntax(artifact.DisplayPath, path, false)...)
+	}
+	if len(violations) > 0 {
+		return Outcome{OK: false}, violations, nil
+	}
+	return Validate(phase, role, iterDir)
+}
+
+func validateYAMLArtifactSyntax(displayPath, path string, required bool) []ProtocolViolation {
+	if !isYAMLArtifact(displayPath, path) {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if required {
+				return []ProtocolViolation{{Artifact: displayPath, Reason: missingArtifactReason(displayPath, filepath.Dir(path))}}
+			}
+			return nil
+		}
+		return []ProtocolViolation{{Artifact: displayPath, Reason: fmt.Sprintf("reading %s: %v", displayPath, err)}}
+	}
+	var node yaml.Node
+	if err := yaml.Unmarshal(data, &node); err != nil {
+		return []ProtocolViolation{{Artifact: displayPath, Reason: fmt.Sprintf("%s is unparseable: %v", displayPath, err)}}
+	}
+	return nil
+}
+
+func isYAMLArtifact(displayPath, path string) bool {
+	for _, value := range []string{displayPath, path} {
+		switch strings.ToLower(filepath.Ext(value)) {
+		case ".yaml", ".yml":
+			return true
+		}
+	}
+	return false
+}
+
 func phasePlanArtifactDir(attemptDir string) string {
 	return filepath.Dir(attemptDir)
 }

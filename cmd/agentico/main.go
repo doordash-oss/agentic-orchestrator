@@ -71,6 +71,7 @@ const (
 	launchModeHelp
 	launchModeVersion
 	launchModeUpdate
+	launchModeValidateArtifacts
 )
 
 type launchOptions struct {
@@ -79,9 +80,16 @@ type launchOptions struct {
 	dangerouslySkipPerms bool
 	enabledProviders     []string
 	mode                 launchMode
+	validateArtifacts    validateArtifactsOptions
 	// updateCheck is set when update mode was selected with --check / -n,
 	// requesting a check-only run that never attempts to install.
 	updateCheck bool
+}
+
+type validateArtifactsOptions struct {
+	phase string
+	role  string
+	dir   string
 }
 
 type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string)
@@ -140,6 +148,8 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update
 		// The update path never reaches the TUI launcher below, so it takes
 		// no instance lock, builds no fx container, and reconciles no assets.
 		return update(opts.updateCheck, stdout, stderr)
+	case launchModeValidateArtifacts:
+		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
 	default:
 		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders)
 		return 0
@@ -155,6 +165,10 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	// command.
 	if len(args) > 0 && args[0] == "update" {
 		return parseUpdateArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == "validate-artifacts" {
+		opts.mode = launchModeValidateArtifacts
+		return parseValidateArtifactsArgs(opts, args[1:])
 	}
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -197,15 +211,62 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	return opts, nil
 }
 
+func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOptions, error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--phase":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--phase requires a value")
+			}
+			i++
+			opts.validateArtifacts.phase = args[i]
+		case "--role":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--role requires a value")
+			}
+			i++
+			opts.validateArtifacts.role = args[i]
+		case "--dir":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("--dir requires a value")
+			}
+			i++
+			opts.validateArtifacts.dir = args[i]
+		case "--help", "-h":
+			opts.mode = launchModeHelp
+			return opts, nil
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unknown validate-artifacts flag: %s", arg)
+			}
+			return opts, fmt.Errorf("unknown validate-artifacts argument: %s", arg)
+		}
+	}
+	if strings.TrimSpace(opts.validateArtifacts.phase) == "" {
+		return opts, fmt.Errorf("validate-artifacts requires --phase")
+	}
+	if strings.TrimSpace(opts.validateArtifacts.role) == "" {
+		return opts, fmt.Errorf("validate-artifacts requires --role")
+	}
+	if strings.TrimSpace(opts.validateArtifacts.dir) == "" {
+		return opts, fmt.Errorf("validate-artifacts requires --dir")
+	}
+	return opts, nil
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
 Usage: agentico [flags]
        agentico update [--check|-n]
+       agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
 
 Launches the Bubble Tea TUI dashboard.
 Run 'agentico update' to upgrade the binary, or 'agentico update --check'
 (alias -n) to report the latest available release without installing.
+Run 'agentico validate-artifacts' from agent sessions before phase_complete
+to parse and validate role output artifacts without starting the TUI.
 
 Flags:
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
@@ -219,6 +280,51 @@ Flags:
 
 When no explicit paths are passed, an existing ~/.agentic-workflow/
 runtime parent is used in place so legacy installs remain discoverable.`)
+}
+
+func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Writer) int {
+	phase, err := parseValidateArtifactsPhase(opts.phase)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	out, violations, err := agent.ValidateArtifactsPreflight(phase, agent.Role(strings.TrimSpace(opts.role)), opts.dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "validating artifacts: %v\n", err)
+		return 1
+	}
+	if !out.OK || len(violations) > 0 {
+		reason := agent.JoinProtocolViolations(violations)
+		if reason == "" {
+			reason = "artifact validation failed"
+		}
+		fmt.Fprintln(stderr, reason)
+		return 1
+	}
+	fmt.Fprintln(stdout, "artifacts OK")
+	return 0
+}
+
+func parseValidateArtifactsPhase(value string) (feature.Phase, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	for _, phase := range []feature.Phase{
+		feature.PhaseResearch,
+		feature.PhasePlan,
+		feature.PhaseImplement,
+		feature.PhasePublish,
+		feature.PhaseReview,
+		feature.PhaseKnowledgeBase,
+		feature.PhaseInquire,
+		feature.PhaseDesign,
+	} {
+		if normalized == strings.ToLower(phase.DirName()) || normalized == strings.ToLower(phase.String()) {
+			return phase, nil
+		}
+	}
+	if normalized == strings.ToLower(feature.PhaseFinalReview.String()) {
+		return feature.PhaseReview, nil
+	}
+	return 0, fmt.Errorf("unknown validate-artifacts phase: %s", value)
 }
 
 const providerReadinessTimeout = 5 * time.Second

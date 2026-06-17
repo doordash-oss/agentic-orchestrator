@@ -209,6 +209,10 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 
 	attachCh := sess.AttachCh()
 	statusCh := sess.StatusCh()
+	if registrar, ok := sess.(ports.AttachConsumerRegistrar); ok {
+		unregister := registrar.RegisterAttachConsumer()
+		defer unregister()
+	}
 
 	for {
 		select {

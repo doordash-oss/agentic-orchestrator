@@ -15,9 +15,13 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -90,7 +94,7 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 	resp := TranscriptResponse{
 		APIVersion: APIVersion,
 		Cursor:     CursorDTO{Total: total, Start: offset, End: end},
-		Messages:   transcriptDTOs(messages, offset),
+		Messages:   transcriptDTOs(messages, offset, sess.WorkDir()),
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = responseMeta(revision)
@@ -174,16 +178,20 @@ func pendingControlDTOs(sess ports.SessionView) []ControlRequestDTO {
 	return out
 }
 
-func transcriptDTOs(messages []llm.SDKMessage, start int) []TranscriptMessageDTO {
+func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []TranscriptMessageDTO {
 	out := make([]TranscriptMessageDTO, 0, len(messages))
+	root := ""
+	if len(workDir) > 0 {
+		root = workDir[0]
+	}
 	for i, msg := range messages {
 		index := start + i
 		switch {
 		case msg.Assistant != nil:
-			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content)...)
+			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content, root)...)
 		case msg.User != nil:
 			if msg.LocallyAppended {
-				out = append(out, conversationDTOs(index, "user", msg.User.Message.Content)...)
+				out = append(out, conversationDTOs(index, "user", msg.User.Message.Content, root)...)
 				continue
 			}
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "user", Type: "text", Text: "[redacted]", Redacted: true})
@@ -192,7 +200,7 @@ func transcriptDTOs(messages []llm.SDKMessage, start int) []TranscriptMessageDTO
 		case msg.Result != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "result", Status: msg.Result.Subtype, Redacted: true})
 		case msg.ToolProgress != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "tool_progress", Tool: msg.ToolProgress.ToolName, Redacted: true})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "tool_progress", Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
 		default:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: msg.Type, Redacted: true})
 		}
@@ -200,14 +208,14 @@ func transcriptDTOs(messages []llm.SDKMessage, start int) []TranscriptMessageDTO
 	return out
 }
 
-func conversationDTOs(index int, role string, blocks []llm.ContentBlock) []TranscriptMessageDTO {
+func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string) []TranscriptMessageDTO {
 	var out []TranscriptMessageDTO
 	for _, block := range blocks {
 		switch {
 		case block.IsText():
 			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "text", Text: safeDisplayText(block.Text, 500)})
 		case block.IsToolUse():
-			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "tool_use", Tool: block.Name, Redacted: true})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "tool_use", Tool: block.Name, Redacted: true, FileChange: fileChangeDTOFromToolUse(block, workDir)})
 		case block.IsToolResult():
 			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "tool_result", Redacted: true})
 		case block.IsThinking():
@@ -218,6 +226,195 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock) []Trans
 		out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "message", Redacted: true})
 	}
 	return out
+}
+
+func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChangeDTO {
+	if !block.IsToolUse() {
+		return nil
+	}
+	input := transcriptJSONFields(block.Input)
+	switch block.Name {
+	case "Edit", "MultiEdit", "Write":
+		path := firstTranscriptString(input, "file_path", "path", "target_file")
+		if path == "" {
+			return nil
+		}
+		op := "update"
+		if block.Name == "Write" && strings.TrimSpace(firstTranscriptString(input, "old_string")) == "" {
+			op = "write"
+		}
+		detail := transcriptToolUseFileChangeDetail(block.Name, input)
+		if detail == "" {
+			detail = "Captured from tool usage."
+		}
+		return &FileChangeDTO{
+			Path:      safeTranscriptPath(workDir, path),
+			Operation: op,
+			Detail:    safeDisplayText(truncateTranscriptFileChangeDetail(detail), 2000),
+		}
+	case "Delete":
+		path := firstTranscriptString(input, "file_path", "path")
+		if path == "" {
+			return nil
+		}
+		return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: "delete", Detail: "Captured from tool usage."}
+	case "Move", "Rename":
+		newPath := firstTranscriptString(input, "new_path", "destination_path", "to", "path")
+		if newPath == "" {
+			return nil
+		}
+		return &FileChangeDTO{
+			Path:      safeTranscriptPath(workDir, newPath),
+			OldPath:   safeTranscriptPath(workDir, firstTranscriptString(input, "old_path", "source_path", "from")),
+			Operation: "rename",
+			Detail:    "Captured from tool usage.",
+		}
+	default:
+		return nil
+	}
+}
+
+func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *FileChangeDTO {
+	if progress == nil || (progress.ToolName != "Write" && progress.ToolName != "Edit") {
+		return nil
+	}
+	path := extractTranscriptFilePathFromProgress(progress.Data)
+	if path == "" {
+		return nil
+	}
+	detail := safeDisplayText(truncateTranscriptFileChangeDetail(progress.Data), 2000)
+	if detail == "" {
+		detail = "Captured from tool activity."
+	}
+	return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: "update", Detail: detail}
+}
+
+func transcriptToolUseFileChangeDetail(toolName string, fields map[string]interface{}) string {
+	oldString := firstTranscriptString(fields, "old_string", "oldText")
+	newString := firstTranscriptString(fields, "new_string", "newText", "content")
+	if oldString == "" && newString == "" && toolName == "MultiEdit" {
+		return transcriptMultiEditDetail(fields)
+	}
+	switch toolName {
+	case "Edit", "MultiEdit":
+		if oldString == "" && newString == "" {
+			return ""
+		}
+		return formatTranscriptReplacement(oldString, newString)
+	case "Write":
+		if newString == "" {
+			return ""
+		}
+		return "+ " + newString
+	default:
+		return ""
+	}
+}
+
+func transcriptMultiEditDetail(fields map[string]interface{}) string {
+	rawEdits, ok := fields["edits"].([]interface{})
+	if !ok {
+		return ""
+	}
+	parts := make([]string, 0, len(rawEdits))
+	for _, raw := range rawEdits {
+		edit, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		part := formatTranscriptReplacement(firstTranscriptString(edit, "old_string", "oldText"), firstTranscriptString(edit, "new_string", "newText"))
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func formatTranscriptReplacement(oldString, newString string) string {
+	var lines []string
+	if strings.TrimSpace(oldString) != "" {
+		for _, line := range strings.Split(strings.TrimSuffix(oldString, "\n"), "\n") {
+			lines = append(lines, "- "+line)
+		}
+	}
+	if strings.TrimSpace(newString) != "" {
+		for _, line := range strings.Split(strings.TrimSuffix(newString, "\n"), "\n") {
+			lines = append(lines, "+ "+line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func truncateTranscriptFileChangeDetail(detail string) string {
+	detail = strings.TrimSpace(strings.ReplaceAll(detail, "\r\n", "\n"))
+	if detail == "" {
+		return ""
+	}
+	const (
+		maxChars = 2000
+		maxLines = 24
+	)
+	if len(detail) > maxChars {
+		detail = strings.TrimSpace(detail[:maxChars]) + "\n..."
+	}
+	lines := strings.Split(detail, "\n")
+	if len(lines) > maxLines {
+		lines = append(lines[:maxLines], "...")
+	}
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func transcriptJSONFields(raw json.RawMessage) map[string]interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil
+	}
+	return fields
+}
+
+func firstTranscriptString(fields map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		value, ok := fields[key]
+		if !ok {
+			continue
+		}
+		if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+func safeTranscriptPath(workDir, filePath string) string {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return ""
+	}
+	if !filepath.IsAbs(filePath) {
+		return filepath.Clean(filePath)
+	}
+	if workDir != "" {
+		if rel, err := filepath.Rel(workDir, filePath); err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+			return filepath.Clean(rel)
+		}
+	}
+	return filepath.Base(filePath)
+}
+
+var transcriptProgressPathRe = regexp.MustCompile(`(?:^|[\s('"])((?:/|\.?/)?[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)+|(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+)`)
+
+func extractTranscriptFilePathFromProgress(data string) string {
+	matches := transcriptProgressPathRe.FindStringSubmatch(data)
+	if len(matches) < 2 {
+		return ""
+	}
+	return strings.Trim(matches[1], "\"'.,:;)")
 }
 
 func fileExists(path string) bool {

@@ -497,6 +497,9 @@ func TestStartRefactorCycle_AllowsCodeReadyFeature(t *testing.T) {
 		t.Fatalf("RepoCycles[repo-a] = %+v, want running refactor cycle", rc)
 	}
 	promptPath := filepath.Join(store.BaseDir, f.ID, "runs", "run-001", "refactor-1", "refactor-prompt.md")
+	if rc.PlanPath != promptPath {
+		t.Fatalf("RepoCycles[repo-a].PlanPath = %q, want %q", rc.PlanPath, promptPath)
+	}
 	if _, err := os.Stat(promptPath); err != nil {
 		t.Fatalf("refactor prompt artifact was not staged at %s: %v", promptPath, err)
 	}

@@ -4522,6 +4522,9 @@ func buildAttachFileEvents(msgs []llm.SDKMessage, baseMessageCount int) []attach
 				appendChange(change)
 			}
 		}
+		for _, change := range fileChangesFromSDKFileChanges(msg.FileChanges) {
+			appendChange(change)
+		}
 	}
 
 	if len(events) > attachViewportFileLimit {
@@ -4665,6 +4668,36 @@ func toolProgressFailed(data string) bool {
 		return line == "failed" || strings.HasPrefix(line, "status: failed")
 	}
 	return false
+}
+
+func fileChangesFromSDKFileChanges(changes []llm.FileChangeEvent) []attachFileChange {
+	if len(changes) == 0 {
+		return nil
+	}
+	out := make([]attachFileChange, 0, len(changes))
+	for _, change := range changes {
+		if strings.TrimSpace(change.Path) == "" {
+			continue
+		}
+		op := strings.TrimSpace(change.Operation)
+		if op == "" {
+			op = "update"
+		}
+		detail := strings.TrimSpace(change.Detail)
+		if detail == "" {
+			detail = "Captured from tool activity."
+		}
+		out = append(out, attachFileChange{
+			Path:         change.Path,
+			OldPath:      change.OldPath,
+			Operation:    op,
+			Detail:       detail,
+			AddedLines:   change.AddedLines,
+			RemovedLines: change.RemovedLines,
+			HasDiffPatch: change.HasDiffPatch,
+		})
+	}
+	return out
 }
 
 func renderFileEventDetail(detail string) string {

@@ -39,6 +39,7 @@ type SDKMessage struct {
 	RateLimit      *RateLimitMessage       `json:"-"`
 	Compact        *CompactBoundaryMessage `json:"-"`
 	FileReads      []FileReadEvent         `json:"-"`
+	FileChanges    []FileChangeEvent       `json:"-"`
 
 	// Subagent (Task tool) lifecycle messages. Emitted by Claude with
 	// Type="system" and Subtype in {"task_started","task_progress",
@@ -654,6 +655,19 @@ type FileReadEvent struct {
 	Source         string `json:"source,omitempty"`
 	ProviderItemID string `json:"provider_item_id,omitempty"`
 	ExitCode       *int   `json:"exit_code,omitempty"`
+}
+
+// FileChangeEvent is a provider-neutral signal for a concrete file mutation.
+// API transcript reconstruction uses this to preserve attach-view file cards
+// without exposing raw provider tool inputs.
+type FileChangeEvent struct {
+	Path         string
+	OldPath      string
+	Operation    string
+	Detail       string
+	AddedLines   int
+	RemovedLines int
+	HasDiffPatch bool
 }
 
 // HookStartedMessage is emitted when a hook begins execution.

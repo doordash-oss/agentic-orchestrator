@@ -764,10 +764,14 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 				// Only restart one refactor per feature — one at a time.
 				continue
 			}
-			data, _ := os.ReadFile(c.planPath)
+			prompt := f.RefactorPrompt
+			if prompt == "" && c.planPath != "" {
+				data, _ := os.ReadFile(c.planPath)
+				prompt = extractRefactorPromptFromPlan(string(data))
+			}
 			refactor = &RefactorRestart{
 				RepoName: c.repoName,
-				Prompt:   extractRefactorPromptFromPlan(string(data)),
+				Prompt:   prompt,
 			}
 		default:
 			data, _ := os.ReadFile(c.planPath)

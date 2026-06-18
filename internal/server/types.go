@@ -561,13 +561,24 @@ type TranscriptResponse struct {
 }
 
 type TranscriptMessageDTO struct {
-	Index    int    `json:"index"`
-	Role     string `json:"role"`
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	Tool     string `json:"tool,omitempty"`
-	Status   string `json:"status,omitempty"`
-	Redacted bool   `json:"redacted,omitempty"`
+	Index      int            `json:"index"`
+	Role       string         `json:"role"`
+	Type       string         `json:"type"`
+	Text       string         `json:"text,omitempty"`
+	Tool       string         `json:"tool,omitempty"`
+	Status     string         `json:"status,omitempty"`
+	Redacted   bool           `json:"redacted,omitempty"`
+	FileChange *FileChangeDTO `json:"file_change,omitempty"`
+}
+
+type FileChangeDTO struct {
+	Path         string `json:"path,omitempty"`
+	OldPath      string `json:"old_path,omitempty"`
+	Operation    string `json:"operation,omitempty"`
+	Detail       string `json:"detail,omitempty"`
+	AddedLines   int    `json:"added_lines,omitempty"`
+	RemovedLines int    `json:"removed_lines,omitempty"`
+	HasDiffPatch bool   `json:"has_diff_patch,omitempty"`
 }
 
 type ReviewCommentsFetchResponse struct {

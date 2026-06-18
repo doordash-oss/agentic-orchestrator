@@ -262,7 +262,7 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 		for _, req := range sess.PendingControlRequests() {
 			resp.Attention = append(resp.Attention, controlRequestDTO(sess, req))
 		}
-		resp.Transcript = transcriptDTOs(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), 0)
+		resp.Transcript = transcriptDTOs(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), 0, sess.WorkDir())
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = responseMeta(revision)

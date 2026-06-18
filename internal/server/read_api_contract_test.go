@@ -897,6 +897,47 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 	}
 }
 
+func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	msgs := []llm.SDKMessage{
+		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: "assistant",
+			Content: []llm.ContentBlock{{
+				Type:  "tool_use",
+				Name:  "Write",
+				Input: json.RawMessage(`{"file_path":"docs/provider-notes.md","content":"# Provider notes\n\nUpdated for all providers.\n"}`),
+			}},
+		}}},
+		{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{
+			Type:     "tool_progress",
+			ToolName: "Bash",
+			Data:     "private-token output must stay redacted",
+		}},
+	}
+	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: "codex",
+		messages: msgs,
+	}}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
+	raw := mustMarshalJSON(t, body)
+	for _, want := range []string{`"file_change"`, `"path":"docs/provider-notes.md"`, `"operation":"write"`, `"+ # Provider notes`} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("transcript missing sanitized file change %q in %s", want, raw)
+		}
+	}
+	if strings.Contains(raw, "private-token") {
+		t.Fatalf("transcript leaked redacted tool progress output: %s", raw)
+	}
+}
+
 func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

@@ -366,6 +366,41 @@ func TestOrchestrator_CollectAndClearRepoCycleRestarts_ReadsPlansAndClears(t *te
 	}
 }
 
+func TestOrchestrator_CollectAndClearRepoCycleRestarts_UsesPersistedRefactorPromptWhenPlanPathMissing(t *testing.T) {
+	f := &feature.Feature{
+		ID:             "feat-1",
+		Status:         feature.StatusInterrupted,
+		RefactorPrompt: "keep restart prompt",
+		RepoCycles: map[string]*feature.RepoCycleState{
+			"repo-b": {Type: feature.CycleRefactor, Status: feature.RepoCycleInterrupted},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+	}, orchestrator.Hooks{})
+
+	restarts, refactor, err := o.CollectAndClearRepoCycleRestarts("feat-1")
+	if err != nil {
+		t.Fatalf("CollectAndClearRepoCycleRestarts: %v", err)
+	}
+	if len(restarts) != 0 {
+		t.Fatalf("expected no non-refactor restarts, got %d", len(restarts))
+	}
+	if refactor == nil {
+		t.Fatal("expected refactor restart, got nil")
+	}
+	if refactor.RepoName != "repo-b" {
+		t.Errorf("refactor RepoName = %q, want repo-b", refactor.RepoName)
+	}
+	if refactor.Prompt != "keep restart prompt" {
+		t.Errorf("refactor Prompt = %q, want %q", refactor.Prompt, "keep restart prompt")
+	}
+}
+
 func TestOrchestrator_CollectAndClearRepoCycleRestarts_SkipsTweakCycles(t *testing.T) {
 	f := &feature.Feature{
 		ID:     "feat-1",

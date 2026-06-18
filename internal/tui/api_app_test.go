@@ -2139,6 +2139,61 @@ func TestAPIAppModelChatRefreshRendersResultErrorAsRedResponse(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("yo")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	started := model.(APIAppModel)
+
+	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{
+			SessionSummaryDTO: server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "WaitingHelp"},
+			TranscriptCursor:  server.CursorDTO{Total: 1, Start: 0, End: 1},
+		}},
+		Transcript: &server.TranscriptResponse{
+			Cursor: server.CursorDTO{Total: 1, Start: 0, End: 1},
+			Messages: []server.TranscriptMessageDTO{
+				{Index: 0, Role: "assistant", Type: "text", Text: "yo! What's up?"},
+			},
+		},
+	}})
+	ready := model.(APIAppModel)
+
+	if ready.chat.responding {
+		t.Fatal("chat remained responding after WaitingHelp snapshot")
+	}
+	view := stripANSI(ready.View().Content)
+	if strings.Contains(view, "Thinking") || !strings.Contains(view, "[enter] Send") {
+		t.Fatalf("chat view did not return to send mode:\n%s", view)
+	}
+
+	ready.chat.input.SetValue("take two")
+	model, cmd = ready.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want follow-up send command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	if got := client.helpRequests; len(got) != 1 || got[0].SessionID != chatSessionID || got[0].Message != "take two" {
+		t.Fatalf("SendHelp requests = %+v, want chat follow-up message", got)
+	}
+}
+
 func TestAPIAppModelCreateFeatureUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
@@ -3232,6 +3287,45 @@ func TestAPIAttachSessionRendersRestoredLocalUserTranscriptAsYou(t *testing.T) {
 	for _, want := range []string{"[you] PostgreSQL", "Active work"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("reattached API transcript missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestAPIAttachSessionRendersFileChangeTranscriptRows(t *testing.T) {
+	t.Parallel()
+
+	var transcript server.TranscriptResponse
+	if err := json.Unmarshal([]byte(`{
+		"messages": [{
+			"index": 0,
+			"role": "assistant",
+			"type": "tool_use",
+			"tool": "Write",
+			"redacted": true,
+			"file_change": {
+				"path": "docs/provider-notes.md",
+				"operation": "write",
+				"detail": "+ # Provider notes\n+ \n+ Updated for all providers."
+			}
+		}]
+	}`), &transcript); err != nil {
+		t.Fatalf("unmarshal transcript: %v", err)
+	}
+	sess := newAPIAttachSession(nil, server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        "sess-1",
+			FeatureID: "active",
+			Phase:     "implement",
+			Kind:      "phase",
+			Status:    "Running",
+		},
+	}, transcript, nil)
+
+	m := attachModelFromSession(sess, 120, 40)
+	view := stripANSI(m.View())
+	for _, want := range []string{"Write(docs/provider-notes.md)", "+ # Provider notes", "+ Updated for all providers."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("reattached API transcript missing file change %q in:\n%s", want, view)
 		}
 	}
 }

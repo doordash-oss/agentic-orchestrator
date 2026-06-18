@@ -121,6 +121,9 @@ func (o *Orchestrator) startFeatureRefactor(
 	// state was lost.
 	promptPath := filepath.Join(stagedArtifactDir, "refactor-prompt.md")
 	_ = os.WriteFile(promptPath, []byte("# Refactor\n\n"+prompt+"\n"), 0o644)
+	for i := range f.Repos {
+		_ = o.deps.Lifecycle.SetRepoCyclePlanPath(featureID, f.Repos[i].Name, promptPath)
+	}
 
 	cfg := agent.RefactorFeatureLoopConfig{
 		Feature:                    f,

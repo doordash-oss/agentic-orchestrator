@@ -1844,6 +1844,32 @@ func (m APIAppModel) apiDashboardWorktreePath(featureSlug, repoName string) stri
 	return candidate
 }
 
+func (m APIAppModel) apiSessionWorkDir(featureID, repoName string) string {
+	summary, ok := m.apiFeatureSummary(featureID)
+	if !ok {
+		return ""
+	}
+	if repoName == "" && len(summary.Repos) == 1 {
+		repoName = summary.Repos[0]
+	}
+	if repoName == "" {
+		return ""
+	}
+	return m.apiDashboardWorktreePath(summary.Slug, repoName)
+}
+
+func (m APIAppModel) apiFeatureSummary(featureID string) (server.FeatureSummary, bool) {
+	for _, summary := range m.featureList.Features {
+		if summary.ID == featureID {
+			return summary, true
+		}
+	}
+	if detail, ok := m.featureDetails[featureID]; ok && detail.Feature.ID != "" {
+		return detail.Feature.FeatureSummary, true
+	}
+	return server.FeatureSummary{}, false
+}
+
 func (m APIAppModel) applyAPIAttention(f *feature.Feature) {
 	if f == nil {
 		return
@@ -1924,6 +1950,7 @@ type apiSessionView struct {
 	iteration             int
 	provider              string
 	model                 string
+	workDir               string
 	initialPrompt         string
 	contextPct            int
 	log                   ports.MessageLog
@@ -2061,7 +2088,7 @@ func (s *apiSessionView) StartedAt() time.Time         { return s.startedAt }
 func (s *apiSessionView) InitialPrompt() string        { return s.initialPrompt }
 func (s *apiSessionView) ProviderName() string         { return s.provider }
 func (s *apiSessionView) Model() string                { return s.model }
-func (s *apiSessionView) WorkDir() string              { return "" }
+func (s *apiSessionView) WorkDir() string              { return s.workDir }
 func (s *apiSessionView) MessageLog() ports.MessageLog { return s.log }
 func (s *apiSessionView) Cost() *llm.ResultMessage     { return s.cost }
 func (s *apiSessionView) LatestUsage() *llm.Usage      { return nil }
@@ -2216,7 +2243,7 @@ func (m APIAppModel) apiAttachTabsForFeature(featureID string) []repoTab {
 		if len(controls) == 0 {
 			controls = detail.PendingControls
 		}
-		sess := newAPIAttachSession(m.client, detail, transcript, controls)
+		sess := newAPIAttachSession(m.client, detail, transcript, controls, m.apiSessionWorkDir(featureID, detail.Repo))
 		repoName := firstNonEmpty(sess.RepoName(), sess.Label(), sess.ID())
 		if repoName == "" {
 			repoName = sessionID
@@ -2287,7 +2314,7 @@ func apiAttachTabStatus(sess session.SessionView) presentationStatus {
 	}
 }
 
-func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, transcript server.TranscriptResponse, controls []server.ControlRequestDTO) *apiSessionView {
+func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, transcript server.TranscriptResponse, controls []server.ControlRequestDTO, workDir ...string) *apiSessionView {
 	log := session.NewMessageLog()
 	lastIndex := -1
 	lastRows := map[string]string{}
@@ -2327,6 +2354,7 @@ func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, trans
 		iteration:             detail.Iteration,
 		provider:              detail.Provider,
 		model:                 detail.Model,
+		workDir:               firstNonEmpty(workDir...),
 		initialPrompt:         detail.InitialPrompt,
 		contextPct:            detail.ContextPct,
 		log:                   log,
@@ -2493,7 +2521,7 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 			return llm.SDKMessage{}, false
 		}
 		if row.Role == "user" {
-			return llm.SDKMessage{
+			return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 				Type:            "user",
 				LocallyAppended: !row.Redacted,
 				User: &llm.UserMessage{
@@ -2504,9 +2532,9 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 						Content: []llm.ContentBlock{{Type: "text", Text: text}},
 					},
 				},
-			}, true
+			}, row), true
 		}
-		return llm.SDKMessage{
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 			Type: "assistant",
 			Assistant: &llm.AssistantMessage{
 				Type:      "assistant",
@@ -2516,12 +2544,12 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 					Content: []llm.ContentBlock{{Type: "text", Text: text}},
 				},
 			},
-		}, true
+		}, row), true
 	case "tool_use":
 		if row.Tool == "" {
 			return llm.SDKMessage{}, false
 		}
-		return llm.SDKMessage{
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 			Type: "assistant",
 			Assistant: &llm.AssistantMessage{
 				Type:      "assistant",
@@ -2531,12 +2559,12 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 					Content: []llm.ContentBlock{{Type: "tool_use", Name: row.Tool}},
 				},
 			},
-		}, true
+		}, row), true
 	case "tool_progress":
 		if row.Tool == "" {
 			return llm.SDKMessage{}, false
 		}
-		return llm.SDKMessage{
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 			Type: "tool_progress",
 			ToolProgress: &llm.ToolProgressMessage{
 				Type:      "tool_progress",
@@ -2544,29 +2572,49 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 				Data:      row.Text,
 				SessionID: sessionID,
 			},
-		}, true
+		}, row), true
 	case "result":
 		subtype := firstNonEmpty(row.Status, "success")
-		return llm.SDKMessage{
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 			Type:   "result",
 			Result: &llm.ResultMessage{Type: "result", Subtype: subtype, SessionID: sessionID},
-		}, true
+		}, row), true
 	case "status":
-		return llm.SDKMessage{
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 			Type:   "status",
 			Status: &llm.StatusMessage{Type: "status", SessionID: sessionID, Message: row.Text},
-		}, true
+		}, row), true
 	default:
 		return llm.SDKMessage{}, false
 	}
 }
 
 func apiTranscriptRowKey(row server.TranscriptMessageDTO) string {
-	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted)
+	fileChangeKey := ""
+	if row.FileChange != nil {
+		fileChangeKey = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00%t", row.FileChange.Path, row.FileChange.OldPath, row.FileChange.Operation, row.FileChange.Detail, row.FileChange.AddedLines, row.FileChange.RemovedLines, row.FileChange.HasDiffPatch)
+	}
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, fileChangeKey)
 }
 
 func apiTranscriptRowSignature(row server.TranscriptMessageDTO) string {
 	return apiTranscriptRowKey(row) + "\x00" + row.Text
+}
+
+func apiTranscriptMessageWithFileChange(msg llm.SDKMessage, row server.TranscriptMessageDTO) llm.SDKMessage {
+	if row.FileChange == nil || strings.TrimSpace(row.FileChange.Path) == "" {
+		return msg
+	}
+	msg.FileChanges = []llm.FileChangeEvent{{
+		Path:         row.FileChange.Path,
+		OldPath:      row.FileChange.OldPath,
+		Operation:    row.FileChange.Operation,
+		Detail:       row.FileChange.Detail,
+		AddedLines:   row.FileChange.AddedLines,
+		RemovedLines: row.FileChange.RemovedLines,
+		HasDiffPatch: row.FileChange.HasDiffPatch,
+	}}
+	return msg
 }
 
 func apiVisibleUserTranscriptRow(row server.TranscriptMessageDTO) bool {
@@ -2669,12 +2717,34 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 	}
 	detail := snapshot.Session.Session
 	newMessages := active.applyAPISessionSnapshot(detail, snapshot.Transcript, detail.PendingControls)
+	if m.chat.responding && apiChatSnapshotWaitingForNextMessage(detail, newMessages) {
+		newMessages = append(newMessages, llm.SDKMessage{
+			Type: "result",
+			Result: &llm.ResultMessage{
+				Type:      "result",
+				Subtype:   "success",
+				SessionID: active.ID(),
+			},
+		})
+	}
 	if len(newMessages) == 0 {
 		return m, nil
 	}
 	updated, cmd := m.chat.Update(chatMsgsMsg{messages: newMessages})
 	m.chat = updated
 	return m, cmd
+}
+
+func apiChatSnapshotWaitingForNextMessage(detail server.SessionDetailDTO, messages []llm.SDKMessage) bool {
+	if apiSessionStatus(detail.Status) != ports.SessionWaitingHelp || len(detail.PendingControls) > 0 {
+		return false
+	}
+	for _, msg := range messages {
+		if msg.Result != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO, transcript *server.TranscriptResponse, controls []server.ControlRequestDTO) []llm.SDKMessage {

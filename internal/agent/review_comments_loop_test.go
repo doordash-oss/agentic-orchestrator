@@ -851,6 +851,11 @@ func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
 	}, "/state/runs/run-001/review-comments-1/review-resolutions.json")
 
 	for _, want := range []string{
+		"## Cycle Communication Contract",
+		"`progress.md`: `{phase_dir}/progress.md`",
+		"`verification-report.yaml`: `{iteration_dir}/verification-report.yaml`",
+		"`phase_complete`: `{iteration_dir}/phase_complete`",
+		"Do not place `progress.md` under `{iteration_dir}`",
 		"## Repo: `api`",
 		"## Repo: `web`",
 		"`api` — PR https://github.com/o/api/pull/1 — 1 comment",
@@ -871,6 +876,26 @@ func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
 	// Sorted output: api before web.
 	if idxAPI, idxWeb := strings.Index(plan, "## Repo: `api`"), strings.Index(plan, "## Repo: `web`"); idxAPI >= 0 && idxWeb >= 0 && idxAPI > idxWeb {
 		t.Errorf("api section should appear before web; api=%d web=%d", idxAPI, idxWeb)
+	}
+}
+
+func TestReviewCommentsSkillDocumentsStandardImplementHandoff(t *testing.T) {
+	data, err := os.ReadFile(repoRootPath(t, "skills", "review-comments", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read review-comments skill: %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{
+		"`progress.md`: `{phase_dir}/progress.md`",
+		"`verification-report.yaml`: `{iteration_dir}/verification-report.yaml`",
+		"`phase_complete`: `{iteration_dir}/phase_complete`",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/review-comments/SKILL.md missing %q", want)
+		}
+	}
+	if strings.Contains(content, "at the cycle's iteration artifact dir") {
+		t.Fatalf("skills/review-comments/SKILL.md still says the handoff is at the iteration artifact dir")
 	}
 }
 

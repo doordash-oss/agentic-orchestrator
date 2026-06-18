@@ -443,6 +443,8 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 	b.WriteString("## Overview\n\n")
 	b.WriteString(fmt.Sprintf("This cycle aggregates %d unaddressed PR review comment(s) across %d repo(s) into one work list. The cross-PR aggregation is intentional: a single Claude session iterates over every comment, whether the fix is in one repo or several. Per-repo file edits should be dispatched via Task sub-agents prompt-scoped to that repo's worktree.\n\n", totalComments, len(sorted)))
 
+	b.WriteString(standardImplementCycleCommunicationContract())
+
 	b.WriteString("## Repos in this cycle\n\n")
 	for _, t := range sorted {
 		b.WriteString(fmt.Sprintf("- `%s` — PR %s — %d comment(s)", t.RepoName, t.PRURL, len(t.Comments)))

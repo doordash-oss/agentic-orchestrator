@@ -3634,6 +3634,83 @@ func TestAPIAttachSessionRendersFileChangeTranscriptRows(t *testing.T) {
 	}
 }
 
+func TestAPIAttachSessionRendersTaskLifecycleAndDelegationRows(t *testing.T) {
+	t.Parallel()
+
+	var transcript server.TranscriptResponse
+	if err := json.Unmarshal([]byte(`{
+		"api_version": "v1",
+		"cursor": {"total": 4, "start": 0, "end": 4},
+		"messages": [{
+			"index": 0,
+			"role": "assistant",
+			"type": "tool_use",
+			"tool": "Agent",
+			"redacted": true,
+			"tool_call": {
+				"summary": "Explore KB completion handler",
+				"prompt": "Inspect KB docs and return the impacted categories."
+			}
+		}, {
+			"index": 1,
+			"role": "system",
+			"type": "task_started",
+			"redacted": true,
+			"task": {
+				"id": "task-1",
+				"description": "inspect provider docs",
+				"task_type": "local_agent",
+				"prompt": "Read the provider docs and report every attach-view metadata gap."
+			}
+		}, {
+			"index": 2,
+			"role": "system",
+			"type": "task_progress",
+			"redacted": true,
+			"task": {
+				"id": "task-1",
+				"description": "inspect provider docs",
+				"last_tool_name": "Read"
+			}
+		}, {
+			"index": 3,
+			"role": "system",
+			"type": "task_notification",
+			"redacted": true,
+			"task": {
+				"id": "task-1",
+				"status": "completed",
+				"summary": "found API transcript gaps"
+			}
+		}]
+	}`), &transcript); err != nil {
+		t.Fatalf("unmarshal transcript: %v", err)
+	}
+	sess := newAPIAttachSession(nil, server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        "sess-1",
+			FeatureID: "active",
+			Phase:     "implement",
+			Kind:      "phase",
+			Status:    "Running",
+		},
+	}, transcript, nil)
+
+	view := stripANSI(renderAttachMessages(sess.MessageLog().Messages(), filterAll, 120, nil))
+	for _, want := range []string{
+		"Agent: Explore KB completion handler",
+		"Inspect KB docs and return the impacted categories.",
+		"Task started: inspect provider docs",
+		"Read the provider docs and report every attach-view metadata gap.",
+		"Task progress: inspect provider docs via Read",
+		"Task completed: found API transcript gaps",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("reattached API transcript missing task/delegation row %q in:\n%s", want, view)
+		}
+	}
+}
+
 func TestAPIAttachRefreshDoesNotDuplicateRestoredLocalUserEcho(t *testing.T) {
 	t.Parallel()
 

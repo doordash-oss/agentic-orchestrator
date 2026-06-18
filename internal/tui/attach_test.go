@@ -738,6 +738,78 @@ func TestRenderAttachMessages_ControlRequestCanUseToolRendersAsToolUse(t *testin
 	}
 }
 
+func TestRenderAttachMessages_TaskLifecycleRowsIncludePromptBox(t *testing.T) {
+	msgs := []llm.SDKMessage{
+		{
+			Type:    "system",
+			Subtype: "task_started",
+			TaskStarted: &llm.TaskStartedMessage{
+				Description: "inspect provider docs",
+				TaskType:    "local_agent",
+				Prompt:      "Read the provider docs and report every attach-view metadata gap.",
+			},
+		},
+		{
+			Type:    "system",
+			Subtype: "task_progress",
+			TaskProgress: &llm.TaskProgressMessage{
+				Description:  "inspect provider docs",
+				LastToolName: "Read",
+			},
+		},
+		{
+			Type:    "system",
+			Subtype: "task_notification",
+			TaskNotification: &llm.TaskNotificationMessage{
+				Status:  "completed",
+				Summary: "found API transcript gaps",
+			},
+		},
+	}
+
+	output := ansiRegex.ReplaceAllString(renderAttachMessages(msgs, filterAll, 120, nil), "")
+	for _, want := range []string{
+		"Task started: inspect provider docs",
+		"sub-agent prompt",
+		"Read the provider docs and report every attach-view metadata gap.",
+		"Task progress: inspect provider docs via Read",
+		"Task completed: found API transcript gaps",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected task lifecycle rendering to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderAttachMessages_AgentToolUseShowsDelegationSummaryAndPrompt(t *testing.T) {
+	msgs := []llm.SDKMessage{
+		{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{
+				Message: llm.ConversationMsg{
+					Role: "assistant",
+					Content: []llm.ContentBlock{{
+						Type:  "tool_use",
+						Name:  "Agent",
+						Input: json.RawMessage(`{"description":"Explore KB completion handler","prompt":"Inspect KB docs and return the impacted categories."}`),
+					}},
+				},
+			},
+		},
+	}
+
+	output := ansiRegex.ReplaceAllString(renderAttachMessages(msgs, filterAll, 120, nil), "")
+	for _, want := range []string{
+		"Agent: Explore KB completion handler",
+		"sub-agent prompt",
+		"Inspect KB docs and return the impacted categories.",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected Agent tool rendering to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
 func TestRenderAttachMessages_DedupesConsecutiveAssistantQuestion(t *testing.T) {
 	question := "What exact version should Agentic be bumped to?"
 	msgs := []llm.SDKMessage{

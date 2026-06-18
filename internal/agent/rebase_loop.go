@@ -445,7 +445,9 @@ func rebaseExitCriteria(_ *feature.Feature) string {
 // dispatches per-repo work via the rebase skill prompt.
 func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 	if len(repos) == 0 {
-		return "# Rebase Cycle Plan\n\nNo behind repos detected. This file is empty.\n"
+		return "# Rebase Cycle Plan\n\n" +
+			standardImplementCycleCommunicationContract() +
+			"No behind repos detected. This file is empty.\n"
 	}
 
 	// Sort by repo name for deterministic output.
@@ -457,6 +459,7 @@ func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 	out += "behind its base; rebase the branch, resolve any conflicts, run the\n"
 	out += "project verification commands, and (when publishable) force-push the\n"
 	out += "rebased branch to its remote PR branch.\n\n"
+	out += standardImplementCycleCommunicationContract()
 	out += "## Repos in this cycle\n\n"
 	for _, r := range sorted {
 		out += fmt.Sprintf("- `%s` — base `%s`", r.RepoName, r.RebaseTarget)
@@ -483,6 +486,16 @@ func BuildMultiRepoRebasePlan(repos []RebaseRepoTarget) string {
 		out += "\n"
 	}
 	return out
+}
+
+func standardImplementCycleCommunicationContract() string {
+	return "## Cycle Communication Contract\n\n" +
+		"This cycle is executed by the generic implementer role. Use the named output roots from the system prompt and the standard implement handoff artifact layout:\n\n" +
+		"- `progress.md`: `{phase_dir}/progress.md`\n" +
+		"- `verification-report.yaml`: `{iteration_dir}/verification-report.yaml`\n" +
+		"- `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.\n" +
+		"- `phase_complete`: `{iteration_dir}/phase_complete`\n\n" +
+		"Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.\n\n"
 }
 
 // stripFirstHeading drops the first H1 ("# ...") heading line from md.

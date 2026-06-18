@@ -60,6 +60,12 @@ The plan-less contract has no `cross-repo` items in the rebase cycle — verific
 
 Emit `progress.md` and `verification-report.yaml` per the standard handoff contract (see [implement skill](../implement/SKILL.md) for the exact schema). Cycle-specific guidance:
 
+- Standard handoff paths:
+  - `progress.md`: `{phase_dir}/progress.md`
+  - `verification-report.yaml`: `{iteration_dir}/verification-report.yaml`
+  - `need-user-input.yaml`: `{iteration_dir}/need-user-input.yaml` only when the iteration state is `NEED_USER_INPUT`.
+  - `phase_complete`: `{iteration_dir}/phase_complete`
+- Do not place `progress.md` under `{iteration_dir}`; the harness reads the phase-level progress file before routing the next iteration.
 - `## Iteration Handoff → Completed this iteration` — one bullet per repo rebased (e.g., `- api: rebased onto origin/main, force-pushed`).
 - `## Iteration Handoff → Remaining from the plan` — repos NOT yet rebased (empty when every behind repo is done).
 - `## Verification Report → Summary` — must agree with the YAML tally.
@@ -87,4 +93,4 @@ Emit `progress.md` and `verification-report.yaml` per the standard handoff contr
 - `git status` is clean in each rebased worktree (no rebase in progress, no conflict markers).
 - The remote PR branches reflect the rebased history (publishable repos only).
 - The testing contract's per-repo baseline rows passed in `verification-report.yaml`.
-- One handoff (`progress.md` + `verification-report.yaml`) at the cycle's iteration artifact dir — no per-repo subdir.
+- One standard handoff at the cycle artifact root/iteration pair: `progress.md` at `{phase_dir}/progress.md`, `verification-report.yaml` at `{iteration_dir}/verification-report.yaml` — no per-repo subdir.

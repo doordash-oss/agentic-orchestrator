@@ -938,6 +938,78 @@ func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
 	}
 }
 
+func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	msgs := []llm.SDKMessage{
+		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: "assistant",
+			Content: []llm.ContentBlock{{
+				Type:  "tool_use",
+				Name:  "Agent",
+				Input: json.RawMessage(`{"description":"Explore KB completion handler","prompt":"Inspect KB docs and return impacted categories with private-token omitted."}`),
+			}},
+		}}},
+		{Type: "system", Subtype: "task_started", TaskStarted: &llm.TaskStartedMessage{
+			Type:        "system",
+			Subtype:     "task_started",
+			TaskID:      "task-1",
+			Description: "inspect provider docs",
+			TaskType:    "local_agent",
+			Prompt:      "Read the provider docs and report every attach-view metadata gap with private-token omitted.",
+		}},
+		{Type: "system", Subtype: "task_progress", TaskProgress: &llm.TaskProgressMessage{
+			Type:         "system",
+			Subtype:      "task_progress",
+			TaskID:       "task-1",
+			Description:  "inspect provider docs",
+			LastToolName: "Read",
+		}},
+		{Type: "system", Subtype: "task_notification", TaskNotification: &llm.TaskNotificationMessage{
+			Type:    "system",
+			Subtype: "task_notification",
+			TaskID:  "task-1",
+			Status:  "completed",
+			Summary: "found API transcript gaps",
+		}},
+	}
+	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: "claude",
+		messages: msgs,
+	}}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
+	raw := mustMarshalJSON(t, body)
+	for _, want := range []string{
+		`"type":"tool_use"`,
+		`"tool":"Agent"`,
+		`"tool_call"`,
+		`"summary":"Explore KB completion handler"`,
+		`"prompt":"Inspect KB docs and return impacted categories with [redacted] omitted."`,
+		`"type":"task_started"`,
+		`"type":"task_progress"`,
+		`"type":"task_notification"`,
+		`"task"`,
+		`"description":"inspect provider docs"`,
+		`"last_tool_name":"Read"`,
+		`"status":"completed"`,
+		`"summary":"found API transcript gaps"`,
+	} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("transcript missing task/delegation metadata %q in %s", want, raw)
+		}
+	}
+	if strings.Contains(raw, "private-token") {
+		t.Fatalf("transcript leaked unsanitized task/delegation prompt: %s", raw)
+	}
+}
+
 func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

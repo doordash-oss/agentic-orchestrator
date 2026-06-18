@@ -171,6 +171,8 @@ func BuildReviewCommentsPlan(comments []ports.ReviewComment, prURL, mode, resolu
 	b.WriteString("## Overview\n\n")
 	b.WriteString(fmt.Sprintf("The feature's PR (%s) has received review comments that need attention.\n\n", prURL))
 
+	b.WriteString(standardImplementCycleCommunicationContract())
+
 	b.WriteString("## Mode: Agent Decides\n\n")
 	b.WriteString("For each review comment below, decide whether to:\n")
 	b.WriteString("- **Address it**: Make code changes to resolve the feedback\n")

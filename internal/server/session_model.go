@@ -201,6 +201,12 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "result", Status: msg.Result.Subtype, Redacted: true})
 		case msg.ToolProgress != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "tool_progress", Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
+		case msg.TaskStarted != nil:
+			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "task_started", Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
+		case msg.TaskProgress != nil:
+			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "task_progress", Redacted: true, Task: taskDTOFromProgress(msg.TaskProgress)})
+		case msg.TaskNotification != nil:
+			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "task_notification", Status: msg.TaskNotification.Status, Redacted: true, Task: taskDTOFromNotification(msg.TaskNotification)})
 		default:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: msg.Type, Redacted: true})
 		}
@@ -215,7 +221,15 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 		case block.IsText():
 			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "text", Text: safeDisplayText(block.Text, 500)})
 		case block.IsToolUse():
-			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "tool_use", Tool: block.Name, Redacted: true, FileChange: fileChangeDTOFromToolUse(block, workDir)})
+			out = append(out, TranscriptMessageDTO{
+				Index:      index,
+				Role:       role,
+				Type:       "tool_use",
+				Tool:       block.Name,
+				Redacted:   true,
+				FileChange: fileChangeDTOFromToolUse(block, workDir),
+				ToolCall:   toolCallDTOFromToolUse(block),
+			})
 		case block.IsToolResult():
 			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "tool_result", Redacted: true})
 		case block.IsThinking():
@@ -226,6 +240,94 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 		out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "message", Redacted: true})
 	}
 	return out
+}
+
+func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCallDTO {
+	if !block.IsToolUse() {
+		return nil
+	}
+	switch block.Name {
+	case "Agent", "Task", "TaskCreate":
+	default:
+		return nil
+	}
+	fields := transcriptJSONFields(block.Input)
+	summary := firstTranscriptString(fields, "description", "summary", "title")
+	prompt := firstTranscriptString(fields, "prompt", "instructions")
+	if summary == "" {
+		summary = prompt
+	}
+	if summary == "" && prompt == "" {
+		return nil
+	}
+	return &ToolCallDTO{
+		Summary: safeDisplayText(summary, 500),
+		Prompt:  safeTranscriptPrompt(prompt),
+	}
+}
+
+func taskDTOFromStarted(msg *llm.TaskStartedMessage) *TaskDTO {
+	if msg == nil {
+		return nil
+	}
+	return &TaskDTO{
+		ID:          safeDisplayText(msg.TaskID, 200),
+		ToolUseID:   safeDisplayText(msg.ToolUseID, 200),
+		Description: safeDisplayText(msg.Description, 500),
+		TaskType:    safeDisplayText(msg.TaskType, 200),
+		Prompt:      safeTranscriptPrompt(msg.Prompt),
+	}
+}
+
+func taskDTOFromProgress(msg *llm.TaskProgressMessage) *TaskDTO {
+	if msg == nil {
+		return nil
+	}
+	return &TaskDTO{
+		ID:           safeDisplayText(msg.TaskID, 200),
+		ToolUseID:    safeDisplayText(msg.ToolUseID, 200),
+		Description:  safeDisplayText(msg.Description, 500),
+		LastToolName: safeDisplayText(msg.LastToolName, 200),
+	}
+}
+
+func taskDTOFromNotification(msg *llm.TaskNotificationMessage) *TaskDTO {
+	if msg == nil {
+		return nil
+	}
+	return &TaskDTO{
+		ID:         safeDisplayText(msg.TaskID, 200),
+		ToolUseID:  safeDisplayText(msg.ToolUseID, 200),
+		Status:     safeDisplayText(msg.Status, 200),
+		Summary:    safeDisplayText(msg.Summary, 1000),
+		OutputFile: safeTranscriptPath("", msg.OutputFile),
+	}
+}
+
+func safeTranscriptPrompt(prompt string) string {
+	return safeDisplayText(truncateTranscriptPrompt(prompt), 4000)
+}
+
+func truncateTranscriptPrompt(prompt string) string {
+	prompt = strings.TrimSpace(strings.ReplaceAll(prompt, "\r\n", "\n"))
+	if prompt == "" {
+		return ""
+	}
+	const (
+		maxChars = 4000
+		maxLines = 80
+	)
+	if len(prompt) > maxChars {
+		prompt = strings.TrimSpace(prompt[:maxChars]) + "\n..."
+	}
+	lines := strings.Split(prompt, "\n")
+	if len(lines) > maxLines {
+		lines = append(lines[:maxLines], "...")
+	}
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChangeDTO {

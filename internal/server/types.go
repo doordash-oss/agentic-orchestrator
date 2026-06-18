@@ -569,6 +569,25 @@ type TranscriptMessageDTO struct {
 	Status     string         `json:"status,omitempty"`
 	Redacted   bool           `json:"redacted,omitempty"`
 	FileChange *FileChangeDTO `json:"file_change,omitempty"`
+	ToolCall   *ToolCallDTO   `json:"tool_call,omitempty"`
+	Task       *TaskDTO       `json:"task,omitempty"`
+}
+
+type ToolCallDTO struct {
+	Summary string `json:"summary,omitempty"`
+	Prompt  string `json:"prompt,omitempty"`
+}
+
+type TaskDTO struct {
+	ID           string `json:"id,omitempty"`
+	ToolUseID    string `json:"tool_use_id,omitempty"`
+	Description  string `json:"description,omitempty"`
+	TaskType     string `json:"task_type,omitempty"`
+	Prompt       string `json:"prompt,omitempty"`
+	LastToolName string `json:"last_tool_name,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	OutputFile   string `json:"output_file,omitempty"`
 }
 
 type FileChangeDTO struct {

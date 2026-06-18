@@ -4166,12 +4166,14 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 					lastAssistantText = strings.TrimSpace(block.Text)
 				case block.IsToolUse():
 					if filter < filterNoTools {
-						if rendered, ok := renderAttachTaskPromptBox(block, viewportWidth); ok {
+						if rendered := renderAttachDelegationToolUse(block, viewportWidth); rendered != "" {
 							b.WriteString(rendered)
+							lastAssistantText = ""
+							continue
 						}
 					}
-					// Tool use blocks are shown as a single spinner line
-					// at the bottom of the viewport (like chat model).
+					// Other tool use blocks are shown as a single spinner
+					// line at the bottom of the viewport (like chat model).
 					lastAssistantText = ""
 					continue
 				case block.IsThinking():
@@ -4225,7 +4227,9 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 						if filter >= filterNoTools {
 							continue
 						}
-						b.WriteString(renderAttachPromptBox("prompt", block.Text, viewportWidth, nil))
+						b.WriteByte('\n')
+						b.WriteString(renderAttachPromptBox(block.Text, "prompt", viewportWidth))
+						b.WriteString("\n\n")
 					}
 				}
 			}
@@ -4293,6 +4297,27 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 			b.WriteString(MutedStyle.Render(fmt.Sprintf("  [status] %s", msg.Status.Message)))
 			b.WriteByte('\n')
 
+		case msg.TaskStarted != nil:
+			lastAssistantText = ""
+			if filter >= filterNoTools {
+				continue
+			}
+			b.WriteString(renderAttachTaskStarted(msg.TaskStarted, viewportWidth))
+
+		case msg.TaskProgress != nil:
+			lastAssistantText = ""
+			if filter >= filterNoTools {
+				continue
+			}
+			b.WriteString(renderAttachTaskProgress(msg.TaskProgress))
+
+		case msg.TaskNotification != nil:
+			lastAssistantText = ""
+			if filter >= filterNoTools {
+				continue
+			}
+			b.WriteString(renderAttachTaskNotification(msg.TaskNotification))
+
 		case msg.ToolProgress != nil:
 			// Tool progress is shown via the spinner line, not as permanent entries.
 			lastAssistantText = ""
@@ -4317,34 +4342,101 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 	return b.String()
 }
 
-func renderAttachTaskPromptBox(block llm.ContentBlock, viewportWidth int) (string, bool) {
-	if block.Name != "Task" && block.Name != "Agent" {
-		return "", false
+func renderAttachDelegationToolUse(block llm.ContentBlock, viewportWidth int) string {
+	if !isAttachDelegationTool(block.Name) {
+		return ""
 	}
 	fields := jsonObjectFields(block.Input)
-	prompt := firstNonEmptyString(fields, "prompt")
-	if strings.TrimSpace(prompt) == "" {
-		return "", false
+	summary := firstNonEmptyString(fields, "description", "summary", "title")
+	prompt := firstNonEmptyString(fields, "prompt", "instructions")
+	if summary == "" {
+		summary = prompt
 	}
-	title := block.Name + " prompt"
-	if description := firstNonEmptyString(fields, "description"); description != "" {
-		title = block.Name + ": " + description
+
+	line := block.Name
+	if detail := singleLine(summary); detail != "" {
+		line += ": " + detail
 	}
-	var leading []string
-	if agentType := firstNonEmptyString(fields, "subagent_type", "subagentType", "agent_type", "agent"); agentType != "" {
-		leading = append(leading, MutedStyle.Render(agentType))
+	toolStyle := lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
+	var b strings.Builder
+	b.WriteString(toolStyle.Render("  [tool_use] " + line))
+	b.WriteByte('\n')
+	if strings.TrimSpace(prompt) != "" {
+		b.WriteByte('\n')
+		b.WriteString(renderAttachPromptBox(prompt, "sub-agent prompt", viewportWidth))
+		b.WriteString("\n\n")
 	}
-	return renderAttachPromptBox(title, prompt, viewportWidth, leading), true
+	return b.String()
 }
 
-func renderAttachPromptBox(title, prompt string, viewportWidth int, leading []string) string {
-	prompt = strings.ReplaceAll(prompt, "\r\n", "\n")
-	if strings.TrimSpace(prompt) == "" {
+func isAttachDelegationTool(name string) bool {
+	switch name {
+	case "Agent", "Task", "TaskCreate":
+		return true
+	default:
+		return false
+	}
+}
+
+func renderAttachTaskStarted(msg *llm.TaskStartedMessage, viewportWidth int) string {
+	if msg == nil {
+		return ""
+	}
+	line := "Task started"
+	if detail := firstNonEmpty(msg.Description, msg.TaskType, msg.TaskID); detail != "" {
+		line += ": " + detail
+	}
+	var b strings.Builder
+	b.WriteString(attachTaskStyle(false).Render("  [task] " + line))
+	b.WriteByte('\n')
+	if strings.TrimSpace(msg.Prompt) != "" {
+		b.WriteByte('\n')
+		b.WriteString(renderAttachPromptBox(msg.Prompt, "sub-agent prompt", viewportWidth))
+		b.WriteString("\n\n")
+	}
+	return b.String()
+}
+
+func renderAttachTaskProgress(msg *llm.TaskProgressMessage) string {
+	if msg == nil {
+		return ""
+	}
+	line := "Task progress"
+	if detail := firstNonEmpty(msg.Description, msg.TaskID); detail != "" {
+		line += ": " + detail
+	}
+	if msg.LastToolName != "" {
+		line += " via " + msg.LastToolName
+	}
+	return attachTaskStyle(false).Render("  [task] "+line) + "\n"
+}
+
+func renderAttachTaskNotification(msg *llm.TaskNotificationMessage) string {
+	if msg == nil {
+		return ""
+	}
+	status := firstNonEmpty(msg.Status, "notification")
+	line := "Task " + status
+	if detail := firstNonEmpty(msg.Summary, msg.OutputFile, msg.TaskID); detail != "" {
+		line += ": " + detail
+	}
+	return attachTaskStyle(status == "failed" || status == "error").Render("  [task] "+line) + "\n"
+}
+
+func attachTaskStyle(warning bool) lipgloss.Style {
+	if warning {
+		return lipgloss.NewStyle().Foreground(colorWarning).Bold(true)
+	}
+	return lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
+}
+
+func renderAttachPromptBox(text, title string, viewportWidth int) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if strings.TrimSpace(text) == "" {
 		return ""
 	}
 	boxWidth := max(viewportWidth-4, 20)
-	contentWidth := max(boxWidth-4, 10)
-	wrapped := lipgloss.NewStyle().Width(contentWidth).Render(prompt)
+	wrapped := lipgloss.NewStyle().Width(boxWidth - 4).Render(text)
 	lines := strings.Split(wrapped, "\n")
 	var content string
 	if len(lines) > promptMaxLines {
@@ -4352,14 +4444,9 @@ func renderAttachPromptBox(title, prompt string, viewportWidth int, leading []st
 	} else {
 		content = strings.Join(lines, "\n")
 	}
-	if len(leading) > 0 {
-		content = strings.Join(leading, "\n") + "\n\n" + content
-	}
 	box := panelStyle(false).Width(boxWidth).Render(content)
 	titleStyle := lipgloss.NewStyle().Foreground(compat.AdaptiveColor{Light: lipgloss.Color("#6c6f85"), Dark: lipgloss.Color("#6c7086")}).Bold(true)
-	title = truncateString(title, max(boxWidth-10, 10))
-	box = renderBorderTitle(box, title, titleStyle)
-	return "\n" + box + "\n\n"
+	return renderBorderTitle(box, title, titleStyle)
 }
 
 func renderFileEvent(change attachFileChange, viewportWidth int) string {

@@ -1024,7 +1024,7 @@ func (o *Orchestrator) moveFeatureToPlanningForEvidenceRevision(featureID string
 //
 // Idempotent: if the feature has already been advanced out of
 // StatusImplementing (e.g. because a sibling completion trigger ran first),
-// return nil so the async dispatchMultiRepoResults path is a safe no-op.
+// return nil so the async phase-supervisor result path is a safe no-op.
 // Without this guard, a double-call would fail CompleteImplementation's
 // invalid transition check, propagate as an error, and cause
 // surfaceDispatchCompletionError to wrongly mark the feature Failed.

@@ -211,6 +211,8 @@ type Orchestrator struct {
 	eventCh chan ports.Event
 	mu      sync.RWMutex
 
+	supervisor *phaseSupervisor
+
 	// doneCh is closed by Shutdown to signal all emitters and consumers to
 	// terminate. eventCh is deliberately NEVER closed — closing it would
 	// race with concurrent emitters and could panic mid-send. Emitters
@@ -296,6 +298,11 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		eventCh: make(chan ports.Event, eventChBuffer),
 		doneCh:  make(chan struct{}),
 	}
+	o.supervisor = newPhaseSupervisor(phaseSupervisorConfig{
+		Completion:        o,
+		Sessions:          o.deps.Sessions,
+		OnCompletionError: o.surfaceDispatchCompletionError,
+	})
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,
 		planPath string,
@@ -597,7 +604,7 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	allFresh := true
 	baseDir := o.stateDir()
 	for _, repo := range f.Repos {
-		if activeKBRepos[repo.Name] {
+		if _, active := activeKBRepos[repo.Name]; active {
 			freshness[repo.Name] = false
 			allFresh = false
 			continue
@@ -641,7 +648,8 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 
 	if o.deps.PhaseRunner != nil {
 		for _, repo := range f.Repos {
-			if activeKBRepos[repo.Name] {
+			if sessionID, active := activeKBRepos[repo.Name]; active {
+				o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
 				continue
 			}
 			if freshness[repo.Name] {
@@ -651,13 +659,15 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 				_ = o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repo.Name)
 				continue
 			}
-			if _, err := o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo); err != nil {
+			sessionID, err := o.deps.PhaseRunner.RunKnowledgeBaseForRepo(f, repo)
+			if err != nil {
 				if errors.Is(err, agent.ErrKBLocked) {
 					o.markKBWaiting(featureID, baseDir, repo.Name)
 					return PhaseStartResult{Outcome: PhaseStarted}, nil
 				}
 				return PhaseStartResult{}, fmt.Errorf("run KB for repo %s: %w", repo.Name, err)
 			}
+			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseKnowledgeBase)
 		}
 	}
 
@@ -667,8 +677,8 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
 
-func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]bool {
-	active := make(map[string]bool)
+func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]string {
+	active := make(map[string]string)
 	if o.deps.Sessions == nil {
 		return active
 	}
@@ -681,10 +691,23 @@ func (o *Orchestrator) activeKBSessionRepos(featureID string) map[string]bool {
 			repoName = agent.RepoNameFromKBSession(s.ID())
 		}
 		if repoName != "" {
-			active[repoName] = true
+			active[repoName] = s.ID()
 		}
 	}
 	return active
+}
+
+func (o *Orchestrator) activePhaseSessionID(featureID string, phase feature.Phase) string {
+	if o.deps.Sessions == nil {
+		return ""
+	}
+	for _, s := range o.deps.Sessions.FeatureSessions(featureID) {
+		if s == nil || !s.IsActive() || s.Phase() != phase {
+			continue
+		}
+		return s.ID()
+	}
+	return ""
 }
 
 // markKBWaiting records that the feature couldn't acquire the KB lock for the
@@ -816,9 +839,15 @@ func (o *Orchestrator) startInquire(featureID string) (PhaseStartResult, error) 
 	}
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
-		if _, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...); err != nil {
+		if sessionID := o.activePhaseSessionID(featureID, feature.PhaseInquire); sessionID != "" {
+			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseInquire)
+			return PhaseStartResult{Outcome: PhaseStarted}, nil
+		}
+		sessionID, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...)
+		if err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run inquire: %w", err)
 		}
+		o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseInquire)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
@@ -844,13 +873,19 @@ func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error)
 	}
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
+		if sessionID := o.activePhaseSessionID(featureID, feature.PhaseResearch); sessionID != "" {
+			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseResearch)
+			return PhaseStartResult{Outcome: PhaseStarted}, nil
+		}
 		questionsPath := o.resolveArtifactPath(f, "inquire")
 		if questionsPath == "" {
 			return PhaseStartResult{}, errors.New("no inquire artifact found; cannot proceed to research")
 		}
-		if _, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...); err != nil {
+		sessionID, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...)
+		if err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run research from questions: %w", err)
 		}
+		o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseResearch)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
@@ -891,9 +926,15 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 	}
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
-		if _, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...); err != nil {
+		if sessionID := o.activePhaseSessionID(featureID, feature.PhaseDesign); sessionID != "" {
+			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseDesign)
+			return PhaseStartResult{Outcome: PhaseStarted}, nil
+		}
+		sessionID, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...)
+		if err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run design: %w", err)
 		}
+		o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseDesign)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }
@@ -934,28 +975,9 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 		if err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run planning: %w", err)
 		}
-		if resultCh != nil {
-			go o.dispatchPlanLoopResult(featureID, resultCh)
-		}
+		o.phaseSupervisor().supervisePlanLoop(featureID, resultCh)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
-}
-
-// dispatchPlanLoopResult consumes the planner's result channel and routes
-// the result through HandlePhaseCompletion. Called from startPlan /
-// startRoadmapPhasePlan in a goroutine so the orchestrator owns the phase
-// result flow end-to-end (the TUI no longer bridges the channel).
-func (o *Orchestrator) dispatchPlanLoopResult(featureID string, resultCh <-chan *agent.PlanLoopResult) {
-	result, ok := <-resultCh
-	if !ok {
-		return
-	}
-	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
-		Phase:      feature.PhasePlan,
-		PlanResult: result,
-	}); err != nil {
-		o.surfaceDispatchCompletionError(featureID, err)
-	}
 }
 
 // startRoadmapPhasePlan starts per-phase planning for the current roadmap
@@ -1015,9 +1037,7 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 		if err != nil {
 			return PhaseStartResult{}, fmt.Errorf("run phase planning: %w", err)
 		}
-		if resultCh != nil {
-			go o.dispatchPlanLoopResult(featureID, resultCh)
-		}
+		o.phaseSupervisor().supervisePlanLoop(featureID, resultCh)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
 }

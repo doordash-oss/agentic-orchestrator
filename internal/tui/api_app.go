@@ -2549,6 +2549,10 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 		if row.Tool == "" {
 			return llm.SDKMessage{}, false
 		}
+		block := llm.ContentBlock{Type: "tool_use", Name: row.Tool}
+		if input := apiTranscriptToolCallInput(row.ToolCall); len(input) > 0 {
+			block.Input = input
+		}
 		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 			Type: "assistant",
 			Assistant: &llm.AssistantMessage{
@@ -2556,8 +2560,61 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 				SessionID: sessionID,
 				Message: llm.ConversationMsg{
 					Role:    "assistant",
-					Content: []llm.ContentBlock{{Type: "tool_use", Name: row.Tool}},
+					Content: []llm.ContentBlock{block},
 				},
+			},
+		}, row), true
+	case "task_started":
+		if row.Task == nil {
+			return llm.SDKMessage{}, false
+		}
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_started",
+			TaskStarted: &llm.TaskStartedMessage{
+				Type:        "system",
+				Subtype:     "task_started",
+				TaskID:      row.Task.ID,
+				ToolUseID:   row.Task.ToolUseID,
+				Description: row.Task.Description,
+				TaskType:    row.Task.TaskType,
+				Prompt:      row.Task.Prompt,
+				SessionID:   sessionID,
+			},
+		}, row), true
+	case "task_progress":
+		if row.Task == nil {
+			return llm.SDKMessage{}, false
+		}
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_progress",
+			TaskProgress: &llm.TaskProgressMessage{
+				Type:         "system",
+				Subtype:      "task_progress",
+				TaskID:       row.Task.ID,
+				ToolUseID:    row.Task.ToolUseID,
+				Description:  row.Task.Description,
+				LastToolName: row.Task.LastToolName,
+				SessionID:    sessionID,
+			},
+		}, row), true
+	case "task_notification":
+		if row.Task == nil {
+			return llm.SDKMessage{}, false
+		}
+		return apiTranscriptMessageWithFileChange(llm.SDKMessage{
+			Type:    "system",
+			Subtype: "task_notification",
+			TaskNotification: &llm.TaskNotificationMessage{
+				Type:       "system",
+				Subtype:    "task_notification",
+				TaskID:     row.Task.ID,
+				ToolUseID:  row.Task.ToolUseID,
+				Status:     firstNonEmpty(row.Task.Status, row.Status),
+				Summary:    row.Task.Summary,
+				OutputFile: row.Task.OutputFile,
+				SessionID:  sessionID,
 			},
 		}, row), true
 	case "tool_progress":
@@ -2589,12 +2646,38 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 	}
 }
 
+func apiTranscriptToolCallInput(call *server.ToolCallDTO) json.RawMessage {
+	if call == nil {
+		return nil
+	}
+	payload := make(map[string]string)
+	if strings.TrimSpace(call.Summary) != "" {
+		payload["description"] = call.Summary
+	}
+	if strings.TrimSpace(call.Prompt) != "" {
+		payload["prompt"] = call.Prompt
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(payload)
+	return data
+}
+
 func apiTranscriptRowKey(row server.TranscriptMessageDTO) string {
 	fileChangeKey := ""
 	if row.FileChange != nil {
 		fileChangeKey = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d\x00%d\x00%t", row.FileChange.Path, row.FileChange.OldPath, row.FileChange.Operation, row.FileChange.Detail, row.FileChange.AddedLines, row.FileChange.RemovedLines, row.FileChange.HasDiffPatch)
 	}
-	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, fileChangeKey)
+	toolCallKey := ""
+	if row.ToolCall != nil {
+		toolCallKey = fmt.Sprintf("%s\x00%s", row.ToolCall.Summary, row.ToolCall.Prompt)
+	}
+	taskKey := ""
+	if row.Task != nil {
+		taskKey = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", row.Task.ID, row.Task.ToolUseID, row.Task.Description, row.Task.TaskType, row.Task.Prompt, row.Task.LastToolName, row.Task.Status, row.Task.Summary, row.Task.OutputFile)
+	}
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%s\x00%s\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, fileChangeKey, toolCallKey, taskKey)
 }
 
 func apiTranscriptRowSignature(row server.TranscriptMessageDTO) string {

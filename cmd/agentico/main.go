@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -941,10 +942,91 @@ func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequ
 	if err != nil {
 		return serverruntime.AskUserAnswerResponse{}, err
 	}
-	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, req.Answers, nil); err != nil {
+	answers := normalizeAskUserAnswerKeys(pending.Request.Input, req.Answers)
+	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil); err != nil {
 		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", err)
 	}
 	return serverruntime.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Result: "answered"}, nil
+}
+
+func normalizeAskUserAnswerKeys(input json.RawMessage, answers map[string]string) map[string]string {
+	if len(input) == 0 || len(answers) == 0 {
+		return answers
+	}
+	var envelope struct {
+		Questions []struct {
+			Question string `json:"question"`
+			Header   string `json:"header"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil || len(envelope.Questions) == 0 {
+		return answers
+	}
+	keys := make([]string, 0, len(envelope.Questions))
+	for _, q := range envelope.Questions {
+		key := q.Question
+		if strings.TrimSpace(key) == "" {
+			key = q.Header
+		}
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return answers
+	}
+
+	normalized := make(map[string]string, len(answers))
+	remaining := make(map[string]string, len(answers))
+	for key, answer := range answers {
+		remaining[key] = answer
+	}
+	for _, originalKey := range keys {
+		if answer, ok := remaining[originalKey]; ok {
+			normalized[originalKey] = answer
+			delete(remaining, originalKey)
+			continue
+		}
+		var matchedKey string
+		for submittedKey := range remaining {
+			if askUserSubmittedKeyMatchesOriginal(submittedKey, originalKey) {
+				if matchedKey != "" {
+					matchedKey = ""
+					break
+				}
+				matchedKey = submittedKey
+			}
+		}
+		if matchedKey != "" {
+			normalized[originalKey] = remaining[matchedKey]
+			delete(remaining, matchedKey)
+		}
+	}
+	if len(keys) == 1 && len(normalized) == 0 && len(answers) == 1 {
+		for _, answer := range answers {
+			return map[string]string{keys[0]: answer}
+		}
+	}
+	for key, answer := range remaining {
+		normalized[key] = answer
+	}
+	return normalized
+}
+
+func askUserSubmittedKeyMatchesOriginal(submittedKey, originalKey string) bool {
+	submittedKey = strings.TrimSpace(submittedKey)
+	originalKey = strings.TrimSpace(originalKey)
+	if submittedKey == "" || originalKey == "" {
+		return false
+	}
+	if submittedKey == originalKey {
+		return true
+	}
+	if strings.HasSuffix(submittedKey, "...") {
+		prefix := strings.TrimSuffix(submittedKey, "...")
+		return prefix != "" && strings.HasPrefix(originalKey, prefix)
+	}
+	return false
 }
 
 func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, error) {

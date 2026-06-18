@@ -31,15 +31,81 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agentdef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"go.uber.org/fx"
 )
+
+func TestAgentModuleWiresPermissionCacheIntoPhaseRunner(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	stateDir := filepath.Join(tmpDir, "features")
+
+	var pr *PhaseRunner
+	var cache *permission.Cache
+	app := fx.New(
+		fx.Supply(
+			fx.Annotate(configPath, fx.ResultTags(`name:"configPath"`)),
+			fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`)),
+			fx.Annotate(make(chan any, 100), fx.ResultTags(`name:"eventCh"`)),
+			fx.Annotate(false, fx.ResultTags(`name:"dsp"`)),
+		),
+		config.Module,
+		feature.Module,
+		git.Module,
+		session.Module,
+		llm.Module,
+		observe.Module,
+		permission.Module,
+		Module,
+		fx.Populate(&pr, &cache),
+		fx.NopLogger,
+	)
+	ctx := context.Background()
+	if err := app.Start(ctx); err != nil {
+		t.Fatalf("fx.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := app.Stop(context.Background()); err != nil {
+			t.Errorf("fx.Stop: %v", err)
+		}
+	})
+
+	if pr == nil {
+		t.Fatal("PhaseRunner was not resolved by fx")
+	}
+	if cache == nil {
+		t.Fatal("permission cache was not resolved by fx")
+	}
+	if pr.PermissionCache == nil {
+		t.Fatal("PhaseRunner.PermissionCache is nil")
+	}
+	if pr.PermissionCache != cache {
+		t.Fatal("PhaseRunner.PermissionCache is not the shared fx permission cache")
+	}
+
+	handler := permHandlerFor(false, pr.PermissionCache, "")
+	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
+		RequestID: "req-validate",
+		ToolName:  "Bash",
+		Input:     `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase design --role designer --dir /tmp/iteration"}`,
+	})
+	if err != nil {
+		t.Fatalf("CanUseTool: %v", err)
+	}
+	if decision.Behavior != "allow" {
+		t.Fatalf("behavior = %q, want allow", decision.Behavior)
+	}
+}
 
 func TestPhaseRunnerGetPhaseOutput(t *testing.T) {
 	dir := t.TempDir()

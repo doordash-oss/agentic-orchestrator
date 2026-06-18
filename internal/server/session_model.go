@@ -188,9 +188,9 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 		index := start + i
 		switch {
 		case msg.Assistant != nil:
-			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content, root, false)...)
+			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content, root, false, false, "", 0)...)
 		case msg.User != nil:
-			out = append(out, conversationDTOs(index, "user", msg.User.Message.Content, root, msg.LocallyAppended)...)
+			out = append(out, conversationDTOs(index, "user", msg.User.Message.Content, root, msg.LocallyAppended, msg.AutoPicked, msg.AutoPickQuestion, msg.AutoPickConfidence)...)
 		case msg.ControlRequest != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "control_request", Tool: msg.ControlRequest.Request.ToolName, Status: "pending", Redacted: true})
 		case msg.Result != nil:
@@ -210,17 +210,21 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 	return out
 }
 
-func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string, locallyAppended bool) []TranscriptMessageDTO {
+func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string, locallyAppended bool, autoPicked bool, autoPickQuestion string, autoPickConfidence float64) []TranscriptMessageDTO {
 	var out []TranscriptMessageDTO
 	for _, block := range blocks {
 		switch {
 		case block.IsText():
+			userLocal := role == "user" && locallyAppended
 			out = append(out, TranscriptMessageDTO{
-				Index:           index,
-				Role:            role,
-				Type:            "text",
-				Text:            safeTranscriptText(block.Text, role, locallyAppended),
-				LocallyAppended: role == "user" && locallyAppended,
+				Index:              index,
+				Role:               role,
+				Type:               "text",
+				Text:               safeTranscriptText(block.Text, role, locallyAppended),
+				LocallyAppended:    userLocal,
+				AutoPicked:         userLocal && autoPicked,
+				AutoPickQuestion:   autoPickQuestion,
+				AutoPickConfidence: autoPickConfidence,
 			})
 		case block.IsToolUse():
 			out = append(out, TranscriptMessageDTO{

@@ -591,17 +591,20 @@ type TranscriptResponse struct {
 }
 
 type TranscriptMessageDTO struct {
-	Index           int            `json:"index"`
-	Role            string         `json:"role"`
-	Type            string         `json:"type"`
-	Text            string         `json:"text,omitempty"`
-	Tool            string         `json:"tool,omitempty"`
-	Status          string         `json:"status,omitempty"`
-	Redacted        bool           `json:"redacted,omitempty"`
-	LocallyAppended bool           `json:"locally_appended,omitempty"`
-	FileChange      *FileChangeDTO `json:"file_change,omitempty"`
-	ToolCall        *ToolCallDTO   `json:"tool_call,omitempty"`
-	Task            *TaskDTO       `json:"task,omitempty"`
+	Index              int            `json:"index"`
+	Role               string         `json:"role"`
+	Type               string         `json:"type"`
+	Text               string         `json:"text,omitempty"`
+	Tool               string         `json:"tool,omitempty"`
+	Status             string         `json:"status,omitempty"`
+	Redacted           bool           `json:"redacted,omitempty"`
+	LocallyAppended    bool           `json:"locally_appended,omitempty"`
+	AutoPicked         bool           `json:"auto_picked,omitempty"`
+	AutoPickQuestion   string         `json:"auto_pick_question,omitempty"`
+	AutoPickConfidence float64        `json:"auto_pick_confidence,omitempty"`
+	FileChange         *FileChangeDTO `json:"file_change,omitempty"`
+	ToolCall           *ToolCallDTO   `json:"tool_call,omitempty"`
+	Task               *TaskDTO       `json:"task,omitempty"`
 }
 
 type ToolCallDTO struct {

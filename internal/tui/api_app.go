@@ -2576,8 +2576,11 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 		}
 		if row.Role == "user" {
 			return apiTranscriptMessageWithFileChange(llm.SDKMessage{
-				Type:            "user",
-				LocallyAppended: row.LocallyAppended,
+				Type:               "user",
+				LocallyAppended:    row.LocallyAppended,
+				AutoPicked:         row.AutoPicked,
+				AutoPickQuestion:   row.AutoPickQuestion,
+				AutoPickConfidence: row.AutoPickConfidence,
 				User: &llm.UserMessage{
 					Type:      "user",
 					SessionID: sessionID,
@@ -2731,7 +2734,7 @@ func apiTranscriptRowKey(row server.TranscriptMessageDTO) string {
 	if row.Task != nil {
 		taskKey = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", row.Task.ID, row.Task.ToolUseID, row.Task.Description, row.Task.TaskType, row.Task.Prompt, row.Task.LastToolName, row.Task.Status, row.Task.Summary, row.Task.OutputFile)
 	}
-	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, row.LocallyAppended, fileChangeKey, toolCallKey, taskKey)
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t\x00%t\x00%s\x00%.6f\x00%s\x00%s\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, row.LocallyAppended, row.AutoPicked, row.AutoPickQuestion, row.AutoPickConfidence, fileChangeKey, toolCallKey, taskKey)
 }
 
 func apiTranscriptRowSignature(row server.TranscriptMessageDTO) string {

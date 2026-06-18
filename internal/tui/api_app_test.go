@@ -1167,6 +1167,35 @@ func TestAPITranscriptRowToSDKMessagePreservesToolProgress(t *testing.T) {
 	}
 }
 
+func TestAPITranscriptRowToSDKMessagePreservesAutoPickedUserEcho(t *testing.T) {
+	t.Parallel()
+
+	msg, ok := apiTranscriptRowToSDKMessage(server.TranscriptMessageDTO{
+		Index:              1,
+		Role:               "user",
+		Type:               "text",
+		Text:               "Translate `README.md` in place (Recommended)",
+		LocallyAppended:    true,
+		AutoPicked:         true,
+		AutoPickQuestion:   "Which output shape?",
+		AutoPickConfidence: 0.72,
+	}, "sess-live")
+	if !ok {
+		t.Fatal("apiTranscriptRowToSDKMessage(auto-picked user text) returned !ok")
+	}
+	if !msg.AutoPicked || msg.AutoPickQuestion != "Which output shape?" || msg.AutoPickConfidence != 0.72 {
+		t.Fatalf("apiTranscriptRowToSDKMessage() = %+v, want auto-picked metadata", msg)
+	}
+
+	rendered := stripANSI(renderAttachMessages([]llm.SDKMessage{msg}, filterAll, 120, nil))
+	if !strings.Contains(rendered, "[auto-picked, confidence: 0.72] Translate `README.md` in place (Recommended)") {
+		t.Fatalf("rendered auto-picked row = %q", rendered)
+	}
+	if strings.Contains(rendered, "[you] Translate `README.md` in place (Recommended)") {
+		t.Fatalf("rendered auto-picked row should not use [you] label: %q", rendered)
+	}
+}
+
 func TestAPILivePreviewSessionCarriesProviderFromREST(t *testing.T) {
 	t.Parallel()
 

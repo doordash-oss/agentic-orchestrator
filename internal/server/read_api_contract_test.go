@@ -862,6 +862,10 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 					Role:    "user",
 					Content: []llm.ContentBlock{{Type: "text", Text: "PostgreSQL"}},
 				}}},
+				{Type: "user", LocallyAppended: true, AutoPicked: true, AutoPickQuestion: "Which cache?", AutoPickConfidence: 0.72, User: &llm.UserMessage{Message: llm.ConversationMsg{
+					Role:    "user",
+					Content: []llm.ContentBlock{{Type: "text", Text: "Redis (Recommended)"}},
+				}}},
 			},
 		}},
 	}
@@ -873,8 +877,8 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-local-echo/transcript")
 	messages := body["messages"].([]any)
-	if len(messages) != 2 {
-		t.Fatalf("messages length = %d, want protocol prompt and local echo rows", len(messages))
+	if len(messages) != 3 {
+		t.Fatalf("messages length = %d, want protocol prompt, local echo, and auto-picked rows", len(messages))
 	}
 	protocol := messages[0].(map[string]any)
 	if protocol["text"] != protocolPrompt || protocol["redacted"] == true || protocol["locally_appended"] == true {
@@ -883,6 +887,10 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 	local := messages[1].(map[string]any)
 	if local["text"] != "PostgreSQL" || local["redacted"] == true || local["locally_appended"] != true {
 		t.Fatalf("local user echo row = %+v, want visible locally-appended text", local)
+	}
+	autoPicked := messages[2].(map[string]any)
+	if autoPicked["text"] != "Redis (Recommended)" || autoPicked["locally_appended"] != true || autoPicked["auto_picked"] != true || autoPicked["auto_pick_confidence"] != 0.72 || autoPicked["auto_pick_question"] != "Which cache?" {
+		t.Fatalf("auto-picked user row = %+v, want visible auto-picked metadata", autoPicked)
 	}
 }
 

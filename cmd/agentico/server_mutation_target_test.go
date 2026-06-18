@@ -152,6 +152,65 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 	assertJSONDoesNotContain(t, result, "Postgres with read replicas", "Dark launch first")
 }
 
+func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *testing.T) {
+	fullQuestion := "Which persistence strategy should the orchestrator use when an AskUserQuestion contains enough detail that the read API truncates the display projection, but the provider still requires the exact original question text as the answer-map key?"
+	truncatedQuestion := fullQuestion[:180] + "..."
+	input, err := json.Marshal(map[string]any{
+		"questions": []map[string]any{{
+			"question": fullQuestion,
+			"options": []map[string]string{{
+				"label": "Use the full input (Recommended)",
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	sess := &mutationTargetSessionView{
+		id:        "session-ask",
+		featureID: "feat-ask",
+		phase:     feature.PhaseInquire,
+		status:    ports.SessionWaitingHelp,
+		active:    true,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      "control_request",
+			RequestID: "ask-1",
+			Request: llm.ControlRequest{
+				Subtype:  "can_use_tool",
+				ToolName: "AskUserQuestion",
+				Input:    input,
+			},
+		}},
+	}
+	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+	target := serverMutationTarget{
+		orch:     mutationTargetOrchestrator(sessions),
+		sessions: sessions,
+	}
+
+	_, err = target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
+		RequestID: "ask-1",
+		SessionID: "session-ask",
+		Answers: map[string]string{
+			truncatedQuestion: "Use the full input (Recommended)",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AnswerAskUser() error = %v", err)
+	}
+
+	if len(sess.askCalls) != 1 {
+		t.Fatalf("RespondToAskUser calls = %d, want 1", len(sess.askCalls))
+	}
+	call := sess.askCalls[0]
+	if got := call.answers[fullQuestion]; got != "Use the full input (Recommended)" {
+		t.Fatalf("RespondToAskUser answers[%q] = %q; want selected answer in %v", fullQuestion, got, call.answers)
+	}
+	if _, ok := call.answers[truncatedQuestion]; ok {
+		t.Fatalf("RespondToAskUser kept truncated question key %q in %v", truncatedQuestion, call.answers)
+	}
+}
+
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
 	sess := &mutationTargetSessionView{
 		id:        "session-help",

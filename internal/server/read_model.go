@@ -372,6 +372,7 @@ func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummaryDTO {
 		RoadmapTotal:    run.TotalRoadmapPhases,
 		ArtifactCount:   len(run.Artifacts),
 		HasNeedUserGate: run.PendingNeedUserInputPath != "",
+		Setup:           setupDTO(run.Setup),
 	}
 	if run.PendingReviewPhase != nil {
 		dto.PendingReviewPhase = run.PendingReviewPhase.DirName()
@@ -381,6 +382,45 @@ func runSummaryDTO(run *feature.Run, f *feature.Feature) RunSummaryDTO {
 	}
 	dto.IsRewind = run.IsRewind
 	return dto
+}
+
+func setupDTO(setup *feature.SetupState) *SetupDTO {
+	if setup == nil {
+		return nil
+	}
+	tasks := make(map[string]SetupTaskDTO, len(setup.Tasks))
+	for key, task := range setup.Tasks {
+		tasks[key] = setupTaskDTO(task)
+	}
+	return &SetupDTO{
+		Status:        string(setup.Status),
+		Attempt:       setup.Attempt,
+		StartedAt:     setup.StartedAt,
+		CompletedAt:   setup.CompletedAt,
+		LatestLogPath: safeDisplayText(setup.LatestLogPath, 1000),
+		Tasks:         tasks,
+		TaskOrder:     append([]string(nil), setup.TaskOrder...),
+		LastError:     safeDisplayText(setup.LastError, 500),
+	}
+}
+
+func setupTaskDTO(task feature.SetupTask) SetupTaskDTO {
+	return SetupTaskDTO{
+		Key:              task.Key,
+		Kind:             string(task.Kind),
+		Label:            safeDisplayText(task.Label, 200),
+		Repo:             safeDisplayText(task.Repo, 200),
+		Status:           string(task.Status),
+		Path:             safeDisplayText(task.Path, 1000),
+		SourcePath:       safeDisplayText(task.SourcePath, 1000),
+		Branch:           safeDisplayText(task.Branch, 500),
+		StartPoint:       safeDisplayText(task.StartPoint, 500),
+		UseCurrentBranch: task.UseCurrentBranch,
+		Attempt:          task.Attempt,
+		StartedAt:        task.StartedAt,
+		EndedAt:          task.EndedAt,
+		LastError:        safeDisplayText(task.LastError, 500),
+	}
 }
 
 func repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {

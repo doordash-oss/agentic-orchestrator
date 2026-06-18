@@ -757,6 +757,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		UseCurrentBranchPerRepo: req.UseCurrentBranchPerRepo,
 		Checkpoints:             checkpoints,
 		Attachments:             req.Attachments,
+		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
 		Pipeline:                req.Pipeline,
 	})
@@ -1227,10 +1228,30 @@ func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.Ret
 	if t.orch == nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
+	if t.store != nil {
+		f, err := t.store.Load(featureID)
+		if err == nil && isFailedSetupFeature(f) {
+			if err := t.orch.RetrySetup(featureID); err != nil {
+				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+			}
+			return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "retried"}, nil
+		}
+	}
 	if err := t.orch.RetryPhase(featureID); err != nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "failed"}, err
 	}
 	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "retried"}, nil
+}
+
+func isFailedSetupFeature(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	setup := f.Run().Setup
+	return f.Status == feature.StatusFailed &&
+		f.FailureType == feature.FailureWorktreeSetup &&
+		setup != nil &&
+		setup.Status == feature.SetupStatusFailed
 }
 
 func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.RebaseActionRequest) (serverruntime.RebaseStartResponse, error) {

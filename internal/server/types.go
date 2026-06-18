@@ -234,6 +234,35 @@ type RunSummaryDTO struct {
 	IsRewind                        bool       `json:"is_rewind,omitempty"`
 	ArtifactCount                   int        `json:"artifact_count"`
 	HasNeedUserGate                 bool       `json:"has_need_user_gate,omitempty"`
+	Setup                           *SetupDTO  `json:"setup,omitempty"`
+}
+
+type SetupDTO struct {
+	Status        string                  `json:"status"`
+	Attempt       int                     `json:"attempt,omitempty"`
+	StartedAt     *time.Time              `json:"started_at,omitempty"`
+	CompletedAt   *time.Time              `json:"completed_at,omitempty"`
+	LatestLogPath string                  `json:"latest_log_path,omitempty"`
+	Tasks         map[string]SetupTaskDTO `json:"tasks,omitempty"`
+	TaskOrder     []string                `json:"task_order,omitempty"`
+	LastError     string                  `json:"last_error,omitempty"`
+}
+
+type SetupTaskDTO struct {
+	Key              string     `json:"key"`
+	Kind             string     `json:"kind"`
+	Label            string     `json:"label,omitempty"`
+	Repo             string     `json:"repo,omitempty"`
+	Status           string     `json:"status"`
+	Path             string     `json:"path,omitempty"`
+	SourcePath       string     `json:"source_path,omitempty"`
+	Branch           string     `json:"branch,omitempty"`
+	StartPoint       string     `json:"start_point,omitempty"`
+	UseCurrentBranch bool       `json:"use_current_branch,omitempty"`
+	Attempt          int        `json:"attempt,omitempty"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	LastError        string     `json:"last_error,omitempty"`
 }
 
 type RepoStatusDTO struct {

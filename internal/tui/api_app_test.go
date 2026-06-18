@@ -279,6 +279,161 @@ func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelDashboardRestoresSetupFailureFromRESTDetail(t *testing.T) {
+	t.Parallel()
+
+	var detail server.FeatureDetailResponse
+	if err := json.Unmarshal([]byte(`{
+		"feature": {
+			"id": "setup-fail",
+			"name": "Setup Fail",
+			"slug": "setup-fail",
+			"status": "Failed",
+			"current_phase": "plan",
+			"active_run": 1,
+			"run_count": 1,
+			"repos": ["repo-a"],
+			"created_at": "2026-06-18T10:00:00Z",
+			"failure": {"type": "worktree_setup", "message": "git worktree add failed"},
+			"active_run_detail": {
+				"run_number": 1,
+				"setup": {
+					"status": "failed",
+					"attempt": 1,
+					"latest_log_path": "/tmp/agentico/setup.log",
+					"last_error": "git worktree add failed",
+					"task_order": ["worktree:repo-a"],
+					"tasks": {
+						"worktree:repo-a": {
+							"key": "worktree:repo-a",
+							"kind": "worktree",
+							"label": "Worktree: repo-a",
+							"repo": "repo-a",
+							"status": "failed",
+							"path": "/tmp/agentico/worktrees/setup-fail/repo-a",
+							"branch": "feature/setup-fail",
+							"attempt": 1,
+							"last_error": "git worktree add failed"
+						}
+					}
+				}
+			}
+		}
+	}`), &detail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	summary := server.FeatureSummary{
+		ID:           "setup-fail",
+		Name:         "Setup Fail",
+		Slug:         "setup-fail",
+		Status:       "Failed",
+		CurrentPhase: "plan",
+		ActiveRun:    1,
+		RunCount:     1,
+		Repos:        []string{"repo-a"},
+		CreatedAt:    time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC),
+	}
+	app := APIAppModel{
+		width:           160,
+		height:          40,
+		focusPanel:      1,
+		rightPanelMode:  dashboardRightPanelOverview,
+		selectedFeature: summary.ID,
+		featureList:     server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: detail,
+		},
+		runtimeConfig: server.RuntimeConfigResponse{
+			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+		},
+	}
+	app.rebuildPresentation(summary.ID)
+
+	features := app.apiDashboardFeatures()
+	if len(features) != 1 {
+		t.Fatalf("apiDashboardFeatures length = %d, want 1", len(features))
+	}
+	setup := features[0].Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusFailed || setup.LastError != "git worktree add failed" {
+		t.Fatalf("dashboard setup = %+v, want failed setup diagnostics", setup)
+	}
+	if !canRetrySetup(features[0]) {
+		t.Fatalf("canRetrySetup(feature) = false for failed setup: %+v", features[0])
+	}
+
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{"IN PROGRESS", "Failed (worktree setup)", "Setup attempt 1", "git worktree add failed", "Worktree: repo-a", "/tmp/agentico/setup.log"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API dashboard View() missing setup failure detail %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestAPIAppModelRShortcutRetriesFailedSetup(t *testing.T) {
+	t.Parallel()
+
+	var detail server.FeatureDetailResponse
+	if err := json.Unmarshal([]byte(`{
+		"feature": {
+			"id": "setup-fail",
+			"name": "Setup Fail",
+			"slug": "setup-fail",
+			"status": "Failed",
+			"current_phase": "plan",
+			"created_at": "2026-06-18T10:00:00Z",
+			"failure": {"type": "worktree_setup", "message": "git worktree add failed"},
+			"active_run_detail": {
+				"run_number": 1,
+				"setup": {
+					"status": "failed",
+					"attempt": 1,
+					"last_error": "git worktree add failed",
+					"tasks": {
+						"worktree:repo-a": {
+							"key": "worktree:repo-a",
+							"kind": "worktree",
+							"label": "Worktree: repo-a",
+							"repo": "repo-a",
+							"status": "failed",
+							"last_error": "git worktree add failed"
+						}
+					}
+				}
+			}
+		}
+	}`), &detail); err != nil {
+		t.Fatalf("unmarshal detail: %v", err)
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "setup-fail", Name: "Setup Fail", Slug: "setup-fail", Status: "Failed", CurrentPhase: "plan", CreatedAt: time.Now()},
+		}},
+		detail:        detail,
+		retryAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if cmd == nil {
+		t.Fatal("Update(r) returned nil command, want setup retry mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+
+	if got := strings.Join(client.retryFeatureIDs, ","); got != "setup-fail" {
+		t.Fatalf("RetryFeature calls = %q, want setup-fail", got)
+	}
+	if len(client.restartFeatureIDs) != 0 {
+		t.Fatalf("RestartFeature calls = %v, want none for setup retry shortcut", client.restartFeatureIDs)
+	}
+	if view := stripANSI(model.(APIAppModel).View().Content); !strings.Contains(view, "Completed Retry") {
+		t.Fatalf("API app View() missing retry completed status in:\n%s", view)
+	}
+}
+
 func TestAPIAppModelDiffUsesSavedFeatureBaseBranch(t *testing.T) {
 	t.Parallel()
 

@@ -457,7 +457,13 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 		return fmt.Errorf("loading feature: %w", err)
 	}
 	if f.Status == feature.StatusSettingUpWorktrees {
-		return fmt.Errorf("feature %s is still setting up worktrees", featureID)
+		if err := o.runSetupWith(false, featureID); err != nil {
+			return err
+		}
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return fmt.Errorf("loading feature after setup: %w", err)
+		}
 	}
 
 	phase := f.CurrentPhase

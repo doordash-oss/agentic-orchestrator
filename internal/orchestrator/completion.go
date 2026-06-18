@@ -410,6 +410,9 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	completeFn func(string) error,
 ) error {
 	if !input.Success {
+		if f, _ := o.deps.Lifecycle.Get(featureID); isTerminalForCompletion(f) {
+			return nil
+		}
 		// LastError keeps the "<Phase> phase failed: <detail>" format so
 		// downstream reporters (banners, observe-summary.yaml) can attribute
 		// the failure to a specific phase even when ErrorDetail is a bare

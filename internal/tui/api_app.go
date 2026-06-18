@@ -1195,6 +1195,9 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "p":
 		return m.openPublishAction(), nil
 	case "r":
+		if canRetrySetup(m.selectedAPIDashboardFeature()) {
+			return m, m.selectedFeatureActionCmd("feature.retry", m.selectedFeature)
+		}
 		return m.confirmSelectedFeatureAction("feature.restart"), nil
 	case "s":
 		return m.confirmSelectedFeatureAction("feature.stop"), nil
@@ -1750,6 +1753,10 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	if len(f.RepoCycles) == 0 {
 		f.RepoCycles = nil
 	}
+	var setup *feature.SetupState
+	if hasDetail && detail.ActiveRun != nil {
+		setup = apiSetupState(detail.ActiveRun.Setup)
+	}
 	m.applyAPIAttention(f)
 	f.SetRun(&feature.Run{
 		RunNumber:                       f.ActiveRun,
@@ -1772,8 +1779,48 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		PhaseCosts:                      f.PhaseCosts,
 		LastError:                       f.LastError,
 		FailureType:                     f.FailureType,
+		Setup:                           setup,
 	})
 	return f
+}
+
+func apiSetupState(dto *server.SetupDTO) *feature.SetupState {
+	if dto == nil {
+		return nil
+	}
+	tasks := make(map[string]feature.SetupTask, len(dto.Tasks))
+	for key, task := range dto.Tasks {
+		tasks[key] = apiSetupTask(task)
+	}
+	return &feature.SetupState{
+		Status:        feature.SetupStatus(dto.Status),
+		Attempt:       dto.Attempt,
+		StartedAt:     dto.StartedAt,
+		CompletedAt:   dto.CompletedAt,
+		LatestLogPath: dto.LatestLogPath,
+		Tasks:         tasks,
+		TaskOrder:     append([]string(nil), dto.TaskOrder...),
+		LastError:     dto.LastError,
+	}
+}
+
+func apiSetupTask(dto server.SetupTaskDTO) feature.SetupTask {
+	return feature.SetupTask{
+		Key:              dto.Key,
+		Kind:             feature.SetupTaskKind(dto.Kind),
+		Label:            dto.Label,
+		Repo:             dto.Repo,
+		Status:           feature.SetupStatus(dto.Status),
+		Path:             dto.Path,
+		SourcePath:       dto.SourcePath,
+		Branch:           dto.Branch,
+		StartPoint:       dto.StartPoint,
+		UseCurrentBranch: dto.UseCurrentBranch,
+		Attempt:          dto.Attempt,
+		StartedAt:        dto.StartedAt,
+		EndedAt:          dto.EndedAt,
+		LastError:        dto.LastError,
+	}
 }
 
 func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureSummary {

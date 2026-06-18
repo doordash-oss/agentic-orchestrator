@@ -89,6 +89,57 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	}
 }
 
+func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
+	t.Parallel()
+	store := feature.NewStore(t.TempDir())
+	now := time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC)
+	f := &feature.Feature{
+		ID:            "feat-setup-failed",
+		Name:          "Setup Failed",
+		Slug:          "setup-failed",
+		Status:        feature.StatusFailed,
+		CurrentPhase:  feature.PhasePlan,
+		Created:       now,
+		ActiveRun:     1,
+		RunCount:      1,
+		FailureType:   feature.FailureWorktreeSetup,
+		LastError:     "git worktree add failed",
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "repo-a", Branch: "feature/setup-failed"}},
+	}
+	setup := feature.NewActiveSetupState(f.Repos, nil, nil, now)
+	setup.Status = feature.SetupStatusFailed
+	setup.CompletedAt = &now
+	setup.LatestLogPath = "/tmp/agentico/setup.log"
+	setup.LastError = "git worktree add failed"
+	task := setup.Tasks["worktree:repo-a"]
+	task.Status = feature.SetupStatusFailed
+	task.Path = "/tmp/worktrees/setup-failed/repo-a"
+	task.LastError = "git worktree add failed"
+	setup.Tasks[task.Key] = task
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, FailureType: feature.FailureWorktreeSetup})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save feature: %v", err)
+	}
+	handler := NewHandler(HandlerOptions{Features: store})
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	featureBody := detail["feature"].(map[string]any)
+	active := featureBody["active_run_detail"].(map[string]any)
+	setupBody, ok := active["setup"].(map[string]any)
+	if !ok {
+		t.Fatalf("active_run_detail = %+v, want setup object for durable setup failure", active)
+	}
+	if setupBody["status"] != "failed" || setupBody["last_error"] != "git worktree add failed" || setupBody["latest_log_path"] == "" {
+		t.Fatalf("setup = %+v, want failed setup diagnostic", setupBody)
+	}
+	tasks := setupBody["tasks"].(map[string]any)
+	worktreeTask := tasks["worktree:repo-a"].(map[string]any)
+	if worktreeTask["status"] != "failed" || worktreeTask["last_error"] != "git worktree add failed" || worktreeTask["path"] == "" {
+		t.Fatalf("worktree task = %+v, want failed task diagnostic", worktreeTask)
+	}
+}
+
 func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	t.Parallel()
 

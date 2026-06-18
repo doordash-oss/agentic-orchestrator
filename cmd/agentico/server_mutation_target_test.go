@@ -518,15 +518,19 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	if created.Checkpoints != wantCheckpoints {
 		t.Fatalf("created checkpoints = %+v, want normalized %+v", created.Checkpoints, wantCheckpoints)
 	}
-	if len(created.Attachments) != 1 {
-		t.Fatalf("created attachments = %v; want one copied attachment", created.Attachments)
+	if created.Status != feature.StatusSettingUpWorktrees {
+		t.Fatalf("created status = %s; want SettingUpWorktrees", created.Status)
 	}
-	copied, err := os.ReadFile(created.Attachments[0])
-	if err != nil {
-		t.Fatalf("ReadFile copied attachment: %v", err)
+	if len(created.Attachments) != 0 {
+		t.Fatalf("created attachments = %v; want attachment queued for setup, not copied during create", created.Attachments)
 	}
-	if string(copied) != "rest attachment" {
-		t.Fatalf("copied attachment = %q; want original contents", copied)
+	setup := created.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusRunning {
+		t.Fatalf("created setup = %+v; want active setup state", setup)
+	}
+	attachmentTask := setup.Tasks["attachment:1"]
+	if attachmentTask.Kind != feature.SetupTaskAttachment || attachmentTask.Status != feature.SetupStatusQueued || attachmentTask.SourcePath != attachment {
+		t.Fatalf("attachment setup task = %+v; want queued task from REST attachment", attachmentTask)
 	}
 
 	loaded, err := config.Load(configPath)
@@ -540,6 +544,106 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	gates := loaded.Repos["repo-a"].PipelineGates["medium"]
 	if gates.InquiryReview || !gates.RoadmapReview || !gates.PhasePlanReview || gates.ManualPublish {
 		t.Fatalf("persisted repo gates = %+v; want normalized medium gates with manual publish false", gates)
+	}
+}
+
+func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	stateDir := filepath.Join(runtimeDir, "features")
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, cfg)
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		return "", errors.New("worktree creation should be deferred to setup")
+	}
+	manager.Worktrees = worktrees
+	target := serverMutationTarget{
+		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		cfg:        cfg,
+		configPath: configPath,
+		store:      store,
+	}
+
+	result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
+		Name:     "REST queued setup",
+		Repos:    []string{"repo-a"},
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("CreateFeature() error = %v, want queued setup without worktree side effect", err)
+	}
+
+	created, err := store.Load(result.FeatureID)
+	if err != nil {
+		t.Fatalf("Load created feature: %v", err)
+	}
+	if created.Status != feature.StatusSettingUpWorktrees {
+		t.Fatalf("created status = %s, want SettingUpWorktrees", created.Status)
+	}
+	setup := created.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusRunning {
+		t.Fatalf("created setup = %+v, want active setup state", setup)
+	}
+	if len(worktrees.Calls) != 0 {
+		t.Fatalf("worktree calls = %+v, want none during feature_create", worktrees.Calls)
+	}
+}
+
+func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	failWorktree := true
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		if failWorktree {
+			return "", errors.New("repo checkout missing")
+		}
+		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	}
+	manager.Worktrees = worktrees
+	f, err := manager.Create("Retry setup via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		QueueSetup: true,
+		Pipeline:   feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := manager.RunSetup(f.ID); err == nil {
+		t.Fatal("RunSetup() error = nil, want initial setup failure")
+	}
+	failWorktree = false
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		store: store,
+	}
+
+	result, err := target.RetryFeature(f.ID)
+	if err != nil {
+		t.Fatalf("RetryFeature() error = %v, want setup retry then first phase start", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load retried feature: %v", err)
+	}
+	if result.Result != "retried" || result.FeatureID != f.ID {
+		t.Fatalf("RetryFeature() result = %+v, want retried feature", result)
+	}
+	if updated.Status != feature.StatusPlanning || updated.CurrentPhase != feature.PhasePlan {
+		t.Fatalf("feature status/phase = %s/%s, want Planning/Plan after setup retry start", updated.Status, updated.CurrentPhase)
+	}
+	setup := updated.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone || setup.Attempt != 2 {
+		t.Fatalf("setup = %+v, want done setup on retry attempt 2", setup)
 	}
 }
 

@@ -1409,6 +1409,42 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Failure(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseFailureOnInterruptedFeature_DoesNotMarkFailed(t *testing.T) {
+	for _, tc := range artifactPhaseCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &feature.Feature{
+				ID:           "feat-int-" + tc.phaseKey,
+				Status:       feature.StatusInterrupted,
+				CurrentPhase: tc.phase,
+				Pipeline:     feature.PipelineLarge,
+			}
+			lc := lifecycleForFeature(f)
+			fs := newFeatureStore(f)
+			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+
+			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+				Phase:       tc.phase,
+				Success:     false,
+				ErrorDetail: "session stopped while agent was mid-turn",
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion: %v", err)
+			}
+
+			refuteLifecycleCall(t, lc, "MarkFailed")
+			events := drainEvents(o)
+			if hasEventType(events, ports.FeatureFailed) {
+				t.Fatalf("unexpected FeatureFailed event for interrupted %s completion: %#v", tc.phase, events)
+			}
+			if hasEventType(events, ports.PhaseCompleted) {
+				t.Fatalf("unexpected PhaseCompleted event for interrupted %s completion: %#v", tc.phase, events)
+			}
+			if f.Status != feature.StatusInterrupted {
+				t.Fatalf("Status = %s, want Interrupted", f.Status)
+			}
+		})
+	}
+}
+
 // Artifact phase terminal-state guard.
 func TestOrchestrator_HandlePhaseCompletion_Inquire_Terminal(t *testing.T) {
 	f := &feature.Feature{

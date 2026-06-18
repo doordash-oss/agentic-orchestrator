@@ -68,12 +68,12 @@ func TestLivePreviewEligible(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "pending ask user",
+			name: "interrupted stale ask user",
 			f: &feature.Feature{
 				Status:    feature.StatusInterrupted,
 				HelpQueue: []feature.HelpRequest{{Question: "Need input?", Pending: true}},
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "needs review",

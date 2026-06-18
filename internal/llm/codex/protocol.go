@@ -1087,6 +1087,16 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 				FileReads: p.fileReadEventsForCommand(completed.Item),
 			}, true
+		case "fileChange":
+			return llm.SDKMessage{
+				Type: "tool_progress",
+				ToolProgress: &llm.ToolProgressMessage{
+					Type:      "tool_progress",
+					ToolUseID: completed.Item.ID,
+					ToolName:  "Write",
+				},
+				FileChanges: fileChangeEventsForItem(completed.Item),
+			}, true
 		default:
 			return llm.SDKMessage{}, false
 		}
@@ -1214,6 +1224,60 @@ func (p *Protocol) fileReadEventsForCommand(item ItemUnion) []llm.FileReadEvent 
 		events = append(events, event)
 	}
 	return events
+}
+
+func fileChangeEventsForItem(item ItemUnion) []llm.FileChangeEvent {
+	if len(item.Changes) == 0 {
+		return nil
+	}
+	events := make([]llm.FileChangeEvent, 0, len(item.Changes))
+	for _, change := range item.Changes {
+		path := strings.TrimSpace(change.Path)
+		if path == "" {
+			continue
+		}
+		detail := strings.TrimSpace(change.Diff)
+		added, removed := countDiffPatchLines(detail)
+		events = append(events, llm.FileChangeEvent{
+			Path:         path,
+			OldPath:      strings.TrimSpace(change.Kind.MovePath),
+			Operation:    normalizeFileChangeOperation(change.Kind.Type),
+			Detail:       detail,
+			AddedLines:   added,
+			RemovedLines: removed,
+			HasDiffPatch: detail != "",
+		})
+	}
+	return events
+}
+
+func normalizeFileChangeOperation(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "add", "create", "write":
+		return "write"
+	case "delete", "remove":
+		return "delete"
+	case "move", "rename":
+		return "rename"
+	case "update", "modify", "modified":
+		return "update"
+	default:
+		return "update"
+	}
+}
+
+func countDiffPatchLines(patch string) (added, removed int) {
+	for _, line := range strings.Split(patch, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	return added, removed
 }
 
 func textLooksLikeQuestion(text string) bool {

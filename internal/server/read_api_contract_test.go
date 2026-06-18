@@ -285,6 +285,75 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	}
 }
 
+func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	longQuestion := "Should TUI/UI label names that match what is displayed on screen, including In Progress, Published, Watch, Answer, Approve, and Publish as PR, be translated into the target language or kept in English so the reader can map the README back to the live interface without losing important workflow context?"
+	longLabel := "Translate visible TUI labels too, including every status badge, button label, and action description that directly corresponds to on-screen text"
+	longDescription := "Translate all prose including TUI labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
+	input, err := json.Marshal(map[string]any{
+		"questions": []map[string]any{{
+			"question": longQuestion,
+			"options": []map[string]any{{
+				"label":       longLabel,
+				"description": longDescription,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal AskUser input: %v", err)
+	}
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id: "sess-ask", featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+			pending: []*llm.ControlRequestMessage{{
+				Type:      "control_request",
+				RequestID: "ask-long",
+				Request: llm.ControlRequest{
+					Subtype:  "can_use_tool",
+					ToolName: "AskUserQuestion",
+					Input:    input,
+				},
+			}},
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	asks := prompts["ask_user_questions"].([]any)
+	if len(asks) != 1 {
+		t.Fatalf("ask_user_questions length = %d; want 1", len(asks))
+	}
+	ask := asks[0].(map[string]any)
+	if _, ok := ask["input"]; ok {
+		t.Fatalf("AskUser prompt snapshot exposed raw input: %+v", ask["input"])
+	}
+	questions := ask["questions"].([]any)
+	if len(questions) != 1 {
+		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
+	}
+	question := questions[0].(map[string]any)
+	if got := question["question"]; got != longQuestion {
+		t.Fatalf("ask_user question = %q; want full question %q", got, longQuestion)
+	}
+	options := question["options"].([]any)
+	if len(options) != 1 {
+		t.Fatalf("ask_user options length = %d; want 1", len(options))
+	}
+	option := options[0].(map[string]any)
+	if got := option["label"]; got != longLabel {
+		t.Fatalf("ask_user option label = %q; want full label %q", got, longLabel)
+	}
+	if got := option["description"]; got != longDescription {
+		t.Fatalf("ask_user option description = %q; want full description %q", got, longDescription)
+	}
+}
+
 func TestRuntimeConfigDiscoversWorkspaceRootReposOnRead(t *testing.T) {
 	t.Parallel()
 
@@ -1023,6 +1092,46 @@ func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
 	}
 	if strings.Contains(raw, "private-token") {
 		t.Fatalf("transcript leaked redacted tool progress output: %s", raw)
+	}
+}
+
+func TestSessionTranscriptIncludesStructuredCodexFileChangeDiffRows(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	msgs := []llm.SDKMessage{{
+		Type: "tool_progress",
+		ToolProgress: &llm.ToolProgressMessage{
+			Type:      "tool_progress",
+			ToolUseID: "call_write",
+			ToolName:  "Write",
+		},
+		FileChanges: []llm.FileChangeEvent{{
+			Path:         filepath.Join("/work/repo", "README.md"),
+			Operation:    "update",
+			Detail:       "@@ -1,2 +1,2 @@\n-old\n+new\n",
+			AddedLines:   1,
+			RemovedLines: 1,
+			HasDiffPatch: true,
+		}},
+	}}
+	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+		id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: "codex",
+		workDir:  "/work/repo",
+		messages: msgs,
+	}}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
+	raw := mustMarshalJSON(t, body)
+	for _, want := range []string{`"file_change"`, `"path":"README.md"`, `"operation":"update"`, `"has_diff_patch":true`, `"added_lines":1`, `"removed_lines":1`, `-old`, `+new`} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("transcript missing structured Codex file change %q in %s", want, raw)
+		}
 	}
 }
 

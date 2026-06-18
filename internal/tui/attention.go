@@ -59,20 +59,22 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 			ReviewMode: reviewAttentionMode(f),
 		}
 	}
-	if summary, ok := pendingPermissionSummary(f, sess); ok {
-		return featureAttention{
-			Kind:      attentionPermission,
-			CTALabel:  "Approve",
-			TypeLabel: "Permission Request",
-			Summary:   summary,
+	if featureCanSurfacePromptQueues(f) {
+		if summary, ok := pendingPermissionSummary(f, sess); ok {
+			return featureAttention{
+				Kind:      attentionPermission,
+				CTALabel:  "Approve",
+				TypeLabel: "Permission Request",
+				Summary:   summary,
+			}
 		}
-	}
-	if summary, ok := pendingAskUserSummary(f, sess); ok {
-		return featureAttention{
-			Kind:      attentionAskUser,
-			CTALabel:  "Answer",
-			TypeLabel: "Question",
-			Summary:   summary,
+		if summary, ok := pendingAskUserSummary(f, sess); ok {
+			return featureAttention{
+				Kind:      attentionAskUser,
+				CTALabel:  "Answer",
+				TypeLabel: "Question",
+				Summary:   summary,
+			}
 		}
 	}
 	if f.Status == feature.StatusNeedUserInput {
@@ -105,6 +107,13 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 		}
 	}
 	return featureAttention{Kind: attentionNone}
+}
+
+func featureCanSurfacePromptQueues(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	return f.Status != feature.StatusInterrupted
 }
 
 func (a featureAttention) HasCTA() bool {

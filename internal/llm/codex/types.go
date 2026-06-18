@@ -309,12 +309,14 @@ type ItemStartedParams struct {
 type ItemUnion struct {
 	ID               string          `json:"id"`
 	Type             string          `json:"type"`
+	Status           string          `json:"status,omitempty"`
 	Phase            string          `json:"phase,omitempty"`
 	Text             string          `json:"text,omitempty"`
 	AggregatedOutput string          `json:"aggregatedOutput,omitempty"`
 	ExitCode         *int            `json:"exitCode,omitempty"`
 	Summary          []string        `json:"summary,omitempty"`
 	CommandActions   []CommandAction `json:"commandActions,omitempty"`
+	Changes          []FileChange    `json:"changes,omitempty"`
 }
 
 // CommandAction is Codex's structured description of a command's filesystem
@@ -325,6 +327,19 @@ type CommandAction struct {
 	Command string `json:"command,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Path    string `json:"path,omitempty"`
+}
+
+// FileChange is Codex's structured description of a file mutation.
+type FileChange struct {
+	Path string         `json:"path,omitempty"`
+	Kind FileChangeKind `json:"kind,omitempty"`
+	Diff string         `json:"diff,omitempty"`
+}
+
+// FileChangeKind describes the kind of a Codex file mutation.
+type FileChangeKind struct {
+	Type     string `json:"type,omitempty"`
+	MovePath string `json:"move_path,omitempty"`
 }
 
 // --- tool/requestUserInput (inbound) ---

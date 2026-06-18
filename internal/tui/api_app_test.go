@@ -1864,6 +1864,32 @@ func TestMergeLivePreviewTranscriptTreatsShiftedSnapshotsAsOverlappingTail(t *te
 	}
 }
 
+func TestMergeLivePreviewTranscriptReplacesUpdatedStreamingRow(t *testing.T) {
+	t.Parallel()
+
+	existing := []server.TranscriptMessageDTO{
+		{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+		{Index: 2, Role: "assistant", Type: "text", Text: "I'm using the inquire workflow now; I'll keep this"},
+		{Index: 3, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+	}
+	incoming := []server.TranscriptMessageDTO{
+		{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+		{Index: 2, Role: "assistant", Type: "text", Text: "I'm using the inquire workflow now; I'll keep this to requirements-level clarification."},
+		{Index: 3, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+	}
+
+	merged := mergeLivePreviewTranscript(existing, incoming)
+	if got, want := len(merged), 3; got != want {
+		t.Fatalf("merged transcript len = %d, want %d: %+v", got, want, merged)
+	}
+	if strings.Contains(merged[1].Text, "this\nI'm using") {
+		t.Fatalf("merged transcript stacked streaming prefixes: %+v", merged)
+	}
+	if got, want := merged[1].Text, incoming[1].Text; got != want {
+		t.Fatalf("merged streaming row text = %q, want latest %q", got, want)
+	}
+}
+
 func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -1908,6 +1934,39 @@ func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 	}
 	if newFeature.AttentionCount != 1 {
 		t.Fatalf("new feature AttentionCount = %d, want 1", newFeature.AttentionCount)
+	}
+}
+
+func TestAPIAppModelIgnoresStaleAttentionForInterruptedFeature(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "stopped", Name: "Stopped work", Slug: "stopped-work", Status: "Interrupted", CurrentPhase: "design", CreatedAt: time.Now()},
+		}},
+		prompts: server.PromptSnapshotResponse{
+			AskUserQuestions: []server.ControlRequestDTO{
+				{FeatureID: "stopped", RequestID: "ask-1", Status: "pending", ToolName: "AskUserQuestion", Summary: "Which path?"},
+			},
+			HelpQueue: []server.HelpQueueDTO{
+				{FeatureID: "stopped", Question: "Need input?", Pending: true},
+			},
+		},
+		permissions: server.PermissionSnapshotResponse{Requests: []server.ControlRequestDTO{
+			{FeatureID: "stopped", RequestID: "perm-1", Status: "pending", ToolName: "Bash", Summary: "go test ./internal/tui"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	snapshot := app.Snapshot()
+	if len(snapshot.Features) != 1 {
+		t.Fatalf("Features len = %d, want 1", len(snapshot.Features))
+	}
+	if got := snapshot.Features[0].AttentionCount; got != 0 {
+		t.Fatalf("interrupted feature AttentionCount = %d, want 0", got)
 	}
 }
 
@@ -4244,6 +4303,71 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 	_, _ = model.(APIAppModel).Update(msg)
 	if got := client.askUserAnswers; len(got) != 1 || got[0].Answers["Which database?"] != "DynamoDB" {
 		t.Fatalf("AnswerAskUser requests = %+v, want DynamoDB answer", got)
+	}
+}
+
+func TestAPIAppModelChatPromptOnlyAskUserSnapshotShowsReadableLongText(t *testing.T) {
+	t.Parallel()
+
+	longQuestion := "Should TUI/UI label names that match what is displayed on screen, including In Progress, Published, Watch, Answer, Approve, and Publish as PR, be translated into the target language or kept in English so the reader can map the README back to the live interface without losing important workflow context?"
+	longDescription := "Translate all prose including TUI labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "design", CreatedAt: time.Now()},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 320, Height: 60})
+	app = model.(APIAppModel)
+	model, _ = app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("ask the full translation policy question")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	thinking := model.(APIAppModel)
+
+	askControl := server.ControlRequestDTO{
+		RequestID: "ask-long",
+		SessionID: chatSessionID,
+		FeatureID: chatSessionID,
+		ToolName:  "AskUserQuestion",
+		Status:    "pending",
+		Questions: []server.AskUserQuestionDTO{{
+			Question: longQuestion,
+			Options: []server.AskUserOptionDTO{{
+				Label:       "Translate TUI labels too (Recommended)",
+				Description: longDescription,
+			}},
+		}},
+	}
+	model, _ = thinking.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Prompts: &server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{askControl}},
+	}})
+	waiting := model.(APIAppModel)
+
+	if waiting.chat.responding {
+		t.Fatal("chat remained responding after prompt-only AskUserQuestion snapshot")
+	}
+	view := stripANSI(waiting.View().Content)
+	for _, want := range []string{
+		"losing important workflow context?",
+		"Translate TUI labels too (Recommended)",
+		"[enter] Send",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("chat view missing %q after long AskUser snapshot:\n%s", want, view)
+		}
+	}
+	for _, notWant := range []string{"target languag...", "looking...", "match..."} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("chat view contains truncated AskUser text %q:\n%s", notWant, view)
+		}
 	}
 }
 

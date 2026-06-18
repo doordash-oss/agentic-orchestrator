@@ -195,6 +195,55 @@ func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T)
 	}
 }
 
+func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
+
+	params := json.RawMessage(`{
+		"threadId": "thread-1",
+		"turnId": "turn-1",
+		"item": {
+			"id": "call_write",
+			"type": "fileChange",
+			"status": "completed",
+			"changes": [{
+				"path": "/tmp/test/README.md",
+				"kind": {"type": "update", "move_path": null},
+				"diff": "@@ -1,2 +1,2 @@\n-old\n+new\n"
+			}]
+		}
+	}`)
+
+	msg, ok := p.parseNotification("item/completed", params)
+	if !ok {
+		t.Fatal("parseNotification(item/completed fileChange) returned false, want true")
+	}
+	if msg.ToolProgress == nil {
+		t.Fatal("msg.ToolProgress is nil, want non-nil")
+	}
+	if msg.ToolProgress.ToolUseID != "call_write" || msg.ToolProgress.ToolName != "Write" {
+		t.Fatalf("ToolProgress = %+v, want call_write Write", msg.ToolProgress)
+	}
+	if len(msg.FileChanges) != 1 {
+		t.Fatalf("len(FileChanges) = %d, want 1", len(msg.FileChanges))
+	}
+	change := msg.FileChanges[0]
+	if change.Path != "/tmp/test/README.md" {
+		t.Fatalf("FileChanges[0].Path = %q", change.Path)
+	}
+	if change.Operation != "update" {
+		t.Fatalf("FileChanges[0].Operation = %q, want update", change.Operation)
+	}
+	if !change.HasDiffPatch {
+		t.Fatal("FileChanges[0].HasDiffPatch = false, want true")
+	}
+	if change.AddedLines != 1 || change.RemovedLines != 1 {
+		t.Fatalf("line counts = +%d -%d, want +1 -1", change.AddedLines, change.RemovedLines)
+	}
+	if !strings.Contains(change.Detail, "-old") || !strings.Contains(change.Detail, "+new") {
+		t.Fatalf("FileChanges[0].Detail missing diff lines: %q", change.Detail)
+	}
+}
+
 func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
 

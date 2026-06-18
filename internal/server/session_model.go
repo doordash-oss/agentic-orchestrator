@@ -196,6 +196,10 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 		case msg.Result != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "result", Status: msg.Result.Subtype, Redacted: true})
 		case msg.ToolProgress != nil:
+			if rows := fileChangeDTOsFromSDKFileChanges(index, msg.ToolProgress.ToolName, msg.FileChanges, root); len(rows) > 0 {
+				out = append(out, rows...)
+				continue
+			}
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "tool_progress", Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
 		case msg.TaskStarted != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "task_started", Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
@@ -402,6 +406,52 @@ func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir st
 		detail = "Captured from tool activity."
 	}
 	return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: "update", Detail: detail}
+}
+
+func fileChangeDTOsFromSDKFileChanges(index int, toolName string, changes []llm.FileChangeEvent, workDir string) []TranscriptMessageDTO {
+	if len(changes) == 0 {
+		return nil
+	}
+	rows := make([]TranscriptMessageDTO, 0, len(changes))
+	for _, change := range changes {
+		dto := fileChangeDTOFromSDKFileChange(change, workDir)
+		if dto == nil {
+			continue
+		}
+		rows = append(rows, TranscriptMessageDTO{
+			Index:      index,
+			Role:       "system",
+			Type:       "tool_progress",
+			Tool:       firstNonEmpty(toolName, "Write"),
+			Redacted:   true,
+			FileChange: dto,
+		})
+	}
+	return rows
+}
+
+func fileChangeDTOFromSDKFileChange(change llm.FileChangeEvent, workDir string) *FileChangeDTO {
+	path := strings.TrimSpace(change.Path)
+	if path == "" {
+		return nil
+	}
+	op := strings.TrimSpace(change.Operation)
+	if op == "" {
+		op = "update"
+	}
+	detail := safeDisplayText(truncateTranscriptFileChangeDetail(change.Detail), 2000)
+	if detail == "" {
+		detail = "Captured from provider file change."
+	}
+	return &FileChangeDTO{
+		Path:         safeTranscriptPath(workDir, path),
+		OldPath:      safeTranscriptPath(workDir, change.OldPath),
+		Operation:    safeDisplayText(op, 120),
+		Detail:       detail,
+		AddedLines:   change.AddedLines,
+		RemovedLines: change.RemovedLines,
+		HasDiffPatch: change.HasDiffPatch,
+	}
 }
 
 func transcriptToolUseFileChangeDetail(toolName string, fields map[string]interface{}) string {

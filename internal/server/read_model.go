@@ -1014,6 +1014,13 @@ func safeStringField(fields map[string]any, key string) string {
 	return safeDisplayText(value, 2000)
 }
 
+const (
+	askUserQuestionDisplayLimit          = 4000
+	askUserHeaderDisplayLimit            = 1000
+	askUserOptionLabelDisplayLimit       = 1000
+	askUserOptionDescriptionDisplayLimit = 4000
+)
+
 func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {
 	if req == nil || req.Request.ToolName != "AskUserQuestion" {
 		return nil
@@ -1036,14 +1043,14 @@ func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {
 	questions := make([]AskUserQuestionDTO, 0, len(envelope.Questions))
 	for _, rawQuestion := range envelope.Questions {
 		question := AskUserQuestionDTO{
-			Question:    safeDisplayText(rawQuestion.Question, 180),
-			Header:      safeDisplayText(rawQuestion.Header, 120),
+			Question:    safeDisplayText(rawQuestion.Question, askUserQuestionDisplayLimit),
+			Header:      safeDisplayText(rawQuestion.Header, askUserHeaderDisplayLimit),
 			MultiSelect: rawQuestion.MultiSelect,
 		}
 		for _, rawOption := range rawQuestion.Options {
 			option := AskUserOptionDTO{
-				Label:       safeDisplayText(rawOption.Label, 120),
-				Description: safeDisplayText(rawOption.Description, 180),
+				Label:       safeDisplayText(rawOption.Label, askUserOptionLabelDisplayLimit),
+				Description: safeDisplayText(rawOption.Description, askUserOptionDescriptionDisplayLimit),
 				Confidence:  rawOption.Confidence,
 			}
 			if option.Label == "" && option.Description == "" && option.Confidence == nil {

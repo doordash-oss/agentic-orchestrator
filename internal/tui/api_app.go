@@ -3201,8 +3201,8 @@ func mergeLivePreviewTranscript(existing, incoming []server.TranscriptMessageDTO
 	}
 	overlap := livePreviewTranscriptOverlap(existing, incoming)
 	merged := make([]server.TranscriptMessageDTO, 0, len(existing)+len(incoming)-overlap)
-	merged = append(merged, existing...)
-	merged = append(merged, incoming[overlap:]...)
+	merged = append(merged, existing[:len(existing)-overlap]...)
+	merged = append(merged, incoming...)
 	return trimLivePreviewTranscript(merged)
 }
 
@@ -3212,7 +3212,7 @@ func livePreviewTranscriptOverlap(existing, incoming []server.TranscriptMessageD
 		matches := true
 		existingStart := len(existing) - overlap
 		for i := 0; i < overlap; i++ {
-			if livePreviewTranscriptContentKey(existing[existingStart+i]) != livePreviewTranscriptContentKey(incoming[i]) {
+			if !livePreviewTranscriptRowsOverlap(existing[existingStart+i], incoming[i]) {
 				matches = false
 				break
 			}
@@ -3222,6 +3222,13 @@ func livePreviewTranscriptOverlap(existing, incoming []server.TranscriptMessageD
 		}
 	}
 	return 0
+}
+
+func livePreviewTranscriptRowsOverlap(existing, incoming server.TranscriptMessageDTO) bool {
+	if livePreviewTranscriptContentKey(existing) == livePreviewTranscriptContentKey(incoming) {
+		return true
+	}
+	return apiTranscriptRowKey(existing) == apiTranscriptRowKey(incoming)
 }
 
 func livePreviewTranscriptContentKey(row server.TranscriptMessageDTO) string {
@@ -3286,7 +3293,7 @@ func (m *APIAppModel) storeContent(content apiFeatureContentSnapshot) {
 }
 
 func (m *APIAppModel) rebuildPresentation(preferredFeatureID string) {
-	attention := apiAttentionCounts(m.prompts, m.permissions)
+	attention := apiAttentionCounts(m.featureList.Features, m.prompts, m.permissions)
 	features := make([]APIFeaturePresentation, 0, len(m.featureList.Features))
 	for _, dto := range m.featureList.Features {
 		features = append(features, APIFeaturePresentation{
@@ -8245,29 +8252,46 @@ func apiRoadmapPhaseStatus(current, phaseNum int) string {
 	}
 }
 
-func apiAttentionCounts(prompts server.PromptSnapshotResponse, permissions server.PermissionSnapshotResponse) map[string]int {
+func apiAttentionCounts(features []server.FeatureSummary, prompts server.PromptSnapshotResponse, permissions server.PermissionSnapshotResponse) map[string]int {
 	counts := map[string]int{}
+	suppressed := apiSuppressedAttentionFeatures(features)
+	shouldCount := func(featureID string) bool {
+		return featureID != "" && !suppressed[featureID]
+	}
 	for _, h := range prompts.HelpQueue {
-		if h.Pending && h.FeatureID != "" {
+		if h.Pending && shouldCount(h.FeatureID) {
 			counts[h.FeatureID]++
 		}
 	}
 	for _, gate := range prompts.NeedUserInputs {
-		if gate.Open && gate.FeatureID != "" {
+		if gate.Open && shouldCount(gate.FeatureID) {
 			counts[gate.FeatureID]++
 		}
 	}
 	for _, ask := range prompts.AskUserQuestions {
-		if isPendingControlStatus(ask.Status) && ask.FeatureID != "" {
+		if isPendingControlStatus(ask.Status) && shouldCount(ask.FeatureID) {
 			counts[ask.FeatureID]++
 		}
 	}
 	for _, req := range permissions.Requests {
-		if isPendingControlStatus(req.Status) && req.FeatureID != "" {
+		if isPendingControlStatus(req.Status) && shouldCount(req.FeatureID) {
 			counts[req.FeatureID]++
 		}
 	}
 	return counts
+}
+
+func apiSuppressedAttentionFeatures(features []server.FeatureSummary) map[string]bool {
+	suppressed := make(map[string]bool)
+	for _, summary := range features {
+		if summary.ID == "" {
+			continue
+		}
+		if apiFeatureStatus(summary.Status) == feature.StatusInterrupted {
+			suppressed[summary.ID] = true
+		}
+	}
+	return suppressed
 }
 
 func isPendingControlStatus(status string) bool {

@@ -148,6 +148,18 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 			wantKind: attentionNone,
 		},
 		{
+			name: "interrupted feature ignores stale feature and session queues",
+			f: &feature.Feature{
+				Status: feature.StatusInterrupted,
+				PermissionsQueue: []feature.PermissionRequest{
+					{Tool: "Bash", Args: `{"command":"go test ./internal/tui"}`, Pending: true},
+				},
+				HelpQueue: []feature.HelpRequest{{Question: "Which branch?", Pending: true}},
+			},
+			sess:     pendingAttentionSession("stopped-session", session.SessionWaitingPermission, pendingPermissionControlRequestForAttention("perm-stale", "Bash", `{"command":"go test ./internal/tui"}`)),
+			wantKind: attentionNone,
+		},
+		{
 			name: "session permission beats feature ask user",
 			f: &feature.Feature{
 				Status:    feature.StatusImplementing,

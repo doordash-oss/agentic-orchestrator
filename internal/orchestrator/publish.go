@@ -166,6 +166,7 @@ func (o *Orchestrator) generatePRDescription(f *feature.Feature, prCtx agent.PRC
 	}
 	title, body, err := o.deps.PhaseRunner.RunDescriptionGeneration(
 		context.Background(),
+		f.ID,
 		model,
 		prCtx,
 	)

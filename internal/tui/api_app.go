@@ -799,7 +799,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Config load failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
-		m.configEditor = newAPIEditConfigModel(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiPhaseModelCatalog(m.catalog))
+		m.configEditor = newAPIEditConfigModel(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiFeatureModelCatalog(m.catalog))
 		m.statusMessage = ""
 		return m, nil
 	case publishDescGeneratedMsg:
@@ -2712,11 +2712,42 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 	if !ok || active == nil {
 		return m, nil
 	}
-	if snapshot.Session == nil || snapshot.Session.Session.ID != active.ID() {
-		return m, nil
+	var detail server.SessionDetailDTO
+	var transcript *server.TranscriptResponse
+	if snapshot.Session != nil {
+		if snapshot.Session.Session.ID != active.ID() {
+			return m, nil
+		}
+		detail = snapshot.Session.Session
+		transcript = snapshot.Transcript
+	} else {
+		controls := m.apiPendingControlsBySession(active.FeatureID())[active.ID()]
+		if len(controls) == 0 {
+			return m, nil
+		}
+		detail = server.SessionDetailDTO{
+			SessionSummaryDTO: server.SessionSummaryDTO{
+				ID:        active.ID(),
+				FeatureID: active.FeatureID(),
+				Phase:     active.Phase().String(),
+				Status:    active.Status().String(),
+			},
+			PendingControls: controls,
+		}
 	}
-	detail := snapshot.Session.Session
-	newMessages := active.applyAPISessionSnapshot(detail, snapshot.Transcript, detail.PendingControls)
+	controls := detail.PendingControls
+	if len(controls) == 0 {
+		if bySession := m.apiPendingControlsBySession(active.FeatureID()); len(bySession) > 0 {
+			controls = bySession[active.ID()]
+			detail.PendingControls = controls
+		}
+	}
+	newMessages := active.applyAPISessionSnapshot(detail, transcript, controls)
+	if m.chat.responding {
+		if pendingAsk := firstPendingAskUserControlRequest(active); pendingAsk != nil && !apiMessagesContainControlRequest(newMessages, pendingAsk.RequestID) {
+			newMessages = append(newMessages, llm.SDKMessage{Type: "control_request", ControlRequest: pendingAsk})
+		}
+	}
 	if m.chat.responding && apiChatSnapshotWaitingForNextMessage(detail, newMessages) {
 		newMessages = append(newMessages, llm.SDKMessage{
 			Type: "result",
@@ -2733,6 +2764,18 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 	updated, cmd := m.chat.Update(chatMsgsMsg{messages: newMessages})
 	m.chat = updated
 	return m, cmd
+}
+
+func apiMessagesContainControlRequest(messages []llm.SDKMessage, requestID string) bool {
+	for _, msg := range messages {
+		if msg.ControlRequest == nil {
+			continue
+		}
+		if requestID == "" || msg.ControlRequest.RequestID == requestID {
+			return true
+		}
+	}
+	return false
 }
 
 func apiChatSnapshotWaitingForNextMessage(detail server.SessionDetailDTO, messages []llm.SDKMessage) bool {
@@ -7506,26 +7549,25 @@ func (e apiRuntimeConfigEditor) render(width int) string {
 	}
 	var b strings.Builder
 	b.WriteString("Runtime config\n\n")
-	b.WriteString("  Default models\n\n")
-	for i, field := range e.fields() {
-		prefix := "  "
-		line := fmt.Sprintf("%-14s %s", field, apiConfigModelSummary(e.modelValue(field)))
-		if i == e.cursor {
-			prefix = "> "
-			line = SelectedRowStyle.Render(line)
-		}
-		b.WriteString(prefix + line + "\n")
-	}
+	b.WriteString(e.configEditor().renderModelsBoxWithTitle(width-4, "Default models"))
 	b.WriteString("\n")
 	b.WriteString(KeyHelpStyle.Render(" [up/down] Field   [tab] Change model   [enter] Save   [esc] Cancel"))
 	return panelStyle(true).Width(width).Render(b.String())
+}
+
+func (e apiRuntimeConfigEditor) configEditor() ConfigEditorModel {
+	return ConfigEditorModel{
+		models:    e.draft,
+		catalog:   e.catalog,
+		rowCursor: e.cursor,
+	}
 }
 
 func (e apiRuntimeConfigEditor) fields() []string {
 	if len(e.catalog.Fields) > 0 {
 		return e.catalog.Fields
 	}
-	return phaseCatalogFields
+	return globalModelFields
 }
 
 func (e apiRuntimeConfigEditor) currentField() string {
@@ -7546,6 +7588,8 @@ func (e apiRuntimeConfigEditor) modelValue(field string) string {
 		return e.draft.Implementation
 	case "Review":
 		return e.draft.Review
+	case "Utilities":
+		return e.draft.Utilities
 	case "KB Build":
 		return e.draft.KBBuild
 	default:
@@ -7563,6 +7607,8 @@ func (e *apiRuntimeConfigEditor) setModelValue(field, value string) {
 		e.draft.Implementation = value
 	case "Review":
 		e.draft.Review = value
+	case "Utilities":
+		e.draft.Utilities = value
 	case "KB Build":
 		e.draft.KBBuild = value
 	}
@@ -7640,7 +7686,7 @@ func apiConfigModelSummary(value string) string {
 
 func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 	cat := PhaseModelCatalog{
-		Fields:              append([]string(nil), phaseCatalogFields...),
+		Fields:              append([]string(nil), globalModelFields...),
 		ProviderModels:      map[string][]string{},
 		ProviderOrder:       append([]string(nil), resp.ProviderOrder...),
 		PhaseDefaults:       map[string]string{},
@@ -7651,6 +7697,7 @@ func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 	cat.PhaseDefaults["Planning"] = resp.PhaseDefaults.Planning
 	cat.PhaseDefaults["Implementation"] = resp.PhaseDefaults.Implementation
 	cat.PhaseDefaults["Review"] = resp.PhaseDefaults.Review
+	cat.PhaseDefaults["Utilities"] = resp.PhaseDefaults.Utilities
 	cat.PhaseDefaults["KB Build"] = resp.PhaseDefaults.KBBuild
 	for provider, models := range resp.ProviderModels {
 		ids := make([]string, 0, len(models))
@@ -7668,9 +7715,10 @@ func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 		}
 	}
 	for field, providerModels := range resp.PhaseProviderModels {
-		cat.PhaseProviderModels[field] = map[string][]string{}
+		displayField := normalizeModelCatalogField(field)
+		cat.PhaseProviderModels[displayField] = map[string][]string{}
 		for provider, models := range providerModels {
-			cat.PhaseProviderModels[field][provider] = append([]string(nil), models...)
+			cat.PhaseProviderModels[displayField][provider] = append([]string(nil), models...)
 			if !stringSliceContains(cat.ProviderOrder, provider) {
 				missingProviders[provider] = true
 			}
@@ -7684,6 +7732,12 @@ func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 	for _, provider := range missingOrder {
 		cat.ProviderOrder = append(cat.ProviderOrder, provider)
 	}
+	return cat
+}
+
+func apiFeatureModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
+	cat := apiPhaseModelCatalog(resp)
+	cat.Fields = append([]string(nil), phaseCatalogFields...)
 	return cat
 }
 

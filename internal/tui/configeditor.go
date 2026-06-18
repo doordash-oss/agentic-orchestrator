@@ -677,7 +677,13 @@ func displayModelLabel(entry PhaseModelEntry, fallback string) string {
 		return entry.DisplayName
 	}
 	if fallback != "" {
-		return compactModelValueLabel(fallback)
+		if provider, model := splitProviderModel(fallback); provider != "" {
+			return provider + " / " + compactModelIDLabel(model)
+		}
+		return compactModelIDLabel(fallback)
+	}
+	if provider, model := splitProviderModel(entry.ModelID); provider != "" && provider == entry.Agent {
+		return provider + " / " + compactModelIDLabel(model)
 	}
 	return compactModelIDLabel(entry.ModelID)
 }
@@ -1046,9 +1052,14 @@ func (m ConfigEditorModel) phaseAssignmentLabel(field string) string {
 // cascade. The focused row expands into agent choices and model choices scoped
 // to the selected agent.
 func (m ConfigEditorModel) renderModelsBox(width int) string {
-	title := lipgloss.NewStyle().Bold(true).Render("Models")
+	return m.renderModelsBoxWithTitle(width, "Models")
+}
+
+func (m ConfigEditorModel) renderModelsBoxWithTitle(width int, titleText string) string {
+	title := lipgloss.NewStyle().Bold(true).Render(titleText)
 	lines := []string{
 		title,
+		MutedStyle.Render("Assignments"),
 		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %s", "Phase", "Agent", "Model")),
 	}
 	onModelsRow := m.rowCategory() == rowCatModels
@@ -1081,7 +1092,7 @@ func (m ConfigEditorModel) renderModelsBox(width int) string {
 
 	if onModelsRow {
 		field := m.currentModelField()
-		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Selection for "+field))
+		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Choices for "+field))
 		lines = append(lines, m.renderModelCascadeDetails(field, width)...)
 	}
 	return strings.Join(lines, "\n")

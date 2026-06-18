@@ -1115,6 +1115,7 @@ func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
 	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
 	baseURL := "http://127.0.0.1:7655"
+	var terminal bytes.Buffer
 	var started serverStartRequest
 	var launched defaultClientLaunch
 	prepareCalls := 0
@@ -1124,6 +1125,7 @@ func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
 		ConfigPath:               configPath,
 		StateDir:                 stateDir,
 		EnabledProviders:         []string{"codex"},
+		Stderr:                   &terminal,
 		WaitForReadyPollInterval: time.Millisecond,
 		WaitForReadyTimeout:      50 * time.Millisecond,
 	}, defaultLaunchDeps{
@@ -1147,6 +1149,12 @@ func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
 		},
 		StartServer: func(ctx context.Context, req serverStartRequest) (serverProcess, error) {
 			started = req
+			if req.Stderr == nil {
+				t.Fatal("server stderr = nil; want runtime log writer")
+			}
+			if _, err := io.WriteString(req.Stderr, "server log line\n"); err != nil {
+				t.Fatalf("write server stderr: %v", err)
+			}
 			return process, nil
 		},
 		LaunchClient: func(ctx context.Context, launch defaultClientLaunch) error {
@@ -1162,6 +1170,16 @@ func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
 	}
 	if !slices.Equal(started.EnabledProviders, []string{"codex"}) {
 		t.Fatalf("server providers = %v; want [codex]", started.EnabledProviders)
+	}
+	if strings.Contains(terminal.String(), "server log line") {
+		t.Fatalf("child server stderr leaked to terminal: %q", terminal.String())
+	}
+	logData, err := os.ReadFile(filepath.Join(runtimeDir, defaultLogBasename))
+	if err != nil {
+		t.Fatalf("read runtime log: %v", err)
+	}
+	if !strings.Contains(string(logData), "server log line") {
+		t.Fatalf("runtime log missing child server stderr: %q", string(logData))
 	}
 	if launched.BaseURL != baseURL || !launched.OwnedServer {
 		t.Fatalf("client launch = %+v; want owned child server at %s", launched, baseURL)

@@ -592,7 +592,7 @@ func (m DashboardModel) renderFooter() string {
 		if m.SelectedFeature() != nil {
 			hints = append(hints, "[→/enter] Focus")
 		}
-		hints = append(hints, "[Shift+W] Workspaces", "[Shift+E] Workspace Config", "[Shift+R] Resume All", "[tab] Panel", "[q] Quit")
+		hints = append(hints, "[Shift+W] Workspaces", "[Shift+R] Resume All", "[Shift+E] Settings", "[tab] Panel", "[q] Quit")
 	}
 
 	leftPart := KeyHelpStyle.Render(" " + strings.Join(hints, "   "))
@@ -636,7 +636,7 @@ func renderDashboardFooterLine(leftPart, rightHints string, width int) string {
 	leftWidth := ansi.StringWidth(leftLine)
 	if leftWidth+minGap+rightWidth > width {
 		if leftWidth > width {
-			leftLine = ansi.Truncate(leftLine, width, "")
+			leftLine = ansi.Wrap(leftLine, width, " ")
 		}
 		if rightWidth > width {
 			return prefix + leftLine + "\n" + ansi.Truncate(rightHints, width, "")

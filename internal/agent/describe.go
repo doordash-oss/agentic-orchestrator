@@ -188,9 +188,10 @@ func truncateTitle(s string, n int) string {
 // RunDescriptionGeneration runs the bounded utility helper to generate a PR
 // title/body from a structured PRContext. On any helper error, the
 // deterministic fallback is used and the error is returned for observability.
-func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, model string, prCtx PRContext) (title, body string, err error) {
+func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, model string, prCtx PRContext) (title, body string, err error) {
 	result, runErr := pr.RunUtilitySession(ctx, UtilityRunConfig{
 		SessionID:   fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
+		FeatureID:   featureID,
 		Label:       "description generation",
 		Model:       model,
 		Prompt:      BuildPRDescriptionPrompt(prCtx),

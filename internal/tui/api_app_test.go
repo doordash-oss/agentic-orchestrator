@@ -553,6 +553,7 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 		"[→/enter] Focus",
 		"[Shift+W] Workspaces",
 		"[Shift+R] Resume All",
+		"[Shift+E] Settings",
 		"[tab] Panel",
 		"Layout: US",
 		"[/] Ask",
@@ -2194,6 +2195,169 @@ func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("ask me a question with 3 choices")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	started := model.(APIAppModel)
+
+	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{
+			SessionSummaryDTO: server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "WaitingHelp"},
+			PendingControls: []server.ControlRequestDTO{{
+				RequestID: "ask-1",
+				SessionID: chatSessionID,
+				FeatureID: chatSessionID,
+				ToolName:  "AskUserQuestion",
+				Status:    "pending",
+				Questions: []server.AskUserQuestionDTO{{
+					Question: "Pick a direction",
+					Options: []server.AskUserOptionDTO{
+						{Label: "Alpha", Description: "First option"},
+						{Label: "Beta", Description: "Second option"},
+						{Label: "Gamma", Description: "Third option"},
+					},
+				}},
+			}},
+		}},
+		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+			{Index: 0, Role: "assistant", Type: "tool_progress", Tool: "AskUserQuestion", Redacted: true},
+		}},
+	}})
+	waiting := model.(APIAppModel)
+
+	if waiting.chat.responding {
+		t.Fatal("chat remained responding after pending AskUserQuestion snapshot")
+	}
+	view := stripANSI(waiting.View().Content)
+	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "[enter] Send"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("chat view missing %q while waiting for AskUser answer:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "[esc] Background") {
+		t.Fatalf("chat view still rendered responding footer:\n%s", view)
+	}
+
+	waiting.chat.input.SetValue("Beta")
+	model, cmd = waiting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want AskUser answer command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	if len(client.helpRequests) != 0 {
+		t.Fatalf("SendHelp requests = %+v, want none for AskUser answer", client.helpRequests)
+	}
+	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != "ask-1" || got[0].SessionID != chatSessionID || got[0].Answers["Pick a direction"] != "Beta" {
+		t.Fatalf("AnswerAskUser requests = %+v, want chat answer", got)
+	}
+}
+
+func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("ask me a question with 3 choices")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	started := model.(APIAppModel)
+
+	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{
+			SessionSummaryDTO: server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "Running"},
+		}},
+		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+			{Index: 0, Role: "system", Type: "tool_progress", Tool: "AskUserQuestion", Redacted: true},
+		}},
+	}})
+	thinking := model.(APIAppModel)
+	if !thinking.chat.responding {
+		t.Fatal("setup: chat should still be responding after tool_progress snapshot")
+	}
+
+	askControl := server.ControlRequestDTO{
+		RequestID: "ask-1",
+		SessionID: chatSessionID,
+		FeatureID: chatSessionID,
+		ToolName:  "AskUserQuestion",
+		Status:    "pending",
+		Questions: []server.AskUserQuestionDTO{{
+			Question: "Pick a direction",
+			Options: []server.AskUserOptionDTO{
+				{Label: "Alpha"},
+				{Label: "Beta"},
+				{Label: "Gamma"},
+			},
+		}},
+	}
+	model, _ = thinking.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Prompts: &server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{askControl}},
+	}})
+	waiting := model.(APIAppModel)
+
+	if waiting.chat.responding {
+		t.Fatal("chat remained responding after prompt-only AskUserQuestion snapshot")
+	}
+	view := stripANSI(waiting.View().Content)
+	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "[enter] Send"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("chat view missing %q after prompt-only AskUser snapshot:\n%s", want, view)
+		}
+	}
+
+	waiting.chat.input.SetValue("Gamma")
+	model, cmd = waiting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want AskUser answer command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != "ask-1" || got[0].Answers["Pick a direction"] != "Gamma" {
+		t.Fatalf("AnswerAskUser requests = %+v, want prompt-only chat answer", got)
+	}
+
+	model, _ = model.(APIAppModel).Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Prompts: &server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{askControl}},
+	}})
+	answered := model.(APIAppModel)
+	view = stripANSI(answered.View().Content)
+	history := stripANSI(answered.chat.history)
+	if got := strings.Count(history, "Pick a direction"); got != 1 {
+		t.Fatalf("stale AskUser prompt was recorded %d times, want once:\n%s", got, history)
+	}
+	if !answered.chat.responding {
+		t.Fatalf("chat stopped waiting for assistant after stale AskUser prompt:\n%s", view)
+	}
+}
+
 func TestAPIAppModelCreateFeatureUsesRESTMutation(t *testing.T) {
 	t.Parallel()
 
@@ -2886,7 +3050,13 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 		}
 	}
 
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	editing = model.(APIAppModel)
 	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	edited := model.(APIAppModel)
 	model, cmd = edited.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
@@ -2978,7 +3148,7 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 	}
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Runtime config", "Default models", "Research", "codex:gpt-5.4"} {
+	for _, want := range []string{"Runtime config", "Default models", "Research", "codex / gpt-5.4"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -3005,6 +3175,140 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAppModelRuntimeConfigEditorIncludesUtilitiesAndDiscoveredRoleOptions(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		runtime: server.RuntimeConfigResponse{
+			Defaults: config.ModelConfig{
+				Research:       "codex:gpt-5.4",
+				Planning:       "codex:gpt-5.4",
+				Implementation: "codex:gpt-5.4",
+				Review:         "codex:gpt-5.4",
+				Utilities:      "codex:gpt-5.4-mini",
+				KBBuild:        "codex:gpt-5.4",
+			},
+			Providers: []string{"codex"},
+		},
+		catalog: server.ModelCatalogResponse{
+			ProviderOrder: []string{"codex"},
+			ProviderModels: map[string][]server.ModelDTO{
+				"codex": {
+					{ID: "codex:gpt-5.4"},
+					{ID: "codex:gpt-5.4-mini"},
+					{ID: "codex:gpt-5.5-mini"},
+				},
+			},
+			PhaseDefaults: config.ModelConfig{
+				Utilities: "codex:gpt-5.4-mini",
+			},
+			PhaseProviderModels: map[string]map[string][]string{
+				"chat": {"codex": {"codex:gpt-5.4-mini", "codex:gpt-5.5-mini"}},
+			},
+		},
+		updateRuntimeConfigAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	editing := model.(APIAppModel)
+	view := stripANSI(editing.View().Content)
+	for _, want := range []string{"Runtime config", "Default models", "Assignments", "Utilities", "codex / gpt-5.4-mini"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("runtime config view missing %q:\n%s", want, view)
+		}
+	}
+
+	for i := 0; i < 4; i++ {
+		model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		editing = model.(APIAppModel)
+	}
+	view = stripANSI(editing.View().Content)
+	for _, want := range []string{"Choices for Utilities", "gpt-5.4-mini", "gpt-5.5-mini"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("utilities choices missing %q:\n%s", want, view)
+		}
+	}
+
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	edited := model.(APIAppModel)
+	model, cmd := edited.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want runtime config update command")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Utilities != "codex:gpt-5.5-mini" {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited utilities default model", got)
+	}
+}
+
+func TestAPIAppModelFeatureConfigEditorDoesNotExposeUtilities(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()},
+		}},
+		catalog: server.ModelCatalogResponse{
+			ProviderOrder: []string{"codex"},
+			ProviderModels: map[string][]server.ModelDTO{
+				"codex": {
+					{ID: "codex:gpt-5.4"},
+					{ID: "codex:gpt-5.4-mini"},
+				},
+			},
+			PhaseDefaults: config.ModelConfig{
+				Research:  "codex:gpt-5.4",
+				Utilities: "codex:gpt-5.4-mini",
+			},
+			PhaseProviderModels: map[string]map[string][]string{
+				"Research": {"codex": {"codex:gpt-5.4"}},
+				"chat":     {"codex": {"codex:gpt-5.4-mini"}},
+			},
+		},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish"},
+			Pipeline:       "large",
+		}},
+		featureConfig: server.FeatureConfigResponse{
+			FeatureID: "active",
+			Current: server.FeatureConfigDTO{
+				Models:      config.ModelConfig{Research: "codex:gpt-5.4", Utilities: "codex:gpt-5.4-mini"},
+				Inquireness: "targeted",
+				Checkpoints: server.CheckpointsDTO{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+				Pipeline:    "large",
+			},
+			Defaults: server.FeatureConfigDTO{
+				Models:      config.ModelConfig{Research: "codex:gpt-5.4"},
+				Inquireness: "targeted",
+				Checkpoints: server.CheckpointsDTO{ManualPublish: true},
+				Pipeline:    "large",
+			},
+			Publish: server.PublishabilityDTO{ManualPublish: true, Repos: map[string]bool{"api": true}},
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if cmd == nil {
+		t.Fatal("Update(e) returned nil command, want feature config fetch")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	editing := model.(APIAppModel)
+	view := stripANSI(editing.View().Content)
+	if strings.Contains(view, "Utilities") {
+		t.Fatalf("feature config editor exposed global Utilities field:\n%s", view)
 	}
 }
 

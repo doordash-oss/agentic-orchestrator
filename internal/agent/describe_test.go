@@ -224,7 +224,7 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	prCtx := PRContext{FeatureName: "test", Roadmap: "plan content"}
-	title, body, err := runner.pr.RunDescriptionGeneration(context.Background(), "sonnet", prCtx)
+	title, body, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", prCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,6 +244,12 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	if opts.Phase != feature.PhasePublish {
 		t.Errorf("BuildSessionOpts.Phase = %v, want %v", opts.Phase, feature.PhasePublish)
 	}
+	if sess.featureID != "feat-publish" {
+		t.Errorf("session featureID = %q, want %q", sess.featureID, "feat-publish")
+	}
+	if sess.phase != feature.PhasePublish {
+		t.Errorf("session phase = %v, want %v", sess.phase, feature.PhasePublish)
+	}
 }
 
 func TestPhaseRunnerRunDescriptionGeneration_FallsBackOnHelperError(t *testing.T) {
@@ -256,7 +262,7 @@ func TestPhaseRunnerRunDescriptionGeneration_FallsBackOnHelperError(t *testing.T
 		FeatureDescription: "feature desc",
 	}
 
-	title, body, err := runner.pr.RunDescriptionGeneration(context.Background(), "sonnet", prCtx)
+	title, body, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", prCtx)
 	if err == nil {
 		t.Fatal("RunDescriptionGeneration() error = nil, want fallback error")
 	}

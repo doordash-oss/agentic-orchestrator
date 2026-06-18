@@ -1159,7 +1159,7 @@ func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req 
 	if t.phaseRunner == nil {
 		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("phase runner is not available")
 	}
-	title, body, err := t.phaseRunner.RunDescriptionGeneration(context.Background(), req.Model, agent.PRContext{
+	title, body, err := t.phaseRunner.RunDescriptionGeneration(context.Background(), featureID, req.Model, agent.PRContext{
 		FeatureName:        req.FeatureName,
 		FeatureDescription: req.FeatureDescription,
 		Roadmap:            req.Roadmap,
@@ -2242,6 +2242,7 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 		})
 	}
 
+	serverStderr, closeServerStderr := openDefaultLaunchServerStderr(runtimeDir)
 	child, err := deps.StartServer(ctx, serverStartRequest{
 		ConfigPath:                 req.ConfigPath,
 		StateDir:                   req.StateDir,
@@ -2250,8 +2251,9 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 		RefreshModels:              req.RefreshModels,
 		Stdin:                      req.Stdin,
 		Stdout:                     req.Stdout,
-		Stderr:                     req.Stderr,
+		Stderr:                     serverStderr,
 	})
+	closeServerStderr()
 	if err != nil {
 		if isRuntimeLockBusy(err) {
 			record, readyErr := waitForDefaultLaunchServerReady(ctx, req, deps, runtimeDir, identity, policy, client)
@@ -2356,12 +2358,26 @@ func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
 	return nil
 }
 
-func redirectStderrToRuntimeLog(runtimeDir string) func() {
+func openRuntimeLogFile(runtimeDir string) (*os.File, error) {
 	if runtimeDir == "" {
-		return func() {}
+		return nil, errors.New("missing runtime dir")
 	}
 	logPath := filepath.Join(runtimeDir, defaultLogBasename)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+}
+
+func openDefaultLaunchServerStderr(runtimeDir string) (io.Writer, func()) {
+	logFile, err := openRuntimeLogFile(runtimeDir)
+	if err != nil {
+		return io.Discard, func() {}
+	}
+	return logFile, func() {
+		_ = logFile.Close()
+	}
+}
+
+func redirectStderrToRuntimeLog(runtimeDir string) func() {
+	logFile, err := openRuntimeLogFile(runtimeDir)
 	if err != nil {
 		return func() {}
 	}

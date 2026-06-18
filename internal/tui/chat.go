@@ -100,6 +100,8 @@ type ChatModel struct {
 	focused      bool
 	responding   bool                // true while claude is generating
 	sess         session.SessionView // the persistent interactive session (nil before first message)
+	pendingAsk   *llm.ControlRequestMessage
+	answeredAsk  map[string]struct{}
 	// turnCostBaseline is the Cost() pointer observed at the moment the
 	// current turn started. The recovery tick clears responding when
 	// sess.Cost() no longer matches this baseline — i.e. a new Result was
@@ -235,6 +237,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.responding = false
 				m.sess = nil
 				m.thinkingLine = ""
+				m.pendingAsk = nil
+				m.answeredAsk = nil
 				if m.partialText != "" {
 					m.history += m.partialText
 					m.partialText = ""
@@ -276,6 +280,30 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				return m, m.startSessionCmd(question)
 			}
 
+			if m.pendingAsk != nil {
+				pending := m.pendingAsk
+				m.pendingAsk = nil
+				if pending.RequestID != "" {
+					if m.answeredAsk == nil {
+						m.answeredAsk = make(map[string]struct{})
+					}
+					m.answeredAsk[pending.RequestID] = struct{}{}
+					m.sess.ClearPendingQuestion(pending.RequestID)
+				}
+				m.turnCostBaseline = m.sess.Cost()
+				sess := m.sess
+				sendCmd := func() tea.Msg {
+					if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, chatAskUserAnswers(pending, question), nil); err != nil {
+						return chatSendErrorMsg{err: err}
+					}
+					return nil
+				}
+				if !m.pollSession {
+					return m, sendCmd
+				}
+				return m, tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
+			}
+
 			// Subsequent message — send via existing session. Capture the
 			// current Cost() pointer so the recovery tick can detect when a
 			// new Result lands on the session (even if attachCh drops it).
@@ -311,6 +339,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			m.responding = false
 			m.thinkingLine = ""
+			m.pendingAsk = nil
 			m.history += ErrorStyle.Render(text) + "\n"
 			if m.sess != nil {
 				m.turnCostBaseline = m.sess.Cost()
@@ -376,6 +405,24 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					m.turnCostBaseline = m.sess.Cost()
 				}
 			}
+			if sdkMsg.ControlRequest != nil && sdkMsg.ControlRequest.Request.ToolName == "AskUserQuestion" {
+				if chatAskUserAnswered(m.answeredAsk, sdkMsg.ControlRequest.RequestID) {
+					continue
+				}
+				if m.partialText != "" {
+					m.history += m.partialText
+					m.partialText = ""
+				}
+				if m.pendingAsk == nil || m.pendingAsk.RequestID != sdkMsg.ControlRequest.RequestID {
+					m.history += chatAskUserPrompt(sdkMsg.ControlRequest)
+				}
+				m.pendingAsk = sdkMsg.ControlRequest
+				m.responding = false
+				m.thinkingLine = ""
+				if m.sess != nil {
+					m.turnCostBaseline = m.sess.Cost()
+				}
+			}
 		}
 		m.rebuildViewport()
 		if m.pollSession && m.sess != nil {
@@ -422,6 +469,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		}
 		m.responding = false
 		m.thinkingLine = ""
+		m.pendingAsk = nil
+		m.answeredAsk = nil
 		m.sess = nil
 		m.rebuildViewport()
 		return m, nil
@@ -429,6 +478,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	case chatSendErrorMsg:
 		m.responding = false
 		m.thinkingLine = ""
+		m.pendingAsk = nil
+		m.answeredAsk = nil
 		m.sess = nil
 		if m.partialText != "" {
 			m.history += m.partialText
@@ -543,6 +594,76 @@ func chatResultIsError(result *llm.ResultMessage) bool {
 		return false
 	}
 	return result.IsError || result.Subtype == "error" || result.Subtype == "max_budget"
+}
+
+func chatAskUserPrompt(req *llm.ControlRequestMessage) string {
+	if req == nil {
+		return ""
+	}
+	questions := parseAskUserQuestions(req.Request.Input)
+	if len(questions) == 0 {
+		return "\n  Question requested. Type your answer and press Enter.\n\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("\n")
+	for _, q := range questions {
+		question := strings.TrimSpace(q.Question)
+		if question == "" {
+			question = strings.TrimSpace(q.Header)
+		}
+		var lineParts []string
+		if question != "" {
+			lineParts = append(lineParts, question)
+		}
+		if len(q.Options) > 0 {
+			choices := make([]string, 0, len(q.Options))
+			for i, opt := range q.Options {
+				label := strings.TrimSpace(opt.Label)
+				if label == "" {
+					continue
+				}
+				choices = append(choices, fmt.Sprintf("%d. %s", i+1, label))
+			}
+			if len(choices) > 0 {
+				lineParts = append(lineParts, strings.Join(choices, ", "))
+			}
+		}
+		if len(lineParts) > 0 {
+			b.WriteString("  " + strings.Join(lineParts, " | ") + "\n")
+		}
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func chatAskUserAnswered(answered map[string]struct{}, requestID string) bool {
+	if requestID == "" || len(answered) == 0 {
+		return false
+	}
+	_, ok := answered[requestID]
+	return ok
+}
+
+func chatAskUserAnswers(req *llm.ControlRequestMessage, answer string) map[string]string {
+	answer = strings.TrimSpace(answer)
+	if req == nil {
+		return nil
+	}
+	questions := parseAskUserQuestions(req.Request.Input)
+	for _, q := range questions {
+		question := strings.TrimSpace(q.RawQuestion)
+		if question == "" {
+			question = strings.TrimSpace(q.Question)
+		}
+		if question == "" {
+			question = strings.TrimSpace(q.Header)
+		}
+		if question != "" {
+			return map[string]string{question: answer}
+		}
+	}
+	return map[string]string{"answer": answer}
 }
 
 // chatRecoveryTickCmd schedules a chatRecoveryTickMsg after chatRecoveryInterval.

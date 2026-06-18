@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
@@ -205,6 +206,35 @@ func TestFeatureListDoesNotMutateStorageSchemas(t *testing.T) {
 	}
 }
 
+func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
+	t.Parallel()
+
+	reg := llm.NewRegistry()
+	reg.Register(&testCatalogProvider{
+		name: "codex",
+		catalog: []llm.ModelInfo{
+			{ID: "gpt-5.4", Category: "capable"},
+			{ID: "gpt-5.4-mini", Category: "balanced"},
+		},
+	})
+	handler := NewHandler(HandlerOptions{Registry: reg})
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/catalog/models", nil))
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200", w.Result().StatusCode)
+	}
+	var body ModelCatalogResponse
+	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	chatModels := body.PhaseProviderModels[string(llm.PhaseChat)]["codex"]
+	if len(chatModels) != 1 || chatModels[0] != "gpt-5.4-mini" {
+		t.Fatalf("chat utility models = %+v, want discovered balanced utility model", chatModels)
+	}
+}
+
 type featureListerFunc func() ([]*feature.Feature, error)
 
 func (f featureListerFunc) List() ([]*feature.Feature, error) {
@@ -231,3 +261,40 @@ type ioNopCloser struct {
 }
 
 func (ioNopCloser) Close() error { return nil }
+
+type testCatalogProvider struct {
+	name    string
+	catalog []llm.ModelInfo
+}
+
+func (p *testCatalogProvider) Name() string { return p.name }
+
+func (p *testCatalogProvider) MatchesModel(model string) bool {
+	for _, info := range p.catalog {
+		if info.ID == model || p.name+":"+info.ID == model {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *testCatalogProvider) DetectCLI() bool { return true }
+
+func (p *testCatalogProvider) AvailableModels() []string {
+	models := make([]string, 0, len(p.catalog))
+	for _, info := range p.catalog {
+		models = append(models, info.ID)
+	}
+	return models
+}
+
+func (p *testCatalogProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
+	return nil, nil, nil
+}
+
+func (p *testCatalogProvider) NewProtocol(llm.ProtocolOpts) llm.Protocol { return nil }
+func (p *testCatalogProvider) InstallHint() string                       { return "" }
+func (p *testCatalogProvider) VersionInfo() (string, error)              { return "", nil }
+func (p *testCatalogProvider) MinVersion() [3]int                        { return [3]int{} }
+func (p *testCatalogProvider) EnvVarsToExclude() []string                { return nil }
+func (p *testCatalogProvider) ModelCatalog() []llm.ModelInfo             { return p.catalog }

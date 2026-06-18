@@ -262,6 +262,22 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 	}
 }
 
+func TestDefaultGlobalRules_MatchAgenticoValidateArtifacts(t *testing.T) {
+	cache := NewCache(nil)
+	cache.mu.Lock()
+	cache.rules = append(cache.rules, defaultGlobalRules()...)
+	cache.mu.Unlock()
+
+	command := `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_reviewer --dir /tmp/iteration-01"}`
+	rule, found := cache.Check("Bash", command, "any-repo")
+	if !found {
+		t.Fatalf("cache.Check(%q) found = false, want true", command)
+	}
+	if rule.Effect != "allow" {
+		t.Fatalf("cache.Check(%q) effect = %q, want allow", command, rule.Effect)
+	}
+}
+
 func TestDefaultGlobalRules_DoNotMatchMutatingCommands(t *testing.T) {
 	cache := NewCache(nil)
 	cache.mu.Lock()

@@ -3143,27 +3143,47 @@ func mergeLivePreviewTranscript(existing, incoming []server.TranscriptMessageDTO
 	if len(existing) == 0 && len(incoming) == 0 {
 		return nil
 	}
-	merged := make([]server.TranscriptMessageDTO, 0, len(existing)+len(incoming))
-	seen := make(map[string]struct{}, len(existing)+len(incoming))
-	appendRows := func(rows []server.TranscriptMessageDTO) {
-		for _, row := range rows {
-			key := apiTranscriptRowSignature(row)
-			if _, ok := seen[key]; ok {
-				continue
+	if len(existing) == 0 {
+		return trimLivePreviewTranscript(incoming)
+	}
+	if len(incoming) == 0 {
+		return trimLivePreviewTranscript(existing)
+	}
+	overlap := livePreviewTranscriptOverlap(existing, incoming)
+	merged := make([]server.TranscriptMessageDTO, 0, len(existing)+len(incoming)-overlap)
+	merged = append(merged, existing...)
+	merged = append(merged, incoming[overlap:]...)
+	return trimLivePreviewTranscript(merged)
+}
+
+func livePreviewTranscriptOverlap(existing, incoming []server.TranscriptMessageDTO) int {
+	maxOverlap := min(len(existing), len(incoming))
+	for overlap := maxOverlap; overlap > 0; overlap-- {
+		matches := true
+		existingStart := len(existing) - overlap
+		for i := 0; i < overlap; i++ {
+			if livePreviewTranscriptContentKey(existing[existingStart+i]) != livePreviewTranscriptContentKey(incoming[i]) {
+				matches = false
+				break
 			}
-			seen[key] = struct{}{}
-			merged = append(merged, row)
+		}
+		if matches {
+			return overlap
 		}
 	}
-	appendRows(existing)
-	appendRows(incoming)
-	sort.SliceStable(merged, func(i, j int) bool {
-		return merged[i].Index < merged[j].Index
-	})
-	if len(merged) > livePreviewTranscriptMessageLimit {
-		merged = merged[len(merged)-livePreviewTranscriptMessageLimit:]
+	return 0
+}
+
+func livePreviewTranscriptContentKey(row server.TranscriptMessageDTO) string {
+	row.Index = 0
+	return apiTranscriptRowSignature(row)
+}
+
+func trimLivePreviewTranscript(rows []server.TranscriptMessageDTO) []server.TranscriptMessageDTO {
+	if len(rows) > livePreviewTranscriptMessageLimit {
+		rows = rows[len(rows)-livePreviewTranscriptMessageLimit:]
 	}
-	return merged
+	return rows
 }
 
 func (m *APIAppModel) storeTranscript(sessionID string, transcript server.TranscriptResponse) {

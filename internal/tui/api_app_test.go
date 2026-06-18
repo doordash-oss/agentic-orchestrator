@@ -1647,6 +1647,39 @@ func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSessionChanges(t *testi
 	}
 }
 
+func TestMergeLivePreviewTranscriptTreatsShiftedSnapshotsAsOverlappingTail(t *testing.T) {
+	t.Parallel()
+
+	existing := []server.TranscriptMessageDTO{
+		{Index: 10, Role: "assistant", Type: "text", Text: "I have enough context. Let me now write the research questions file."},
+		{Index: 11, Role: "assistant", Type: "tool_use", Tool: "Bash", Redacted: true},
+		{Index: 12, Role: "system", Type: "control_request", Tool: "AskUserQuestion", Status: "pending", Redacted: true},
+	}
+	incoming := []server.TranscriptMessageDTO{
+		{Index: 20, Role: "assistant", Type: "text", Text: "I have enough context. Let me now write the research questions file."},
+		{Index: 21, Role: "assistant", Type: "tool_use", Tool: "Bash", Redacted: true},
+		{Index: 22, Role: "system", Type: "control_request", Tool: "AskUserQuestion", Status: "pending", Redacted: true},
+		{Index: 23, Role: "assistant", Type: "tool_use", Tool: "Read", Redacted: true},
+	}
+
+	merged := mergeLivePreviewTranscript(existing, incoming)
+	if got, want := len(merged), 4; got != want {
+		t.Fatalf("merged transcript len = %d, want %d: %+v", got, want, merged)
+	}
+	if got, want := merged[0].Text, existing[0].Text; got != want {
+		t.Fatalf("merged[0].Text = %q, want %q", got, want)
+	}
+	if got, want := merged[1].Tool, "Bash"; got != want {
+		t.Fatalf("merged[1].Tool = %q, want %q", got, want)
+	}
+	if got, want := merged[2].Tool, "AskUserQuestion"; got != want {
+		t.Fatalf("merged[2].Tool = %q, want %q", got, want)
+	}
+	if got, want := merged[3].Tool, "Read"; got != want {
+		t.Fatalf("merged[3].Tool = %q, want %q", got, want)
+	}
+}
+
 func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 	t.Parallel()
 

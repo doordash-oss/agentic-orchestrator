@@ -875,6 +875,8 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 	}
 	if req.Request.ToolName == "AskUserQuestion" {
 		dto.Questions = safeAskUserQuestions(req)
+	} else {
+		dto.Input = safeControlInput(req)
 	}
 	return dto
 }
@@ -899,7 +901,77 @@ func safeControlSummary(req *llm.ControlRequestMessage) string {
 		}
 		return "user input requested"
 	}
+	if detail := safeControlInputDetail(req.Request.ToolName, req.Request.Input); detail != "" {
+		return safeDisplayText(detail, 180)
+	}
 	return safeDisplayText(req.Request.ToolName+" requested", 180)
+}
+
+func safeControlInput(req *llm.ControlRequestMessage) map[string]any {
+	if req == nil || len(req.Request.Input) == 0 {
+		return nil
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(req.Request.Input, &parsed); err != nil {
+		return nil
+	}
+	return safeControlInputValue(parsed).(map[string]any)
+}
+
+func safeControlInputValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			out[key] = safeControlInputValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, safeControlInputValue(item))
+		}
+		return out
+	case string:
+		return safeDisplayText(v, 2000)
+	default:
+		return v
+	}
+}
+
+func safeControlInputDetail(toolName string, input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return ""
+	}
+	switch toolName {
+	case "Bash":
+		return safeStringField(fields, "command")
+	case "Write", "Edit":
+		return firstSafeStringField(fields, "file_path", "path")
+	default:
+		return firstSafeStringField(fields, "description", "summary", "title", "command", "file_path", "path")
+	}
+}
+
+func firstSafeStringField(fields map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := safeStringField(fields, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func safeStringField(fields map[string]any, key string) string {
+	value, ok := fields[key].(string)
+	if !ok {
+		return ""
+	}
+	return safeDisplayText(value, 2000)
 }
 
 func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {

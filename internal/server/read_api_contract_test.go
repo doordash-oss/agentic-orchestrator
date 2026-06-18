@@ -622,6 +622,38 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	}
 }
 
+func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
+			pending: []*llm.ControlRequestMessage{
+				pendingReadControl("perm-1", "Bash", `{"command":"go test ./internal/tui"}`),
+			},
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	permissions := getJSONMap(t, handler, "/api/v1/permissions")
+	requests := permissions["requests"].([]any)
+	if len(requests) != 1 {
+		t.Fatalf("permissions requests length = %d; want 1", len(requests))
+	}
+	request := requests[0].(map[string]any)
+	if got, want := request["summary"], "go test ./internal/tui"; got != want {
+		t.Fatalf("permission summary = %v; want %q", got, want)
+	}
+	input := request["input"].(map[string]any)
+	if got, want := input["command"], "go test ./internal/tui"; got != want {
+		t.Fatalf("permission input.command = %v; want %q", got, want)
+	}
+}
+
 func TestFeatureDetailLoadsBoundedHistoricalRuns(t *testing.T) {
 	t.Parallel()
 	_, f := seedReadFeature(t)
@@ -762,9 +794,10 @@ func TestSessionDetailAndTranscriptDoNotScanFeatureSessionsOnLookupMiss(t *testi
 	}
 }
 
-func TestSessionTranscriptExposesLocalUserEchoesButRedactsProtocolUserMessages(t *testing.T) {
+func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
+	protocolPrompt := "Translate README in Neapolitan.\n" + strings.Repeat("Preserve this sentence. ", 30) + "tail marker"
 	sessions := fakeSessionManager{
 		views: []ports.SessionView{&fakeSessionView{
 			id: "sess-local-echo", featureID: f.ID, phase: feature.PhaseImplement,
@@ -772,7 +805,7 @@ func TestSessionTranscriptExposesLocalUserEchoesButRedactsProtocolUserMessages(t
 			messages: []llm.SDKMessage{
 				{Type: "user", User: &llm.UserMessage{Message: llm.ConversationMsg{
 					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: "raw prompt private-token"}},
+					Content: []llm.ContentBlock{{Type: "text", Text: protocolPrompt}},
 				}}},
 				{Type: "user", LocallyAppended: true, User: &llm.UserMessage{Message: llm.ConversationMsg{
 					Role:    "user",
@@ -788,21 +821,17 @@ func TestSessionTranscriptExposesLocalUserEchoesButRedactsProtocolUserMessages(t
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-local-echo/transcript")
-	raw := mustMarshalJSON(t, body)
-	if strings.Contains(raw, "raw prompt private-token") {
-		t.Fatalf("transcript leaked protocol user content: %s", raw)
-	}
 	messages := body["messages"].([]any)
 	if len(messages) != 2 {
-		t.Fatalf("messages length = %d, want protocol redaction and local echo rows", len(messages))
+		t.Fatalf("messages length = %d, want protocol prompt and local echo rows", len(messages))
 	}
-	redacted := messages[0].(map[string]any)
-	if redacted["text"] != "[redacted]" || redacted["redacted"] != true {
-		t.Fatalf("protocol user row = %+v, want redacted placeholder", redacted)
+	protocol := messages[0].(map[string]any)
+	if protocol["text"] != protocolPrompt || protocol["redacted"] == true || protocol["locally_appended"] == true {
+		t.Fatalf("protocol user row = %+v, want visible non-local prompt", protocol)
 	}
 	local := messages[1].(map[string]any)
-	if local["text"] != "PostgreSQL" || local["redacted"] == true {
-		t.Fatalf("local user echo row = %+v, want visible non-redacted text", local)
+	if local["text"] != "PostgreSQL" || local["redacted"] == true || local["locally_appended"] != true {
+		t.Fatalf("local user echo row = %+v, want visible locally-appended text", local)
 	}
 }
 
@@ -1057,7 +1086,7 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 
 	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/sess-1", "/api/v1/sessions/sess-1/transcript?limit=10"} {
 		raw := mustMarshalJSON(t, getJSONMap(t, handler, path))
-		if strings.Contains(raw, "private-token") || strings.Contains(raw, "raw prompt") {
+		if strings.Contains(raw, "private-token") {
 			t.Fatalf("%s leaks redacted content in %s", path, raw)
 		}
 	}

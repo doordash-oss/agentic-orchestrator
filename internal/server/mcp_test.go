@@ -435,7 +435,7 @@ func TestMCPReadToolsCoverSnapshotsTypedContentSessionsAndRecovery(t *testing.T)
 			t.Fatalf("CallTool(%s) api_version = %v; want %s", call.name, body["api_version"], APIVersion)
 		}
 		raw := mustMarshalJSON(t, body)
-		for _, leaked := range []string{"private-token", "raw prompt", "/private/runtime", "/private/worktree"} {
+		for _, leaked := range []string{"private-token", "/private/runtime", "/private/worktree"} {
 			if strings.Contains(raw, leaked) {
 				t.Fatalf("CallTool(%s) leaked %q in %s", call.name, leaked, raw)
 			}

@@ -433,6 +433,7 @@ type ControlRequestDTO struct {
 	ToolName  string               `json:"tool_name"`
 	Status    string               `json:"status"`
 	Summary   string               `json:"summary,omitempty"`
+	Input     map[string]any       `json:"input,omitempty"`
 	Questions []AskUserQuestionDTO `json:"questions,omitempty"`
 }
 
@@ -561,16 +562,17 @@ type TranscriptResponse struct {
 }
 
 type TranscriptMessageDTO struct {
-	Index      int            `json:"index"`
-	Role       string         `json:"role"`
-	Type       string         `json:"type"`
-	Text       string         `json:"text,omitempty"`
-	Tool       string         `json:"tool,omitempty"`
-	Status     string         `json:"status,omitempty"`
-	Redacted   bool           `json:"redacted,omitempty"`
-	FileChange *FileChangeDTO `json:"file_change,omitempty"`
-	ToolCall   *ToolCallDTO   `json:"tool_call,omitempty"`
-	Task       *TaskDTO       `json:"task,omitempty"`
+	Index           int            `json:"index"`
+	Role            string         `json:"role"`
+	Type            string         `json:"type"`
+	Text            string         `json:"text,omitempty"`
+	Tool            string         `json:"tool,omitempty"`
+	Status          string         `json:"status,omitempty"`
+	Redacted        bool           `json:"redacted,omitempty"`
+	LocallyAppended bool           `json:"locally_appended,omitempty"`
+	FileChange      *FileChangeDTO `json:"file_change,omitempty"`
+	ToolCall        *ToolCallDTO   `json:"tool_call,omitempty"`
+	Task            *TaskDTO       `json:"task,omitempty"`
 }
 
 type ToolCallDTO struct {

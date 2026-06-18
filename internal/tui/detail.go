@@ -201,8 +201,8 @@ func (m DetailModel) View() string {
 	// Header
 	b.WriteString(TitleStyle.Render(fmt.Sprintf(" %s", f.Slug)))
 
-	pendingHelp := countPendingHelp(f)
-	if pendingHelp > 0 {
+	attention := computeFeatureAttention(f, nil)
+	if detailShowsInputAttention(attention) {
 		b.WriteString("  " + WarningStyle.Render("\u26a0 waiting for input"))
 	}
 	b.WriteString("\n\n")
@@ -246,14 +246,7 @@ func (m DetailModel) View() string {
 		b.WriteString(" " + reviewBox + "\n")
 	}
 
-	// Help queue
-	if pendingHelp > 0 {
-		attentionContent := m.renderAttention(f)
-		attentionBox := panelStyle(false).
-			BorderForeground(colorWarning).
-			Width(boxWidth).
-			Render(attentionContent)
-		attentionBox = renderBorderTitle(attentionBox, "Attention", WarningStyle)
+	if attentionBox := renderDetailInputAttentionBox(attention, boxWidth); attentionBox != "" {
 		b.WriteString(" " + attentionBox + "\n")
 	}
 
@@ -887,8 +880,8 @@ func (m DetailModel) ViewCompact(width int) string {
 
 	var b strings.Builder
 
-	pendingHelp := countPendingHelp(f)
-	if pendingHelp > 0 {
+	attention := computeFeatureAttention(f, nil)
+	if detailShowsInputAttention(attention) {
 		b.WriteString(WarningStyle.Render("\u26a0 waiting for input"))
 		b.WriteString("\n")
 	}
@@ -934,14 +927,7 @@ func (m DetailModel) ViewCompact(width int) string {
 		b.WriteString("\n")
 	}
 
-	// Help queue
-	if pendingHelp > 0 {
-		attentionContent := m.renderAttention(f)
-		attentionBox := panelStyle(false).
-			BorderForeground(colorWarning).
-			Width(width - 4).
-			Render(attentionContent)
-		attentionBox = renderBorderTitle(attentionBox, "Attention", WarningStyle)
+	if attentionBox := renderDetailInputAttentionBox(attention, width-4); attentionBox != "" {
 		b.WriteString(attentionBox)
 		b.WriteString("\n")
 	}
@@ -1297,19 +1283,19 @@ func roadmapPhaseTiming(f *feature.Feature, key string) string {
 	return timing
 }
 
-func (m DetailModel) renderAttention(f *feature.Feature) string {
-	if f.Status.IsNeedsReview() {
+func detailShowsInputAttention(att featureAttention) bool {
+	return att.RequiresUser() && att.Kind != attentionReview
+}
+
+func renderDetailInputAttentionBox(att featureAttention, boxWidth int) string {
+	if !detailShowsInputAttention(att) {
 		return ""
 	}
-	var b strings.Builder
-	for _, h := range f.HelpQueue {
-		if h.Pending {
-			b.WriteString(WarningStyle.Render("  \u25b8 "))
-			b.WriteString(normalizeManagedHelpQuestion(h.Question))
-			b.WriteString("\n")
-		}
+	if att.Kind == attentionAskUser {
+		att.TypeLabel = "Attention"
 	}
-	return strings.TrimRight(b.String(), "\n")
+	contentWidth := max(boxWidth-4, 1)
+	return livePreviewAttentionSectionBox(att, att.ActivityLine(), boxWidth, contentWidth)
 }
 
 // needsReviewBanner returns a prominent banner describing the pending review

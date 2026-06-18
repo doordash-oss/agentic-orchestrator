@@ -1593,13 +1593,57 @@ func TestAPIAppModelLivePreviewRefreshUsesBoundedAPIReadModel(t *testing.T) {
 		t.Fatalf("Transcript calls after live-preview refresh = %d, want unchanged %d", got, initialTranscriptCalls)
 	}
 	view := stripANSI(refreshed.View().Content)
-	for _, want := range []string{"Live Preview", "Using Bash...", "57%", "$1.25", "Patched through REST snapshot"} {
+	for _, want := range []string{"Live Preview", "Using Bash...", "57%", "$1.25", "Initial tail", "Patched through REST snapshot"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("refreshed API app View() missing %q in:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Initial tail") {
-		t.Fatalf("refreshed API app View() kept stale live-preview tail:\n%s", view)
+}
+
+func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSessionChanges(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		livePreview: server.LivePreviewResponse{
+			Feature:    server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
+			Activity:   "Thinking...",
+			Session:    &server.SessionSummaryDTO{ID: "sess-old", FeatureID: "active", Phase: "implement", Status: "running"},
+			Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: "assistant", Type: "text", Text: "Old session tail"}},
+		},
+	}
+	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	client.refreshSnapshot = server.RefreshSnapshot{
+		LivePreview: &server.LivePreviewResponse{
+			Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
+			Activity: "Using Bash...",
+			Session:  &server.SessionSummaryDTO{ID: "sess-new", FeatureID: "active", Phase: "implement", Status: "running"},
+			Transcript: []server.TranscriptMessageDTO{
+				{Index: 1, Role: "assistant", Type: "text", Text: "New session tail"},
+			},
+		},
+	}
+	signal := server.RefreshSignal{
+		Event:    server.SSEEventDTO{Kind: "log.updated"},
+		Resource: server.ResourceDTO{Type: "session", ID: "sess-new", FeatureID: "active"},
+	}
+	msg := app.fetchRefreshSnapshotCmd(signal)()
+	model, _ := app.Update(msg)
+	refreshed := model.(APIAppModel)
+
+	view := stripANSI(refreshed.View().Content)
+	if !strings.Contains(view, "New session tail") {
+		t.Fatalf("refreshed API app View() missing new session tail:\n%s", view)
+	}
+	if strings.Contains(view, "Old session tail") {
+		t.Fatalf("refreshed API app View() kept old session tail after session change:\n%s", view)
 	}
 }
 
@@ -3581,7 +3625,7 @@ func TestAPIAttachSessionRendersRestoredLocalUserTranscriptAsYou(t *testing.T) {
 	}, server.TranscriptResponse{
 		Messages: []server.TranscriptMessageDTO{
 			{Index: 0, Role: "assistant", Type: "text", Text: "Which database?"},
-			{Index: 1, Role: "user", Type: "text", Text: "PostgreSQL"},
+			{Index: 1, Role: "user", Type: "text", Text: "PostgreSQL", LocallyAppended: true},
 			{Index: 2, Role: "assistant", Type: "text", Text: "Active work"},
 		},
 	}, nil)
@@ -3592,6 +3636,116 @@ func TestAPIAttachSessionRendersRestoredLocalUserTranscriptAsYou(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("reattached API transcript missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestAPIAttachSessionRendersProtocolUserTranscriptAsPrompt(t *testing.T) {
+	t.Parallel()
+
+	var transcript server.TranscriptResponse
+	if err := json.Unmarshal([]byte(`{
+		"messages": [{
+			"index": 0,
+			"role": "user",
+			"type": "text",
+			"text": "Translate README in Neapolitan."
+		}, {
+			"index": 1,
+			"role": "user",
+			"type": "text",
+			"text": "Replace the existing README",
+			"locally_appended": true
+		}]
+	}`), &transcript); err != nil {
+		t.Fatalf("unmarshal transcript: %v", err)
+	}
+	sess := newAPIAttachSession(nil, server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        "sess-1",
+			FeatureID: "active",
+			Phase:     "implement",
+			Kind:      "phase",
+			Status:    "Running",
+		},
+	}, transcript, nil)
+
+	view := stripANSI(renderAttachMessages(sess.MessageLog().Messages(), filterAll, 120, nil))
+	for _, want := range []string{"prompt", "Translate README in Neapolitan.", "[you] Replace the existing README"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("reattached API transcript missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "[you] Translate README in Neapolitan.") {
+		t.Fatalf("protocol prompt rendered as local user echo:\n%s", view)
+	}
+}
+
+func TestAPIControlRequestMessagePreservesRESTToolInput(t *testing.T) {
+	t.Parallel()
+
+	var req server.ControlRequestDTO
+	if err := json.Unmarshal([]byte(`{
+		"request_id": "perm-1",
+		"session_id": "sess-1",
+		"feature_id": "active",
+		"tool_name": "Bash",
+		"status": "pending",
+		"summary": "Bash requested",
+		"input": {"command": "go test ./internal/tui"}
+	}`), &req); err != nil {
+		t.Fatalf("unmarshal control request: %v", err)
+	}
+
+	msg := apiControlRequestMessage(req)
+	var payload map[string]string
+	if err := json.Unmarshal(msg.Request.Input, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(input): %v", err)
+	}
+	if got, want := payload["command"], "go test ./internal/tui"; got != want {
+		t.Fatalf("payload[command] = %q; want %q", got, want)
+	}
+	if payload["summary"] != "" {
+		t.Fatalf("payload[summary] = %q; want raw tool input without summary fallback", payload["summary"])
+	}
+}
+
+func TestAPIControlRequestMessagePrefersRESTAskUserInput(t *testing.T) {
+	t.Parallel()
+
+	fullQuestion := "Which persistence strategy should the orchestrator use when an AskUserQuestion contains enough detail that the read API truncates the display projection, but the provider still requires the exact original question text as the answer-map key?"
+	displayQuestion := fullQuestion[:180]
+	req := server.ControlRequestDTO{
+		RequestID: "ask-1",
+		SessionID: "sess-1",
+		FeatureID: "active",
+		ToolName:  "AskUserQuestion",
+		Status:    "pending",
+		Input: map[string]any{
+			"questions": []any{
+				map[string]any{
+					"question": fullQuestion,
+					"options": []any{
+						map[string]any{"label": "Full input"},
+					},
+				},
+			},
+		},
+		Questions: []server.AskUserQuestionDTO{{
+			Question: displayQuestion,
+			Options:  []server.AskUserOptionDTO{{Label: "Display projection"}},
+		}},
+	}
+
+	msg := apiControlRequestMessage(req)
+	questions := parseAskUserQuestions(msg.Request.Input)
+	if len(questions) != 1 {
+		t.Fatalf("parseAskUserQuestions() length = %d, want 1 from REST input", len(questions))
+	}
+	if got := questions[0].RawQuestion; got != fullQuestion {
+		t.Fatalf("AskUser question = %q; want full REST input question", got)
+	}
+	if got := questions[0].Options[0].Label; got != "Full input" {
+		t.Fatalf("AskUser option = %q; want REST input option", got)
 	}
 }
 
@@ -3750,7 +3904,7 @@ func TestAPIAttachRefreshDoesNotDuplicateRestoredLocalUserEcho(t *testing.T) {
 		},
 	}, &server.TranscriptResponse{
 		Messages: []server.TranscriptMessageDTO{
-			{Index: 0, Role: "user", Type: "text", Text: "PostgreSQL"},
+			{Index: 0, Role: "user", Type: "text", Text: "PostgreSQL", LocallyAppended: true},
 		},
 	}, nil)
 
@@ -3760,6 +3914,63 @@ func TestAPIAttachRefreshDoesNotDuplicateRestoredLocalUserEcho(t *testing.T) {
 	view := stripANSI(renderAttachMessages(sess.MessageLog().Messages(), filterAll, 120, nil))
 	if got := strings.Count(view, "[you] PostgreSQL"); got != 1 {
 		t.Fatalf("rendered [you] PostgreSQL count = %d, want 1 in:\n%s", got, view)
+	}
+}
+
+func TestAPIAppModelAskUserAnswerUsesFullInputQuestionKey(t *testing.T) {
+	t.Parallel()
+
+	fullQuestion := "Which persistence strategy should the orchestrator use when an AskUserQuestion contains enough detail that the read API truncates the display projection, but the provider still requires the exact original question text as the answer-map key?"
+	displayQuestion := fullQuestion[:180]
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		prompts: server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
+			{
+				RequestID: "ask-1",
+				FeatureID: "active",
+				ToolName:  "AskUserQuestion",
+				Status:    "pending",
+				Summary:   displayQuestion,
+				Input: map[string]any{
+					"questions": []any{
+						map[string]any{
+							"question": fullQuestion,
+							"options":  []any{},
+						},
+					},
+				},
+				Questions: []server.AskUserQuestionDTO{{Question: displayQuestion}},
+			},
+		}},
+		askUserAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	prompting := model.(APIAppModel)
+	if !prompting.ShowingAskUserPrompt() {
+		t.Fatal("Update(u) did not enter API ask-user prompt")
+	}
+	for _, ch := range "Use the full input" {
+		model, cmd = prompting.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
+		prompting = model.(APIAppModel)
+	}
+	model, cmd = prompting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want ask-user answer mutation")
+	}
+	_, _ = model.(APIAppModel).Update(cmd())
+
+	if got := client.askUserAnswers; len(got) != 1 || got[0].Answers[fullQuestion] != "Use the full input" {
+		t.Fatalf("AnswerAskUser requests = %+v, want answer keyed by full original question", got)
+	}
+	if got := client.askUserAnswers[0].Answers[displayQuestion]; got != "" {
+		t.Fatalf("AnswerAskUser used truncated display question key with answer %q", got)
 	}
 }
 

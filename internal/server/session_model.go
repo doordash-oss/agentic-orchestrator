@@ -188,13 +188,9 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 		index := start + i
 		switch {
 		case msg.Assistant != nil:
-			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content, root)...)
+			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content, root, false)...)
 		case msg.User != nil:
-			if msg.LocallyAppended {
-				out = append(out, conversationDTOs(index, "user", msg.User.Message.Content, root)...)
-				continue
-			}
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "user", Type: "text", Text: "[redacted]", Redacted: true})
+			out = append(out, conversationDTOs(index, "user", msg.User.Message.Content, root, msg.LocallyAppended)...)
 		case msg.ControlRequest != nil:
 			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "control_request", Tool: msg.ControlRequest.Request.ToolName, Status: "pending", Redacted: true})
 		case msg.Result != nil:
@@ -214,12 +210,18 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 	return out
 }
 
-func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string) []TranscriptMessageDTO {
+func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string, locallyAppended bool) []TranscriptMessageDTO {
 	var out []TranscriptMessageDTO
 	for _, block := range blocks {
 		switch {
 		case block.IsText():
-			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "text", Text: safeDisplayText(block.Text, 500)})
+			out = append(out, TranscriptMessageDTO{
+				Index:           index,
+				Role:            role,
+				Type:            "text",
+				Text:            safeTranscriptText(block.Text, role, locallyAppended),
+				LocallyAppended: role == "user" && locallyAppended,
+			})
 		case block.IsToolUse():
 			out = append(out, TranscriptMessageDTO{
 				Index:      index,
@@ -240,6 +242,13 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 		out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "message", Redacted: true})
 	}
 	return out
+}
+
+func safeTranscriptText(text, role string, locallyAppended bool) string {
+	if role == "user" && !locallyAppended {
+		return safeTranscriptPrompt(text)
+	}
+	return safeDisplayText(text, 500)
 }
 
 func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCallDTO {

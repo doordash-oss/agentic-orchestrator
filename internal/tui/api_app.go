@@ -2465,6 +2465,11 @@ func apiControlRequestMessage(req server.ControlRequestDTO) *llm.ControlRequestM
 
 func apiControlRequestInput(req server.ControlRequestDTO) json.RawMessage {
 	if req.ToolName == "AskUserQuestion" {
+		if len(req.Input) > 0 {
+			if data, err := json.Marshal(req.Input); err == nil {
+				return data
+			}
+		}
 		type option struct {
 			Label       string   `json:"label,omitempty"`
 			Description string   `json:"description,omitempty"`
@@ -2497,6 +2502,11 @@ func apiControlRequestInput(req server.ControlRequestDTO) json.RawMessage {
 		data, _ := json.Marshal(envelope)
 		return data
 	}
+	if len(req.Input) > 0 {
+		if data, err := json.Marshal(req.Input); err == nil {
+			return data
+		}
+	}
 	data, _ := json.Marshal(map[string]string{"summary": req.Summary})
 	return data
 }
@@ -2514,16 +2524,13 @@ func apiTranscriptRowToSDKMessage(row server.TranscriptMessageDTO, sessionID str
 	switch row.Type {
 	case "text":
 		text := strings.TrimSpace(row.Text)
-		if text == "" && row.Redacted {
-			text = "[redacted]"
-		}
 		if text == "" {
 			return llm.SDKMessage{}, false
 		}
 		if row.Role == "user" {
 			return apiTranscriptMessageWithFileChange(llm.SDKMessage{
 				Type:            "user",
-				LocallyAppended: !row.Redacted,
+				LocallyAppended: row.LocallyAppended,
 				User: &llm.UserMessage{
 					Type:      "user",
 					SessionID: sessionID,
@@ -2677,7 +2684,7 @@ func apiTranscriptRowKey(row server.TranscriptMessageDTO) string {
 	if row.Task != nil {
 		taskKey = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", row.Task.ID, row.Task.ToolUseID, row.Task.Description, row.Task.TaskType, row.Task.Prompt, row.Task.LastToolName, row.Task.Status, row.Task.Summary, row.Task.OutputFile)
 	}
-	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%s\x00%s\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, fileChangeKey, toolCallKey, taskKey)
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t\x00%s\x00%s\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, row.LocallyAppended, fileChangeKey, toolCallKey, taskKey)
 }
 
 func apiTranscriptRowSignature(row server.TranscriptMessageDTO) string {
@@ -2701,7 +2708,7 @@ func apiTranscriptMessageWithFileChange(msg llm.SDKMessage, row server.Transcrip
 }
 
 func apiVisibleUserTranscriptRow(row server.TranscriptMessageDTO) bool {
-	return row.Role == "user" && row.Type == "text" && !row.Redacted && strings.TrimSpace(row.Text) != ""
+	return row.Role == "user" && row.Type == "text" && row.LocallyAppended && strings.TrimSpace(row.Text) != ""
 }
 
 func apiHasLocalUserEcho(log ports.MessageLog, text string) bool {
@@ -3119,7 +3126,44 @@ func (m *APIAppModel) storeLivePreview(featureID string, preview server.LivePrev
 	if m.livePreviews == nil {
 		m.livePreviews = map[string]server.LivePreviewResponse{}
 	}
+	if existing, ok := m.livePreviews[featureID]; ok && livePreviewResponseSessionID(existing) != "" && livePreviewResponseSessionID(existing) == livePreviewResponseSessionID(preview) {
+		preview.Transcript = mergeLivePreviewTranscript(existing.Transcript, preview.Transcript)
+	}
 	m.livePreviews[featureID] = preview
+}
+
+func livePreviewResponseSessionID(preview server.LivePreviewResponse) string {
+	if preview.Session == nil {
+		return ""
+	}
+	return strings.TrimSpace(preview.Session.ID)
+}
+
+func mergeLivePreviewTranscript(existing, incoming []server.TranscriptMessageDTO) []server.TranscriptMessageDTO {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return nil
+	}
+	merged := make([]server.TranscriptMessageDTO, 0, len(existing)+len(incoming))
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	appendRows := func(rows []server.TranscriptMessageDTO) {
+		for _, row := range rows {
+			key := apiTranscriptRowSignature(row)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, row)
+		}
+	}
+	appendRows(existing)
+	appendRows(incoming)
+	sort.SliceStable(merged, func(i, j int) bool {
+		return merged[i].Index < merged[j].Index
+	})
+	if len(merged) > livePreviewTranscriptMessageLimit {
+		merged = merged[len(merged)-livePreviewTranscriptMessageLimit:]
+	}
+	return merged
 }
 
 func (m *APIAppModel) storeTranscript(sessionID string, transcript server.TranscriptResponse) {
@@ -7208,7 +7252,8 @@ func (m APIAppModel) handleAPIAskUserPromptKey(msg tea.KeyPressMsg) (tea.Model, 
 			m.statusMessage = "AskUser answer cannot be empty"
 			return m, nil
 		}
-		return m, m.askUserAnswerCmd(m.askUserRequest, m.askUserQuestion, answer)
+		questionKey := apiAskUserAnswerQuestionKey(m.askUserRequest, m.askUserQuestion)
+		return m, m.askUserAnswerCmd(m.askUserRequest, questionKey, answer)
 	case tea.KeyBackspace:
 		runes := []rune(m.askUserAnswerDraft)
 		if len(runes) > 0 {
@@ -7544,6 +7589,27 @@ func askUserQuestionLabel(req server.ControlRequestDTO) string {
 		}
 	}
 	return strings.TrimSpace(req.Summary)
+}
+
+func apiAskUserAnswerQuestionKey(req server.ControlRequestDTO, fallback string) string {
+	if len(req.Input) > 0 {
+		if data, err := json.Marshal(req.Input); err == nil {
+			questions := parseAskUserQuestions(data)
+			if len(questions) > 0 {
+				question := strings.TrimSpace(questions[0].RawQuestion)
+				if question == "" {
+					question = strings.TrimSpace(questions[0].Question)
+				}
+				if question == "" {
+					question = strings.TrimSpace(questions[0].Header)
+				}
+				if question != "" {
+					return question
+				}
+			}
+		}
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func apiAskUserFirstQuestion(req server.ControlRequestDTO) (server.AskUserQuestionDTO, bool) {

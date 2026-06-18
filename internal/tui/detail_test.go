@@ -281,6 +281,31 @@ func TestDetailViewFooterUsesContextualAttentionLabel(t *testing.T) {
 	}
 }
 
+func TestDetailCompactViewRendersPendingPermissionAttentionBox(t *testing.T) {
+	t.Parallel()
+
+	f := &feature.Feature{
+		ID:     "perm",
+		Slug:   "perm",
+		Status: feature.StatusImplementing,
+		PermissionsQueue: []feature.PermissionRequest{
+			{Tool: "Bash", Args: `{"command":"go test ./internal/tui"}`, Pending: true},
+		},
+		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+	}
+	m := NewDetailModel(f, "")
+
+	view := stripANSI(m.ViewCompact(96))
+	for _, want := range []string{"Permission Request", "Bash: go test ./internal/tui", "[a] Approve", "Waiting for approval"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("DetailModel.ViewCompact() missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Question") {
+		t.Fatalf("DetailModel.ViewCompact() rendered permission as question:\n%s", view)
+	}
+}
+
 func TestDetailViewPlanNeedsReview(t *testing.T) {
 	t.Parallel()
 	t.Run("roadmap awaiting review", func(t *testing.T) {

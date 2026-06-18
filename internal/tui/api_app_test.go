@@ -1242,6 +1242,77 @@ func TestAPILivePreviewSessionCarriesPhaseFromREST(t *testing.T) {
 	}
 }
 
+func TestAPILivePreviewSessionCarriesKindAndLabelFromREST(t *testing.T) {
+	t.Parallel()
+
+	presentation := apiLivePreviewPresentation("active", server.LivePreviewResponse{
+		Session: &server.SessionSummaryDTO{
+			ID:     "scope-validator",
+			Phase:  "plan",
+			Kind:   "validator",
+			Label:  "Scope",
+			Status: "running",
+		},
+	})
+	sess := newAPILivePreviewSession(presentation)
+	if sess == nil {
+		t.Fatal("newAPILivePreviewSession returned nil")
+	}
+	if got := sess.Kind().String(); got != "validator" {
+		t.Fatalf("Kind() = %q, want validator", got)
+	}
+	if got := sess.Label(); got != "Scope" {
+		t.Fatalf("Label() = %q, want Scope", got)
+	}
+}
+
+func TestAPIAppModelDashboardFeatureCarriesValidationReviewGateFromREST(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Validate roadmap",
+		Slug:         "validate-roadmap",
+		Status:       "Planning",
+		CurrentPhase: "plan",
+		Progress: server.FeatureProgress{
+			CurrentRoadmapPhase: 1,
+			TotalRoadmapPhases:  3,
+		},
+	}
+	detail := server.FeatureDetailDTO{
+		FeatureSummary: summary,
+		ActiveRun:      &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: "plan", RoadmapPhase: 1, RoadmapTotal: 3},
+		ReviewGate: server.ReviewGateDTO{
+			ValidatingPlan: true,
+			ValidatorStatuses: map[string]string{
+				"Architecture": "APPROVED",
+				"Scope":        "CHANGES_REQUESTED",
+				"Testing":      "running",
+			},
+		},
+	}
+	f := (APIAppModel{}).apiDashboardFeature(summary, detail, true)
+	if !f.ValidatingPlan {
+		t.Fatal("ValidatingPlan = false, want true")
+	}
+	if got := f.ValidatorStatuses["Scope"]; got != "CHANGES_REQUESTED" {
+		t.Fatalf("ValidatorStatuses[Scope] = %q, want CHANGES_REQUESTED", got)
+	}
+
+	sess := validatorLivePreviewSession("scope-validator", "Scope")
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	for _, want := range []string{
+		"Status", "Validating Phase 1 plan",
+		"Validators", "Arch ✓", "Test ⟳", "Scope ✗",
+		"Current: Validating Phase 1 plan", "1 ✓", "1 ✗", "1 running", "Showing Scope",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("REST validation live preview missing %q in:\n%s", want, view)
+		}
+	}
+}
+
 func TestAPIAppModelTranscriptLoadsSelectedSessionFromREST(t *testing.T) {
 	t.Parallel()
 

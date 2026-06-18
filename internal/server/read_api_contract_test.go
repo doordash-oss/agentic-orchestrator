@@ -354,6 +354,98 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	}
 }
 
+func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	question := "Which orthographic system should the Neapolitan translation follow?"
+	optionDescriptions := []string{
+		"The 400-year-old literary tradition.",
+		"The most recent academically credible guide.",
+		"Use Historical-Literary conventions for prose but De Blasi & Montuori 2020 for technical terms.",
+	}
+	strippedInput := json.RawMessage(mustMarshalJSON(t, map[string]any{
+		"questions": []map[string]any{{
+			"question":    question,
+			"header":      "Orthography",
+			"multiSelect": false,
+			"options": []map[string]any{
+				{"label": "Historical-Literary (Recommended)", "description": optionDescriptions[0]},
+				{"label": "De Blasi & Montuori 2020", "description": optionDescriptions[1]},
+				{"label": "Hybrid", "description": optionDescriptions[2]},
+			},
+		}},
+	}))
+	sourceInput := json.RawMessage(mustMarshalJSON(t, map[string]any{
+		"questions": []map[string]any{{
+			"question":    question,
+			"header":      "Orthography",
+			"multiSelect": false,
+			"options": []map[string]any{
+				{"label": "Historical-Literary (Recommended)", "description": optionDescriptions[0], "confidence": 0.72},
+				{"label": "De Blasi & Montuori 2020", "description": optionDescriptions[1], "confidence": 0.21},
+				{"label": "Hybrid", "description": optionDescriptions[2], "confidence": 0.07},
+			},
+		}},
+	}))
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id: "sess-ask", featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+			messages: []llm.SDKMessage{{
+				Type: "assistant",
+				Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+					Role: "assistant",
+					Content: []llm.ContentBlock{{
+						Type:  "tool_use",
+						ID:    "toolu-ask-1",
+						Name:  "AskUserQuestion",
+						Input: sourceInput,
+					}},
+				}},
+			}},
+			pending: []*llm.ControlRequestMessage{{
+				Type:      "control_request",
+				RequestID: "ask-confidence",
+				Request: llm.ControlRequest{
+					Subtype:  "can_use_tool",
+					ToolName: "AskUserQuestion",
+					Input:    strippedInput,
+				},
+			}},
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	asks := prompts["ask_user_questions"].([]any)
+	if len(asks) != 1 {
+		t.Fatalf("ask_user_questions length = %d; want 1", len(asks))
+	}
+	ask := asks[0].(map[string]any)
+	if _, ok := ask["input"]; ok {
+		t.Fatalf("AskUser prompt snapshot exposed raw input: %+v", ask["input"])
+	}
+	questions := ask["questions"].([]any)
+	if len(questions) != 1 {
+		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
+	}
+	options := questions[0].(map[string]any)["options"].([]any)
+	want := []float64{0.72, 0.21, 0.07}
+	if len(options) != len(want) {
+		t.Fatalf("ask_user options length = %d; want %d", len(options), len(want))
+	}
+	for i, wantConfidence := range want {
+		option := options[i].(map[string]any)
+		if got := option["confidence"]; got != wantConfidence {
+			t.Fatalf("option[%d] confidence = %v; want %.2f in %+v", i, got, wantConfidence, options)
+		}
+	}
+}
+
 func TestRuntimeConfigDiscoversWorkspaceRootReposOnRead(t *testing.T) {
 	t.Parallel()
 
@@ -1978,4 +2070,17 @@ func (l fakeMessageLog) LastN(n int) []llm.SDKMessage {
 func (l fakeMessageLog) LastResultMessage() *llm.ResultMessage { return nil }
 func (l fakeMessageLog) LastErrorDetail() string               { return "" }
 func (l fakeMessageLog) AssistantText() string                 { return "" }
-func (l fakeMessageLog) ToolUseBlocks() []llm.ContentBlock     { return nil }
+func (l fakeMessageLog) ToolUseBlocks() []llm.ContentBlock {
+	var blocks []llm.ContentBlock
+	for _, msg := range l.messages {
+		if msg.Assistant == nil {
+			continue
+		}
+		for _, block := range msg.Assistant.Message.Content {
+			if block.IsToolUse() {
+				blocks = append(blocks, block)
+			}
+		}
+	}
+	return blocks
+}

@@ -914,7 +914,7 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 		Summary:   safeControlSummary(req),
 	}
 	if req.Request.ToolName == "AskUserQuestion" {
-		dto.Questions = safeAskUserQuestions(req)
+		dto.Questions = safeAskUserQuestions(sess, req)
 	} else {
 		dto.Input = safeControlInput(req)
 	}
@@ -1021,8 +1021,19 @@ const (
 	askUserOptionDescriptionDisplayLimit = 4000
 )
 
-func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {
+func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage) []AskUserQuestionDTO {
 	if req == nil || req.Request.ToolName != "AskUserQuestion" {
+		return nil
+	}
+	questions := safeAskUserQuestionsFromInput(req.Request.Input)
+	if !askUserQuestionDTOsNeedConfidence(questions) || sess == nil || sess.MessageLog() == nil {
+		return questions
+	}
+	return enrichAskUserQuestionDTOConfidence(questions, sess.MessageLog())
+}
+
+func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestionDTO {
+	if len(input) == 0 {
 		return nil
 	}
 	var envelope struct {
@@ -1037,7 +1048,7 @@ func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {
 			} `json:"options"`
 		} `json:"questions"`
 	}
-	if err := json.Unmarshal(req.Request.Input, &envelope); err != nil || len(envelope.Questions) == 0 {
+	if err := json.Unmarshal(input, &envelope); err != nil || len(envelope.Questions) == 0 {
 		return nil
 	}
 	questions := make([]AskUserQuestionDTO, 0, len(envelope.Questions))
@@ -1064,6 +1075,71 @@ func safeAskUserQuestions(req *llm.ControlRequestMessage) []AskUserQuestionDTO {
 		questions = append(questions, question)
 	}
 	return questions
+}
+
+func askUserQuestionDTOsNeedConfidence(questions []AskUserQuestionDTO) bool {
+	for _, q := range questions {
+		for _, opt := range q.Options {
+			if opt.Confidence == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func enrichAskUserQuestionDTOConfidence(questions []AskUserQuestionDTO, log ports.MessageLog) []AskUserQuestionDTO {
+	if log == nil {
+		return questions
+	}
+	blocks := log.ToolUseBlocks()
+	for i := len(blocks) - 1; i >= 0; i-- {
+		block := blocks[i]
+		if block.Name != "AskUserQuestion" || len(block.Input) == 0 {
+			continue
+		}
+		source := safeAskUserQuestionsFromInput(block.Input)
+		if !askUserQuestionDTOBundlesMatch(questions, source) {
+			continue
+		}
+		return copyAskUserQuestionDTOConfidence(questions, source)
+	}
+	return questions
+}
+
+func askUserQuestionDTOBundlesMatch(a, b []AskUserQuestionDTO) bool {
+	if len(a) == 0 || len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if strings.TrimSpace(a[i].Question) != strings.TrimSpace(b[i].Question) ||
+			strings.TrimSpace(a[i].Header) != strings.TrimSpace(b[i].Header) ||
+			a[i].MultiSelect != b[i].MultiSelect ||
+			len(a[i].Options) != len(b[i].Options) {
+			return false
+		}
+		for j := range a[i].Options {
+			if strings.TrimSpace(a[i].Options[j].Label) != strings.TrimSpace(b[i].Options[j].Label) ||
+				strings.TrimSpace(a[i].Options[j].Description) != strings.TrimSpace(b[i].Options[j].Description) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func copyAskUserQuestionDTOConfidence(questions, source []AskUserQuestionDTO) []AskUserQuestionDTO {
+	enriched := make([]AskUserQuestionDTO, len(questions))
+	for i := range questions {
+		enriched[i] = questions[i]
+		enriched[i].Options = append([]AskUserOptionDTO(nil), questions[i].Options...)
+		for j := range enriched[i].Options {
+			if enriched[i].Options[j].Confidence == nil {
+				enriched[i].Options[j].Confidence = source[i].Options[j].Confidence
+			}
+		}
+	}
+	return enriched
 }
 
 func safeDisplayText(s string, limit int) string {

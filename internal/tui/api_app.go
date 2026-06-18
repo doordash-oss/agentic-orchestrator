@@ -162,6 +162,8 @@ type APILivePreviewPresentation struct {
 	FeatureID      string
 	SessionID      string
 	Phase          string
+	Kind           string
+	Label          string
 	Provider       string
 	Model          string
 	Activity       string
@@ -1648,6 +1650,8 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		f.Pipeline = feature.PipelineProfile(detail.Pipeline)
 		f.PhaseTimings = apiPhaseTimings(detail.Timing.ByPhase)
 		f.PhaseCosts = apiPhaseCosts(detail.Cost.ByPhase, detail.Cost.TotalUSD, f.CurrentPhase)
+		f.ValidatingPlan = detail.ReviewGate.ValidatingPlan
+		f.ValidatorStatuses = copyStringMapValues(detail.ReviewGate.ValidatorStatuses)
 		if detail.ActiveRun != nil {
 			if detail.ActiveRun.RunNumber > 0 {
 				f.ActiveRun = detail.ActiveRun.RunNumber
@@ -1775,6 +1779,8 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		RepoStates:                      f.RepoStates,
 		RepoCycles:                      f.RepoCycles,
 		ActiveCycle:                     f.ActiveCycle,
+		ValidatingPlan:                  f.ValidatingPlan,
+		ValidatorStatuses:               f.ValidatorStatuses,
 		PhaseTimings:                    f.PhaseTimings,
 		PhaseCosts:                      f.PhaseCosts,
 		LastError:                       f.LastError,
@@ -2038,8 +2044,8 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 		id:                    preview.SessionID,
 		featureID:             preview.FeatureID,
 		phase:                 apiLivePreviewPhase(preview.Phase),
-		kind:                  ports.KindPhase,
-		label:                 "Live Preview",
+		kind:                  apiSessionKind(preview.Kind),
+		label:                 firstNonEmpty(preview.Label, "Live Preview"),
 		status:                ports.SessionRunning,
 		provider:              preview.Provider,
 		model:                 preview.Model,
@@ -8735,6 +8741,8 @@ func apiLivePreviewPresentation(featureID string, dto server.LivePreviewResponse
 	if dto.Session != nil {
 		out.SessionID = dto.Session.ID
 		out.Phase = firstNonEmpty(dto.Session.Phase, out.Phase)
+		out.Kind = dto.Session.Kind
+		out.Label = dto.Session.Label
 		out.Provider = dto.Session.Provider
 		out.Model = dto.Session.Model
 	}

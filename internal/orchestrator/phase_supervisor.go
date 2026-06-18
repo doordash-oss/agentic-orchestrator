@@ -73,7 +73,6 @@ func (s *phaseSupervisor) superviseSingleShotSession(featureID, sessionID string
 }
 
 func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
-	defer s.releaseSingleShotSession(sessionID)
 	doneCh := sess.Done()
 	for {
 		select {
@@ -129,6 +128,7 @@ func (s *phaseSupervisor) handleSingleShotStatus(featureID, sessionID string, ph
 		return false
 	}
 	_ = sess.Stop()
+	s.releaseSingleShotSession(sessionID)
 	if status == phaseSupervisorStatusSuccess {
 		s.complete(featureID, PhaseCompletionInput{
 			Phase:     phase,
@@ -147,6 +147,7 @@ func (s *phaseSupervisor) handleSingleShotStatus(featureID, sessionID string, ph
 }
 
 func (s *phaseSupervisor) completeSingleShotFailure(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
+	s.releaseSingleShotSession(sessionID)
 	s.complete(featureID, PhaseCompletionInput{
 		Phase:       phase,
 		SessionID:   sessionID,

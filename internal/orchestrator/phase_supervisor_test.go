@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,6 +82,53 @@ func TestPhaseSupervisorSingleShotDedupe(t *testing.T) {
 	sink.expectNoCall(t)
 	if sess.StopCalled != 1 {
 		t.Fatalf("session Stop calls = %d, want 1", sess.StopCalled)
+	}
+}
+
+func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testing.T) {
+	sm := mocks.NewMockSessionManager()
+	first := mocks.NewMockSessionView("feat-inquire", "feat")
+	first.PhaseVal = feature.PhaseInquire
+	retry := mocks.NewMockSessionView("feat-inquire", "feat")
+	retry.PhaseVal = feature.PhaseInquire
+
+	var getCount atomic.Int32
+	sm.GetSessionFn = func(id string) session.SessionView {
+		if id != "feat-inquire" {
+			t.Fatalf("GetSession(%q), want feat-inquire", id)
+		}
+		if getCount.Add(1) == 1 {
+			return first
+		}
+		return retry
+	}
+
+	var supervisor *phaseSupervisor
+	sink := newReentrantRetryCompletionSink(func() {
+		supervisor.superviseSingleShotSession("feat", "feat-inquire", feature.PhaseInquire)
+		retry.StatusChVal <- "SUCCESS"
+	})
+	supervisor = newPhaseSupervisor(phaseSupervisorConfig{
+		Completion: sink,
+		Sessions:   sm,
+	})
+	supervisor.superviseSingleShotSession("feat", "feat-inquire", feature.PhaseInquire)
+
+	first.StatusChVal <- "SUCCESS"
+
+	firstCall := sink.wait(t)
+	if firstCall.input.SessionID != "feat-inquire" || !firstCall.input.Success {
+		t.Fatalf("first completion = %+v, want successful inquire completion", firstCall.input)
+	}
+	retryCall := sink.wait(t)
+	if retryCall.input.SessionID != "feat-inquire" || !retryCall.input.Success {
+		t.Fatalf("retry completion = %+v, want successful retry completion", retryCall.input)
+	}
+	if got := getCount.Load(); got != 2 {
+		t.Fatalf("GetSession calls = %d, want 2 so retried session was supervised", got)
+	}
+	if retry.StopCalled != 1 {
+		t.Fatalf("retry Stop calls = %d, want 1", retry.StopCalled)
 	}
 }
 
@@ -178,6 +226,28 @@ type recordedPhaseCompletionCall struct {
 
 func newRecordingPhaseCompletionSink() *recordingPhaseCompletionSink {
 	return &recordingPhaseCompletionSink{calls: make(chan recordedPhaseCompletionCall, 4)}
+}
+
+type reentrantRetryCompletionSink struct {
+	*recordingPhaseCompletionSink
+	onFirst func()
+	calls   atomic.Int32
+}
+
+func newReentrantRetryCompletionSink(onFirst func()) *reentrantRetryCompletionSink {
+	return &reentrantRetryCompletionSink{
+		recordingPhaseCompletionSink: newRecordingPhaseCompletionSink(),
+		onFirst:                      onFirst,
+	}
+}
+
+func (r *reentrantRetryCompletionSink) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {
+	callNum := r.calls.Add(1)
+	r.recordingPhaseCompletionSink.calls <- recordedPhaseCompletionCall{featureID: featureID, input: input}
+	if callNum == 1 && r.onFirst != nil {
+		r.onFirst()
+	}
+	return r.err
 }
 
 func (r *recordingPhaseCompletionSink) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {

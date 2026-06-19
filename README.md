@@ -23,17 +23,19 @@ That is the real "oneshot" value: an engineer can describe a large feature once,
 
 The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
-## Quick Start
+<a id="quick-start"></a>
 
-Use Homebrew if you have it; otherwise grab the prebuilt binary. Build from source only if you're working on agentico itself.
+## Partenza viloci
 
-**Homebrew** (recommended — macOS/Linux):
+Usati Homebrew siddu l'aviti; sinnò pigghiati lu binariu già custruitu. Custruiti dû còdici surgenti sulu siddu stati travagghiannu supra agentico stissu.
+
+**Homebrew** (cunsigghiatu — macOS/Linux):
 
 ```bash
 brew install doordash-oss/agentic-orchestrator/agentico
 ```
 
-**Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):
+**Prebuilt binary** — senza Homebrew o Go (macOS/Linux, amd64/arm64):
 
 ```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -44,45 +46,47 @@ curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/downlo
 # ensure ~/.local/bin is on your PATH
 ```
 
-**From source** — for contributing to agentico (Go 1.25+):
+**From source** — pi cuntribbuiri a agentico (Go 1.25+):
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
 # or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-Then run `agentico`. Update any time with `agentico update` — it uses the right method for how you installed.
+Poi eseguiti `agentico`. Putiti attualizzari quannu vuliti cu `agentico update` — usa lu mètudu giustu secunnu comu lu nstallàstivu.
 
-On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
+Ô primu avviu, Agentic Orchestrator vi guida cu nu flussu di binvinutu pi scègghiri li vostri carteddi di workspace. Doppu chistu, arrivati â dashboard.
 
-**Three keys to remember**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Everything else is discoverable from the help overlay.
+**Tri tasti di ricurdari**: `n` (new feature), `?` (help), `a` (watch active work; answer, approve, or review when prompted). Tuttu lu restu si trova dâ finestra di help.
 
-## Prerequisites
+<a id="prerequisites"></a>
 
-### Required
+## Riquisiti
 
-| Tool | Purpose | Install |
+### Nicissari
+
+| Strumentu | Scopu | Nstallazzioni |
 |------|---------|---------|
-| **`git`** | Worktree, branch, commit, and rebase operations | Pre-installed on most systems |
-| **`gh` CLI** | Push-time PR creation and cross-repo PR body updates during Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), then `gh auth login` |
+| **`git`** | Operazzioni di worktree, branch, commit e rebase | Prisenti di sòlitu nta la maiurìa dî sistemi |
+| **`gh` CLI** | Criazzioni dî PR ô mumentu dû push e attualizzazzioni cross-repo dû corpu dâ PR duranti Publish | [GitHub CLI docs](https://docs.github.com/en/github-cli/github-cli), poi `gh auth login` |
 
-### Provider CLIs — install at least one
+### CLI di provider — nstallàtini armenu unu
 
-Agentic Orchestrator needs **at least one** AI provider CLI.
+Agentic Orchestrator havi bisognu di **armenu una** CLI di provider AI.
 
-| Tool | Role | Install |
+| Strumentu | Rolu | Nstallazzioni |
 |------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend predefinitu pi KB, inquiry, research, design, planning, implementation e chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) o `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Backend predefinitu pi Final Review e pi mudelli di review appujati supra Codex | [Codex CLI setup](https://developers.openai.com/codex/cli) o `npm i -g @openai/codex@latest` |
 
-### Optional
+### Opzziunali
 
-| Tool | Purpose | Install |
+| Strumentu | Scopu | Nstallazzioni |
 |------|---------|---------|
-| **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
-| **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
+| **Go 1.25+** | Nicissariu sulu pi custruiri `agentico` dû còdici surgenti — nun è nicissariu quannu si usa un [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
+| **Node.js 18+ and npm** | Nicissariu sulu quannu si nstalla Claude Code o Codex attraversu npm | [nodejs.org](https://nodejs.org/) |
 
-After installing your provider CLI(s), run `claude auth status` and/or `codex login status`, plus `gh auth status`, before launching `agentico`.
+Doppu aviri nstallatu li vostri CLI di provider, eseguiti `claude auth status` e/o `codex login status`, cchiù `gh auth status`, prima d'avviari `agentico`.
 
 ## How It Works
 
@@ -153,15 +157,15 @@ Critics run in parallel and produce independent verdicts. If any critic requests
 
 ## Usage
 
-### TUI Dashboard
+### Dashboard TUI
 
-Launch with `agentico`. The dashboard shows all features organized by status:
+Avviati cu `agentico`. La dashboard mustra tutti li feature urganizzati pi statu:
 
-- **In Progress** — actively being worked on (researching, planning, implementing)
-- **Published** — PR created, awaiting merge
-- **Completed** — marked as done
+- **In Progress** — travagghiu attivu (researching, planning, implementing)
+- **Published** — PR criata, aspittannu lu merge
+- **Completed** — marcata comu fatta
 
-Features needing your attention (pending permissions, help requests) show a warning indicator.
+Li feature chi addumannanu la vostra attinzioni (permessi pendenti, richiesti d'aiutu) mustranu n'indicaturi d'avvirtimentu.
 
 ### Creating a Feature
 
@@ -201,9 +205,9 @@ Press `/` anywhere to open the built-in AI chat. It's a read-only Claude session
 
 > For the complete reference, see [docs/keybindings.md](docs/keybindings.md).
 
-## Configuration
+## Cunfigurazzioni
 
-Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first launch). If a legacy `~/.agentic-workflow/` directory already exists, it is reused in place so existing installs keep working without a manual copy.
+La cunfigurazzioni sta nta `~/.agentic-orchestrator/config.yaml` (criatu autumaticamenti ô primu avviu). Siddu esisti già na cartedda legacy `~/.agentic-workflow/`, veni riusata ddà stissu accussì li nstallazzioni esistenti cuntìnuanu a funziunari senza copia manuali.
 
 ```yaml
 defaults:
@@ -236,11 +240,11 @@ workspace_roots:
   - /home/user/projects      # Scanned for git repos on startup
 ```
 
-### Model Overrides
+### Suvrascritturi di mudelli
 
-Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`) or as bare aliases that are automatically routed to the best-matching provider.
+Ogni feature pò suvrascrìviri li mudelli predefiniti duranti la criazzioni attraversu lu wizard (passu 4). Li mudelli ponnu èssiri spicificati cu prifissi di provider espliciti (p'asempiu, `claude:opus[1M]`, `codex:gpt-5.4[272K]`) o comu alias nudi chi vennu instradati autumaticamenti ô provider chi currispunni megghiu.
 
-### Launch Flags
+### Flag d'avviu
 
 ```text
 agentico [flags]
@@ -254,18 +258,18 @@ Flags:
   --version, -v                    Show version
 ```
 
-### Updating
+### Attualizzari
 
 ```text
 agentico update [--check|-n]
 ```
 
-Run `agentico update` to upgrade to the latest stable release. Use
-`agentico update --check` (alias `-n`) to report the current and latest
-available versions without installing anything; it exits `0` and prints an
-already-up-to-date message when you are on the newest release.
+Eseguiti `agentico update` pi passari â cchiù ricenti release stabbili. Usati
+`agentico update --check` (alias `-n`) pi fari vidiri la virsioni currenti e
+la cchiù ricenti virsioni dispunìbbili senza nstallari nenti; nesci cu `0` e
+stampa un missaggiu already-up-to-date quannu siti già supra la release cchiù nova.
 
-## Development
+## Sviluppu
 
 ```bash
 # Build
@@ -281,27 +285,27 @@ make test-fast
 go generate ./internal/tui/...
 ```
 
-Verification is split into named tiers so everyday checks stay fast while
-extended coverage remains available.
+La virìfica è spartuta nta tier cu nomu, accussì li cuntrolli cutidiani ristanu
+viloci mentri la cupertura allargata arresta dispunìbbili.
 
 | Tier | Command | Current wall time | Purpose |
 |------|---------|-------------------|---------|
-| Fast suite | `make test-fast` | 23s, target <=30s | Everyday all-package short-mode check before handoff. |
-| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Builds the binary and checks CLI flags plus embedded skill layout. |
-| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Lifecycle, state-machine, and protocol-violation coverage. |
-| E2E Go (TUI / teatest) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Full TUI and teatest behavior with the race detector. |
-| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Observer-backed TUI event and feature-span integration coverage. |
-| Race regression | `go test ./... -count=1 -race` | 158.82s | Extended all-package race/regression sweep. |
-| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Live skill/guideline discovery against real LLM CLIs. |
+| Fast suite | `make test-fast` | 23s, target <=30s | Cuntrollu cutidianu all-package in short-mode prima dû handoff. |
+| E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Custruisci lu binariu e cuntrolla li flag CLI cchiù lu layout dî skill ncurpurati. |
+| Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Cupertura dû lifecycle, dâ state-machine e dî protocol-violation. |
+| E2E Go (TUI / teatest) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Cumportamentu TUI e teatest cumpletu cu lu race detector. |
+| TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Cupertura d'integrazioni pi eventi TUI e feature-span appujata supra Observer. |
+| Race regression | `go test ./... -count=1 -race` | 158.82s | Spazzata allargata all-package pi race/regression. |
+| Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Scuperta live di skill/guideline contru CLI LLM riali. |
 
-`go vet ./...` and `go build ./...` remain required static and build checks.
-The tagged **TUI observability** tier is the explicit opt-in gate for slower
-observer-backed TUI integration coverage. The race-enabled all-package sweep is
-the **Race regression** tier, not the ordinary unit command. See
-[AGENTS.md](AGENTS.md) and
-[docs/testing-baseline.md](docs/testing-baseline.md) for timing details, and
-see AGENTS.md for the isolated-run pattern for running a second instance without
-colliding with the first.
+`go vet ./...` e `go build ./...` ristanu li cuntrolli statici e di build
+nicissari. Lu tier marcatu **TUI observability** è lu gate opt-in esplicitu pi
+la cupertura d'integrazioni TUI cchiù lenta appujata supra Observer. La spazzata
+all-package cu race abbilitatu è lu tier **Race regression**, non lu cumannu
+unit ordinariu. Viditi [AGENTS.md](AGENTS.md) e
+[docs/testing-baseline.md](docs/testing-baseline.md) pi li dittagghi supra li
+tempi, e viditi AGENTS.md pi lu mudellu isolated-run quannu vuliti eseguiri na
+secunna istanza senza scontrarivi cu la prima.
 
 ## Contributing
 

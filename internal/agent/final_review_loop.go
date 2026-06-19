@@ -526,7 +526,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 
 	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
 
-	sess, err := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
+	sess, err := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseFinalReview, command, s.workspace.Cwd, env, sessOpts)
 	if err != nil {
 		if errors.Is(err, ports.ErrSessionShuttingDown) {
 			return ReviewFailed, "", fmt.Errorf("session manager shutting down")
@@ -665,7 +665,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 
 	sessionID := s.featureFinalReviewSessionID("fix", iteration)
 
-	sess, startErr := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
+	sess, startErr := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseFinalReview, command, s.workspace.Cwd, env, sessOpts)
 	if startErr != nil {
 		if errors.Is(startErr, ports.ErrSessionShuttingDown) {
 			return "", fmt.Errorf("session manager shutting down")

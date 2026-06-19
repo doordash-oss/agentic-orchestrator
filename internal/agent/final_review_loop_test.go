@@ -19,14 +19,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // newFRTestFeature seeds a multi-repo feature whose RepoImpl entries are all
@@ -180,6 +183,127 @@ func runFinalReviewWithReviewScript(t *testing.T, reviewBody func(artDir string)
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
 	return result
+}
+
+func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
+	t.Parallel()
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-session-phase", []string{"api", "web"})
+	f.CurrentPhase = feature.PhaseFinalReview
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature current phase: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		iterDir := latestFinalReviewIterationDir(t, artDir)
+		switch {
+		case strings.Contains(id, "-final-review-01"):
+			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", "CHANGES_REQUESTED"))
+			touchPhaseComplete(t, iterDir)
+		case strings.Contains(id, "-fix-01"):
+			markFinalReviewReportPassed(t, iterDir)
+			touchPhaseComplete(t, iterDir)
+		case strings.Contains(id, "-final-review-02"):
+			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("", "", "APPROVED"))
+			markFinalReviewReportPassed(t, iterDir)
+			touchPhaseComplete(t, iterDir)
+		default:
+			t.Fatalf("unexpected session id %q", id)
+		}
+
+		sess := session.NewSession(id, featureID, phase)
+		sess.SetCost(&llm.ResultMessage{Type: "result", Subtype: "success", SessionID: "mock"})
+		sess.SendStatus(agentStatusSuccess)
+		sess.CloseDone()
+		return sess, nil
+	}
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  3,
+		MaxConsecFails: 3,
+		BuildSession: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			return []string{"mock"}, nil, &session.SessionOpts{}, nil
+		},
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
+	}
+
+	var got []string
+	for _, call := range sm.StartSessionCalls {
+		got = append(got, fmt.Sprintf("%s=%s", call.ID, call.Phase))
+		if call.Phase != feature.PhaseFinalReview {
+			t.Fatalf("StartSession(%q) phase = %s, want %s; all calls: %v", call.ID, call.Phase, feature.PhaseFinalReview, got)
+		}
+	}
+	if len(sm.StartSessionCalls) != 3 {
+		t.Fatalf("StartSession call count = %d, want 3; calls: %v", len(sm.StartSessionCalls), got)
+	}
+}
+
+func latestFinalReviewIterationDir(t *testing.T, artDir string) string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(artDir, "iteration-*"))
+	if err != nil {
+		t.Fatalf("glob final review iterations: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatalf("no final review iterations under %s", artDir)
+	}
+	sort.Strings(matches)
+	return matches[len(matches)-1]
+}
+
+func writeFinalReviewFeedbackFile(t *testing.T, iterDir, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write final review feedback: %v", err)
+	}
+}
+
+func touchPhaseComplete(t *testing.T, iterDir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(iterDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("touch %s: %v", PhaseCompleteFile, err)
+	}
+}
+
+func markFinalReviewReportPassed(t *testing.T, iterDir string) {
+	t.Helper()
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	report, err := ReadVerificationReport(reportPath)
+	if err != nil {
+		t.Fatalf("read final review verification report: %v", err)
+	}
+	markVerificationRowsPassed(report.Results)
+	markVerificationRowsPassed(report.RequiredChecks)
+	markVerificationRowsPassed(report.AdditionalChecks)
+	if err := WriteVerificationReport(reportPath, *report); err != nil {
+		t.Fatalf("write final review verification report: %v", err)
+	}
+}
+
+func markVerificationRowsPassed(rows []VerificationCheckResult) {
+	for i := range rows {
+		rows[i].Status = VerificationStatusPassed
+		rows[i].Evidence = "mock final review contract check passed"
+	}
 }
 
 func TestPriorImplementationEvidenceContextForRunListsReferencedEvidenceArtifacts(t *testing.T) {

@@ -122,6 +122,33 @@ func TestHandleFeatureRebaseDone_ManualPublishDoesNotResumePublish(t *testing.T)
 	)
 }
 
+func TestResolveBehindSubset_SkipsUpToDateHintWithoutConflictFiles(t *testing.T) {
+	rebaser := mocks.NewMockRebaseOperator()
+	rebaser.IsBehindRemoteFn = func(string, string) (bool, error) {
+		return false, nil
+	}
+	o := New(Deps{Rebaser: rebaser}, Hooks{})
+
+	f := &feature.Feature{
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{
+				Name:         "agentic",
+				Path:         "/tmp/agentic",
+				WorktreePath: "/tmp/agentic",
+				Branch:       "feature/up-to-date",
+				BaseBranch:   "main",
+			},
+		},
+	}
+
+	got := o.resolveBehindSubset(f, "agentic", "", nil)
+
+	if len(got) != 0 {
+		t.Fatalf("resolveBehindSubset returned %v, want no targets for an up-to-date non-conflict hint", got)
+	}
+}
+
 func TestHandleFeatureRebaseDone_NeedUserInputPausesCycle(t *testing.T) {
 	store := feature.NewStore(t.TempDir())
 	cfg := config.NewDefault()

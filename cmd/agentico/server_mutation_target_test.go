@@ -211,6 +211,65 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 	}
 }
 
+func TestServerMutationTargetStartRebaseSkipsAgentCycleWhenAlreadyUpToDate(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, config.NewDefault())
+	worktree := t.TempDir()
+	const featureID = "feat-rebase-up-to-date"
+	f := &feature.Feature{
+		ID:            featureID,
+		Name:          "Rebase Up To Date",
+		Slug:          "rebase-up-to-date",
+		Status:        feature.StatusCodeReady,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{{
+			Name:         "agentic",
+			Path:         worktree,
+			WorktreePath: worktree,
+			Branch:       "feature/rebase-up-to-date",
+			BaseBranch:   "main",
+		}},
+		RepoStates: map[string]*feature.RepoState{
+			"agentic": {Touched: true},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	rebaser := mocks.NewMockRebaseOperator()
+	rebaser.IsBehindRemoteFn = func(string, string) (bool, error) {
+		return false, nil
+	}
+	target := serverMutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{
+			Lifecycle: manager,
+			Store:     store,
+			Rebaser:   rebaser,
+		}, orchestrator.Hooks{}),
+		store: store,
+	}
+
+	_, err := target.StartRebase(featureID, serverruntime.RebaseActionRequest{Repo: "agentic"})
+
+	if err == nil || !strings.Contains(err.Error(), "already up to date") {
+		t.Fatalf("StartRebase error = %v, want already-up-to-date preflight error", err)
+	}
+	if got := countMockCalls(rebaser.Calls, "IsBehindRemote"); got != 1 {
+		t.Fatalf("IsBehindRemote calls = %d, want 1", got)
+	}
+	if got := countMockCalls(rebaser.Calls, "RebaseOnto"); got != 0 {
+		t.Fatalf("RebaseOnto calls = %d, want 0 for up-to-date repo", got)
+	}
+	loaded, loadErr := store.Load(featureID)
+	if loadErr != nil {
+		t.Fatalf("load feature: %v", loadErr)
+	}
+	if len(loaded.RepoCycles) != 0 || loaded.ActiveCycle != nil {
+		t.Fatalf("unexpected rebase cycle state: RepoCycles=%+v ActiveCycle=%+v", loaded.RepoCycles, loaded.ActiveCycle)
+	}
+}
+
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
 	sess := &mutationTargetSessionView{
 		id:        "session-help",

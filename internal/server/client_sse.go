@@ -222,12 +222,18 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		return RefreshSnapshot{LivePreview: &preview}, err
 	case resource.Type == "session" || evt.Kind == "session.updated" || evt.Kind == "log.updated":
 		snapshot := RefreshSnapshot{}
+		featureID := resource.FeatureID
+		refreshFeatureDetail := false
 		if resource.ID != "" {
 			session, err := c.SessionDetail(ctx, resource.ID)
 			if err != nil {
 				return snapshot, err
 			}
 			snapshot.Session = &session
+			if featureID == "" {
+				featureID = session.Session.FeatureID
+			}
+			refreshFeatureDetail = isTerminalSessionStatus(session.Session.Status)
 			end := session.Session.TranscriptCursor.End
 			if end == 0 {
 				end = session.Session.TranscriptCursor.Total
@@ -247,12 +253,19 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 			}
 			snapshot.Sessions = &sessions
 		}
-		if resource.FeatureID != "" && !isUtilityFeatureID(resource.FeatureID) {
-			preview, err := c.LivePreview(ctx, resource.FeatureID)
+		if featureID != "" && !isUtilityFeatureID(featureID) {
+			preview, err := c.LivePreview(ctx, featureID)
 			if err != nil {
 				return snapshot, err
 			}
 			snapshot.LivePreview = &preview
+			if refreshFeatureDetail {
+				feature, err := c.FeatureDetail(ctx, featureID)
+				if err != nil {
+					return snapshot, err
+				}
+				snapshot.Feature = &feature
+			}
 		}
 		return snapshot, nil
 	case resource.FeatureID != "":
@@ -278,5 +291,14 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	default:
 		features, err := c.Features(ctx)
 		return RefreshSnapshot{Features: &features}, err
+	}
+}
+
+func isTerminalSessionStatus(status string) bool {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(status), "-", "_")) {
+	case "done", "completed", "success", "failed", "error":
+		return true
+	default:
+		return false
 	}
 }

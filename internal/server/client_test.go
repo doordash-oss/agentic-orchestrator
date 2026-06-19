@@ -752,6 +752,59 @@ func TestClientFetchRefreshSnapshotIncludesLivePreviewForSessionOutput(t *testin
 	}
 }
 
+func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.T) {
+	var sawSessionDetail bool
+	var sawLivePreview bool
+	var sawFeatureDetail bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/sessions/sess-1":
+			sawSessionDetail = true
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
+				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Done"},
+				TranscriptCursor:  CursorDTO{Total: 0, Start: 0, End: 0},
+			}})
+		case "GET /api/v1/features/feat-1/live-preview":
+			sawLivePreview = true
+			writeJSON(w, http.StatusOK, LivePreviewResponse{
+				APIVersion: APIVersion,
+				Feature:    FeatureSummary{ID: "feat-1", Status: "CodeReady", CurrentPhase: "publish"},
+				Activity:   "Done",
+			})
+		case "GET /api/v1/features/feat-1":
+			sawFeatureDetail = true
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: FeatureDetailDTO{
+				FeatureSummary: FeatureSummary{ID: "feat-1", Status: "CodeReady", CurrentPhase: "publish"},
+			}})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event:    SSEEventDTO{Kind: "session.updated"},
+		Resource: ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"},
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "sess-1" {
+		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want sess-1 detail", snapshot.Session, sawSessionDetail)
+	}
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" || snapshot.LivePreview.Activity != "Done" {
+		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want terminal preview", snapshot.LivePreview, sawLivePreview)
+	}
+	if !sawFeatureDetail || snapshot.Feature == nil || snapshot.Feature.Feature.Status != "CodeReady" || snapshot.Feature.Feature.CurrentPhase != "publish" {
+		t.Fatalf("FetchRefreshSnapshot() feature = %+v, sawFeatureDetail=%v; want refreshed feature detail", snapshot.Feature, sawFeatureDetail)
+	}
+}
+
 func TestClientFetchRefreshSnapshotSkipsLivePreviewForChatSession(t *testing.T) {
 	var sawSessionDetail bool
 	var sawTranscript bool

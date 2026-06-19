@@ -61,10 +61,10 @@ func (o *Orchestrator) startFeatureRebase(
 		return "", errors.New("phase runner not configured")
 	}
 
-	// Enumerate the behind subset. The hint repo (from the TUI) is forced
-	// in unconditionally — the TUI already detected it as behind via its
-	// own preflight rebase attempt — and gets the hint conflict files.
-	// Other Feature.Repos branches are tested via the Rebaser port.
+	// Enumerate the behind subset. A hint with conflict context is forced in
+	// because the harness already attempted a rebase and found a conflict.
+	// Plain hints are probed like every other repo so a selected up-to-date
+	// branch does not spend an agent cycle.
 	behind := o.resolveBehindSubset(f, hintRepoName, hintRebaseTarget, hintConflictFiles)
 	if len(behind) == 0 {
 		// Nothing to rebase. This can happen when the hint repo's branch
@@ -166,11 +166,11 @@ func (o *Orchestrator) stageRebasePlanArtifacts(
 
 // resolveBehindSubset enumerates every Feature.Repos branch behind its
 // base branch, building the RebaseRepoTarget slice the loop expects. The
-// hint repo is included unconditionally (TUI already detected it behind);
-// other repos are probed via the RebaseOperator. Repos that are up-to-
-// date are skipped silently. The Rebaser dependency may be nil in tests
-// that don't wire git adapters; in that case only the hint repo is
-// included.
+// hint repo is included unconditionally only when conflict context is
+// present; otherwise it is probed via the RebaseOperator like every other
+// repo. Repos that are up-to-date are skipped silently. The Rebaser
+// dependency may be nil in tests that don't wire git adapters; in that
+// case only conflict-context hints are included.
 func (o *Orchestrator) resolveBehindSubset(
 	f *feature.Feature,
 	hintRepoName, hintRebaseTarget string,
@@ -186,9 +186,9 @@ func (o *Orchestrator) resolveBehindSubset(
 			worktreeDir = repo.Path
 		}
 
-		// The hint repo enters unconditionally with the TUI-resolved
-		// target + conflict files.
-		if repo.Name == hintRepoName {
+		isHintRepo := repo.Name == hintRepoName
+		hasConflictContext := isHintRepo && (hintRebaseTarget != "" || len(hintConflictFiles) > 0)
+		if hasConflictContext {
 			target := hintRebaseTarget
 			if target == "" {
 				target = o.resolveRebaseTarget(f, repo)
@@ -228,9 +228,10 @@ func (o *Orchestrator) resolveBehindSubset(
 			continue
 		}
 		out = append(out, agent.RebaseRepoTarget{
-			RepoName:     repo.Name,
-			RebaseTarget: target,
-			PRURL:        prURLs[repo.Name],
+			RepoName:      repo.Name,
+			RebaseTarget:  target,
+			ConflictFiles: nil,
+			PRURL:         prURLs[repo.Name],
 		})
 	}
 	return out

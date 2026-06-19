@@ -1347,6 +1347,24 @@ func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.R
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
+
+	if req.RebaseTarget == "" && len(req.ConflictFiles) == 0 {
+		if err := t.orch.StartRebase(featureID, req.Repo); err != nil {
+			var conflict *orchestrator.RebaseConflictError
+			if !errors.As(err, &conflict) {
+				resp.Result = "failed"
+				return resp, err
+			}
+			req.RebaseTarget = conflict.RebaseTarget
+			req.ConflictFiles = append([]string(nil), conflict.ConflictFiles...)
+			resp.RebaseTarget = req.RebaseTarget
+			resp.ConflictFiles = append([]string(nil), req.ConflictFiles...)
+		} else {
+			resp.Result = "completed"
+			return resp, nil
+		}
+	}
+
 	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleRebase, req.RebaseTarget, req.ConflictFiles...)
 	if sessionID != "" {
 		resp.SessionID = sessionID

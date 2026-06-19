@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -1032,6 +1034,17 @@ func assertFirstArtifactRetry(t *testing.T, fix artifactPhaseRetryFixture, tc ar
 	}
 }
 
+func gitStatusForCompletionTest(t *testing.T, repoPath string) string {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repoPath, "status", "--porcelain", "--untracked-files=all")
+	cmd.Env = testutil.GitTestEnv()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v\n%s", err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseMissingPhaseCompleteProtocolViolation(t *testing.T) {
 	for _, tc := range artifactPhaseCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1065,6 +1078,177 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseMissingMarkdownProtocol
 
 			assertFirstArtifactRetry(t, fix, tc, "markdown")
 		})
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseRepoMutationProtocolViolationRestoresWorktree(t *testing.T) {
+	for _, tc := range artifactPhaseCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			fix := newArtifactPhaseRetryFixture(t, tc, retrySuccessCheckpointForTest(tc.phase))
+			fix.runner.cmd.RunFn = agent.NewExecCommandRunner().Run
+			repoPath := testutil.InitGitRepo(t)
+			if err := fix.store.Modify(fix.feature.ID, func(ff *feature.Feature) error {
+				ff.Repos = []feature.FeatureRepo{{
+					Name:         "repo-a",
+					Path:         repoPath,
+					WorktreePath: repoPath,
+					Branch:       "main",
+					BaseBranch:   "main",
+				}}
+				return nil
+			}); err != nil {
+				t.Fatalf("record feature repo: %v", err)
+			}
+
+			readmePath := filepath.Join(repoPath, "README.md")
+			if err := os.WriteFile(readmePath, []byte("# Testu\n"), 0o644); err != nil {
+				t.Fatalf("dirty README: %v", err)
+			}
+			strayPath := filepath.Join(repoPath, "stray.md")
+			if err := os.WriteFile(strayPath, []byte("stray artifact\n"), 0o644); err != nil {
+				t.Fatalf("write stray file: %v", err)
+			}
+			if got := gitStatusForCompletionTest(t, repoPath); got == "" {
+				t.Fatal("repo status is clean before completion; test setup failed")
+			}
+
+			writePhaseComplete(t, fix.store.BaseDir, fix.feature, tc.phaseKey)
+			writePhaseMarkdown(t, fix.store.BaseDir, fix.feature, tc.phaseKey, tc.phaseKey+".md")
+
+			if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+				Phase:   tc.phase,
+				Success: true,
+			}); err != nil {
+				t.Fatalf("HandlePhaseCompletion() error = %v", err)
+			}
+
+			data, err := os.ReadFile(readmePath)
+			if err != nil {
+				t.Fatalf("read README after restore: %v", err)
+			}
+			if got, want := string(data), "# Test\n"; got != want {
+				t.Fatalf("README after restore = %q, want %q", got, want)
+			}
+			if _, err := os.Stat(strayPath); !os.IsNotExist(err) {
+				t.Fatalf("stray file stat err = %v, want removed", err)
+			}
+			if got := gitStatusForCompletionTest(t, repoPath); got != "" {
+				t.Fatalf("repo status after restore = %q, want clean", got)
+			}
+
+			matches, err := filepath.Glob(filepath.Join(fix.phaseDir, "violations", "repo-mutation-*.patch"))
+			if err != nil {
+				t.Fatalf("glob violation patches: %v", err)
+			}
+			if len(matches) != 1 {
+				t.Fatalf("violation patch count = %d, want 1 (%v)", len(matches), matches)
+			}
+			patch, err := os.ReadFile(matches[0])
+			if err != nil {
+				t.Fatalf("read violation patch: %v", err)
+			}
+			patchText := string(patch)
+			for _, want := range []string{"repo-a", "README.md", "# Testu", "stray.md"} {
+				if !strings.Contains(patchText, want) {
+					t.Fatalf("violation patch missing %q:\n%s", want, patchText)
+				}
+			}
+
+			assertFirstArtifactRetry(t, fix, tc, "modified target repo")
+		})
+	}
+}
+
+func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseRepoMutationRestoresPrePhaseBaseline(t *testing.T) {
+	tc := artifactPhaseCases()[0]
+	fix := newArtifactPhaseRetryFixture(t, tc, retrySuccessCheckpointForTest(tc.phase))
+	fix.runner.cmd.RunFn = agent.NewExecCommandRunner().Run
+	repoPath := testutil.InitGitRepo(t)
+	if err := fix.store.Modify(fix.feature.ID, func(ff *feature.Feature) error {
+		ff.Repos = []feature.FeatureRepo{{
+			Name:         "repo-a",
+			Path:         repoPath,
+			WorktreePath: repoPath,
+			Branch:       "main",
+			BaseBranch:   "main",
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("record feature repo: %v", err)
+	}
+
+	readmePath := filepath.Join(repoPath, "README.md")
+	if err := os.WriteFile(readmePath, []byte("# Baseline\n"), 0o644); err != nil {
+		t.Fatalf("write baseline README: %v", err)
+	}
+	baselineNotePath := filepath.Join(repoPath, "baseline-note.md")
+	if err := os.WriteFile(baselineNotePath, []byte("keep me\n"), 0o644); err != nil {
+		t.Fatalf("write baseline untracked file: %v", err)
+	}
+	baselineStatus := gitStatusForCompletionTest(t, repoPath)
+	if !strings.Contains(baselineStatus, "README.md") || !strings.Contains(baselineStatus, "baseline-note.md") {
+		t.Fatalf("baseline status = %q, want README.md and baseline-note.md", baselineStatus)
+	}
+
+	if err := fix.orchestrator.StartFeature(fix.feature.ID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	drainEvents(fix.orchestrator)
+
+	if err := os.WriteFile(readmePath, []byte("# Mutated by read-only phase\n"), 0o644); err != nil {
+		t.Fatalf("write read-only mutation: %v", err)
+	}
+	if err := os.WriteFile(baselineNotePath, []byte("mutated note\n"), 0o644); err != nil {
+		t.Fatalf("mutate baseline untracked file: %v", err)
+	}
+	strayPath := filepath.Join(repoPath, "stray.md")
+	if err := os.WriteFile(strayPath, []byte("stray artifact\n"), 0o644); err != nil {
+		t.Fatalf("write stray file: %v", err)
+	}
+
+	writePhaseComplete(t, fix.store.BaseDir, fix.feature, tc.phaseKey)
+	writePhaseMarkdown(t, fix.store.BaseDir, fix.feature, tc.phaseKey, tc.phaseKey+".md")
+
+	if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
+		Phase:   tc.phase,
+		Success: true,
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion() error = %v", err)
+	}
+
+	data, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read README after restore: %v", err)
+	}
+	if got, want := string(data), "# Baseline\n"; got != want {
+		t.Fatalf("README after restore = %q, want %q", got, want)
+	}
+	noteData, err := os.ReadFile(baselineNotePath)
+	if err != nil {
+		t.Fatalf("read baseline untracked file after restore: %v", err)
+	}
+	if got, want := string(noteData), "keep me\n"; got != want {
+		t.Fatalf("baseline untracked after restore = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(strayPath); !os.IsNotExist(err) {
+		t.Fatalf("stray file stat err = %v, want removed", err)
+	}
+	if got := gitStatusForCompletionTest(t, repoPath); got != baselineStatus {
+		t.Fatalf("repo status after restore = %q, want baseline %q", got, baselineStatus)
+	}
+
+	sidecar, err := agent.ReadProtocolRetrySidecar(fix.phaseDir)
+	if err != nil {
+		t.Fatalf("ReadProtocolRetrySidecar() error = %v", err)
+	}
+	if sidecar == nil || sidecar.Consecutive != 1 || !strings.Contains(sidecar.LastViolation, "modified target repo") {
+		t.Fatalf("sidecar = %#v, want first repo mutation violation", sidecar)
+	}
+	if got := len(fix.runner.capturedByPhase(tc.phase)); got != 2 {
+		t.Fatalf("starter captures for %s = %d, want initial start plus retry", tc.phase, got)
+	}
+	if events := drainEvents(fix.orchestrator); hasEventType(events, ports.PhaseCompleted) {
+		t.Fatalf("PhaseCompleted emitted on retry: %#v", events)
 	}
 }
 

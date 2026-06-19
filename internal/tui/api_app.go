@@ -902,6 +902,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = apiMutationSuccessMessage(msg.kind)
 		if msg.kind == "feature.rewind" && msg.featureID != "" {
 			delete(m.contents, msg.featureID)
+			if m.artifactReview != nil && m.artifactReview.FeatureID() == msg.featureID {
+				m.artifactReview = nil
+			}
 			m.rebuildPresentation(m.selectedFeature)
 			return m, m.fetchFeatureDetailCmd(msg.featureID)
 		}
@@ -4753,9 +4756,12 @@ func (m APIAppModel) openAPIReviewAttention(f *feature.Feature) (tea.Model, tea.
 		m.artifactReview.FeatureID() == f.ID &&
 		m.artifactReview.Detached() &&
 		!m.artifactReview.Decided() {
-		cmd := m.artifactReview.Reattach()
-		m.statusMessage = ""
-		return m, cmd
+		if artifactReviewMatchesFeature(m.artifactReview, f) {
+			cmd := m.artifactReview.Reattach()
+			m.statusMessage = ""
+			return m, cmd
+		}
+		m.artifactReview = nil
 	}
 	artifact, ok, reason := m.reviewArtifactForFeature(f)
 	if !ok {
@@ -4772,9 +4778,28 @@ func (m APIAppModel) openAPIReviewModel(f *feature.Feature, artifact server.Arti
 	if f == nil {
 		return m, nil
 	}
+	reviewMode, rewindPhase := apiReviewTarget(f)
+	model := NewArtifactReviewModel(artifact.Path, f.ID, reviewMode, rewindPhase, m.width, m.height, m.sessionManager, "", m.buildSession)
+	model.utilityModel = m.apiUtilityModelForFeature(f.ID)
+	m.artifactReview = &model
+	m.statusMessage = ""
+	return m, model.editor.Focus()
+}
+
+func artifactReviewMatchesFeature(review *ArtifactReviewModel, f *feature.Feature) bool {
+	if review == nil || f == nil {
+		return false
+	}
+	reviewMode, rewindPhase := apiReviewTarget(f)
+	return review.FeatureID() == f.ID &&
+		review.ReviewMode() == reviewMode &&
+		review.rewindPhase == rewindPhase
+}
+
+func apiReviewTarget(f *feature.Feature) (string, feature.Phase) {
 	reviewMode := "plan"
 	rewindPhase := feature.PhasePlan
-	if f.PendingReviewPhase != nil {
+	if f != nil && f.PendingReviewPhase != nil {
 		rewindPhase = *f.PendingReviewPhase
 		if f.IsRewind {
 			reviewMode = "rewind"
@@ -4782,11 +4807,7 @@ func (m APIAppModel) openAPIReviewModel(f *feature.Feature, artifact server.Arti
 			reviewMode = "gate"
 		}
 	}
-	model := NewArtifactReviewModel(artifact.Path, f.ID, reviewMode, rewindPhase, m.width, m.height, m.sessionManager, "", m.buildSession)
-	model.utilityModel = m.apiUtilityModelForFeature(f.ID)
-	m.artifactReview = &model
-	m.statusMessage = ""
-	return m, model.editor.Focus()
+	return reviewMode, rewindPhase
 }
 
 func (m APIAppModel) reviewArtifactForFeature(f *feature.Feature) (server.ArtifactDTO, bool, string) {
@@ -4810,12 +4831,19 @@ func selectReviewArtifact(f *feature.Feature, resp server.ArtifactListResponse) 
 			}
 		}
 	}
+	if rewindReviewRequiresPreferredArtifact(f) {
+		return server.ArtifactDTO{}, false, "Review artifact is still loading"
+	}
 	for _, artifact := range artifacts {
 		if strings.TrimSpace(artifact.Path) != "" {
 			return artifact, true, ""
 		}
 	}
 	return server.ArtifactDTO{}, false, "Review artifact path is unavailable"
+}
+
+func rewindReviewRequiresPreferredArtifact(f *feature.Feature) bool {
+	return f != nil && f.IsRewind && f.PendingReviewPhase != nil
 }
 
 func reviewArtifactIDs(f *feature.Feature) []string {

@@ -211,6 +211,11 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	if err != nil {
 		return err
 	}
+	repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, feature.PhaseKnowledgeBase, kbDir, repoName)
+	if err != nil {
+		return fmt.Errorf("enforce knowledge base read-only repo guard: %w", err)
+	}
+	violations = append(violations, repoMutationViolations...)
 
 	if kbDir == "" && len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(agent.RoleKnowledgeBaseBuilder, kbDir, violations)
@@ -437,6 +442,11 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	if err != nil {
 		return err
 	}
+	repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, input.Phase, phaseDir)
+	if err != nil {
+		return fmt.Errorf("enforce %s read-only repo guard: %w", phaseKey, err)
+	}
+	violations = append(violations, repoMutationViolations...)
 	if phaseDir == "" && len(violations) > 0 {
 		errMsg := formatSingleShotProtocolViolationError(artifactPhaseRoleMust(input.Phase), phaseDir, violations)
 		o.emitPhaseCompleted(featureID, input.Phase, errors.New(errMsg))
@@ -613,6 +623,20 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 		errMsg := "plan loop returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+	planDir := o.planReadOnlyGuardDir(f)
+	repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, feature.PhasePlan, planDir)
+	if err != nil {
+		return fmt.Errorf("enforce plan read-only repo guard: %w", err)
+	}
+	if len(repoMutationViolations) > 0 {
+		role := agent.RolePlanRoadmapPlanner
+		if f.CurrentRoadmapPhase > 0 {
+			role = agent.RolePlanPhasePlanner
+		}
+		errMsg := formatSingleShotProtocolViolationError(role, planDir, repoMutationViolations)
+		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
+		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
 	}
 
 	switch result.FinalStatus {
@@ -1348,6 +1372,10 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
+	finalReviewDir := o.finalReviewReadOnlyGuardDir(f)
+	if err := o.recordReadOnlyRepoBaseline(context.Background(), f, finalReviewDir); err != nil {
+		return fmt.Errorf("record final review read-only repo baseline: %w", err)
+	}
 	resultCh, err := runFn(f, o.computeKBInfos(f)...)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
@@ -1359,6 +1387,17 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 		errMsg := "final review returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+	if res.FinalStatus != "interrupted" {
+		repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, feature.PhaseFinalReview, finalReviewDir)
+		if err != nil {
+			return fmt.Errorf("enforce final review read-only repo guard: %w", err)
+		}
+		if len(repoMutationViolations) > 0 {
+			errMsg := formatSingleShotProtocolViolationError(agent.RoleFinalReviewer, finalReviewDir, repoMutationViolations)
+			o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
+			return o.markFinalReviewFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
+		}
 	}
 	switch res.FinalStatus {
 	case "all_passed":

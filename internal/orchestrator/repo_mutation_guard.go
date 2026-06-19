@@ -1,0 +1,430 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package orchestrator
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+)
+
+const readOnlyRepoBaselineFile = ".repo-readonly-baseline.json"
+
+type readOnlyRepoBaseline struct {
+	Version int                    `json:"version"`
+	Repos   []readOnlyRepoSnapshot `json:"repos"`
+}
+
+type readOnlyRepoSnapshot struct {
+	Name         string                  `json:"name"`
+	WorktreePath string                  `json:"worktree_path"`
+	Status       string                  `json:"status"`
+	Diff         string                  `json:"diff"`
+	Untracked    []readOnlyUntrackedFile `json:"untracked,omitempty"`
+}
+
+type readOnlyUntrackedFile struct {
+	Path    string `json:"path"`
+	Mode    uint32 `json:"mode"`
+	SHA256  string `json:"sha256"`
+	Content []byte `json:"content"`
+}
+
+func (o *Orchestrator) recordReadOnlyRepoBaseline(ctx context.Context, f *feature.Feature, phaseDir string, repoNames ...string) error {
+	if f == nil || phaseDir == "" {
+		return nil
+	}
+	snapshots, err := o.captureReadOnlyRepoSnapshots(ctx, f, repoNames...)
+	if err != nil {
+		return err
+	}
+	if len(snapshots) == 0 {
+		return nil
+	}
+	if err := os.MkdirAll(phaseDir, 0o755); err != nil {
+		return fmt.Errorf("create read-only phase dir: %w", err)
+	}
+	data, err := json.MarshalIndent(readOnlyRepoBaseline{
+		Version: 1,
+		Repos:   snapshots,
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal read-only repo baseline: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(phaseDir, readOnlyRepoBaselineFile), append(data, '\n'), 0o644); err != nil {
+		return fmt.Errorf("write read-only repo baseline: %w", err)
+	}
+	return nil
+}
+
+func (o *Orchestrator) enforceReadOnlyRepoMutations(ctx context.Context, f *feature.Feature, phase feature.Phase, phaseDir string, repoNames ...string) ([]agent.ProtocolViolation, error) {
+	if f == nil || phaseDir == "" || phase == feature.PhaseImplement {
+		return nil, nil
+	}
+	current, err := o.captureReadOnlyRepoSnapshots(ctx, f, repoNames...)
+	if err != nil {
+		return nil, err
+	}
+	if len(current) == 0 {
+		return nil, nil
+	}
+
+	baseline, err := readReadOnlyRepoBaseline(phaseDir)
+	if err != nil {
+		return nil, err
+	}
+	baselineByRepo := make(map[string]readOnlyRepoSnapshot, len(baseline.Repos))
+	for _, snap := range baseline.Repos {
+		baselineByRepo[readOnlyRepoKey(snap.Name, snap.WorktreePath)] = snap
+	}
+
+	var violations []agent.ProtocolViolation
+	for _, snap := range current {
+		base := baselineByRepo[readOnlyRepoKey(snap.Name, snap.WorktreePath)]
+		if readOnlyRepoSnapshotsEqual(base, snap) {
+			continue
+		}
+		patchPath, err := o.writeReadOnlyRepoMutationPatch(phaseDir, phase, base, snap)
+		if err != nil {
+			return nil, err
+		}
+		if err := o.restoreReadOnlyRepoBaseline(ctx, snap, base); err != nil {
+			return nil, err
+		}
+		violations = append(violations, agent.ProtocolViolation{
+			Artifact: fmt.Sprintf("target repo %s", snap.Name),
+			Reason:   fmt.Sprintf("read-only %s phase modified target repo %s; saved attempted diff to %s and restored the managed worktree", phase.String(), snap.Name, patchPath),
+		})
+	}
+	return violations, nil
+}
+
+func (o *Orchestrator) captureReadOnlyRepoSnapshots(ctx context.Context, f *feature.Feature, repoNames ...string) ([]readOnlyRepoSnapshot, error) {
+	if f == nil {
+		return nil, nil
+	}
+	filter := make(map[string]struct{}, len(repoNames))
+	for _, name := range repoNames {
+		if strings.TrimSpace(name) != "" {
+			filter[name] = struct{}{}
+		}
+	}
+
+	var snapshots []readOnlyRepoSnapshot
+	for _, repo := range f.Repos {
+		if len(filter) > 0 {
+			if _, ok := filter[repo.Name]; !ok {
+				continue
+			}
+		}
+		if strings.TrimSpace(repo.WorktreePath) == "" {
+			continue
+		}
+		snap, ok, err := o.captureReadOnlyRepoSnapshot(ctx, repo)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			snapshots = append(snapshots, snap)
+		}
+	}
+	sort.Slice(snapshots, func(i, j int) bool {
+		return readOnlyRepoKey(snapshots[i].Name, snapshots[i].WorktreePath) < readOnlyRepoKey(snapshots[j].Name, snapshots[j].WorktreePath)
+	})
+	return snapshots, nil
+}
+
+func (o *Orchestrator) captureReadOnlyRepoSnapshot(ctx context.Context, repo feature.FeatureRepo) (readOnlyRepoSnapshot, bool, error) {
+	worktreePath := filepath.Clean(repo.WorktreePath)
+	info, err := os.Stat(worktreePath)
+	if err != nil || !info.IsDir() {
+		return readOnlyRepoSnapshot{}, false, nil
+	}
+	inside, err := o.gitOutput(ctx, worktreePath, "rev-parse", "--is-inside-work-tree")
+	if err != nil || strings.TrimSpace(string(inside)) != "true" {
+		return readOnlyRepoSnapshot{}, false, nil
+	}
+	status, err := o.gitOutput(ctx, worktreePath, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return readOnlyRepoSnapshot{}, false, fmt.Errorf("git status for %s: %w", repo.Name, err)
+	}
+	diff, err := o.gitOutput(ctx, worktreePath, "diff", "--binary", "HEAD", "--")
+	if err != nil {
+		return readOnlyRepoSnapshot{}, false, fmt.Errorf("git diff for %s: %w", repo.Name, err)
+	}
+	untracked, err := o.captureReadOnlyUntrackedFiles(ctx, worktreePath)
+	if err != nil {
+		return readOnlyRepoSnapshot{}, false, fmt.Errorf("capture untracked files for %s: %w", repo.Name, err)
+	}
+	name := repo.Name
+	if name == "" {
+		name = filepath.Base(worktreePath)
+	}
+	return readOnlyRepoSnapshot{
+		Name:         name,
+		WorktreePath: worktreePath,
+		Status:       strings.TrimSpace(string(status)),
+		Diff:         string(diff),
+		Untracked:    untracked,
+	}, true, nil
+}
+
+func (o *Orchestrator) captureReadOnlyUntrackedFiles(ctx context.Context, worktreePath string) ([]readOnlyUntrackedFile, error) {
+	out, err := o.gitOutput(ctx, worktreePath, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	raw := bytes.Split(out, []byte{0})
+	files := make([]readOnlyUntrackedFile, 0, len(raw))
+	for _, entry := range raw {
+		if len(entry) == 0 {
+			continue
+		}
+		rel := filepath.Clean(string(entry))
+		if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		path := filepath.Join(worktreePath, rel)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(content)
+		files = append(files, readOnlyUntrackedFile{
+			Path:    filepath.ToSlash(rel),
+			Mode:    uint32(info.Mode().Perm()),
+			SHA256:  hex.EncodeToString(sum[:]),
+			Content: content,
+		})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
+}
+
+func (o *Orchestrator) restoreReadOnlyRepoBaseline(ctx context.Context, current, baseline readOnlyRepoSnapshot) error {
+	worktreePath := current.WorktreePath
+	if _, err := o.gitOutput(ctx, worktreePath, "reset", "--hard", "HEAD"); err != nil {
+		return fmt.Errorf("reset read-only repo %s: %w", current.Name, err)
+	}
+	if _, err := o.gitOutput(ctx, worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("clean read-only repo %s: %w", current.Name, err)
+	}
+	if strings.TrimSpace(baseline.Diff) != "" {
+		if _, err := o.gitOutputWithStdin(ctx, worktreePath, strings.NewReader(baseline.Diff), "apply", "--binary", "--whitespace=nowarn"); err != nil {
+			return fmt.Errorf("restore baseline diff for %s: %w", current.Name, err)
+		}
+	}
+	for _, file := range baseline.Untracked {
+		rel := filepath.Clean(filepath.FromSlash(file.Path))
+		if rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		path := filepath.Join(worktreePath, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("restore untracked parent for %s: %w", file.Path, err)
+		}
+		mode := os.FileMode(file.Mode)
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := os.WriteFile(path, file.Content, mode); err != nil {
+			return fmt.Errorf("restore untracked file %s: %w", file.Path, err)
+		}
+	}
+	return nil
+}
+
+func (o *Orchestrator) writeReadOnlyRepoMutationPatch(phaseDir string, phase feature.Phase, baseline, current readOnlyRepoSnapshot) (string, error) {
+	violationsDir := filepath.Join(phaseDir, "violations")
+	if err := os.MkdirAll(violationsDir, 0o755); err != nil {
+		return "", fmt.Errorf("create read-only repo violations dir: %w", err)
+	}
+	path, err := nextReadOnlyRepoMutationPatchPath(violationsDir, current.Name)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Agentico read-only phase repo mutation\n")
+	fmt.Fprintf(&b, "# saved_at: %s\n", time.Now().UTC().Format(time.RFC3339))
+	fmt.Fprintf(&b, "# phase: %s\n", phase.String())
+	fmt.Fprintf(&b, "# repo: %s\n", current.Name)
+	fmt.Fprintf(&b, "# worktree: %s\n\n", current.WorktreePath)
+	if baseline.Status != "" {
+		fmt.Fprintf(&b, "# baseline status\n%s\n\n", baseline.Status)
+	}
+	if current.Status != "" {
+		fmt.Fprintf(&b, "# current status\n%s\n\n", current.Status)
+	}
+	if strings.TrimSpace(current.Diff) != "" {
+		fmt.Fprintf(&b, "# current diff against HEAD\n%s\n", current.Diff)
+	}
+	if len(current.Untracked) > 0 {
+		fmt.Fprintf(&b, "\n# current untracked files\n")
+		for _, file := range current.Untracked {
+			fmt.Fprintf(&b, "# %s sha256=%s bytes=%d\n", file.Path, file.SHA256, len(file.Content))
+		}
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", fmt.Errorf("write read-only repo mutation patch: %w", err)
+	}
+	return path, nil
+}
+
+func readReadOnlyRepoBaseline(phaseDir string) (readOnlyRepoBaseline, error) {
+	path := filepath.Join(phaseDir, readOnlyRepoBaselineFile)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return readOnlyRepoBaseline{Version: 1}, nil
+	}
+	if err != nil {
+		return readOnlyRepoBaseline{}, fmt.Errorf("read read-only repo baseline: %w", err)
+	}
+	var baseline readOnlyRepoBaseline
+	if err := json.Unmarshal(data, &baseline); err != nil {
+		return readOnlyRepoBaseline{}, fmt.Errorf("parse read-only repo baseline: %w", err)
+	}
+	return baseline, nil
+}
+
+func readOnlyRepoSnapshotsEqual(a, b readOnlyRepoSnapshot) bool {
+	if strings.TrimSpace(a.Status) != strings.TrimSpace(b.Status) || a.Diff != b.Diff {
+		return false
+	}
+	if len(a.Untracked) != len(b.Untracked) {
+		return false
+	}
+	for i := range a.Untracked {
+		if a.Untracked[i].Path != b.Untracked[i].Path ||
+			a.Untracked[i].Mode != b.Untracked[i].Mode ||
+			a.Untracked[i].SHA256 != b.Untracked[i].SHA256 {
+			return false
+		}
+	}
+	return true
+}
+
+func nextReadOnlyRepoMutationPatchPath(dir, repoName string) (string, error) {
+	slug := sanitizeReadOnlyRepoName(repoName)
+	for i := 1; i < 1000; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("repo-mutation-%03d-%s.patch", i, slug))
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return path, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("too many read-only repo mutation patches in %s", dir)
+}
+
+func sanitizeReadOnlyRepoName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return "repo"
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	if slug := strings.Trim(b.String(), "-"); slug != "" {
+		return slug
+	}
+	return "repo"
+}
+
+func readOnlyRepoKey(name, worktreePath string) string {
+	return name + "\x00" + filepath.Clean(worktreePath)
+}
+
+func (o *Orchestrator) artifactReadOnlyGuardDir(f *feature.Feature, phaseKey string) string {
+	baseDir := o.stateDir()
+	if f == nil || baseDir == "" || phaseKey == "" {
+		return ""
+	}
+	return filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), phaseKey)
+}
+
+func (o *Orchestrator) planReadOnlyGuardDir(f *feature.Feature) string {
+	baseDir := o.stateDir()
+	if f == nil || baseDir == "" {
+		return ""
+	}
+	base := filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix())
+	if f.CurrentRoadmapPhase > 0 {
+		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "plan")
+	}
+	return filepath.Join(base, "roadmap")
+}
+
+func (o *Orchestrator) finalReviewReadOnlyGuardDir(f *feature.Feature) string {
+	baseDir := o.stateDir()
+	if f == nil || baseDir == "" {
+		return ""
+	}
+	return filepath.Join(agent.ActiveRunDir(baseDir, f), feature.PhaseReview.DirName())
+}
+
+func (o *Orchestrator) gitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	return o.gitOutputWithStdin(ctx, dir, nil, args...)
+}
+
+func (o *Orchestrator) gitOutputWithStdin(ctx context.Context, dir string, stdin *strings.Reader, args ...string) ([]byte, error) {
+	runner := o.deps.CmdRunner
+	if runner == nil {
+		runner = agent.NewExecCommandRunner()
+	}
+	var stderr bytes.Buffer
+	opts := ports.CommandOpts{Dir: dir, Stderr: &stderr}
+	if stdin != nil {
+		opts.Stdin = stdin
+	}
+	out, err := runner.Run(ctx, "git", args, opts)
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return out, fmt.Errorf("%w: %s", err, msg)
+		}
+		return out, err
+	}
+	return out, nil
+}

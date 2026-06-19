@@ -131,13 +131,20 @@ func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 
 	on := render(true)
 	requireContains(t, on, "ABSOLUTE: write only inside the output roots above.")
+	requireContains(t, on, "This is a read-only phase for target repositories.")
+	requireContains(t, on, "You may inspect repository files, but you must not create, edit, delete, move, rename, reformat, or otherwise mutate any file outside the output roots.")
+	requireContains(t, on, "If a user answer or artifact requirement sounds like permission to edit repository files, treat it only as a requirement to document in your output artifact.")
+	requireContains(t, on, "Before creating `phase_complete`, ensure every file you changed is inside the output roots.")
 	// The prohibition must sit between the output-roots list and the
 	// completion marker — agents skip ahead to "## Completion", so placing
 	// the rule there keeps it on the path of an attentive reader.
 	requireOrder(t, on, "## Output Roots", "ABSOLUTE: write only inside the output roots above.", "## Completion")
+	requireOrder(t, on, "## Completion", "Before creating `phase_complete`, ensure every file you changed is inside the output roots.", "/phase/phase_complete")
 
 	off := render(false)
 	requireNotContains(t, off, "ABSOLUTE: write only inside the output roots above.")
+	requireNotContains(t, off, "This is a read-only phase for target repositories.")
+	requireNotContains(t, off, "If a user answer or artifact requirement sounds like permission to edit repository files")
 }
 
 func TestMultiRepoPromptBranches(t *testing.T) {

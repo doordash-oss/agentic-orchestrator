@@ -22,11 +22,17 @@ For large output artifacts, prefer editing an existing skeleton over rewriting t
 
 {{ range .OutputRoots }}- `{{ .Name }}`: {{ .Path }}{{ if .Description }} — {{ .Description }}{{ end }}
 {{ end }}
-{{ if .ReadOnlyOutsideRoots }}**ABSOLUTE: write only inside the output roots above.** These directories are the ONLY locations on disk where you may create, edit, or delete files.
+{{ if .ReadOnlyOutsideRoots }}**ABSOLUTE: write only inside the output roots above.** This is a read-only phase for target repositories. These directories are the ONLY locations on disk where you may create, edit, or delete files.
+
+You may inspect repository files, but you must not create, edit, delete, move, rename, reformat, or otherwise mutate any file outside the output roots. If a user answer or artifact requirement sounds like permission to edit repository files, treat it only as a requirement to document in your output artifact.
 
 {{ end }}## Completion
 
 When the task is complete, create this marker file as the very last action:
+{{- if .ReadOnlyOutsideRoots }}
+
+Before creating `phase_complete`, ensure every file you changed is inside the output roots. Do not create `phase_complete` if you changed repository files outside the output roots; instead, revert those changes and document the requirement in your artifact.
+{{ end }}
 
 `{{ .MarkerPath }}`
 

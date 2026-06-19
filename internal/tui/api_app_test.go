@@ -4925,6 +4925,137 @@ func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testin
 	}
 }
 
+func TestAPIAppModelContextualActionRejectsStaleRewindReviewArtifact(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	roadmapPath := filepath.Join(tmp, "roadmap.md")
+	if err := os.WriteFile(roadmapPath, []byte("# Old Roadmap\n"), 0o644); err != nil {
+		t.Fatalf("write stale roadmap artifact: %v", err)
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "PromptNeedsReview",
+				CurrentPhase: "knowledge-base",
+				ActiveRun:    2,
+				RunCount:     2,
+				CreatedAt:    time.Now(),
+			},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "PromptNeedsReview",
+				CurrentPhase: "knowledge-base",
+				ActiveRun:    2,
+				RunCount:     2,
+			},
+			Pipeline: "large",
+			ActiveRun: &server.RunSummaryDTO{
+				RunNumber:          2,
+				CurrentPhase:       "knowledge-base",
+				PendingReviewPhase: "inquire",
+				IsRewind:           true,
+				ArtifactCount:      1,
+			},
+			Models: config.ModelConfig{Utilities: "test-utility"},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	updated := model.(APIAppModel)
+	if updated.artifactReview != nil {
+		t.Fatalf("pressing a opened stale artifact review for %q; want fetch for rewind prompt artifact", updated.artifactReview.ArtifactPath())
+	}
+	if cmd == nil {
+		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
+	}
+	if updated.statusMessage != "Loading review artifact" {
+		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
+	}
+}
+
+func TestAPIAppModelContextualActionRejectsDetachedStaleReviewAfterRewind(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	roadmapPath := filepath.Join(tmp, "roadmap.md")
+	if err := os.WriteFile(roadmapPath, []byte("# Old Roadmap\n"), 0o644); err != nil {
+		t.Fatalf("write stale roadmap artifact: %v", err)
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "PromptNeedsReview",
+				CurrentPhase: "knowledge-base",
+				ActiveRun:    2,
+				RunCount:     2,
+				CreatedAt:    time.Now(),
+			},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "PromptNeedsReview",
+				CurrentPhase: "knowledge-base",
+				ActiveRun:    2,
+				RunCount:     2,
+			},
+			Pipeline: "large",
+			ActiveRun: &server.RunSummaryDTO{
+				RunNumber:          2,
+				CurrentPhase:       "knowledge-base",
+				PendingReviewPhase: "inquire",
+				IsRewind:           true,
+				ArtifactCount:      1,
+			},
+			Models: config.ModelConfig{Utilities: "test-utility"},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	stale := NewArtifactReviewModel(roadmapPath, "active", "plan", feature.PhasePlan, app.width, app.height, nil, "", nil)
+	stale.detached = true
+	app.artifactReview = &stale
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	updated := model.(APIAppModel)
+	if updated.artifactReview != nil && !updated.artifactReview.Detached() {
+		t.Fatalf("pressing a reattached stale %s review for %q", updated.artifactReview.ReviewMode(), updated.artifactReview.ArtifactPath())
+	}
+	if cmd == nil {
+		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
+	}
+	if updated.statusMessage != "Loading review artifact" {
+		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
+	}
+}
+
 func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -6101,6 +6232,9 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 	if got := app.snapshot.Content; got == nil || got.RunNumber != 1 || got.Artifact == nil || got.Artifact.ID != "old-plan" {
 		t.Fatalf("initial content = %+v, want run 1 old-plan", got)
 	}
+	staleReview := NewArtifactReviewModel("/tmp/old-plan.md", "active", "plan", feature.PhasePlan, app.width, app.height, nil, "", nil)
+	staleReview.detached = true
+	app.artifactReview = &staleReview
 
 	client.detail = run2Detail
 	model, cmd := app.Update(apiMutationResultMsg{kind: "feature.rewind", featureID: "active"})
@@ -6110,6 +6244,9 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 	afterRewind := model.(APIAppModel)
 	if got, ok := afterRewind.contents["active"]; ok {
 		t.Fatalf("rewind mutation retained stale content = %+v, want content cleared until run 2 loads", got)
+	}
+	if afterRewind.artifactReview != nil {
+		t.Fatalf("rewind mutation retained stale artifact review for %q", afterRewind.artifactReview.ArtifactPath())
 	}
 
 	msg := cmd()

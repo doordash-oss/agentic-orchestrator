@@ -1418,6 +1418,7 @@ func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]st
 		sb.WriteString("\n")
 	}
 	sb.WriteString("\n")
+	sb.WriteString("This answer clarifies requirements; it is not authorization to implement, edit repository files, or modify files outside your phase artifact/output directory.\n\n")
 	sb.WriteString(askingFormatReminder)
 	return strings.TrimSpace(sb.String())
 }

@@ -685,6 +685,7 @@ func TestBuildAskUserAnswerEnvelope_RestatesQuestionAndOptions(t *testing.T) {
 		"2. Add README.scn.md — Preserves the English README.",
 		"3. Add bilingual README.md — Keeps both in one file.",
 		"User's selected answer: Replace README.md (Recommended)",
+		"This answer clarifies requirements; it is not authorization to implement, edit repository files, or modify files outside your phase artifact/output directory.",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(got, want) {
@@ -716,6 +717,9 @@ func TestBuildAskUserAnswerEnvelope_HandlesMissingOptions(t *testing.T) {
 	}
 	if !strings.Contains(got, "User's selected answer: 2.0.0") {
 		t.Errorf("missing answer:\n%s", got)
+	}
+	if !strings.Contains(got, "This answer clarifies requirements; it is not authorization to implement") {
+		t.Errorf("missing non-authorization reminder:\n%s", got)
 	}
 	if strings.Contains(got, "Options you presented:") {
 		t.Errorf("should omit options block when none were presented:\n%s", got)
@@ -771,6 +775,7 @@ func TestRespondToAskUser_SyntheticSendsFramedFollowUp(t *testing.T) {
 		"> Replace or add alongside?",
 		"1. Replace (Recommended) — matches the literal request",
 		"User's selected answer: Replace (Recommended)",
+		"This answer clarifies requirements; it is not authorization to implement, edit repository files, or modify files outside your phase artifact/output directory.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("follow-up turn missing %q\n--- got ---\n%s", want, text)
@@ -1367,6 +1372,9 @@ func TestBuildAskUserAnswerEnvelope_AppendsAskingFormatReminder(t *testing.T) {
 	}
 	if !strings.Contains(got, "asking-questions format from your system prompt") {
 		t.Errorf("envelope missing pointer back to system prompt\n--- got ---\n%s", got)
+	}
+	if !strings.Contains(got, "not authorization to implement") {
+		t.Errorf("envelope missing non-authorization reminder\n--- got ---\n%s", got)
 	}
 	// The reminder must come AFTER the answer block so the agent reads the
 	// answer first and the format rule last (most-recent-wins anchoring).

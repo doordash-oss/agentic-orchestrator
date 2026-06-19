@@ -670,6 +670,8 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 			})
 			for _, want := range []string{
 				"ABSOLUTE: write only inside the output roots above.",
+				"This is a read-only phase for target repositories.",
+				"If a user answer or artifact requirement sounds like permission to edit repository files, treat it only as a requirement to document in your output artifact.",
 			} {
 				if !strings.Contains(got, want) {
 					t.Fatalf("%s system prompt missing %q in:\n%s", tt.name, want, got)
@@ -700,8 +702,13 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 				IterationDir: "/state/feat/run-001/" + tt.name,
 				SkillsDir:    "/skills",
 			})
-			if strings.Contains(got, "ABSOLUTE: write only inside the output roots above.") {
-				t.Fatalf("%s system prompt contains read-only-outside-roots clause but role legitimately writes outside its output roots:\n%s", tt.name, got)
+			for _, unwanted := range []string{
+				"ABSOLUTE: write only inside the output roots above.",
+				"This is a read-only phase for target repositories.",
+			} {
+				if strings.Contains(got, unwanted) {
+					t.Fatalf("%s system prompt contains read-only-outside-roots clause %q but role legitimately writes outside its output roots:\n%s", tt.name, unwanted, got)
+				}
 			}
 		})
 	}

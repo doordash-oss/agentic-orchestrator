@@ -260,6 +260,10 @@ func containsPriorEvidencePath(ctx priorImplementationEvidenceContext, want stri
 	return false
 }
 
+func shellSingleQuoteForFRTest(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos covers
 // the SUCCESS path: one feature-level reviewer session approves on iter-1;
 // every repo at "awaiting_final_review" transitions atomically to
@@ -380,6 +384,77 @@ done
 	}
 	if got, want := result.Iterations, 1; got != want {
 		t.Errorf("Iterations = %d, want %d (recovered within the first iteration)", got, want)
+	}
+}
+
+func TestRunFeatureFinalReviewLoop_ReviewerRepoMutationTripsProtocolViolationAndRestores(t *testing.T) {
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-reviewer-repo-mutation", []string{"api"})
+	repo := testutil.InitGitRepo(t)
+	f.Repos[0].Path = repo
+	f.Repos[0].WorktreePath = repo
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature with git repo: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	readmePath := filepath.Join(repo, "README.md")
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+
+			fmt.Sprintf("cat > %s <<'EOF'\n# Mutated by reviewer\nEOF\n", shellSingleQuoteForFRTest(readmePath))+
+			testutil.WriteFinalReviewApproved(artDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  1,
+		MaxConsecFails: 1,
+		CommandRunner:  NewExecCommandRunner(),
+		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": reviewScript}),
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "protocol_violation" {
+		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
+	}
+	if !strings.Contains(result.LastError, "read-only Final Review phase modified target repo api") {
+		t.Fatalf("LastError missing repo-mutation violation:\n%s", result.LastError)
+	}
+	data, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatalf("read README after restore: %v", err)
+	}
+	if got, want := string(data), "# Test\n"; got != want {
+		t.Fatalf("README after restore = %q, want %q", got, want)
+	}
+	matches, err := filepath.Glob(filepath.Join(artDir, "iteration-01", "violations", "repo-mutation-*.patch"))
+	if err != nil {
+		t.Fatalf("glob violation patches: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("violation patch count = %d, want 1 (%v)", len(matches), matches)
+	}
+	patch, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("read violation patch: %v", err)
+	}
+	if got := string(patch); !strings.Contains(got, "README.md") || !strings.Contains(got, "# Mutated by reviewer") {
+		t.Fatalf("violation patch missing reviewer mutation:\n%s", got)
 	}
 }
 
@@ -886,6 +961,85 @@ fi`,
 	}
 	if _, err := os.Stat(filepath.Join(artDir, "iteration-02", "phase_complete")); err != nil {
 		t.Fatalf("iteration-02 phase_complete missing: %v", err)
+	}
+}
+
+func TestRunFeatureFinalReviewLoop_CoveredMissingEvidenceRunsFix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-covered-evidence", []string{"app"})
+
+	requirement := "Capture actual rendered README output showing the translated top section, one translated mixed-content table, and one preserved code/flags section."
+	phaseDir := PhaseDir(env.stateDir, f, 1)
+	planDir := filepath.Join(phaseDir, "plan")
+	if err := os.MkdirAll(planDir, 0o755); err != nil {
+		t.Fatalf("mkdir phase plan dir: %v", err)
+	}
+	planPath := filepath.Join(planDir, "phase-plan.md")
+	plan := "# Phase 1\n\n### Visual Evidence\n\n- [ ] " + requirement + "\n"
+	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
+		t.Fatalf("write phase plan: %v", err)
+	}
+	contract := CompileTestingContract(plan, planPath, "collapsed")
+	if err := WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
+		t.Fatalf("write phase testing contract: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
+		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
+%s
+%s
+else
+%s
+%s
+fi`,
+			artDir,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewApproved(artDir)+"\n"+testutil.JSONLSuccess,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: MISSING_EVIDENCE_REQUIREMENT phase 1 visual: "+requirement)+"\n"+testutil.JSONLSuccess))
+
+	fixMarker := filepath.Join(artDir, "fix-ran")
+	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
+		testutil.JSONLInit+"\n"+
+			fmt.Sprintf("touch %q\n", fixMarker)+
+			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  3,
+		MaxConsecFails: 3,
+		BuildSession: mockBuildSessionByModel(map[string]string{
+			"reviewer": reviewScript,
+			"agent":    fixScript,
+		}),
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed; feedback:\n%s", result.FinalStatus, result.PlanRevisionFeedback)
+	}
+	if _, err := os.Stat(fixMarker); err != nil {
+		t.Fatalf("fix marker was not written: %v", err)
 	}
 }
 

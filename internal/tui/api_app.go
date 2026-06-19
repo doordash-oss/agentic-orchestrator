@@ -2810,6 +2810,7 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 	if !ok || active == nil {
 		return m, nil
 	}
+	var cmds []tea.Cmd
 	detail := server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
 		ID:         active.ID(),
 		FeatureID:  active.FeatureID(),
@@ -2823,33 +2824,66 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 		ContextPct: active.ContextPercentage(),
 	}}
 	var transcript *server.TranscriptResponse
+	updateActive := true
 	if snapshot.Session != nil {
 		if snapshot.Session.Session.ID != active.ID() {
-			return m, nil
-		}
-		detail = snapshot.Session.Session
-		transcript = snapshot.Transcript
-	}
-	controls := detail.PendingControls
-	if len(controls) == 0 {
-		if bySession := m.apiPendingControlsBySession(active.FeatureID()); len(bySession) > 0 {
-			controls = bySession[active.ID()]
+			updateActive = false
+		} else {
+			detail = snapshot.Session.Session
+			transcript = snapshot.Transcript
 		}
 	}
-	newMessages := active.applyAPISessionSnapshot(detail, transcript, controls)
+	if updateActive {
+		controls := detail.PendingControls
+		if len(controls) == 0 {
+			if bySession := m.apiPendingControlsBySession(active.FeatureID()); len(bySession) > 0 {
+				controls = bySession[active.ID()]
+			}
+		}
+		newMessages := active.applyAPISessionSnapshot(detail, transcript, controls)
+		if len(newMessages) > 0 {
+			updated, updateCmd := m.attach.Update(attachMsgsMsg{generation: m.attach.tabGeneration, messages: newMessages})
+			m.attach = &updated
+			if updateCmd != nil {
+				cmds = append(cmds, updateCmd)
+			}
+		}
+		if len(controls) > 0 {
+			m.attach.restorePendingAskUserQuestions(active)
+			if !m.attach.HasActiveQuestion() {
+				m.attach.restorePendingPermission(active)
+			}
+			m.attach.updateViewport()
+		}
+	}
+	var rebuildCmd tea.Cmd
+	m, rebuildCmd = m.rebuildAPIAttachTabs()
+	if rebuildCmd != nil {
+		cmds = append(cmds, rebuildCmd)
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m APIAppModel) rebuildAPIAttachTabs() (APIAppModel, tea.Cmd) {
+	if m.attach == nil {
+		return m, nil
+	}
+	next := m.apiAttachTabsForFeature(m.attach.featureID)
+	if len(next) == 0 {
+		m.attach = nil
+		m.statusMessage = "No active sessions to watch."
+		return m, nil
+	}
+	if !m.attach.rebuildTabs(next) {
+		return m, nil
+	}
+	idx := m.attach.activeTabIdx
+	if idx < 0 || idx >= len(m.attach.repoTabs) || m.attach.repoTabs[idx].sess == nil {
+		return m, nil
+	}
 	var cmd tea.Cmd
-	if len(newMessages) > 0 {
-		updated, updateCmd := m.attach.Update(attachMsgsMsg{generation: m.attach.tabGeneration, messages: newMessages})
-		m.attach = &updated
-		cmd = updateCmd
-	}
-	if len(controls) > 0 {
-		m.attach.restorePendingAskUserQuestions(active)
-		if !m.attach.HasActiveQuestion() {
-			m.attach.restorePendingPermission(active)
-		}
-		m.attach.updateViewport()
-	}
+	updated, cmd := m.attach.switchToTab(idx)
+	m.attach = &updated
 	return m, cmd
 }
 

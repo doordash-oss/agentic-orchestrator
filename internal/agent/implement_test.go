@@ -107,6 +107,62 @@ func TestBuildImplementPrompt_TestingContractPath(t *testing.T) {
 	t.Error("testing contract path should not be inlined into the lean implement user prompt")
 }
 
+func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
+	planDir := t.TempDir()
+	planPath := filepath.Join(planDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte("# Phase plan\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	feedback := MissingEvidencePlanRevisionFeedback([]MissingEvidenceRequirement{{
+		Phase:       1,
+		Kind:        "visual",
+		Requirement: "Capture actual rendered README output.",
+	}})
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      2,
+		AgentStatus:  "SUCCESS",
+		ReviewStatus: "CHANGES_REQUESTED",
+	}); err != nil {
+		t.Fatalf("write plan attempt meta: %v", err)
+	}
+	feedbackPath := filepath.Join(planDir, "attempt-02", "validation-feedback.md")
+	if err := os.WriteFile(feedbackPath, []byte(feedback), 0o644); err != nil {
+		t.Fatalf("write validation feedback: %v", err)
+	}
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      3,
+		AgentStatus:  "SUCCESS",
+		ReviewStatus: "APPROVED",
+	}); err != nil {
+		t.Fatalf("write approved plan attempt meta: %v", err)
+	}
+
+	prompt := BuildImplementPrompt(
+		planPath,
+		"Relevant tests pass",
+		"/tmp/progress.md",
+		"/tmp/verification-report.yaml",
+		"/tmp/testing-contract.yaml",
+		"",
+		"",
+		"",
+		"",
+		"",
+		nil,
+		3,
+	)
+
+	for _, want := range []string{
+		"Approved plan revision context",
+		"MISSING_EVIDENCE_REQUIREMENT phase 1 visual: Capture actual rendered README output.",
+		"Previous progress.md may predate this approved plan revision",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

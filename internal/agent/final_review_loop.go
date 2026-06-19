@@ -27,6 +27,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -519,6 +520,10 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
+	if err := RecordReadOnlyRepoBaseline(context.Background(), cfg.CommandRunner, cfg.Feature, iterDir); err != nil {
+		return ReviewFailed, "", fmt.Errorf("record final reviewer read-only repo baseline: %w", err)
+	}
+
 	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
 
 	sess, err := s.sm.StartSession(sessionID, cfg.Feature.ID, feature.PhaseReview, command, s.workspace.Cwd, env, sessOpts)
@@ -562,6 +567,16 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		MissingArtifacts:     []string{"review-feedback.md"},
 	}).Status
 
+	if !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		repoMutationViolations, err := EnforceReadOnlyRepoMutations(context.Background(), cfg.CommandRunner, cfg.Feature, feature.PhaseFinalReview, iterDir)
+		if err != nil {
+			return ReviewFailed, "", fmt.Errorf("enforce final reviewer read-only repo guard: %w", err)
+		}
+		if len(repoMutationViolations) > 0 {
+			return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, repoMutationViolations)
+		}
+	}
+
 	if agentStatus == agentStatusMissingMarker {
 		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
 			Artifact: PhaseCompleteFile,
@@ -585,11 +600,6 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	if outcome.ReviewFeedback == nil {
 		return ReviewFailed, "", fmt.Errorf("validating final reviewer contract: validated without review feedback")
-	}
-	if outcome.ReviewFeedback.Verdict == ReviewChangesRequested && outcome.VerificationReport == nil {
-		if err := s.reseedVerificationReportFromContract(iterDir); err != nil {
-			return ReviewFailed, "", fmt.Errorf("resetting final-review verification report for fix: %w", err)
-		}
 	}
 	return outcome.ReviewFeedback.Verdict, strings.TrimSpace(outcome.ReviewFeedback.Body), nil
 }
@@ -696,14 +706,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		MissingArtifacts:     []string{"verification-report.yaml"},
 	}).Status
 	return agentStatus, nil
-}
-
-func (s *featureFinalReviewLoopState) reseedVerificationReportFromContract(iterDir string) error {
-	contract, err := ReadTestingContract(s.contractPath)
-	if err != nil {
-		return fmt.Errorf("reading final-review testing contract: %w", err)
-	}
-	return WriteVerificationReportStubFromContract(filepath.Join(iterDir, "verification-report.yaml"), s.contractPath, contract)
 }
 
 func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string, iteration int, violations []ProtocolViolation, consecutiveFailures *int) *FeatureFinalReviewResult {
@@ -837,4 +839,138 @@ func touchedReposFresh(store ports.FeatureStore, f *feature.Feature) []string {
 		}
 	}
 	return fresh.TouchedRepos()
+}
+
+func missingEvidenceRequirementsNeedingPlanRevision(runDir string, reqs []MissingEvidenceRequirement) []MissingEvidenceRequirement {
+	if len(reqs) == 0 {
+		return nil
+	}
+	priorEvidence := priorImplementationEvidenceContextForRun(runDir)
+	if len(priorEvidence.ContractPaths) == 0 {
+		return append([]MissingEvidenceRequirement(nil), reqs...)
+	}
+	var contracts []priorEvidenceContract
+	for _, path := range priorEvidence.ContractPaths {
+		contract, err := ReadTestingContract(path)
+		if err != nil || contract == nil {
+			continue
+		}
+		contracts = append(contracts, priorEvidenceContract{Path: path, Contract: *contract})
+	}
+	if len(contracts) == 0 {
+		return append([]MissingEvidenceRequirement(nil), reqs...)
+	}
+	uncovered := make([]MissingEvidenceRequirement, 0, len(reqs))
+	for _, req := range reqs {
+		if !missingEvidenceRequirementCoveredByContract(contracts, req) {
+			uncovered = append(uncovered, req)
+		}
+	}
+	return uncovered
+}
+
+type priorEvidenceContract struct {
+	Path     string
+	Contract TestingContract
+}
+
+func missingEvidenceRequirementCoveredByContract(contracts []priorEvidenceContract, req MissingEvidenceRequirement) bool {
+	source := missingEvidenceRequirementContractSource(req.Kind)
+	if source == "" {
+		return false
+	}
+	for _, prior := range contracts {
+		if !missingEvidenceRequirementPhaseMatches(prior, req) {
+			continue
+		}
+		for _, item := range prior.Contract.Items {
+			if !missingEvidenceContractItemSourceMatches(item, source) {
+				continue
+			}
+			if missingEvidenceRequirementTextMatchesItem(req.Requirement, source, item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func missingEvidenceRequirementContractSource(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "visual":
+		return testingContractVisualSource
+	case "behavioral":
+		return testingContractBehavioralSource
+	default:
+		return ""
+	}
+}
+
+func missingEvidenceRequirementPhaseMatches(prior priorEvidenceContract, req MissingEvidenceRequirement) bool {
+	if req.Phase <= 0 {
+		return true
+	}
+	want := fmt.Sprintf("phase-%02d", req.Phase)
+	for _, candidate := range []string{
+		prior.Contract.Scope,
+		filepath.ToSlash(prior.Contract.GeneratedFrom.PlanPath),
+		filepath.ToSlash(prior.Path),
+	} {
+		if strings.Contains(candidate, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func missingEvidenceContractItemSourceMatches(item TestingContractItem, source string) bool {
+	if item.Source == source {
+		return true
+	}
+	switch source {
+	case testingContractVisualSource:
+		return item.ExpectedEvidence.Kind == testingContractVisualKind
+	case testingContractBehavioralSource:
+		return item.ExpectedEvidence.Kind == testingContractBehavioralKind
+	default:
+		return false
+	}
+}
+
+func missingEvidenceRequirementTextMatchesItem(requirement, source string, item TestingContractItem) bool {
+	want := normalizeVerificationCommand(requirement)
+	if want == "" {
+		return false
+	}
+	wantCommand := normalizeVerificationCommand(evidenceRequirementCommand(source, requirement))
+	for _, candidate := range []string{item.Name, item.Command} {
+		got := normalizeVerificationCommand(candidate)
+		if got == "" {
+			continue
+		}
+		if got == want || got == wantCommand || strings.Contains(got, want) {
+			return true
+		}
+		if len(got) >= 32 && strings.Contains(want, got) {
+			return true
+		}
+	}
+	return false
+}
+
+// writeFeatureFinalReviewContract compiles and persists the feature-level
+// FR testing contract: per-repo baseline rows tagged `repo: <name>` plus
+// any cross-repo verification items declared on the feature. Plan-less
+// because FR has no phase plan to inherit from — implementation-phase
+// plans already gated their own per-iteration reviews.
+func writeFeatureFinalReviewContract(path string, repos []string, f *feature.Feature) error {
+	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{
+		Repos:    repos,
+		PlanLess: true,
+		PlanPath: path,
+	})
+	if err := WriteTestingContract(path, contract); err != nil {
+		return fmt.Errorf("writing feature FR testing contract: %w", err)
+	}
+	return nil
 }

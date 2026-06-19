@@ -78,6 +78,7 @@ type OrchestratorConfig struct {
 
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
+	CommandRunner              ports.CommandRunner
 
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. Passed through to ImplementConfig.

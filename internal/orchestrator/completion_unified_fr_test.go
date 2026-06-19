@@ -29,6 +29,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -844,6 +845,70 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 		if !st.Touched {
 			t.Errorf("RepoStates[%q] = %+v, want Touched=true after FR", name, st)
 		}
+	}
+}
+
+func TestOrchestrator_FeatureFinalReview_FixerRepoEditsDoNotTripReadOnlyGuard(t *testing.T) {
+	repo := testutil.InitGitRepo(t)
+	unpub := false
+	f := &feature.Feature{
+		ID:           "feat-fr-fixer-edits",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		ActiveRun:    1,
+		RunCount:     1,
+		Pipeline:     feature.PipelineLarge,
+		Repos: []feature.FeatureRepo{{
+			Name:         "docs",
+			Path:         repo,
+			WorktreePath: repo,
+			Publishable:  &unpub,
+			BaseBranch:   "main",
+		}},
+		RepoStates: map[string]*feature.RepoState{
+			"docs": {Touched: true},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
+	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
+	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		PhaseRunner: &agent.PhaseRunner{StateDir: t.TempDir()},
+		CmdRunner:   agent.NewExecCommandRunner(),
+	}, orchestrator.Hooks{})
+
+	o.SetRunMultiRepoFinalReviewFn(func(
+		ff *feature.Feature,
+		_ ...agent.KBInfo,
+	) (chan *agent.OrchestratorResult, error) {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# Test\n\nFixed during final review.\n"), 0o644); err != nil {
+			t.Fatalf("write final review fix: %v", err)
+		}
+		ch := make(chan *agent.OrchestratorResult, 1)
+		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+		return ch, nil
+	})
+
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:           feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion() error = %v", err)
+	}
+	if f.Status != feature.StatusCodeReady {
+		t.Fatalf("feature status = %v, want CodeReady", f.Status)
+	}
+	data, err := os.ReadFile(filepath.Join(repo, "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	if got := string(data); !strings.Contains(got, "Fixed during final review.") {
+		t.Fatalf("final review fix was not preserved:\n%s", got)
 	}
 }
 

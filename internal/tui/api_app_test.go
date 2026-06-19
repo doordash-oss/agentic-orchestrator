@@ -938,6 +938,53 @@ func TestAPIAppModelSessionSnapshotRefreshUsesAPIReadModels(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "impl-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Running"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
+	}
+	attached := model.(APIAppModel)
+	if attached.attach == nil || len(attached.attach.repoTabs) != 2 {
+		t.Fatalf("attach tabs = %+v, want implementation plus validator tabs", attached.attach.repoTabs)
+	}
+
+	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Sessions: &server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "impl-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Done"},
+		}},
+	}})
+	refreshed := model.(APIAppModel)
+	if refreshed.attach == nil {
+		t.Fatal("attach view closed; want it to stay on remaining implementation session")
+	}
+	if got := len(refreshed.attach.repoTabs); got != 1 {
+		t.Fatalf("attach tab count = %d, want 1 after completed validator is pruned: %+v", got, refreshed.attach.repoTabs)
+	}
+	if got := refreshed.attach.repoTabs[0].sess.ID(); got != "impl-1" {
+		t.Fatalf("remaining attach session = %q, want impl-1", got)
+	}
+	if view := stripANSI(refreshed.View().Content); strings.Contains(view, "Testing") || strings.Contains(view, "Plan (running)") {
+		t.Fatalf("attach view still renders completed validator as running:\n%s", view)
+	}
+}
+
 func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 	t.Parallel()
 

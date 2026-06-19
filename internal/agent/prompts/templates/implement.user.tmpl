@@ -13,7 +13,17 @@
 **Exit criteria**: {{ .ExitCriteria }}
 {{- if gt .Iteration 1 }}
 
-This is iteration {{ .Iteration }}. Resume according to the implement skill handoff rules and use the delta context below.
+{{- if or .PlanRevisionFeedback .Feedback .PriorUserInputAnswers .HelpAnswers }}
+This is iteration {{ .Iteration }}. Resume according to the implement skill handoff rules and use the context below.
+{{- else }}
+This is iteration {{ .Iteration }}. Resume according to the implement skill handoff rules.
+{{- end }}
+{{- end }}{{- if .PlanRevisionFeedback }}
+
+Approved plan revision context:
+{{ .PlanRevisionFeedback }}
+
+Previous progress.md may predate this approved plan revision. Treat progress.md as historical context; the current plan and this feedback are authoritative for completion.
 {{- end }}{{- if .Feedback }}
 
 Reviewer feedback from previous iteration:

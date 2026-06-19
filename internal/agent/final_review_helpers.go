@@ -249,6 +249,7 @@ func latestImplementationVerificationReportPath(stateDir string, f *feature.Feat
 
 type priorImplementationEvidenceContext struct {
 	ReportPaths           []string
+	ContractPaths         []string
 	EvidenceRootDirs      []string
 	EvidenceArtifactPaths []string
 }
@@ -256,6 +257,9 @@ type priorImplementationEvidenceContext struct {
 func priorImplementationEvidenceContextForRun(runDir string) priorImplementationEvidenceContext {
 	var ctx priorImplementationEvidenceContext
 	addImplementationDir := func(scopeDir string) {
+		if contractPath := filepath.Join(scopeDir, "testing-contract.yaml"); fileExists(contractPath) {
+			ctx.ContractPaths = appendUniquePath(ctx.ContractPaths, contractPath)
+		}
 		if reportPath := latestCompletedImplementationReportPath(filepath.Join(scopeDir, feature.PhaseImplement.DirName())); reportPath != "" {
 			ctx.ReportPaths = append(ctx.ReportPaths, reportPath)
 			ctx.EvidenceRootDirs = append(ctx.EvidenceRootDirs, filepath.Dir(reportPath))
@@ -275,6 +279,20 @@ func priorImplementationEvidenceContextForRun(runDir string) priorImplementation
 		addImplementationDir(filepath.Join(runDir, entry.Name()))
 	}
 	return ctx
+}
+
+func appendUniquePath(out []string, path string) []string {
+	for _, existing := range out {
+		if existing == path {
+			return out
+		}
+	}
+	return append(out, path)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func appendEvidenceArtifactPaths(out []string, reportPath string) []string {

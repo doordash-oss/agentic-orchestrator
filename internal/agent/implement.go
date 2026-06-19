@@ -1147,10 +1147,26 @@ func BuildImplementPrompt(planPath, exitCriteria, progressPath, verificationRepo
 		PlanPath:              planPath,
 		ExitCriteria:          exitCriteria,
 		Feedback:              feedback,
+		PlanRevisionFeedback:  implementationPlanRevisionFeedback(planPath, iteration),
 		HelpAnswers:           helpAnswers,
 		PriorUserInputAnswers: priorUserInputAnswers,
 		Iteration:             iteration,
 	})
+}
+
+func implementationPlanRevisionFeedback(planPath string, iteration int) string {
+	if iteration <= 1 || strings.TrimSpace(planPath) == "" {
+		return ""
+	}
+	planDir := filepath.Dir(planPath)
+	feedbackAttempt, feedback := latestPlanRevisionFeedbackAttempt(planDir)
+	if feedbackAttempt == 0 || strings.TrimSpace(feedback) == "" {
+		return ""
+	}
+	if LatestCompletedPlanAttempt(planDir) <= feedbackAttempt {
+		return ""
+	}
+	return feedback
 }
 
 // buildHelpAnswers formats answered help requests into a string for the prompt.

@@ -16,11 +16,34 @@ package tui
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
+
+type phaseCatalogStubProvider struct {
+	name    string
+	models  []string
+	catalog []llm.ModelInfo
+}
+
+func (p *phaseCatalogStubProvider) Name() string { return p.name }
+func (p *phaseCatalogStubProvider) MatchesModel(model string) bool {
+	return slices.Contains(p.models, model)
+}
+func (p *phaseCatalogStubProvider) DetectCLI() bool           { return true }
+func (p *phaseCatalogStubProvider) AvailableModels() []string { return p.models }
+func (p *phaseCatalogStubProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
+	return nil, nil, nil
+}
+func (p *phaseCatalogStubProvider) NewProtocol(llm.ProtocolOpts) llm.Protocol { return nil }
+func (p *phaseCatalogStubProvider) InstallHint() string                       { return "" }
+func (p *phaseCatalogStubProvider) VersionInfo() (string, error)              { return "", nil }
+func (p *phaseCatalogStubProvider) MinVersion() [3]int                        { return [3]int{} }
+func (p *phaseCatalogStubProvider) EnvVarsToExclude() []string                { return nil }
+func (p *phaseCatalogStubProvider) ModelCatalog() []llm.ModelInfo             { return p.catalog }
 
 // TestBuildPhaseModelCatalog_Shape builds a catalog from a real *llm.Registry
 // and verifies the Fields list, PhaseDefaults, and PhaseProviderModels have
@@ -125,5 +148,31 @@ func TestPhaseModelCatalog_ModelOptionsForField(t *testing.T) {
 	want = []string{"claude/sonnet-4-6", "claude/opus-4-7", "codex/gpt-5-codex"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ModelOptionsForField(Planning fallback) = %v, want %v", got, want)
+	}
+}
+
+func TestBuildPhaseModelCatalog_PlanningUsesBalancedDefaultAndOptions(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "claude",
+		models: []string{"opus", "sonnet", "haiku"},
+		catalog: []llm.ModelInfo{
+			{ID: "opus", Category: "capable"},
+			{ID: "sonnet", Category: "balanced"},
+			{ID: "haiku", Category: "cheap"},
+		},
+	})
+
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	if got := cat.PhaseDefaults["Planning"]; got != "sonnet" {
+		t.Errorf("Planning default = %q, want sonnet", got)
+	}
+	opts := cat.ModelOptionsForField("Planning")
+	if !slices.Contains(opts, "sonnet") || !slices.Contains(opts, "opus") {
+		t.Errorf("Planning options = %v, want sonnet and opus", opts)
+	}
+	if slices.Contains(opts, "haiku") {
+		t.Errorf("Planning options = %v, want cheap model excluded", opts)
 	}
 }

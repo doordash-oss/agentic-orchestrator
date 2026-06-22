@@ -417,11 +417,17 @@ func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	if defaults[llm.PhaseResearch] != "claude:sonnet" {
 		t.Errorf("research: got %q, want %q", defaults[llm.PhaseResearch], "claude:sonnet")
 	}
+	if defaults[llm.PhasePlanning] != "claude:sonnet" {
+		t.Errorf("planning: got %q, want %q", defaults[llm.PhasePlanning], "claude:sonnet")
+	}
+	if defaults[llm.PhaseImplementation] != "claude:sonnet" {
+		t.Errorf("implementation: got %q, want %q", defaults[llm.PhaseImplementation], "claude:sonnet")
+	}
 	if defaults[llm.PhaseChat] != "claude:sonnet" {
 		t.Errorf("chat: got %q, want %q", defaults[llm.PhaseChat], "claude:sonnet")
 	}
-	if defaults[llm.PhaseReview] != "codex:codex" {
-		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "codex:codex")
+	if defaults[llm.PhaseReview] != "codex:gpt-5.4-mini" {
+		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "codex:gpt-5.4-mini")
 	}
 	if defaults[llm.PhaseKBBuild] != "claude:sonnet" {
 		t.Errorf("kb_build: got %q, want %q", defaults[llm.PhaseKBBuild], "claude:sonnet")
@@ -758,22 +764,20 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 
 		mc := r.CatalogDefaultModels()
 
-		// Research and KB build prefer cost-efficient claude defaults → "claude:sonnet"
+		// Feature phases prefer balanced defaults where available.
 		if mc.Research != "claude:sonnet" {
 			t.Errorf("research: got %q, want %q", mc.Research, "claude:sonnet")
 		}
-		// Planning/Implementation prefer claude capable → "claude:opus"
-		if mc.Planning != "claude:opus" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "claude:opus")
+		if mc.Planning != "claude:sonnet" {
+			t.Errorf("planning: got %q, want %q", mc.Planning, "claude:sonnet")
 		}
-		if mc.Implementation != "claude:opus" {
-			t.Errorf("implementation: got %q, want %q", mc.Implementation, "claude:opus")
+		if mc.Implementation != "claude:sonnet" {
+			t.Errorf("implementation: got %q, want %q", mc.Implementation, "claude:sonnet")
 		}
-		// Review prefers codex capable → "codex:codex"
-		if mc.Review != "codex:codex" {
-			t.Errorf("review: got %q, want %q", mc.Review, "codex:codex")
+		// Review still prefers codex, but chooses its balanced model.
+		if mc.Review != "codex:gpt-5.4-mini" {
+			t.Errorf("review: got %q, want %q", mc.Review, "codex:gpt-5.4-mini")
 		}
-		// Chat prefers claude balanced → "claude:sonnet"
 		if mc.Utilities != "claude:sonnet" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "claude:sonnet")
 		}
@@ -795,15 +799,15 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Research != "sonnet" {
 			t.Errorf("research: got %q, want %q", mc.Research, "sonnet")
 		}
-		if mc.Planning != "opus" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "opus")
+		if mc.Planning != "sonnet" {
+			t.Errorf("planning: got %q, want %q", mc.Planning, "sonnet")
 		}
-		if mc.Implementation != "opus" {
-			t.Errorf("implementation: got %q, want %q", mc.Implementation, "opus")
+		if mc.Implementation != "sonnet" {
+			t.Errorf("implementation: got %q, want %q", mc.Implementation, "sonnet")
 		}
-		// Review prefers codex, but codex not available; falls back to claude capable
-		if mc.Review != "opus" {
-			t.Errorf("review: got %q, want %q", mc.Review, "opus")
+		// Review prefers codex, but codex not available; falls back to claude balanced.
+		if mc.Review != "sonnet" {
+			t.Errorf("review: got %q, want %q", mc.Review, "sonnet")
 		}
 		if mc.Utilities != "sonnet" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "sonnet")
@@ -827,14 +831,14 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Research != "gpt-5.4-mini" {
 			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4-mini")
 		}
-		if mc.Planning != "codex" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "codex")
+		if mc.Planning != "gpt-5.4-mini" {
+			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4-mini")
 		}
-		if mc.Implementation != "codex" {
-			t.Errorf("implementation: got %q, want %q", mc.Implementation, "codex")
+		if mc.Implementation != "gpt-5.4-mini" {
+			t.Errorf("implementation: got %q, want %q", mc.Implementation, "gpt-5.4-mini")
 		}
-		if mc.Review != "codex" {
-			t.Errorf("review: got %q, want %q", mc.Review, "codex")
+		if mc.Review != "gpt-5.4-mini" {
+			t.Errorf("review: got %q, want %q", mc.Review, "gpt-5.4-mini")
 		}
 		if mc.Utilities != "gpt-5.4-mini" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "gpt-5.4-mini")
@@ -857,14 +861,14 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		})
 
 		mc := r.CatalogDefaultModels()
-		if mc.Research != "gpt-5.4[272K]" {
-			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4[272K]")
+		if mc.Research != "gpt-5.4-mini[400K]" {
+			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4-mini[400K]")
 		}
-		if mc.KBBuild != "gpt-5.4[272K]" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4[272K]")
+		if mc.KBBuild != "gpt-5.4-mini[400K]" {
+			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4-mini[400K]")
 		}
-		if mc.Planning != "gpt-5.4[1M]" {
-			t.Errorf("planning: got %q, want most-capable %q", mc.Planning, "gpt-5.4[1M]")
+		if mc.Planning != "gpt-5.4-mini[400K]" {
+			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4-mini[400K]")
 		}
 	})
 
@@ -912,10 +916,10 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Research != "claude:sonnet" {
 			t.Errorf("research: got %q, want %q", mc.Research, "claude:sonnet")
 		}
-		// Review prefers codex; codex has no catalog, so synthetic entry for "codex-model"
-		// has no category → MostCapableFrom returns it (rank 0, but still the first/only).
-		if mc.Review != "codex:codex-model" {
-			t.Errorf("review: got %q, want %q", mc.Review, "codex:codex-model")
+		// Review prefers codex, but codex has no categorized catalog; fall back
+		// to the available balanced model from claude.
+		if mc.Review != "claude:sonnet" {
+			t.Errorf("review: got %q, want %q", mc.Review, "claude:sonnet")
 		}
 		// Chat prefers claude balanced → "claude:sonnet"
 		if mc.Utilities != "claude:sonnet" {
@@ -974,6 +978,19 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 		}
 		if got := result["codex"]; !slices.Contains(got, "gpt-5.4-mini") {
 			t.Errorf("codex impl: got %v, want gpt-5.4-mini included", got)
+		}
+	})
+
+	t.Run("planning capable+balanced", func(t *testing.T) {
+		result := r.EligibleModelsForPhase(llm.PhasePlanning)
+		if got := result["claude"]; !slices.Contains(got, "opus") || !slices.Contains(got, "sonnet") {
+			t.Errorf("claude planning: got %v, want opus and sonnet", got)
+		}
+		if slices.Contains(result["claude"], "haiku") {
+			t.Error("claude planning should not include haiku")
+		}
+		if got := result["codex"]; !slices.Contains(got, "gpt-5.4-mini") {
+			t.Errorf("codex planning: got %v, want gpt-5.4-mini included", got)
 		}
 	})
 

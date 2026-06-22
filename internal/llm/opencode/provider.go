@@ -106,22 +106,62 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 
 	args := []string{"opencode", "acp"}
 
-	env, err := configContentEnv(backend)
+	env, err := configContentEnv(backend, opts.DangerouslySkipPerms)
 	if err != nil {
 		return nil, nil, err
 	}
 	return args, env, nil
 }
 
+// sessionConfig is the inline OpenCode configuration the tracer pins for one
+// managed launch. It carries the validated backend model and the session-scoped
+// permission decisions; delivered via OPENCODE_CONFIG_CONTENT, it never mutates
+// the user's global OpenCode configuration file.
+type sessionConfig struct {
+	Model      string            `json:"model"`
+	Permission map[string]string `json:"permission"`
+}
+
 // configContentEnv builds the OPENCODE_CONFIG_CONTENT entry that pins the given
-// validated backend model for a managed launch. Callers must validate the
-// backend with validateBackendModel first.
-func configContentEnv(backend string) ([]string, error) {
-	content, err := json.Marshal(map[string]string{"model": backend})
+// validated backend model and the Phase 2 permission decisions for a managed
+// launch. Callers must validate the backend with validateBackendModel first.
+func configContentEnv(backend string, dangerouslySkipPerms bool) ([]string, error) {
+	content, err := json.Marshal(sessionConfig{
+		Model:      backend,
+		Permission: permissionConfig(dangerouslySkipPerms),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshaling OpenCode config content: %w", err)
 	}
 	return []string{configContentEnvVar + "=" + string(content)}, nil
+}
+
+// permissionGatedTools are the OpenCode permission keys for the tool surfaces
+// Phase 2 routes through Agentico's permission flow: shell, file edits, web
+// fetch/search, and external-directory access.
+var permissionGatedTools = []string{"bash", "edit", "webfetch", "websearch", "external_directory"}
+
+// questionPermissionKey is the OpenCode permission key governing user-facing
+// questions. It always stays "ask" so questions surface as AskUserQuestion
+// pauses rather than being auto-answered — even in dangerous-skip mode.
+const questionPermissionKey = "question"
+
+// permissionConfig returns the session-scoped OpenCode permission map. In normal
+// mode every gated surface asks, so Agentico pauses for the user (its caching
+// and deny decisions then apply after normalization). In dangerous-skip mode the
+// tool surfaces are allowed noninteractively, but questions still ask so an
+// AskUserQuestion is never silently auto-approved.
+func permissionConfig(dangerouslySkipPerms bool) map[string]string {
+	toolDecision := "ask"
+	if dangerouslySkipPerms {
+		toolDecision = "allow"
+	}
+	perm := make(map[string]string, len(permissionGatedTools)+1)
+	for _, key := range permissionGatedTools {
+		perm[key] = toolDecision
+	}
+	perm[questionPermissionKey] = "ask"
+	return perm
 }
 
 // validateBackendModel reports whether a stripped OpenCode backend model is a
@@ -283,11 +323,12 @@ func countModelLines(out []byte) int {
 }
 
 // AskingQuestionsClause provides the provider-specific asking-questions prompt
-// section. OpenCode has no structured AskUserQuestion channel during Phase 1
-// (interactive question delivery fails closed), so the clause directs the agent
-// to express any question as numbered text alternatives. A question emitted
-// this way surfaces as plain assistant text and ends the turn without the
-// phase_complete marker — the safe non-success outcome for the tracer.
+// section. OpenCode questions surface through Agentico's shared AskUserQuestion
+// flow: the protocol parses the agent's numbered text alternatives into a formal
+// AskUserQuestion that pauses the session for the user, so the clause directs the
+// agent to express any question in exactly that numbered, confidence-qualified
+// format (the structure the plain-text parser reads). A question phrased this way
+// becomes a help-waiting pause, not a phase completion.
 func (p *Provider) AskingQuestionsClause() string {
 	return `## Asking Questions
 

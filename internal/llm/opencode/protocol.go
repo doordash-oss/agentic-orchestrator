@@ -65,7 +65,28 @@ type Protocol struct {
 	assistantBuf  strings.Builder
 	resultEmitted bool
 
+	// Control-request bookkeeping. pendingPerms maps a permission request id to
+	// the allow/reject option ids the user's approve/deny decision selects;
+	// pendingQuestionOpts maps a structured-question request id to its answer
+	// label -> optionId map so a chosen answer resolves to the right ACP option.
+	// Both are keyed by the string request id surfaced to the session layer.
+	pendingPerms        map[string]permissionOptions
+	pendingQuestionOpts map[string]map[string]string
+
+	// formatRetryCount tracks reformat-reminder turns sent for a plain-text
+	// question that lacked the required numbered options; synthSeq makes
+	// synthetic AskUserQuestion request ids unique without a wall-clock source.
+	formatRetryCount int
+	synthSeq         int
+
 	logFunc func(string, ...interface{})
+}
+
+// permissionOptions records the option ids a permission request offers, so an
+// approve/deny decision from the session layer maps to a concrete ACP outcome.
+type permissionOptions struct {
+	allowID  string
+	rejectID string
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -208,6 +229,10 @@ func (p *Protocol) sendPrompt(text string) error {
 	p.mu.Lock()
 	p.promptID = id
 	sessionID := p.acpSessionID
+	// Each prompt is a fresh turn: reset the accumulated assistant text so the
+	// next turn's question detection (and streamed partial) reflects only that
+	// turn, not text carried over from a prior answered question.
+	p.assistantBuf.Reset()
 	p.mu.Unlock()
 
 	req := Request{
@@ -270,11 +295,20 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 		return nil, nil
 	}
 
-	// Server-initiated (agent->client) request: has id and method. Phase 1
-	// implements none of these client capabilities, so fail closed. The JSON-RPC
-	// error response is always written (failClosed handles that) so OpenCode can
-	// unblock, but only the first terminal result reaches the session.
+	// Server-initiated (agent->client) request: has id and method. Phase 2
+	// supports the permission/question control surface (session/request_permission)
+	// and surfaces it through Agentico's shared decision flow; client filesystem
+	// and terminal requests and any unknown method are capabilities Agentico did
+	// not declare, so they still fail closed. The JSON-RPC reply is always written
+	// so OpenCode can unblock, and only the first terminal result reaches the
+	// session.
 	if hasID && env.Method != "" {
+		if env.Method == requestPermissionMethod {
+			if msg, ok := p.handleRequestPermission(env.ID, env.Params); ok {
+				return []llm.SDKMessage{msg}, nil
+			}
+			return nil, nil
+		}
 		if msg, ok := p.failClosed(env.ID, env.Method); ok {
 			return []llm.SDKMessage{msg}, nil
 		}
@@ -393,6 +427,22 @@ func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) (llm.S
 	}
 	switch res.StopReason {
 	case StopReasonEndTurn:
+		// A clean end_turn is a completion only when the agent's final text is
+		// not really a user-facing question. When it is, surface a question pause
+		// (synthetic AskUserQuestion or a reformat-reminder turn) instead of a
+		// success result, so a pending question can never be mistaken for phase
+		// completion.
+		p.mu.Lock()
+		lastText := p.assistantBuf.String()
+		p.mu.Unlock()
+		if msg, emit, done := p.maybeSynthesizeQuestion(lastText); done {
+			if emit {
+				return msg, true
+			}
+			// A reformat-reminder turn was sent; no message yet — the reformatted
+			// answer arrives on the follow-up turn's response.
+			return llm.SDKMessage{}, false
+		}
 		return p.terminalSuccess()
 	case StopReasonRefusal:
 		return p.terminalError("OpenCode refused to complete the request")
@@ -468,8 +518,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 // failClosed responds to an unsupported agent->client request with a JSON-RPC
 // error (so OpenCode is never left waiting) and produces a terminal non-success
-// result naming the unsupported surface. Phase 1 does not implement permission,
-// elicitation/question, client filesystem, or client terminal capabilities. The
+// result naming the unsupported surface. The tracer supports the permission and
+// question control surface (session/request_permission); it does NOT host client
+// filesystem (fs/*) or client terminal (terminal/*) capabilities — Agentico
+// declared neither — and treats any other unknown method as corruption. The
 // JSON-RPC error is always written so OpenCode can unblock, but the bool is false
 // when a terminal result was already emitted, in which case the caller suppresses
 // the duplicate terminal message: the first terminal result wins.
@@ -479,17 +531,17 @@ func (p *Protocol) failClosed(rawID json.RawMessage, method string) (llm.SDKMess
 		ID:      rawID,
 		Error: RPCError{
 			Code:    jsonRPCMethodNotSupported,
-			Message: fmt.Sprintf("%s is not supported by the Phase 1 OpenCode tracer", method),
+			Message: fmt.Sprintf("%s is not supported by the OpenCode tracer", method),
 		},
 	})
 	return p.terminalError(unsupportedSurfaceDiagnostic(method))
 }
 
 // unsupportedSurfaceDiagnostic returns the user-facing explanation for a
-// fail-closed control path, documenting the tracer's limited supported surface.
+// fail-closed control path, documenting the tracer's supported surface.
 func unsupportedSurfaceDiagnostic(method string) string {
 	return fmt.Sprintf(
-		"OpenCode requested an unsupported ACP control path (%s). The Phase 1 explicit tracer only supports initialize, session/new, session/prompt, and streamed session/update events; permission, question/elicitation, client filesystem, and client terminal surfaces arrive in a later phase. Failing closed.",
+		"OpenCode requested an unsupported ACP control path (%s). The tracer supports initialize, session/new, session/prompt, streamed session/update events, and the session/request_permission permission/question surface; it does not host client filesystem or client terminal capabilities, and treats any other method as corruption. Failing closed.",
 		method,
 	)
 }
@@ -606,27 +658,17 @@ func parseID(raw json.RawMessage) (int, error) {
 
 // --- llm.Protocol methods stubbed for Phase 1 ---
 
-// SendUserMessage delivers a follow-up user turn. Phase 1's tracer is a single
-// prompt, but the method is implemented so the session layer can drive a
-// follow-up if needed.
+// SendUserMessage delivers a follow-up user turn as a new session/prompt.
 func (p *Protocol) SendUserMessage(text string) error {
 	return p.sendPrompt(text)
-}
-
-// RespondToControl is unreachable in Phase 1: control requests fail closed in
-// ParseLine and are never surfaced to the session for a response.
-func (p *Protocol) RespondToControl(string, bool, json.RawMessage, string) error {
-	return llm.ErrNotSupported
 }
 
 // RespondToHook is a no-op — OpenCode ACP has no PreToolUse hook callbacks.
 func (p *Protocol) RespondToHook(string) error { return nil }
 
-// RespondToAskUser is unreachable in Phase 1: question/elicitation requests
-// fail closed rather than pausing for user input.
-func (p *Protocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
-	return llm.ErrNotSupported
-}
+// RespondToControl and RespondToAskUser are implemented in control.go: they
+// answer the Phase 2 permission and question surfaces back through the ACP
+// protocol.
 
 // Interrupt returns ErrNotSupported; the session layer falls back to signalling
 // the process group. Protocol-level interrupt arrives in a later phase.
@@ -679,4 +721,13 @@ func (p *Protocol) setRequestIDsForTest(initID, sessionNewID, promptID int) {
 	p.mu.Lock()
 	p.initID, p.sessionNewID, p.promptID = initID, sessionNewID, promptID
 	p.mu.Unlock()
+}
+
+// promptIDForTest returns the id of the most recent session/prompt request,
+// which advances each time a follow-up turn (e.g. a reformat reminder or an
+// answer envelope) is sent.
+func (p *Protocol) promptIDForTest() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.promptID
 }

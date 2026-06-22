@@ -548,11 +548,14 @@ func TestPromptSuccessRequiresMarkerToCompletePhase(t *testing.T) {
 // --- fail-closed control tests (Task 5) ---
 
 func TestParseLine_FailsClosedOnUnsupportedServerRequests(t *testing.T) {
+	// session/request_permission is now a supported control surface (see
+	// control_test.go); the surfaces below remain unsupported because Agentico
+	// declared no client filesystem or terminal capabilities, and any other
+	// method is treated as corruption.
 	cases := []struct {
 		name   string
 		method string
 	}{
-		{"permission", "session/request_permission"},
 		{"client read", "fs/read_text_file"},
 		{"client write", "fs/write_text_file"},
 		{"terminal create", "terminal/create"},
@@ -571,8 +574,8 @@ func TestParseLine_FailsClosedOnUnsupportedServerRequests(t *testing.T) {
 			if !strings.Contains(msgs[0].Result.Result, tc.method) {
 				t.Fatalf("fail-closed detail = %q, want to name the surface %q", msgs[0].Result.Result, tc.method)
 			}
-			if !strings.Contains(msgs[0].Result.Result, "later phase") {
-				t.Fatalf("fail-closed detail = %q, want to document the later-phase limitation", msgs[0].Result.Result)
+			if !strings.Contains(msgs[0].Result.Result, "does not host") {
+				t.Fatalf("fail-closed detail = %q, want to document the unsupported-capability limitation", msgs[0].Result.Result)
 			}
 
 			// A JSON-RPC error response is written back so OpenCode is not
@@ -604,7 +607,7 @@ func TestParseLine_FailsClosedOnUnsupportedServerRequests(t *testing.T) {
 // marker-present case is asserted explicitly, not assumed.
 func TestFailClosedControlNeverSatisfiesPhase(t *testing.T) {
 	p, _, _ := newPostHandshakeProtocol(t)
-	msgs := mustParse(t, p, serverRequestLine(t, 5, "session/request_permission", map[string]any{"sessionId": "ses_x"}))
+	msgs := mustParse(t, p, serverRequestLine(t, 5, "fs/read_text_file", map[string]any{"sessionId": "ses_x"}))
 	result := msgs[0].Result
 	if result.IsSuccess() {
 		t.Fatal("fail-closed result reported success")
@@ -632,7 +635,7 @@ func TestParseLine_FailClosedControlIsStickyOverLaterPromptSuccess(t *testing.T)
 	p, _, promptID := newPostHandshakeProtocol(t)
 
 	// 1. An unsupported control request fails closed with a terminal error.
-	failMsgs := mustParse(t, p, serverRequestLine(t, 777, "session/request_permission", map[string]any{"sessionId": "ses_x"}))
+	failMsgs := mustParse(t, p, serverRequestLine(t, 777, "terminal/create", map[string]any{"sessionId": "ses_x"}))
 	if len(failMsgs) != 1 || failMsgs[0].Result == nil || failMsgs[0].Result.IsSuccess() {
 		t.Fatalf("control request produced %+v, want a non-success terminal result", failMsgs)
 	}
@@ -666,9 +669,9 @@ func TestParseLine_TerminalResultIsStickyOverLaterControlRequest(t *testing.T) {
 		t.Fatalf("end_turn produced %+v, want a success result", success)
 	}
 
-	// 2. A late control request emits no further terminal SDK message...
+	// 2. A late unsupported control request emits no further terminal SDK message...
 	const reqID = 888
-	later := mustParse(t, p, serverRequestLine(t, reqID, "session/request_permission", map[string]any{"sessionId": "ses_x"}))
+	later := mustParse(t, p, serverRequestLine(t, reqID, "fs/write_text_file", map[string]any{"sessionId": "ses_x"}))
 	if len(later) != 0 {
 		t.Fatalf("control request after terminal success produced %+v, want no messages", later)
 	}
@@ -688,24 +691,22 @@ func TestParseLine_TerminalResultIsStickyOverLaterControlRequest(t *testing.T) {
 	}
 }
 
-// --- stubbed-method coverage ---
+// --- out-of-scope / no-op method coverage ---
 
-func TestStubbedMethods(t *testing.T) {
+// TestOutOfScopeMethods covers the methods that remain out of scope this phase
+// (resume/session-identity parity, transcript capture, protocol interrupt) plus
+// the no-op hook callback. RespondToControl/RespondToAskUser are no longer stubs
+// and are exercised in control_test.go.
+func TestOutOfScopeMethods(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{})
 	if p.SessionID() != "" {
-		t.Error("SessionID() should be empty for Phase 1")
+		t.Error("SessionID() should be empty (resume parity out of scope)")
 	}
 	if p.TranscriptPath() != "" {
-		t.Error("TranscriptPath() should be empty for Phase 1")
+		t.Error("TranscriptPath() should be empty (transcript capture out of scope)")
 	}
 	if err := p.Interrupt(); err != llm.ErrNotSupported {
 		t.Errorf("Interrupt() = %v, want ErrNotSupported", err)
-	}
-	if err := p.RespondToControl("1", true, nil, ""); err != llm.ErrNotSupported {
-		t.Errorf("RespondToControl() = %v, want ErrNotSupported", err)
-	}
-	if err := p.RespondToAskUser("1", nil, nil, nil); err != llm.ErrNotSupported {
-		t.Errorf("RespondToAskUser() = %v, want ErrNotSupported", err)
 	}
 	if err := p.RespondToHook("1"); err != nil {
 		t.Errorf("RespondToHook() = %v, want nil", err)

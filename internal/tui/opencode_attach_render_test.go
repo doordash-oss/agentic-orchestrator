@@ -1,0 +1,124 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package tui
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
+)
+
+// TestOpenCodeAttachRenderArtifacts proves an OpenCode permission request and an
+// OpenCode question request render through the existing attach-view controls
+// (the same renderPermMenu / renderQuestion paths every provider uses), and
+// captures the rendered text as visual evidence. The control requests are
+// produced by a real opencode.Protocol from fake ACP lines, so the rendered
+// prompts reflect the actual Phase 2 normalization.
+//
+// When AGENTIC_OPENCODE_SCREENSHOT_DIR is set, the ANSI-stripped renders are
+// written there as .txt artifacts; the content assertions run unconditionally.
+func TestOpenCodeAttachRenderArtifacts(t *testing.T) {
+	p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+
+	// --- permission prompt (shell execution) ---
+	permLine := mustJSONLine(t, map[string]any{
+		"jsonrpc": "2.0", "id": 4242, "method": "session/request_permission",
+		"params": map[string]any{
+			"sessionId": "ses_x",
+			"toolCall":  map[string]any{"kind": "execute", "title": "Run the test suite", "rawInput": map[string]any{"command": "go test ./... -count=1"}},
+			"options": []map[string]any{
+				{"optionId": "opt-allow", "name": "Allow", "kind": "allow_once"},
+				{"optionId": "opt-reject", "name": "Reject", "kind": "reject_once"},
+			},
+		},
+	})
+	permMsgs, err := p.ParseLine(permLine)
+	if err != nil || len(permMsgs) != 1 || permMsgs[0].ControlRequest == nil {
+		t.Fatalf("permission ParseLine = %+v, err %v; want one control_request", permMsgs, err)
+	}
+
+	permModel := AttachModel{width: 100, inputHeight: 1}
+	permModel.activatePermissionRequest(permMsgs[0].ControlRequest)
+	permRender := stripANSI(permModel.renderPermMenu())
+	for _, want := range []string{"Allow Bash?", "go test ./... -count=1", "[y] Allow", "[n] Deny"} {
+		if !strings.Contains(permRender, want) {
+			t.Fatalf("permission render missing %q:\n%s", want, permRender)
+		}
+	}
+
+	// --- question prompt (structured multiple choice) ---
+	qLine := mustJSONLine(t, map[string]any{
+		"jsonrpc": "2.0", "id": 91, "method": "session/request_permission",
+		"params": map[string]any{
+			"sessionId": "ses_x",
+			"toolCall":  map[string]any{"kind": "question", "title": "Which migration strategy should I use?"},
+			"options": []map[string]any{
+				{"optionId": "o1", "name": "Online", "description": "No downtime; more complex.", "recommended": true, "confidence": 0.82},
+				{"optionId": "o2", "name": "Offline", "description": "Simpler; needs a maintenance window.", "confidence": 0.40},
+			},
+		},
+	})
+	qMsgs, err := p.ParseLine(qLine)
+	if err != nil || len(qMsgs) != 1 || qMsgs[0].ControlRequest == nil {
+		t.Fatalf("question ParseLine = %+v, err %v; want one control_request", qMsgs, err)
+	}
+
+	qModel := AttachModel{width: 100, inputHeight: 1}
+	questions := qModel.parseAskUserQuestionsForDisplay(qMsgs[0].ControlRequest.Request.Input)
+	if len(questions) != 1 {
+		t.Fatalf("parsed questions = %+v, want one", questions)
+	}
+	qModel.pendingQuestions = questions
+	qModel.questionStates = make([]questionUIState, len(questions))
+	qRender := stripANSI(qModel.renderQuestion())
+	for _, want := range []string{"Which migration strategy should I use?", "Online (Recommended)", "No downtime", "Confidence: 0.82", "Offline"} {
+		if !strings.Contains(qRender, want) {
+			t.Fatalf("question render missing %q:\n%s", want, qRender)
+		}
+	}
+
+	if dir := os.Getenv("AGENTIC_OPENCODE_SCREENSHOT_DIR"); dir != "" {
+		writeArtifact(t, dir, "opencode-permission-prompt.txt",
+			"OpenCode permission prompt (shell execution) — rendered via attach-view renderPermMenu\n"+
+				"Source: ACP session/request_permission {kind:execute} normalized to tool \"Bash\".\n\n"+permRender+"\n")
+		writeArtifact(t, dir, "opencode-question-prompt.txt",
+			"OpenCode question prompt (structured multiple choice) — rendered via attach-view renderQuestion\n"+
+				"Source: ACP session/request_permission {kind:question} normalized to AskUserQuestion.\n\n"+qRender+"\n")
+	}
+}
+
+func mustJSONLine(t *testing.T, v map[string]any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal ACP line: %v", err)
+	}
+	return b
+}
+
+func writeArtifact(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}

@@ -99,12 +99,8 @@ func TestBuildCommand_ACPStdioWithModelEnv(t *testing.T) {
 	}
 
 	got := configContentValue(t, env)
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
-		t.Fatalf("OPENCODE_CONFIG_CONTENT is not valid JSON %q: %v", got, err)
-	}
-	if parsed["model"] != "anthropic/claude-sonnet-4-5" {
-		t.Fatalf("config content model = %q, want anthropic/claude-sonnet-4-5", parsed["model"])
+	if model := configModel(t, got); model != "anthropic/claude-sonnet-4-5" {
+		t.Fatalf("config content model = %q, want anthropic/claude-sonnet-4-5", model)
 	}
 }
 
@@ -116,12 +112,8 @@ func TestBuildCommand_StripsRoutingPrefixBeforeModelEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCommand() error: %v", err)
 	}
-	var parsed map[string]string
-	if err := json.Unmarshal([]byte(configContentValue(t, env)), &parsed); err != nil {
-		t.Fatalf("unmarshal config content: %v", err)
-	}
-	if parsed["model"] != "openai/gpt-5" {
-		t.Fatalf("config content model = %q, want openai/gpt-5", parsed["model"])
+	if model := configModel(t, configContentValue(t, env)); model != "openai/gpt-5" {
+		t.Fatalf("config content model = %q, want openai/gpt-5", model)
 	}
 }
 
@@ -189,12 +181,8 @@ func TestBuildCommand_PreservesValidSlashFormModels(t *testing.T) {
 			if !slices.Equal(cmd, []string{"opencode", "acp"}) {
 				t.Fatalf("BuildCommand(%q) cmd = %v, want [opencode acp]", in, cmd)
 			}
-			var parsed map[string]string
-			if err := json.Unmarshal([]byte(configContentValue(t, env)), &parsed); err != nil {
-				t.Fatalf("BuildCommand(%q) config content not valid JSON: %v", in, err)
-			}
-			if parsed["model"] != want {
-				t.Fatalf("BuildCommand(%q) backend model = %q, want %q", in, parsed["model"], want)
+			if model := configModel(t, configContentValue(t, env)); model != want {
+				t.Fatalf("BuildCommand(%q) backend model = %q, want %q", in, model, want)
 			}
 		})
 	}
@@ -209,6 +197,68 @@ func configContentValue(t *testing.T, env []string) string {
 	}
 	t.Fatalf("env %v missing %s", env, configContentEnvVar)
 	return ""
+}
+
+// parsedConfig is the subset of OPENCODE_CONFIG_CONTENT the tests assert on:
+// the pinned backend model and the session-scoped permission decisions.
+type parsedConfig struct {
+	Model      string            `json:"model"`
+	Permission map[string]string `json:"permission"`
+}
+
+func parseConfigContent(t *testing.T, content string) parsedConfig {
+	t.Helper()
+	var cfg parsedConfig
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		t.Fatalf("OPENCODE_CONFIG_CONTENT is not valid JSON %q: %v", content, err)
+	}
+	return cfg
+}
+
+func configModel(t *testing.T, content string) string {
+	t.Helper()
+	return parseConfigContent(t, content).Model
+}
+
+// TestBuildCommand_NormalModeAsksForPhase2Surfaces proves a normal (non
+// dangerous-skip) OpenCode session is configured to ask for every Phase 2
+// permission surface — shell, edit, web fetch/search, external directory — and
+// for user questions, delivered inline via OPENCODE_CONFIG_CONTENT so the user's
+// global OpenCode configuration is not mutated (Task 2).
+func TestBuildCommand_NormalModeAsksForPhase2Surfaces(t *testing.T) {
+	p := New()
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5", DangerouslySkipPerms: false})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	perm := parseConfigContent(t, configContentValue(t, env)).Permission
+	for _, key := range []string{"bash", "edit", "webfetch", "websearch", "external_directory", "question"} {
+		if perm[key] != "ask" {
+			t.Errorf("normal-mode permission[%q] = %q, want ask", key, perm[key])
+		}
+	}
+}
+
+// TestBuildCommand_DangerousSkipAllowsToolsButAsksQuestions proves dangerous-skip
+// mode configures OpenCode to allow the permissioned tool surfaces
+// noninteractively, while user questions remain "ask" so AskUserQuestion-style
+// prompts still route as user-input decisions rather than being silently
+// auto-approved (Task 2).
+func TestBuildCommand_DangerousSkipAllowsToolsButAsksQuestions(t *testing.T) {
+	p := New()
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5", DangerouslySkipPerms: true})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	perm := parseConfigContent(t, configContentValue(t, env)).Permission
+	for _, key := range []string{"bash", "edit", "webfetch", "websearch", "external_directory"} {
+		if perm[key] != "allow" {
+			t.Errorf("dangerous-skip permission[%q] = %q, want allow", key, perm[key])
+		}
+	}
+	if perm["question"] != "ask" {
+		t.Errorf("dangerous-skip permission[question] = %q, want ask (questions must not be auto-approved)", perm["question"])
+	}
 }
 
 func TestInstallHint_SupportedDistribution(t *testing.T) {

@@ -183,3 +183,96 @@ type UpdateContent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 }
+
+// --- session/request_permission (agent->client request) ---
+
+// requestPermissionMethod is the ACP method OpenCode uses to ask the client to
+// approve a tool action or answer a user-facing question. It is the single
+// control surface Phase 2 supports; client filesystem and terminal requests
+// (fs/*, terminal/*) and unknown methods still fail closed.
+const requestPermissionMethod = "session/request_permission"
+
+// RequestPermissionParams is the params object of a session/request_permission
+// request. OpenCode describes the gated action in ToolCall and offers the
+// selectable Options the user picks among.
+type RequestPermissionParams struct {
+	SessionID string             `json:"sessionId"`
+	ToolCall  PermissionToolCall `json:"toolCall"`
+	Options   []PermissionOption `json:"options"`
+}
+
+// PermissionToolCall describes the action OpenCode wants permission for, or the
+// question it wants answered. Kind classifies the surface (execute, edit, fetch,
+// search, read, question); RawInput carries the tool's native input so the
+// permission prompt and cache can show and match concrete detail; Title is a
+// human summary used as the question stem and as a detail fallback.
+type PermissionToolCall struct {
+	ToolCallID string          `json:"toolCallId,omitempty"`
+	Title      string          `json:"title,omitempty"`
+	Kind       string          `json:"kind,omitempty"`
+	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+}
+
+// PermissionOption is one selectable response to a session/request_permission
+// request. For a tool permission, Kind is one of the allow_*/reject_* values and
+// Name is the human label ("Allow", "Reject"). For a question (Kind=="question"
+// on the tool call), each option is an answer choice: Name is the answer label,
+// and the optional Description/Recommended/Confidence enrich the surfaced
+// AskUserQuestion when OpenCode provides them.
+type PermissionOption struct {
+	OptionID    string   `json:"optionId"`
+	Name        string   `json:"name"`
+	Kind        string   `json:"kind,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Recommended bool     `json:"recommended,omitempty"`
+	Confidence  *float64 `json:"confidence,omitempty"`
+}
+
+// ACP tool-call kinds the tracer recognizes. Unknown kinds still surface as a
+// permission prompt (the user decides) rather than failing closed; only the
+// "question" kind diverts to the AskUserQuestion flow.
+const (
+	ToolKindExecute  = "execute"
+	ToolKindEdit     = "edit"
+	ToolKindFetch    = "fetch"
+	ToolKindSearch   = "search"
+	ToolKindRead     = "read"
+	ToolKindQuestion = "question"
+)
+
+// ACP permission option kinds. The allow_* kinds approve the action; the
+// reject_* kinds decline it.
+const (
+	OptionKindAllowOnce    = "allow_once"
+	OptionKindAllowAlways  = "allow_always"
+	OptionKindRejectOnce   = "reject_once"
+	OptionKindRejectAlways = "reject_always"
+)
+
+// PermissionResponse is the outbound JSON-RPC result for a
+// session/request_permission request. It carries the user's outcome so OpenCode
+// either runs the gated action / records the answer or skips it.
+type PermissionResponse struct {
+	JSONRPC string                  `json:"jsonrpc"`
+	ID      int                     `json:"id"`
+	Result  PermissionOutcomeResult `json:"result"`
+}
+
+// PermissionOutcomeResult wraps the outcome in the ACP result envelope.
+type PermissionOutcomeResult struct {
+	Outcome PermissionOutcome `json:"outcome"`
+}
+
+// PermissionOutcome is the user's decision. Outcome is "selected" with the
+// chosen OptionID, or "cancelled" when no option applies (e.g. a denial with no
+// reject option, or a free-form answer that matched no listed choice).
+type PermissionOutcome struct {
+	Outcome  string `json:"outcome"`
+	OptionID string `json:"optionId,omitempty"`
+}
+
+// ACP permission outcome discriminators.
+const (
+	OutcomeSelected  = "selected"
+	OutcomeCancelled = "cancelled"
+)

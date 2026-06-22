@@ -202,16 +202,16 @@ func TestWizardReviewDelegation_CheckpointsSpaceToggles(t *testing.T) {
 	m.summaryCursor = summaryFieldCheckpoints
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	if m.checkpoints[0] == orig {
-		t.Error("Space did not toggle checkpoint[0]")
+	if m.checkpoints[checkpointInquiryReview] == orig {
+		t.Error("Space did not toggle InquiryReview checkpoint")
 	}
 	if !m.checkpointsManuallySet {
 		t.Error("expected checkpointsManuallySet=true after Space")
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	if m.checkpoints[0] != orig {
+	if m.checkpoints[checkpointInquiryReview] != orig {
 		t.Error("second Space did not toggle back")
 	}
 }
@@ -221,10 +221,10 @@ func TestWizardReviewDelegation_CheckpointsTabTogglesNotJumps(t *testing.T) {
 	m.summaryCursor = summaryFieldCheckpoints
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.checkpoints[0] == orig {
-		t.Error("Tab on Checkpoints did not toggle checkpoint[0] (wizard reshape failed)")
+	if m.checkpoints[checkpointInquiryReview] == orig {
+		t.Error("Tab on Checkpoints did not toggle InquiryReview checkpoint (wizard reshape failed)")
 	}
 	if m.checkpointsCursor != 0 {
 		t.Errorf("Tab on Checkpoints moved sub-cursor: got %d, want 0", m.checkpointsCursor)
@@ -246,23 +246,23 @@ func TestWizardReviewDelegation_CheckpointsUpDownClampedAtBounds(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if m.checkpointsCursor != 4 {
-		t.Errorf("Down × 10 (publishable=true): got %d, want 4 (clamped)", m.checkpointsCursor)
+	if m.checkpointsCursor != checkpointManualPublish {
+		t.Errorf("Down × 10 (publishable=true): got %d, want %d (clamped)", m.checkpointsCursor, checkpointManualPublish)
 	}
 }
 
 func TestWizardReviewDelegation_CheckpointsManualPublishHidden_Parity(t *testing.T) {
 	m := newWizardAtReviewForDelegation(t, nil, nil, nil)
 	m.provisionalPublishable = false
-	initManualPublish := m.checkpoints[4]
+	initManualPublish := m.checkpoints[checkpointManualPublish]
 	m.summaryCursor = summaryFieldCheckpoints
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	for i := 0; i < 10; i++ {
 		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if m.checkpointsCursor != 3 {
-		t.Errorf("Down × 10 (publishable=false): got %d, want 3 (row 4 hidden)", m.checkpointsCursor)
+	if m.checkpointsCursor != checkpointPhasePlanReview {
+		t.Errorf("Down × 10 (publishable=false): got %d, want %d (manual publish row hidden)", m.checkpointsCursor, checkpointPhasePlanReview)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
@@ -312,8 +312,8 @@ func TestWizardReviewDelegation_GateRoundTripAllThreeAxes(t *testing.T) {
 	if r.Inquireness != inquirenessVal {
 		t.Errorf("Inquireness = %q, want %q", r.Inquireness, inquirenessVal)
 	}
-	if !r.Checkpoints.InquiryReview {
-		t.Errorf("Checkpoints.InquiryReview = %v, want true after toggling the visible thorough gate", r.Checkpoints.InquiryReview)
+	if r.Checkpoints.InquiryReview {
+		t.Errorf("Checkpoints.InquiryReview = %v, want false after toggling the visible thorough gate", r.Checkpoints.InquiryReview)
 	}
 }
 
@@ -433,7 +433,7 @@ func TestWizardReviewDelegation_CheckpointsEditorRendersGates(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	for _, needle := range []string{"Gates", "Inquiry Review", "Research Review", "Design Review", "Plan Review"} {
+	for _, needle := range []string{"Gates", "Inquiry Review", "Research Review", "Design Review", "Roadmap Review", "Phase Plan Review"} {
 		if !strings.Contains(view, needle) {
 			t.Errorf("rendered Checkpoints editor missing %q", needle)
 		}

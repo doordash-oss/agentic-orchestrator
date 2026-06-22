@@ -417,6 +417,8 @@ func TestConfigEditor_CheckpointRowsFollowPipelineProfile(t *testing.T) {
 }
 
 func TestConfigEditor_PhasePlanReviewVisibilityFollowsRoadmapReview(t *testing.T) {
+	t.Parallel()
+
 	e := newEditor(&feature.Feature{
 		Pipeline:    feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{ManualPublish: true},
@@ -442,6 +444,8 @@ func TestConfigEditor_PhasePlanReviewVisibilityFollowsRoadmapReview(t *testing.T
 }
 
 func TestConfigEditor_PhasePlanOnlyManualConfigIsVisible(t *testing.T) {
+	t.Parallel()
+
 	e := newEditor(&feature.Feature{
 		Pipeline: feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{
@@ -457,6 +461,8 @@ func TestConfigEditor_PhasePlanOnlyManualConfigIsVisible(t *testing.T) {
 }
 
 func TestConfigEditor_PhasePlanOnlyUnpublishedToggleClampsCursor(t *testing.T) {
+	t.Parallel()
+
 	e := newEditor(&feature.Feature{
 		Pipeline: feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{

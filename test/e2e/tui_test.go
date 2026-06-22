@@ -237,10 +237,11 @@ func TestMediumWizardGateProjectionSmoke(t *testing.T) {
 		Path: repoPath,
 		PipelineGates: map[string]config.Checkpoints{
 			"medium": {
-				InquiryReview: true,
-				DesignReview:  true,
-				PlanReview:    true,
-				ManualPublish: true,
+				InquiryReview:   true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 		},
 	}
@@ -278,15 +279,15 @@ func TestMediumWizardGateProjectionSmoke(t *testing.T) {
 	)
 
 	tm.Send(tea.KeyPressMsg{Text: "medium wizard smoke"})
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})                  // name -> description
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})                  // description -> Where
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})                  // add focused repo to chips
-	tm.Send(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})         // Ctrl+D advances Where -> Pipeline
-	tm.Send(tea.KeyPressMsg{Code: tea.KeyUp})                     // pipeline cursor up -> medium
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})          // name -> description
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})          // description -> Where
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyEnter})          // add focused repo to chips
+	tm.Send(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}) // Ctrl+D advances Where -> Pipeline
+	tm.Send(tea.KeyPressMsg{Code: tea.KeyUp})             // pipeline cursor up -> medium
 
 	teatest.WaitFor(t, tm.Output(),
 		func(bts []byte) bool {
-			return bytes.Contains(bts, []byte("Gate options: Plan review, Publish review"))
+			return bytes.Contains(bts, []byte("Gate options: Roadmap review, Phase plan review, Publish review"))
 		},
 		teatest.WithDuration(3*time.Second),
 	)
@@ -308,13 +309,13 @@ func TestMediumWizardGateProjectionSmoke(t *testing.T) {
 	if len(features) != 1 {
 		t.Fatalf("feature count = %d, want 1", len(features))
 	}
-	if features[0].Checkpoints != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("created feature checkpoints = %+v, want PlanReview+ManualPublish", features[0].Checkpoints)
+	if features[0].Checkpoints != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("created feature checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", features[0].Checkpoints)
 	}
 
 	saved := fm.Config.Repos["test-repo"].PipelineGates["medium"]
-	if saved != (config.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("saved medium gates = %+v, want PlanReview+ManualPublish", saved)
+	if saved != (config.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("saved medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", saved)
 	}
 }
 

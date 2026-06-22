@@ -3932,9 +3932,9 @@ func TestPlanLoopDone_NeedsHumanReview_RoadmapCase(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Enable PlanReview checkpoint so needs_human_review triggers review (not failure)
+	// Enable the roadmap checkpoint so needs_human_review triggers review (not failure).
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		feat.Checkpoints.PlanReview = true
+		feat.Checkpoints.RoadmapReview = true
 		return nil
 	})
 
@@ -4097,7 +4097,7 @@ func TestPlanReviewArtifactResolution_RoadmapWithoutTotalPhases(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Enable PlanReview checkpoint so needs_human_review triggers review (not failure).
+	// Enable the roadmap checkpoint so needs_human_review triggers review (not failure).
 	// Advance to Planning — do NOT set TotalRoadmapPhases (leave at 0).
 	// Only set Artifacts["roadmap"] to simulate the roadmap artifact being
 	// emitted before TotalRoadmapPhases is populated.
@@ -4105,7 +4105,7 @@ func TestPlanReviewArtifactResolution_RoadmapWithoutTotalPhases(t *testing.T) {
 	_ = fm.Transition(f.ID, feature.StatusPlanReady)
 	_ = fm.Transition(f.ID, feature.StatusPlanning)
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		feat.Checkpoints.PlanReview = true
+		feat.Checkpoints.RoadmapReview = true
 		feat.TotalRoadmapPhases = 0
 		feat.CurrentRoadmapPhase = 0
 		if feat.Artifacts == nil {
@@ -8663,10 +8663,11 @@ func TestCreateFeatureCmdNormalizesExpressGatesBeforeSave(t *testing.T) {
 		Repos:       []string{"test-repo"},
 		Pipeline:    feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview: true,
-			DesignReview:  true,
-			PlanReview:    true,
-			ManualPublish: true,
+			InquiryReview:   true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 
@@ -8686,14 +8687,14 @@ func TestCreateFeatureCmdNormalizesExpressGatesBeforeSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading created feature: %v", err)
 	}
-	want := feature.Checkpoints{PlanReview: true, ManualPublish: true}
+	want := feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
 	if feat.Checkpoints != want {
 		t.Fatalf("created feature checkpoints = %+v, want %+v", feat.Checkpoints, want)
 	}
 
 	saved := fm.Config.Repos["test-repo"].PipelineGates["medium"]
-	if saved != (config.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("saved medium gates = %+v, want PlanReview+ManualPublish", saved)
+	if saved != (config.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("saved medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", saved)
 	}
 
 	loaded, err := config.Load(configPath)
@@ -8701,8 +8702,8 @@ func TestCreateFeatureCmdNormalizesExpressGatesBeforeSave(t *testing.T) {
 		t.Fatalf("loading saved config: %v", err)
 	}
 	loadedGates := loaded.Repos["test-repo"].PipelineGates["medium"]
-	if loadedGates.InquiryReview || loadedGates.ResearchReview || loadedGates.DesignReview || !loadedGates.PlanReview || !loadedGates.ManualPublish {
-		t.Fatalf("loaded medium gates = %+v, want PlanReview+ManualPublish", loadedGates)
+	if loadedGates.InquiryReview || loadedGates.ResearchReview || loadedGates.DesignReview || !loadedGates.RoadmapReview || !loadedGates.PhasePlanReview || !loadedGates.ManualPublish {
+		t.Fatalf("loaded medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", loadedGates)
 	}
 }
 
@@ -8740,7 +8741,7 @@ func TestCreateFeatureCmdSavesGatesToAllRepos(t *testing.T) {
 		Description: "test multi-repo gate save",
 		Repos:       []string{"repo-a", "repo-b"},
 		Pipeline:    feature.PipelineLarge,
-		Checkpoints: feature.Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: true},
+		Checkpoints: feature.Checkpoints{DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 	}
 
 	cmd := app.createFeatureCmd(result)
@@ -8766,8 +8767,8 @@ func TestCreateFeatureCmdSavesGatesToAllRepos(t *testing.T) {
 			t.Errorf("%s: PipelineGates should have 'large' key", repoName)
 			continue
 		}
-		if !gates.DesignReview || !gates.PlanReview || !gates.ManualPublish {
-			t.Errorf("%s: gates should have DesignReview+PlanReview+ManualPublish, got %+v", repoName, gates)
+		if !gates.DesignReview || !gates.RoadmapReview || !gates.PhasePlanReview || !gates.ManualPublish {
+			t.Errorf("%s: gates should have DesignReview+RoadmapReview+PhasePlanReview+ManualPublish, got %+v", repoName, gates)
 		}
 	}
 }
@@ -8790,10 +8791,11 @@ func TestSaveConfigCmdPersistsNormalizedExpressGatesAfterEdit(t *testing.T) {
 		Models:      config.ModelConfig{Implementation: "claude:sonnet"},
 		Inquireness: feature.InquirenessNone,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview: true,
-			DesignReview:  true,
-			PlanReview:    true,
-			ManualPublish: true,
+			InquiryReview:   true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}, []string{"test-repo"}, feature.PipelineMedium, true)()
 	result, ok := msg.(editConfigResultMsg)
@@ -8808,13 +8810,13 @@ func TestSaveConfigCmdPersistsNormalizedExpressGatesAfterEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading feature: %v", err)
 	}
-	if got := savedFeature.Checkpoints; got != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("feature checkpoints = %+v, want PlanReview+ManualPublish", got)
+	if got := savedFeature.Checkpoints; got != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("feature checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", got)
 	}
 
 	gates := fm.Config.Repos["test-repo"].PipelineGates["medium"]
-	if gates != (config.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("saved medium gates = %+v, want PlanReview+ManualPublish", gates)
+	if gates != (config.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("saved medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", gates)
 	}
 
 	loaded, err := config.Load(configPath)
@@ -8822,8 +8824,8 @@ func TestSaveConfigCmdPersistsNormalizedExpressGatesAfterEdit(t *testing.T) {
 		t.Fatalf("loading saved config: %v", err)
 	}
 	got := loaded.Repos["test-repo"].PipelineGates["medium"]
-	if got.InquiryReview || got.ResearchReview || got.DesignReview || !got.PlanReview || !got.ManualPublish {
-		t.Fatalf("loaded medium gates = %+v, want PlanReview+ManualPublish", got)
+	if got.InquiryReview || got.ResearchReview || got.DesignReview || !got.RoadmapReview || !got.PhasePlanReview || !got.ManualPublish {
+		t.Fatalf("loaded medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", got)
 	}
 }
 

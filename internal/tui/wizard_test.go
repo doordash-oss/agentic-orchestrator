@@ -36,6 +36,19 @@ func advanceWizardToWhereViaUI(m WizardModel, name string) WizardModel {
 	return m
 }
 
+func normalizedWizardViewText(view string) string {
+	return strings.Join(strings.Fields(ansiRegex.ReplaceAllString(view, "")), " ")
+}
+
+func requireWizardViewContainsAll(t *testing.T, view string, needles ...string) {
+	t.Helper()
+	for _, needle := range needles {
+		if !strings.Contains(view, needle) {
+			t.Fatalf("wizard view missing %q:\n%s", needle, view)
+		}
+	}
+}
+
 func TestWizardSteps(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
 	defaults := config.DefaultsConfig{
@@ -2925,10 +2938,18 @@ func TestWizardSummaryCheckpointsUpDownNavigation(t *testing.T) {
 		t.Errorf("expected 4, got %d", m.checkpointsCursor)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.checkpointsCursor != 4 {
-		t.Errorf("expected 4 (clamped), got %d", m.checkpointsCursor)
+	if m.checkpointsCursor != 5 {
+		t.Errorf("expected 5, got %d", m.checkpointsCursor)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.checkpointsCursor != 5 {
+		t.Errorf("expected 5 (clamped), got %d", m.checkpointsCursor)
 	}
 
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.checkpointsCursor != 4 {
+		t.Errorf("expected 4, got %d", m.checkpointsCursor)
+	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.checkpointsCursor != 3 {
 		t.Errorf("expected 3, got %d", m.checkpointsCursor)
@@ -2964,10 +2985,10 @@ func TestWizardSummaryCheckpointsSpaceToggles(t *testing.T) {
 	m.summaryCursor = summaryFieldCheckpoints
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	if m.checkpoints[0] == orig {
-		t.Error("expected checkpoint[0] to toggle after Space")
+	if m.checkpoints[checkpointInquiryReview] == orig {
+		t.Error("expected InquiryReview checkpoint to toggle after Space")
 	}
 	if !m.checkpointsManuallySet {
 		t.Error("expected checkpointsManuallySet=true after Space")
@@ -2975,8 +2996,8 @@ func TestWizardSummaryCheckpointsSpaceToggles(t *testing.T) {
 
 	// Toggle back
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	if m.checkpoints[0] != orig {
-		t.Error("expected checkpoint[0] to toggle back after second Space")
+	if m.checkpoints[checkpointInquiryReview] != orig {
+		t.Error("expected InquiryReview checkpoint to toggle back after second Space")
 	}
 }
 
@@ -2993,10 +3014,10 @@ func TestWizardSummaryCheckpointsTabToggles(t *testing.T) {
 	m.summaryCursor = summaryFieldCheckpoints
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.checkpoints[0] == orig {
-		t.Error("expected checkpoint[0] to toggle after Tab")
+	if m.checkpoints[checkpointInquiryReview] == orig {
+		t.Error("expected InquiryReview checkpoint to toggle after Tab")
 	}
 	if !m.checkpointsManuallySet {
 		t.Error("expected checkpointsManuallySet=true after Tab")
@@ -3017,7 +3038,7 @@ func TestWizardSummaryCheckpointsEnterCollapses(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Toggle
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
 
 	// Collapse
@@ -3025,7 +3046,7 @@ func TestWizardSummaryCheckpointsEnterCollapses(t *testing.T) {
 	if m.summaryEditing {
 		t.Error("expected summaryEditing=false after Enter (collapse)")
 	}
-	if m.checkpoints[0] == orig {
+	if m.checkpoints[checkpointInquiryReview] == orig {
 		t.Error("expected toggled value to be preserved after collapse")
 	}
 }
@@ -3043,13 +3064,13 @@ func TestWizardSummaryCheckpointsEscCollapses(t *testing.T) {
 
 	// Toggle
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	toggled := m.checkpoints[0]
+	toggled := m.checkpoints[checkpointInquiryReview]
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.summaryEditing {
 		t.Error("expected summaryEditing=false after Esc")
 	}
-	if m.checkpoints[0] != toggled {
+	if m.checkpoints[checkpointInquiryReview] != toggled {
 		t.Error("expected toggled value to be preserved after Esc")
 	}
 }
@@ -3439,14 +3460,17 @@ func TestWizardSummaryEditedCheckpointsInResult(t *testing.T) {
 	if r == nil {
 		t.Fatal("expected non-nil Result")
 	}
-	if !r.Checkpoints.InquiryReview {
-		t.Error("expected InquiryReview to be true after toggling the first visible moonshot gate")
+	if r.Checkpoints.InquiryReview {
+		t.Error("expected InquiryReview to be false after toggling the first visible moonshot gate")
 	}
-	if r.Checkpoints.ResearchReview {
-		t.Error("expected ResearchReview to be false (unchanged)")
+	if !r.Checkpoints.ResearchReview {
+		t.Error("expected ResearchReview to remain true (moonshot pipeline default)")
 	}
-	if !r.Checkpoints.PlanReview {
-		t.Error("expected PlanReview to remain true (moonshot pipeline default)")
+	if !r.Checkpoints.RoadmapReview {
+		t.Error("expected RoadmapReview to remain true (moonshot pipeline default)")
+	}
+	if !r.Checkpoints.PhasePlanReview {
+		t.Error("expected PhasePlanReview to remain true (moonshot pipeline default)")
 	}
 	if !r.Checkpoints.DesignReview {
 		t.Error("expected DesignReview to remain true (moonshot pipeline default)")
@@ -4718,7 +4742,7 @@ func TestWizardCheckpointHidingManualPublishForcedTrue(t *testing.T) {
 
 	m.applyPipelineDefaults()
 
-	if !m.checkpoints[4] {
+	if !m.checkpoints[checkpointManualPublish] {
 		t.Error("ManualPublish should be forced true when provisionalPublishable=false")
 	}
 }
@@ -4731,12 +4755,12 @@ func TestWizardCheckpointHidingCursorBound(t *testing.T) {
 	m.step = wizardStepReview
 	m.summaryEditing = true
 	m.summaryCursor = summaryFieldCheckpoints
-	m.checkpointsCursor = 3 // at the max for unpublished
+	m.checkpointsCursor = checkpointPhasePlanReview // at the max for unpublished
 
-	// Try to go down — should not go to 4
+	// Try to go down — should not move to the hidden Manual Publish row.
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.checkpointsCursor != 3 {
-		t.Errorf("checkpointsCursor = %d, want 3 (max for unpublished)", m.checkpointsCursor)
+	if m.checkpointsCursor != checkpointPhasePlanReview {
+		t.Errorf("checkpointsCursor = %d, want %d (max for unpublished)", m.checkpointsCursor, checkpointPhasePlanReview)
 	}
 }
 
@@ -4772,16 +4796,16 @@ func TestWizardMergedPipelineCheckpointsNormalizeToSelectedProfile(t *testing.T)
 		want        feature.Checkpoints
 	}{
 		{
-			name:    "medium keeps plan and manual publish",
+			name:    "medium keeps roadmap, phase plan, and manual publish",
 			profile: "medium",
 			repoConfigs: map[string]config.RepoConfig{
 				"alpha": {
 					PipelineGates: map[string]config.Checkpoints{
-						"medium": {InquiryReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
+						"medium": {InquiryReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 					},
 				},
 			},
-			want: feature.Checkpoints{PlanReview: true, ManualPublish: true},
+			want: feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 		},
 		{
 			name:    "large keeps only supported merged gates",
@@ -4794,16 +4818,17 @@ func TestWizardMergedPipelineCheckpointsNormalizeToSelectedProfile(t *testing.T)
 				},
 				"bravo": {
 					PipelineGates: map[string]config.Checkpoints{
-						"large": {ResearchReview: true, DesignReview: true, PlanReview: true},
+						"large": {ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true},
 					},
 				},
 			},
 			want: feature.Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 		},
 		{
@@ -4817,16 +4842,17 @@ func TestWizardMergedPipelineCheckpointsNormalizeToSelectedProfile(t *testing.T)
 				},
 				"bravo": {
 					PipelineGates: map[string]config.Checkpoints{
-						"moonshot": {ResearchReview: true, PlanReview: true, ManualPublish: true},
+						"moonshot": {ResearchReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 					},
 				},
 			},
 			want: feature.Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 		},
 	}
@@ -4860,8 +4886,8 @@ func TestWizardPipelineCardAndReviewGatesTrackSelectedProfile(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium":   {InquiryReview: true, ManualPublish: true},
-				"large":    {InquiryReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
-				"moonshot": {InquiryReview: true, ResearchReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
+				"large":    {InquiryReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+				"moonshot": {InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 			},
 		},
 	}
@@ -4875,28 +4901,25 @@ func TestWizardPipelineCardAndReviewGatesTrackSelectedProfile(t *testing.T) {
 	m.height = 40
 
 	largeView := m.View()
-	if !strings.Contains(largeView, "Gate options: Inquiry review, Research review, Design review, Plan") ||
-		!strings.Contains(largeView, "review, Publish review") {
-		t.Fatalf("large card lost its profile-specific gates:\n%s", m.View())
-	}
+	requireWizardViewContainsAll(t, largeView,
+		"Gate options:", "Inquiry review", "Research review", "Design review",
+		"Roadmap review", "Phase plan review", "Publish review")
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if !strings.Contains(m.View(), "Gate options: Plan review, Publish review") {
-		t.Fatalf("medium card lost its profile-specific gates:\n%s", m.View())
-	}
+	requireWizardViewContainsAll(t, m.View(),
+		"Gate options:", "Roadmap review", "Phase plan review", "Publish review")
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	moonshotView := m.View()
-	if !strings.Contains(moonshotView, "Gate options: Inquiry review, Research review, Design review, Plan") ||
-		!strings.Contains(moonshotView, "review, Publish review") {
-		t.Fatalf("moonshot card lost its profile-specific gates:\n%s", m.View())
-	}
+	requireWizardViewContainsAll(t, moonshotView,
+		"Gate options:", "Inquiry review", "Research review", "Design review",
+		"Roadmap review", "Phase plan review", "Publish review")
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	review := m.View()
-	if !strings.Contains(review, "Inquiry review, Research review, Design review, Plan review,") ||
-		!strings.Contains(review, "Publish review") {
+	if !strings.Contains(review, "Inquiry review, Research review, Design review, Roadmap review,") ||
+		!strings.Contains(review, "Phase plan review, Publish review") {
 		t.Fatalf("review summary leaked the wrong gate set after profile switching:\n%s", review)
 	}
 }
@@ -4906,10 +4929,11 @@ func TestWizardExpressProjectionFiltersNonApplicableConfigGates(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium": {
-					InquiryReview: true,
-					DesignReview:  true,
-					PlanReview:    true,
-					ManualPublish: true,
+					InquiryReview:   true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   true,
 				},
 			},
 		},
@@ -4920,14 +4944,14 @@ func TestWizardExpressProjectionFiltersNonApplicableConfigGates(t *testing.T) {
 	m.provisionalPublishable = true
 
 	projection := m.projectedPipelineCheckpoints("medium")
-	if projection.Checkpoints != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("projectedPipelineCheckpoints(medium).Checkpoints = %+v, want PlanReview+ManualPublish", projection.Checkpoints)
+	if projection.Checkpoints != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("projectedPipelineCheckpoints(medium).Checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", projection.Checkpoints)
 	}
 	if !projection.FromConfig {
 		t.Fatal("expected medium repo override to be detected")
 	}
-	if !slices.Equal(projection.Visible, []feature.GateIndex{feature.GatePlanReview, feature.GateManualPublish}) {
-		t.Fatalf("projectedPipelineCheckpoints(medium).Visible = %v, want PlanReview+ManualPublish", projection.Visible)
+	if !slices.Equal(projection.Visible, []feature.GateIndex{feature.GateRoadmapReview, feature.GatePhasePlanReview, feature.GateManualPublish}) {
+		t.Fatalf("projectedPipelineCheckpoints(medium).Visible = %v, want RoadmapReview+PhasePlanReview+ManualPublish", projection.Visible)
 	}
 }
 
@@ -4936,10 +4960,11 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium": {
-					InquiryReview: true,
-					DesignReview:  true,
-					PlanReview:    true,
-					ManualPublish: true,
+					InquiryReview:   true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   true,
 				},
 			},
 		},
@@ -4950,6 +4975,8 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 	m.descInput.SetValue("projection smoke")
 	m.selectedRepos = map[string]bool{"alpha": true}
 	m.provisionalPublishable = true
+	m.width = 200
+	m.height = 40
 
 	m, _ = m.advance()
 	m, _ = m.advance()
@@ -4962,8 +4989,8 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 	}
 
 	view := m.View()
-	if !strings.Contains(view, "Gate options: Plan review, Publish review") {
-		t.Fatalf("expected medium pipeline card to contain plan and publish options; got:\n%s", view)
+	if !strings.Contains(normalizedWizardViewText(view), "Gate options: Roadmap review, Phase plan review, Publish review") {
+		t.Fatalf("expected medium pipeline card to contain roadmap, phase plan, and publish options; got:\n%s", view)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -4979,8 +5006,8 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected result to be populated")
 	}
-	if result.Checkpoints != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("WizardResult.Checkpoints = %+v, want PlanReview+ManualPublish", result.Checkpoints)
+	if result.Checkpoints != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("WizardResult.Checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", result.Checkpoints)
 	}
 }
 
@@ -4989,10 +5016,11 @@ func TestWizardReviewCheckpointEditorUsesProjectedGateRows(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium": {
-					InquiryReview: true,
-					DesignReview:  true,
-					PlanReview:    true,
-					ManualPublish: true,
+					InquiryReview:   true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   true,
 				},
 			},
 		},
@@ -5020,8 +5048,11 @@ func TestWizardReviewCheckpointEditorUsesProjectedGateRows(t *testing.T) {
 	if !strings.Contains(view, "Manual Publish") {
 		t.Fatalf("review checkpoint editor missing Manual Publish:\n%s", view)
 	}
-	if !strings.Contains(view, "Plan Review") {
-		t.Fatalf("review checkpoint editor missing Plan Review:\n%s", view)
+	if !strings.Contains(view, "Roadmap Review") {
+		t.Fatalf("review checkpoint editor missing Roadmap Review:\n%s", view)
+	}
+	if !strings.Contains(view, "Phase Plan Review") {
+		t.Fatalf("review checkpoint editor missing Phase Plan Review:\n%s", view)
 	}
 	for _, hidden := range []string{"Inquiry Review", "Research Review", "Design Review"} {
 		if strings.Contains(view, hidden) {

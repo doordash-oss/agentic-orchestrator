@@ -95,10 +95,11 @@ func TestInquirePhase_GrillMe_SmokeEndToEnd(t *testing.T) {
 				// touch a real PhaseRunner / model registry once the inquire
 				// gate lands.
 				ff.Checkpoints = feature.Checkpoints{
-					InquiryReview:  true,
-					ResearchReview: true,
-					DesignReview:   true,
-					PlanReview:     true,
+					InquiryReview:   true,
+					ResearchReview:  true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
 				}
 				return nil
 			})

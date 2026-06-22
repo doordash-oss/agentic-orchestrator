@@ -889,9 +889,10 @@ func TestTUI_CreateFeatureCmd_DelegatesCompleteWizardResultToOrchestrator(t *tes
 		Pipeline:         feature.PipelineMedium,
 		UseCurrentBranch: true,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview: true,
-			PlanReview:    true,
-			ManualPublish: true,
+			InquiryReview:   true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 

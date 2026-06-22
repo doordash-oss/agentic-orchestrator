@@ -1261,7 +1261,7 @@ func formatRiskBadge(risk feature.RiskLevel) string {
 }
 
 func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing bool, ok bool) {
-	if f == nil || len(f.RepoCycles) == 0 {
+	if f == nil {
 		return "", false, false
 	}
 	if f.Status != feature.StatusPublished && f.Status != feature.StatusCodeReady {
@@ -1305,7 +1305,7 @@ func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing boo
 	}
 
 	if len(active) == 0 {
-		return "", false, false
+		return activeFeatureCycleStatus(f)
 	}
 
 	if len(active) > 1 {
@@ -1365,6 +1365,52 @@ func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing boo
 		label += " · " + cycle.repoName
 	}
 	return label, reviewing, true
+}
+
+func activeFeatureCycleStatus(f *feature.Feature) (label string, reviewing bool, ok bool) {
+	if f == nil || f.ActiveCycle == nil {
+		return "", false, false
+	}
+	switch f.ActiveCycle.Status {
+	case feature.RepoCycleNeedUserInput:
+		return string(f.ActiveCycle.Type) + " needs input", false, true
+	case feature.RepoCycleReviewing:
+		switch f.ActiveCycle.Type {
+		case feature.CycleReviewComments:
+			return "Final Review (Review Comments)", true, true
+		case feature.CycleRebase:
+			return "Final Review (Rebase)", true, true
+		case feature.CycleTweak:
+			return "Final Review (Tweak)", true, true
+		case feature.CycleRefactor:
+			return "Final Review (Refactor)", true, true
+		default:
+			return "Final Review (Repo Cycle)", true, true
+		}
+	case feature.RepoCycleRunning:
+		switch f.ActiveCycle.Type {
+		case feature.CycleReviewComments:
+			label = "Addressing Review Comments"
+		case feature.CycleRebase:
+			label = "Rebasing"
+		case feature.CycleTweak:
+			label = "Tweaking"
+		case feature.CycleRefactor:
+			label = "Refactoring"
+		default:
+			label = "Repo Cycle Running"
+		}
+		iteration := f.CurrentIteration
+		if iteration == 0 {
+			iteration = f.ActiveCycle.Iteration
+		}
+		if iteration > 0 {
+			label = fmt.Sprintf("%s [%d]", label, iteration)
+		}
+		return label, false, true
+	default:
+		return "", false, false
+	}
 }
 
 func formatStatus(f *feature.Feature) string {

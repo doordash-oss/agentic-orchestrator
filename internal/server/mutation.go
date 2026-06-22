@@ -659,7 +659,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return false
 		}
 		var req RebaseActionRequest
-		if !decodeMutationJSON(w, r, &req) || !validateRepoName(w, req.Repo, false) || !validateSafeOptionalToken(w, "rebase_target", req.RebaseTarget) || !validateConflictFiles(w, req.ConflictFiles) {
+		if !decodeRebaseActionRequest(w, r, &req) {
 			return true
 		}
 		resp, err := h.mutations.StartRebase(featureID, req)
@@ -1157,6 +1157,25 @@ func validateRepoList(w http.ResponseWriter, repos []string, required bool) bool
 	return true
 }
 
+func decodeRebaseActionRequest(w http.ResponseWriter, r *http.Request, out *RebaseActionRequest) bool {
+	fields, ok := decodeMutationObject(w, r)
+	if !ok {
+		return false
+	}
+	for _, name := range []string{"repo", "rebase_target", "conflict_files"} {
+		if _, exists := fields[name]; exists {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "rebase is feature-scoped; repo and conflict inputs are internal state", nil)
+			return false
+		}
+	}
+	if len(fields) > 0 {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid JSON request", nil)
+		return false
+	}
+	*out = RebaseActionRequest{}
+	return true
+}
+
 func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
@@ -1353,4 +1372,33 @@ func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 		return false
 	}
 	return true
+}
+
+func decodeMutationObject(w http.ResponseWriter, r *http.Request) (map[string]json.RawMessage, bool) {
+	limited := http.MaxBytesReader(w, r.Body, MaxMutationBodyBytes)
+	defer limited.Close()
+	dec := json.NewDecoder(limited)
+	var fields map[string]json.RawMessage
+	if err := dec.Decode(&fields); err != nil {
+		status := http.StatusBadRequest
+		code := "bad_request"
+		message := "invalid JSON request"
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			message = "truncated JSON request"
+		}
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			status = http.StatusRequestEntityTooLarge
+			code = "request_too_large"
+			message = "mutation body is too large"
+		}
+		writeAPIError(w, status, code, message, nil)
+		return nil, false
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid JSON request", nil)
+		return nil, false
+	}
+	return fields, true
 }

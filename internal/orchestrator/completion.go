@@ -1358,27 +1358,39 @@ func reposNeedFinalReview(f *feature.Feature) bool {
 // remains unchanged). On failure marks the feature failed and returns the
 // error so the caller short-circuits.
 func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
+	f, resultCh, err := o.startDeferredFinalReview(featureID)
+	if err != nil {
+		return err
+	}
+	res, ok := <-resultCh
+	return o.finishDeferredFinalReviewResult(featureID, f, res, ok)
+}
+
+func (o *Orchestrator) startDeferredFinalReview(featureID string) (*feature.Feature, chan *agent.OrchestratorResult, error) {
 	if err := o.deps.Lifecycle.MarkFinalReviewReady(featureID); err != nil {
-		return fmt.Errorf("mark final review ready: %w", err)
+		return nil, nil, fmt.Errorf("mark final review ready: %w", err)
 	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		return fmt.Errorf("load feature for final review: %w", err)
+		return nil, nil, fmt.Errorf("load feature for final review: %w", err)
 	}
 
 	runFn := o.runMultiRepoFinalReviewFn
 	if runFn == nil {
 		errMsg := "runMultiRepoFinalReviewFn not configured"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return nil, nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	resultCh, err := runFn(f, o.computeKBInfos(f)...)
 	if err != nil {
 		errMsg := fmt.Sprintf("dispatch final review: %v", err)
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+		return nil, nil, o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
-	res, ok := <-resultCh
+	return f, resultCh, nil
+}
+
+func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, f *feature.Feature, res *agent.OrchestratorResult, ok bool) error {
 	if !ok || res == nil {
 		errMsg := "final review returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))

@@ -3598,6 +3598,385 @@ func TestRepoCycleMethods(t *testing.T) {
 	})
 }
 
+func TestManagerFeatureRebaseOperationLifecycle(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	m := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-rebase-op",
+		Name:          "Rebase Operation",
+		Slug:          "rebase-operation",
+		Status:        feature.StatusCodeReady,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: "api"},
+			{Name: "web"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
+		t.Fatalf("StartFeatureRebaseOperation: %v", err)
+	}
+	if err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChecking, feature.RebaseRepoProgress{}); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo checking: %v", err)
+	}
+	if err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo changed: %v", err)
+	}
+	if err := m.UpdateFeatureRebaseRepo(f.ID, "web", feature.RebaseRepoStatusUpToDate, feature.RebaseRepoProgress{RebaseTarget: "main"}); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo up to date: %v", err)
+	}
+
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleRebase || got.ActiveCycle.Status != feature.RepoCycleRunning {
+		t.Fatalf("ActiveCycle = %+v, want running rebase", got.ActiveCycle)
+	}
+	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
+		t.Fatalf("RebaseOperation = %+v, want harness stage", got.RebaseOperation)
+	}
+	if got.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusChanged {
+		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos["api"].Status)
+	}
+
+	if err := m.ClearFeatureRebaseOperation(f.ID); err != nil {
+		t.Fatalf("ClearFeatureRebaseOperation: %v", err)
+	}
+	got, err = store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("reload feature: %v", err)
+	}
+	if got.ActiveCycle != nil || got.ActiveCycleType() != "" || got.RebaseOperation != nil {
+		t.Fatalf("cycle not cleared: ActiveCycle=%+v ActiveCycleType=%q RebaseOperation=%+v", got.ActiveCycle, got.ActiveCycleType(), got.RebaseOperation)
+	}
+}
+
+func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	m := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-rebase-op-guard",
+		Name:          "Rebase Operation Guard",
+		Slug:          "rebase-operation-guard",
+		Status:        feature.StatusPublished,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ActiveRun:     1,
+		RunCount:      1,
+		Repos: []feature.FeatureRepo{
+			{Name: "api"},
+		},
+		ActiveCycle: &feature.CycleState{
+			Type:   feature.CycleTweak,
+			Status: feature.RepoCycleRunning,
+			Count:  2,
+		},
+		RebaseOperation: &feature.RebaseOperationState{
+			Stage: feature.RebaseStageHarness,
+			Repos: map[string]*feature.RebaseRepoProgress{
+				"api": {Status: feature.RebaseRepoStatusChecking},
+			},
+		},
+	}
+	f.SetActiveCycleType(feature.CycleTweak)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	if err := m.StartFeatureRebaseOperation(f.ID); err == nil {
+		t.Fatal("StartFeatureRebaseOperation error = nil, want non-rebase cycle guard")
+	}
+	assertTweakCycleIntact(t, store, f.ID)
+
+	if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageFinalReview); err == nil {
+		t.Fatal("MarkFeatureRebaseStage error = nil, want non-rebase cycle guard")
+	}
+	assertTweakCycleIntact(t, store, f.ID)
+
+	if err := m.ClearFeatureRebaseOperation(f.ID); err != nil {
+		t.Fatalf("ClearFeatureRebaseOperation: %v", err)
+	}
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("reload feature: %v", err)
+	}
+	if got.RebaseOperation != nil {
+		t.Fatalf("RebaseOperation = %+v, want nil", got.RebaseOperation)
+	}
+	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleTweak || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
+		t.Fatalf("ActiveCycle = %+v, want original tweak cycle", got.ActiveCycle)
+	}
+	if got.ActiveCycleType() != feature.CycleTweak {
+		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleTweak)
+	}
+}
+
+func TestManagerFeatureRebaseOperationRejectsDuplicateStart(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	m := feature.NewManager(store, config.NewDefault())
+	f := &feature.Feature{
+		ID:            "feat-rebase-op-duplicate",
+		Name:          "Rebase Operation Duplicate",
+		Slug:          "rebase-operation-duplicate",
+		Status:        feature.StatusCodeReady,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: "api"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
+		t.Fatalf("StartFeatureRebaseOperation: %v", err)
+	}
+	if err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
+		t.Fatalf("UpdateFeatureRebaseRepo changed: %v", err)
+	}
+	if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageSmartRebase); err != nil {
+		t.Fatalf("MarkFeatureRebaseStage smart rebase: %v", err)
+	}
+
+	if err := m.StartFeatureRebaseOperation(f.ID); err == nil {
+		t.Fatal("duplicate StartFeatureRebaseOperation error = nil, want active rebase guard")
+	}
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if got.RebaseOperation == nil {
+		t.Fatal("RebaseOperation = nil, want existing operation preserved")
+	}
+	if got.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
+		t.Fatalf("RebaseOperation.Stage = %q, want %q", got.RebaseOperation.Stage, feature.RebaseStageSmartRebase)
+	}
+	if got.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusChanged {
+		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos["api"].Status)
+	}
+	if !got.RebaseOperation.Repos["api"].Changed {
+		t.Fatalf("api Changed = false, want true")
+	}
+}
+
+func TestManagerFeatureRebaseOperationStageRequiresOwnership(t *testing.T) {
+	t.Run("no active ownership", func(t *testing.T) {
+		store := feature.NewStore(t.TempDir())
+		m := feature.NewManager(store, config.NewDefault())
+		f := &feature.Feature{
+			ID:            "feat-rebase-op-stage-no-owner",
+			Name:          "Rebase Operation Stage No Owner",
+			Slug:          "rebase-operation-stage-no-owner",
+			Status:        feature.StatusCodeReady,
+			SchemaVersion: feature.SchemaVersionCurrent,
+			Repos: []feature.FeatureRepo{
+				{Name: "api"},
+			},
+		}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+
+		err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageFinalReview)
+		if err == nil {
+			t.Fatal("MarkFeatureRebaseStage error = nil, want ownership guard")
+		}
+		got, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("load feature: %v", err)
+		}
+		if got.RebaseOperation != nil {
+			t.Fatalf("RebaseOperation = %+v, want nil", got.RebaseOperation)
+		}
+		if got.ActiveCycle != nil || got.ActiveCycleType() != "" {
+			t.Fatalf("cycle state changed: ActiveCycle=%+v ActiveCycleType=%q", got.ActiveCycle, got.ActiveCycleType())
+		}
+	})
+
+	t.Run("cycle type ownership recovers operation", func(t *testing.T) {
+		store := feature.NewStore(t.TempDir())
+		m := feature.NewManager(store, config.NewDefault())
+		f := &feature.Feature{
+			ID:            "feat-rebase-op-stage-cycle-type",
+			Name:          "Rebase Operation Stage Cycle Type",
+			Slug:          "rebase-operation-stage-cycle-type",
+			Status:        feature.StatusCodeReady,
+			SchemaVersion: feature.SchemaVersionCurrent,
+			Repos: []feature.FeatureRepo{
+				{Name: "api"},
+			},
+		}
+		f.SetActiveCycleType(feature.CycleRebase)
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+
+		if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageFinalReview); err != nil {
+			t.Fatalf("MarkFeatureRebaseStage: %v", err)
+		}
+		got, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("load feature: %v", err)
+		}
+		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageFinalReview {
+			t.Fatalf("RebaseOperation = %+v, want final review stage", got.RebaseOperation)
+		}
+		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleRebase || got.ActiveCycle.Status != feature.RepoCycleReviewing {
+			t.Fatalf("ActiveCycle = %+v, want reviewing rebase", got.ActiveCycle)
+		}
+		if got.ActiveCycleType() != feature.CycleRebase {
+			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleRebase)
+		}
+	})
+
+	t.Run("active cycle ownership recovers operation", func(t *testing.T) {
+		store := feature.NewStore(t.TempDir())
+		m := feature.NewManager(store, config.NewDefault())
+		f := &feature.Feature{
+			ID:            "feat-rebase-op-stage-active-cycle",
+			Name:          "Rebase Operation Stage Active Cycle",
+			Slug:          "rebase-operation-stage-active-cycle",
+			Status:        feature.StatusCodeReady,
+			SchemaVersion: feature.SchemaVersionCurrent,
+			Repos: []feature.FeatureRepo{
+				{Name: "api"},
+			},
+			ActiveCycle: &feature.CycleState{
+				Type:   feature.CycleRebase,
+				Status: feature.RepoCycleRunning,
+				Count:  1,
+			},
+		}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+
+		if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageSmartRebase); err != nil {
+			t.Fatalf("MarkFeatureRebaseStage: %v", err)
+		}
+		got, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("load feature: %v", err)
+		}
+		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
+			t.Fatalf("RebaseOperation = %+v, want smart rebase stage", got.RebaseOperation)
+		}
+		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleRebase || got.ActiveCycle.Status != feature.RepoCycleRunning {
+			t.Fatalf("ActiveCycle = %+v, want running rebase", got.ActiveCycle)
+		}
+		if got.ActiveCycleType() != feature.CycleRebase {
+			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleRebase)
+		}
+	})
+}
+
+func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
+	t.Run("non-rebase cycle with stale rebase operation", func(t *testing.T) {
+		store := feature.NewStore(t.TempDir())
+		m := feature.NewManager(store, config.NewDefault())
+		f := &feature.Feature{
+			ID:            "feat-rebase-op-update-guard",
+			Name:          "Rebase Operation Update Guard",
+			Slug:          "rebase-operation-update-guard",
+			Status:        feature.StatusPublished,
+			SchemaVersion: feature.SchemaVersionCurrent,
+			ActiveRun:     1,
+			RunCount:      1,
+			Repos: []feature.FeatureRepo{
+				{Name: "api"},
+			},
+			ActiveCycle: &feature.CycleState{
+				Type:   feature.CycleTweak,
+				Status: feature.RepoCycleRunning,
+				Count:  4,
+			},
+			RebaseOperation: &feature.RebaseOperationState{
+				Stage: feature.RebaseStageHarness,
+				Repos: map[string]*feature.RebaseRepoProgress{
+					"api": {Status: feature.RebaseRepoStatusChecking},
+				},
+			},
+		}
+		f.SetActiveCycleType(feature.CycleTweak)
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+
+		err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
+		if err == nil {
+			t.Fatal("UpdateFeatureRebaseRepo error = nil, want non-rebase cycle guard")
+		}
+		got, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("load feature: %v", err)
+		}
+		if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleTweak || got.ActiveCycle.Count != 4 {
+			t.Fatalf("ActiveCycle = %+v, want original tweak cycle", got.ActiveCycle)
+		}
+		if got.ActiveCycleType() != feature.CycleTweak {
+			t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleTweak)
+		}
+		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
+			t.Fatalf("RebaseOperation = %+v, want stale operation preserved", got.RebaseOperation)
+		}
+		if got.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusChecking {
+			t.Fatalf("api status = %q, want checking", got.RebaseOperation.Repos["api"].Status)
+		}
+	})
+
+	t.Run("no active operation", func(t *testing.T) {
+		store := feature.NewStore(t.TempDir())
+		m := feature.NewManager(store, config.NewDefault())
+		f := &feature.Feature{
+			ID:            "feat-rebase-op-update-no-owner",
+			Name:          "Rebase Operation Update No Owner",
+			Slug:          "rebase-operation-update-no-owner",
+			Status:        feature.StatusCodeReady,
+			SchemaVersion: feature.SchemaVersionCurrent,
+			Repos: []feature.FeatureRepo{
+				{Name: "api"},
+			},
+		}
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature: %v", err)
+		}
+
+		err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
+		if err == nil {
+			t.Fatal("UpdateFeatureRebaseRepo error = nil, want ownership guard")
+		}
+		got, err := store.Load(f.ID)
+		if err != nil {
+			t.Fatalf("load feature: %v", err)
+		}
+		if got.RebaseOperation != nil {
+			t.Fatalf("RebaseOperation = %+v, want nil", got.RebaseOperation)
+		}
+		if got.ActiveCycle != nil || got.ActiveCycleType() != "" {
+			t.Fatalf("cycle state changed: ActiveCycle=%+v ActiveCycleType=%q", got.ActiveCycle, got.ActiveCycleType())
+		}
+	})
+}
+
+func assertTweakCycleIntact(t *testing.T, store *feature.Store, featureID string) {
+	t.Helper()
+	got, err := store.Load(featureID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	if got.ActiveCycle == nil || got.ActiveCycle.Type != feature.CycleTweak || got.ActiveCycle.Status != feature.RepoCycleRunning || got.ActiveCycle.Count != 2 {
+		t.Fatalf("ActiveCycle = %+v, want original tweak cycle", got.ActiveCycle)
+	}
+	if got.ActiveCycleType() != feature.CycleTweak {
+		t.Fatalf("ActiveCycleType = %q, want %q", got.ActiveCycleType(), feature.CycleTweak)
+	}
+	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
+		t.Fatalf("RebaseOperation = %+v, want stale harness state preserved before clear", got.RebaseOperation)
+	}
+}
+
 // advanceToPublished is a test helper that transitions a feature through the full
 // state machine from Created to Published using direct Transition calls via Store.Modify.
 func advanceToPublished(t *testing.T, store *feature.Store, featureID string) {

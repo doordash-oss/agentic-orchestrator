@@ -124,6 +124,11 @@ type Run struct {
 	// their per-repo entries here so existing TUI badges keep working.
 	RepoCycles map[string]*RepoCycleState `yaml:"repo_cycles,omitempty"`
 	RepoStates map[string]*RepoState      `yaml:"repo_states,omitempty"`
+	// RebaseOperation tracks transient feature-level rebase progress while a
+	// harness, smart rebase, or rebase-triggered Final Review is active. It is
+	// cleared on successful/no-op settlement and retained only when actionable
+	// failure/conflict state remains useful to render.
+	RebaseOperation *RebaseOperationState `yaml:"rebase_operation,omitempty"`
 
 	// CurrentPhaseStatus is the mid-flight phase-implement status for the
 	// unified flow ("implementing", "reviewing", or "" when not in a phase).

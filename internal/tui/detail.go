@@ -1489,6 +1489,16 @@ func formatDetailStatus(f *feature.Feature) string {
 	case feature.StatusDone:
 		return SuccessStyle.Render("\u2713 Done")
 	case feature.StatusCodeReady:
+		if label, reviewing, ok := activePublishedCycleStatus(f); ok {
+			label += " \u2014 [a] Watch"
+			if hasPendingPerms(f) || hasPendingHelp(f) {
+				label += " | waiting input"
+			}
+			if reviewing {
+				return ReviewStyle.Render(label)
+			}
+			return lipgloss.NewStyle().Foreground(colorInfo).Render(label)
+		}
 		if f.IsPublishable() && f.Checkpoints.AutoPublish() {
 			return lipgloss.NewStyle().Foreground(colorInfo).Render("Publishing...")
 		}

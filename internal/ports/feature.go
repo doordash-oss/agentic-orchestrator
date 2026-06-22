@@ -104,6 +104,10 @@ type FeatureLifecycle interface {
 	CompleteRefactor(featureID string) error
 	StartAddressingReviews(featureID string) error
 	ClearAddressingReviews(featureID string) error
+	StartFeatureRebaseOperation(featureID string) error
+	MarkFeatureRebaseStage(featureID string, stage feature.RebaseStage) error
+	UpdateFeatureRebaseRepo(featureID, repoName string, status feature.RebaseRepoStatus, progress feature.RebaseRepoProgress) error
+	ClearFeatureRebaseOperation(featureID string) error
 
 	// Per-repo cycles
 	StartRepoCycle(featureID, repoName string, cycleType feature.RepoCycleType) error

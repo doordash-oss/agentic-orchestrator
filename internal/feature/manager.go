@@ -754,6 +754,111 @@ func (m *Manager) ClearAddressingReviews(featureID string) error {
 	})
 }
 
+func (m *Manager) StartFeatureRebaseOperation(featureID string) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if hasActiveNonRebaseCycle(f) {
+			return fmt.Errorf("cannot start rebase operation while %s cycle is active", activeNonRebaseCycleType(f))
+		}
+		if hasActiveRebaseOperation(f) {
+			return fmt.Errorf("rebase operation already active")
+		}
+		now := time.Now()
+		f.SetActiveCycleType(CycleRebase)
+		f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
+		f.RebaseOperation = &RebaseOperationState{
+			Stage:     RebaseStageHarness,
+			StartedAt: now,
+			UpdatedAt: now,
+			Repos:     map[string]*RebaseRepoProgress{},
+		}
+		return nil
+	})
+}
+
+func (m *Manager) MarkFeatureRebaseStage(featureID string, stage RebaseStage) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if hasActiveNonRebaseCycle(f) {
+			return fmt.Errorf("cannot mark rebase stage while %s cycle is active", activeNonRebaseCycleType(f))
+		}
+		if !hasActiveRebaseOperation(f) {
+			return fmt.Errorf("no active rebase operation")
+		}
+		now := time.Now()
+		if f.RebaseOperation == nil {
+			f.RebaseOperation = &RebaseOperationState{StartedAt: now, Repos: map[string]*RebaseRepoProgress{}}
+		}
+		f.RebaseOperation.Stage = stage
+		f.RebaseOperation.UpdatedAt = now
+		if f.ActiveCycle == nil {
+			f.ActiveCycle = &CycleState{Type: CycleRebase, Status: RepoCycleRunning, Count: f.RebaseCount() + 1}
+		} else {
+			f.ActiveCycle.Type = CycleRebase
+		}
+		if stage == RebaseStageFinalReview {
+			f.ActiveCycle.Status = RepoCycleReviewing
+		}
+		f.SetActiveCycleType(CycleRebase)
+		return nil
+	})
+}
+
+func (m *Manager) UpdateFeatureRebaseRepo(featureID, repoName string, status RebaseRepoStatus, progress RebaseRepoProgress) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		if hasActiveNonRebaseCycle(f) {
+			return fmt.Errorf("cannot update rebase operation while %s cycle is active", activeNonRebaseCycleType(f))
+		}
+		if f.RebaseOperation == nil {
+			return fmt.Errorf("no active rebase operation")
+		}
+		if f.RebaseOperation.Repos == nil {
+			f.RebaseOperation.Repos = map[string]*RebaseRepoProgress{}
+		}
+		progress.Status = status
+		progress.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
+		f.RebaseOperation.Repos[repoName] = &progress
+		f.RebaseOperation.UpdatedAt = time.Now()
+		return nil
+	})
+}
+
+func (m *Manager) ClearFeatureRebaseOperation(featureID string) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		f.RebaseOperation = nil
+		if f.ActiveCycle != nil && f.ActiveCycle.Type == CycleRebase {
+			f.ActiveCycle = nil
+		}
+		if f.ActiveCycleType() == CycleRebase {
+			f.SetActiveCycleType("")
+		}
+		return nil
+	})
+}
+
+func hasActiveNonRebaseCycle(f *Feature) bool {
+	if f.ActiveCycle != nil && f.ActiveCycle.Type != CycleRebase {
+		return true
+	}
+	activeType := f.ActiveCycleType()
+	return activeType != "" && activeType != CycleRebase
+}
+
+func hasActiveRebaseOperation(f *Feature) bool {
+	if f.RebaseOperation != nil {
+		return true
+	}
+	if f.ActiveCycle != nil && f.ActiveCycle.Type == CycleRebase {
+		return true
+	}
+	return f.ActiveCycleType() == CycleRebase
+}
+
+func activeNonRebaseCycleType(f *Feature) RepoCycleType {
+	if f.ActiveCycle != nil && f.ActiveCycle.Type != CycleRebase {
+		return f.ActiveCycle.Type
+	}
+	return f.ActiveCycleType()
+}
+
 // StartRepoCycle starts a per-repo post-publish cycle (rebase/tweak/review-comments).
 // The feature stays StatusPublished; only the per-repo cycle state is set.
 func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycleType) error {

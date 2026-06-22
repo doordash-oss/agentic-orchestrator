@@ -1232,7 +1232,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "t":
 		return m.openRepoCycleAction("feature.tweak.start"), nil
 	case "b":
-		return m.openRepoCycleAction("feature.rebase"), nil
+		return m.confirmSelectedFeatureAction("feature.rebase"), nil
 	case "i":
 		return m.openNeedInputPrompt(), nil
 	case "a":
@@ -1734,6 +1734,7 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 			Touched:   dto.Touched,
 			PRURL:     dto.PRURL,
 			LastError: dto.LastError,
+			Freshness: dto.Freshness,
 		}
 		if dto.CycleType != "" || dto.CycleStatus != "" {
 			cycleType := feature.RepoCycleType(dto.CycleType)
@@ -1751,6 +1752,25 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 			}
 			if activeCycleType == "" && cycle.Status != "" {
 				activeCycleType = cycle.Type
+			}
+		}
+	}
+	if hasDetail {
+		for _, dto := range detail.RepoStatus {
+			if dto.Name == "" || dto.RebaseStatus == "" {
+				continue
+			}
+			if f.RebaseOperation == nil {
+				f.RebaseOperation = &feature.RebaseOperationState{
+					Stage: feature.RebaseStageHarness,
+					Repos: map[string]*feature.RebaseRepoProgress{},
+				}
+			}
+			f.RebaseOperation.Repos[dto.Name] = &feature.RebaseRepoProgress{
+				Status:        feature.RebaseRepoStatus(dto.RebaseStatus),
+				RebaseTarget:  dto.RebaseTarget,
+				ConflictFiles: append([]string(nil), dto.ConflictFiles...),
+				LastError:     dto.LastError,
 			}
 		}
 	}
@@ -1782,6 +1802,7 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		RepoStates:                      f.RepoStates,
 		RepoCycles:                      f.RepoCycles,
 		ActiveCycle:                     f.ActiveCycle,
+		RebaseOperation:                 f.RebaseOperation,
 		ValidatingPlan:                  f.ValidatingPlan,
 		ValidatorStatuses:               f.ValidatorStatuses,
 		PhaseTimings:                    f.PhaseTimings,
@@ -5343,32 +5364,6 @@ func (m APIAppModel) selectedRefactorRepo() string {
 	return ""
 }
 
-func (m APIAppModel) selectedRebaseRepo(featureID string) string {
-	if detail, ok := m.featureDetails[featureID]; ok {
-		for _, repo := range detail.Feature.RepoStatus {
-			if strings.TrimSpace(repo.Name) != "" && repo.Publishable {
-				return repo.Name
-			}
-		}
-		for _, repo := range detail.Feature.RepoStatus {
-			if strings.TrimSpace(repo.Name) != "" {
-				return repo.Name
-			}
-		}
-	}
-	for _, feature := range m.featureList.Features {
-		if feature.ID == featureID && len(feature.Repos) > 0 {
-			return feature.Repos[0]
-		}
-	}
-	for _, feature := range m.snapshot.Features {
-		if feature.ID == featureID && len(feature.Repos) > 0 {
-			return feature.Repos[0]
-		}
-	}
-	return ""
-}
-
 func (m APIAppModel) selectedFeatureName() string {
 	return m.featureNameByID(m.selectedFeature)
 }
@@ -6901,11 +6896,7 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 		case "feature.mark-done":
 			_, err = m.client.MarkDone(ctx, featureID)
 		case "feature.rebase":
-			repo := args.Repo
-			if repo == "" {
-				repo = m.selectedRebaseRepo(featureID)
-			}
-			_, err = m.client.StartRebase(ctx, featureID, server.RebaseActionRequest{Repo: repo})
+			_, err = m.client.StartRebase(ctx, featureID, server.RebaseActionRequest{})
 		case "feature.cleanup":
 			_, err = m.client.CleanupFeature(ctx, featureID, server.CleanupActionRequest{Target: "worktrees", Repo: args.Repo})
 		case "feature.rewind":
@@ -7043,7 +7034,7 @@ func (m APIAppModel) acceptAPIRepoAction(panel apiRepoActionPanel) (tea.Model, t
 		mode, modes := m.selectedReviewCommentsModeDefaults()
 		m.statusMessage = "Fetching review comments..."
 		return m, m.fetchReviewCommentsCmd(panel.featureID, panel.featureName, repo, mode, modes)
-	case "feature.rebase", "feature.tweak.start":
+	case "feature.tweak.start":
 		m.selectedFeature = panel.featureID
 		return m.confirmSelectedFeatureActionWithArgs(panel.kind, apiFeatureActionArgs{Repo: repo}), nil
 	case "feature.refactor.start":
@@ -8567,6 +8558,12 @@ func apiFeatureDetailPresentation(dto server.FeatureDetailDTO) APIFeatureDetailP
 			if cycle != "" {
 				stateParts = append(stateParts, cycle)
 			}
+		}
+		if repo.RebaseStatus != "" {
+			stateParts = append(stateParts, "rebase/"+repo.RebaseStatus)
+		}
+		if repo.Freshness != "" && repo.Freshness != "unknown" {
+			stateParts = append(stateParts, repo.Freshness)
 		}
 		if repo.LastError != "" {
 			stateParts = append(stateParts, firstLine(repo.LastError))

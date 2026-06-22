@@ -47,6 +47,7 @@ type Options struct {
 	Owner           instancelock.Owner
 	Features        FeatureLister
 	FeatureStore    FeatureReader
+	Freshness       RepoFreshnessProvider
 	Config          *config.Config
 	Registry        *llm.Registry
 	Sessions        ports.SessionManager
@@ -63,6 +64,7 @@ type HandlerOptions struct {
 	Owner           instancelock.Owner
 	Features        FeatureLister
 	FeatureStore    FeatureReader
+	Freshness       RepoFreshnessProvider
 	Config          *config.Config
 	Registry        *llm.Registry
 	Sessions        ports.SessionManager
@@ -266,13 +268,17 @@ type SetupTaskDTO struct {
 }
 
 type RepoStatusDTO struct {
-	Name        string `json:"name"`
-	Touched     bool   `json:"touched"`
-	PRURL       string `json:"pr_url,omitempty"`
-	LastError   string `json:"last_error,omitempty"`
-	Publishable bool   `json:"publishable"`
-	CycleType   string `json:"cycle_type,omitempty"`
-	CycleStatus string `json:"cycle_status,omitempty"`
+	Name          string   `json:"name"`
+	Freshness     string   `json:"freshness,omitempty"`
+	RebaseStatus  string   `json:"rebase_status,omitempty"`
+	RebaseTarget  string   `json:"rebase_target,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+	Touched       bool     `json:"touched"`
+	PRURL         string   `json:"pr_url,omitempty"`
+	LastError     string   `json:"last_error,omitempty"`
+	Publishable   bool     `json:"publishable"`
+	CycleType     string   `json:"cycle_type,omitempty"`
+	CycleStatus   string   `json:"cycle_status,omitempty"`
 }
 
 type CycleDTO struct {

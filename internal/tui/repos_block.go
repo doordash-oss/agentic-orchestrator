@@ -53,7 +53,7 @@ func renderReposBlock(f *feature.Feature) []string {
 
 	rows := make([]string, 0, len(names))
 	for _, name := range names {
-		touched, prURL, lastErr := derivePerRepoView(f, name)
+		touched, prURL, lastErr, freshness := derivePerRepoView(f, name)
 
 		// Pre-implementation features uniformly render `unpublished` —
 		// nothing has been scoped onto repos yet.
@@ -77,10 +77,18 @@ func renderReposBlock(f *feature.Feature) []string {
 
 		// Cycle suffix is appended (not a replacement) so a published PR URL
 		// stays visible while a rebase/tweak/refactor/review-comments runs.
+		rebaseSuffix := ""
 		if !preImpl {
-			if suffix := cycleSuffix(f, name); suffix != "" {
+			if suffix := rebaseOperationSuffix(f, name); suffix != "" {
+				rebaseSuffix = suffix
+				tail = strings.TrimRight(tail, " ") + "  " + rebaseSuffix
+			} else if suffix := cycleSuffix(f, name); suffix != "" {
 				tail = strings.TrimRight(tail, " ") + "  " + suffix
 			}
+		}
+		if suffix := freshnessSuffix(freshness); suffix != "" &&
+			!(rebaseSuffix != "" && strings.TrimSpace(freshness) == "in sync") {
+			tail = strings.TrimRight(tail, " ") + "  " + suffix
 		}
 
 		row := LabelStyle.Width(repoNameWidth).Render(name) + "  " + tail
@@ -92,12 +100,61 @@ func renderReposBlock(f *feature.Feature) []string {
 	return rows
 }
 
-func derivePerRepoView(f *feature.Feature, name string) (touched bool, prURL string, lastErr string) {
+func derivePerRepoView(f *feature.Feature, name string) (touched bool, prURL string, lastErr string, freshness string) {
 	state, ok := f.RepoStates[name]
 	if !ok || state == nil {
-		return false, "", ""
+		return false, "", "", ""
 	}
-	return state.Touched, state.PRURL, state.LastError
+	return state.Touched, state.PRURL, state.LastError, state.Freshness
+}
+
+func rebaseOperationSuffix(f *feature.Feature, name string) string {
+	if f == nil || f.RebaseOperation == nil {
+		return ""
+	}
+	progress := f.RebaseOperation.Repos[name]
+	if progress == nil {
+		return ""
+	}
+	switch progress.Status {
+	case feature.RebaseRepoStatusChecking:
+		return MutedStyle.Render("⟳ checking")
+	case feature.RebaseRepoStatusRebasing:
+		return MutedStyle.Render("⟳ rebasing")
+	case feature.RebaseRepoStatusUpToDate:
+		return SuccessStyle.Render("✓ in sync")
+	case feature.RebaseRepoStatusChanged:
+		return SuccessStyle.Render("✓ rebased")
+	case feature.RebaseRepoStatusConflict:
+		label := "conflict"
+		if len(progress.ConflictFiles) > 0 {
+			label += ": " + truncateText(strings.Join(progress.ConflictFiles, ", "), 60)
+		}
+		return WarningStyle.Render("⚠ " + label)
+	case feature.RebaseRepoStatusFailed:
+		label := "rebase failed"
+		if progress.LastError != "" {
+			label += ": " + truncateText(progress.LastError, 60)
+		}
+		return ErrorStyle.Render("✗ " + label)
+	default:
+		return ""
+	}
+}
+
+func freshnessSuffix(freshness string) string {
+	switch strings.TrimSpace(freshness) {
+	case "", "unknown":
+		return ""
+	case "in sync":
+		return SuccessStyle.Render("✓ in sync")
+	case "local changes":
+		return WarningStyle.Render("local changes")
+	case "local only":
+		return MutedStyle.Render("local only")
+	default:
+		return MutedStyle.Render(freshness)
+	}
 }
 
 // cycleSuffix returns a styled trailing annotation when the repo has an

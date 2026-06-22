@@ -1714,6 +1714,36 @@ func TestActivePublishedCycleStatus_NoSuffixForSingleRepo(t *testing.T) {
 	}
 }
 
+func TestActivePublishedCycleStatus_FeatureRebaseNoRepoSuffix(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status:           feature.StatusCodeReady,
+		CurrentIteration: 2,
+		Repos:            []feature.FeatureRepo{{Name: "api"}, {Name: "web"}},
+		ActiveCycle:      &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+	}
+
+	label, _, ok := activePublishedCycleStatus(f)
+	if !ok {
+		t.Fatal("activePublishedCycleStatus() should report feature-level rebase")
+	}
+	if label != "Rebasing [2]" {
+		t.Fatalf("activePublishedCycleStatus() = %q, want feature-level rebase label", label)
+	}
+	if strings.Contains(label, "·") {
+		t.Fatalf("activePublishedCycleStatus() = %q, want no repo suffix for feature-level rebase", label)
+	}
+
+	got := formatStatus(f)
+	if !strings.Contains(got, "Rebasing [2]") || strings.Contains(got, "Code Ready") {
+		t.Fatalf("formatStatus() = %q, want active rebase instead of Code Ready", got)
+	}
+	detail := stripANSI(formatDetailStatus(f))
+	if !strings.Contains(detail, "Rebasing [2]") || strings.Contains(detail, "Code Ready") {
+		t.Fatalf("formatDetailStatus() = %q, want active rebase instead of Code Ready", detail)
+	}
+}
+
 func TestActivePublishedCycleStatus_SuffixForMultiRepo(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{

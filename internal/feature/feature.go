@@ -178,6 +178,8 @@ type RepoState struct {
 	Touched   bool   `yaml:"touched,omitempty"`
 	PRURL     string `yaml:"pr_url,omitempty"`
 	LastError string `yaml:"last_error,omitempty"`
+
+	Freshness string `yaml:"-"`
 }
 
 // RepoCycleType identifies the kind of post-publish per-repo cycle.
@@ -633,6 +635,10 @@ type Feature struct {
 	// ActiveCycle is the feature-level active post-publish cycle under
 	// SchemaVersionCurrent = 4.
 	ActiveCycle *CycleState `yaml:"-"`
+	// RebaseOperation is the feature-level transient operation display state
+	// for the currently active rebase harness / smart rebase / Final Review.
+	// Persisted on Run.RebaseOperation.
+	RebaseOperation *RebaseOperationState `yaml:"-"`
 	// RepoCycles is the per-repo cycle rendering surface kept for the TUI's
 	// existing per-repo badge/spinner paths; the unified cycle loops mirror
 	// their per-repo entries here so legacy renderers keep working.
@@ -725,6 +731,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.PhaseCosts = f.PhaseCosts
 	r.SessionCosts = f.SessionCosts
 	r.ActiveCycle = f.ActiveCycle
+	r.RebaseOperation = f.RebaseOperation
 	r.PendingReviewPhase = f.PendingReviewPhase
 	r.PendingRewindReviewRoadmapPhase = f.PendingRewindReviewRoadmapPhase
 	r.IsRewind = f.IsRewind
@@ -767,6 +774,7 @@ func (f *Feature) syncRunToShadows() {
 	f.PhaseCosts = r.PhaseCosts
 	f.SessionCosts = r.SessionCosts
 	f.ActiveCycle = r.ActiveCycle
+	f.RebaseOperation = r.RebaseOperation
 	f.PendingReviewPhase = r.PendingReviewPhase
 	f.PendingRewindReviewRoadmapPhase = r.PendingRewindReviewRoadmapPhase
 	f.IsRewind = r.IsRewind

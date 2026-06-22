@@ -731,15 +731,39 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 }
 
 type serverMutationTarget struct {
-	mu           sync.Mutex
-	orch         *orchestrator.Orchestrator
-	cfg          *config.Config
-	configPath   string
-	store        *feature.Store
-	sessions     ports.SessionManager
-	phaseRunner  *agent.PhaseRunner
-	workspaceDir string
-	reviewer     ports.ReviewCommentOperator
+	mu            sync.Mutex
+	orch          *orchestrator.Orchestrator
+	rebaseStarter featureRebaseStarter
+	cfg           *config.Config
+	configPath    string
+	store         *feature.Store
+	sessions      ports.SessionManager
+	phaseRunner   *agent.PhaseRunner
+	workspaceDir  string
+	reviewer      ports.ReviewCommentOperator
+}
+
+type featureRebaseStarter interface {
+	StartFeatureRebase(featureID string) error
+}
+
+type gitFreshnessProvider struct{}
+
+func (gitFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) serverruntime.RepoFreshness {
+	worktree := repo.WorktreePath
+	if worktree == "" {
+		worktree = repo.Path
+	}
+	switch git.RepoFreshness(worktree) {
+	case "in sync":
+		return serverruntime.RepoFreshnessInSync
+	case "local changes":
+		return serverruntime.RepoFreshnessLocalChanges
+	case "local only":
+		return serverruntime.RepoFreshnessLocalOnly
+	default:
+		return serverruntime.RepoFreshnessUnknown
+	}
 }
 
 func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (serverruntime.CreateFeatureResponse, error) {
@@ -1338,42 +1362,21 @@ func isFailedSetupFeature(f *feature.Feature) bool {
 
 func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.RebaseActionRequest) (serverruntime.RebaseStartResponse, error) {
 	resp := serverruntime.RebaseStartResponse{
-		FeatureID:     featureID,
-		Repo:          req.Repo,
-		CycleType:     string(feature.CycleRebase),
-		RebaseTarget:  req.RebaseTarget,
-		ConflictFiles: append([]string(nil), req.ConflictFiles...),
+		FeatureID: featureID,
+		CycleType: string(feature.CycleRebase),
 	}
-	if t.orch == nil {
+	starter := t.rebaseStarter
+	if starter == nil {
+		starter = t.orch
+	}
+	if starter == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
-
-	if req.RebaseTarget == "" && len(req.ConflictFiles) == 0 {
-		if err := t.orch.StartRebase(featureID, req.Repo); err != nil {
-			var conflict *orchestrator.RebaseConflictError
-			if !errors.As(err, &conflict) {
-				resp.Result = "failed"
-				return resp, err
-			}
-			req.RebaseTarget = conflict.RebaseTarget
-			req.ConflictFiles = append([]string(nil), conflict.ConflictFiles...)
-			resp.RebaseTarget = req.RebaseTarget
-			resp.ConflictFiles = append([]string(nil), req.ConflictFiles...)
-		} else {
-			resp.Result = "completed"
-			return resp, nil
-		}
+	if req.Repo != "" || req.RebaseTarget != "" || req.ConflictFiles != nil {
+		resp.Result = "failed"
+		return resp, errors.New("rebase is feature-scoped")
 	}
-
-	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleRebase, req.RebaseTarget, req.ConflictFiles...)
-	if sessionID != "" {
-		resp.SessionID = sessionID
-	}
-	if err != nil {
-		if conflict := actionConflictError(err); conflict != nil {
-			resp.Result = "conflict"
-			return resp, conflict
-		}
+	if err := starter.StartFeatureRebase(featureID); err != nil {
 		resp.Result = "failed"
 		return resp, err
 	}
@@ -2771,20 +2774,22 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Owner:        boot.owner,
 		Features:     boot.featureManager,
 		FeatureStore: boot.featureManager.Store,
+		Freshness:    gitFreshnessProvider{},
 		Config:       boot.cfg,
 		Registry:     boot.registry,
 		Sessions:     boot.sessionManager,
 		Events:       boot.eventCh,
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: &serverMutationTarget{
-			orch:         boot.orchestrator,
-			cfg:          boot.cfg,
-			configPath:   boot.runtime.Config,
-			store:        boot.featureManager.Store,
-			sessions:     boot.sessionManager,
-			phaseRunner:  boot.phaseRunner,
-			workspaceDir: boot.workspaceDir,
-			reviewer:     &git.ReviewCommentAdapter{},
+			orch:          boot.orchestrator,
+			rebaseStarter: boot.orchestrator,
+			cfg:           boot.cfg,
+			configPath:    boot.runtime.Config,
+			store:         boot.featureManager.Store,
+			sessions:      boot.sessionManager,
+			phaseRunner:   boot.phaseRunner,
+			workspaceDir:  boot.workspaceDir,
+			reviewer:      &git.ReviewCommentAdapter{},
 		},
 		RequestShutdown: requestShutdown,
 	})

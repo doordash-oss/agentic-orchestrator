@@ -47,6 +47,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Owner:           opts.Owner,
 		Features:        opts.Features,
 		FeatureStore:    opts.FeatureStore,
+		Freshness:       opts.Freshness,
 		Config:          opts.Config,
 		Registry:        opts.Registry,
 		Sessions:        opts.Sessions,

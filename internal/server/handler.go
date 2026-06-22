@@ -42,6 +42,7 @@ type apiHandler struct {
 	owner           instancelock.Owner
 	features        FeatureLister
 	store           FeatureReader
+	freshness       RepoFreshnessProvider
 	cfg             *config.Config
 	registry        *llm.Registry
 	sessions        ports.SessionManager
@@ -75,6 +76,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		owner:           opts.Owner,
 		features:        features,
 		store:           store,
+		freshness:       opts.Freshness,
 		cfg:             opts.Config,
 		registry:        opts.Registry,
 		sessions:        opts.Sessions,

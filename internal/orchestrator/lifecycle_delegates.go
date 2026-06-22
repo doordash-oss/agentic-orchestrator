@@ -313,6 +313,24 @@ func (o *Orchestrator) FailRepoImplementation(featureID, repoName, errMsg string
 	return o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, errMsg)
 }
 
+func (o *Orchestrator) RecordRebasePreflightFailure(featureID, repoName string, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	msg := "rebase preflight: " + cause.Error()
+	if err := o.deps.Lifecycle.FailRepoImplementation(featureID, repoName, msg); err != nil {
+		return fmt.Errorf("record rebase preflight failure: %w", err)
+	}
+	o.emitEvent(ports.Event{
+		Type:      ports.RepoStatusChanged,
+		FeatureID: featureID,
+		RepoName:  repoName,
+		Message:   msg,
+		Error:     cause,
+	})
+	return nil
+}
+
 // phaseDeclaredRepos returns the phase-declared repo subset by running
 // agent.PhaseScope against the feature's current plan. Returns every
 // Feature.Repos entry on any error.

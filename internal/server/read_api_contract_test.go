@@ -173,6 +173,57 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	}
 }
 
+func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
+	store, f := seedReadFeature(t)
+	f.ID = "feat-rebase"
+	f.Status = feature.StatusCodeReady
+	f.Repos = []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}
+	f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning, Count: 2}
+	f.SetActiveCycleType(feature.CycleRebase)
+	f.RebaseOperation = &feature.RebaseOperationState{
+		Stage: feature.RebaseStageHarness,
+		Repos: map[string]*feature.RebaseRepoProgress{
+			"api": {Status: feature.RebaseRepoStatusRebasing, RebaseTarget: "main"},
+			"web": {Status: feature.RebaseRepoStatusUpToDate, RebaseTarget: "main"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:      RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:     store,
+		FeatureStore: store,
+		Freshness: StaticFreshnessProvider(map[string]RepoFreshness{
+			"api": RepoFreshnessLocalChanges,
+			"web": RepoFreshnessInSync,
+		}),
+	})
+
+	body := getJSONMap(t, handler, "/api/v1/features/feat-rebase")
+	featureBody := body["feature"].(map[string]any)
+	cycle := featureBody["cycle"].(map[string]any)
+	if cycle["type"] != "rebase" || cycle["status"] != "running" {
+		t.Fatalf("cycle = %+v, want active rebase", cycle)
+	}
+	status := map[string]RepoStatusDTO{}
+	for _, raw := range featureBody["repo_status"].([]any) {
+		repo := raw.(map[string]any)
+		name := repo["name"].(string)
+		status[name] = RepoStatusDTO{
+			Name:         name,
+			Freshness:    repo["freshness"].(string),
+			RebaseStatus: repo["rebase_status"].(string),
+		}
+	}
+	if status["api"].RebaseStatus != "rebasing" || status["api"].Freshness != "local changes" {
+		t.Fatalf("api status = %+v", status["api"])
+	}
+	if status["web"].RebaseStatus != "up_to_date" || status["web"].Freshness != "in sync" {
+		t.Fatalf("web status = %+v", status["web"])
+	}
+}
+
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -547,13 +598,13 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	assertActionInputRequired(t, actionsByID["rewind"], "target_phase", true)
 	assertActionInputRequired(t, actionsByID["rewind"], "roadmap_phase", false)
 	assertActionInputRequired(t, actionsByID["rewind"], "upgrade_pipeline", false)
-	assertActionScope(t, actionsByID["rebase"], "feature", "optional")
-	assertActionInputNames(t, actionsByID["rebase"], "repo", "rebase_target", "conflict_files")
-	assertActionInputRequired(t, actionsByID["rebase"], "repo", false)
+	assertActionScope(t, actionsByID["rebase"], "feature", "")
+	assertActionInputNames(t, actionsByID["rebase"])
 	assertActionScope(t, actionsByID["review-comments"], "feature", "required")
 	assertActionInputNames(t, actionsByID["review-comments"], "repo", "mode")
 	assertActionInputRequired(t, actionsByID["review-comments"], "repo", true)
 	assertActionInputRequired(t, actionsByID["review-comments"], "mode", true)
+	assertActionScope(t, actionsByID["refactor"], "feature", "optional")
 	assertActionInputNames(t, actionsByID["refactor"], "repo", "prompt", "pipeline")
 	assertActionInputRequired(t, actionsByID["refactor"], "repo", false)
 	assertActionInputRequired(t, actionsByID["refactor"], "prompt", true)
@@ -588,6 +639,62 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	}
 	if !sawDisabledReason {
 		t.Fatalf("all actions enabled; want representative disabled reasons")
+	}
+}
+
+func TestActionCatalogRebaseIsFeatureScoped(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		return nil
+	}); err != nil {
+		t.Fatalf("Modify() error = %v", err)
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:   RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:  store,
+		Mutations: &fakeMutationTarget{},
+	})
+
+	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+	featureDTO := detail["feature"].(map[string]any)
+	actions := featureDTO["actions"].([]any)
+	actionsByID := map[string]map[string]any{}
+	for _, raw := range actions {
+		action := raw.(map[string]any)
+		actionsByID[action["id"].(string)] = action
+	}
+	assertActionScope(t, actionsByID["rebase"], "feature", "")
+	assertActionInputNames(t, actionsByID["rebase"])
+
+	for _, bodyJSON := range []string{
+		`{"repo":"api"}`,
+		`{"repo":""}`,
+		`{"rebase_target":""}`,
+		`{"conflict_files":null}`,
+		`{"conflict_files":[]}`,
+	} {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/features/"+f.ID+"/actions/rebase", strings.NewReader(bodyJSON))
+		req.Header.Set("X-Agentico-Client", "local")
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		resp := w.Result()
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			data, _ := io.ReadAll(resp.Body)
+			t.Fatalf("rebase mutation %s status = %d; want 400; body: %s", bodyJSON, resp.StatusCode, data)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode rebase error response for %s: %v", bodyJSON, err)
+		}
+		errDTO := body["error"].(map[string]any)
+		if errDTO["code"] != "bad_request" || !strings.Contains(errDTO["message"].(string), "rebase is feature-scoped") {
+			t.Fatalf("rebase mutation %s error = %+v, want feature-scoped bad_request", bodyJSON, errDTO)
+		}
 	}
 }
 

@@ -675,6 +675,63 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Multi Repo Rebase",
+		Slug:         "multi-repo-rebase",
+		Status:       "CodeReady",
+		CurrentPhase: "publish",
+		Repos:        []string{"api", "web"},
+		CreatedAt:    time.Now(),
+	}
+	app := APIAppModel{
+		width:           160,
+		height:          40,
+		focusPanel:      1,
+		rightPanelMode:  dashboardRightPanelOverview,
+		selectedFeature: summary.ID,
+		featureList:     server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: {Feature: server.FeatureDetailDTO{
+				FeatureSummary: summary,
+				Cycle:          &server.CycleDTO{Type: "rebase", Status: "running", Count: 1, Iteration: 1},
+				RepoStatus: []server.RepoStatusDTO{
+					{Name: "api", Touched: true, Publishable: true, Freshness: "local changes", RebaseStatus: "conflict", ConflictFiles: []string{"service.go"}},
+					{Name: "web", Touched: true, Publishable: true, Freshness: "in sync", RebaseStatus: "up_to_date"},
+				},
+			}},
+		},
+	}
+
+	features := app.apiDashboardFeatures()
+	if len(features) != 1 {
+		t.Fatalf("apiDashboardFeatures length = %d, want 1", len(features))
+	}
+	f := features[0]
+	if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRebase || f.ActiveCycle.Status != feature.RepoCycleRunning {
+		t.Fatalf("ActiveCycle = %+v, want running feature-level rebase", f.ActiveCycle)
+	}
+	if f.RebaseOperation == nil || f.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusConflict {
+		t.Fatalf("RebaseOperation = %+v, want api conflict progress", f.RebaseOperation)
+	}
+	if got := f.RepoStates["api"].Freshness; got != "local changes" {
+		t.Fatalf("api freshness = %q, want local changes", got)
+	}
+
+	view := stripANSI(app.View().Content)
+	for _, want := range []string{"Info", "Rebasing [1]", "Repo Status", "api", "conflict: service.go", "local changes", "web", "in sync"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("REST rebase overview missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Code Ready") || strings.Contains(view, "· api") {
+		t.Fatalf("REST rebase overview should show feature-level rebase without repo suffix:\n%s", view)
+	}
+}
+
 func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 	t.Parallel()
 
@@ -3132,8 +3189,8 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 				if got := strings.Join(client.startRebaseFeatureIDs, ","); got != "active" {
 					t.Fatalf("StartRebase calls = %q, want active", got)
 				}
-				if got := client.startRebaseRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].RebaseTarget != "" || len(got[0].ConflictFiles) != 0 {
-					t.Fatalf("StartRebase requests = %+v, want repo agentic-orchestrator without target or conflict files", got)
+				if got := client.startRebaseRequests; len(got) != 1 || got[0].Repo != "" || got[0].RebaseTarget != "" || len(got[0].ConflictFiles) != 0 {
+					t.Fatalf("StartRebase requests = %+v, want no repo or conflict inputs", got)
 				}
 			},
 		},
@@ -5855,19 +5912,6 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 		assertCall func(t *testing.T, client *fakeTUIAPIClient)
 	}{
 		{
-			name:      "rebase",
-			key:       tea.KeyPressMsg{Code: 'b', Text: "b"},
-			actionID:  "rebase",
-			wantTitle: "Confirm Rebase",
-			accepted:  apiTestActionResponse{},
-			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
-				t.Helper()
-				if got := client.startRebaseRequests; len(got) != 1 || got[0].Repo != "web" {
-					t.Fatalf("StartRebase requests = %+v, want repo web", got)
-				}
-			},
-		},
-		{
 			name:      "tweak",
 			key:       tea.KeyPressMsg{Code: 't', Text: "t"},
 			actionID:  "tweak",
@@ -5923,6 +5967,39 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 			_, _ = model.(APIAppModel).Update(msg)
 			tt.assertCall(t, client)
 		})
+	}
+}
+
+func TestAPIAppModelRebaseDoesNotOpenRepoSelector(t *testing.T) {
+	t.Parallel()
+
+	client := apiRepoSelectorClient("rebase", apiTestActionResponse{})
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	if cmd != nil {
+		t.Fatal("Update(b) returned command before confirmation")
+	}
+	confirming := model.(APIAppModel)
+	view := stripANSI(confirming.View().Content)
+	if strings.Contains(view, "Select repo") {
+		t.Fatalf("rebase opened repo selector:\n%s", view)
+	}
+	if !strings.Contains(view, "Confirm Rebase") {
+		t.Fatalf("rebase confirmation not shown:\n%s", view)
+	}
+
+	model, cmd = confirming.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if cmd == nil {
+		t.Fatal("confirmation returned nil command")
+	}
+	msg := cmd()
+	_, _ = model.(APIAppModel).Update(msg)
+	if got := client.startRebaseRequests; len(got) != 1 || got[0].Repo != "" || got[0].RebaseTarget != "" || len(got[0].ConflictFiles) != 0 {
+		t.Fatalf("StartRebase requests = %+v, want no repo or conflict inputs", got)
 	}
 }
 
@@ -6636,6 +6713,8 @@ func apiRepoSelectorClient(actionID string, accepted apiTestActionResponse) *fak
 		Scope:   server.ActionScopeDTO{Type: "feature", RepoSelection: "optional"},
 	}
 	switch actionID {
+	case "rebase":
+		action.Scope = server.ActionScopeDTO{Type: "feature"}
 	case "review-comments":
 		action.Scope = server.ActionScopeDTO{Type: "feature", RepoSelection: "required", CycleType: "review-comments"}
 		action.RequiredInputs = []server.ActionInputDTO{

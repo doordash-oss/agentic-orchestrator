@@ -24,6 +24,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+func findInterruptLifecycleCall(lc *mocks.MockFeatureLifecycle, method string) *mocks.MockCall {
+	for i := range lc.Calls {
+		if lc.Calls[i].Method == method {
+			return &lc.Calls[i]
+		}
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // TestOrchestrator_InterruptFeature
 // ---------------------------------------------------------------------------
@@ -136,6 +145,50 @@ func TestOrchestrator_InterruptFeature_NoSessions(t *testing.T) {
 		t.Errorf("StopSession should not be called with no sessions; got %d", len(sm.StopCalls))
 	}
 	assertLifecycleCall(t, lc, "Transition")
+}
+
+func TestOrchestrator_InterruptFeature_CodeReadyFeatureLevelRebaseCycle(t *testing.T) {
+	f := &feature.Feature{
+		ID:     "feat-rebase-active",
+		Status: feature.StatusCodeReady,
+		ActiveCycle: &feature.CycleState{
+			Type:      feature.CycleRebase,
+			Status:    feature.RepoCycleRunning,
+			Count:     1,
+			LastError: "stale failure",
+		},
+	}
+	f.SetActiveCycleType(feature.CycleRebase)
+	lc := mocks.NewMockFeatureLifecycle()
+	lc.GetFn = func(id string) (*feature.Feature, error) { return f, nil }
+	lc.TransitionFn = func(id string, to feature.Status) error {
+		return f.Transition(to)
+	}
+	fs := newFeatureStore(f)
+	sm := mocks.NewMockSessionManager()
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		Sessions:  sm,
+	}, orchestrator.Hooks{})
+
+	if err := o.InterruptFeature("feat-rebase-active"); err != nil {
+		t.Fatalf("InterruptFeature: %v", err)
+	}
+
+	if f.ActiveCycle == nil || f.ActiveCycle.Status != feature.RepoCycleInterrupted {
+		t.Fatalf("ActiveCycle = %+v, want interrupted", f.ActiveCycle)
+	}
+	if f.ActiveCycle.LastError != "" {
+		t.Fatalf("ActiveCycle.LastError = %q, want empty", f.ActiveCycle.LastError)
+	}
+	if f.Status != feature.StatusInterrupted {
+		t.Fatalf("Status = %q, want %q", f.Status, feature.StatusInterrupted)
+	}
+	if call := findInterruptLifecycleCall(lc, "Transition"); call != nil {
+		t.Fatalf("Transition should not be called for feature-level rebase cycle; got %+v", call)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -368,5 +421,69 @@ func TestOrchestrator_InterruptAllRunning_CodeReadyWithCycles(t *testing.T) {
 	}
 	if codeReady.KBStatus == nil {
 		t.Error("KBStatus should be preserved for CodeReady features with cycles")
+	}
+}
+
+func TestOrchestrator_InterruptAllRunning_FeatureLevelRebaseCycles(t *testing.T) {
+	published := &feature.Feature{
+		ID:       "pub-feature-rebase",
+		Status:   feature.StatusPublished,
+		KBStatus: map[string]string{"api": "completed"},
+		ActiveCycle: &feature.CycleState{
+			Type:   feature.CycleRebase,
+			Status: feature.RepoCycleRunning,
+			Count:  1,
+		},
+	}
+	published.SetActiveCycleType(feature.CycleRebase)
+	codeReady := &feature.Feature{
+		ID:     "code-ready-feature-rebase",
+		Status: feature.StatusCodeReady,
+		ActiveCycle: &feature.CycleState{
+			Type:   feature.CycleRebase,
+			Status: feature.RepoCycleReviewing,
+			Count:  2,
+		},
+	}
+	codeReady.SetActiveCycleType(feature.CycleRebase)
+
+	fs := newFeatureStore(published, codeReady)
+	lc := mocks.NewMockFeatureLifecycle()
+	lc.GetFn = func(id string) (*feature.Feature, error) {
+		switch id {
+		case published.ID:
+			return published, nil
+		case codeReady.ID:
+			return codeReady, nil
+		default:
+			return nil, nil
+		}
+	}
+	lc.TransitionFn = func(id string, to feature.Status) error {
+		t.Fatalf("Transition should not be called for feature-level rebase cycle %s", id)
+		return nil
+	}
+	sm := mocks.NewMockSessionManager()
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		Sessions:  sm,
+	}, orchestrator.Hooks{})
+
+	if err := o.InterruptAllRunning(); err != nil {
+		t.Fatalf("InterruptAllRunning: %v", err)
+	}
+
+	for _, f := range []*feature.Feature{published, codeReady} {
+		if f.ActiveCycle == nil || f.ActiveCycle.Status != feature.RepoCycleInterrupted {
+			t.Fatalf("%s ActiveCycle = %+v, want interrupted", f.ID, f.ActiveCycle)
+		}
+		if f.Status != feature.StatusInterrupted {
+			t.Fatalf("%s Status = %q, want %q", f.ID, f.Status, feature.StatusInterrupted)
+		}
+	}
+	if published.KBStatus == nil {
+		t.Fatal("published KBStatus should be preserved for feature-level rebase cycle")
 	}
 }

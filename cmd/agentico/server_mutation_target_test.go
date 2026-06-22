@@ -211,63 +211,56 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 	}
 }
 
-func TestServerMutationTargetStartRebaseSkipsAgentCycleWhenAlreadyUpToDate(t *testing.T) {
-	stateDir := t.TempDir()
-	store := feature.NewStore(stateDir)
-	manager := feature.NewManager(store, config.NewDefault())
-	worktree := t.TempDir()
-	const featureID = "feat-rebase-up-to-date"
-	f := &feature.Feature{
-		ID:            featureID,
-		Name:          "Rebase Up To Date",
-		Slug:          "rebase-up-to-date",
-		Status:        feature.StatusCodeReady,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos: []feature.FeatureRepo{{
-			Name:         "agentic",
-			Path:         worktree,
-			WorktreePath: worktree,
-			Branch:       "feature/rebase-up-to-date",
-			BaseBranch:   "main",
-		}},
-		RepoStates: map[string]*feature.RepoState{
-			"agentic": {Touched: true},
-		},
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	rebaser := mocks.NewMockRebaseOperator()
-	rebaser.IsBehindRemoteFn = func(string, string) (bool, error) {
-		return false, nil
-	}
-	target := serverMutationTarget{
-		orch: orchestrator.New(orchestrator.Deps{
-			Lifecycle: manager,
-			Store:     store,
-			Rebaser:   rebaser,
-		}, orchestrator.Hooks{}),
-		store: store,
-	}
+func TestServerMutationTargetStartRebaseStartsFeatureRebasePromptly(t *testing.T) {
+	starter := &fakeFeatureRebaseStarter{}
+	target := serverMutationTarget{rebaseStarter: starter}
 
-	_, err := target.StartRebase(featureID, serverruntime.RebaseActionRequest{Repo: "agentic"})
+	resp, err := target.StartRebase("feat-rebase", serverruntime.RebaseActionRequest{})
+	if err != nil {
+		t.Fatalf("StartRebase error = %v", err)
+	}
+	if resp.FeatureID != "feat-rebase" || resp.Result != "started" || resp.CycleType != string(feature.CycleRebase) {
+		t.Fatalf("StartRebase response = %+v, want started feature rebase", resp)
+	}
+	if resp.Repo != "" || resp.RebaseTarget != "" || len(resp.ConflictFiles) != 0 || resp.SessionID != "" {
+		t.Fatalf("StartRebase response leaked repo/conflict fields: %+v", resp)
+	}
+	if got := strings.Join(starter.featureIDs, ","); got != "feat-rebase" {
+		t.Fatalf("StartFeatureRebase calls = %q, want feat-rebase", got)
+	}
+}
 
-	if err == nil || !strings.Contains(err.Error(), "already up to date") {
-		t.Fatalf("StartRebase error = %v, want already-up-to-date preflight error", err)
+func TestServerMutationTargetStartRebaseRejectsInternalInputs(t *testing.T) {
+	for _, req := range []serverruntime.RebaseActionRequest{
+		{Repo: "agentic"},
+		{RebaseTarget: "main"},
+		{ConflictFiles: []string{"internal/server/mutation.go"}},
+		{ConflictFiles: []string{}},
+	} {
+		starter := &fakeFeatureRebaseStarter{}
+		target := serverMutationTarget{rebaseStarter: starter}
+
+		resp, err := target.StartRebase("feat-rebase", req)
+		if err == nil || !strings.Contains(err.Error(), "rebase is feature-scoped") {
+			t.Fatalf("StartRebase(%+v) error = %v, want feature-scoped rejection", req, err)
+		}
+		if resp.Result != "failed" {
+			t.Fatalf("StartRebase(%+v) result = %q, want failed", req, resp.Result)
+		}
+		if len(starter.featureIDs) != 0 {
+			t.Fatalf("StartFeatureRebase called for rejected request: %v", starter.featureIDs)
+		}
 	}
-	if got := countMockCalls(rebaser.Calls, "IsBehindRemote"); got != 1 {
-		t.Fatalf("IsBehindRemote calls = %d, want 1", got)
-	}
-	if got := countMockCalls(rebaser.Calls, "RebaseOnto"); got != 0 {
-		t.Fatalf("RebaseOnto calls = %d, want 0 for up-to-date repo", got)
-	}
-	loaded, loadErr := store.Load(featureID)
-	if loadErr != nil {
-		t.Fatalf("load feature: %v", loadErr)
-	}
-	if len(loaded.RepoCycles) != 0 || loaded.ActiveCycle != nil {
-		t.Fatalf("unexpected rebase cycle state: RepoCycles=%+v ActiveCycle=%+v", loaded.RepoCycles, loaded.ActiveCycle)
-	}
+}
+
+type fakeFeatureRebaseStarter struct {
+	featureIDs []string
+	err        error
+}
+
+func (f *fakeFeatureRebaseStarter) StartFeatureRebase(featureID string) error {
+	f.featureIDs = append(f.featureIDs, featureID)
+	return f.err
 }
 
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {

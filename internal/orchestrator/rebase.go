@@ -36,6 +36,18 @@ type RebaseResultInput struct {
 	ConflictFiles []string
 }
 
+type HarnessRebaseRepoOutcome struct {
+	RepoName      string
+	Status        feature.RebaseRepoStatus
+	RebaseTarget  string
+	ConflictFiles []string
+	Changed       bool
+	Err           error
+	Publishable   bool
+	WorktreePath  string
+	Branch        string
+}
+
 // RebaseConflictError is returned when a rebase encounters a merge conflict
 // that needs interactive resolution. RebaseTarget carries the ref the rebase
 // was being applied onto (e.g. "master", "main") so the conflict-resolution
@@ -94,6 +106,95 @@ func (o *Orchestrator) resolveRebaseTarget(f *feature.Feature, repo *feature.Fea
 		target, _ = o.deps.Branch.DefaultBranch(repo.Path)
 	}
 	return target
+}
+
+func (o *Orchestrator) runHarnessRebaseRepo(f *feature.Feature, repo feature.FeatureRepo) HarnessRebaseRepoOutcome {
+	worktreeDir := repo.WorktreePath
+	if worktreeDir == "" {
+		worktreeDir = repo.Path
+	}
+
+	branch := repo.Branch
+	if branch == "" {
+		branch = "feature/" + f.Slug
+	}
+
+	out := HarnessRebaseRepoOutcome{
+		RepoName:     repo.Name,
+		RebaseTarget: o.resolveRebaseTarget(f, &repo),
+		Publishable:  repo.Publishable == nil || *repo.Publishable,
+		WorktreePath: worktreeDir,
+		Branch:       branch,
+	}
+	if out.RebaseTarget == "" {
+		out.Status = feature.RebaseRepoStatusFailed
+		out.Err = errors.New("rebase target not found")
+		return out
+	}
+	if o.deps.Rebaser == nil {
+		out.Status = feature.RebaseRepoStatusFailed
+		out.Err = errors.New("rebase operator not configured")
+		return out
+	}
+
+	if out.Publishable {
+		if err := o.deps.Rebaser.Fetch(worktreeDir); err != nil {
+			out.Status = feature.RebaseRepoStatusFailed
+			out.Err = fmt.Errorf("fetch failed: %w", err)
+			return out
+		}
+
+		behind, err := o.deps.Rebaser.IsBehindRemote(worktreeDir, out.RebaseTarget)
+		if err != nil {
+			out.Status = feature.RebaseRepoStatusFailed
+			out.Err = fmt.Errorf("behind remote check failed: %w", err)
+			return out
+		}
+		if !behind {
+			out.Status = feature.RebaseRepoStatusUpToDate
+			return out
+		}
+
+		return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(worktreeDir, "origin/"+out.RebaseTarget))
+	}
+
+	behind, err := o.deps.Rebaser.IsBehindLocal(worktreeDir, out.RebaseTarget)
+	if err != nil {
+		out.Status = feature.RebaseRepoStatusFailed
+		out.Err = fmt.Errorf("behind local check failed: %w", err)
+		return out
+	}
+	if !behind {
+		out.Status = feature.RebaseRepoStatusUpToDate
+		return out
+	}
+
+	return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(worktreeDir, out.RebaseTarget))
+}
+
+func harnessOutcomeFromRebaseResult(out HarnessRebaseRepoOutcome, result ports.RebaseResult) HarnessRebaseRepoOutcome {
+	switch result.Outcome {
+	case ports.RebaseSuccess:
+		out.Status = feature.RebaseRepoStatusChanged
+		out.Changed = true
+		return out
+	case ports.RebaseConflict:
+		out.Status = feature.RebaseRepoStatusConflict
+		out.ConflictFiles = append([]string(nil), result.ConflictFiles...)
+		return out
+	case ports.RebaseFailed:
+		out.Status = feature.RebaseRepoStatusFailed
+		if result.Err != nil {
+			out.Err = result.Err
+		} else {
+			out.Err = errors.New("rebase failed")
+		}
+		return out
+	default:
+		out.Status = feature.RebaseRepoStatusFailed
+		out.Err = fmt.Errorf("unknown rebase outcome %d", result.Outcome)
+		return out
+	}
 }
 
 // StartRebase performs a per-repo rebase for a published feature. The

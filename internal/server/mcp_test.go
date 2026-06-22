@@ -191,7 +191,7 @@ func TestMCPSchemasCoverRESTDTOFields(t *testing.T) {
 		"config_runtime_update":  {"defaults"},
 		"feature_publish":        {"feature_id", "repos"},
 		"feature_rewind":         {"feature_id", "target_phase", "roadmap_phase", "upgrade_pipeline"},
-		"rebase_start":           {"feature_id", "repo", "rebase_target", "conflict_files"},
+		"rebase_start":           {"feature_id"},
 		"review_comments_fetch":  {"feature_id", "repo"},
 		"review_comments_start":  {"feature_id", "repo", "mode"},
 		"tweak_finish":           {"feature_id", "decision", "had_changes"},
@@ -202,6 +202,7 @@ func TestMCPSchemasCoverRESTDTOFields(t *testing.T) {
 		tool := mcpToolByName(t, tools.Tools, name)
 		assertSchemaHasProperties(t, tool.InputSchema, name+" input", fields...)
 	}
+	assertSchemaOmitsProperties(t, mcpToolByName(t, tools.Tools, "rebase_start").InputSchema, "rebase_start input", "repo", "rebase_target", "conflict_files")
 	for name, fields := range map[string][]string{
 		"feature_create":         {"feature_id", "result"},
 		"feature_start":          {"feature_id", "result"},
@@ -1076,6 +1077,16 @@ func assertSchemaHasProperties(t *testing.T, schema any, label string, names ...
 	for _, name := range names {
 		if _, ok := props[name]; !ok {
 			t.Fatalf("%s schema properties = %v; want %s", label, sortedMapKeys(props), name)
+		}
+	}
+}
+
+func assertSchemaOmitsProperties(t *testing.T, schema any, label string, names ...string) {
+	t.Helper()
+	props := schemaProperties(t, schema, label)
+	for _, name := range names {
+		if _, ok := props[name]; ok {
+			t.Fatalf("%s schema properties = %v; want %s omitted", label, sortedMapKeys(props), name)
 		}
 	}
 }

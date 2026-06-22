@@ -96,7 +96,6 @@ type rewindFeatureMCPArgs struct {
 
 type rebaseMCPArgs struct {
 	FeatureID string `json:"feature_id"`
-	RebaseActionRequest
 }
 
 type reviewCommentsFetchMCPArgs struct {
@@ -238,7 +237,7 @@ func (h *apiHandler) registerMCPMutationTools(server *mcp.Server) {
 	addRESTTool[rebaseMCPArgs, RebaseStartResponse](server, h, "rebase_start", "Start a rebase cycle.", http.MethodPost, func(in rebaseMCPArgs) string {
 		return featureActionPath(in.FeatureID, "rebase")
 	}, nil, func(in rebaseMCPArgs) any {
-		return in.RebaseActionRequest
+		return emptyBody()
 	}, true)
 	addRESTTool[reviewCommentsFetchMCPArgs, ReviewCommentsFetchResponse](server, h, "review_comments_fetch", "Fetch review comments.", http.MethodPost, func(in reviewCommentsFetchMCPArgs) string {
 		return featureActionPath(in.FeatureID, "review-comments") + "/fetch"

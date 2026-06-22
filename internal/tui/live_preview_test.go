@@ -558,6 +558,19 @@ func TestLivePreviewTailBannerLabel(t *testing.T) {
 			sess: newLivePreviewSession("cycle", feature.PhaseImplement),
 			want: "Current: Rebasing [2]",
 		},
+		{
+			name: "feature rebase cycle context",
+			f: &feature.Feature{
+				Status:       feature.StatusCodeReady,
+				CurrentPhase: feature.PhasePublish,
+				ActiveCycle: &feature.CycleState{
+					Type:      feature.CycleRebase,
+					Status:    feature.RepoCycleRunning,
+					Iteration: 3,
+				},
+			},
+			want: "Current: Rebasing [3]",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1222,6 +1235,20 @@ func TestDashboardFeatureRowSpinnerUsesLivePreviewPredicate(t *testing.T) {
 				Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
 					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
+				},
+			},
+			wantSpin: true,
+		},
+		{
+			name: "active feature cycle",
+			f: &feature.Feature{
+				ID:     "feature-cycle",
+				Slug:   "feature-cycle",
+				Status: feature.StatusCodeReady,
+				ActiveCycle: &feature.CycleState{
+					Type:   feature.CycleRebase,
+					Status: feature.RepoCycleRunning,
+					Count:  1,
 				},
 			},
 			wantSpin: true,

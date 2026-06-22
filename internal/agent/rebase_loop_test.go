@@ -28,6 +28,34 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+type rebaseLoopSessionManagerStub struct {
+	startCalls int
+}
+
+func (s *rebaseLoopSessionManagerStub) StartSession(
+	string,
+	string,
+	feature.Phase,
+	[]string,
+	string,
+	[]string,
+	...*ports.SessionOpts,
+) (ports.SessionHandle, error) {
+	s.startCalls++
+	return nil, errors.New("unexpected session start")
+}
+
+func (s *rebaseLoopSessionManagerStub) StopSession(string) error                   { return nil }
+func (s *rebaseLoopSessionManagerStub) GetSession(string) ports.SessionView        { return nil }
+func (s *rebaseLoopSessionManagerStub) ActiveSessions() []ports.SessionView        { return nil }
+func (s *rebaseLoopSessionManagerStub) RecentSessions(int) []ports.SessionView     { return nil }
+func (s *rebaseLoopSessionManagerStub) FeatureSessions(string) []ports.SessionView { return nil }
+func (s *rebaseLoopSessionManagerStub) SendInput(string, []byte) error             { return nil }
+func (s *rebaseLoopSessionManagerStub) Attach(string) (ports.SessionView, error)   { return nil, nil }
+func (s *rebaseLoopSessionManagerStub) Detach()                                    {}
+func (s *rebaseLoopSessionManagerStub) Shutdown()                                  {}
+func (s *rebaseLoopSessionManagerStub) IsShuttingDown() bool                       { return false }
+
 // newRebaseTestFeature seeds a multi-repo feature whose RepoImpl entries
 // are at "pr_ready" (post-publish) — the precondition for the
 // unified rebase cycle. The store is a real on-disk store so
@@ -500,12 +528,10 @@ func TestRunRebaseLoop_NoBehindReposShortCircuits(t *testing.T) {
 	}
 }
 
-// TestRunRebaseLoop_BehindSubsetWorkspaceFiltersAddDir verifies the
-// workspace mounts ONLY the behind-subset repos (cycle-specific
-// divergence: phase implement mounts every Feature.Repos worktree;
-// rebase mounts only the subset under repair). Asserts via the
-// captured ImplementConfig.AdditionalDirs.
-func TestRunRebaseLoop_BehindSubsetWorkspaceFiltersAddDir(t *testing.T) {
+// TestRunRebaseLoop_WorkspaceReposEmptyFallsBackToBehindSubset verifies
+// the legacy default: when WorkspaceRepos is empty, the loop mounts only
+// the behind-subset repos. Asserts via captured ImplementConfig.AdditionalDirs.
+func TestRunRebaseLoop_WorkspaceReposEmptyFallsBackToBehindSubset(t *testing.T) {
 	stateDir := t.TempDir()
 	store, f, repoPaths := newRebaseTestFeature(t, stateDir, "rebase-subset", []string{"api", "web", "infra"})
 
@@ -542,7 +568,91 @@ func TestRunRebaseLoop_BehindSubsetWorkspaceFiltersAddDir(t *testing.T) {
 		t.Errorf("AdditionalDirs missing web worktree %q (got %v)", webAbs, dirs)
 	}
 	if sliceContainsAny(dirs, infraAbs) {
-		t.Errorf("AdditionalDirs unexpectedly contains infra (NOT behind) %q", infraAbs)
+		t.Errorf("AdditionalDirs unexpectedly contains infra without explicit WorkspaceRepos %q", infraAbs)
+	}
+}
+
+// TestRunRebaseLoop_WorkspaceReposMountsFullFeatureContext verifies
+// coordinated smart rebase can target a behind subset while mounting all
+// feature repos for validation and cross-repo fixes.
+func TestRunRebaseLoop_WorkspaceReposMountsFullFeatureContext(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, repoPaths := newRebaseTestFeature(t, stateDir, "rebase-workspace-all", []string{"api", "web", "infra"})
+
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1})
+
+	cfg := RebaseLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     stateDir,
+		BehindRepos: []RebaseRepoTarget{
+			{RepoName: "api", RebaseTarget: "main"},
+			{RepoName: "web", RebaseTarget: "main"},
+		},
+		WorkspaceRepos: []string{"api", "web", "infra"},
+		MaxIterations:  3,
+		RunImplementFn: captureFn,
+	}
+
+	result, err := RunRebaseLoop(cfg, nil)
+	if err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+	if got, want := result.Repos, []string{"api", "web"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("result Repos = %v, want stamped behind subset %v", got, want)
+	}
+
+	if len(*captured) != 1 {
+		t.Fatalf("RunImplementFn called %d times, want 1", len(*captured))
+	}
+	dirs := (*captured)[0].AdditionalDirs
+	for _, repoPath := range repoPaths {
+		abs, _ := filepath.Abs(repoPath)
+		if !sliceContainsAny(dirs, abs) {
+			t.Errorf("AdditionalDirs missing workspace repo %q (got %v)", abs, dirs)
+		}
+	}
+}
+
+func TestRunRebaseLoop_SessionStartFuncRejectsInterruptedFeature(t *testing.T) {
+	stateDir := t.TempDir()
+	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-session-start-interrupted", []string{"api"})
+	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: "review_passed", Iterations: 1})
+	sm := &rebaseLoopSessionManagerStub{}
+
+	cfg := RebaseLoopConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       stateDir,
+		BehindRepos:    []RebaseRepoTarget{{RepoName: "api", RebaseTarget: "main"}},
+		MaxIterations:  3,
+		RunImplementFn: captureFn,
+	}
+
+	if _, err := RunRebaseLoop(cfg, sm); err != nil {
+		t.Fatalf("RunRebaseLoop: %v", err)
+	}
+	if len(*captured) != 1 {
+		t.Fatalf("RunImplementFn called %d times, want 1", len(*captured))
+	}
+
+	startFn := (*captured)[0].SessionStartFunc
+	if startFn == nil {
+		t.Fatal("SessionStartFunc is nil, want rebase-specific guard")
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusInterrupted
+		return nil
+	}); err != nil {
+		t.Fatalf("mark interrupted: %v", err)
+	}
+
+	_, err := startFn("session-id", f.ID, feature.PhaseImplement, nil, t.TempDir(), nil)
+	if !errors.Is(err, ports.ErrSessionShuttingDown) {
+		t.Fatalf("SessionStartFunc error = %v, want ErrSessionShuttingDown", err)
+	}
+	if sm.startCalls != 0 {
+		t.Fatalf("StartSession calls = %d, want 0 after interrupted guard", sm.startCalls)
 	}
 }
 
@@ -885,6 +995,11 @@ func TestRebasePlanMultiRepoFormatting(t *testing.T) {
 	// Per-repo headings present.
 	for _, want := range []string{
 		"## Cycle Communication Contract",
+		"This coordinated rebase covers the conflicting repos listed below",
+		"All\nfeature repos are available in the workspace as validation context",
+		"make\ncross-repo edits only when verification proves they are necessary",
+		"do not push",
+		"The orchestrator runs Final\nReview and applies publish policy after approval",
 		"`progress.md`: `{phase_dir}/progress.md`",
 		"`verification-report.yaml`: `{iteration_dir}/verification-report.yaml`",
 		"`phase_complete`: `{iteration_dir}/phase_complete`",
@@ -905,6 +1020,26 @@ func TestRebasePlanMultiRepoFormatting(t *testing.T) {
 	if idxAPI, idxWeb := strings.Index(plan, "## Repo: `api`"), strings.Index(plan, "## Repo: `web`"); idxAPI >= 0 && idxWeb >= 0 && idxAPI > idxWeb {
 		t.Errorf("expected api section before web section; api=%d web=%d", idxAPI, idxWeb)
 	}
+	if strings.Contains(plan, "force-push") {
+		t.Fatalf("plan still contains force-push instruction:\n%s", plan)
+	}
+}
+
+func TestRebaseExitCriteriaForbidsPush(t *testing.T) {
+	got := rebaseExitCriteria(nil)
+	for _, want := range []string{
+		"Every conflicted rebase target is resolved onto its base",
+		"feature-level project verification commands pass across all affected repos",
+		"Do not push",
+		"orchestrator runs Final Review and applies publish policy after approval",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rebaseExitCriteria missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "force-pushed") || strings.Contains(got, "force-push") {
+		t.Fatalf("rebaseExitCriteria still contains push language: %q", got)
+	}
 }
 
 func TestRebaseSkillDocumentsStandardImplementHandoff(t *testing.T) {
@@ -924,6 +1059,32 @@ func TestRebaseSkillDocumentsStandardImplementHandoff(t *testing.T) {
 	}
 	if strings.Contains(content, "at the cycle's iteration artifact dir") {
 		t.Fatalf("skills/rebase/SKILL.md still says the handoff is at the iteration artifact dir")
+	}
+}
+
+func TestRebaseSkillForbidsPush(t *testing.T) {
+	data, err := os.ReadFile(repoRootPath(t, "skills", "rebase", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read rebase skill: %v", err)
+	}
+	content := string(data)
+	for _, forbidden := range []string{
+		"force-push",
+		"force-pushed",
+		"force-with-lease",
+		"git push",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("skills/rebase/SKILL.md still contains push instruction %q", forbidden)
+		}
+	}
+	for _, want := range []string{
+		"Do not push",
+		"The orchestrator runs Final Review and applies publish policy after approval",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("skills/rebase/SKILL.md missing %q", want)
+		}
 	}
 }
 

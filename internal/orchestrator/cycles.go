@@ -298,31 +298,9 @@ func (o *Orchestrator) restartPausedFeatureRebase(featureID, repoName string) er
 		return fmt.Errorf("no active rebase cycles to resume for repo %q", repoName)
 	}
 
-	pr := o.deps.PhaseRunner
-	if pr == nil {
-		return errors.New("phase runner not configured")
-	}
-
-	cfg := agent.RebaseLoopConfig{
-		Feature:                    f,
-		FeatureStore:               o.deps.Store,
-		StateDir:                   o.stateDir(),
-		BehindRepos:                behind,
-		Model:                      f.Models.Implementation,
-		ReviewModel:                f.Models.Review,
-		MaxIterations:              f.MaxIterations,
-		MaxConsecFails:             3,
-		MaxConsecNoProgress:        3,
-		KBInfos:                    o.computeKBInfos(f),
-		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
-		PermissionCache:            pr.PermissionCache,
-		BuildSession:               pr.BuildSession,
-		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
-		SkillsDir:                  pr.SkillsDir,
-		GuidelinesDir:              pr.GuidelinesDir,
-		Observer:                   pr.Observer,
-		ResumeExistingCycle:        true,
+	cfg, err := o.rebaseLoopConfigForFeature(f, behind, true)
+	if err != nil {
+		return err
 	}
 
 	sm := o.deps.Sessions

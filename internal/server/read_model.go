@@ -58,7 +58,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		Models:         f.Models,
 		ActiveRun:      &active,
 		HistoricalRuns: history,
-		RepoStatus:     repoStatusDTOs(f),
+		RepoStatus:     h.repoStatusDTOs(f),
 		Timing:         timingDTO(f),
 		Cost:           costDTO(f),
 		ReviewGate: ReviewGateDTO{
@@ -231,17 +231,13 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
 			{Name: "upgrade_pipeline", Kind: "enum", Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, ActionDisabledReasonDTO{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"}),
-		action("rebase", canPostPublishCycle, repoOptional, []ActionInputDTO{
-			{Name: "repo", Kind: "string", Required: false},
-			{Name: "rebase_target", Kind: "string", Required: false, MaxLength: 128},
-			{Name: "conflict_files", Kind: "string_list", Required: false},
-		}, postPublishCycleDisabledReason(f, "rebase")),
+		action("rebase", canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, "rebase")),
 		action("review-comments", canPostPublishCycle && f.IsPublishable(), repoRequired, []ActionInputDTO{
 			{Name: "repo", Kind: "string", Required: true},
 			{Name: "mode", Kind: "enum", Required: true, Options: []string{"auto", "address_all"}},
 		}, postPublishCycleDisabledReason(f, "review-comments")),
 		action("tweak", canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, "tweak")),
-		action("refactor", canRefactor, featureScope, []ActionInputDTO{
+		action("refactor", canRefactor, repoOptional, []ActionInputDTO{
 			{Name: "repo", Kind: "string", Required: false},
 			{Name: "prompt", Kind: "string", Required: true, MaxLength: MaxActionTextBytes},
 			{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
@@ -423,7 +419,10 @@ func setupTaskDTO(task feature.SetupTask) SetupTaskDTO {
 	}
 }
 
-func repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {
+func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {
+	if f == nil {
+		return nil
+	}
 	out := make([]RepoStatusDTO, 0, len(f.Repos))
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
@@ -437,9 +436,23 @@ func repoStatusDTOs(f *feature.Feature) []RepoStatusDTO {
 			dto.PRURL = state.PRURL
 			dto.LastError = safeDisplayText(state.LastError, 200)
 		}
+		if h.freshness != nil {
+			dto.Freshness = string(h.freshness.Freshness(f, repo))
+		}
 		if cycle != nil {
 			dto.CycleType = string(cycle.Type)
 			dto.CycleStatus = cycle.Status
+		}
+		if f.RebaseOperation != nil {
+			progress := f.RebaseOperation.Repos[repo.Name]
+			if progress != nil {
+				dto.RebaseStatus = string(progress.Status)
+				dto.RebaseTarget = safeDisplayText(progress.RebaseTarget, 128)
+				dto.ConflictFiles = append([]string(nil), progress.ConflictFiles...)
+				if dto.LastError == "" {
+					dto.LastError = safeDisplayText(progress.LastError, 200)
+				}
+			}
 		}
 		out = append(out, dto)
 	}

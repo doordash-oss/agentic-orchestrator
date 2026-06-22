@@ -199,7 +199,7 @@ func isWatchAttentionEligible(f *feature.Feature) bool {
 		return true
 	}
 	if f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady {
-		return f.HasActiveRepoCycles()
+		return featureHasRunningCycle(f)
 	}
 	return false
 }

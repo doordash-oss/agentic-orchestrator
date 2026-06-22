@@ -227,6 +227,60 @@ func TestRenderReposBlockCycleSuffix(t *testing.T) {
 	}
 }
 
+func TestRenderReposBlockFreshnessSuffix(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status: feature.StatusCodeReady,
+		Repos:  []feature.FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "worker"}},
+		RepoStates: map[string]*feature.RepoState{
+			"api":    {Touched: true, Freshness: "local changes"},
+			"web":    {Touched: true, Freshness: "in sync"},
+			"worker": {Touched: true, Freshness: "local only"},
+		},
+	}
+
+	rows := renderReposBlock(f)
+	joined := stripANSI(strings.Join(rows, "\n"))
+	for _, want := range []string{"api", "local changes", "web", "in sync", "worker", "local only"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("renderReposBlock() missing %q in:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "unknown") {
+		t.Fatalf("renderReposBlock() should not render unknown freshness:\n%s", joined)
+	}
+}
+
+func TestRenderReposBlockRebaseOperationSuffix(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status: feature.StatusCodeReady,
+		Repos:  []feature.FeatureRepo{{Name: "api"}, {Name: "web"}},
+		RepoStates: map[string]*feature.RepoState{
+			"api": {Touched: true, Freshness: "local changes"},
+			"web": {Touched: true, Freshness: "in sync"},
+		},
+		RebaseOperation: &feature.RebaseOperationState{
+			Stage: feature.RebaseStageSmartRebase,
+			Repos: map[string]*feature.RebaseRepoProgress{
+				"api": {Status: feature.RebaseRepoStatusConflict, ConflictFiles: []string{"service.go"}},
+				"web": {Status: feature.RebaseRepoStatusUpToDate},
+			},
+		},
+	}
+
+	rows := renderReposBlock(f)
+	joined := stripANSI(strings.Join(rows, "\n"))
+	for _, want := range []string{"api", "conflict: service.go", "local changes", "web", "in sync"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("renderReposBlock() missing %q in:\n%s", want, joined)
+		}
+	}
+	if strings.Count(joined, "web") != 1 || strings.Count(joined, "in sync") != 1 {
+		t.Fatalf("renderReposBlock() should not duplicate up-to-date freshness:\n%s", joined)
+	}
+}
+
 func TestRenderReposBlockPreImplementation(t *testing.T) {
 	t.Parallel()
 	preImplStatuses := []feature.Status{

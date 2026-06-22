@@ -34,6 +34,19 @@ var ErrNotImplemented = errors.New("not implemented")
 
 const eventChBuffer = 256
 
+type featureRebaseControl struct {
+	mu       sync.Mutex
+	cond     *sync.Cond
+	stopping bool
+	active   int
+}
+
+func newFeatureRebaseControl() *featureRebaseControl {
+	c := &featureRebaseControl{}
+	c.cond = sync.NewCond(&c.mu)
+	return c
+}
+
 // Hooks contains optional callbacks fired at lifecycle points.
 // Nil hooks are silently skipped.
 type Hooks struct {
@@ -230,6 +243,13 @@ type Orchestrator struct {
 	// cleanup.
 	cycleWG sync.WaitGroup
 
+	// featureRebaseControls serialize feature-level rebase continuation checks
+	// with Stop/interrupt per feature. The git operations themselves are not
+	// cancellable through the RebaseOperator port, so a stop request waits for
+	// the currently claimed rebase/push operation on that feature to return
+	// before it lands in feature state.
+	featureRebaseControls sync.Map
+
 	// publishFn is a test hook. When nil the orchestrator calls o.Publish.
 	// Tests can override this to intercept publish dispatch without touching
 	// the publish implementation.
@@ -278,6 +298,10 @@ type Orchestrator struct {
 	// launches the production unified rebase loop; tests override it to
 	// verify rebase gate routing without booting agent sessions.
 	runRebaseLoopFn func(agent.RebaseLoopConfig, ports.SessionManager) (*agent.RebaseLoopResult, error)
+
+	// worktreeFingerprintFn is a test seam for detecting whether a mounted
+	// smart-rebase context repo changed during the agent loop.
+	worktreeFingerprintFn func(worktreePath string) (string, error)
 }
 
 // SetRunImplementationFn installs a test seam that intercepts
@@ -325,6 +349,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		return o.deps.PhaseRunner.RunMultiRepoFinalReview(f, kbInfos...)
 	}
 	o.runRebaseLoopFn = agent.RunRebaseLoop
+	o.worktreeFingerprintFn = gitWorktreeFingerprint
 	return o
 }
 
@@ -335,6 +360,20 @@ func (o *Orchestrator) Events() <-chan ports.Event { return o.eventCh }
 // Consumers should select on Done alongside Events() to terminate receive
 // loops cleanly. The channel is never sent to — only closed.
 func (o *Orchestrator) Done() <-chan struct{} { return o.doneCh }
+
+func (o *Orchestrator) featureRebaseControl(featureID string) *featureRebaseControl {
+	if v, ok := o.featureRebaseControls.Load(featureID); ok {
+		if control, ok := v.(*featureRebaseControl); ok {
+			return control
+		}
+	}
+	control := newFeatureRebaseControl()
+	actual, _ := o.featureRebaseControls.LoadOrStore(featureID, control)
+	if stored, ok := actual.(*featureRebaseControl); ok {
+		return stored
+	}
+	return control
+}
 
 // WaitForCycles blocks until every background goroutine launched by the
 // per-repo cycle entry points (StartRepoCycleImplement,
@@ -1189,6 +1228,14 @@ func (o *Orchestrator) startFinalReview(featureID string) (PhaseStartResult, err
 // Otherwise the stopped session's last assistant text would surface
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
 func (o *Orchestrator) InterruptFeature(featureID string) error {
+	rebaseControl := o.featureRebaseControl(featureID)
+	rebaseControl.mu.Lock()
+	rebaseControl.stopping = true
+	for rebaseControl.active > 0 {
+		rebaseControl.cond.Wait()
+	}
+	rebaseControl.mu.Unlock()
+
 	featureInterrupted := false
 	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
 		(f.Status == feature.StatusPublished || f.Status == feature.StatusCodeReady) &&
@@ -1312,8 +1359,12 @@ func (o *Orchestrator) InterruptAllRunning() error {
 }
 
 // hasActiveRepoCycles returns true if the feature has any running/reviewing
-// per-repo cycles. Mirrors app.go:10383-10391.
+// post-publish cycle. Legacy cycles live in RepoCycles; feature-level rebase,
+// review-comment, and refactor flows live only in ActiveCycle.
 func hasActiveRepoCycles(f *feature.Feature) bool {
+	if hasActiveFeatureLevelInterruptibleCycle(f) {
+		return true
+	}
 	for _, rc := range f.RepoCycles {
 		if rc != nil && (rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing) {
 			return true
@@ -1323,6 +1374,9 @@ func hasActiveRepoCycles(f *feature.Feature) bool {
 }
 
 func hasInterruptibleRepoCycles(f *feature.Feature) bool {
+	if hasActiveFeatureLevelInterruptibleCycle(f) {
+		return true
+	}
 	for _, rc := range f.RepoCycles {
 		if rc == nil {
 			continue
@@ -1337,6 +1391,25 @@ func hasInterruptibleRepoCycles(f *feature.Feature) bool {
 		}
 	}
 	return false
+}
+
+func hasActiveFeatureLevelInterruptibleCycle(f *feature.Feature) bool {
+	if f == nil || f.ActiveCycle == nil {
+		return false
+	}
+	if f.ActiveCycle.Status != feature.RepoCycleRunning && f.ActiveCycle.Status != feature.RepoCycleReviewing {
+		return false
+	}
+	cycleType := f.ActiveCycle.Type
+	if cycleType == "" {
+		cycleType = f.ActiveCycleType()
+	}
+	switch cycleType {
+	case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
+		return true
+	default:
+		return false
+	}
 }
 
 func (o *Orchestrator) interruptActiveRepoCycles(featureID string, interruptFeature bool) error {

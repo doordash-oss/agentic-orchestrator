@@ -371,14 +371,14 @@ var providerPreference = map[PhaseRole]string{
 }
 
 // categoryForRole maps phase roles to the default model-selection category.
-// Research and KB build are intentionally cost-efficient defaults: they are
-// token-heavy phases that fan out through sub-agents, so a balanced model is
-// usually a better starting point than the largest context window.
+// Feature phases intentionally default to balanced models. Capable models
+// remain selectable for phases that benefit from them, but balanced defaults
+// are the cost/performance starting point for new features.
 var categoryForRole = map[PhaseRole]string{
 	PhaseResearch:       "balanced",
-	PhasePlanning:       "capable",
-	PhaseImplementation: "capable",
-	PhaseReview:         "capable",
+	PhasePlanning:       "balanced",
+	PhaseImplementation: "balanced",
+	PhaseReview:         "balanced",
 	PhaseChat:           "balanced",
 	PhaseKBBuild:        "balanced",
 }
@@ -507,7 +507,7 @@ func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 // that are appropriate for that phase.
 var eligibleCategoriesForRole = map[PhaseRole]map[string]bool{
 	PhaseResearch:       {"capable": true, "balanced": true},
-	PhasePlanning:       {"capable": true},
+	PhasePlanning:       {"capable": true, "balanced": true},
 	PhaseImplementation: {"capable": true, "balanced": true},
 	PhaseReview:         {"capable": true, "balanced": true},
 	PhaseChat:           {"balanced": true, "cheap": true},

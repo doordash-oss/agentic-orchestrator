@@ -26,8 +26,8 @@ func NewDefault() *Config {
 		Defaults: DefaultsConfig{
 			Models: ModelConfig{
 				Research:       "sonnet[200K]",
-				Planning:       "opus[1M]",
-				Implementation: "opus[1M]",
+				Planning:       "sonnet[200K]",
+				Implementation: "sonnet[200K]",
 				Review:         "gpt-5.4[272K]",
 				Utilities:      "sonnet[200K]",
 				KBBuild:        "sonnet[200K]",

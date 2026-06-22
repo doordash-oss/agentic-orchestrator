@@ -174,6 +174,8 @@ func codexCategoryForDiscoveredModel(id string) string {
 		return "cheap"
 	case strings.Contains(lower, "mini"):
 		return "balanced"
+	case lower == "gpt-5.4":
+		return "balanced"
 	case lower == "gpt-5.3-codex":
 		return "balanced"
 	case strings.HasPrefix(lower, "gpt-5."):

@@ -395,7 +395,7 @@ func performTarballUpdate(stdout, stderr io.Writer, deps updateDeps, slug, curre
 // failures to a non-zero exit. Reached only in bare mode once the check confirms a
 // newer release; a nil runBrew prints the command as guidance instead.
 func performHomebrewUpdate(stdout, stderr io.Writer, deps updateDeps, latest string) int {
-	cmdline := "brew upgrade " + homebrewFormulaName
+	cmdline := "brew update && brew upgrade " + homebrewFormulaName
 	fmt.Fprintf(stdout, "agentico was installed via Homebrew. Updating with: %s\n", cmdline)
 
 	if deps.runBrew == nil {
@@ -407,6 +407,23 @@ func performHomebrewUpdate(stdout, stderr io.Writer, deps updateDeps, latest str
 	defer cancel()
 
 	fmt.Fprintln(stdout, "(this can take a minute while Homebrew refreshes its taps)")
+
+	// Refresh the tap before upgrading. `brew upgrade` resolves against the local
+	// tap clone, and Homebrew's own auto-update is throttled (HOMEBREW_AUTO_UPDATE_SECS)
+	// or can be disabled (HOMEBREW_NO_AUTO_UPDATE) — so without an explicit refresh the
+	// cached formula stays stale and the upgrade is a no-op that leaves the old version
+	// installed. A missing brew or a timeout won't be fixed by attempting the upgrade, so
+	// those fail fast; any other `brew update` error is transient — warn and still upgrade.
+	if out, err := deps.runBrew(ctx, "brew", []string{"update"}, nil); err != nil {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
+			return reportBrewFailure(ctx, stderr, err)
+		}
+		fmt.Fprintf(stderr, "Warning: `brew update` failed (%v); the tap may be stale, continuing with the upgrade.\n", err)
+		writeBrewOutput(stderr, out)
+	} else {
+		writeBrewOutput(stdout, out)
+	}
+
 	out, err := deps.runBrew(ctx, "brew", []string{"upgrade", homebrewFormulaName}, nil)
 	writeBrewOutput(stdout, out)
 	if err != nil {

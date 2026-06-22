@@ -758,6 +758,56 @@ func TestRunUpdateWithHomebrewBrewMissing(t *testing.T) {
 	}
 }
 
+// Bare homebrew update refreshes the tap with `brew update` before running
+// `brew upgrade agentico`, so a stale local tap clone cannot leave the old
+// version installed. The two brew invocations must run in that order.
+func TestRunUpdateWithHomebrewRefreshesTapBeforeUpgrade(t *testing.T) {
+	var calls [][]string
+	var stdout, stderr bytes.Buffer
+
+	deps := updateDeps{
+		currentVersion: "1.2.3",
+		method:         fixedMethod(installMethodHomebrew),
+		slug:           okSlug,
+		fetchLatest:    fakeFetch("v2.0.0", nil),
+		runBrew: func(_ context.Context, _ string, args, _ []string) ([]byte, error) {
+			calls = append(calls, append([]string(nil), args...))
+			return nil, nil
+		},
+	}
+
+	code := runUpdateWith(context.Background(), false, &stdout, &stderr, deps)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0\nstderr: %s", code, stderr.String())
+	}
+
+	wantCalls := [][]string{
+		{"update"},
+		{"upgrade", "agentico"},
+	}
+	if len(calls) != len(wantCalls) {
+		t.Fatalf("brew invocations = %v, want %v", calls, wantCalls)
+	}
+	for i := range wantCalls {
+		if !equalArgs(calls[i], wantCalls[i]) {
+			t.Errorf("call[%d] = %v, want %v", i, calls[i], wantCalls[i])
+		}
+	}
+}
+
+// equalArgs reports whether two argument slices are element-wise equal.
+func equalArgs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // A non-zero `brew upgrade` exit is reported as a failure.
 func TestRunUpdateWithHomebrewFailure(t *testing.T) {
 	var rec recordedInstall

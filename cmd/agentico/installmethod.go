@@ -319,7 +319,7 @@ func (m installMethod) wouldDoAction() string {
 	case installMethodTarball:
 		return "Would update by downloading the latest release and replacing the binary in place."
 	case installMethodHomebrew:
-		return "Would update via Homebrew by running `brew upgrade agentico`."
+		return "Would update via Homebrew by running `brew update && brew upgrade agentico`."
 	case installMethodDevBuild:
 		return "Would update from source (development builds are not updated automatically)."
 	default:

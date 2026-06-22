@@ -139,11 +139,8 @@ func TestWizardZeroConfigDefaultsToManualPublish(t *testing.T) {
 
 func TestWizardPipelineDefaultsApplyCheckpoints(t *testing.T) {
 	// Config with explicit checkpoints that disable ManualPublish.
-	defaults := config.DefaultsConfig{
-		Checkpoints: config.Checkpoints{
-			ManualPublish: false,
-		},
-	}
+	defaults := config.NewDefault().Defaults
+	defaults.Checkpoints.ManualPublish = false
 	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
@@ -157,12 +154,12 @@ func TestWizardPipelineDefaultsApplyCheckpoints(t *testing.T) {
 		t.Fatal("expected wizard to be done")
 	}
 	result := m.Result()
-	// Large pipeline defaults: DesignReview=true, ManualPublish=true
+	// Large applies compatible configured defaults and preserves explicit false.
 	if !result.Checkpoints.DesignReview {
-		t.Error("expected DesignReview to be true (large pipeline default)")
+		t.Error("expected DesignReview to be true (configured default)")
 	}
-	if !result.Checkpoints.ManualPublish {
-		t.Error("expected ManualPublish to be true (large pipeline default)")
+	if result.Checkpoints.ManualPublish {
+		t.Error("expected ManualPublish to remain false from configured default")
 	}
 }
 
@@ -2906,7 +2903,7 @@ func TestWizardSummaryCheckpointsEnterExpands(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsUpDownNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.NewDefault().Defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3437,7 +3434,7 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 
 func TestWizardSummaryEditedCheckpointsInResult(t *testing.T) {
 	// applyPipelineDefaults seeds the selected moonshot profile before review.
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.NewDefault().Defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -4748,7 +4745,7 @@ func TestWizardCheckpointHidingManualPublishForcedTrue(t *testing.T) {
 }
 
 func TestWizardCheckpointHidingCursorBound(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.NewDefault().Defaults, "", nil, nil, nil, nil, nil, nil)
 	m.provisionalPublishable = false
 	m.pipelineCursor = 2
 	m.applyPipelineDefaults()
@@ -4761,6 +4758,31 @@ func TestWizardCheckpointHidingCursorBound(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.checkpointsCursor != checkpointPhasePlanReview {
 		t.Errorf("checkpointsCursor = %d, want %d (max for unpublished)", m.checkpointsCursor, checkpointPhasePlanReview)
+	}
+}
+
+func TestWizardApplyPipelineDefaultsUsesConfiguredCheckpointDefaults(t *testing.T) {
+	defaults := config.NewDefault().Defaults
+	defaults.Checkpoints.RoadmapReview = false
+	defaults.Checkpoints.PhasePlanReview = false
+
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
+	m.pipelineCursor = 0 // medium
+	m.provisionalPublishable = true
+
+	projection := m.projectedPipelineCheckpoints(feature.PipelineMedium.ConfigKey())
+	if projection.Checkpoints.RoadmapReview || projection.Checkpoints.PhasePlanReview {
+		t.Fatalf("projected medium checkpoints = %+v, want planning reviews disabled by configured defaults", projection.Checkpoints)
+	}
+
+	m.applyPipelineDefaults()
+
+	got := m.checkpointState()
+	if got.RoadmapReview || got.PhasePlanReview {
+		t.Fatalf("applied medium checkpoints = %+v, want planning reviews disabled by configured defaults", got)
+	}
+	if !got.ManualPublish {
+		t.Fatalf("applied medium checkpoints = %+v, want ManualPublish preserved from configured defaults", got)
 	}
 }
 

@@ -171,6 +171,7 @@ type WizardModel struct {
 	showBranchWarning       bool             // true when the dedicated branch-selection screen replaces the Where panel
 	checkpointsCursor       int              // which checkpoint row is focused
 	checkpoints             [checkpointCount]bool
+	checkpointDefaults      feature.Checkpoints
 	result                  *WizardResult
 	cancelled               bool
 	width, height           int
@@ -317,13 +318,14 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	crni.CharLimit = 100
 
 	// Initialize checkpoint toggles from config defaults.
+	checkpointDefaults := feature.ConfigCheckpointsToFeature(defaults.Checkpoints)
 	var initCheckpoints [checkpointCount]bool
-	initCheckpoints[checkpointInquiryReview] = defaults.Checkpoints.InquiryReview
-	initCheckpoints[checkpointResearchReview] = defaults.Checkpoints.ResearchReview
-	initCheckpoints[checkpointDesignReview] = defaults.Checkpoints.DesignReview
-	initCheckpoints[checkpointRoadmapReview] = defaults.Checkpoints.RoadmapReview
-	initCheckpoints[checkpointPhasePlanReview] = defaults.Checkpoints.PhasePlanReview
-	initCheckpoints[checkpointManualPublish] = defaults.Checkpoints.ManualPublish
+	initCheckpoints[checkpointInquiryReview] = checkpointDefaults.InquiryReview
+	initCheckpoints[checkpointResearchReview] = checkpointDefaults.ResearchReview
+	initCheckpoints[checkpointDesignReview] = checkpointDefaults.DesignReview
+	initCheckpoints[checkpointRoadmapReview] = checkpointDefaults.RoadmapReview
+	initCheckpoints[checkpointPhasePlanReview] = checkpointDefaults.PhasePlanReview
+	initCheckpoints[checkpointManualPublish] = checkpointDefaults.ManualPublish
 
 	pipelineOptions := []string{
 		feature.PipelineMedium.ConfigKey(),
@@ -388,6 +390,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		inquirenessOptions:     []string{"none", "medium", "high"},
 		inquirenessCursor:      inquirenessCursor,
 		checkpoints:            initCheckpoints,
+		checkpointDefaults:     checkpointDefaults,
 		riskOptions:            []string{"low", "medium", "high"},
 		riskCursor:             1, // default to medium
 		pipelineOptions:        pipelineOptions,
@@ -551,7 +554,7 @@ func (m *WizardModel) pipelineCheckpointOverrides(opt string) []feature.Checkpoi
 func (m *WizardModel) mergedPipelineCheckpoints(opt string) (feature.Checkpoints, bool) {
 	profile := pipelineProfileFromKey(opt)
 	projection := profile.ProjectMergedGates(
-		feature.DefaultCheckpointsForProfile(profile),
+		m.checkpointDefaults,
 		m.pipelineCheckpointOverrides(opt),
 		m.provisionalPublishable,
 	)
@@ -581,7 +584,7 @@ func (m *WizardModel) setCheckpointState(cp feature.Checkpoints) {
 func (m *WizardModel) projectedPipelineCheckpoints(opt string) feature.GateProjection {
 	profile := pipelineProfileFromKey(opt)
 	return profile.ProjectMergedGates(
-		feature.DefaultCheckpointsForProfile(profile),
+		m.checkpointDefaults,
 		m.pipelineCheckpointOverrides(opt),
 		m.provisionalPublishable,
 	)
@@ -649,7 +652,7 @@ func availableGateLabels(projection feature.GateProjection) []string {
 }
 
 // applyPipelineDefaults updates checkpoints to match the selected pipeline profile.
-// It first applies the profile defaults, then checks for per-repo pipeline_gates
+// It first applies the configured defaults, then checks for per-repo pipeline_gates
 // config overrides (matching the logic used for card rendering in step 3).
 func (m *WizardModel) applyPipelineDefaults() {
 	opt := m.pipelineOptions[m.pipelineCursor]

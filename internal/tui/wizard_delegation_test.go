@@ -32,15 +32,15 @@ import (
 
 func newWizardAtReviewForDelegation(t *testing.T, providerModels map[string][]string, providerOrder []string, phaseModels map[string]map[string][]string) WizardModel {
 	t.Helper()
-	defaults := config.DefaultsConfig{
-		Models: config.ModelConfig{
-			Research:       "opus",
-			Planning:       "opus",
-			Implementation: "opus",
-			Review:         "opus",
-			KBBuild:        "opus",
-		},
+	defaults := config.NewDefault().Defaults
+	defaults.Models = config.ModelConfig{
+		Research:       "opus",
+		Planning:       "opus",
+		Implementation: "opus",
+		Review:         "opus",
+		KBBuild:        "opus",
 	}
+	defaults.Inquireness = "medium"
 	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, phaseModels, nil, nil)
 	m.nameInput.SetValue("feat")
 	m, _ = m.advance() // What → Where

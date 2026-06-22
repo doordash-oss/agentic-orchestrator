@@ -1911,7 +1911,7 @@ func TestObserver_ConfigChanged_WritesEventsJSONL(t *testing.T) {
 	before := feature.ConfigSnapshot{
 		Models:      config.ModelConfig{Research: "old-research", Planning: "old-planning"},
 		Inquireness: feature.InquirenessMedium,
-		Checkpoints: feature.Checkpoints{PlanReview: true},
+		Checkpoints: feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true},
 	}
 	after := feature.ConfigSnapshot{
 		Models:      config.ModelConfig{Research: "new-research", Planning: "new-planning"},
@@ -1961,8 +1961,14 @@ func TestObserver_ConfigChanged_WritesEventsJSONL(t *testing.T) {
 	}
 
 	beforeCheckpoints := beforeMap["checkpoints"].(map[string]any)
-	if beforeCheckpoints["plan_review"] != true {
-		t.Errorf("before.checkpoints.plan_review = %v, want true", beforeCheckpoints["plan_review"])
+	if beforeCheckpoints["roadmap_review"] != true {
+		t.Errorf("before.checkpoints.roadmap_review = %v, want true", beforeCheckpoints["roadmap_review"])
+	}
+	if beforeCheckpoints["phase_plan_review"] != true {
+		t.Errorf("before.checkpoints.phase_plan_review = %v, want true", beforeCheckpoints["phase_plan_review"])
+	}
+	if _, ok := beforeCheckpoints["plan_review"]; ok {
+		t.Errorf("before.checkpoints should not include legacy plan_review key, got %v", beforeCheckpoints["plan_review"])
 	}
 	afterCheckpoints := afterMap["checkpoints"].(map[string]any)
 	if afterCheckpoints["inquiry_review"] != true {
@@ -1970,6 +1976,15 @@ func TestObserver_ConfigChanged_WritesEventsJSONL(t *testing.T) {
 	}
 	if afterCheckpoints["manual_publish"] != true {
 		t.Errorf("after.checkpoints.manual_publish = %v, want true", afterCheckpoints["manual_publish"])
+	}
+	if afterCheckpoints["roadmap_review"] != false {
+		t.Errorf("after.checkpoints.roadmap_review = %v, want false", afterCheckpoints["roadmap_review"])
+	}
+	if afterCheckpoints["phase_plan_review"] != false {
+		t.Errorf("after.checkpoints.phase_plan_review = %v, want false", afterCheckpoints["phase_plan_review"])
+	}
+	if _, ok := afterCheckpoints["plan_review"]; ok {
+		t.Errorf("after.checkpoints should not include legacy plan_review key, got %v", afterCheckpoints["plan_review"])
 	}
 }
 

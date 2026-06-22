@@ -1109,11 +1109,12 @@ func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 		},
 		"inquireness": string(s.Inquireness),
 		"checkpoints": map[string]any{
-			"inquiry_review":  s.Checkpoints.InquiryReview,
-			"research_review": s.Checkpoints.ResearchReview,
-			"design_review":   s.Checkpoints.DesignReview,
-			"plan_review":     s.Checkpoints.PlanReview,
-			"manual_publish":  s.Checkpoints.ManualPublish,
+			"inquiry_review":    s.Checkpoints.InquiryReview,
+			"research_review":   s.Checkpoints.ResearchReview,
+			"design_review":     s.Checkpoints.DesignReview,
+			"roadmap_review":    s.Checkpoints.RoadmapReview,
+			"phase_plan_review": s.Checkpoints.PhasePlanReview,
+			"manual_publish":    s.Checkpoints.ManualPublish,
 		},
 	}
 }

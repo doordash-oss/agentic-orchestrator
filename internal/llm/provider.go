@@ -78,6 +78,20 @@ type ReadinessChecker interface {
 	CheckReadiness(ctx context.Context) ProviderReadiness
 }
 
+// VersionEnforcer is implemented by providers whose installed CLI must meet
+// MinVersion() to be usable at startup. When EnforcesMinVersion reports true and
+// the installed CLI is older than MinVersion(), the provider is excluded from
+// the ready set just like a failed readiness probe — it is filtered out of
+// routing rather than left selectable with only a warning.
+//
+// Providers that do not implement this interface (or that return false) keep the
+// warn-only version policy: a below-minimum CLI logs a startup warning but the
+// provider stays selectable. OpenCode enforces because its ACP wire behavior is
+// only verified at or above its MinVersion.
+type VersionEnforcer interface {
+	EnforcesMinVersion() bool
+}
+
 // PromptAdapter provides provider-specific prompt content.
 type PromptAdapter interface {
 	AskingQuestionsClause() string

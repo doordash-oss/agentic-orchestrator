@@ -385,24 +385,26 @@ type TerminationInputs struct {
 }
 
 // ClassifyTermination returns the TerminationClass for a completed invocation
-// based on the observable signals. The ordering matters: completion and
-// formal questions win over anything else; errors/refusals beat any success
-// subtype signal; truncation is inferred from stop_reason only after the
-// earlier cases are ruled out.
+// based on the observable signals. The ordering matters: a reported error is
+// terminal and beats everything else — including a phase_complete marker that
+// happens to be on disk — so a failed invocation (e.g. an OpenCode fail-closed
+// control event) can never be laundered into a clean completion. After errors,
+// the completion marker wins, then formal questions; truncation is inferred
+// from stop_reason only after the earlier cases are ruled out.
 func ClassifyTermination(in TerminationInputs) TerminationClass {
 	if in.Result == nil {
 		return TermUnknown
 	}
 	r := in.Result
 
+	if r.IsError || r.Subtype == "error" {
+		return TermErrored
+	}
 	if in.PhaseCompleteExists {
 		return TermCompleted
 	}
 	if in.AskUserQuestionPending {
 		return TermAskedFormal
-	}
-	if r.IsError || r.Subtype == "error" {
-		return TermErrored
 	}
 	switch r.StopReason {
 	case "refusal":

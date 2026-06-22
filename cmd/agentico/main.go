@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	claude "github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	codex "github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
+	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -374,6 +375,12 @@ func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.
 }
 
 func checkProviderReadiness(ctx context.Context, p llm.LLMProvider) llm.ProviderReadiness {
+	// Enforce MinVersion before the readiness probe so a too-old CLI is treated
+	// as unavailable here — excluded from the ready set and from routing — rather
+	// than left selectable with only a later warning.
+	if status, ok := checkProviderVersionGate(p); !ok {
+		return status
+	}
 	checker, ok := p.(llm.ReadinessChecker)
 	if !ok {
 		return llm.ProviderReadiness{Ready: true}
@@ -385,6 +392,31 @@ func checkProviderReadiness(ctx context.Context, p llm.LLMProvider) llm.Provider
 		status.Detail = "not ready"
 	}
 	return status
+}
+
+// checkProviderVersionGate enforces MinVersion for providers that opt in via
+// llm.VersionEnforcer. It returns ok=false with a not-ready status when the
+// installed CLI is older than the provider's minimum, so the provider is
+// excluded from the ready set before readiness is even probed. This preserves
+// fallback to other ready providers and the existing no-ready-provider failure
+// when the too-old provider is the only selected one. Providers that do not
+// enforce, or whose version is acceptable or undeterminable, return ok=true and
+// proceed to the normal readiness probe.
+func checkProviderVersionGate(p llm.LLMProvider) (llm.ProviderReadiness, bool) {
+	enforcer, ok := p.(llm.VersionEnforcer)
+	if !ok || !enforcer.EnforcesMinVersion() {
+		return llm.ProviderReadiness{}, true
+	}
+	below, version, minVer := agent.BelowMinVersion(p)
+	if !below {
+		return llm.ProviderReadiness{}, true
+	}
+	return llm.ProviderReadiness{
+		Ready: false,
+		Detail: fmt.Sprintf("%s CLI version %s is below the required minimum %d.%d.%d",
+			p.Name(), version, minVer[0], minVer[1], minVer[2]),
+		Remedy: "Upgrade with: " + p.InstallHint(),
+	}, false
 }
 
 func formatReadinessProblem(status llm.ProviderReadiness) string {
@@ -626,6 +658,13 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	// Detect first-run before config is loaded (LoadOrCreate will create it).
 	configIsNew := !fileExists(configPath)
 
+	// Phase 1 keeps OpenCode explicit-only. Beyond the explicit `--providers
+	// ...,opencode` opt-in, auto-register it in the default provider set only
+	// when the existing config selects an explicit `opencode:` model, so
+	// config-driven routing resolves under normal startup without pulling
+	// OpenCode into automatic defaults, the setup picker, or model lists.
+	autoRegisterOpenCode := enabledProviders == nil && configSelectsOpenCode(configPath)
+
 	workspaceDir, _ := os.Getwd()
 	tui.SetMarkdownRenderer(markdown.Render)
 
@@ -660,7 +699,7 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		observe.Module,
 		permission.Module,
 		llm.Module,
-		fx.Options(providerFxModules(enabledProviders)...),
+		fx.Options(providerFxModules(enabledProviders, autoRegisterOpenCode)...),
 		agent.Module,
 		orchestrator.Module,
 		tuiModule,
@@ -979,15 +1018,27 @@ func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 }
 
 // providerFxModules returns the fx modules for the requested providers.
-// When enabled is nil, all providers are included (default behavior).
-func providerFxModules(enabled []string) []fx.Option {
+//
+// When enabled is non-nil, exactly the named providers are registered (the
+// explicit `--providers` opt-in). When enabled is nil, the default set is
+// claude+codex. OpenCode joins the default set only when autoRegisterOpenCode is
+// set — Phase 1 keeps OpenCode explicit-only, so it is auto-registered solely so
+// an explicit `opencode:` model selected in config can resolve through normal
+// startup. Even when registered, OpenCode stays out of automatic defaults, the
+// setup picker, and ordinary model lists because its AvailableModels is nil.
+func providerFxModules(enabled []string, autoRegisterOpenCode bool) []fx.Option {
 	all := map[string]fx.Option{
-		"claude": claude.Module,
-		"codex":  codex.Module,
+		"claude":   claude.Module,
+		"codex":    codex.Module,
+		"opencode": opencode.Module,
 	}
 
 	if enabled == nil {
-		return []fx.Option{claude.Module, codex.Module}
+		modules := []fx.Option{claude.Module, codex.Module}
+		if autoRegisterOpenCode {
+			modules = append(modules, opencode.Module)
+		}
+		return modules
 	}
 
 	var modules []fx.Option
@@ -1006,6 +1057,44 @@ func providerFxModules(enabled []string) []fx.Option {
 	}
 
 	return modules
+}
+
+// configSelectsOpenCode reports whether the config at path explicitly selects an
+// OpenCode-routed model — a model string carrying the `opencode:` routing prefix
+// in any of its model-selection fields. It is the signal used to auto-register
+// the OpenCode provider in the default set so config-driven routing can resolve.
+//
+// A missing config reports false: a config that does not yet exist cannot
+// reference OpenCode. An unreadable or unparseable config also reports false; the
+// genuine parse error is surfaced later when the config fx module loads it.
+func configSelectsOpenCode(path string) bool {
+	if !fileExists(path) {
+		return false
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return false
+	}
+	if modelConfigSelectsOpenCode(cfg.Defaults.Models) {
+		return true
+	}
+	for _, pref := range cfg.Defaults.PipelinePreferences {
+		if modelConfigSelectsOpenCode(pref.Models) {
+			return true
+		}
+	}
+	return false
+}
+
+// modelConfigSelectsOpenCode reports whether any model field in m carries the
+// OpenCode routing prefix.
+func modelConfigSelectsOpenCode(m config.ModelConfig) bool {
+	for _, model := range []string{m.Research, m.Planning, m.Implementation, m.Review, m.Utilities, m.KBBuild} {
+		if strings.HasPrefix(strings.TrimSpace(model), opencode.RoutingPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasAnyModelConfig(m config.ModelConfig) bool {

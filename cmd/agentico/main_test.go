@@ -60,12 +60,15 @@ func writeReviewFeedback(t *testing.T, path, findings, verdict string) {
 
 // stubProvider is a minimal LLMProvider for testing checkRequiredProviders.
 type stubProvider struct {
-	name         string
-	models       []string
-	hasCLI       bool
-	installHint  string
-	readiness    llm.ProviderReadiness
-	hasReadiness bool
+	name              string
+	models            []string
+	hasCLI            bool
+	installHint       string
+	readiness         llm.ProviderReadiness
+	hasReadiness      bool
+	version           string // VersionInfo() output; "" defaults to "1.0.0"
+	minVersion        [3]int // MinVersion(); zero value {0,0,0} accepts any version
+	enforceMinVersion bool   // EnforcesMinVersion(); opts into the startup version gate
 }
 
 func (s *stubProvider) Name() string { return s.name }
@@ -79,9 +82,15 @@ func (s *stubProvider) BuildCommand(_ llm.CommandBuildOpts) ([]string, []string,
 }
 func (s *stubProvider) NewProtocol(_ llm.ProtocolOpts) llm.Protocol { return nil }
 func (s *stubProvider) InstallHint() string                         { return s.installHint }
-func (s *stubProvider) VersionInfo() (string, error)                { return "1.0.0", nil }
-func (s *stubProvider) MinVersion() [3]int                          { return [3]int{0, 0, 0} }
-func (s *stubProvider) EnvVarsToExclude() []string                  { return nil }
+func (s *stubProvider) VersionInfo() (string, error) {
+	if s.version != "" {
+		return s.version, nil
+	}
+	return "1.0.0", nil
+}
+func (s *stubProvider) MinVersion() [3]int         { return s.minVersion }
+func (s *stubProvider) EnforcesMinVersion() bool   { return s.enforceMinVersion }
+func (s *stubProvider) EnvVarsToExclude() []string { return nil }
 func (s *stubProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
 	if s.hasReadiness {
 		return s.readiness
@@ -478,8 +487,8 @@ func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 	}
 }
 
-func TestProviderFxModules_NilReturnsAll(t *testing.T) {
-	modules := providerFxModules(nil)
+func TestProviderFxModules_NilReturnsDefaultSet(t *testing.T) {
+	modules := providerFxModules(nil, false)
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules for nil input, got %d", len(modules))
 	}
@@ -488,7 +497,7 @@ func TestProviderFxModules_NilReturnsAll(t *testing.T) {
 func TestProviderFxModules_SingleProvider(t *testing.T) {
 	for _, name := range []string{"claude", "codex"} {
 		t.Run(name, func(t *testing.T) {
-			modules := providerFxModules([]string{name})
+			modules := providerFxModules([]string{name}, false)
 			if len(modules) != 1 {
 				t.Errorf("expected 1 module for %q, got %d", name, len(modules))
 			}
@@ -497,21 +506,21 @@ func TestProviderFxModules_SingleProvider(t *testing.T) {
 }
 
 func TestProviderFxModules_BothProviders(t *testing.T) {
-	modules := providerFxModules([]string{"claude", "codex"})
+	modules := providerFxModules([]string{"claude", "codex"}, false)
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules, got %d", len(modules))
 	}
 }
 
 func TestProviderFxModules_TrimsWhitespace(t *testing.T) {
-	modules := providerFxModules([]string{" claude ", " codex "})
+	modules := providerFxModules([]string{" claude ", " codex "}, false)
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules after trimming, got %d", len(modules))
 	}
 }
 
 func TestProviderFxModules_UnknownSkipped(t *testing.T) {
-	modules := providerFxModules([]string{"claude", "bogus"})
+	modules := providerFxModules([]string{"claude", "bogus"}, false)
 	if len(modules) != 1 {
 		t.Errorf("expected 1 module (bogus skipped), got %d", len(modules))
 	}

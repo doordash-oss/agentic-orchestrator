@@ -25,6 +25,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	teatest "github.com/charmbracelet/x/exp/teatest/v2"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -287,7 +288,7 @@ func TestMediumWizardGateProjectionSmoke(t *testing.T) {
 
 	teatest.WaitFor(t, tm.Output(),
 		func(bts []byte) bool {
-			return bytes.Contains(bts, []byte("Gate options: Roadmap review, Phase plan review, Publish review"))
+			return strings.Contains(ansi.Strip(string(bts)), "Gate options: Roadmap review, Phase plan review, Publish review")
 		},
 		teatest.WithDuration(3*time.Second),
 	)

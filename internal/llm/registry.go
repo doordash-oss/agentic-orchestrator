@@ -386,11 +386,11 @@ var categoryForRole = map[PhaseRole]string{
 var preferredModelHintsByRoleProvider = map[PhaseRole]map[string][]string{
 	PhaseResearch: {
 		"claude": {"sonnet[200K]", "sonnet"},
-		"codex":  {"gpt-5.4-mini[400K]", "gpt-5.4-mini"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
 	},
 	PhaseKBBuild: {
 		"claude": {"sonnet[200K]", "sonnet"},
-		"codex":  {"gpt-5.4-mini[400K]", "gpt-5.4-mini"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
 	},
 }
 

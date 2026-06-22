@@ -28,7 +28,7 @@ func NewDefault() *Config {
 				Research:       "sonnet[200K]",
 				Planning:       "sonnet[200K]",
 				Implementation: "sonnet[200K]",
-				Review:         "gpt-5.4-mini[400K]",
+				Review:         "gpt-5.4[272K]",
 				Utilities:      "sonnet[200K]",
 				KBBuild:        "sonnet[200K]",
 			},

@@ -426,8 +426,8 @@ func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	if defaults[llm.PhaseChat] != "claude:sonnet" {
 		t.Errorf("chat: got %q, want %q", defaults[llm.PhaseChat], "claude:sonnet")
 	}
-	if defaults[llm.PhaseReview] != "codex:gpt-5.4-mini" {
-		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "codex:gpt-5.4-mini")
+	if defaults[llm.PhaseReview] != "codex:gpt-5.4" {
+		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "codex:gpt-5.4")
 	}
 	if defaults[llm.PhaseKBBuild] != "claude:sonnet" {
 		t.Errorf("kb_build: got %q, want %q", defaults[llm.PhaseKBBuild], "claude:sonnet")
@@ -444,6 +444,7 @@ var claudeCatalog = []llm.ModelInfo{
 
 var codexCatalog = []llm.ModelInfo{
 	{ID: "codex", DisplayName: "Codex", ContextWindow: 200000, Category: "capable"},
+	{ID: "gpt-5.4", DisplayName: "GPT 5.4", ContextWindow: 200000, Category: "balanced"},
 	{ID: "gpt-5.4-mini", DisplayName: "GPT 5.4 Mini", ContextWindow: 200000, Category: "balanced"},
 }
 
@@ -455,19 +456,19 @@ func TestRegistry_CatalogAllModels(t *testing.T) {
 			catalog:      claudeCatalog,
 		})
 		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4-mini"}, hasCLI: true},
+			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4", "gpt-5.4-mini"}, hasCLI: true},
 			catalog:      codexCatalog,
 		})
 
 		all := r.AllModels()
-		if len(all) != 5 {
-			t.Fatalf("expected 5 models, got %d: %v", len(all), all)
+		if len(all) != 6 {
+			t.Fatalf("expected 6 models, got %d: %v", len(all), all)
 		}
 		ids := make([]string, len(all))
 		for i, m := range all {
 			ids[i] = m.ID
 		}
-		for _, want := range []string{"opus", "sonnet", "haiku", "codex", "gpt-5.4-mini"} {
+		for _, want := range []string{"opus", "sonnet", "haiku", "codex", "gpt-5.4", "gpt-5.4-mini"} {
 			if !slices.Contains(ids, want) {
 				t.Errorf("expected %q in %v", want, ids)
 			}
@@ -774,9 +775,9 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Implementation != "claude:sonnet" {
 			t.Errorf("implementation: got %q, want %q", mc.Implementation, "claude:sonnet")
 		}
-		// Review still prefers codex, but chooses its balanced model.
-		if mc.Review != "codex:gpt-5.4-mini" {
-			t.Errorf("review: got %q, want %q", mc.Review, "codex:gpt-5.4-mini")
+		// Review prefers codex and uses its balanced default.
+		if mc.Review != "codex:gpt-5.4" {
+			t.Errorf("review: got %q, want %q", mc.Review, "codex:gpt-5.4")
 		}
 		if mc.Utilities != "claude:sonnet" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "claude:sonnet")
@@ -820,7 +821,7 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 	t.Run("codex_only", func(t *testing.T) {
 		r := llm.NewRegistry()
 		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4-mini"}, hasCLI: true},
+			stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4", "gpt-5.4-mini"}, hasCLI: true},
 			catalog:      codexCatalog,
 		})
 
@@ -828,23 +829,23 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 
 		// Single provider → bare names (no prefix)
 		// Research prefers claude, but claude not available; falls back to a balanced codex model
-		if mc.Research != "gpt-5.4-mini" {
-			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4-mini")
+		if mc.Research != "gpt-5.4" {
+			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4")
 		}
-		if mc.Planning != "gpt-5.4-mini" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4-mini")
+		if mc.Planning != "gpt-5.4" {
+			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4")
 		}
-		if mc.Implementation != "gpt-5.4-mini" {
-			t.Errorf("implementation: got %q, want %q", mc.Implementation, "gpt-5.4-mini")
+		if mc.Implementation != "gpt-5.4" {
+			t.Errorf("implementation: got %q, want %q", mc.Implementation, "gpt-5.4")
 		}
-		if mc.Review != "gpt-5.4-mini" {
-			t.Errorf("review: got %q, want %q", mc.Review, "gpt-5.4-mini")
+		if mc.Review != "gpt-5.4" {
+			t.Errorf("review: got %q, want %q", mc.Review, "gpt-5.4")
 		}
-		if mc.Utilities != "gpt-5.4-mini" {
-			t.Errorf("chat: got %q, want %q", mc.Utilities, "gpt-5.4-mini")
+		if mc.Utilities != "gpt-5.4" {
+			t.Errorf("chat: got %q, want %q", mc.Utilities, "gpt-5.4")
 		}
-		if mc.KBBuild != "gpt-5.4-mini" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4-mini")
+		if mc.KBBuild != "gpt-5.4" {
+			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4")
 		}
 	})
 
@@ -854,21 +855,24 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.5[272K]", "gpt-5.4[272K]", "gpt-5.4[1M]", "gpt-5.4-mini[400K]"}, hasCLI: true},
 			catalog: []llm.ModelInfo{
 				{ID: "gpt-5.5[272K]", Category: "capable", ContextWindow: 272000, Aliases: []string{"gpt-5.5"}},
-				{ID: "gpt-5.4[272K]", Category: "capable", ContextWindow: 272000, Aliases: []string{"gpt-5.4"}},
+				{ID: "gpt-5.4[272K]", Category: "balanced", ContextWindow: 272000, Aliases: []string{"gpt-5.4"}},
 				{ID: "gpt-5.4[1M]", Category: "capable", ContextWindow: 1000000},
 				{ID: "gpt-5.4-mini[400K]", Category: "balanced", ContextWindow: 400000, Aliases: []string{"gpt-5.4-mini"}},
 			},
 		})
 
 		mc := r.CatalogDefaultModels()
-		if mc.Research != "gpt-5.4-mini[400K]" {
-			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4-mini[400K]")
+		if mc.Research != "gpt-5.4[272K]" {
+			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4[272K]")
 		}
-		if mc.KBBuild != "gpt-5.4-mini[400K]" {
-			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4-mini[400K]")
+		if mc.KBBuild != "gpt-5.4[272K]" {
+			t.Errorf("kb_build: got %q, want %q", mc.KBBuild, "gpt-5.4[272K]")
 		}
-		if mc.Planning != "gpt-5.4-mini[400K]" {
-			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4-mini[400K]")
+		if mc.Planning != "gpt-5.4[272K]" {
+			t.Errorf("planning: got %q, want %q", mc.Planning, "gpt-5.4[272K]")
+		}
+		if mc.Review != "gpt-5.4[272K]" {
+			t.Errorf("review: got %q, want %q", mc.Review, "gpt-5.4[272K]")
 		}
 	})
 
@@ -942,7 +946,7 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 		stubProvider: stubProvider{name: "codex", models: []string{"codex", "gpt-5.4", "gpt-5.4-mini"}, hasCLI: true},
 		catalog: []llm.ModelInfo{
 			{ID: "codex", Category: "capable"},
-			{ID: "gpt-5.4", Category: "capable"},
+			{ID: "gpt-5.4", Category: "balanced"},
 			{ID: "gpt-5.4-mini", Category: "balanced"},
 		},
 	}
@@ -976,8 +980,8 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 		if slices.Contains(result["claude"], "haiku") {
 			t.Error("claude impl should not include haiku")
 		}
-		if got := result["codex"]; !slices.Contains(got, "gpt-5.4-mini") {
-			t.Errorf("codex impl: got %v, want gpt-5.4-mini included", got)
+		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
+			t.Errorf("codex impl: got %v, want gpt-5.4 and gpt-5.4-mini included", got)
 		}
 	})
 
@@ -989,8 +993,8 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 		if slices.Contains(result["claude"], "haiku") {
 			t.Error("claude planning should not include haiku")
 		}
-		if got := result["codex"]; !slices.Contains(got, "gpt-5.4-mini") {
-			t.Errorf("codex planning: got %v, want gpt-5.4-mini included", got)
+		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
+			t.Errorf("codex planning: got %v, want gpt-5.4 and gpt-5.4-mini included", got)
 		}
 	})
 

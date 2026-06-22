@@ -514,6 +514,9 @@ func TestParseCodexModelCatalog_FiltersAndMapsVisibleAPIModels(t *testing.T) {
 	if got := byID["gpt-5.5[272K]"].Category; got != "capable" {
 		t.Errorf("gpt-5.5 category = %q, want capable", got)
 	}
+	if got := byID["gpt-5.4[272K]"].Category; got != "balanced" {
+		t.Errorf("gpt-5.4 category = %q, want balanced", got)
+	}
 	if got := byID["gpt-5.4-mini[272K]"].Category; got != "balanced" {
 		t.Errorf("gpt-5.4-mini category = %q, want balanced", got)
 	}
@@ -657,6 +660,9 @@ func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
 		if m.ContextWindow != want {
 			t.Errorf("%s.ContextWindow = %d, want %d", id, m.ContextWindow, want)
 		}
+	}
+	if got := byID["gpt-5.4[272K]"].Category; got != "balanced" {
+		t.Errorf("gpt-5.4[272K].Category = %q, want balanced", got)
 	}
 }
 

@@ -254,6 +254,136 @@ func TestYAMLIgnoresUnknownAutoPublish(t *testing.T) {
 	}
 }
 
+func TestLoadConfigCheckpointFieldsDefaultOnAndPlanReviewIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`defaults:
+  checkpoints:
+    plan_review: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := cfg.Defaults.Checkpoints
+	if !got.InquiryReview ||
+		!got.ResearchReview ||
+		!got.DesignReview ||
+		!got.RoadmapReview ||
+		!got.PhasePlanReview ||
+		!got.ManualPublish {
+		t.Fatalf("omitted checkpoints should default on and plan_review should be ignored, got %+v", got)
+	}
+}
+
+func TestLoadConfigMalformedLegacyPlanReviewIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`defaults:
+  checkpoints:
+    plan_review:
+      - not-a-bool
+    manual_publish: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load should ignore malformed legacy plan_review: %v", err)
+	}
+	got := cfg.Defaults.Checkpoints
+	if !got.InquiryReview || !got.ResearchReview || !got.DesignReview || !got.RoadmapReview || !got.PhasePlanReview {
+		t.Fatalf("non-legacy omitted checkpoints should default on, got %+v", got)
+	}
+	if got.ManualPublish {
+		t.Fatalf("explicit manual_publish=false should still win, got %+v", got)
+	}
+}
+
+func TestLoadConfigCheckpointExplicitFalseWins(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`defaults:
+  checkpoints:
+    inquiry_review: false
+    research_review: false
+    design_review: false
+    roadmap_review: false
+    phase_plan_review: true
+    manual_publish: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := cfg.Defaults.Checkpoints
+	if got.InquiryReview ||
+		got.ResearchReview ||
+		got.DesignReview ||
+		got.RoadmapReview ||
+		!got.PhasePlanReview ||
+		got.ManualPublish {
+		t.Fatalf("loaded checkpoints did not preserve explicit values: %+v", got)
+	}
+}
+
+func TestSaveWritesCheckpointFieldsExplicitly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	cfg := NewDefault()
+	cfg.Defaults.Checkpoints = Checkpoints{
+		InquiryReview:   false,
+		ResearchReview:  true,
+		DesignReview:    false,
+		RoadmapReview:   true,
+		PhasePlanReview: false,
+		ManualPublish:   false,
+	}
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	yamlStr := string(data)
+	for _, needle := range []string{
+		"inquiry_review: false",
+		"research_review: true",
+		"design_review: false",
+		"roadmap_review: true",
+		"phase_plan_review: false",
+		"manual_publish: false",
+	} {
+		if !strings.Contains(yamlStr, needle) {
+			t.Fatalf("saved YAML missing %q:\n%s", needle, yamlStr)
+		}
+	}
+	for _, line := range strings.Split(yamlStr, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "plan_review:") {
+			t.Fatalf("saved YAML should not contain legacy plan_review:\n%s", yamlStr)
+		}
+	}
+}
+
 func TestLoadConfigWithoutManualPublishDefaultsToTrue(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -271,8 +401,11 @@ func TestLoadConfigWithoutManualPublishDefaultsToTrue(t *testing.T) {
 	if !cfg.Defaults.Checkpoints.ManualPublish {
 		t.Error("expected ManualPublish to default to true when omitted from loaded config")
 	}
-	if !cfg.Defaults.Checkpoints.PlanReview {
-		t.Error("expected PlanReview to be parsed as true")
+	if !cfg.Defaults.Checkpoints.RoadmapReview {
+		t.Error("expected RoadmapReview to default to true")
+	}
+	if !cfg.Defaults.Checkpoints.PhasePlanReview {
+		t.Error("expected PhasePlanReview to default to true")
 	}
 }
 
@@ -389,6 +522,30 @@ func TestApplyDefaults(t *testing.T) {
 	}
 	if !cfg.Defaults.Checkpoints.ManualPublish {
 		t.Error("expected ManualPublish to default to true via applyDefaults")
+	}
+}
+
+func TestApplyDefaultsPreservesExplicitFalseCheckpointsOnSecondCall(t *testing.T) {
+	cfg := &Config{
+		Defaults: DefaultsConfig{
+			Checkpoints: Checkpoints{
+				InquiryReview:   false,
+				ResearchReview:  false,
+				DesignReview:    false,
+				RoadmapReview:   false,
+				PhasePlanReview: true,
+				ManualPublish:   false,
+				parsed:          true,
+			},
+		},
+	}
+
+	applyDefaults(cfg)
+	applyDefaults(cfg)
+
+	got := cfg.Defaults.Checkpoints
+	if got.InquiryReview || got.ResearchReview || got.DesignReview || got.RoadmapReview || !got.PhasePlanReview || got.ManualPublish {
+		t.Fatalf("explicit checkpoint values were not preserved after repeated applyDefaults: %+v", got)
 	}
 }
 
@@ -1297,6 +1454,32 @@ func TestRepoConfigPipelineGatesRoundTrip(t *testing.T) {
 	}
 	if medium.ManualPublish {
 		t.Error("expected ManualPublish=false for medium pipeline gate")
+	}
+}
+
+func TestRepoPipelineGatesSparseCheckpointDefaultsOn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`repos:
+  my-repo:
+    path: /tmp/my-repo
+    pipeline_gates:
+      medium:
+        manual_publish: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := cfg.Repos["my-repo"].PipelineGates["medium"]
+	if !got.InquiryReview || !got.ResearchReview || !got.DesignReview || !got.RoadmapReview || !got.PhasePlanReview || got.ManualPublish {
+		t.Fatalf("sparse repo pipeline gate should default omitted checkpoints on and preserve manual_publish=false, got %+v", got)
 	}
 }
 

@@ -33,7 +33,12 @@ func NewDefault() *Config {
 				KBBuild:        "sonnet[200K]",
 			},
 			Checkpoints: Checkpoints{
-				ManualPublish: true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 			ExitCriteria:             defaultExitCriteria,
 			Inquireness:              "high",

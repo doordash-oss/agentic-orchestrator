@@ -216,10 +216,11 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 					CurrentPhase: feature.PhaseDesign,
 					Pipeline:     feature.PipelineLarge,
 					Checkpoints: feature.Checkpoints{
-						InquiryReview:  true,
-						ResearchReview: true,
-						DesignReview:   true,
-						PlanReview:     true,
+						InquiryReview:   true,
+						ResearchReview:  true,
+						DesignReview:    true,
+						RoadmapReview:   true,
+						PhasePlanReview: true,
 					},
 				}
 			},
@@ -256,7 +257,7 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 						InquiryReview:  true,
 						ResearchReview: true,
 						DesignReview:   true,
-						PlanReview:     true,
+						RoadmapReview:  true,
 					},
 				}
 			},
@@ -289,10 +290,10 @@ func TestGrillMeFanout_PrimaryBuilders_EndToEnd(t *testing.T) {
 					CurrentRoadmapPhase: 1,
 					Pipeline:            feature.PipelineLarge,
 					Checkpoints: feature.Checkpoints{
-						InquiryReview:  true,
-						ResearchReview: true,
-						DesignReview:   true,
-						PlanReview:     true,
+						InquiryReview:   true,
+						ResearchReview:  true,
+						DesignReview:    true,
+						PhasePlanReview: true,
 					},
 				}
 			},

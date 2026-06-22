@@ -42,6 +42,17 @@ func TestWelcomeModelInitialView(t *testing.T) {
 	}
 }
 
+func TestWelcomeIntroArtSpellsAgentico(t *testing.T) {
+	m := newTestWelcomeModel(t)
+	view := m.View()
+	if !strings.Contains(view, " ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀▀ █▀█") {
+		t.Errorf("welcome intro art missing AGENTICO top row:\n%s", view)
+	}
+	if !strings.Contains(view, " █▀█ █▄█ ██▄ █░▀█ ░█░ █ █▄▄ █▄█") {
+		t.Errorf("welcome intro art missing AGENTICO bottom row:\n%s", view)
+	}
+}
+
 func TestWelcomeModelEnterGoesToPicker(t *testing.T) {
 	m := newTestWelcomeModel(t)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

@@ -112,6 +112,54 @@ func TestOpenCodePermissionRequestParksReplaysAndApproves(t *testing.T) {
 	}
 }
 
+// TestOpenCodeReadPermissionAutoApprovedByDefault proves OpenCode read-scoped
+// permission requests stay inside Agentico's shared read-only auto-approval
+// path instead of surfacing to the TUI as ExternalDirectory prompts.
+func TestOpenCodeReadPermissionAutoApprovedByDefault(t *testing.T) {
+	p, buf := newOpenCodeProtocol(t)
+	msg := parseOneControl(t, p, ocPermissionLine(t, 73, "read", "Read guidelines", map[string]any{"path": "/repo/AGENTS.md"}))
+	if msg.ControlRequest.Request.ToolName != "ExternalDirectory" {
+		t.Fatalf("tool name = %q, want ExternalDirectory", msg.ControlRequest.Request.ToolName)
+	}
+
+	sess := NewSession("oc-read", "feat-1", feature.PhaseResearch)
+	sess.protocol = p
+	sess.permHandler = &AcceptEditsHandler{}
+
+	if handled := sess.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true so default read permissions do not reach the TUI")
+	}
+	if !strings.Contains(buf.String(), `"outcome":"selected"`) || !strings.Contains(buf.String(), "opt-allow") {
+		t.Fatalf("read permission did not select the allow option via ACP outcome: %q", buf.String())
+	}
+}
+
+// TestOpenCodeExternalDirectoryFallbackPermissionAutoApprovedByDefault proves
+// OpenCode's current ACP shape for external-directory path checks
+// (kind="other", title="external_directory") still normalizes into Agentico's
+// read-only permission model.
+func TestOpenCodeExternalDirectoryFallbackPermissionAutoApprovedByDefault(t *testing.T) {
+	p, buf := newOpenCodeProtocol(t)
+	msg := parseOneControl(t, p, ocPermissionLine(t, 74, "other", "external_directory", map[string]any{
+		"filepath":  "/repo/AGENTS.md",
+		"parentDir": "/repo",
+	}))
+	if msg.ControlRequest.Request.ToolName != "ExternalDirectory" {
+		t.Fatalf("tool name = %q, want ExternalDirectory", msg.ControlRequest.Request.ToolName)
+	}
+
+	sess := NewSession("oc-external-dir", "feat-1", feature.PhaseResearch)
+	sess.protocol = p
+	sess.permHandler = &AcceptEditsHandler{}
+
+	if handled := sess.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true so external-directory path checks do not reach the TUI")
+	}
+	if !strings.Contains(buf.String(), `"outcome":"selected"`) || !strings.Contains(buf.String(), "opt-allow") {
+		t.Fatalf("external-directory permission did not select the allow option via ACP outcome: %q", buf.String())
+	}
+}
+
 // TestOpenCodePermissionDenialResumesViaRejectOutcome proves a user denial of an
 // OpenCode permission resumes the session by selecting the reject option through
 // the provider protocol, rather than bypassing the adapter.

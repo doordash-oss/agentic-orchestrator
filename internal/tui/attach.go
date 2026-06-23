@@ -2461,15 +2461,8 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			if sdkMsg.Assistant != nil {
 				m.turnActive = true
 				for _, block := range sdkMsg.Assistant.Message.Content {
-					if block.IsThinking() && block.Thinking != "" {
-						thinking := block.Thinking
-						if len(thinking) > 120 {
-							thinking = thinking[len(thinking)-120:]
-						}
-						if idx := strings.LastIndex(thinking, "\n"); idx >= 0 {
-							thinking = thinking[idx+1:]
-						}
-						m.thinkingLine = strings.TrimSpace(thinking)
+					if block.IsThinking() {
+						m.thinkingLine = "Thinking..."
 					}
 					if block.IsToolUse() {
 						m.thinkingLine = fmt.Sprintf("Using %s...", block.Name)

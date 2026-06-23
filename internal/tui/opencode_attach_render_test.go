@@ -23,7 +23,38 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
+
+func TestOpenCodeAttachThinkingChunkRendersGenericThinking(t *testing.T) {
+	p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+	line := mustJSONLine(t, map[string]any{
+		"jsonrpc": "2.0", "method": "session/update",
+		"params": map[string]any{
+			"sessionId": "ses_x",
+			"update": map[string]any{
+				"sessionUpdate": "agent_thought_chunk",
+				"content":       map[string]any{"type": "text", "text": "for"},
+			},
+		},
+	})
+	msgs, err := p.ParseLine(line)
+	if err != nil || len(msgs) != 1 || msgs[0].Assistant == nil {
+		t.Fatalf("thought ParseLine = %+v, err %v; want one assistant message", msgs, err)
+	}
+
+	sess := session.NewSession("oc-thinking", "feat-1", 0)
+	m := testAttachModel(sess, 80, 24, nil, 0)
+	m.spinnerView = "spin"
+
+	updated, _ := m.Update(attachMsgsMsg{generation: m.tabGeneration, messages: msgs})
+	if updated.thinkingLine != "Thinking..." {
+		t.Fatalf("thinkingLine = %q, want generic Thinking... label", updated.thinkingLine)
+	}
+	if line := stripANSI(updated.renderSpinnerLine()); strings.Contains(line, "for") {
+		t.Fatalf("spinner line leaked raw OpenCode thought token: %q", line)
+	}
+}
 
 // TestOpenCodeAttachRenderArtifacts proves an OpenCode permission request and an
 // OpenCode question request render through the existing attach-view controls

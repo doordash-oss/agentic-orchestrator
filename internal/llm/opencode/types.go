@@ -323,6 +323,7 @@ const (
 	ToolKindFetch    = "fetch"
 	ToolKindSearch   = "search"
 	ToolKindRead     = "read"
+	ToolKindOther    = "other"
 	ToolKindQuestion = "question"
 )
 

@@ -119,19 +119,28 @@ func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
 		return "WebSearch", inputObject("query", firstStringField(tc.RawInput, tc.Title, "query", "q", "search"))
 	case ToolKindRead:
 		return "ExternalDirectory", inputObject("path", firstStringField(tc.RawInput, tc.Title, "path", "directory", "dir"))
+	case ToolKindOther:
+		if tc.Title == "external_directory" {
+			return "ExternalDirectory", inputObject("path", firstStringField(tc.RawInput, tc.Title, "path", "filepath", "filePath", "directory", "dir", "parentDir"))
+		}
+		return unknownPermissionInput(tc)
 	default:
 		// An unrecognized permission kind is still a permission the user should
 		// decide on. Preserve the raw input when present so the prompt carries
 		// whatever detail OpenCode supplied.
-		name := tc.Kind
-		if name == "" {
-			name = "Tool"
-		}
-		if len(tc.RawInput) > 0 {
-			return name, tc.RawInput
-		}
-		return name, inputObject("detail", tc.Title)
+		return unknownPermissionInput(tc)
 	}
+}
+
+func unknownPermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
+	name := tc.Kind
+	if name == "" {
+		name = "Tool"
+	}
+	if len(tc.RawInput) > 0 {
+		return name, tc.RawInput
+	}
+	return name, inputObject("detail", tc.Title)
 }
 
 // inputObject marshals a single-field detail object for a normalized permission

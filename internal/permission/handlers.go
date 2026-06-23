@@ -102,7 +102,7 @@ type AcceptEditsHandler struct{}
 func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
 	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP",
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
 		return ports.PermissionDecision{Behavior: "allow"}, nil
@@ -130,7 +130,7 @@ type PlanReviewHandler struct {
 func (h *PlanReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
 	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP",
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
 		return ports.PermissionDecision{Behavior: "allow"}, nil
@@ -166,7 +166,7 @@ type ReadOnlyHandler struct{}
 func (h *ReadOnlyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
 	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP",
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
 		return ports.PermissionDecision{Behavior: "allow"}, nil
@@ -203,7 +203,7 @@ type ReviewFeedbackHandler struct {
 // every other write or shell tool so the reviewer cannot mutate the worktree.
 func (h *ReviewFeedbackHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
-	case "Read", "Glob", "Grep", "LS", "LSP",
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
 		return ports.PermissionDecision{Behavior: "allow"}, nil
@@ -232,7 +232,7 @@ type BoundedHelperArtifactHandler struct {
 // CanUseTool approves reads and exact declared artifact writes.
 func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
-	case "Read", "Glob", "Grep", "LS", "LSP", "WebSearch", "WebFetch":
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory", "WebSearch", "WebFetch":
 		return ports.PermissionDecision{Behavior: "allow"}, nil
 
 	case "Edit", "Write", "NotebookEdit":
@@ -287,7 +287,7 @@ type RewindReviewHandler struct {
 func (h *RewindReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
 	// Read-only tools — always safe
-	case "Read", "Glob", "Grep", "LS", "LSP",
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
 		return ports.PermissionDecision{Behavior: "allow"}, nil

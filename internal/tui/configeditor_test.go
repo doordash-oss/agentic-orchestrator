@@ -410,6 +410,64 @@ func TestConfigEditor_StaleModelPreservation(t *testing.T) {
 	}
 }
 
+// TestConfigEditor_OpenCodeGroupRecommendedMarkerAndSlashForm proves the config
+// editor surfaces an OpenCode provider group, renders slash-form backend ids in
+// full (never mistaking the "/" for a provider prefix split), and marks the
+// recommended default with a ★ even though the option string is bare while the
+// catalog default carries the opencode: routing prefix (multi-provider form).
+func TestConfigEditor_OpenCodeGroupRecommendedMarkerAndSlashForm(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
+	// rowCursor defaults to 0 (the first Models row, Research), so the choice
+	// lines for Research — including provider group labels — are rendered.
+	view := e.renderModelsBox(120)
+	t.Logf("config editor Models view (OpenCode group + recommended marker):\n%s", view)
+
+	if !strings.Contains(view, "opencode") {
+		t.Errorf("missing opencode provider group; view:\n%s", view)
+	}
+	if !strings.Contains(view, "anthropic/claude-sonnet-4-5[200K]") {
+		t.Errorf("slash-form opencode backend id not rendered in full; view:\n%s", view)
+	}
+	if !strings.Contains(view, "★") {
+		t.Errorf("recommended ★ marker not shown for the OpenCode default; view:\n%s", view)
+	}
+}
+
+// TestConfigEditor_OpenCodeSelectionPersistsBareSlashForm proves cycling onto an
+// OpenCode option persists the bare slash-form backend id (no opencode: prefix
+// injected, the "/" left intact) and that the value is recognized as eligible
+// rather than labelled "(unavailable)".
+func TestConfigEditor_OpenCodeSelectionPersistsBareSlashForm(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
+
+	opts := cat.ModelOptionsForField("Research")
+	target := "anthropic/claude-sonnet-4-5[200K]"
+	idx := -1
+	for i, o := range opts {
+		if o == target {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("ModelOptionsForField(Research) = %v, want it to include %q", opts, target)
+	}
+	// Cycle forward until the Research selection lands on the OpenCode model.
+	for i := 0; i <= idx; i++ {
+		e.cycleModelForward()
+	}
+	if got := e.Snapshot().Models.Research; got != target {
+		t.Fatalf("persisted Research model = %q, want bare slash-form %q", got, target)
+	}
+	if !e.modelValueEligible("Research", target) {
+		t.Errorf("bare slash-form %q reported ineligible", target)
+	}
+}
+
 func TestConfigEditor_HasChanges(t *testing.T) {
 	t.Parallel()
 	e := newEditor(&feature.Feature{Inquireness: feature.InquirenessMedium}, true)
@@ -466,6 +524,61 @@ func TestConfigEditor_ChangeCounters(t *testing.T) {
 	}
 	if got := e.CheckpointsChangeCount(); got != 1 {
 		t.Errorf("CheckpointsChangeCount = %d, want 1", got)
+	}
+}
+
+// TestConfigEditor_PrefixedOpenCodeDefaultEligible proves a valid
+// multi-provider default persisted in routing-prefix form
+// ("opencode:anthropic/claude-sonnet-4-5[200K]") is recognized as eligible even
+// though the per-provider option lists carry bare backend ids. The assignment
+// summary must not append "(unavailable)" to a model the picker highlights.
+func TestConfigEditor_PrefixedOpenCodeDefaultEligible(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
+	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
+
+	if !e.modelValueEligible("Research", prefixed) {
+		t.Errorf("prefixed OpenCode default %q reported ineligible", prefixed)
+	}
+	if got := e.modelAssignmentSummary("Research", prefixed); strings.Contains(got, "(unavailable)") {
+		t.Errorf("modelAssignmentSummary(%q) = %q, want no (unavailable) suffix", prefixed, got)
+	}
+	// The Models box must not flag the highlighted recommended default as unavailable.
+	view := e.renderModelsBox(120)
+	t.Logf("config editor Models view (persisted prefixed OpenCode default, eligible + selected):\n%s", view)
+	if strings.Contains(view, "(unavailable)") {
+		t.Errorf("renderModelsBox marked a valid prefixed default unavailable:\n%s", view)
+	}
+}
+
+// TestConfigEditor_CycleFromPrefixedDefaultAdvances proves cycling forward from a
+// valid prefixed multi-provider default advances to the next option in the flat
+// list rather than jumping to the first (which is what bare-only matching did
+// when the current value carried a routing prefix).
+func TestConfigEditor_CycleFromPrefixedDefaultAdvances(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
+	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
+
+	opts, _ := cat.FlatOptionsForField("Research")
+	// Locate the bare option the prefixed default refers to.
+	idx := -1
+	for i, o := range opts {
+		if o == "anthropic/claude-sonnet-4-5[200K]" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatalf("FlatOptionsForField(Research) = %v, want it to include the OpenCode backend id", opts)
+	}
+	e.rowCursor = 0
+	e.cycleModelForward()
+	want := opts[(idx+1)%len(opts)]
+	if got := e.Snapshot().Models.Research; got != want {
+		t.Errorf("forward cycle from prefixed default: got %q, want next option %q (not first)", got, want)
 	}
 }
 

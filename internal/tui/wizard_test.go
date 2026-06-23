@@ -4248,6 +4248,51 @@ func TestWizardPhaseDefaultsClamping(t *testing.T) {
 	}
 }
 
+// TestWizardClampKeepsPrefixedOpenCodeDefault proves the wizard's default
+// clamp keeps a valid multi-provider default persisted in "<provider>:<id>"
+// routing form rather than discarding it for the first bare option. The
+// per-provider option lists carry bare backend ids while the default is
+// prefixed, exactly the Phase 6 multi-provider shape.
+func TestWizardClampKeepsPrefixedOpenCodeDefault(t *testing.T) {
+	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
+	defaults := config.DefaultsConfig{
+		Models: config.ModelConfig{
+			Research:       prefixed,
+			Planning:       prefixed,
+			Implementation: prefixed,
+			Review:         prefixed,
+			KBBuild:        prefixed,
+		},
+	}
+	providerModels := map[string][]string{
+		"claude":   {"sonnet[200K]", "opus[200K]"},
+		"opencode": {"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5"},
+	}
+	providerOrder := []string{"claude", "opencode"}
+	phaseModels := map[string]map[string][]string{}
+	for _, f := range []string{"Research", "Planning", "Implementation", "Review", "KB Build"} {
+		phaseModels[f] = map[string][]string{
+			"claude":   {"sonnet[200K]", "opus[200K]"},
+			"opencode": {"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5"},
+		}
+	}
+
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, phaseModels, nil, nil)
+
+	if len(m.pipelinePreferences) == 0 {
+		t.Fatal("no pipeline preferences built")
+	}
+	for profile, pref := range m.pipelinePreferences {
+		if pref.Models.Implementation != prefixed {
+			t.Errorf("pipeline %q Implementation clamped to %q, want kept %q (first bare option would be sonnet[200K])",
+				profile, pref.Models.Implementation, prefixed)
+		}
+		if pref.Models.Review != prefixed {
+			t.Errorf("pipeline %q Review clamped to %q, want kept %q", profile, pref.Models.Review, prefixed)
+		}
+	}
+}
+
 func TestWizardModelCyclingForwardAndWrap(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{Research: "opus"},

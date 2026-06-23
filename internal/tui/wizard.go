@@ -253,33 +253,20 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		workspaceDir, _ = os.Getwd()
 	}
 
-	clampTo := func(val string, opts []string) string {
-		if len(opts) == 0 {
-			return val
-		}
-		for _, opt := range opts {
-			if opt == val {
-				return val
-			}
-		}
-		return opts[0]
-	}
 	var allModels []string
 	for _, prov := range providerOrder {
 		allModels = append(allModels, providerModels[prov]...)
 	}
-	// Build per-phase flat options for clamping
-	phaseOpts := func(field string) []string {
-		if pm, ok := phaseModels[field]; ok {
-			var opts []string
-			for _, prov := range providerOrder {
-				opts = append(opts, pm[prov]...)
-			}
-			if len(opts) > 0 {
-				return opts
-			}
-		}
-		return allModels
+	// Shared phase-model catalog. Built before clamping so the same
+	// provider-aware matching used by the picker also guards default clamping:
+	// a multi-provider default persisted in "<provider>:<id>" routing form is
+	// kept rather than discarded when option lists carry bare backend ids.
+	configCatalog := PhaseModelCatalog{
+		ProviderModels:      providerModels,
+		ProviderOrder:       providerOrder,
+		PhaseDefaults:       phaseDefaults,
+		PhaseProviderModels: phaseModels,
+		Fields:              append([]string(nil), phaseCatalogFields...),
 	}
 
 	canPaste := canPasteClipboardImage()
@@ -322,11 +309,11 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	pipelinePrefs := make(map[string]config.PipelinePreference, len(pipelineOptions))
 	for _, profile := range pipelineOptions {
 		pref := defaults.PreferenceForPipeline(profile)
-		pref.Models.Research = clampTo(pref.Models.Research, phaseOpts("Research"))
-		pref.Models.Planning = clampTo(pref.Models.Planning, phaseOpts("Planning"))
-		pref.Models.Implementation = clampTo(pref.Models.Implementation, phaseOpts("Implementation"))
-		pref.Models.Review = clampTo(pref.Models.Review, phaseOpts("Review"))
-		pref.Models.KBBuild = clampTo(pref.Models.KBBuild, phaseOpts("KB Build"))
+		pref.Models.Research = configCatalog.ClampModelValue("Research", pref.Models.Research)
+		pref.Models.Planning = configCatalog.ClampModelValue("Planning", pref.Models.Planning)
+		pref.Models.Implementation = configCatalog.ClampModelValue("Implementation", pref.Models.Implementation)
+		pref.Models.Review = configCatalog.ClampModelValue("Review", pref.Models.Review)
+		pref.Models.KBBuild = configCatalog.ClampModelValue("KB Build", pref.Models.KBBuild)
 		if pref.Inquireness == "" {
 			pref.Inquireness = defaults.Inquireness
 		}
@@ -342,14 +329,6 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 			inquirenessCursor = i
 			break
 		}
-	}
-
-	configCatalog := PhaseModelCatalog{
-		ProviderModels:      providerModels,
-		ProviderOrder:       providerOrder,
-		PhaseDefaults:       phaseDefaults,
-		PhaseProviderModels: phaseModels,
-		Fields:              append([]string(nil), phaseCatalogFields...),
 	}
 
 	return WizardModel{
@@ -666,35 +645,11 @@ func (m *WizardModel) applyPipelinePreference(profile string) {
 	if !ok {
 		return
 	}
-	clampTo := func(val string, opts []string) string {
-		if len(opts) == 0 {
-			return val
-		}
-		for _, opt := range opts {
-			if opt == val {
-				return val
-			}
-		}
-		return opts[0]
-	}
-	phaseOpts := func(field string) []string {
-		if pm, ok := m.phaseProviderModels[field]; ok {
-			var opts []string
-			for _, prov := range m.providerOrder {
-				opts = append(opts, pm[prov]...)
-			}
-			if len(opts) > 0 {
-				return opts
-			}
-		}
-		return m.allModels
-	}
-
-	pref.Models.Research = clampTo(pref.Models.Research, phaseOpts("Research"))
-	pref.Models.Planning = clampTo(pref.Models.Planning, phaseOpts("Planning"))
-	pref.Models.Implementation = clampTo(pref.Models.Implementation, phaseOpts("Implementation"))
-	pref.Models.Review = clampTo(pref.Models.Review, phaseOpts("Review"))
-	pref.Models.KBBuild = clampTo(pref.Models.KBBuild, phaseOpts("KB Build"))
+	pref.Models.Research = m.configCatalog.ClampModelValue("Research", pref.Models.Research)
+	pref.Models.Planning = m.configCatalog.ClampModelValue("Planning", pref.Models.Planning)
+	pref.Models.Implementation = m.configCatalog.ClampModelValue("Implementation", pref.Models.Implementation)
+	pref.Models.Review = m.configCatalog.ClampModelValue("Review", pref.Models.Review)
+	pref.Models.KBBuild = m.configCatalog.ClampModelValue("KB Build", pref.Models.KBBuild)
 	m.models = pref.Models
 
 	for i, opt := range m.inquirenessOptions {
@@ -2428,14 +2383,14 @@ func (m *WizardModel) providerModelsForField(field string) map[string][]string {
 
 func (m *WizardModel) cycleModel() {
 	field := m.modelFields[m.modelCursor]
-	opts := m.modelOptionsForField(field)
+	opts, providers := m.configCatalog.FlatOptionsForField(field)
 	if len(opts) == 0 {
 		return
 	}
 	current := m.getModelField(field)
 	nextIdx := 0
-	for i, opt := range opts {
-		if opt == current {
+	for i := range opts {
+		if m.configCatalog.MatchesModelValue(providers[i], opts[i], current) {
 			nextIdx = (i + 1) % len(opts)
 			break
 		}
@@ -2445,14 +2400,14 @@ func (m *WizardModel) cycleModel() {
 
 func (m *WizardModel) cycleModelReverse() {
 	field := m.modelFields[m.modelCursor]
-	opts := m.modelOptionsForField(field)
+	opts, providers := m.configCatalog.FlatOptionsForField(field)
 	if len(opts) == 0 {
 		return
 	}
 	current := m.getModelField(field)
 	nextIdx := len(opts) - 1
-	for i, opt := range opts {
-		if opt == current {
+	for i := range opts {
+		if m.configCatalog.MatchesModelValue(providers[i], opts[i], current) {
 			nextIdx = (i - 1 + len(opts)) % len(opts)
 			break
 		}

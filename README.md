@@ -19,7 +19,7 @@ That is the real "oneshot" value: an engineer can describe a large feature once,
 - **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
 - **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
 - **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
-- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add a second to split the work. By default Claude handles context gathering, planning, and implementation while Codex handles independent review, but models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
+- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add more to split the work. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
 
 The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
@@ -249,7 +249,7 @@ Flags:
   --config <path>                  Config file (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory (default: ~/.agentic-orchestrator/features)
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
-  --providers <list>               Restrict to specific providers (claude,codex)
+  --providers <list>               Restrict to specific providers (claude,codex,opencode)
   --help, -h                       Show help
   --version, -v                    Show version
 ```

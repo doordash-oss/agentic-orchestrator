@@ -147,6 +147,59 @@ func (c PhaseModelCatalog) AllModels() []string {
 	return out
 }
 
+// MatchesModelValue reports whether a bare option opt within provider group
+// `provider` corresponds to the (possibly provider-prefixed) model string
+// value. Per-provider option lists carry bare backend ids, while a recommended
+// default (CatalogDefaultModels) or a persisted selection may carry the routing
+// prefix when multiple providers are detected. Matching both the bare id and
+// the "<provider>:<opt>" form lets the picker mark the recommended default and
+// the current selection regardless of which form the value takes — including
+// OpenCode slash-form ids such as "opencode:anthropic/claude-sonnet-4-5[200K]".
+func (c PhaseModelCatalog) MatchesModelValue(provider, opt, value string) bool {
+	if value == "" || opt == "" {
+		return false
+	}
+	return value == opt || value == provider+":"+opt
+}
+
+// FlatOptionsForField returns the flattened option list for field together with
+// the provider group each option belongs to. The two slices are index-parallel
+// and follow the same order as ModelOptionsForField / ProviderGroupsForField, so
+// callers iterating a flat cursor can still apply provider-aware MatchesModelValue
+// against a possibly provider-prefixed selection.
+func (c PhaseModelCatalog) FlatOptionsForField(field string) (opts []string, providers []string) {
+	for _, group := range c.ProviderGroupsForField(field) {
+		for _, opt := range group.Models {
+			opts = append(opts, opt)
+			providers = append(providers, group.Name)
+		}
+	}
+	return opts, providers
+}
+
+// ClampModelValue keeps value when it is still an eligible option for field —
+// matching either a bare backend id or its "<provider>:<id>" routing form, so a
+// multi-provider default persisted as "opencode:anthropic/claude-sonnet-4-5[200K]"
+// is preserved rather than silently replaced. When value is not eligible it
+// returns the first eligible option; an empty option set leaves value unchanged.
+func (c PhaseModelCatalog) ClampModelValue(field, value string) string {
+	var first string
+	for _, group := range c.ProviderGroupsForField(field) {
+		for _, opt := range group.Models {
+			if first == "" {
+				first = opt
+			}
+			if c.MatchesModelValue(group.Name, opt, value) {
+				return value
+			}
+		}
+	}
+	if first == "" {
+		return value
+	}
+	return first
+}
+
 func (c PhaseModelCatalog) providerModelsForField(field string) map[string][]string {
 	if pm, ok := c.PhaseProviderModels[field]; ok && len(pm) > 0 {
 		return pm

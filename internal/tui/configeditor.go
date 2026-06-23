@@ -379,14 +379,14 @@ func (m *ConfigEditorModel) cycleModelForward() {
 	if field == "" {
 		return
 	}
-	opts := m.catalog.ModelOptionsForField(field)
+	opts, providers := m.catalog.FlatOptionsForField(field)
 	if len(opts) == 0 {
 		return
 	}
 	current := m.modelValueForField(field)
 	nextIdx := 0 // stale-model preservation: unknown value advances to first eligible
-	for i, opt := range opts {
-		if opt == current {
+	for i := range opts {
+		if m.catalog.MatchesModelValue(providers[i], opts[i], current) {
 			nextIdx = (i + 1) % len(opts)
 			break
 		}
@@ -399,14 +399,14 @@ func (m *ConfigEditorModel) cycleModelBackward() {
 	if field == "" {
 		return
 	}
-	opts := m.catalog.ModelOptionsForField(field)
+	opts, providers := m.catalog.FlatOptionsForField(field)
 	if len(opts) == 0 {
 		return
 	}
 	current := m.modelValueForField(field)
 	nextIdx := len(opts) - 1 // stale-model preservation: unknown value goes to last eligible
-	for i, opt := range opts {
-		if opt == current {
+	for i := range opts {
+		if m.catalog.MatchesModelValue(providers[i], opts[i], current) {
 			nextIdx = (i - 1 + len(opts)) % len(opts)
 			break
 		}
@@ -563,9 +563,11 @@ func (m ConfigEditorModel) modelValueEligible(field, value string) bool {
 	if value == "" {
 		return true
 	}
-	for _, opt := range m.catalog.ModelOptionsForField(field) {
-		if opt == value {
-			return true
+	for _, group := range m.catalog.ProviderGroupsForField(field) {
+		for _, opt := range group.Models {
+			if m.catalog.MatchesModelValue(group.Name, opt, value) {
+				return true
+			}
 		}
 	}
 	return false
@@ -592,13 +594,15 @@ func (m ConfigEditorModel) renderModelChoiceLines(field string, width int) []str
 		var tokens []string
 		for _, opt := range group.Models {
 			_, label := splitProviderModel(opt)
-			if opt == m.catalog.PhaseDefaults[field] {
+			recommended := m.catalog.MatchesModelValue(group.Name, opt, m.catalog.PhaseDefaults[field])
+			selected := m.catalog.MatchesModelValue(group.Name, opt, current)
+			if recommended {
 				label += "★"
 			}
 			switch {
-			case opt == current:
+			case selected:
 				tokens = append(tokens, selectedPillStyle.Render(label))
-			case opt == m.catalog.PhaseDefaults[field]:
+			case recommended:
 				tokens = append(tokens, recommendedStyle.Render(label))
 			default:
 				tokens = append(tokens, optionStyle.Render(label))

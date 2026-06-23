@@ -45,6 +45,57 @@ func (p *phaseCatalogStubProvider) MinVersion() [3]int                        { 
 func (p *phaseCatalogStubProvider) EnvVarsToExclude() []string                { return nil }
 func (p *phaseCatalogStubProvider) ModelCatalog() []llm.ModelInfo             { return p.catalog }
 
+// openCodeWinningRegistry returns a registry where Claude and OpenCode are both
+// ready and OpenCode's balanced model has the largest context window, so the
+// provider-neutral ranking makes OpenCode the recommended default for every
+// role. Used by the OpenCode catalog/picker tests in this package.
+func openCodeWinningRegistry() *llm.Registry {
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "claude",
+		models: []string{"sonnet[200K]", "opus[200K]"},
+		catalog: []llm.ModelInfo{
+			{ID: "sonnet[200K]", ContextWindow: 200_000, Category: "balanced"},
+			{ID: "opus[200K]", ContextWindow: 200_000, Category: "capable"},
+		},
+	})
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5"},
+		catalog: []llm.ModelInfo{
+			{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 400_000, Category: "balanced"},
+			{ID: "openai/gpt-5", Category: "capable"},
+		},
+	})
+	return reg
+}
+
+// TestBuildPhaseModelCatalog_SurfacesOpenCodeGroup proves that once OpenCode is a
+// ready, detected provider it appears as its own provider group in the shared
+// phase-model catalog the wizard and config editor consume: its backend ids
+// populate ProviderModels and the per-phase eligible lists, and when OpenCode
+// wins the provider-neutral ranking the recommended default carries the
+// opencode: routing prefix (multi-provider form).
+func TestBuildPhaseModelCatalog_SurfacesOpenCodeGroup(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+
+	if !slices.Contains(cat.ProviderOrder, "opencode") {
+		t.Fatalf("ProviderOrder = %v, want it to include opencode", cat.ProviderOrder)
+	}
+	if got := cat.ProviderModels["opencode"]; !slices.Contains(got, "anthropic/claude-sonnet-4-5[200K]") {
+		t.Errorf("opencode ProviderModels = %v, want the slash-form backend id", got)
+	}
+	for _, field := range []string{"Research", "Planning", "Implementation", "Review", "KB Build"} {
+		if _, ok := cat.PhaseProviderModels[field]["opencode"]; !ok {
+			t.Errorf("PhaseProviderModels[%q] missing opencode group", field)
+		}
+		if got := cat.PhaseDefaults[field]; got != "opencode:anthropic/claude-sonnet-4-5[200K]" {
+			t.Errorf("PhaseDefaults[%q] = %q, want opencode:anthropic/claude-sonnet-4-5[200K]", field, got)
+		}
+	}
+}
+
 // TestBuildPhaseModelCatalog_Shape builds a catalog from a real *llm.Registry
 // and verifies the Fields list, PhaseDefaults, and PhaseProviderModels have
 // the expected shape.
@@ -148,6 +199,33 @@ func TestPhaseModelCatalog_ModelOptionsForField(t *testing.T) {
 	want = []string{"claude/sonnet-4-6", "claude/opus-4-7", "codex/gpt-5-codex"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ModelOptionsForField(Planning fallback) = %v, want %v", got, want)
+	}
+}
+
+// TestPhaseModelCatalog_ClampModelValue proves provider-aware default clamping:
+// a valid multi-provider default in routing-prefix form is kept, a valid bare
+// option is kept, an ineligible value is replaced with the first eligible
+// option, and an empty option set leaves the value untouched.
+func TestPhaseModelCatalog_ClampModelValue(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
+
+	if got := cat.ClampModelValue("Research", prefixed); got != prefixed {
+		t.Errorf("ClampModelValue(prefixed) = %q, want kept %q", got, prefixed)
+	}
+	if got := cat.ClampModelValue("Research", "sonnet[200K]"); got != "sonnet[200K]" {
+		t.Errorf("ClampModelValue(bare) = %q, want kept sonnet[200K]", got)
+	}
+
+	opts := cat.ModelOptionsForField("Research")
+	if got := cat.ClampModelValue("Research", "retired/model"); got != opts[0] {
+		t.Errorf("ClampModelValue(stale) = %q, want first eligible %q", got, opts[0])
+	}
+
+	empty := PhaseModelCatalog{}
+	if got := empty.ClampModelValue("Research", prefixed); got != prefixed {
+		t.Errorf("ClampModelValue(no options) = %q, want unchanged %q", got, prefixed)
 	}
 }
 

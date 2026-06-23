@@ -16,92 +16,44 @@ package main
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// TestProviderFxModules_DefaultExcludesOpenCode proves OpenCode stays out of the
-// default provider set during Phase 1 when no explicit opencode: model is
-// configured, keeping it out of automatic defaults, the setup picker, and
-// ordinary model lists.
-func TestProviderFxModules_DefaultExcludesOpenCode(t *testing.T) {
-	if got := len(providerFxModules(nil, false)); got != 2 {
-		t.Fatalf("providerFxModules(nil, false) = %d modules, want 2 (claude+codex, opencode excluded)", got)
-	}
-}
-
-// TestProviderFxModules_AutoRegistersOpenCodeForExplicitConfig proves that when
-// the config selects an explicit opencode: model, OpenCode joins the default
-// provider set so config-driven routing can resolve under normal startup.
-func TestProviderFxModules_AutoRegistersOpenCodeForExplicitConfig(t *testing.T) {
-	if got := len(providerFxModules(nil, true)); got != 3 {
-		t.Fatalf("providerFxModules(nil, true) = %d modules, want 3 (claude+codex+opencode)", got)
+// TestProviderFxModules_DefaultIncludesOpenCode proves OpenCode is now a normal
+// member of the default provider set: a launch without an explicit --providers
+// filter registers Claude, Codex, and OpenCode together, before readiness
+// filtering. No config signal or auto-registration gate is required.
+func TestProviderFxModules_DefaultIncludesOpenCode(t *testing.T) {
+	if got := len(providerFxModules(nil)); got != 3 {
+		t.Fatalf("providerFxModules(nil) = %d modules, want 3 (claude+codex+opencode)", got)
 	}
 }
 
 // TestProviderFxModules_ExplicitProvidersFlagHonorsOpenCode proves the
-// --providers opt-in still selects exactly the named providers regardless of the
-// auto-registration signal.
+// --providers opt-in selects exactly the named providers, including OpenCode
+// alone or alongside the others.
 func TestProviderFxModules_ExplicitProvidersFlagHonorsOpenCode(t *testing.T) {
-	if got := len(providerFxModules([]string{"opencode"}, false)); got != 1 {
+	if got := len(providerFxModules([]string{"opencode"})); got != 1 {
 		t.Fatalf("providerFxModules([opencode]) = %d modules, want 1", got)
 	}
-	if got := len(providerFxModules([]string{"claude", "codex", "opencode"}, false)); got != 3 {
+	if got := len(providerFxModules([]string{"claude", "codex", "opencode"})); got != 3 {
 		t.Fatalf("providerFxModules([claude codex opencode]) = %d modules, want 3", got)
 	}
 }
 
-// TestConfigSelectsOpenCode proves the config scan recognizes an explicit
-// opencode: model in the default model selections or a pipeline preference, and
-// reports false for missing files and configs that never reference OpenCode.
-func TestConfigSelectsOpenCode(t *testing.T) {
-	t.Run("missing file", func(t *testing.T) {
-		if configSelectsOpenCode(filepath.Join(t.TempDir(), "nonexistent.yaml")) {
-			t.Fatal("configSelectsOpenCode(missing) = true, want false")
-		}
-	})
-
-	t.Run("no opencode model", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		cfg := config.NewDefault()
-		cfg.Defaults.Models.Implementation = "claude:opus"
-		if err := config.Save(path, cfg); err != nil {
-			t.Fatalf("save config: %v", err)
-		}
-		if configSelectsOpenCode(path) {
-			t.Fatal("configSelectsOpenCode(no opencode) = true, want false")
-		}
-	})
-
-	t.Run("opencode model in defaults", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		cfg := config.NewDefault()
-		cfg.Defaults.Models.Implementation = "opencode:anthropic/claude-sonnet-4-5"
-		if err := config.Save(path, cfg); err != nil {
-			t.Fatalf("save config: %v", err)
-		}
-		if !configSelectsOpenCode(path) {
-			t.Fatal("configSelectsOpenCode(opencode default) = false, want true")
-		}
-	})
-
-	t.Run("opencode model in pipeline preference", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		cfg := config.NewDefault()
-		cfg.Defaults.PipelinePreferences = map[string]config.PipelinePreference{
-			"default": {Models: config.ModelConfig{Planning: "opencode:anthropic/claude-sonnet-4-5"}},
-		}
-		if err := config.Save(path, cfg); err != nil {
-			t.Fatalf("save config: %v", err)
-		}
-		if !configSelectsOpenCode(path) {
-			t.Fatal("configSelectsOpenCode(opencode pipeline preference) = false, want true")
-		}
-	})
+// TestProviderFxModules_MixedListWithOpenCodeAnyPositionTrimmed proves a mixed
+// --providers list can place OpenCode in any position and tolerates surrounding
+// whitespace.
+func TestProviderFxModules_MixedListWithOpenCodeAnyPositionTrimmed(t *testing.T) {
+	if got := len(providerFxModules([]string{" opencode ", " claude "})); got != 2 {
+		t.Fatalf("providerFxModules([ opencode , claude ]) = %d modules, want 2 (trimmed, opencode leading)", got)
+	}
+	if got := len(providerFxModules([]string{"codex", "opencode"})); got != 2 {
+		t.Fatalf("providerFxModules([codex opencode]) = %d modules, want 2", got)
+	}
 }
 
 // TestCheckRequiredProviders_OpenCodeUnreadyFallsBackToReadyProvider proves

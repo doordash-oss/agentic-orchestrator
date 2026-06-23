@@ -379,17 +379,6 @@ func (r *Registry) LargestContextModel() string {
 	return ""
 }
 
-// providerPreference maps phase roles to preferred provider names.
-// Research/Planning/Implementation/Chat prefer "claude"; Review prefers "codex".
-var providerPreference = map[PhaseRole]string{
-	PhaseResearch:       "claude",
-	PhasePlanning:       "claude",
-	PhaseImplementation: "claude",
-	PhaseReview:         "codex",
-	PhaseChat:           "claude",
-	PhaseKBBuild:        "claude",
-}
-
 // categoryForRole maps phase roles to the default model-selection category.
 // Feature phases intentionally default to balanced models. Capable models
 // remain selectable for phases that benefit from them, but balanced defaults
@@ -450,7 +439,53 @@ func formatCatalogDefault(provider string, model ModelInfo, multi bool) string {
 	return model.ID
 }
 
-func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride string) config.ModelConfig {
+// roleCandidate is one provider's best model for a phase role, carried through
+// the provider-neutral cross-provider ranking in catalogDefaultModels.
+type roleCandidate struct {
+	provider string
+	model    ModelInfo
+}
+
+// roleCategoryDistance scores how well a model category fits a role: the
+// absolute distance between the category's rank and the role's target-category
+// rank. 0 is an exact fit; larger is worse. Unknown categories (rank 0) score
+// worst, but eligible candidates always carry a known, ranked category.
+func roleCategoryDistance(category string, role PhaseRole) int {
+	d := categoryRank[category] - categoryRank[categoryForRole[role]]
+	if d < 0 {
+		d = -d
+	}
+	return d
+}
+
+// betterRoleCandidate reports whether a should be preferred over b as the
+// default for role. The comparison is provider-neutral: closest category fit
+// wins first, then the larger context window, and only genuine ties resolve by
+// a stable provider+model-ID order. No provider is favored by name, hardcoded
+// preference, or registration order — the final tie-break is the sole source of
+// determinism, so equal candidates always resolve to the same winner.
+func betterRoleCandidate(a, b roleCandidate, role PhaseRole) bool {
+	if da, db := roleCategoryDistance(a.model.Category, role), roleCategoryDistance(b.model.Category, role); da != db {
+		return da < db
+	}
+	if a.model.ContextWindow != b.model.ContextWindow {
+		return a.model.ContextWindow > b.model.ContextWindow
+	}
+	if a.provider != b.provider {
+		return a.provider < b.provider
+	}
+	return a.model.ID < b.model.ID
+}
+
+// CatalogDefaultModels returns a ModelConfig with catalog-driven defaults per
+// phase role. Claude, Codex, and OpenCode compete as peers: each detected
+// provider contributes its best model for the role (by role category, honoring
+// per-provider model hints), and the cross-provider winner is chosen by
+// betterRoleCandidate — category fit, then model metadata, then a deterministic
+// provider+model-ID tie-break. With multiple providers detected the winner is
+// returned in "provider:model" form; with a single detected provider the bare
+// model ID is used.
+func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 	detected := r.DetectedProviders()
 	if len(detected) == 0 {
 		return config.ModelConfig{}
@@ -472,30 +507,22 @@ func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride str
 	multi := len(detected) > 1
 
 	selectModel := func(role PhaseRole) string {
-		preferred := providerPreference[role]
-		if providerOverride != "" {
-			preferred = providerOverride
-		}
-
-		if preferred != "" {
-			if models := r.ModelsForProvider(preferred); len(models) > 0 {
-				if m, ok := selectRoleModel(models, role, preferred); ok {
-					return formatCatalogDefault(preferred, m, multi)
-				}
-			}
-			if providerOverride != "" {
-				return ""
-			}
-		}
-
+		var best *roleCandidate
 		for _, p := range detected {
-			cat := catalogForProvider(p)
-			if m, ok := selectRoleModel(cat, role, p.Name()); ok {
-				return formatCatalogDefault(p.Name(), m, multi)
+			m, ok := selectRoleModel(catalogForProvider(p), role, p.Name())
+			if !ok {
+				continue
+			}
+			cand := roleCandidate{provider: p.Name(), model: m}
+			if best == nil || betterRoleCandidate(cand, *best, role) {
+				winner := cand
+				best = &winner
 			}
 		}
-
-		return ""
+		if best == nil {
+			return ""
+		}
+		return formatCatalogDefault(best.provider, best.model, multi)
 	}
 
 	return config.ModelConfig{
@@ -506,21 +533,6 @@ func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride str
 		Utilities:      selectModel(PhaseChat),
 		KBBuild:        selectModel(PhaseKBBuild),
 	}
-}
-
-// CatalogDefaultModelsForProvider returns catalog-driven defaults for a single
-// preferred provider only. Roles the provider cannot satisfy are left empty so
-// callers can fill them from the general catalog defaults.
-func (r *Registry) CatalogDefaultModelsForProvider(name string) config.ModelConfig {
-	return r.catalogDefaultModelsWithProviderOverride(name)
-}
-
-// CatalogDefaultModels returns a ModelConfig with catalog-driven defaults per phase role.
-// Provider preferences: Research/Planning/Implementation/Chat/KBBuild → "claude",
-// Review → "codex". Falls back to any detected provider when the preferred
-// provider has no eligible model for a role.
-func (r *Registry) CatalogDefaultModels() config.ModelConfig {
-	return r.catalogDefaultModelsWithProviderOverride("")
 }
 
 // eligibleCategoriesForRole maps phase roles to the set of model categories

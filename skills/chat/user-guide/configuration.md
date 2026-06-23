@@ -170,7 +170,7 @@ Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agen
 |------|-------------|---------|
 | `--config <path>` | Config file path | `~/.agentic-orchestrator/config.yaml` |
 | `--state-dir <path>` | State directory path | `~/.agentic-orchestrator/features` |
-| `--providers <list>` | Comma-separated provider list (e.g., `claude,codex`) | all detected |
+| `--providers <list>` | Comma-separated provider list (e.g., `claude,codex,opencode`) | all detected |
 | `--dangerously-skip-permissions` | Skip all permission prompts | `false` |
 | `--help`, `-h` | Print usage | - |
 | `--version`, `-v` | Print version | - |

@@ -274,7 +274,7 @@ Flags:
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory path (default: ~/.agentic-orchestrator/features)
   --providers <list>               Comma-separated provider list (default: all)
-                                   Available: claude, codex
+                                   Available: claude, codex, opencode
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
   --help, -h                       Show this help
@@ -681,15 +681,6 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	// Detect first-run before config is loaded (LoadOrCreate will create it).
 	configIsNew := !fileExists(configPath)
 
-	// OpenCode is not in the unconditional default provider set. Beyond the
-	// explicit `--providers ...,opencode` opt-in, auto-register it only when the
-	// existing config already selects an `opencode:` model, so a config-driven
-	// OpenCode selection resolves under normal startup. Registering it (rather
-	// than the old AvailableModels==nil trick) is what keeps an unsolicited
-	// OpenCode out of the default experience; once registered and ready it
-	// discovers and contributes a catalog like any other provider.
-	autoRegisterOpenCode := enabledProviders == nil && configSelectsOpenCode(configPath)
-
 	workspaceDir, _ := os.Getwd()
 	tui.SetMarkdownRenderer(markdown.Render)
 
@@ -724,7 +715,7 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		observe.Module,
 		permission.Module,
 		llm.Module,
-		fx.Options(providerFxModules(enabledProviders, autoRegisterOpenCode)...),
+		fx.Options(providerFxModules(enabledProviders)...),
 		agent.Module,
 		orchestrator.Module,
 		tuiModule,
@@ -813,31 +804,18 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 		fmt.Fprintln(os.Stderr, w)
 	}
 
-	// First-run setup: when both CLIs are detected and config is new,
-	// prompt user to choose a preferred provider.
-	var preferredProvider string
-	if agent.ShouldRunFirstSetup(configIsNew, len(detected)) {
-		preferredProvider = agent.RunFirstSetup(detected, os.Stdin, os.Stderr)
-	}
-
 	// Apply catalog-driven defaults after discovery. For a brand-new config,
 	// replace the bootstrap defaults entirely so persisted config reflects the
-	// discovered catalogs rather than built-in placeholders.
-	changed := applyCatalogModelDefaultsToConfig(cfg, registry, configIsNew, preferredProvider)
-
-	// When --providers limits the registry, remap model defaults that reference
-	// unavailable providers to valid models. This is a runtime adjustment only —
-	// don't persist provider-filtered defaults to the config file.
-	if enabledProviders != nil {
-		remapUnresolvableModels(cfg, registry)
-	} else if availabilityFiltered {
-		remapUnresolvableModels(cfg, registry)
-		if configIsNew && changed {
-			_ = config.Save(configPath, cfg)
-		}
-	} else if changed {
-		_ = config.Save(configPath, cfg)
-	}
+	// discovered catalogs rather than built-in placeholders. Defaults are
+	// provider-neutral: OpenCode competes with Claude and Codex as a peer and no
+	// first-run prompt biases the selection toward a single provider.
+	// Apply catalog-driven defaults, remap selections the (possibly
+	// provider-filtered) registry can no longer resolve, and persist when
+	// appropriate. A brand-new config persists its discovered provider-neutral
+	// defaults even under an explicit --providers filter or readiness filtering;
+	// an existing broader config keeps those remaps runtime-only so a transient
+	// launch flag never rewrites the user's selections.
+	reconcileModelDefaults(cfg, registry, configPath, configIsNew, enabledProviders != nil, availabilityFiltered)
 
 	showProviderStartupNotices(os.Stderr, startupNotices, providerReadinessNoticeDelay)
 
@@ -1042,18 +1020,49 @@ func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 	remap(&m.KBBuild)
 }
 
+// shouldPersistCatalogDefaults reports whether catalog-derived model defaults
+// should be written back to the config file after discovery.
+//
+// A brand-new config persists its discovered provider-neutral defaults even when
+// an explicit --providers filter or readiness filtering narrowed the registry —
+// there is no prior user config to clobber, and the persisted config must
+// reflect the providers that are actually ready (bare backend IDs for a single
+// ready provider, prefixed when several are ready). An existing (broader) config
+// keeps provider-filtered or availability-filtered remaps runtime-only, so a
+// transient launch flag or a missing CLI never rewrites the user's selections.
+func shouldPersistCatalogDefaults(configIsNew, changed, providerFiltered, availabilityFiltered bool) bool {
+	if providerFiltered || availabilityFiltered {
+		return configIsNew && changed
+	}
+	return changed
+}
+
+// reconcileModelDefaults applies catalog-driven defaults to cfg after discovery,
+// remaps any model selections the active registry can no longer resolve, and
+// persists the result when shouldPersistCatalogDefaults allows. It returns true
+// when the config was written to disk.
+func reconcileModelDefaults(cfg *config.Config, registry *llm.Registry, configPath string, configIsNew, providerFiltered, availabilityFiltered bool) bool {
+	changed := applyCatalogModelDefaultsToConfig(cfg, registry, configIsNew)
+	if providerFiltered || availabilityFiltered {
+		remapUnresolvableModels(cfg, registry)
+	}
+	if shouldPersistCatalogDefaults(configIsNew, changed, providerFiltered, availabilityFiltered) {
+		_ = config.Save(configPath, cfg)
+		return true
+	}
+	return false
+}
+
 // providerFxModules returns the fx modules for the requested providers.
 //
 // When enabled is non-nil, exactly the named providers are registered (the
-// explicit `--providers` opt-in). When enabled is nil, the default set is
-// claude+codex. OpenCode joins the default set only when autoRegisterOpenCode is
-// set — it is auto-registered so an explicit `opencode:` model selected in
-// config resolves through normal startup. Registration is the gate that keeps an
-// unsolicited OpenCode out of the default experience: once registered and ready,
-// OpenCode discovers a live model catalog and contributes models like any other
-// provider. Promoting OpenCode into provider-neutral defaults and the setup UI is
-// a later roadmap concern, not this gating.
-func providerFxModules(enabled []string, autoRegisterOpenCode bool) []fx.Option {
+// explicit `--providers` opt-in, which accepts claude, codex, and opencode in
+// any order). When enabled is nil, the default set is claude+codex+opencode:
+// OpenCode is a normal default provider that participates in readiness checks,
+// catalog discovery, provider-neutral defaults, and the setup UI exactly like
+// the others. A missing, unready, or too-old OpenCode is filtered out downstream
+// by the same readiness path as any other provider.
+func providerFxModules(enabled []string) []fx.Option {
 	all := map[string]fx.Option{
 		"claude":   claude.Module,
 		"codex":    codex.Module,
@@ -1061,11 +1070,7 @@ func providerFxModules(enabled []string, autoRegisterOpenCode bool) []fx.Option 
 	}
 
 	if enabled == nil {
-		modules := []fx.Option{claude.Module, codex.Module}
-		if autoRegisterOpenCode {
-			modules = append(modules, opencode.Module)
-		}
-		return modules
+		return []fx.Option{claude.Module, codex.Module, opencode.Module}
 	}
 
 	var modules []fx.Option
@@ -1086,44 +1091,6 @@ func providerFxModules(enabled []string, autoRegisterOpenCode bool) []fx.Option 
 	return modules
 }
 
-// configSelectsOpenCode reports whether the config at path explicitly selects an
-// OpenCode-routed model — a model string carrying the `opencode:` routing prefix
-// in any of its model-selection fields. It is the signal used to auto-register
-// the OpenCode provider in the default set so config-driven routing can resolve.
-//
-// A missing config reports false: a config that does not yet exist cannot
-// reference OpenCode. An unreadable or unparseable config also reports false; the
-// genuine parse error is surfaced later when the config fx module loads it.
-func configSelectsOpenCode(path string) bool {
-	if !fileExists(path) {
-		return false
-	}
-	cfg, err := config.Load(path)
-	if err != nil {
-		return false
-	}
-	if modelConfigSelectsOpenCode(cfg.Defaults.Models) {
-		return true
-	}
-	for _, pref := range cfg.Defaults.PipelinePreferences {
-		if modelConfigSelectsOpenCode(pref.Models) {
-			return true
-		}
-	}
-	return false
-}
-
-// modelConfigSelectsOpenCode reports whether any model field in m carries the
-// OpenCode routing prefix.
-func modelConfigSelectsOpenCode(m config.ModelConfig) bool {
-	for _, model := range []string{m.Research, m.Planning, m.Implementation, m.Review, m.Utilities, m.KBBuild} {
-		if strings.HasPrefix(strings.TrimSpace(model), opencode.RoutingPrefix) {
-			return true
-		}
-	}
-	return false
-}
-
 func hasAnyModelConfig(m config.ModelConfig) bool {
 	return m.Research != "" ||
 		m.Planning != "" ||
@@ -1131,28 +1098,6 @@ func hasAnyModelConfig(m config.ModelConfig) bool {
 		m.Review != "" ||
 		m.Utilities != "" ||
 		m.KBBuild != ""
-}
-
-func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {
-	if overlay.Research != "" {
-		base.Research = overlay.Research
-	}
-	if overlay.Planning != "" {
-		base.Planning = overlay.Planning
-	}
-	if overlay.Implementation != "" {
-		base.Implementation = overlay.Implementation
-	}
-	if overlay.Review != "" {
-		base.Review = overlay.Review
-	}
-	if overlay.Utilities != "" {
-		base.Utilities = overlay.Utilities
-	}
-	if overlay.KBBuild != "" {
-		base.KBBuild = overlay.KBBuild
-	}
-	return base
 }
 
 func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
@@ -1192,7 +1137,13 @@ func canonicalizeModelConfig(registry *llm.Registry, models config.ModelConfig) 
 	return updated, updated != models
 }
 
-func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registry, overwrite bool, preferredProvider string) bool {
+// applyCatalogModelDefaultsToConfig canonicalizes the config's existing model
+// selections against the live registry and fills in catalog-driven defaults.
+// The defaults are provider-neutral (CatalogDefaultModels ranks Claude, Codex,
+// and OpenCode as peers); first-run setup applies no provider-wide preference
+// override, so a brand-new config persists the same neutral defaults a returning
+// user would see.
+func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registry, overwrite bool) bool {
 	if cfg == nil || registry == nil {
 		return false
 	}
@@ -1200,11 +1151,7 @@ func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registr
 	models, changed := canonicalizeModelConfig(registry, cfg.Defaults.Models)
 	cfg.Defaults.Models = models
 
-	preferredDefaults := config.ModelConfig{}
-	if preferredProvider != "" {
-		preferredDefaults = registry.CatalogDefaultModelsForProvider(preferredProvider)
-	}
-	defaults := mergeModelConfig(preferredDefaults, registry.CatalogDefaultModels())
+	defaults := registry.CatalogDefaultModels()
 	if !hasAnyModelConfig(defaults) {
 		return changed
 	}

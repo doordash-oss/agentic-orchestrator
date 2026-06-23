@@ -829,16 +829,16 @@ func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 }
 
 func TestProviderFxModules_NilReturnsDefaultSet(t *testing.T) {
-	modules := providerFxModules(nil, false)
-	if len(modules) != 2 {
-		t.Errorf("expected 2 modules for nil input, got %d", len(modules))
+	modules := providerFxModules(nil)
+	if len(modules) != 3 {
+		t.Errorf("expected 3 modules for nil input (claude+codex+opencode), got %d", len(modules))
 	}
 }
 
 func TestProviderFxModules_SingleProvider(t *testing.T) {
-	for _, name := range []string{"claude", "codex"} {
+	for _, name := range []string{"claude", "codex", "opencode"} {
 		t.Run(name, func(t *testing.T) {
-			modules := providerFxModules([]string{name}, false)
+			modules := providerFxModules([]string{name})
 			if len(modules) != 1 {
 				t.Errorf("expected 1 module for %q, got %d", name, len(modules))
 			}
@@ -847,23 +847,125 @@ func TestProviderFxModules_SingleProvider(t *testing.T) {
 }
 
 func TestProviderFxModules_BothProviders(t *testing.T) {
-	modules := providerFxModules([]string{"claude", "codex"}, false)
+	modules := providerFxModules([]string{"claude", "codex"})
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules, got %d", len(modules))
 	}
 }
 
 func TestProviderFxModules_TrimsWhitespace(t *testing.T) {
-	modules := providerFxModules([]string{" claude ", " codex "}, false)
+	modules := providerFxModules([]string{" claude ", " codex "})
 	if len(modules) != 2 {
 		t.Errorf("expected 2 modules after trimming, got %d", len(modules))
 	}
 }
 
 func TestProviderFxModules_UnknownSkipped(t *testing.T) {
-	modules := providerFxModules([]string{"claude", "bogus"}, false)
+	modules := providerFxModules([]string{"claude", "bogus"})
 	if len(modules) != 1 {
 		t.Errorf("expected 1 module (bogus skipped), got %d", len(modules))
+	}
+}
+
+// stubCatalogProvider is a stubProvider that also exposes a model catalog, so it
+// participates in catalog-driven default selection.
+type stubCatalogProvider struct {
+	stubProvider
+	catalog []llm.ModelInfo
+}
+
+func (s *stubCatalogProvider) ModelCatalog() []llm.ModelInfo { return s.catalog }
+
+// TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs proves
+// a brand-new config whose only ready provider is OpenCode persists
+// provider-neutral defaults as bare OpenCode backend ids in the existing model
+// fields — no routing prefix and no new config keys — and that the values
+// survive a save/load round trip.
+func TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000, Category: "balanced"},
+		},
+	})
+
+	cfg := config.NewDefault()
+	cfg.Defaults.Models = config.ModelConfig{} // brand-new: no model selections yet
+
+	if !applyCatalogModelDefaultsToConfig(cfg, reg, true) {
+		t.Fatal("applyCatalogModelDefaultsToConfig returned false, want changed for a brand-new config")
+	}
+
+	const want = "anthropic/claude-sonnet-4-5[200K]"
+	got := cfg.Defaults.Models
+	for field, val := range map[string]string{
+		"research": got.Research, "planning": got.Planning, "implementation": got.Implementation,
+		"review": got.Review, "chat": got.Utilities, "kb_build": got.KBBuild,
+	} {
+		if val != want {
+			t.Errorf("%s = %q, want bare backend id %q (single provider → no opencode: prefix)", field, val, want)
+		}
+	}
+
+	// Round-trip through the on-disk config: bare OpenCode ids persist in the
+	// existing model fields, and a normal launch resolves them.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if reloaded.Defaults.Models.Implementation != want {
+		t.Errorf("reloaded implementation = %q, want %q", reloaded.Defaults.Models.Implementation, want)
+	}
+	if _, _, err := reg.ResolveModel(reloaded.Defaults.Models.Implementation); err != nil {
+		t.Errorf("persisted bare OpenCode id did not resolve: %v", err)
+	}
+}
+
+// TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills proves
+// an existing Claude/Codex config still loads, canonicalizes its selections
+// (bare names, provider prefixes, aliases, and context-window suffixes), and has
+// only empty fields filled — user choices are never overwritten.
+func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet", "haiku"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "opus", ContextWindow: 200_000, Category: "capable"},
+			{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"},
+			{ID: "haiku", ContextWindow: 200_000, Category: "cheap"},
+		},
+	})
+	reg.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "gpt-5.4", ContextWindow: 200_000, Category: "balanced"},
+		},
+	})
+
+	cfg := config.NewDefault()
+	cfg.Defaults.Models = config.ModelConfig{
+		Research: "claude:SONNET", // explicit prefix + non-canonical case
+		Review:   "gpt-5.4",       // bare codex name
+		// Planning/Implementation/Utilities/KBBuild left empty → filled from defaults.
+	}
+
+	changed := applyCatalogModelDefaultsToConfig(cfg, reg, false)
+	if !changed {
+		t.Fatal("expected changed=true (canonicalization + filled empties)")
+	}
+	if got := cfg.Defaults.Models.Research; got != "claude:sonnet" {
+		t.Errorf("research canonicalized = %q, want claude:sonnet (user choice preserved, canonicalized)", got)
+	}
+	if got := cfg.Defaults.Models.Review; got != "gpt-5.4" {
+		t.Errorf("review = %q, want gpt-5.4 (bare name preserved, not overwritten)", got)
+	}
+	if cfg.Defaults.Models.Planning == "" {
+		t.Error("planning was left empty, want a filled provider-neutral default")
 	}
 }
 
@@ -899,6 +1001,137 @@ func TestRemapUnresolvableModels(t *testing.T) {
 			t.Errorf("utilities should stay sonnet[200K], got %q", cfg.Defaults.Models.Utilities)
 		}
 	})
+}
+
+func TestShouldPersistCatalogDefaults(t *testing.T) {
+	tests := []struct {
+		name                 string
+		configIsNew          bool
+		changed              bool
+		providerFiltered     bool
+		availabilityFiltered bool
+		want                 bool
+	}{
+		// Brand-new config under an explicit --providers filter must persist its
+		// discovered defaults (the bug fix): there is no broader user config to
+		// preserve, so leaving bootstrap defaults on disk is wrong.
+		{"new_provider_filtered_changed_persists", true, true, true, false, true},
+		// Existing broader config keeps provider-filtered remaps runtime-only.
+		{"existing_provider_filtered_runtime_only", false, true, true, false, false},
+		// Same policy for readiness (availability) filtering.
+		{"new_availability_filtered_changed_persists", true, true, false, true, true},
+		{"existing_availability_filtered_runtime_only", false, true, false, true, false},
+		// No filtering: persist whenever defaults changed, new or existing.
+		{"unfiltered_existing_changed_persists", false, true, false, false, true},
+		{"unfiltered_new_changed_persists", true, true, false, false, true},
+		// Nothing changed → nothing to write.
+		{"new_provider_filtered_unchanged_skips", true, false, true, false, false},
+		{"unfiltered_unchanged_skips", false, false, false, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldPersistCatalogDefaults(tt.configIsNew, tt.changed, tt.providerFiltered, tt.availabilityFiltered)
+			if got != tt.want {
+				t.Errorf("shouldPersistCatalogDefaults(new=%v, changed=%v, providerFiltered=%v, availFiltered=%v) = %v, want %v",
+					tt.configIsNew, tt.changed, tt.providerFiltered, tt.availabilityFiltered, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReconcileModelDefaults_NewConfigProviderFilteredPersistsDiscoveredDefaults
+// proves a first launch such as `agentico --providers opencode` rewrites the
+// brand-new config's bootstrap defaults on disk with the discovered
+// provider-neutral defaults, rather than showing OpenCode-only defaults in the
+// running TUI while leaving stale Claude/Codex placeholders persisted.
+func TestReconcileModelDefaults_NewConfigProviderFilteredPersistsDiscoveredDefaults(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "anthropic/claude-sonnet-4-5[200K]", ContextWindow: 200_000, Category: "balanced"},
+		},
+	})
+
+	// Bootstrap defaults already written to disk, exactly as
+	// LoadOrCreateWithStatus would have done for a brand-new config.
+	cfg := config.NewDefault()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	bootstrap := cfg.Defaults.Models.Implementation
+	if bootstrap == "" {
+		t.Fatal("expected NewDefault to seed a bootstrap implementation default")
+	}
+
+	saved := reconcileModelDefaults(cfg, reg, path, true /*configIsNew*/, true /*providerFiltered*/, false)
+	if !saved {
+		t.Fatal("reconcileModelDefaults did not persist discovered defaults for a brand-new explicit-provider launch")
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	const want = "anthropic/claude-sonnet-4-5[200K]"
+	if got := reloaded.Defaults.Models.Implementation; got != want {
+		t.Errorf("persisted implementation = %q, want discovered OpenCode default %q (not bootstrap %q)", got, want, bootstrap)
+	}
+	if _, _, err := reg.ResolveModel(reloaded.Defaults.Models.Implementation); err != nil {
+		t.Errorf("persisted default did not resolve under the active registry: %v", err)
+	}
+}
+
+// TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly proves
+// a provider-filtered launch over an existing broader config remaps unresolvable
+// selections in memory but never persists those remaps, so the user's config
+// survives a transient `--providers` flag.
+func TestReconcileModelDefaults_ExistingConfigProviderFilterStaysRuntimeOnly(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "anthropic/claude-sonnet-4-5[200K]", ContextWindow: 200_000, Category: "balanced"},
+		},
+	})
+
+	// Existing config: user selected Claude/Codex models that the opencode-only
+	// registry cannot resolve.
+	cfg := config.NewDefault()
+	cfg.Defaults.Models = config.ModelConfig{
+		Research:       "sonnet[200K]",
+		Planning:       "sonnet[200K]",
+		Implementation: "sonnet[200K]",
+		Review:         "gpt-5.4[272K]",
+		Utilities:      "sonnet[200K]",
+		KBBuild:        "sonnet[200K]",
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.Save(path, cfg); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	saved := reconcileModelDefaults(cfg, reg, path, false /*configIsNew*/, true /*providerFiltered*/, false)
+	if saved {
+		t.Fatal("reconcileModelDefaults persisted a provider-filtered remap over an existing broader config")
+	}
+
+	// In-memory selections were remapped to a resolvable OpenCode model...
+	if _, _, err := reg.ResolveModel(cfg.Defaults.Models.Research); err != nil {
+		t.Errorf("in-memory research not remapped to a resolvable model, got %q: %v", cfg.Defaults.Models.Research, err)
+	}
+	// ...but the on-disk config still holds the user's original Claude/Codex choices.
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if got := reloaded.Defaults.Models.Research; got != "sonnet[200K]" {
+		t.Errorf("disk research = %q, want unchanged sonnet[200K] (remap must stay runtime-only)", got)
+	}
+	if got := reloaded.Defaults.Models.Review; got != "gpt-5.4[272K]" {
+		t.Errorf("disk review = %q, want unchanged gpt-5.4[272K]", got)
+	}
 }
 
 func TestCheckRequiredProviders_AllDetected(t *testing.T) {

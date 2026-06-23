@@ -484,8 +484,11 @@ func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	if defaults[llm.PhaseChat] != "claude:sonnet" {
 		t.Errorf("chat: got %q, want %q", defaults[llm.PhaseChat], "claude:sonnet")
 	}
-	if defaults[llm.PhaseReview] != "codex:gpt-5.4" {
-		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "codex:gpt-5.4")
+	// Review no longer carries a hardcoded codex preference. sonnet and gpt-5.4
+	// are both balanced @ 200K, so the provider-neutral tie-break (provider+
+	// model-ID order, "claude" < "codex") selects claude:sonnet.
+	if defaults[llm.PhaseReview] != "claude:sonnet" {
+		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "claude:sonnet")
 	}
 	if defaults[llm.PhaseKBBuild] != "claude:sonnet" {
 		t.Errorf("kb_build: got %q, want %q", defaults[llm.PhaseKBBuild], "claude:sonnet")
@@ -833,9 +836,11 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Implementation != "claude:sonnet" {
 			t.Errorf("implementation: got %q, want %q", mc.Implementation, "claude:sonnet")
 		}
-		// Review prefers codex and uses its balanced default.
-		if mc.Review != "codex:gpt-5.4" {
-			t.Errorf("review: got %q, want %q", mc.Review, "codex:gpt-5.4")
+		// Review competes provider-neutrally: claude:sonnet and codex:gpt-5.4 are
+		// both balanced @ 200K, so the deterministic provider+model-ID tie-break
+		// ("claude" < "codex") wins. No role carries a hardcoded codex preference.
+		if mc.Review != "claude:sonnet" {
+			t.Errorf("review: got %q, want %q", mc.Review, "claude:sonnet")
 		}
 		if mc.Utilities != "claude:sonnet" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "claude:sonnet")
@@ -1158,6 +1163,95 @@ func TestRegistry_OpenCodeProviderGroup(t *testing.T) {
 		}
 		if got := r.EligibleModelsForPhase(llm.PhaseResearch)["opencode"]; got != nil {
 			t.Errorf("eligible opencode = %v, want absent when undetected", got)
+		}
+	})
+}
+
+// TestRegistry_CatalogDefaults_ProviderNeutralRanking proves Phase 6's
+// provider-neutral default selection: Claude, Codex, and OpenCode compete as
+// peers under the same role-category and model-metadata rules. OpenCode can win
+// any role when its catalog entry outranks the others, equal-ranked candidates
+// resolve by a stable provider+model-ID order (never registration order or a
+// hardcoded provider preference), and the persisted form follows the
+// single-vs-multi provider rule (bare backend id vs. opencode: routing prefix).
+func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
+	newOpenCode := func(hasCLI bool) *stubCatalogProvider {
+		return &stubCatalogProvider{
+			stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/big[400K]"}, hasCLI: hasCLI},
+			catalog: []llm.ModelInfo{
+				{ID: "anthropic/big[400K]", Aliases: []string{"anthropic/big"}, ContextWindow: 400_000, Category: "balanced"},
+			},
+		}
+	}
+
+	t.Run("opencode wins every role when its balanced model has the largest context window", func(t *testing.T) {
+		r := llm.NewRegistry()
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "gpt-5.4", ContextWindow: 272_000, Category: "balanced"}},
+		})
+		r.Register(newOpenCode(true))
+
+		mc := r.CatalogDefaultModels()
+		roles := map[string]string{
+			"research": mc.Research, "planning": mc.Planning, "implementation": mc.Implementation,
+			"review": mc.Review, "chat": mc.Utilities, "kb_build": mc.KBBuild,
+		}
+		for role, got := range roles {
+			if got != "opencode:anthropic/big[400K]" {
+				t.Errorf("%s: got %q, want opencode:anthropic/big[400K] (largest balanced context window wins)", role, got)
+			}
+		}
+	})
+
+	t.Run("equal-ranked candidates resolve by provider+model-ID, not registration order", func(t *testing.T) {
+		// Register opencode FIRST to prove registration order does not break ties.
+		r := llm.NewRegistry()
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "anthropic/claude-sonnet-4-5[200K]", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "gpt-5.4", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"}},
+		})
+
+		mc := r.CatalogDefaultModels()
+		// All three are balanced @ 200K; "claude" < "codex" < "opencode" so claude
+		// wins deterministically regardless of registration order.
+		if mc.Planning != "claude:sonnet" {
+			t.Errorf("planning tie-break: got %q, want claude:sonnet", mc.Planning)
+		}
+		// Review no longer carries a hardcoded codex preference — it ties like any
+		// other role and resolves to claude by the provider+model-ID order.
+		if mc.Review != "claude:sonnet" {
+			t.Errorf("review tie-break: got %q, want claude:sonnet (review no longer prefers codex)", mc.Review)
+		}
+	})
+
+	t.Run("single-provider OpenCode persists bare backend id; multi-provider adds opencode prefix", func(t *testing.T) {
+		solo := llm.NewRegistry()
+		solo.Register(newOpenCode(true))
+		if got := solo.CatalogDefaultModels().Implementation; got != "anthropic/big[400K]" {
+			t.Errorf("single-provider opencode: got %q, want bare anthropic/big[400K]", got)
+		}
+
+		multi := llm.NewRegistry()
+		multi.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		multi.Register(newOpenCode(true))
+		if got := multi.CatalogDefaultModels().Implementation; got != "opencode:anthropic/big[400K]" {
+			t.Errorf("multi-provider opencode: got %q, want opencode:anthropic/big[400K]", got)
 		}
 	})
 }

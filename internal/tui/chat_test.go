@@ -355,6 +355,37 @@ func TestChatUsesConfiguredModel(t *testing.T) {
 	}
 }
 
+// TestChatUsesConfiguredModel_OpenCode proves chat hands an explicit OpenCode
+// model selection to the normal provider-neutral session builder unchanged, and
+// stays intentionally markerless — chat is a conversational surface with no
+// phase_complete contract, so it must never thread a marker path. This is the
+// chat half of the OpenCode workflow-surface coverage; the agent-side builder
+// routing for chat-shaped (markerless) sessions is proven in
+// agent.TestOpenCodeBoundedHelperRoutesThroughBuilderMarkerless.
+func TestChatUsesConfiguredModel_OpenCode(t *testing.T) {
+	var capturedOpts agent.BuildSessionOpts
+	mockBuildSession := func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		capturedOpts = opts
+		return nil, nil, nil, fmt.Errorf("test: stop here")
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	const openCodeModel = "opencode:anthropic/claude-sonnet-4-5"
+	m := NewChatModel(80, 24, sm, "/tmp", "test", mockBuildSession, openCodeModel, "")
+	cmd := m.startSessionCmd("test question")
+	cmd()
+
+	if capturedOpts.Model != openCodeModel {
+		t.Errorf("expected model %q, got %q", openCodeModel, capturedOpts.Model)
+	}
+	if capturedOpts.MarkerPath != "" {
+		t.Errorf("chat threaded a marker path %q; want markerless", capturedOpts.MarkerPath)
+	}
+}
+
 // TestChatRecoveryTickClearsRespondingWhenResultArrives verifies the
 // defensive safety net: if the session records a Result (Cost() returns
 // a new pointer) but the attachCh forward dropped the SDKMessage, the

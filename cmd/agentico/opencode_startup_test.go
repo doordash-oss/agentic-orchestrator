@@ -22,6 +22,44 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
+// TestStartupCopyListsOpenCodeAsSupportedProvider is the startup-copy golden:
+// it pins that the usage/help text presents OpenCode as a co-equal selectable
+// provider, and that the no-ready-provider startup message surfaces a missing
+// OpenCode CLI with its install hint — the user-facing copy that documents the
+// supported OpenCode provider path at launch.
+func TestStartupCopyListsOpenCodeAsSupportedProvider(t *testing.T) {
+	var usage strings.Builder
+	printUsage(&usage)
+	for _, want := range []string{
+		"--providers",
+		"Available: claude, codex, opencode",
+	} {
+		if !strings.Contains(usage.String(), want) {
+			t.Errorf("usage text missing %q:\n%s", want, usage.String())
+		}
+	}
+
+	claude := &stubProvider{name: "claude", hasCLI: true, hasReadiness: true, readiness: llm.ProviderReadiness{
+		Ready:  false,
+		Detail: "not logged in.",
+		Remedy: "Run 'claude auth login'",
+	}}
+	openCode := &stubProvider{name: "opencode", hasCLI: false, installHint: "curl -fsSL https://opencode.ai/install | bash"}
+
+	msg := formatNoReadyProviderMessage(
+		[]llm.LLMProvider{claude, openCode},
+		[]providerReadinessIssue{{provider: claude, status: claude.readiness}},
+	)
+	for _, want := range []string{
+		"opencode",
+		"opencode.ai/install",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("no-ready-provider message missing OpenCode token %q:\n%s", want, msg)
+		}
+	}
+}
+
 // TestProviderFxModules_DefaultIncludesOpenCode proves OpenCode is now a normal
 // member of the default provider set: a launch without an explicit --providers
 // filter registers Claude, Codex, and OpenCode together, before readiness

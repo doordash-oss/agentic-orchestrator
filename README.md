@@ -72,8 +72,11 @@ Agentic Orchestrator needs **at least one** AI provider CLI.
 
 | Tool | Role | Install |
 |------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **OpenCode CLI >= 1.17.9** (`opencode`) | Co-equal backend for every phase and chat; selected with `opencode:<backend/model>` (e.g. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) or `curl -fsSL https://opencode.ai/install \| bash` |
+
+OpenCode routes a configured backend provider (Anthropic, OpenAI, Google, a local Ollama model, and so on) through one CLI. Authenticate it with `opencode auth login`, and confirm it is ready with `opencode models`. Agentico runs every OpenCode session against a managed, per-session config and never edits your global OpenCode configuration. Opt into it explicitly with `--providers opencode`, or let it join automatically when its CLI is installed and authenticated.
 
 ### Optional
 
@@ -82,7 +85,7 @@ Agentic Orchestrator needs **at least one** AI provider CLI.
 | **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
 | **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
 
-After installing your provider CLI(s), run `claude auth status` and/or `codex login status`, plus `gh auth status`, before launching `agentico`.
+After installing your provider CLI(s), confirm each is authenticated — `claude auth status`, `codex login status`, and/or `opencode models` (it lists models only once a backend provider is configured) — plus `gh auth status`, before launching `agentico`. A provider whose CLI is missing, too old, or not yet authenticated is filtered out at startup with a one-line notice, and the orchestrator continues on whatever providers are ready.
 
 ## How It Works
 
@@ -195,7 +198,7 @@ Once a feature reaches code-ready or published state:
 
 ### Ask Me Anything
 
-Press `/` anywhere to open the built-in AI chat. It's a read-only Claude session that can explain how Agentic Orchestrator works, debug issues by reading feature logs and artifacts, search the codebase, and answer questions — without modifying any files.
+Press `/` anywhere to open the built-in AI chat. It's a read-only session — backed by whichever provider your `utilities` model selects (Claude, Codex, or OpenCode) — that can explain how Agentic Orchestrator works, debug issues by reading feature logs and artifacts, search the codebase, and answer questions, without modifying any files.
 
 ### Keybindings
 
@@ -238,7 +241,11 @@ workspace_roots:
 
 ### Model Overrides
 
-Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`) or as bare aliases that are automatically routed to the best-matching provider.
+Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) or as bare ids resolved against the provider registry. There are three ways a selection reaches OpenCode, and they are distinct:
+
+- A **plain alias** such as `opus`, `sonnet`, or `gpt-5.4` (no slash) resolves to its owning native provider (Claude or Codex) and **never** to OpenCode — OpenCode contributes only slash-form backend ids.
+- The explicit **`opencode:<provider>/<model>` prefix** always routes to OpenCode, passing the backend id straight through (it works even for a backend OpenCode discovers but Agentico does not pre-list).
+- A **bare slash-form backend id** such as `anthropic/claude-sonnet-4-5` (no prefix) resolves to OpenCode when it matches OpenCode's catalog. This is the form Agentico persists for the provider-neutral per-phase defaults when OpenCode is the only ready provider, so an OpenCode model **can** be a default without any `opencode:` prefix in the config.
 
 ### Launch Flags
 

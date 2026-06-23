@@ -136,9 +136,17 @@ Claude CLI's colon-wildcard syntax (e.g., `Bash(go:*)`) is normalized to space-w
 
 This import runs automatically during TUI feature creation.
 
+## OpenCode tool mediation
+
+OpenCode tool requests flow through the **same** Agentico permission layer as Claude and Codex. OpenCode raises an ACP `session/request_permission` request; Agentico classifies the tool by kind — execute → `Bash`, edit → `Write`, fetch → `WebFetch`, search → `WebSearch`, ask → `AskUserQuestion` — and routes it through the identical permission menu, cache (deny-wins, global + per-repo), and pattern inference described above. An unrecognized permission kind still surfaces a prompt for you to decide; it is never silently allowed.
+
+Because OpenCode merges configuration sources rather than replacing them, Agentico bounds tool use through the managed per-session config it generates under the state directory (delivered via `OPENCODE_CONFIG`/`OPENCODE_CONFIG_CONTENT`), never by editing your global OpenCode configuration. That managed config lists every gated surface (`bash`, `edit`, `write`, `apply_patch`, `webfetch`, `websearch`, `task`, `question`, `read`) so each one is mediated; read access is scoped to the mounted read roots, and writes are scoped to the feature's writable roots so read-only context mounts (skills, guidelines) stay readable but never writable.
+
 ## `--dangerously-skip-permissions`
 
 The `--dangerously-skip-permissions` flag disables all permission prompts. Every tool request is auto-approved without user confirmation.
+
+For OpenCode, the flag is applied through the managed config: each gated tool surface is set to `allow` so no prompt is raised — with one deliberate exception, the `question` surface stays `ask` so an `AskUserQuestion` still pauses for you, matching Claude and Codex. Read-only context mounts remain non-writable even under this flag.
 
 ```bash
 agentico --dangerously-skip-permissions

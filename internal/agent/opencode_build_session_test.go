@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -144,6 +145,131 @@ func TestOpenCodeBuildSessionRejectsInvalidModelBeforeLaunch(t *testing.T) {
 			}
 			if cmd != nil || env != nil || sessOpts != nil {
 				t.Fatalf("BuildSession(%q) returned non-nil outputs on rejection: cmd=%v env=%v sessOpts=%v", model, cmd, env, sessOpts)
+			}
+		})
+	}
+}
+
+// openCodePermission extracts the permission map from the OPENCODE_CONFIG_CONTENT
+// env var of a built OpenCode session.
+func openCodePermission(t *testing.T, env []string) map[string]json.RawMessage {
+	t.Helper()
+	content, ok := "", false
+	for _, e := range env {
+		if after, found := strings.CutPrefix(e, "OPENCODE_CONFIG_CONTENT="); found {
+			content, ok = after, true
+		}
+	}
+	if !ok {
+		t.Fatalf("env %v missing OPENCODE_CONFIG_CONTENT", env)
+	}
+	var cfg struct {
+		Permission map[string]json.RawMessage `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(content), &cfg); err != nil {
+		t.Fatalf("OPENCODE_CONFIG_CONTENT not valid JSON: %v", err)
+	}
+	return cfg.Permission
+}
+
+// permPatternMap decodes a path-pattern permission object for key.
+func permPatternMap(t *testing.T, perm map[string]json.RawMessage, key string) map[string]string {
+	t.Helper()
+	raw, ok := perm[key]
+	if !ok {
+		t.Fatalf("permission missing key %q", key)
+	}
+	var patterns map[string]string
+	if err := json.Unmarshal(raw, &patterns); err != nil {
+		t.Fatalf("permission[%q] = %s, want path-pattern object: %v", key, raw, err)
+	}
+	return patterns
+}
+
+// permStringVal decodes a plain string permission decision for key.
+func permStringVal(t *testing.T, perm map[string]json.RawMessage, key string) string {
+	t.Helper()
+	raw, ok := perm[key]
+	if !ok {
+		t.Fatalf("permission missing key %q", key)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("permission[%q] = %s, want a string decision: %v", key, raw, err)
+	}
+	return s
+}
+
+// TestOpenCodeBuildSessionSkillsGuidelinesReadableNotWritable proves the
+// production BuildSession path — which appends the reconciled skills and
+// guidelines dirs as read mounts — lets OpenCode read those mounts but never
+// edit/write/patch them, in both normal and dangerous-skip mode. This is the
+// regression guard for the default writable-roots computation conflating
+// read-only context mounts with writable roots (Task 4).
+func TestOpenCodeBuildSessionSkillsGuidelinesReadableNotWritable(t *testing.T) {
+	for _, dsp := range []bool{false, true} {
+		name := "normal"
+		if dsp {
+			name = "dangerous-skip"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			skillsDir := filepath.Join(dir, "skills")
+			guidelinesDir := filepath.Join(dir, "guidelines")
+			eventCh := make(chan interface{}, 8)
+			sm := session.NewManager(eventCh)
+			store := feature.NewStore(dir)
+			pr := NewPhaseRunner(sm, store, dir)
+			pr.Registry = newRegistryWithOpenCode()
+			pr.SkillsDir = skillsDir
+			pr.GuidelinesDir = guidelinesDir
+			pr.DangerouslySkipPermissions = dsp
+
+			_, env, _, err := pr.BuildSession(BuildSessionOpts{
+				Model:                          "opencode:anthropic/claude-sonnet-4-5",
+				Prompt:                         "implement this",
+				SystemPrompt:                   "you are an implementer",
+				SystemPromptHasUsefulResources: true,
+				MarkerPath:                     filepath.Join(dir, "phase_complete"),
+				WorkDir:                        dir,
+				Phase:                          feature.PhaseImplement,
+			})
+			if err != nil {
+				t.Fatalf("BuildSession() error: %v", err)
+			}
+			perm := openCodePermission(t, env)
+
+			// Skills and guidelines stay readable. In normal mode reads are bounded
+			// to mounted roots (each appears as an allow glob); in dangerous-skip
+			// mode reads are noninteractive everywhere.
+			if dsp {
+				if got := permStringVal(t, perm, "read"); got != "allow" {
+					t.Errorf("dangerous-skip read = %q, want allow", got)
+				}
+			} else {
+				readPatterns := permPatternMap(t, perm, "read")
+				for _, root := range []string{skillsDir, guidelinesDir} {
+					glob := root + "/**"
+					if readPatterns[glob] != "allow" {
+						t.Errorf("read[%q] = %q, want allow (read-only mount must stay readable)", glob, readPatterns[glob])
+					}
+				}
+			}
+
+			// Skills and guidelines are never writable: they get no writable glob in
+			// any file-mutating surface and the catch-all denies them — even in
+			// dangerous-skip mode, where edits would otherwise be noninteractive.
+			for _, key := range []string{"edit", "write", "apply_patch"} {
+				patterns := permPatternMap(t, perm, key)
+				if patterns["*"] != "deny" {
+					t.Errorf("%s default = %q, want deny so read-only mounts are not writable", key, patterns["*"])
+				}
+				for _, root := range []string{skillsDir, guidelinesDir} {
+					glob := root + "/**"
+					if _, ok := patterns[glob]; ok {
+						t.Errorf("%s includes writable glob %q for a read-only mount; want absent", key, glob)
+					}
+				}
 			}
 		})
 	}

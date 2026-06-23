@@ -1148,9 +1148,11 @@ type BuildSessionOpts struct {
 	AllowedTools    []string
 	DisallowedTools []string
 	AdditionalDirs  []string
-	// WritableRoots overrides the Codex sandbox writable roots. Nil preserves
-	// the default StateDir + AdditionalDirs behavior; pass an explicit slice
-	// for bounded helpers that must read mounted directories without making
+	// WritableRoots overrides the provider write boundary (Codex sandbox writable
+	// roots and OpenCode managed-config edit roots). Nil preserves the default
+	// StateDir + AdditionalDirs behavior, except that the read-only context mounts
+	// (skills, guidelines) are kept out of the OpenCode edit set; pass an explicit
+	// slice for bounded helpers that must read mounted directories without making
 	// them writable.
 	WritableRoots []string
 	PIDDir        string
@@ -1199,6 +1201,27 @@ func grillingPhasePermissionMode(phase feature.Phase) string {
 	return ""
 }
 
+// subtractRoots returns roots with every entry in remove omitted, preserving
+// order. Used to keep read-only context mounts (skills, guidelines) out of a
+// provider's writable set while leaving them in the read set.
+func subtractRoots(roots, remove []string) []string {
+	if len(remove) == 0 {
+		return roots
+	}
+	skip := make(map[string]struct{}, len(remove))
+	for _, r := range remove {
+		skip[r] = struct{}{}
+	}
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if _, ok := skip[r]; ok {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
 // BuildSession creates CLI command args, env vars, and session opts by
 // routing through the provider registry. This is the primary entry point
 // for all session creation (research, KB, implementation, review, planning).
@@ -1219,9 +1242,16 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		return nil, nil, nil, fmt.Errorf("resolving provider for model %q: %w", opts.Model, err)
 	}
 
+	// Skills and guidelines are read-only context mounts: agents must be able to
+	// read them, but they are global shared resources that must never become
+	// writable by default. Track them so providers that bound writes through
+	// generated config (OpenCode) keep them readable without granting writes.
+	var readOnlyContextDirs []string
+
 	// Skills injection: grant agents filesystem access to reconciled skill files.
 	if pr.SkillsDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.SkillsDir)
+		readOnlyContextDirs = append(readOnlyContextDirs, pr.SkillsDir)
 	}
 
 	// Guidelines injection: append discovery table for code-touching phases.
@@ -1237,12 +1267,35 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	// Guidelines injection: grant agents filesystem access to guideline files.
 	if pr.GuidelinesDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.GuidelinesDir)
+		readOnlyContextDirs = append(readOnlyContextDirs, pr.GuidelinesDir)
 	}
 
 	writableRoots := append([]string(nil), opts.WritableRoots...)
 	if opts.WritableRoots == nil {
 		writableRoots = []string{pr.StateDir}
 		writableRoots = append(writableRoots, opts.AdditionalDirs...)
+	}
+
+	// Read roots are everything a provider may read without per-call mediation:
+	// the feature state, the working directory, and every additional mounted dir
+	// (skills, guidelines, worktrees, knowledge base, images, attachments).
+	// Providers that bound reads through generated config (OpenCode) allow reads
+	// inside these and route reads outside them through Agentico.
+	readRoots := append([]string{pr.StateDir}, opts.AdditionalDirs...)
+	if opts.WorkDir != "" {
+		readRoots = append(readRoots, opts.WorkDir)
+	}
+
+	// OpenCode encodes edit boundaries in generated config rather than an
+	// OS-level sandbox. When writable roots default to the feature state plus all
+	// additional mounts, the read-only context mounts (skills, guidelines) must
+	// be subtracted so they stay readable without becoming writable. An explicit
+	// caller-supplied WritableRoots is the "explicitly allowed" path and is
+	// honored verbatim. Codex's OS-sandbox writable roots (ProtocolOpts) keep
+	// their established scope, so this only narrows the OpenCode edit set.
+	openCodeWritableRoots := writableRoots
+	if opts.WritableRoots == nil {
+		openCodeWritableRoots = subtractRoots(writableRoots, readOnlyContextDirs)
 	}
 
 	agentsJSON, err := AgentsJSONForNames(opts.AgentNames)
@@ -1268,6 +1321,8 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		EffortLevel:          opts.EffortLevel,
 		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
 		ResumeSessionID:      opts.ResumeSessionID,
+		WritableRoots:        openCodeWritableRoots,
+		ReadRoots:            readRoots,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)

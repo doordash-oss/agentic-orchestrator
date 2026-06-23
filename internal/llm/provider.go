@@ -204,6 +204,22 @@ type CommandBuildOpts struct {
 	StateDir             string
 	PermissionPromptTool string
 	EffortLevel          EffortLevel // pipeline-driven effort level; each provider maps to its own naming
+	// WritableRoots lists the only locations a provider may edit/patch in normal
+	// operation, mirroring ProtocolOpts.WritableRoots. Providers that bound edits
+	// through generated config rather than a protocol-level sandbox (e.g. OpenCode,
+	// whose managed config encodes path-pattern edit permissions) read it here.
+	// Empty means the provider applies its default writable scope; providers that
+	// do not consume it leave their behavior unchanged.
+	WritableRoots []string
+	// ReadRoots lists the directories a provider may read without per-call
+	// mediation, mirroring the read mounts Agentico granted (feature state, work
+	// dir, and additional read roots such as skills, guidelines, worktrees,
+	// knowledge base, images, and attachments). Providers that bound reads
+	// through generated config (e.g. OpenCode) allow reads inside these roots and
+	// route reads outside them through Agentico in normal mode; in dangerous-skip
+	// mode reads stay noninteractive. Empty means the provider applies its default
+	// read scope; providers that do not consume it leave their behavior unchanged.
+	ReadRoots []string
 	// PermissionMode pins the provider's session-level permission mode. Empty
 	// means inherit the user's default (e.g. ~/.claude/settings.json). Set this
 	// for phases whose prompts require behavior that the user's defaults could

@@ -23,7 +23,6 @@ package opencode
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -83,7 +82,8 @@ func (p *Provider) DetectCLI() bool {
 func (p *Provider) AvailableModels() []string { return nil }
 
 // BuildCommand returns the args and environment needed to launch OpenCode in
-// ACP stdio mode with the requested backend model selected.
+// ACP stdio mode with a deterministic, Agentico-owned managed session
+// configuration.
 //
 // The backend model is validated as a data value before any command is
 // constructed: empty selections, CLI-flag-shaped values, and values carrying
@@ -94,74 +94,14 @@ func (p *Provider) AvailableModels() []string { return nil }
 //
 // The command itself is the bare `opencode acp`: it speaks newline-delimited
 // JSON-RPC on stdout while sending its own logs to stderr, so stdout stays valid
-// for the protocol reader. The validated backend model is selected via the
-// OPENCODE_CONFIG_CONTENT environment variable (inline config) rather than a CLI
-// flag — `opencode acp` rejects `-m` — and rather than editing the user's global
-// config file.
+// for the protocol reader. Managed configuration is generated under the
+// provider-managed state directory and delivered through the OPENCODE_CONFIG file
+// plus the highest-precedence OPENCODE_CONFIG_CONTENT inline channel, while
+// inherited compatibility/config sources are scrubbed through environment flags —
+// none of which mutates the user's global OpenCode configuration. Any build
+// failure aborts before a launchable command exists. See buildManagedSession.
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
-	backend := BackendModel(opts.Model)
-	if err := validateBackendModel(backend); err != nil {
-		return nil, nil, err
-	}
-
-	args := []string{"opencode", "acp"}
-
-	env, err := configContentEnv(backend, opts.DangerouslySkipPerms)
-	if err != nil {
-		return nil, nil, err
-	}
-	return args, env, nil
-}
-
-// sessionConfig is the inline OpenCode configuration the tracer pins for one
-// managed launch. It carries the validated backend model and the session-scoped
-// permission decisions; delivered via OPENCODE_CONFIG_CONTENT, it never mutates
-// the user's global OpenCode configuration file.
-type sessionConfig struct {
-	Model      string            `json:"model"`
-	Permission map[string]string `json:"permission"`
-}
-
-// configContentEnv builds the OPENCODE_CONFIG_CONTENT entry that pins the given
-// validated backend model and the Phase 2 permission decisions for a managed
-// launch. Callers must validate the backend with validateBackendModel first.
-func configContentEnv(backend string, dangerouslySkipPerms bool) ([]string, error) {
-	content, err := json.Marshal(sessionConfig{
-		Model:      backend,
-		Permission: permissionConfig(dangerouslySkipPerms),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshaling OpenCode config content: %w", err)
-	}
-	return []string{configContentEnvVar + "=" + string(content)}, nil
-}
-
-// permissionGatedTools are the OpenCode permission keys for the tool surfaces
-// Phase 2 routes through Agentico's permission flow: shell, file edits, web
-// fetch/search, and external-directory access.
-var permissionGatedTools = []string{"bash", "edit", "webfetch", "websearch", "external_directory"}
-
-// questionPermissionKey is the OpenCode permission key governing user-facing
-// questions. It always stays "ask" so questions surface as AskUserQuestion
-// pauses rather than being auto-answered — even in dangerous-skip mode.
-const questionPermissionKey = "question"
-
-// permissionConfig returns the session-scoped OpenCode permission map. In normal
-// mode every gated surface asks, so Agentico pauses for the user (its caching
-// and deny decisions then apply after normalization). In dangerous-skip mode the
-// tool surfaces are allowed noninteractively, but questions still ask so an
-// AskUserQuestion is never silently auto-approved.
-func permissionConfig(dangerouslySkipPerms bool) map[string]string {
-	toolDecision := "ask"
-	if dangerouslySkipPerms {
-		toolDecision = "allow"
-	}
-	perm := make(map[string]string, len(permissionGatedTools)+1)
-	for _, key := range permissionGatedTools {
-		perm[key] = toolDecision
-	}
-	perm[questionPermissionKey] = "ask"
-	return perm
+	return buildManagedSession(opts)
 }
 
 // validateBackendModel reports whether a stripped OpenCode backend model is a

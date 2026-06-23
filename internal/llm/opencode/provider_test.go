@@ -200,10 +200,27 @@ func configContentValue(t *testing.T, env []string) string {
 }
 
 // parsedConfig is the subset of OPENCODE_CONFIG_CONTENT the tests assert on:
-// the pinned backend model and the session-scoped permission decisions.
+// the pinned backend model and the session-scoped permission decisions. The
+// permission values are decoded raw because a value may be a plain string
+// decision or a path-pattern object once writable roots are bounded.
 type parsedConfig struct {
-	Model      string            `json:"model"`
-	Permission map[string]string `json:"permission"`
+	Model      string                     `json:"model"`
+	Permission map[string]json.RawMessage `json:"permission"`
+}
+
+// permString returns a string-valued permission decision for key, failing the
+// test if the value is missing or not a plain string.
+func permString(t *testing.T, perm map[string]json.RawMessage, key string) string {
+	t.Helper()
+	raw, ok := perm[key]
+	if !ok {
+		t.Fatalf("permission missing key %q", key)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("permission[%q] = %s, want a string decision: %v", key, raw, err)
+	}
+	return s
 }
 
 func parseConfigContent(t *testing.T, content string) parsedConfig {
@@ -220,22 +237,34 @@ func configModel(t *testing.T, content string) string {
 	return parseConfigContent(t, content).Model
 }
 
-// TestBuildCommand_NormalModeAsksForPhase2Surfaces proves a normal (non
-// dangerous-skip) OpenCode session is configured to ask for every Phase 2
-// permission surface — shell, edit, web fetch/search, external directory — and
-// for user questions, delivered inline via OPENCODE_CONFIG_CONTENT so the user's
-// global OpenCode configuration is not mutated (Task 2).
-func TestBuildCommand_NormalModeAsksForPhase2Surfaces(t *testing.T) {
+// TestBuildCommand_NormalModeAsksForMediatedSurfaces proves a normal (non
+// dangerous-skip) OpenCode session is configured to ask for every mediated
+// permission surface — shell, web fetch/search, subagent, skill — and for user
+// questions, delivered inline via OPENCODE_CONFIG_CONTENT so the user's global
+// OpenCode configuration is not mutated (Task 3). With no mounted read roots
+// supplied, reads also ask rather than being silently allowed, so an
+// external-directory read still pauses through Agentico.
+func TestBuildCommand_NormalModeAsksForMediatedSurfaces(t *testing.T) {
 	p := New()
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5", DangerouslySkipPerms: false})
 	if err != nil {
 		t.Fatalf("BuildCommand() error: %v", err)
 	}
 	perm := parseConfigContent(t, configContentValue(t, env)).Permission
-	for _, key := range []string{"bash", "edit", "webfetch", "websearch", "external_directory", "question"} {
-		if perm[key] != "ask" {
-			t.Errorf("normal-mode permission[%q] = %q, want ask", key, perm[key])
+	for _, key := range []string{"bash", "webfetch", "websearch", "task", "skill", "question"} {
+		if got := permString(t, perm, key); got != "ask" {
+			t.Errorf("normal-mode permission[%q] = %q, want ask", key, got)
 		}
+	}
+	// With no mounted read roots, reads are not silently allowed in normal mode;
+	// they ask so external reads pause through Agentico.
+	if got := permString(t, perm, "read"); got != "ask" {
+		t.Errorf("normal-mode permission[read] = %q, want ask when no read roots are mounted", got)
+	}
+	// With no writable roots supplied, file edits fall back to the bare mode
+	// decision rather than a path-pattern object.
+	if got := permString(t, perm, "edit"); got != "ask" {
+		t.Errorf("normal-mode permission[edit] = %q, want ask", got)
 	}
 }
 
@@ -243,7 +272,7 @@ func TestBuildCommand_NormalModeAsksForPhase2Surfaces(t *testing.T) {
 // mode configures OpenCode to allow the permissioned tool surfaces
 // noninteractively, while user questions remain "ask" so AskUserQuestion-style
 // prompts still route as user-input decisions rather than being silently
-// auto-approved (Task 2).
+// auto-approved (Task 3).
 func TestBuildCommand_DangerousSkipAllowsToolsButAsksQuestions(t *testing.T) {
 	p := New()
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5", DangerouslySkipPerms: true})
@@ -251,13 +280,13 @@ func TestBuildCommand_DangerousSkipAllowsToolsButAsksQuestions(t *testing.T) {
 		t.Fatalf("BuildCommand() error: %v", err)
 	}
 	perm := parseConfigContent(t, configContentValue(t, env)).Permission
-	for _, key := range []string{"bash", "edit", "webfetch", "websearch", "external_directory"} {
-		if perm[key] != "allow" {
-			t.Errorf("dangerous-skip permission[%q] = %q, want allow", key, perm[key])
+	for _, key := range []string{"bash", "edit", "write", "apply_patch", "webfetch", "websearch", "task", "skill"} {
+		if got := permString(t, perm, key); got != "allow" {
+			t.Errorf("dangerous-skip permission[%q] = %q, want allow", key, got)
 		}
 	}
-	if perm["question"] != "ask" {
-		t.Errorf("dangerous-skip permission[question] = %q, want ask (questions must not be auto-approved)", perm["question"])
+	if got := permString(t, perm, "question"); got != "ask" {
+		t.Errorf("dangerous-skip permission[question] = %q, want ask (questions must not be auto-approved)", got)
 	}
 }
 

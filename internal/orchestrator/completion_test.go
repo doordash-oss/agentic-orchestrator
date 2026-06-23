@@ -1435,15 +1435,14 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Terminal(t *testing.T) {
 // Category C — Plan loop completion
 // ---------------------------------------------------------------------------
 
-// Plan approved with PlanReview checkpoint — raises ReviewRequired gate
-// instead of advancing.
-func TestOrchestrator_HandlePhaseCompletion_Plan_Approved_Gate(t *testing.T) {
+func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_RoadmapGate(t *testing.T) {
 	f := &feature.Feature{
-		ID:           "feat-plan-gate",
-		Status:       feature.StatusPlanning,
-		CurrentPhase: feature.PhasePlan,
-		Pipeline:     feature.PipelineMedium,
-		Checkpoints:  feature.Checkpoints{PlanReview: true},
+		ID:                  "feat-roadmap-gate",
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineMedium,
+		CurrentRoadmapPhase: 0,
+		Checkpoints:         feature.Checkpoints{RoadmapReview: true},
 	}
 	lc := lifecycleForFeature(f)
 	lc.NeedsPlanReviewFn = func(id string) error {
@@ -1457,7 +1456,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Approved_Gate(t *testing.T) {
 		OnReviewRequired: func(id string, p feature.Phase) { reviewPhase = p },
 	})
 
-	if err := o.HandlePhaseCompletion("feat-plan-gate", orchestrator.PhaseCompletionInput{
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
 		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
 	}); err != nil {
@@ -1465,8 +1464,47 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Approved_Gate(t *testing.T) {
 	}
 
 	assertLifecycleCall(t, lc, "NeedsPlanReview")
-	refuteLifecycleCall(t, lc, "CompletePlanning")
+	refuteLifecycleCall(t, lc, "AdvanceRoadmapPhase")
+	if reviewPhase != feature.PhasePlan {
+		t.Errorf("OnReviewRequired phase = %v, want PhasePlan", reviewPhase)
+	}
+	events := drainEvents(o)
+	if !hasEventType(events, ports.ReviewRequired) {
+		t.Error("expected ReviewRequired event")
+	}
+}
 
+func TestOrchestrator_HandlePhaseCompletion_Plan_PhasePlanApproved_PhasePlanGate(t *testing.T) {
+	f := &feature.Feature{
+		ID:                  "feat-phase-plan-gate",
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  3,
+		Checkpoints:         feature.Checkpoints{PhasePlanReview: true},
+	}
+	lc := lifecycleForFeature(f)
+	lc.NeedsPlanReviewFn = func(id string) error {
+		f.Status = feature.StatusPlanNeedsReview
+		return nil
+	}
+	fs := newFeatureStore(f)
+
+	var reviewPhase feature.Phase
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+		OnReviewRequired: func(id string, p feature.Phase) { reviewPhase = p },
+	})
+
+	if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	assertLifecycleCall(t, lc, "NeedsPlanReview")
+	refuteLifecycleCall(t, lc, "StartRoadmapPhaseImplementation")
 	if reviewPhase != feature.PhasePlan {
 		t.Errorf("OnReviewRequired phase = %v, want PhasePlan", reviewPhase)
 	}
@@ -1477,7 +1515,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Approved_Gate(t *testing.T) {
 }
 
 // Plan needs_human_review always raises a review gate, even when
-// Checkpoints.PlanReview is disabled. The validator's escalation is an
+// planning review gates are disabled. The validator's escalation is an
 // exception path — failing the feature would discard a working plan
 // over a question the user can resolve in seconds.
 func TestOrchestrator_HandlePhaseCompletion_Plan_NeedsReview_NoGate_RaisesReview(t *testing.T) {
@@ -1486,7 +1524,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NeedsReview_NoGate_RaisesReview
 		Status:       feature.StatusPlanning,
 		CurrentPhase: feature.PhasePlan,
 		Pipeline:     feature.PipelineMedium,
-		// Checkpoints.PlanReview deliberately left false.
+		// RoadmapReview and PhasePlanReview deliberately left false.
 	}
 	lc := lifecycleForFeature(f)
 	lc.NeedsPlanReviewFn = func(id string) error {

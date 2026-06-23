@@ -92,6 +92,8 @@ When checkpoints are enabled, features pause at these states for human review:
 | `DesignNeedsReview` | Plan phase |
 | `PlanNeedsReview` | Implementation phase |
 
+`PlanNeedsReview` remains the runtime review state name for planning pauses. Checkpoint configuration uses the split `roadmap_review` and `phase_plan_review` keys instead of a single plan-review key.
+
 ### Error States
 
 | State | Description |
@@ -105,13 +107,14 @@ Checkpoints pause the pipeline between phases so you can review artifacts before
 
 | Checkpoint | Gates Before | Medium | Large | Moonshot |
 |------------|-------------|---------|----------|----------|
-| Inquiry Review | Research | Off | Off | Off |
-| Research Review | Design | Off | Off | Off |
+| Inquiry Review | Research | Off | On | On |
+| Research Review | Design | Off | On | On |
 | Design Review | Plan | Off | On | On |
-| Plan Review | Implementation | Off | Off | On |
+| Roadmap Review | Phase planning | On | On | On |
+| Phase Plan Review | Implementation | On | On | On |
 | Manual Publish | (publish step) | On | On | On |
 
-You can toggle any applicable checkpoint in the feature creation wizard (Step 4) or in `config.yaml`.
+You can toggle any applicable checkpoint in the feature creation wizard (Step 4) or in `config.yaml`. In normal TUI use, Roadmap Review controls the planning review group and Phase Plan Review is the subordinate option.
 
 ## Rewind and Retry
 

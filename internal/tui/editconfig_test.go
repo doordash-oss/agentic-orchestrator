@@ -268,7 +268,8 @@ func TestEditConfig_EnterDispatchesSaveWithAllAxes(t *testing.T) {
 	// Dirty all three axes.
 	app.editConfig.editor.inquireness = feature.InquirenessHigh
 	app.editConfig.editor.models.Research = "new-research"
-	app.editConfig.editor.checkpoints.PlanReview = true
+	app.editConfig.editor.checkpoints.RoadmapReview = true
+	app.editConfig.editor.checkpoints.PhasePlanReview = true
 
 	updated, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	got := updated.(AppModel)
@@ -293,8 +294,11 @@ func TestEditConfig_EnterDispatchesSaveWithAllAxes(t *testing.T) {
 	if call.Input.Models.Research != "new-research" {
 		t.Errorf("Models.Research = %q, want new-research", call.Input.Models.Research)
 	}
-	if !call.Input.Checkpoints.PlanReview {
-		t.Error("Checkpoints.PlanReview should be true")
+	if !call.Input.Checkpoints.RoadmapReview {
+		t.Error("Checkpoints.RoadmapReview should be true")
+	}
+	if !call.Input.Checkpoints.PhasePlanReview {
+		t.Error("Checkpoints.PhasePlanReview should be true")
 	}
 }
 
@@ -359,10 +363,11 @@ func TestEditConfig_DiffSummaryFooter(t *testing.T) {
 			mutate: func(m *EditConfigModel) {
 				m.editor.models.Research = "r2"
 				m.editor.models.Planning = "p2"
-				m.editor.checkpoints.PlanReview = true
+				m.editor.checkpoints.RoadmapReview = true
+				m.editor.checkpoints.PhasePlanReview = true
 				m.editor.inquireness = feature.InquirenessNone
 			},
-			want: []string{"Models: 2 changes", "Gates: 1 change", "Inquiry: changed"},
+			want: []string{"Models: 2 changes", "Gates: 2 changes", "Inquiry: changed"},
 		},
 	}
 	for _, tc := range cases {

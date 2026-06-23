@@ -1002,6 +1002,37 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	}
 }
 
+func TestDashboardRendersLivePreviewForFeatureRebase(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		ID:           "feat-rebase",
+		Name:         "Feature Rebase",
+		Slug:         "feature-rebase",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Created:      time.Now(),
+		Repos:        []feature.FeatureRepo{{Name: "api"}},
+		ActiveCycle: &feature.CycleState{
+			Type:   feature.CycleRebase,
+			Status: feature.RepoCycleRunning,
+			Count:  1,
+		},
+	}
+	m := dashboardWithSelectedFeature(f)
+	m.focusPanel = 1
+	m.spinnerView = "spin"
+
+	view := stripANSI(m.View())
+	for _, want := range []string{"Live Preview", "Status", "Rebasing [1]", "Current: Rebasing [1]", "[a] Watch"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("feature rebase live preview missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Phase Progress") {
+		t.Fatalf("feature rebase should render live preview instead of static detail, got:\n%s", view)
+	}
+}
+
 func TestLivePreviewContextMetadata(t *testing.T) {
 	t.Parallel()
 

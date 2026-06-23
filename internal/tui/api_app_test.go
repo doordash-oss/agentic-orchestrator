@@ -720,6 +720,16 @@ func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
 	if got := f.RepoStates["api"].Freshness; got != "local changes" {
 		t.Fatalf("api freshness = %q, want local changes", got)
 	}
+	wantSpinner := stripANSI(newAPIAppSpinner().View())
+	dashboard := NewDashboardModel(features, "")
+	dashboard.spinnerView = wantSpinner
+	row := stripANSI(dashboard.renderFeatureRowCompact(f, false))
+	if !strings.Contains(row, wantSpinner) {
+		t.Fatalf("REST rebase dashboard row = %q; want spinner %q", row, wantSpinner)
+	}
+	if !strings.Contains(row, "Rebasing [1]") {
+		t.Fatalf("REST rebase dashboard row = %q; want feature-level rebase label", row)
+	}
 
 	view := stripANSI(app.View().Content)
 	for _, want := range []string{"Info", "Rebasing [1]", "Repo Status", "api", "conflict: service.go", "local changes", "web", "in sync"} {

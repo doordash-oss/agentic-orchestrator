@@ -1404,6 +1404,9 @@ func activeFeatureCycleStatus(f *feature.Feature) (label string, reviewing bool,
 		if iteration == 0 {
 			iteration = f.ActiveCycle.Iteration
 		}
+		if iteration == 0 {
+			iteration = f.ActiveCycle.Count
+		}
 		if iteration > 0 {
 			label = fmt.Sprintf("%s [%d]", label, iteration)
 		}

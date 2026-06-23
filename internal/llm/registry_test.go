@@ -402,6 +402,64 @@ func TestRegistry_ResolveModel_ColonEdgeCases(t *testing.T) {
 	}
 }
 
+// TestRegistry_ResolveModel_ColonInModelSegment is a regression for a catalog
+// entry (or alias) whose backend id carries a colon-form tag in its model
+// segment, e.g. an OpenCode/Ollama backend id like "ollama/llama3.1:8b". The
+// first colon in such a bare id is part of the model name, not an explicit
+// "provider:model" routing prefix, so it must resolve through normal catalog
+// matching rather than being parsed as provider "ollama/llama3.1" and rejected
+// as unknown. Explicit "opencode:" routing for the same colon-tagged id must
+// keep working, and a genuinely unknown colon-bearing prefix must still be
+// rejected with the "unknown provider" error.
+func TestRegistry_ResolveModel_ColonInModelSegment(t *testing.T) {
+	r := llm.NewRegistry()
+	r.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "opencode", models: []string{"ollama/llama3.1:8b", "anthropic/claude-sonnet-4-5"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "ollama/llama3.1:8b", Aliases: []string{"ollama/llama3.1:latest"}},
+			{ID: "anthropic/claude-sonnet-4-5"},
+		},
+	})
+
+	tests := []struct {
+		name          string
+		model         string
+		wantProvider  string
+		wantBareModel string
+		wantErr       bool
+		errContains   string
+	}{
+		{"bare colon-tagged id resolves via catalog", "ollama/llama3.1:8b", "opencode", "ollama/llama3.1:8b", false, ""},
+		{"bare colon-tagged alias canonicalizes via catalog", "ollama/llama3.1:latest", "opencode", "ollama/llama3.1:8b", false, ""},
+		{"explicit opencode routing preserves colon tag", "opencode:ollama/llama3.1:8b", "opencode", "ollama/llama3.1:8b", false, ""},
+		{"unknown colon-bearing prefix still rejected", "ollama/llama3.1:70b", "", "", true, "unknown provider"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, bareModel, err := r.ResolveModel(tt.model)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if p.Name() != tt.wantProvider {
+				t.Errorf("got provider %q, want %q", p.Name(), tt.wantProvider)
+			}
+			if bareModel != tt.wantBareModel {
+				t.Errorf("got bareModel %q, want %q", bareModel, tt.wantBareModel)
+			}
+		})
+	}
+}
+
 func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubCatalogProvider{
@@ -1005,6 +1063,101 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 		}
 		if slices.Contains(result["claude"], "opus") {
 			t.Error("claude chat should not include opus")
+		}
+	})
+}
+
+// TestRegistry_OpenCodeProviderGroup proves OpenCode is surfaced as a normal
+// provider-backed catalog source once ready: its discovered backend ids appear
+// under the "opencode" provider group in AllModels, ModelsForProvider, and the
+// phase-eligible lists alongside Claude and Codex, filtered by the same category
+// rules; uncategorized entries are excluded; and provider order is preserved.
+func TestRegistry_OpenCodeProviderGroup(t *testing.T) {
+	r := llm.NewRegistry()
+	claude := &stubCatalogProvider{
+		stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "opus", Category: "capable"},
+			{ID: "sonnet", Category: "balanced"},
+		},
+	}
+	codex := &stubCatalogProvider{
+		stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "gpt-5.4", Category: "balanced"},
+		},
+	}
+	opencode := &stubCatalogProvider{
+		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5", "openai/gpt-5-nano[400K]", "vendor/unknown"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000, Category: "balanced"},
+			{ID: "openai/gpt-5", Category: "capable"},
+			{ID: "openai/gpt-5-nano[400K]", ContextWindow: 400_000, Category: "cheap"},
+			{ID: "vendor/unknown", Category: ""}, // uncategorized: excluded from eligible lists
+		},
+	}
+	r.Register(claude)
+	r.Register(codex)
+	r.Register(opencode)
+
+	t.Run("ModelsForProvider returns OpenCode catalog when ready", func(t *testing.T) {
+		got := r.ModelsForProvider("opencode")
+		if len(got) != 4 {
+			t.Fatalf("ModelsForProvider(opencode) = %+v, want 4 entries", got)
+		}
+		if got[0].ID != "anthropic/claude-sonnet-4-5[200K]" {
+			t.Errorf("first OpenCode model = %q, want suffixed sonnet id", got[0].ID)
+		}
+	})
+
+	t.Run("AllModels includes OpenCode in registration order", func(t *testing.T) {
+		all := r.AllModels()
+		var ids []string
+		for _, m := range all {
+			ids = append(ids, m.ID)
+		}
+		// claude + codex precede opencode (registration order preserved).
+		if !slices.Contains(ids, "openai/gpt-5") || !slices.Contains(ids, "anthropic/claude-sonnet-4-5[200K]") {
+			t.Fatalf("AllModels missing OpenCode entries: %v", ids)
+		}
+		idxCodex := slices.Index(ids, "gpt-5.4")
+		idxOpenCode := slices.Index(ids, "openai/gpt-5")
+		if idxCodex < 0 || idxOpenCode < 0 || idxOpenCode < idxCodex {
+			t.Errorf("provider order regressed: ids = %v", ids)
+		}
+	})
+
+	t.Run("phase-eligible list includes OpenCode by category, excludes uncategorized", func(t *testing.T) {
+		research := r.EligibleModelsForPhase(llm.PhaseResearch) // capable + balanced
+		oc := research["opencode"]
+		if !slices.Contains(oc, "openai/gpt-5") || !slices.Contains(oc, "anthropic/claude-sonnet-4-5[200K]") {
+			t.Errorf("opencode research eligible = %v, want capable + balanced entries", oc)
+		}
+		if slices.Contains(oc, "vendor/unknown") {
+			t.Error("uncategorized OpenCode model leaked into eligible list")
+		}
+		if slices.Contains(oc, "openai/gpt-5-nano[400K]") {
+			t.Error("cheap OpenCode model should be excluded from research eligible list")
+		}
+
+		chat := r.EligibleModelsForPhase(llm.PhaseChat) // balanced + cheap
+		ocChat := chat["opencode"]
+		if !slices.Contains(ocChat, "openai/gpt-5-nano[400K]") || !slices.Contains(ocChat, "anthropic/claude-sonnet-4-5[200K]") {
+			t.Errorf("opencode chat eligible = %v, want balanced + cheap entries", ocChat)
+		}
+		if slices.Contains(ocChat, "openai/gpt-5") {
+			t.Error("capable OpenCode model should be excluded from chat eligible list")
+		}
+	})
+
+	t.Run("OpenCode contributes nothing when its CLI is not detected", func(t *testing.T) {
+		opencode.hasCLI = false
+		defer func() { opencode.hasCLI = true }()
+		if got := r.ModelsForProvider("opencode"); got != nil {
+			t.Errorf("ModelsForProvider(opencode) = %v, want nil when undetected", got)
+		}
+		if got := r.EligibleModelsForPhase(llm.PhaseResearch)["opencode"]; got != nil {
+			t.Errorf("eligible opencode = %v, want absent when undetected", got)
 		}
 	})
 }

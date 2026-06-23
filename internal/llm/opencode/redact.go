@@ -20,6 +20,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // Diagnostic redaction for the OpenCode provider.
@@ -84,6 +85,51 @@ var tokenPrefixPattern = regexp.MustCompile(`\b(sk|pk|rk|ghp|gho|ghu|ghs|ghr|git
 // backend endpoint — never reaches a surfaced or persisted diagnostic.
 var providerConfigMarker = regexp.MustCompile(`(?i)"(providers?|options|api[_-]?key|base[_-]?url)"\s*:`)
 
+// terminalEscapePattern matches ANSI/VT escape sequences: CSI ("ESC [ ... final"),
+// OSC ("ESC ] ... BEL or ST"), and the two-byte ESC + Fe forms. These move the
+// cursor, recolor, or retitle a terminal, so an attacker-influenced display name,
+// alias, or CLI error must not carry them into stderr, logs, the cache, or
+// captured evidence.
+var terminalEscapePattern = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)?|\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b[@-Z\\\\-_]")
+
+// stripTerminalControls removes terminal escape sequences and bare C0/C1 control
+// bytes from s. Space, tab, newline, and carriage return are preserved so
+// multi-line diagnostics keep their structure; every other control byte
+// (0x00–0x1F minus the kept whitespace, 0x7F DEL, and the C1 range 0x80–0x9F) is
+// dropped. It is applied to every OpenCode-provided string — display names,
+// aliases, and diagnostic text — before that string can be surfaced or persisted.
+func stripTerminalControls(s string) string {
+	if s == "" {
+		return s
+	}
+	s = terminalEscapePattern.ReplaceAllString(s, "")
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\t', '\n', '\r', ' ':
+			return r
+		}
+		// RuneError covers raw C1 bytes (e.g. 0x9B) that are invalid UTF-8 on
+		// their own; the explicit range covers C1 controls that arrive properly
+		// UTF-8 encoded. Valid multi-byte characters above the C1 range survive.
+		if r == utf8.RuneError || r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// sanitizeCatalogText reduces an OpenCode-provided catalog string (a model
+// display name or alias) to a clean single line: terminal escapes and control
+// bytes are removed, every run of whitespace is collapsed to a single space, and
+// surrounding whitespace is trimmed. Catalog text is single-line by contract, so
+// unlike sanitizeDiagnostic it does not preserve internal newlines/tabs.
+func sanitizeCatalogText(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.Join(strings.Fields(stripTerminalControls(s)), " ")
+}
+
 // sanitizeDiagnostic redacts credential-like content from a diagnostic string
 // before it is surfaced to the user or persisted. It removes, in order:
 //   - whole provider-configuration objects (the config structure itself, not
@@ -95,7 +141,10 @@ var providerConfigMarker = regexp.MustCompile(`(?i)"(providers?|options|api[_-]?
 //   - inline "<credential-key>: <value>" / "<credential-key>=<value>" pairs,
 //     covering API keys, tokens, and any provider-config option contents that
 //     appeared outside a recognizable config object;
-//   - standalone token literals carrying a known vendor prefix.
+//   - standalone token literals carrying a known vendor prefix;
+//   - terminal escape sequences and bare control bytes, so a hostile CLI error
+//     cannot inject cursor/title control into stderr, logs, the cache, or
+//     captured evidence.
 //
 // Clean diagnostics with no credential-like content are returned unchanged so
 // real remediation text still reaches the user.
@@ -110,6 +159,7 @@ func sanitizeDiagnostic(s string) string {
 	out = bearerPattern.ReplaceAllString(out, "${1}"+redactedPlaceholder)
 	out = kvSecretPattern.ReplaceAllString(out, "${1}${2}"+redactedPlaceholder)
 	out = tokenPrefixPattern.ReplaceAllString(out, redactedPlaceholder)
+	out = stripTerminalControls(out)
 	return out
 }
 

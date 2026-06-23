@@ -203,6 +203,71 @@ func TestSanitizeDiagnostic_EmptyInput(t *testing.T) {
 	}
 }
 
+// TestStripTerminalControls_RemovesEscapesAndControlBytes proves ANSI escape
+// sequences and C0/C1 control bytes are removed before any catalog entry,
+// progress update, warning, log line, cache artifact, or transcript can carry
+// them. Structural whitespace (space, tab, newline, carriage return) is
+// preserved so multi-line diagnostics stay readable.
+func TestStripTerminalControls_RemovesEscapesAndControlBytes(t *testing.T) {
+	cases := map[string]string{
+		"plain text":                     "plain text",
+		"":                               "",
+		"red \x1b[31mDANGER\x1b[0m text": "red DANGER text",
+		"clear\x1b[2J\x1b[Hscreen":       "clearscreen",
+		"osc \x1b]0;evil title\x07done":  "osc done",
+		"bell\x07and\x08backspace":       "bellandbackspace",
+		"keep\ttab\nnewline\rcr":         "keep\ttab\nnewline\rcr",
+		"del\x7fchar":                    "delchar",
+		"c1\x9bcontrol":                  "c1control",
+	}
+	for in, want := range cases {
+		if got := stripTerminalControls(in); got != want {
+			t.Errorf("stripTerminalControls(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSanitizeCatalogText_SingleLineNoControls proves catalog-facing text
+// (display names, aliases) is reduced to a clean single line: escapes and
+// control bytes gone, all whitespace runs collapsed to a single space, and
+// surrounding whitespace trimmed.
+func TestSanitizeCatalogText_SingleLineNoControls(t *testing.T) {
+	cases := map[string]string{
+		"Claude Sonnet 4.5":                       "Claude Sonnet 4.5",
+		"  GPT-5  ":                                "GPT-5",
+		"line\x1b[31mone\ntwo\tthree":              "lineone two three",
+		"name\x07with\x08controls":                 "namewithcontrols",
+		"\x1b]0;title\x07Gemma 4":                  "Gemma 4",
+		"multi   space":                            "multi space",
+		"":                                         "",
+		"\x1b[2K\r":                                "",
+	}
+	for in, want := range cases {
+		if got := sanitizeCatalogText(in); got != want {
+			t.Errorf("sanitizeCatalogText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSanitizeDiagnostic_DropsTerminalControls proves diagnostics also lose
+// terminal-control content (so a malicious CLI error cannot inject escape
+// sequences into stderr, logs, the cache, or captured evidence) while the
+// remaining human-readable text and existing credential redaction still apply.
+func TestSanitizeDiagnostic_DropsTerminalControls(t *testing.T) {
+	withEnv(t, []string{"PATH=/usr/bin"})
+	in := "could not list OpenCode models: \x1b[31mboom\x1b[0m token=tok_live_CTRLLEAK0987654321\x07"
+	out := sanitizeDiagnostic(in)
+	if strings.ContainsRune(out, '\x1b') || strings.ContainsRune(out, '\x07') {
+		t.Fatalf("sanitizeDiagnostic left terminal-control bytes: %q", out)
+	}
+	if strings.Contains(out, "tok_live_CTRLLEAK0987654321") {
+		t.Fatalf("sanitizeDiagnostic leaked a credential: %q", out)
+	}
+	if !strings.Contains(out, "could not list OpenCode models") || !strings.Contains(out, "boom") {
+		t.Fatalf("sanitizeDiagnostic lost readable text: %q", out)
+	}
+}
+
 // TestRPCErrorDetail_OmitsDataAndRedactsMessage proves a JSON-RPC error object's
 // structured `data` member (the usual home for provider config or credentials)
 // is omitted entirely, while a credential embedded in the human-readable message

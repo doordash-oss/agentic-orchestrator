@@ -35,6 +35,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	claude "github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
 	codex "github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -534,7 +535,25 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 	version := ""
 	if cacheRoot != "" {
 		if rawVersion, err := p.VersionInfo(); err == nil {
-			version = strings.TrimSpace(rawVersion)
+			// Normalize provider version output through the shared semver parser
+			// before using it as a cache key. Catalog providers' VersionInfo may
+			// return human-readable CLI output with a name or "v" prefix (for
+			// example "claude 2.1.112" or "OpenAI Codex v0.120.0"); the parser
+			// extracts the semver token and drops the surrounding text, including
+			// any trailing credential-like or terminal-control content a malformed
+			// version could carry. cacheableVersion is the final backstop on the
+			// parsed token.
+			if v, perr := clirun.ParseVersionOutput([]byte(rawVersion)); perr == nil && cacheableVersion(v) {
+				version = v
+			} else if strings.TrimSpace(rawVersion) != "" {
+				// Non-empty output with no recognizable semver: never echo it (it
+				// may carry credential-like content). Warn generically and run
+				// discovery without caching this startup.
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: %s reported an unrecognized CLI version; running model discovery without caching",
+					providerName,
+				))
+			}
 		}
 	}
 	if version != "" {
@@ -552,6 +571,10 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		}
 	}
 
+	// On a discovery error or an empty result we leave the catalog unset and warn:
+	// the provider's CatalogProvider supplies the built-in fallback catalog (see
+	// the CatalogDiscoverer contract), so downstream model lists and routing still
+	// see a populated catalog rather than nothing.
 	discoveryCtx, cancel := context.WithTimeout(ctx, providerCatalogDiscoveryTimeout)
 	models, err := discoverModelCatalog(discoveryCtx, discoverer, reportModel)
 	cancel()
@@ -658,11 +681,13 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	// Detect first-run before config is loaded (LoadOrCreate will create it).
 	configIsNew := !fileExists(configPath)
 
-	// Phase 1 keeps OpenCode explicit-only. Beyond the explicit `--providers
-	// ...,opencode` opt-in, auto-register it in the default provider set only
-	// when the existing config selects an explicit `opencode:` model, so
-	// config-driven routing resolves under normal startup without pulling
-	// OpenCode into automatic defaults, the setup picker, or model lists.
+	// OpenCode is not in the unconditional default provider set. Beyond the
+	// explicit `--providers ...,opencode` opt-in, auto-register it only when the
+	// existing config already selects an `opencode:` model, so a config-driven
+	// OpenCode selection resolves under normal startup. Registering it (rather
+	// than the old AvailableModels==nil trick) is what keeps an unsolicited
+	// OpenCode out of the default experience; once registered and ready it
+	// discovers and contributes a catalog like any other provider.
 	autoRegisterOpenCode := enabledProviders == nil && configSelectsOpenCode(configPath)
 
 	workspaceDir, _ := os.Getwd()
@@ -1022,10 +1047,12 @@ func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 // When enabled is non-nil, exactly the named providers are registered (the
 // explicit `--providers` opt-in). When enabled is nil, the default set is
 // claude+codex. OpenCode joins the default set only when autoRegisterOpenCode is
-// set — Phase 1 keeps OpenCode explicit-only, so it is auto-registered solely so
-// an explicit `opencode:` model selected in config can resolve through normal
-// startup. Even when registered, OpenCode stays out of automatic defaults, the
-// setup picker, and ordinary model lists because its AvailableModels is nil.
+// set — it is auto-registered so an explicit `opencode:` model selected in
+// config resolves through normal startup. Registration is the gate that keeps an
+// unsolicited OpenCode out of the default experience: once registered and ready,
+// OpenCode discovers a live model catalog and contributes models like any other
+// provider. Promoting OpenCode into provider-neutral defaults and the setup UI is
+// a later roadmap concern, not this gating.
 func providerFxModules(enabled []string, autoRegisterOpenCode bool) []fx.Option {
 	all := map[string]fx.Option{
 		"claude":   claude.Module,

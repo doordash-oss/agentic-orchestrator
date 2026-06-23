@@ -186,22 +186,42 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 				return p, bareModel, nil
 			}
 		}
+		// The prefix is not a registered provider, so this colon may instead be
+		// part of a bare catalog id whose model segment carries a colon-form tag
+		// (e.g. an OpenCode backend id like "ollama/llama3.1:8b"). Try resolving
+		// the whole string as a bare catalog id before rejecting it; only fall
+		// back to the unknown-provider error when no catalog matches.
+		if p, canonical, ok := r.resolveBareLocked(model); ok {
+			return p, canonical, nil
+		}
 		return nil, "", fmt.Errorf("unknown provider %q in model %q", providerName, model)
 	}
 
-	// Bare model name — search providers in registration order via MatchesModel
+	// Bare model name — search providers in registration order via MatchesModel.
+	if p, canonical, ok := r.resolveBareLocked(model); ok {
+		return p, canonical, nil
+	}
+	return nil, "", fmt.Errorf("no provider found for model %q", model)
+}
+
+// resolveBareLocked resolves a model string with no explicit provider prefix
+// against the active providers' catalogs (canonicalizing ids/aliases) and
+// MatchesModel checks, in registration order. It returns the matching provider
+// and the canonical model name, or ok=false when nothing matches. The caller
+// must hold r.mu.
+func (r *Registry) resolveBareLocked(model string) (LLMProvider, string, bool) {
 	for _, p := range r.providers {
 		if !r.providerActiveLocked(p) {
 			continue
 		}
 		if canonical, ok := canonicalModelForProvider(p, model); ok {
-			return p, canonical, nil
+			return p, canonical, true
 		}
 		if p.MatchesModel(model) {
-			return p, model, nil
+			return p, model, true
 		}
 	}
-	return nil, "", fmt.Errorf("no provider found for model %q", model)
+	return nil, "", false
 }
 
 func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {

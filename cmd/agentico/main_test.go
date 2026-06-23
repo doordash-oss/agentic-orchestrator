@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -31,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 )
 
 func failingLauncher(t *testing.T) tuiLauncher {
@@ -246,13 +248,16 @@ func TestDiscoverProviderCatalogsLoadsVersionedCache(t *testing.T) {
 	cachedModels := []llm.ModelInfo{
 		{ID: "cached-model", DisplayName: "Cached Model", ContextWindow: 456_000, Category: "balanced"},
 	}
-	if err := saveProviderCatalogCache(cacheRoot, "cached", "provider 2.0.0", cachedModels); err != nil {
+	if err := saveProviderCatalogCache(cacheRoot, "cached", "2.0.0", cachedModels); err != nil {
 		t.Fatalf("saveProviderCatalogCache() error: %v", err)
 	}
 	p := &stubCatalogDiscoveryProvider{
 		stubProvider: stubProvider{name: "cached", hasCLI: true},
-		versionInfo:  "provider 2.0.0",
-		discoverErr:  errors.New("discovery should not run"),
+		// Name-prefixed CLI output (the shape Claude/Codex report) must be
+		// normalized to the parsed semver "2.0.0" before it is used as the cache
+		// key, so this matches the pre-seeded cache entry above.
+		versionInfo: "cached 2.0.0",
+		discoverErr: errors.New("discovery should not run"),
 	}
 
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
@@ -274,8 +279,10 @@ func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
 	}
 	p := &stubCatalogDiscoveryProvider{
 		stubProvider: stubProvider{name: "fresh", hasCLI: true},
-		versionInfo:  "fresh 3.0.0",
-		discovered:   discovered,
+		// Prefixed "name + v" CLI output (the shape Codex reports) must be
+		// normalized to the parsed semver "3.0.0" before it becomes the cache key.
+		versionInfo: "OpenAI Codex v3.0.0",
+		discovered:  discovered,
 	}
 
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
@@ -285,7 +292,7 @@ func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
 	if p.discoveries != 1 {
 		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
 	}
-	cached, err := loadProviderCatalogCache(cacheRoot, "fresh", "fresh 3.0.0")
+	cached, err := loadProviderCatalogCache(cacheRoot, "fresh", "3.0.0")
 	if err != nil {
 		t.Fatalf("loadProviderCatalogCache() error: %v", err)
 	}
@@ -296,7 +303,7 @@ func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
 
 func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 	cacheRoot := t.TempDir()
-	path := providerCatalogCachePath(cacheRoot, "corrupt", "corrupt 4.0.0")
+	path := providerCatalogCachePath(cacheRoot, "corrupt", "4.0.0")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error: %v", err)
 	}
@@ -305,7 +312,9 @@ func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 	}
 	p := &stubCatalogDiscoveryProvider{
 		stubProvider: stubProvider{name: "corrupt", hasCLI: true},
-		versionInfo:  "corrupt 4.0.0",
+		// Name-prefixed CLI output normalizes to the parsed semver "4.0.0", which
+		// keys the corrupt entry written above and the refreshed entry written back.
+		versionInfo: "corrupt 4.0.0",
 		discovered: []llm.ModelInfo{
 			{ID: "refreshed-model", DisplayName: "Refreshed Model", ContextWindow: 321_000, Category: "capable"},
 		},
@@ -318,12 +327,344 @@ func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 	if p.discoveries != 1 {
 		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
 	}
-	cached, err := loadProviderCatalogCache(cacheRoot, "corrupt", "corrupt 4.0.0")
+	cached, err := loadProviderCatalogCache(cacheRoot, "corrupt", "4.0.0")
 	if err != nil {
 		t.Fatalf("loadProviderCatalogCache() error: %v", err)
 	}
 	if len(cached) != 1 || cached[0].ID != "refreshed-model" {
 		t.Fatalf("cached models = %+v, want refreshed-model", cached)
+	}
+}
+
+// hostileVersion is a provider version string carrying both credential-like
+// content and a terminal-control (OSC) escape — the shape a malformed or
+// adversarial `opencode --version` could take. The cache layer must never let it
+// reach a cache key, filename, persisted metadata, or any diagnostic string.
+const hostileVersion = "1.17.9 sk-ant-deadbeefdeadbeefdeadbeef0123\x1b]0;pwn\x07"
+
+// hostileSecret is the credential-like substring of hostileVersion; assertions
+// check it never surfaces in an error, a file path, or a cache artifact.
+const hostileSecret = "sk-ant-deadbeefdeadbeefdeadbeef0123"
+
+// unparseableHostileVersion carries credential-like and terminal-control content
+// but contains NO recognizable semver, so the shared version parser cannot
+// extract a cache key from it. The startup path must reject it, warn generically,
+// and never echo it — distinct from hostileVersion, which begins with a valid
+// semver the parser can salvage.
+const unparseableHostileVersion = hostileSecret + "\x1b]0;pwn\x07"
+
+// assertNoCacheLeak walks cacheRoot and fails if any directory entry name or
+// file body contains the credential-like secret or the OSC terminal-control
+// bytes from a rejected version.
+func assertNoCacheLeak(t *testing.T, cacheRoot string) {
+	t.Helper()
+	err := filepath.WalkDir(cacheRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.Contains(path, hostileSecret) || strings.ContainsRune(path, '\x1b') {
+			t.Fatalf("cache path leaked credential/control content: %q", path)
+		}
+		if d.IsDir() {
+			return nil
+		}
+		body, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(body), hostileSecret) || strings.ContainsRune(string(body), '\x1b') {
+			t.Fatalf("cache file %q leaked credential/control content", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk cache root: %v", err)
+	}
+}
+
+func assertDiagnosticClean(t *testing.T, where string, msg string) {
+	t.Helper()
+	if strings.Contains(msg, hostileSecret) {
+		t.Fatalf("%s leaked credential-like content: %q", where, msg)
+	}
+	if strings.ContainsRune(msg, '\x1b') {
+		t.Fatalf("%s leaked terminal-control bytes: %q", where, msg)
+	}
+}
+
+// TestCacheableVersion classifies version strings: a bounded, version-shaped
+// token is cacheable; anything carrying whitespace, control bytes, trailing
+// credential-like content, an unexpected shape, or excessive length is not.
+func TestCacheableVersion(t *testing.T) {
+	cacheable := []string{"1.17.9", "0.116.0", "2.1.81", "v1.2.3", "1.2.3-rc.1", "1.2.3+build.5"}
+	for _, v := range cacheable {
+		if !cacheableVersion(v) {
+			t.Errorf("cacheableVersion(%q) = false, want true", v)
+		}
+	}
+	uncacheable := []string{
+		"",
+		"   ",
+		"provider 2.0.0",                    // name prefix + space
+		hostileVersion,                      // credential + control content
+		hostileSecret,                       // bare credential-shaped token, no semver
+		"1.17.9 extra",                      // trailing junk
+		"1.17.9\x1b]0;x\x07",                // trailing terminal control
+		"1.17.9\n2.0.0",                     // embedded newline
+		"sk-ant-" + strings.Repeat("a", 80), // overlong
+	}
+	for _, v := range uncacheable {
+		if cacheableVersion(v) {
+			t.Errorf("cacheableVersion(%q) = true, want false", v)
+		}
+	}
+}
+
+// TestSaveProviderCatalogCache_RejectsUncacheableVersionWithoutLeak is the
+// cache-WRITE diagnostic guarantee the phase requires: a hostile version is
+// refused, the returned error never echoes the credential-like or terminal-
+// control content, and no cache artifact carrying that content is written.
+func TestSaveProviderCatalogCache_RejectsUncacheableVersionWithoutLeak(t *testing.T) {
+	cacheRoot := t.TempDir()
+	models := []llm.ModelInfo{{ID: "m", DisplayName: "M", ContextWindow: 1000, Category: "balanced"}}
+
+	err := saveProviderCatalogCache(cacheRoot, "opencode", hostileVersion, models)
+	if err == nil {
+		t.Fatal("saveProviderCatalogCache() = nil, want refusal for uncacheable version")
+	}
+	assertDiagnosticClean(t, "saveProviderCatalogCache error", err.Error())
+	assertNoCacheLeak(t, cacheRoot)
+}
+
+// TestLoadProviderCatalogCache_RejectsUncacheableVersionWithoutLeak is the
+// cache-READ diagnostic guarantee: a hostile version is refused before a cache
+// path is built from it, the returned error never echoes the credential-like or
+// terminal-control content, and no path carrying that content is created.
+func TestLoadProviderCatalogCache_RejectsUncacheableVersionWithoutLeak(t *testing.T) {
+	cacheRoot := t.TempDir()
+
+	_, err := loadProviderCatalogCache(cacheRoot, "opencode", hostileVersion)
+	if err == nil {
+		t.Fatal("loadProviderCatalogCache() error = nil, want refusal for uncacheable version")
+	}
+	assertDiagnosticClean(t, "loadProviderCatalogCache error", err.Error())
+	assertNoCacheLeak(t, cacheRoot)
+}
+
+// TestDiscoverProviderCatalogs_RejectsUnparseableVersionWithoutLeak proves the
+// startup orchestration rejects a provider version it cannot parse into a semver
+// before using it as a cache key or in a diagnostic: discovery still runs and the
+// catalog is populated, exactly one ordered warning is emitted, that warning never
+// echoes the credential-like or terminal-control content, and nothing is cached.
+func TestDiscoverProviderCatalogs_RejectsUnparseableVersionWithoutLeak(t *testing.T) {
+	cacheRoot := t.TempDir()
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "opencode", hasCLI: true},
+		versionInfo:  unparseableHostileVersion,
+		discovered: []llm.ModelInfo{
+			{ID: "live-model", DisplayName: "Live Model", ContextWindow: 200_000, Category: "capable"},
+		},
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1 (discovery still runs without caching)", p.discoveries)
+	}
+	if len(p.catalog) != 1 || p.catalog[0].ID != "live-model" {
+		t.Fatalf("catalog = %+v, want discovered live-model", p.catalog)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want exactly one unrecognized-version warning", warnings)
+	}
+	assertDiagnosticClean(t, "startup warning", warnings[0])
+	assertNoCacheLeak(t, cacheRoot)
+}
+
+// TestDiscoverProviderCatalogs_PrefixedVersionNormalizesToCacheKey proves the
+// startup path normalizes human-readable, name- or "v"-prefixed CLI version
+// output (the shape Claude and Codex report from VersionInfo) through the shared
+// semver parser before using it as a cache key: a cache miss writes the catalog
+// under the parsed token and a second startup at the same version installs that
+// cache without re-running discovery. Without normalization these valid versions
+// are rejected and re-discovered (uncached) on every startup.
+func TestDiscoverProviderCatalogs_PrefixedVersionNormalizesToCacheKey(t *testing.T) {
+	cases := []struct {
+		name        string
+		versionInfo string
+		wantKey     string
+	}{
+		{"claude name prefix", "claude 2.1.112", "2.1.112"},
+		{"codex name and v prefix", "OpenAI Codex v0.120.0", "0.120.0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cacheRoot := t.TempDir()
+			discovered := []llm.ModelInfo{
+				{ID: "live-model", DisplayName: "Live Model", ContextWindow: 200_000, Category: "capable"},
+			}
+
+			// First startup: cache miss → discovery runs and persists under the
+			// parsed token, not the raw prefixed output.
+			p1 := &stubCatalogDiscoveryProvider{
+				stubProvider: stubProvider{name: "prov", hasCLI: true},
+				versionInfo:  tc.versionInfo,
+				discovered:   discovered,
+			}
+			if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p1}, cacheRoot, nil); len(warnings) != 0 {
+				t.Fatalf("first-startup warnings = %v, want none", warnings)
+			}
+			if p1.discoveries != 1 {
+				t.Fatalf("discovery calls = %d, want 1 on cache miss", p1.discoveries)
+			}
+			cached, err := loadProviderCatalogCache(cacheRoot, "prov", tc.wantKey)
+			if err != nil {
+				t.Fatalf("loadProviderCatalogCache(%q) error: %v, want catalog cached under parsed token", tc.wantKey, err)
+			}
+			if len(cached) != 1 || cached[0].ID != "live-model" {
+				t.Fatalf("cached = %+v, want live-model", cached)
+			}
+
+			// Second startup at the same version: cache hit → discovery does NOT run.
+			p2 := &stubCatalogDiscoveryProvider{
+				stubProvider: stubProvider{name: "prov", hasCLI: true},
+				versionInfo:  tc.versionInfo,
+				discoverErr:  errors.New("discovery should not run on cache hit"),
+			}
+			if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil); len(warnings) != 0 {
+				t.Fatalf("second-startup warnings = %v, want none", warnings)
+			}
+			if p2.discoveries != 0 {
+				t.Fatalf("second-startup discovery calls = %d, want 0 (version-keyed cache hit)", p2.discoveries)
+			}
+			if len(p2.catalog) != 1 || p2.catalog[0].ID != "live-model" {
+				t.Fatalf("second-startup catalog = %+v, want cached live-model", p2.catalog)
+			}
+		})
+	}
+}
+
+// TestDiscoverProviderCatalogs_NormalizesHostileVersionLineWithoutLeak proves the
+// startup path salvages a hostile version LINE that still begins with a valid
+// semver: the shared parser extracts the clean token "1.17.9" and drops the
+// trailing credential-like and terminal-control content, so the catalog is cached
+// under the clean key with no leak and no warning.
+func TestDiscoverProviderCatalogs_NormalizesHostileVersionLineWithoutLeak(t *testing.T) {
+	cacheRoot := t.TempDir()
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "opencode", hasCLI: true},
+		versionInfo:  hostileVersion, // "1.17.9 " + credential + OSC escape
+		discovered: []llm.ModelInfo{
+			{ID: "live-model", DisplayName: "Live Model", ContextWindow: 200_000, Category: "capable"},
+		},
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none (hostile line normalizes to a clean semver)", warnings)
+	}
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1 on cache miss", p.discoveries)
+	}
+	// Cached under the parsed token "1.17.9", never the raw hostile line.
+	cached, err := loadProviderCatalogCache(cacheRoot, "opencode", "1.17.9")
+	if err != nil {
+		t.Fatalf("loadProviderCatalogCache(\"1.17.9\") error: %v, want catalog cached under parsed token", err)
+	}
+	if len(cached) != 1 || cached[0].ID != "live-model" {
+		t.Fatalf("cached = %+v, want live-model", cached)
+	}
+	assertNoCacheLeak(t, cacheRoot)
+}
+
+// TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches proves the real
+// OpenCode provider participates in the shared startup discovery + version-keyed
+// cache path: a cache miss runs CLI discovery and persists the result, and a
+// second startup at the same CLI version installs the cached catalog without
+// invoking the CLI again. The runner is faked so the test needs no real OpenCode
+// binary, credentials, or network.
+func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
+	cacheRoot := t.TempDir()
+	var verboseCalls int
+	verbose := "anthropic/claude-sonnet-4-5\n" +
+		`{ "id": "claude-sonnet-4-5", "providerID": "anthropic", "name": "Claude Sonnet 4.5", "status": "active", "limit": { "context": 200000 } }` + "\n"
+	runner := func(_ context.Context, name string, args []string, _ []string) ([]byte, error) {
+		if name != "opencode" {
+			t.Fatalf("ran %q, want opencode", name)
+		}
+		switch strings.Join(args, " ") {
+		case "--version":
+			return []byte("1.17.9\n"), nil
+		case "models --verbose --refresh":
+			verboseCalls++
+			return []byte(verbose), nil
+		default:
+			return nil, fmt.Errorf("unexpected argv %q", strings.Join(args, " "))
+		}
+	}
+
+	const wantID = "anthropic/claude-sonnet-4-5[200K]"
+
+	// First startup: cache miss → discovery runs, catalog populated and cached.
+	p1 := opencode.NewWithRunner(runner)
+	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p1}, cacheRoot, nil); len(warnings) != 0 {
+		t.Fatalf("first-startup warnings = %v, want none", warnings)
+	}
+	if verboseCalls != 1 {
+		t.Fatalf("discovery ran %d times, want 1 on cache miss", verboseCalls)
+	}
+	if cat := p1.ModelCatalog(); len(cat) != 1 || cat[0].ID != wantID {
+		t.Fatalf("first-startup catalog = %+v, want discovered %q", cat, wantID)
+	}
+
+	// Second startup at the same version: cache hit → discovery does NOT run.
+	p2 := opencode.NewWithRunner(runner)
+	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil); len(warnings) != 0 {
+		t.Fatalf("second-startup warnings = %v, want none", warnings)
+	}
+	if verboseCalls != 1 {
+		t.Fatalf("discovery ran %d times total, want 1 (version-keyed cache hit skips CLI)", verboseCalls)
+	}
+	if cat := p2.ModelCatalog(); len(cat) != 1 || cat[0].ID != wantID {
+		t.Fatalf("second-startup catalog = %+v, want cached %q", cat, wantID)
+	}
+}
+
+// TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure proves the
+// plan's degrade-to-fallback contract end-to-end: when a ready, version-eligible
+// OpenCode's live discovery fails, the shared startup path emits an ordered
+// "using built-in fallback" warning AND the provider still surfaces a non-empty
+// curated catalog through CatalogProvider/AvailableModels — so a discovery
+// failure never leaves setup/config consumers with an empty OpenCode model list.
+// The runner is faked so the test needs no real OpenCode binary, credentials, or
+// network.
+func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing.T) {
+	runner := func(_ context.Context, name string, args []string, _ []string) ([]byte, error) {
+		if name != "opencode" {
+			t.Fatalf("ran %q, want opencode", name)
+		}
+		switch strings.Join(args, " ") {
+		case "--version":
+			return []byte("1.17.9\n"), nil
+		case "models --verbose --refresh", "models --verbose", "models":
+			return nil, errors.New("discovery boom")
+		default:
+			return nil, fmt.Errorf("unexpected argv %q", strings.Join(args, " "))
+		}
+	}
+
+	p := opencode.NewWithRunner(runner)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, t.TempDir(), nil)
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "opencode") || !strings.Contains(warnings[0], "built-in fallback") {
+		t.Fatalf("warnings = %v, want one opencode built-in-fallback warning", warnings)
+	}
+
+	// Despite the discovery failure, the provider degrades to its curated
+	// fallback so the registry's model lists and routing never see it as empty.
+	if cat := p.ModelCatalog(); len(cat) == 0 {
+		t.Fatal("ModelCatalog() = empty after discovery failure, want the built-in fallback")
+	}
+	if models := p.AvailableModels(); len(models) == 0 {
+		t.Fatal("AvailableModels() = empty after discovery failure, want the built-in fallback")
 	}
 }
 

@@ -32,11 +32,17 @@ func TestProviderName(t *testing.T) {
 	}
 }
 
-func TestMatchesModel_ExplicitPrefixOnly(t *testing.T) {
+func TestMatchesModel_ExplicitPrefixAndFallback(t *testing.T) {
 	p := New()
 	matchCases := []string{
+		// An explicit "opencode:" prefix always matches, in or out of the catalog.
 		"opencode:anthropic/claude-sonnet-4-5",
-		"opencode:openai/gpt-5",
+		"opencode:vendor/custom-model",
+		// Before discovery, bare slash-form ids/aliases resolve through the curated
+		// fallback catalog, so a ready OpenCode is reachable without the prefix.
+		"anthropic/claude-sonnet-4-5[200K]", // fallback canonical id
+		"anthropic/claude-sonnet-4-5",       // fallback unsuffixed alias
+		"openai/gpt-5",                      // fallback id
 	}
 	for _, m := range matchCases {
 		if !p.MatchesModel(m) {
@@ -44,14 +50,15 @@ func TestMatchesModel_ExplicitPrefixOnly(t *testing.T) {
 		}
 	}
 
-	// Bare model strings must never resolve to OpenCode during Phase 1, so the
-	// provider cannot be selected by automatic defaults or generic lists. The
-	// bare routing prefix with no backend model is not a valid selection either,
-	// so it must not match.
+	// A bare name that is neither a fallback id/alias nor slash-form must not
+	// resolve to OpenCode: it never captures a bare name (e.g. "sonnet",
+	// "gpt-5.4") meant for another provider, nor an unknown slash-form id. The
+	// bare routing prefix with no backend model is not a valid selection either.
 	noMatchCases := []string{
 		"sonnet",
 		"gpt-5.4",
-		"anthropic/claude-sonnet-4-5",
+		"anthropic/claude-opus", // not a fallback id (fallback has claude-opus-4-1)
+		"openai/gpt-4",
 		"openai:gpt-5",
 		"",
 		" opencode:foo", // leading space is not the routing prefix
@@ -65,9 +72,120 @@ func TestMatchesModel_ExplicitPrefixOnly(t *testing.T) {
 	}
 }
 
-func TestAvailableModels_EmptyForExplicitOnly(t *testing.T) {
-	if got := New().AvailableModels(); got != nil {
-		t.Fatalf("AvailableModels() = %v, want nil (explicit-only provider)", got)
+// TestMatchesModel_BareCatalogEntries proves that once a catalog is discovered,
+// a bare slash-form id or one of its aliases resolves to OpenCode through normal
+// catalog matching, while names absent from the catalog still do not.
+func TestMatchesModel_BareCatalogEntries(t *testing.T) {
+	p := New()
+	p.SetModelCatalog([]llm.ModelInfo{
+		{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000},
+		{ID: "openai/gpt-5"},
+	})
+	for _, m := range []string{
+		"anthropic/claude-sonnet-4-5[200K]", // canonical id
+		"anthropic/claude-sonnet-4-5",       // unsuffixed alias
+		"ANTHROPIC/CLAUDE-SONNET-4-5",       // case-insensitive
+		"openai/gpt-5",
+		"opencode:openai/gpt-5", // explicit prefix still matches
+	} {
+		if !p.MatchesModel(m) {
+			t.Errorf("MatchesModel(%q) = false, want true after discovery", m)
+		}
+	}
+	for _, m := range []string{"sonnet", "anthropic/claude-opus", "openai/gpt-4"} {
+		if p.MatchesModel(m) {
+			t.Errorf("MatchesModel(%q) = true, want false (not in catalog)", m)
+		}
+	}
+}
+
+// TestAvailableModels_FallbackThenDiscovered proves OpenCode advertises its
+// curated offline fallback ids before discovery (so setup/config consumers never
+// see an empty model list for a ready OpenCode), then replaces them with the
+// discovered catalog ids once discovery populates a catalog.
+func TestAvailableModels_FallbackThenDiscovered(t *testing.T) {
+	p := New()
+	fallback := p.AvailableModels()
+	if len(fallback) == 0 {
+		t.Fatal("AvailableModels() = empty before discovery, want the built-in fallback catalog")
+	}
+	if !slices.Contains(fallback, "anthropic/claude-sonnet-4-5[200K]") {
+		t.Fatalf("fallback AvailableModels() = %v, want a curated slash-form id", fallback)
+	}
+
+	p.SetModelCatalog([]llm.ModelInfo{
+		{ID: "anthropic/claude-sonnet-4-5[200K]"},
+		{ID: "openai/gpt-5"},
+	})
+	want := []string{"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5"}
+	if got := p.AvailableModels(); !slices.Equal(got, want) {
+		t.Fatalf("AvailableModels() = %v, want %v after discovery replaces the fallback", got, want)
+	}
+}
+
+// TestModelCatalog_FallbackWhenEmpty proves a ready OpenCode whose live discovery
+// failed or returned nothing still exposes a non-empty curated catalog through
+// CatalogProvider — the documented degrade-to-fallback path — and that the
+// fallback spans the cheap/balanced/capable categories selection relies on. A
+// discovered (or cached) catalog overrides the fallback entirely.
+func TestModelCatalog_FallbackWhenEmpty(t *testing.T) {
+	p := New()
+
+	for _, empty := range [][]llm.ModelInfo{nil, {}} {
+		p.SetModelCatalog(empty)
+		cat := p.ModelCatalog()
+		if len(cat) == 0 {
+			t.Fatalf("ModelCatalog() = empty for catalog %v, want the built-in fallback", empty)
+		}
+		categories := map[string]bool{}
+		var ids []string
+		for _, m := range cat {
+			categories[m.Category] = true
+			ids = append(ids, m.ID)
+			if m.ID == "" {
+				t.Errorf("fallback entry has empty ID: %+v", m)
+			}
+		}
+		for _, want := range []string{"cheap", "balanced", "capable"} {
+			if !categories[want] {
+				t.Errorf("fallback categories = %v, want a %q entry so role selection can choose one", ids, want)
+			}
+		}
+	}
+
+	// A discovered catalog overrides the fallback.
+	p.SetModelCatalog([]llm.ModelInfo{{ID: "openai/gpt-5", Category: "capable"}})
+	if got := p.ModelCatalog(); len(got) != 1 || got[0].ID != "openai/gpt-5" {
+		t.Fatalf("ModelCatalog() = %+v, want the discovered catalog to override the fallback", got)
+	}
+}
+
+// TestFallbackCatalog_SuffixesAndAliases proves fallback entries are normalized
+// exactly like discovered ones: a known context window promotes the id to the
+// "[<window>]" form, records the window, derives a deterministic category, and
+// keeps the bare backend id reachable as an alias. Pricing is absent from the
+// fallback, so ComputeCost stays zero (real cost flows over ACP).
+func TestFallbackCatalog_SuffixesAndAliases(t *testing.T) {
+	p := New()
+	cat := p.ModelCatalog()
+	sonnet, ok := findModel(cat, "anthropic/claude-sonnet-4-5[200K]")
+	if !ok {
+		t.Fatalf("fallback missing suffixed sonnet id; got %+v", cat)
+	}
+	if sonnet.ContextWindow != 200_000 {
+		t.Errorf("fallback sonnet ContextWindow = %d, want 200000", sonnet.ContextWindow)
+	}
+	if sonnet.Category != "balanced" {
+		t.Errorf("fallback sonnet Category = %q, want balanced", sonnet.Category)
+	}
+	if !slices.Contains(sonnet.Aliases, "anthropic/claude-sonnet-4-5") {
+		t.Errorf("fallback sonnet aliases = %v, want unsuffixed backend id preserved", sonnet.Aliases)
+	}
+	if got := p.ComputeCost("anthropic/claude-sonnet-4-5[200K]", 1_000_000, 1_000_000); got != 0 {
+		t.Errorf("ComputeCost(fallback) = %v, want 0 (fallback carries no pricing)", got)
+	}
+	if got := p.ContextWindowForModel("anthropic/claude-sonnet-4-5"); got != 200_000 {
+		t.Errorf("ContextWindowForModel(fallback alias) = %d, want 200000", got)
 	}
 }
 
@@ -80,6 +198,13 @@ func TestBackendModel_StripsRoutingPrefixOnce(t *testing.T) {
 		// "opencode" in slash form is preserved.
 		"opencode:opencode/local-model": "opencode/local-model",
 		"  opencode:x/y  ":              "x/y",
+		// The Agentico context-window suffix is stripped too, so OpenCode never
+		// receives bracketed selection metadata as part of a backend model name.
+		"opencode:anthropic/claude-sonnet-4-5[200K]": "anthropic/claude-sonnet-4-5",
+		"anthropic/claude-sonnet-4-5[1M]":            "anthropic/claude-sonnet-4-5",
+		// A colon-form tag (ollama "model:tag") survives; only the trailing
+		// "[window]" is removed.
+		"opencode:ollama/llama3.1:8b[256K]": "ollama/llama3.1:8b",
 	}
 	for in, want := range cases {
 		if got := BackendModel(in); got != want {
@@ -143,7 +268,9 @@ func TestBuildCommand_RejectsInvalidBackendModels(t *testing.T) {
 		{"embedded space", "anthropic/claude sonnet"},
 		{"embedded newline", "anthropic/cla\nude"},
 		{"double quote", "anthropic/\"claude\""},
-		{"bracket suffix", "anthropic/claude-sonnet-4-5[200K]"},
+		// A space behind a context-window suffix is still rejected: the suffix is
+		// stripped first, exposing the unsafe space underneath.
+		{"unsafe value behind suffix", "anthropic/claude sonnet[200K]"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,6 +298,12 @@ func TestBuildCommand_PreservesValidSlashFormModels(t *testing.T) {
 		"opencode:anthropic/claude-sonnet-4-5": "anthropic/claude-sonnet-4-5",
 		"ollama/llama3.1:8b":                   "ollama/llama3.1:8b",
 		"  opencode:x/y  ":                     "x/y",
+		// The Agentico context-window suffix is selection metadata only: it is
+		// stripped so OpenCode receives the native backend model, with or without
+		// the routing prefix.
+		"anthropic/claude-sonnet-4-5[200K]":        "anthropic/claude-sonnet-4-5",
+		"opencode:anthropic/claude-sonnet-4-5[1M]": "anthropic/claude-sonnet-4-5",
+		"opencode:ollama/llama3.1:8b[256K]":        "ollama/llama3.1:8b",
 	}
 	for in, want := range cases {
 		t.Run(in, func(t *testing.T) {
@@ -311,13 +444,86 @@ func TestEnforcesMinVersion_True(t *testing.T) {
 	}
 }
 
-func TestCostAndContext_TreatedAsZero(t *testing.T) {
-	p := New()
-	if got := p.ComputeCost("anthropic/claude-sonnet-4-5", 1000, 2000); got != 0 {
-		t.Fatalf("ComputeCost() = %v, want 0 (unknown pricing)", got)
+// TestVersionInfo_ParsesSemverAndNeverEchoesRawOutput proves VersionInfo returns
+// the parsed semver — never the raw `opencode --version` output — so the startup
+// catalog cache key, cache filename, and persisted cache metadata can never carry
+// trailing credential-like or terminal-control content from a malformed or
+// hostile version line. On unparseable output it returns a generic error that
+// does not echo the raw output, closing the same leak on the version diagnostic.
+func TestVersionInfo_ParsesSemverAndNeverEchoesRawOutput(t *testing.T) {
+	const secret = "sk-ant-deadbeefdeadbeefdeadbeef0123"
+	cases := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "clean semver", raw: "1.17.9\n", want: "1.17.9"},
+		{name: "trailing credential stripped", raw: "1.17.9 " + secret + "\n", want: "1.17.9"},
+		{name: "terminal control stripped", raw: "1.17.9\x1b]0;pwn\x07\n", want: "1.17.9"},
+		{name: "name prefixed", raw: "opencode 1.17.9", want: "1.17.9"},
+		{name: "no semver errors without echo", raw: secret + "\n", wantErr: true},
+		{name: "empty errors", raw: "", wantErr: true},
 	}
-	if got := p.ContextWindowForModel("anthropic/claude-sonnet-4-5"); got != 0 {
-		t.Fatalf("ContextWindowForModel() = %d, want 0 (unknown window)", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := func(_ context.Context, name string, args []string, _ []string) ([]byte, error) {
+				if name != "opencode" || strings.Join(args, " ") != "--version" {
+					t.Fatalf("ran %q %v, want `opencode --version`", name, args)
+				}
+				return []byte(tc.raw), nil
+			}
+			got, err := NewWithRunner(runner).VersionInfo()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("VersionInfo() = %q, want error", got)
+				}
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("VersionInfo() error %q echoed credential-like raw output", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("VersionInfo() error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("VersionInfo() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCostAndContext_ZeroWithoutMetadata proves that for a model absent from any
+// catalog (no pricing and no context window in either the discovered catalog or
+// the fallback), cost and context window both report the "unknown" zero rather
+// than a guessed value. The curated fallback carries context windows but never
+// pricing, so even a fallback model's cost stays zero.
+func TestCostAndContext_ZeroWithoutMetadata(t *testing.T) {
+	p := New()
+	// A fallback model has a known window but no pricing → zero cost.
+	if got := p.ComputeCost("anthropic/claude-sonnet-4-5", 1000, 2000); got != 0 {
+		t.Fatalf("ComputeCost(fallback) = %v, want 0 (fallback carries no pricing)", got)
+	}
+	// A model in no catalog at all → unknown (zero) window and zero cost.
+	if got := p.ComputeCost("vendor/unknown-model", 1000, 2000); got != 0 {
+		t.Fatalf("ComputeCost(unknown) = %v, want 0 (no pricing metadata)", got)
+	}
+	if got := p.ContextWindowForModel("vendor/unknown-model"); got != 0 {
+		t.Fatalf("ContextWindowForModel(unknown) = %d, want 0 (no catalog metadata)", got)
+	}
+	// A catalog with no pricing (e.g. loaded from the version-keyed cache) still
+	// yields zero cost, but its discovered context window is returned.
+	p.SetModelCatalog([]llm.ModelInfo{
+		{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000},
+	})
+	if got := p.ComputeCost("anthropic/claude-sonnet-4-5[200K]", 1_000_000, 1_000_000); got != 0 {
+		t.Fatalf("ComputeCost() = %v, want 0 when catalog carries no pricing", got)
+	}
+	if got := p.ContextWindowForModel("anthropic/claude-sonnet-4-5[200K]"); got != 200_000 {
+		t.Fatalf("ContextWindowForModel(suffixed) = %d, want 200000", got)
+	}
+	if got := p.ContextWindowForModel("anthropic/claude-sonnet-4-5"); got != 200_000 {
+		t.Fatalf("ContextWindowForModel(alias) = %d, want 200000", got)
 	}
 }
 
@@ -344,13 +550,21 @@ func TestProviderImplementsExpectedInterfaces(t *testing.T) {
 	if _, ok := p.(llm.CostCalculator); !ok {
 		t.Error("Provider does not implement llm.CostCalculator")
 	}
-	// Phase 1 keeps OpenCode out of catalog-driven surfaces: it must NOT
-	// advertise a discoverable catalog.
-	if _, ok := p.(llm.CatalogProvider); ok {
-		t.Error("Provider unexpectedly implements llm.CatalogProvider (must stay out of catalog defaults)")
+	// OpenCode now participates in the shared catalog surfaces: it advertises a
+	// discoverable, refreshable, progress-streaming, enrichable catalog so it
+	// flows through the same discovery, cache, registry, and model-list paths as
+	// the other providers.
+	if _, ok := p.(llm.CatalogProvider); !ok {
+		t.Error("Provider does not implement llm.CatalogProvider")
 	}
-	if _, ok := p.(llm.CatalogDiscoverer); ok {
-		t.Error("Provider unexpectedly implements llm.CatalogDiscoverer")
+	if _, ok := p.(llm.CatalogDiscoverer); !ok {
+		t.Error("Provider does not implement llm.CatalogDiscoverer")
+	}
+	if _, ok := p.(llm.CatalogProgressDiscoverer); !ok {
+		t.Error("Provider does not implement llm.CatalogProgressDiscoverer")
+	}
+	if _, ok := p.(llm.CatalogEnricher); !ok {
+		t.Error("Provider does not implement llm.CatalogEnricher")
 	}
 }
 
@@ -500,40 +714,102 @@ func TestCheckReadiness_TimeoutDistinguished(t *testing.T) {
 	}
 }
 
-// TestExplicitOnlyRouting_RegistryLevel proves that with OpenCode registered
-// alongside other providers, only an explicit "opencode:" selection resolves to
-// it, bare names route elsewhere, the backend slash-form is passed through
-// unchanged, and OpenCode contributes no entries to the registry's model lists.
-func TestExplicitOnlyRouting_RegistryLevel(t *testing.T) {
+// TestFallbackRouting_RegistryLevel proves that before live discovery, an
+// OpenCode registered alongside other providers still degrades to its curated
+// fallback catalog: an explicit "opencode:" selection routes to OpenCode and
+// passes the backend slash-form through unchanged, a bare fallback id resolves
+// to OpenCode (canonicalized to the suffixed catalog id), and a bare name
+// belonging to another provider still routes there. (List-surface contribution
+// is covered provider-level by TestAvailableModels_FallbackThenDiscovered, which
+// does not depend on the opencode CLI being installed for DetectCLI.)
+func TestFallbackRouting_RegistryLevel(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&fakeBareProvider{name: "claude", models: []string{"sonnet", "opus"}})
 	reg.Register(New())
 
-	prov, bare, err := reg.ResolveModel("opencode:anthropic/claude-sonnet-4-5")
-	if err != nil {
-		t.Fatalf("ResolveModel(opencode:...) error: %v", err)
-	}
-	if prov.Name() != "opencode" {
-		t.Fatalf("ResolveModel routed to %q, want opencode", prov.Name())
-	}
-	if bare != "anthropic/claude-sonnet-4-5" {
-		t.Fatalf("ResolveModel bare model = %q, want backend slash form unchanged", bare)
+	// An explicit selection for a fallback model canonicalizes to the suffixed
+	// fallback id (the same canonicalization a discovered catalog applies); the
+	// "[200K]" is selection metadata that BackendModel later strips for launch.
+	if prov, bare, err := reg.ResolveModel("opencode:anthropic/claude-sonnet-4-5"); err != nil ||
+		prov.Name() != "opencode" || bare != "anthropic/claude-sonnet-4-5[200K]" {
+		t.Fatalf("ResolveModel(opencode:anthropic/claude-sonnet-4-5) = (%v, %q, %v), want opencode canonicalized to the suffixed fallback id", prov, bare, err)
 	}
 
-	// A bare model resolves to the other provider, never OpenCode.
+	// An explicit selection for a model absent from the fallback still routes to
+	// OpenCode and passes the backend slash-form through unchanged.
+	if prov, bare, err := reg.ResolveModel("opencode:vendor/custom-model"); err != nil ||
+		prov.Name() != "opencode" || bare != "vendor/custom-model" {
+		t.Fatalf("ResolveModel(opencode:vendor/custom-model) = (%v, %q, %v), want opencode passthrough", prov, bare, err)
+	}
+
+	// A bare fallback slash-form id resolves to OpenCode and canonicalizes to the
+	// suffixed fallback catalog id.
+	if prov, bare, err := reg.ResolveModel("anthropic/claude-sonnet-4-5"); err != nil ||
+		prov.Name() != "opencode" || bare != "anthropic/claude-sonnet-4-5[200K]" {
+		t.Fatalf("ResolveModel(anthropic/claude-sonnet-4-5) = (%v, %q, %v), want opencode canonicalized to the suffixed fallback id", prov, bare, err)
+	}
+
+	// A bare name belonging to another provider still routes there, never to the
+	// OpenCode fallback (the fallback ids are slash-form only).
 	prov2, _, err := reg.ResolveModel("sonnet")
 	if err != nil {
 		t.Fatalf("ResolveModel(sonnet) error: %v", err)
 	}
-	if prov2.Name() == "opencode" {
-		t.Fatal("bare model 'sonnet' resolved to opencode; explicit-only routing violated")
+	if prov2.Name() != "claude" {
+		t.Fatalf("bare model 'sonnet' resolved to %q, want claude", prov2.Name())
+	}
+}
+
+// TestCatalogBackedRouting_RegistryLevel proves that once OpenCode advertises a
+// discovered catalog, the registry resolves explicit "opencode:" selections,
+// bare slash-form catalog ids, and unsuffixed aliases to OpenCode and
+// canonicalizes them to the suffixed catalog id, while bare names belonging to
+// another provider still route there (backward compatibility) and an unknown
+// bare model is unresolved.
+func TestCatalogBackedRouting_RegistryLevel(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&fakeBareProvider{name: "claude", models: []string{"sonnet", "opus"}})
+	oc := New()
+	oc.SetModelCatalog([]llm.ModelInfo{
+		{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000, Category: "balanced"},
+		{ID: "openai/gpt-5", Category: "capable"},
+	})
+	reg.Register(oc)
+
+	const canonical = "anthropic/claude-sonnet-4-5[200K]"
+	routesToOpenCode := map[string]string{
+		"opencode:anthropic/claude-sonnet-4-5[200K]": canonical, // explicit, suffixed
+		"opencode:anthropic/claude-sonnet-4-5":       canonical, // explicit, unsuffixed alias
+		"anthropic/claude-sonnet-4-5[200K]":          canonical, // bare canonical id
+		"anthropic/claude-sonnet-4-5":                canonical, // bare unsuffixed alias
+	}
+	for in, wantBare := range routesToOpenCode {
+		prov, bare, err := reg.ResolveModel(in)
+		if err != nil {
+			t.Fatalf("ResolveModel(%q) error: %v", in, err)
+		}
+		if prov.Name() != "opencode" {
+			t.Errorf("ResolveModel(%q) routed to %q, want opencode", in, prov.Name())
+		}
+		if bare != wantBare {
+			t.Errorf("ResolveModel(%q) bare = %q, want %q", in, bare, wantBare)
+		}
 	}
 
-	// OpenCode contributes nothing to the registry's user-selectable models.
-	for _, m := range reg.AvailableModels() {
-		if strings.HasPrefix(m, "opencode") || strings.Contains(m, "anthropic/") {
-			t.Errorf("registry AvailableModels() leaked an OpenCode model: %q", m)
-		}
+	// A bare name belonging to another provider still routes there.
+	if prov, _, err := reg.ResolveModel("sonnet"); err != nil || prov.Name() != "claude" {
+		t.Fatalf("ResolveModel(sonnet) = (%v, %v), want claude provider", prov, err)
+	}
+
+	// An explicit opencode: selection for a model absent from the catalog still
+	// routes to OpenCode and passes the backend through unchanged.
+	if prov, bare, err := reg.ResolveModel("opencode:vendor/custom-model"); err != nil || prov.Name() != "opencode" || bare != "vendor/custom-model" {
+		t.Fatalf("ResolveModel(opencode:vendor/custom-model) = (%v, %q, %v), want opencode passthrough", prov, bare, err)
+	}
+
+	// An unknown bare model resolves to no provider.
+	if _, _, err := reg.ResolveModel("vendor/unknown-model"); err == nil {
+		t.Fatal("ResolveModel(vendor/unknown-model) succeeded, want error for unknown bare model")
 	}
 }
 

@@ -20,8 +20,11 @@ import (
 )
 
 // Module registers the OpenCode provider in the LLM registry. It is included
-// only when OpenCode is explicitly requested (e.g. `--providers opencode`);
-// Phase 1 keeps OpenCode out of the default provider set.
+// only when OpenCode is explicitly requested (`--providers opencode`) or
+// auto-registered because the config already selects an `opencode:` model;
+// OpenCode is not part of the unconditional default provider set. Once
+// registered and ready it discovers and contributes a model catalog like the
+// other providers.
 var Module = fx.Module("llm-opencode",
 	fx.Provide(New),
 	fx.Invoke(func(r *llm.Registry, p *Provider) {

@@ -75,8 +75,13 @@ var kvSecretPattern = regexp.MustCompile(`(?i)((?:api[_-]?key|access[_-]?key|sec
 
 // tokenPrefixPattern matches standalone API-key / token literals carrying a
 // well-known vendor prefix, even when they appear with no surrounding key name
-// (for example in a free-text error message).
-var tokenPrefixPattern = regexp.MustCompile(`\b(sk|pk|rk|ghp|gho|ghu|ghs|ghr|github_pat|xox[baprs]|glpat|AKIA|ASIA|AIza|ya29)[-_][A-Za-z0-9_\-./]{6,}`)
+// (for example in a free-text error message). Most listed prefixes are short and
+// only become distinctive once a `-`/`_` separator follows (sk-, ghp_, glpat-),
+// so the separator is required to avoid redacting ordinary words. Google API
+// keys are the exception: they begin `AIza` immediately followed by the key body
+// with no separator (e.g. AIzaSy...), so `AIza` matches on its own — the prefix
+// is distinctive enough that no separator is needed to tell it apart from prose.
+var tokenPrefixPattern = regexp.MustCompile(`\b(?:(?:sk|pk|rk|ghp|gho|ghu|ghs|ghr|github_pat|xox[baprs]|glpat|AKIA|ASIA|ya29)[-_]|AIza)[A-Za-z0-9_\-./]{6,}`)
 
 // providerConfigMarker identifies the structural keys of an OpenCode
 // provider-configuration object. A JSON object carrying any of these keys is

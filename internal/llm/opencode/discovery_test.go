@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -171,6 +172,43 @@ func TestDiscover_LineOnlyFallback(t *testing.T) {
 	p.SetModelCatalog(models)
 	if got := p.ComputeCost("anthropic/claude-sonnet-4-5", 1_000_000, 1_000_000); got != 0 {
 		t.Errorf("ComputeCost line-only = %v, want 0", got)
+	}
+}
+
+func TestDiscover_RefreshTimeoutFallsBackBeforeOverallDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	var attempts []string
+	p := &Provider{runner: func(ctx context.Context, name string, args []string, _ []string) ([]byte, error) {
+		if name != "opencode" {
+			t.Fatalf("discovery ran %q, want opencode", name)
+		}
+		key := strings.Join(args, " ")
+		attempts = append(attempts, key)
+		switch key {
+		case verboseRefreshKey:
+			<-ctx.Done()
+			return nil, ctx.Err()
+		case verboseKey:
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			return []byte(verboseTwoModels), nil
+		default:
+			return nil, fmt.Errorf("unexpected argv %q", key)
+		}
+	}}
+
+	models, err := p.DiscoverModelCatalog(ctx)
+	if err != nil {
+		t.Fatalf("DiscoverModelCatalog error: %v; attempts = %v", err, attempts)
+	}
+	if _, ok := findModel(models, "anthropic/claude-sonnet-4-5[200K]"); !ok {
+		t.Fatalf("models = %+v, want cached verbose fallback after refresh timeout", models)
+	}
+	if !slices.Equal(attempts, []string{verboseRefreshKey, verboseKey}) {
+		t.Fatalf("attempts = %v, want refresh then cached verbose", attempts)
 	}
 }
 

@@ -47,6 +47,15 @@ func TestSanitizeDiagnostic_RedactsCredentialLikeValues(t *testing.T) {
 			leaked: "sk-ant-api03-LeAkEdSecretValue1234567890",
 		},
 		{
+			// Real Google API keys begin `AIza` directly followed by the key body
+			// with no `-`/`_` separator, so this case is only redacted by the
+			// tokenPrefixPattern AIza branch — no env value, key/value pair, bearer
+			// scheme, or provider-config object is present to catch it otherwise.
+			name:   "standalone Google API key without separator",
+			in:     "opencode models failed: backend rejected key AIzaSyB1cD3FgH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ for project",
+			leaked: "AIzaSyB1cD3FgH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ",
+		},
+		{
 			name:   "json apiKey field",
 			in:     `auth failed: {"apiKey":"super-secret-key-value-abcdef123456"}`,
 			leaked: "super-secret-key-value-abcdef123456",
@@ -233,14 +242,14 @@ func TestStripTerminalControls_RemovesEscapesAndControlBytes(t *testing.T) {
 // surrounding whitespace trimmed.
 func TestSanitizeCatalogText_SingleLineNoControls(t *testing.T) {
 	cases := map[string]string{
-		"Claude Sonnet 4.5":                       "Claude Sonnet 4.5",
-		"  GPT-5  ":                                "GPT-5",
-		"line\x1b[31mone\ntwo\tthree":              "lineone two three",
-		"name\x07with\x08controls":                 "namewithcontrols",
-		"\x1b]0;title\x07Gemma 4":                  "Gemma 4",
-		"multi   space":                            "multi space",
-		"":                                         "",
-		"\x1b[2K\r":                                "",
+		"Claude Sonnet 4.5":           "Claude Sonnet 4.5",
+		"  GPT-5  ":                   "GPT-5",
+		"line\x1b[31mone\ntwo\tthree": "lineone two three",
+		"name\x07with\x08controls":    "namewithcontrols",
+		"\x1b]0;title\x07Gemma 4":     "Gemma 4",
+		"multi   space":               "multi space",
+		"":                            "",
+		"\x1b[2K\r":                   "",
 	}
 	for in, want := range cases {
 		if got := sanitizeCatalogText(in); got != want {

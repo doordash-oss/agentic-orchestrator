@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
@@ -76,9 +77,12 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 		runner = clirun.DefaultRunner()
 	}
 
+	attempts := discoveryAttempts()
 	var lastErr error
-	for _, args := range discoveryAttempts() {
-		out, err := runner(ctx, "opencode", args, nil)
+	for i, args := range attempts {
+		attemptCtx, cancel := discoveryAttemptContext(ctx, len(attempts)-i)
+		out, err := runner(attemptCtx, "opencode", args, nil)
+		cancel()
 		if err != nil {
 			lastErr = fmt.Errorf(
 				"running 'opencode %s': %s",
@@ -104,6 +108,22 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 		lastErr = fmt.Errorf("opencode model discovery produced no usable catalog")
 	}
 	return nil, lastErr
+}
+
+const defaultDiscoveryAttemptTimeout = 15 * time.Second
+
+func discoveryAttemptContext(ctx context.Context, remainingAttempts int) (context.Context, context.CancelFunc) {
+	if remainingAttempts <= 1 {
+		return context.WithCancel(ctx)
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return context.WithCancel(ctx)
+		}
+		return context.WithTimeout(ctx, remaining/time.Duration(remainingAttempts))
+	}
+	return context.WithTimeout(ctx, defaultDiscoveryAttemptTimeout)
 }
 
 // parseOpenCodeModels parses `opencode models` output (verbose or line-only) into

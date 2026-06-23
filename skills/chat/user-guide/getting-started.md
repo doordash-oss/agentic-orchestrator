@@ -46,7 +46,7 @@ If a legacy `~/.agentic-workflow/` directory already exists from a previous
 install, it is reused in place as the runtime parent so existing data keeps
 working without a manual copy.
 
-When multiple LLM providers are detected (e.g., Claude, Codex, and OpenCode CLIs are installed), Agentic Orchestrator prompts you to choose a preferred provider during initial setup. See [Configuration → Provider Selection](configuration.md#provider-selection) for installing, authenticating, and troubleshooting each provider.
+When multiple LLM providers are detected (e.g., Claude, Codex, and OpenCode CLIs are installed), Agentic Orchestrator does not ask you to pick a preferred one. The detected providers are treated as co-equal, and each phase defaults to the best available model for that role across every provider — you can override any phase later. See [Configuration → Provider Selection](configuration.md#provider-selection) for installing, authenticating, and troubleshooting each provider.
 
 ## Creating Your First Feature
 

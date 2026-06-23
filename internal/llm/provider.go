@@ -225,6 +225,13 @@ type ProtocolOpts struct {
 	DSP            bool
 	StateDir       string
 	MarkerPath     string
+	// ResumeSessionID, when non-empty, asks the protocol to resume a prior
+	// provider session identity rather than start a fresh one. Providers that
+	// resume at the protocol handshake (e.g. OpenCode's ACP session/load) read
+	// it here; providers that resume via a CLI flag (Claude's --resume) read the
+	// equivalent CommandBuildOpts.ResumeSessionID instead. Empty means a normal
+	// new session, so providers that do not resume leave their behavior unchanged.
+	ResumeSessionID string
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider

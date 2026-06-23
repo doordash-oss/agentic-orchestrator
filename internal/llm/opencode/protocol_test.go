@@ -203,10 +203,11 @@ func TestHandshake_HappyPath(t *testing.T) {
 	if got := h.p.NegotiatedVersion(); got != 1 {
 		t.Fatalf("NegotiatedVersion() = %d, want 1", got)
 	}
-	// Resume/session-identity parity is out of scope: the Agentico-facing
-	// SessionID stays empty even though the internal ACP id is tracked.
-	if got := h.p.SessionID(); got != "" {
-		t.Fatalf("SessionID() = %q, want empty (resume parity out of scope)", got)
+	// Session-identity parity: the captured ACP session id is surfaced through
+	// the Agentico-facing SessionID so session views, PID-file identity, and the
+	// permission cache scope to this OpenCode session.
+	if got := h.p.SessionID(); got != "ses_abc123" {
+		t.Fatalf("SessionID() = %q, want ses_abc123", got)
 	}
 }
 
@@ -691,22 +692,23 @@ func TestParseLine_TerminalResultIsStickyOverLaterControlRequest(t *testing.T) {
 	}
 }
 
-// --- out-of-scope / no-op method coverage ---
+// --- lifecycle method coverage (parity) ---
 
-// TestOutOfScopeMethods covers the methods that remain out of scope this phase
-// (resume/session-identity parity, transcript capture, protocol interrupt) plus
-// the no-op hook callback. RespondToControl/RespondToAskUser are no longer stubs
-// and are exercised in control_test.go.
-func TestOutOfScopeMethods(t *testing.T) {
+// TestLifecycleMethodsBeforeHandshake covers the lifecycle methods on a fresh
+// protocol that has not yet established a session. SessionID/TranscriptPath are
+// empty until a session exists, and Interrupt returns ErrNotSupported so the
+// session layer's SIGINT fallback applies in that pre-session window. The
+// no-op hook callback and Close round out the surface.
+func TestLifecycleMethodsBeforeHandshake(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{})
 	if p.SessionID() != "" {
-		t.Error("SessionID() should be empty (resume parity out of scope)")
+		t.Error("SessionID() should be empty before a session is established")
 	}
 	if p.TranscriptPath() != "" {
-		t.Error("TranscriptPath() should be empty (transcript capture out of scope)")
+		t.Error("TranscriptPath() should be empty (OpenCode exposes none over ACP)")
 	}
 	if err := p.Interrupt(); err != llm.ErrNotSupported {
-		t.Errorf("Interrupt() = %v, want ErrNotSupported", err)
+		t.Errorf("Interrupt() before a session = %v, want ErrNotSupported (SIGINT fallback)", err)
 	}
 	if err := p.RespondToHook("1"); err != nil {
 		t.Errorf("RespondToHook() = %v, want nil", err)

@@ -1174,6 +1174,12 @@ type BuildSessionOpts struct {
 	// Leave empty for paths that don't have a marker contract (e.g. tweak
 	// PTY sessions); the provider falls back to its legacy heuristic.
 	MarkerPath string
+	// ResumeSessionID, when set, asks the provider to resume that prior session
+	// identity rather than start a fresh one. It is forwarded to both the
+	// command (Claude's --resume) and the protocol (OpenCode's ACP session/load)
+	// so each provider resumes via its own supported path. Empty means a normal
+	// new session, leaving providers that do not resume unchanged.
+	ResumeSessionID string
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1261,6 +1267,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
 		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
+		ResumeSessionID:      opts.ResumeSessionID,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)
@@ -1275,15 +1282,16 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
-		Model:         bareModel,
-		ContextWindow: contextWindow,
-		WorkDir:       opts.WorkDir,
-		SystemPrompt:  opts.SystemPrompt,
-		InitialPrompt: opts.Prompt,
-		WritableRoots: writableRoots,
-		DSP:           pr.DangerouslySkipPermissions,
-		StateDir:      pr.StateDir,
-		MarkerPath:    opts.MarkerPath,
+		Model:           bareModel,
+		ContextWindow:   contextWindow,
+		WorkDir:         opts.WorkDir,
+		SystemPrompt:    opts.SystemPrompt,
+		InitialPrompt:   opts.Prompt,
+		WritableRoots:   writableRoots,
+		DSP:             pr.DangerouslySkipPermissions,
+		StateDir:        pr.StateDir,
+		MarkerPath:      opts.MarkerPath,
+		ResumeSessionID: opts.ResumeSessionID,
 	})
 
 	sessOpts = &ports.SessionOpts{

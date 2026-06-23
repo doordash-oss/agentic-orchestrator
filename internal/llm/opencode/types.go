@@ -87,10 +87,19 @@ type FSCapability struct {
 
 // InitializeResult is OpenCode's response to initialize.
 type InitializeResult struct {
-	ProtocolVersion   int             `json:"protocolVersion"`
-	AgentInfo         *AgentInfo      `json:"agentInfo,omitempty"`
-	AuthMethods       []AuthMethod    `json:"authMethods,omitempty"`
-	AgentCapabilities json.RawMessage `json:"agentCapabilities,omitempty"`
+	ProtocolVersion   int               `json:"protocolVersion"`
+	AgentInfo         *AgentInfo        `json:"agentInfo,omitempty"`
+	AuthMethods       []AuthMethod      `json:"authMethods,omitempty"`
+	AgentCapabilities AgentCapabilities `json:"agentCapabilities"`
+}
+
+// AgentCapabilities is the subset of the ACP initialize result that gates which
+// optional protocol surfaces Agentico may use for this OpenCode session. Only
+// the fields the tracer acts on are decoded; unknown capability fields are
+// ignored. loadSession reports whether the agent supports session/load, the
+// ACP-standard mechanism Agentico uses to resume a prior session identity.
+type AgentCapabilities struct {
+	LoadSession bool `json:"loadSession"`
 }
 
 // AgentInfo identifies the OpenCode agent.
@@ -119,6 +128,42 @@ type SessionNewResult struct {
 	SessionID string `json:"sessionId"`
 }
 
+// --- session/load (resume) ---
+
+// sessionLoadMethod is the ACP method that resumes a prior session identity.
+// It replays the prior conversation through session/update notifications and
+// returns an (empty) result when the session is ready for the next prompt. It
+// is only used when the agent advertises AgentCapabilities.LoadSession.
+const sessionLoadMethod = "session/load"
+
+// SessionLoadParams are the parameters for session/load. The sessionId names
+// the prior session to resume; cwd and mcpServers mirror session/new so the
+// resumed session is rooted at the same work directory.
+type SessionLoadParams struct {
+	SessionID  string        `json:"sessionId"`
+	Cwd        string        `json:"cwd"`
+	MCPServers []interface{} `json:"mcpServers"`
+}
+
+// --- session/cancel (interrupt) ---
+
+// sessionCancelMethod is the ACP notification Agentico sends to cancel the
+// session's in-flight turn. It is a notification (no id, no response); the
+// agent answers the pending session/prompt with stopReason "cancelled".
+const sessionCancelMethod = "session/cancel"
+
+// SessionCancelParams are the parameters for the session/cancel notification.
+type SessionCancelParams struct {
+	SessionID string `json:"sessionId"`
+}
+
+// Notification is an outbound JSON-RPC 2.0 notification (no id, no response).
+type Notification struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
 // --- session/prompt ---
 
 // PromptParams are the parameters for session/prompt.
@@ -133,9 +178,32 @@ type ContentBlock struct {
 	Text string `json:"text,omitempty"`
 }
 
-// PromptResult is OpenCode's response to session/prompt.
+// PromptResult is OpenCode's response to session/prompt. The end-turn token
+// accounting rides in Usage (the ACP end-turn-token-usage shape OpenCode builds
+// via UsageService.buildUsage); StopReason classifies the outcome. When present,
+// Usage folds into the terminal result's normalized usage.
 type PromptResult struct {
-	StopReason string `json:"stopReason"`
+	StopReason string       `json:"stopReason"`
+	Usage      *PromptUsage `json:"usage,omitempty"`
+}
+
+// PromptUsage is OpenCode's end-turn token accounting attached to the
+// session/prompt result, matching the real ACP wire shape (camelCase, verified
+// against packages/opencode/src/acp/usage.ts and the ACP end-turn-token-usage
+// RFD). thoughtTokens/cachedReadTokens/cachedWriteTokens are omitted when zero.
+//
+// This is the ONLY carrier of the input/output/cache token split — the streamed
+// usage_update notification reports context and cost but no per-token breakdown.
+// Each result's tokens are summed once into the protocol's cumulative totals, so
+// a multi-turn session (e.g. a question/answer follow-up) accumulates without
+// double-counting. When OpenCode emits nothing, usage stays zero (no context %).
+type PromptUsage struct {
+	TotalTokens       int `json:"totalTokens"`
+	InputTokens       int `json:"inputTokens"`
+	OutputTokens      int `json:"outputTokens"`
+	ThoughtTokens     int `json:"thoughtTokens"`
+	CachedReadTokens  int `json:"cachedReadTokens"`
+	CachedWriteTokens int `json:"cachedWriteTokens"`
 }
 
 // ACP stop reasons returned by session/prompt.
@@ -168,6 +236,23 @@ type SessionUpdate struct {
 	Title      string `json:"title,omitempty"`
 	Kind       string `json:"kind,omitempty"`
 	Status     string `json:"status,omitempty"`
+
+	// usage_update: Used is the tokens currently in context (input + cache read),
+	// Size is the model's total context window, and Cost is the cumulative
+	// session cost. These drive context-% reporting and cost; they carry no
+	// per-token (input/output/cache) split — that lives only on the prompt result.
+	Used int        `json:"used,omitempty"`
+	Size int        `json:"size,omitempty"`
+	Cost *UsageCost `json:"cost,omitempty"`
+}
+
+// UsageCost is the cumulative session cost carried on a usage_update. Amount is
+// the running total in Currency (ISO-4217). OpenCode omits it (or sends zero)
+// when the backend has no pricing, in which case Agentico keeps its zero-cost
+// fallback rather than inventing a figure.
+type UsageCost struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
 }
 
 // session/update discriminator values handled by the tracer.
@@ -176,6 +261,7 @@ const (
 	UpdateAgentThoughtChunk = "agent_thought_chunk"
 	UpdateToolCall          = "tool_call"
 	UpdateToolCallUpdate    = "tool_call_update"
+	UpdateUsage             = "usage_update"
 )
 
 // UpdateContent is the content block carried by message-chunk updates.

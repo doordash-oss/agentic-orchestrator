@@ -54,13 +54,38 @@ type Protocol struct {
 	sessionReady chan struct{}
 
 	// Request ids for the handshake exchanges, used to route responses.
-	initID       int
-	sessionNewID int
-	promptID     int
+	initID        int
+	sessionNewID  int
+	sessionLoadID int
+	promptID      int
 
 	negotiatedVersion int
 	acpSessionID      string
 	handshakeErr      error
+
+	// resumeSessionID, when non-empty, asks the handshake to resume that ACP
+	// session via session/load instead of creating a fresh one. loadSession
+	// records whether the agent advertised the loadSession capability in its
+	// initialize result, which gates whether resume is even attempted.
+	resumeSessionID string
+	loadSession     bool
+
+	// transcriptPath is the OpenCode transcript file path, set only if the
+	// provider ever proves one over ACP. It stays empty (best-effort) when
+	// OpenCode exposes no transcript, rather than fabricating a path.
+	transcriptPath string
+
+	// Cumulative usage normalized from OpenCode's ACP lifecycle events.
+	// inTok/outTok/cacheRead/cacheCreate are lifetime sums of the per-turn token
+	// split from the prompt result's end-turn usage. contextFill is the latest
+	// usage_update's `used` (tokens currently in context) and contextWindow its
+	// `size` (model window); both drive context-% reporting. costUSD is the
+	// latest cumulative session cost from a usage_update (zero when OpenCode
+	// supplies none). usageSeen is true once any usage signal has been observed.
+	inTok, outTok, cacheRead, cacheCreate int
+	contextFill, contextWindow            int
+	costUSD                               float64
+	usageSeen                             bool
 
 	assistantBuf  strings.Builder
 	resultEmitted bool
@@ -92,8 +117,9 @@ type permissionOptions struct {
 // NewProtocol creates a new OpenCode ACP protocol handler.
 func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	return &Protocol{
-		opts:  opts,
-		model: BackendModel(opts.Model),
+		opts:            opts,
+		model:           BackendModel(opts.Model),
+		resumeSessionID: strings.TrimSpace(opts.ResumeSessionID),
 	}
 }
 
@@ -113,8 +139,9 @@ func (p *Protocol) SetStdin(w io.Writer) {
 }
 
 // Handshake performs the ACP bootstrap:
-//  1. initialize — negotiate the protocol version.
-//  2. session/new — create a session rooted at the resolved work directory.
+//  1. initialize — negotiate the protocol version and read agent capabilities.
+//  2. session/new (or session/load when resuming) — establish the session,
+//     rooted at the resolved work directory, the prompt is delivered to.
 //  3. session/prompt — deliver the rendered Agentico phase prompt as the first
 //     user turn. The prompt response arrives asynchronously and is surfaced as
 //     a terminal result by ParseLine.
@@ -134,19 +161,45 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 		return err
 	}
 
-	if err := p.sendSessionNew(); err != nil {
+	if err := p.startSession(ctx); err != nil {
+		return err
+	}
+
+	return p.sendPrompt(p.opts.InitialPrompt)
+}
+
+// startSession establishes the ACP session the prompt is delivered to. With no
+// resume request it creates a fresh session via session/new. With a resume
+// request it resumes the prior session via session/load — but only when the
+// agent advertised the loadSession capability; otherwise it fails clearly
+// before any prompt runs, rather than silently starting an unrelated new
+// session under a different identity.
+func (p *Protocol) startSession(ctx context.Context) error {
+	if p.resumeSessionID == "" {
+		return p.runSessionHandshake(ctx, "session/new", p.sendSessionNew)
+	}
+
+	p.mu.Lock()
+	canResume := p.loadSession
+	p.mu.Unlock()
+	if !canResume {
+		return fmt.Errorf("opencode cannot resume session %q: the agent does not advertise the loadSession capability", p.resumeSessionID)
+	}
+	return p.runSessionHandshake(ctx, sessionLoadMethod, p.sendSessionLoad)
+}
+
+// runSessionHandshake sends a session-establishing request and blocks until the
+// session is ready, the context is cancelled, or a handshake error is recorded.
+func (p *Protocol) runSessionHandshake(ctx context.Context, method string, send func() error) error {
+	if err := send(); err != nil {
 		return err
 	}
 	select {
 	case <-p.sessionReady:
 	case <-ctx.Done():
-		return fmt.Errorf("opencode session/new timeout: %w", ctx.Err())
+		return fmt.Errorf("opencode %s timeout: %w", method, ctx.Err())
 	}
-	if err := p.handshakeError(); err != nil {
-		return err
-	}
-
-	return p.sendPrompt(p.opts.InitialPrompt)
+	return p.handshakeError()
 }
 
 func (p *Protocol) handshakeError() error {
@@ -224,6 +277,32 @@ func (p *Protocol) sendSessionNew() error {
 	return nil
 }
 
+// sendSessionLoad resumes a prior ACP session. The response (and any replayed
+// session/update notifications) arrive asynchronously; sessionReady unblocks
+// once the load result is observed.
+func (p *Protocol) sendSessionLoad() error {
+	id := int(nextID.Add(1))
+	p.mu.Lock()
+	p.sessionLoadID = id
+	resumeID := p.resumeSessionID
+	p.mu.Unlock()
+
+	req := Request{
+		JSONRPC: "2.0",
+		ID:      id,
+		Method:  sessionLoadMethod,
+		Params: SessionLoadParams{
+			SessionID:  resumeID,
+			Cwd:        p.opts.WorkDir,
+			MCPServers: []interface{}{},
+		},
+	}
+	if err := p.writeJSON(req); err != nil {
+		return fmt.Errorf("sending session/load request: %w", err)
+	}
+	return nil
+}
+
 func (p *Protocol) sendPrompt(text string) error {
 	id := int(nextID.Add(1))
 	p.mu.Lock()
@@ -287,12 +366,12 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 	hasID := len(env.ID) > 0 && string(env.ID) != "null"
 
-	// Response to one of our requests: has id, no method.
+	// Response to one of our requests: has id, no method. A response may yield
+	// zero messages (handshake responses), one (a session-init message after
+	// session establishment), or several (a prompt result emits a cumulative
+	// usage update plus the terminal result).
 	if hasID && env.Method == "" {
-		if msg, ok := p.handleResponse(env); ok {
-			return []llm.SDKMessage{msg}, nil
-		}
-		return nil, nil
+		return p.handleResponse(env), nil
 	}
 
 	// Server-initiated (agent->client) request: has id and method. Phase 2
@@ -317,10 +396,7 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 	// Notification: method only.
 	if env.Method != "" {
-		if msg, ok := p.parseNotification(env.Method, env.Params); ok {
-			return []llm.SDKMessage{msg}, nil
-		}
-		return nil, nil
+		return p.parseNotification(env.Method, env.Params), nil
 	}
 
 	// Well-formed JSON that is not a valid JSON-RPC envelope (neither id nor
@@ -352,18 +428,21 @@ func malformedStdoutDiagnostic(detail string) string {
 	)
 }
 
-// handleResponse routes a JSON-RPC response to the request that issued it. Only
-// the prompt response yields an Agentico message (the terminal result); the
-// handshake responses unblock Handshake instead.
-func (p *Protocol) handleResponse(env inboundEnvelope) (llm.SDKMessage, bool) {
+// handleResponse routes a JSON-RPC response to the request that issued it. The
+// handshake (initialize) response only unblocks Handshake; a session
+// establishment (session/new or session/load) response unblocks Handshake AND
+// emits a session-init message so the session layer captures the session
+// identity; the prompt response yields the terminal result (and a cumulative
+// usage update).
+func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 	id, err := parseID(env.ID)
 	if err != nil {
 		p.logDebug("[opencode] response with unparseable id %q", string(env.ID))
-		return llm.SDKMessage{}, false
+		return nil
 	}
 
 	p.mu.Lock()
-	initID, sessionNewID, promptID := p.initID, p.sessionNewID, p.promptID
+	initID, sessionNewID, sessionLoadID, promptID := p.initID, p.sessionNewID, p.sessionLoadID, p.promptID
 	p.mu.Unlock()
 
 	hasErr := len(env.Error) > 0 && string(env.Error) != "null"
@@ -372,59 +451,116 @@ func (p *Protocol) handleResponse(env inboundEnvelope) (llm.SDKMessage, bool) {
 	case initID:
 		if hasErr {
 			p.failHandshake(fmt.Errorf("opencode initialize failed: %s", rpcErrorDetail(env.Error)), p.initDone)
-			return llm.SDKMessage{}, false
+			return nil
 		}
 		var res InitializeResult
 		if jerr := json.Unmarshal(env.Result, &res); jerr != nil {
 			p.failHandshake(fmt.Errorf("parsing initialize result: %s", sanitizeDiagnostic(jerr.Error())), p.initDone)
-			return llm.SDKMessage{}, false
+			return nil
 		}
 		p.mu.Lock()
 		p.negotiatedVersion = res.ProtocolVersion
+		p.loadSession = res.AgentCapabilities.LoadSession
 		p.mu.Unlock()
 		p.closeOnce(p.initDone)
-		return llm.SDKMessage{}, false
+		return nil
 
 	case sessionNewID:
 		if hasErr {
 			p.failHandshake(fmt.Errorf("opencode session/new failed: %s", rpcErrorDetail(env.Error)), p.sessionReady)
-			return llm.SDKMessage{}, false
+			return nil
 		}
 		var res SessionNewResult
 		if jerr := json.Unmarshal(env.Result, &res); jerr != nil {
 			p.failHandshake(fmt.Errorf("parsing session/new result: %s", sanitizeDiagnostic(jerr.Error())), p.sessionReady)
-			return llm.SDKMessage{}, false
+			return nil
 		}
 		if strings.TrimSpace(res.SessionID) == "" {
 			p.failHandshake(fmt.Errorf("opencode session/new returned no session id"), p.sessionReady)
-			return llm.SDKMessage{}, false
+			return nil
 		}
 		p.mu.Lock()
 		p.acpSessionID = res.SessionID
 		p.mu.Unlock()
 		p.closeOnce(p.sessionReady)
-		return llm.SDKMessage{}, false
+		return []llm.SDKMessage{p.sessionInitMessage()}
+
+	case sessionLoadID:
+		// A resume that fails must fail clearly: never fall through to a fresh,
+		// unrelated session under a different identity.
+		if hasErr {
+			p.failHandshake(fmt.Errorf("opencode session/load failed for session %q: %s", p.resumeSessionID, rpcErrorDetail(env.Error)), p.sessionReady)
+			return nil
+		}
+		// session/load returns no new id — the resumed session keeps the
+		// requested identity, which is what the next prompt is delivered to.
+		p.mu.Lock()
+		p.acpSessionID = p.resumeSessionID
+		p.mu.Unlock()
+		p.closeOnce(p.sessionReady)
+		return []llm.SDKMessage{p.sessionInitMessage()}
 
 	case promptID:
 		return p.handlePromptResponse(env, hasErr)
 
 	default:
 		p.logDebug("[opencode] unhandled response for id %d", id)
-		return llm.SDKMessage{}, false
+		return nil
 	}
 }
 
-// handlePromptResponse converts the session/prompt response into a terminal
-// result. A clean end_turn is the only success; every other stop reason, an
-// error response, or a malformed result is a non-success terminal state.
-func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) (llm.SDKMessage, bool) {
+// sessionInitMessage builds the system-init SDK message emitted once the ACP
+// session is established (session/new) or resumed (session/load). It carries the
+// captured session id and backend model so the session layer's existing
+// init-message handling captures the model and updates the PID file with the
+// provider session id — a path that is otherwise only driven by providers that
+// emit a native init message (OpenCode does not).
+func (p *Protocol) sessionInitMessage() llm.SDKMessage {
+	p.mu.Lock()
+	sid := p.acpSessionID
+	model := p.model
+	p.mu.Unlock()
+	return llm.SDKMessage{
+		Type:    "system",
+		Subtype: "init",
+		Init: &llm.SystemInitMessage{
+			Type:      "system",
+			Subtype:   "init",
+			SessionID: sid,
+			Model:     model,
+		},
+	}
+}
+
+// handlePromptResponse converts the session/prompt response into the terminal
+// result, prefixed by a cumulative usage update when the result carried end-turn
+// token usage. A clean end_turn is the only success; every other stop reason, an
+// error response, or a malformed result is a non-success terminal state. The
+// result usage is folded (and its usage update emitted) only on the first
+// terminal seal, so a late or duplicate terminal can neither flip the sealed
+// outcome nor double-count tokens.
+func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) []llm.SDKMessage {
 	if hasErr {
-		return p.terminalError(fmt.Sprintf("OpenCode prompt failed: %s", rpcErrorDetail(env.Error)))
+		return seal(p.terminalError(fmt.Sprintf("OpenCode prompt failed: %s", rpcErrorDetail(env.Error))))
 	}
 	var res PromptResult
 	if jerr := json.Unmarshal(env.Result, &res); jerr != nil {
-		return p.terminalError(fmt.Sprintf("malformed OpenCode prompt result: %v", jerr))
+		return seal(p.terminalError(fmt.Sprintf("malformed OpenCode prompt result: %v", jerr)))
 	}
+
+	// Fold the end-turn token usage into the cumulative totals BEFORE building the
+	// terminal result (so the result reflects it) and emit the resulting cumulative
+	// usage update — the only carrier of the input/output/cache split. Fold only
+	// when the outcome is not already sealed, so a late/duplicate terminal can
+	// neither double-count tokens nor (below) flip the sealed outcome.
+	p.mu.Lock()
+	sealed := p.resultEmitted
+	p.mu.Unlock()
+	var usageMsgs []llm.SDKMessage
+	if !sealed {
+		usageMsgs = p.foldResultUsage(res.Usage)
+	}
+
 	switch res.StopReason {
 	case StopReasonEndTurn:
 		// A clean end_turn is a completion only when the agent's final text is
@@ -437,71 +573,99 @@ func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) (llm.S
 		p.mu.Unlock()
 		if msg, emit, done := p.maybeSynthesizeQuestion(lastText); done {
 			if emit {
-				return msg, true
+				return append(usageMsgs, msg)
 			}
-			// A reformat-reminder turn was sent; no message yet — the reformatted
+			// A reformat-reminder turn was sent; no terminal yet — the reformatted
 			// answer arrives on the follow-up turn's response.
-			return llm.SDKMessage{}, false
+			return usageMsgs
 		}
-		return p.terminalSuccess()
+		term, emit := p.terminalSuccess()
+		return appendIfEmit(usageMsgs, term, emit)
 	case StopReasonRefusal:
-		return p.terminalError("OpenCode refused to complete the request")
+		term, emit := p.terminalError("OpenCode refused to complete the request")
+		return appendIfEmit(usageMsgs, term, emit)
 	case StopReasonCancelled:
-		return p.terminalError("OpenCode prompt was cancelled")
+		term, emit := p.terminalError("OpenCode prompt was cancelled")
+		return appendIfEmit(usageMsgs, term, emit)
 	case "":
-		return p.terminalError("OpenCode prompt result carried no stop reason")
+		term, emit := p.terminalError("OpenCode prompt result carried no stop reason")
+		return appendIfEmit(usageMsgs, term, emit)
 	default:
 		// max_tokens, max_turn_requests, and any future/unknown stop reason are
 		// not a clean completion for the tracer.
-		return p.terminalError(fmt.Sprintf("OpenCode prompt ended without completing (stop reason %q)", res.StopReason))
+		term, emit := p.terminalError(fmt.Sprintf("OpenCode prompt ended without completing (stop reason %q)", res.StopReason))
+		return appendIfEmit(usageMsgs, term, emit)
 	}
 }
 
+// seal wraps a terminal message into a result slice, dropping it when it was a
+// suppressed duplicate (emit==false) so a late/duplicate terminal yields nothing.
+func seal(term llm.SDKMessage, emit bool) []llm.SDKMessage {
+	if !emit {
+		return nil
+	}
+	return []llm.SDKMessage{term}
+}
+
+// appendIfEmit appends the terminal result to the (already-folded) usage updates
+// when this is the first terminal seal; a suppressed duplicate (emit==false)
+// contributes no terminal so a late/duplicate terminal cannot flip the outcome.
+func appendIfEmit(usageMsgs []llm.SDKMessage, term llm.SDKMessage, emit bool) []llm.SDKMessage {
+	if !emit {
+		return usageMsgs
+	}
+	return append(usageMsgs, term)
+}
+
+// foldResultUsage folds the prompt result's end-turn token usage into the
+// cumulative totals and returns the resulting cumulative usage update (empty when
+// the result carried no usage). The streamed usage_update carries no token split,
+// so this is what delivers input/output/cache to the session's accumulation.
+func (p *Protocol) foldResultUsage(u *PromptUsage) []llm.SDKMessage {
+	if msg, ok := p.accumulateResultUsage(u); ok {
+		return []llm.SDKMessage{msg}
+	}
+	return nil
+}
+
 // parseNotification handles agent->client notifications (session/update). It
-// normalizes assistant text, thoughts, and tool/terminal progress; everything
-// else is ignored.
-func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm.SDKMessage, bool) {
+// normalizes assistant text, thoughts, and tool/terminal progress, and folds in
+// any token-usage snapshot the update carries; everything else is ignored. A
+// single update may yield both a content message and a usage update, so the
+// result is a slice.
+func (p *Protocol) parseNotification(method string, params json.RawMessage) []llm.SDKMessage {
 	if method != "session/update" {
 		p.logDebug("[opencode] ignoring notification %s", method)
-		return llm.SDKMessage{}, false
+		return nil
 	}
 	var su SessionUpdateParams
 	if err := json.Unmarshal(params, &su); err != nil {
 		p.logDebug("[opencode] failed to parse session/update: %v", err)
-		return llm.SDKMessage{}, false
+		return nil
 	}
 
+	var out []llm.SDKMessage
 	switch su.Update.SessionUpdate {
 	case UpdateAgentMessageChunk:
-		text := ""
-		if su.Update.Content != nil {
-			text = su.Update.Content.Text
+		if text := updateText(su.Update.Content); text != "" {
+			p.mu.Lock()
+			p.assistantBuf.WriteString(text)
+			accumulated := p.assistantBuf.String()
+			p.mu.Unlock()
+			out = append(out, assistantPartial(llm.ContentBlock{Type: "text", Text: accumulated}))
 		}
-		if text == "" {
-			return llm.SDKMessage{}, false
-		}
-		p.mu.Lock()
-		p.assistantBuf.WriteString(text)
-		accumulated := p.assistantBuf.String()
-		p.mu.Unlock()
-		return assistantPartial(llm.ContentBlock{Type: "text", Text: accumulated}), true
 
 	case UpdateAgentThoughtChunk:
-		text := ""
-		if su.Update.Content != nil {
-			text = su.Update.Content.Text
+		if text := updateText(su.Update.Content); text != "" {
+			out = append(out, assistantPartial(llm.ContentBlock{Type: "thinking", Thinking: text}))
 		}
-		if text == "" {
-			return llm.SDKMessage{}, false
-		}
-		return assistantPartial(llm.ContentBlock{Type: "thinking", Thinking: text}), true
 
 	case UpdateToolCall, UpdateToolCallUpdate:
 		name := su.Update.Title
 		if name == "" {
 			name = su.Update.Kind
 		}
-		return llm.SDKMessage{
+		out = append(out, llm.SDKMessage{
 			Type: "tool_progress",
 			ToolProgress: &llm.ToolProgressMessage{
 				Type:      "tool_progress",
@@ -509,11 +673,26 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				ToolName:  name,
 				Data:      su.Update.Status,
 			},
-		}, true
+		})
 
-	default:
-		return llm.SDKMessage{}, false
+	case UpdateUsage:
+		// usage_update carries context fill, context window, and cumulative cost;
+		// normalize it into a cumulative usage update for context-% and cost.
+		if msg, ok := p.applyUsageUpdate(su.Update); ok {
+			out = append(out, msg)
+		}
 	}
+
+	return out
+}
+
+// updateText returns the text of a message-chunk content block, or "" when
+// absent.
+func updateText(c *UpdateContent) string {
+	if c == nil {
+		return ""
+	}
+	return c.Text
 }
 
 // failClosed responds to an unsupported agent->client request with a JSON-RPC
@@ -544,6 +723,95 @@ func unsupportedSurfaceDiagnostic(method string) string {
 		"OpenCode requested an unsupported ACP control path (%s). The tracer supports initialize, session/new, session/prompt, streamed session/update events, and the session/request_permission permission/question surface; it does not host client filesystem or client terminal capabilities, and treats any other method as corruption. Failing closed.",
 		method,
 	)
+}
+
+// --- usage normalization ---
+
+// applyUsageUpdate folds an ACP usage_update into the protocol's context/cost
+// state and returns a cumulative usage update SDK message. Used is the tokens
+// currently in context and Size the model window — both SET, the latest snapshot
+// wins, and absent values leave context unavailable. Cost.Amount is the
+// cumulative session cost when the backend has pricing; absent or zero leaves the
+// zero-cost fallback. The emitted message carries the FULL cumulative snapshot
+// (including the token split accumulated from prompt results) so the session
+// layer's SET-semantics accumulation stays correct across turns rather than being
+// zeroed by an update that carries no token split.
+func (p *Protocol) applyUsageUpdate(u SessionUpdate) (llm.SDKMessage, bool) {
+	p.mu.Lock()
+	p.usageSeen = true
+	if u.Used > 0 {
+		p.contextFill = u.Used
+	}
+	if u.Size > 0 {
+		p.contextWindow = u.Size
+	}
+	if u.Cost != nil && u.Cost.Amount > 0 {
+		p.costUSD = u.Cost.Amount
+	}
+	usage := p.usageLocked()
+	p.mu.Unlock()
+	return llm.SDKMessage{Type: "usage_update", UsageUpdate: &usage}, true
+}
+
+// accumulateResultUsage folds the end-turn token accounting from a session/prompt
+// result into the cumulative input/output/cache totals and returns a cumulative
+// usage update SDK message. This is the only carrier of the token split (the
+// streamed usage_update has none), so each result's tokens are summed once into
+// the lifetime totals — a multi-turn session accumulates without double-counting.
+// ok is false when the result carried no usage, so callers emit nothing.
+func (p *Protocol) accumulateResultUsage(u *PromptUsage) (llm.SDKMessage, bool) {
+	if u == nil {
+		return llm.SDKMessage{}, false
+	}
+	p.mu.Lock()
+	p.usageSeen = true
+	p.inTok += u.InputTokens
+	p.outTok += u.OutputTokens
+	p.cacheRead += u.CachedReadTokens
+	p.cacheCreate += u.CachedWriteTokens
+	usage := p.usageLocked()
+	p.mu.Unlock()
+	return llm.SDKMessage{Type: "usage_update", UsageUpdate: &usage}, true
+}
+
+// usageLocked snapshots the cumulative normalized usage. Callers must hold p.mu.
+// ContextBaseline is 0 (OpenCode, like Claude, has no fixed overhead to
+// subtract). ContextWindow/ContextTotalTokens are populated only when OpenCode
+// supplied them, so the session reports context usage solely when backed by
+// provider metadata.
+func (p *Protocol) usageLocked() llm.Usage {
+	return llm.Usage{
+		InputTokens:              p.inTok,
+		OutputTokens:             p.outTok,
+		CacheReadInputTokens:     p.cacheRead,
+		CacheCreationInputTokens: p.cacheCreate,
+		ContextInputTokens:       p.contextFill,
+		ContextTotalTokens:       p.contextFill,
+		ContextWindow:            p.contextWindow,
+		ContextBaseline:          0,
+	}
+}
+
+// resultUsage returns the cumulative usage to attach to a terminal result, or
+// nil when OpenCode emitted no usage this session (so the result carries no
+// fabricated zero-token usage block).
+func (p *Protocol) resultUsage() *llm.Usage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.usageSeen {
+		return nil
+	}
+	u := p.usageLocked()
+	return &u
+}
+
+// resultCost returns the cumulative session cost OpenCode reported via the latest
+// usage_update, or zero when OpenCode supplied no pricing. Agentico never invents
+// a figure; zero is the documented fallback.
+func (p *Protocol) resultCost() float64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.costUSD
 }
 
 // --- terminal result helpers ---
@@ -578,6 +846,11 @@ func (p *Protocol) terminalSuccess() (llm.SDKMessage, bool) {
 			Type:       "result",
 			Subtype:    "success",
 			StopReason: "end_turn",
+			// Cost is OpenCode's reported cumulative session cost (zero when the
+			// backend has no pricing) — never invented from tokens. Emitted token
+			// usage is preserved.
+			TotalCostUSD: p.resultCost(),
+			Usage:        p.resultUsage(),
 		},
 	}, true
 }
@@ -602,6 +875,11 @@ func (p *Protocol) terminalError(detail string) (llm.SDKMessage, bool) {
 			Subtype: "error",
 			Result:  detail,
 			IsError: true,
+			// Preserve any token usage and cost observed before the failure (nil
+			// usage / zero cost when none was seen, e.g. handshake or fail-closed
+			// errors) — a failed OpenCode turn still reports what it spent.
+			TotalCostUSD: p.resultCost(),
+			Usage:        p.resultUsage(),
 		},
 	}, true
 }
@@ -656,7 +934,7 @@ func parseID(raw json.RawMessage) (int, error) {
 	return n, nil
 }
 
-// --- llm.Protocol methods stubbed for Phase 1 ---
+// --- llm.Protocol lifecycle methods ---
 
 // SendUserMessage delivers a follow-up user turn as a new session/prompt.
 func (p *Protocol) SendUserMessage(text string) error {
@@ -670,17 +948,52 @@ func (p *Protocol) RespondToHook(string) error { return nil }
 // answer the Phase 2 permission and question surfaces back through the ACP
 // protocol.
 
-// Interrupt returns ErrNotSupported; the session layer falls back to signalling
-// the process group. Protocol-level interrupt arrives in a later phase.
-func (p *Protocol) Interrupt() error { return llm.ErrNotSupported }
+// Interrupt cancels the in-flight turn using the ACP session/cancel
+// notification, which OpenCode answers by completing the pending session/prompt
+// with stopReason "cancelled" (mapped to a terminal non-success result). It
+// returns llm.ErrNotSupported only before a session exists (no stdin or no
+// session id yet), so the session layer's process-group SIGINT fallback still
+// applies in that window.
+func (p *Protocol) Interrupt() error {
+	p.mu.Lock()
+	w := p.stdin
+	sessionID := p.acpSessionID
+	p.mu.Unlock()
+	if w == nil || sessionID == "" {
+		return llm.ErrNotSupported
+	}
+	if err := p.writeJSON(Notification{
+		JSONRPC: "2.0",
+		Method:  sessionCancelMethod,
+		Params:  SessionCancelParams{SessionID: sessionID},
+	}); err != nil {
+		// Falling back to the session-level interrupt is safer than reporting a
+		// hard error when the cancel notification cannot be written.
+		p.logDebug("[opencode] session/cancel write failed: %v", err)
+		return llm.ErrNotSupported
+	}
+	return nil
+}
 
-// SessionID returns "" — Agentico resume/session-identity parity for OpenCode is
-// out of scope for Phase 1. The internal ACP session id used for prompt
-// delivery is tracked separately (see ACPSessionID).
-func (p *Protocol) SessionID() string { return "" }
+// SessionID returns the captured ACP session id so Agentico can scope session
+// views, PID-file identity, and the permission cache to this OpenCode session,
+// and so a later run can request a resume of it. It is empty until the handshake
+// establishes (or resumes) a session.
+func (p *Protocol) SessionID() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.acpSessionID
+}
 
-// TranscriptPath returns "" — OpenCode transcript capture is out of scope.
-func (p *Protocol) TranscriptPath() string { return "" }
+// TranscriptPath returns a concrete OpenCode transcript path only when the
+// provider has proven one over ACP. OpenCode exposes no transcript path through
+// the ACP surface Agentico uses, so this is empty (best-effort) rather than a
+// fabricated path; it never panics.
+func (p *Protocol) TranscriptPath() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.transcriptPath
+}
 
 // Close performs no cleanup; the session layer owns process teardown.
 func (p *Protocol) Close() error { return nil }
@@ -720,6 +1033,15 @@ func (p *Protocol) BackendModelForTest() string { return p.model }
 func (p *Protocol) setRequestIDsForTest(initID, sessionNewID, promptID int) {
 	p.mu.Lock()
 	p.initID, p.sessionNewID, p.promptID = initID, sessionNewID, promptID
+	p.mu.Unlock()
+}
+
+// SetRequestIDsForTest pins the handshake request ids (including session/load) so
+// other packages can drive a real protocol through session establishment and
+// prompt responses without running the full ACP handshake. Test-only.
+func (p *Protocol) SetRequestIDsForTest(initID, sessionNewID, sessionLoadID, promptID int) {
+	p.mu.Lock()
+	p.initID, p.sessionNewID, p.sessionLoadID, p.promptID = initID, sessionNewID, sessionLoadID, promptID
 	p.mu.Unlock()
 }
 

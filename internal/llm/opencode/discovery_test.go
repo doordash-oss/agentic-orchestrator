@@ -225,6 +225,27 @@ func TestDiscover_DuplicateBackendIDs(t *testing.T) {
 	}
 }
 
+func TestDiscover_AcceptsPortkeyFireworksBackendID(t *testing.T) {
+	t.Parallel()
+	const backend = "portkey/@fireworks/accounts/fireworks/models/glm-5p2"
+	out := backend + "\n" +
+		`{ "id": "@fireworks/accounts/fireworks/models/glm-5p2", "providerID": "portkey", "name": "glm-5p2", "status": "active", "limit": { "context": 0 } }` + "\n"
+
+	models, _, err := parseOpenCodeModels([]byte(out))
+	if err != nil {
+		t.Fatalf("parseOpenCodeModels() error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1: %+v", len(models), models)
+	}
+	if models[0].ID != backend {
+		t.Fatalf("model ID = %q, want %q", models[0].ID, backend)
+	}
+	if models[0].DisplayName != "glm-5p2" {
+		t.Fatalf("DisplayName = %q, want glm-5p2", models[0].DisplayName)
+	}
+}
+
 // TestDiscover_MissingDisplayName proves a model with no name still gets a
 // non-empty display name derived from the backend id.
 func TestDiscover_MissingDisplayName(t *testing.T) {

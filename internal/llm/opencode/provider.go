@@ -175,14 +175,20 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 // malformed or hostile selection cannot reach command construction:
 //   - empty (or whitespace-only) selections are rejected so OpenCode never
 //     silently falls back to its default model;
+//   - credential-shaped ids are rejected before any diagnostic can echo them;
 //   - a leading "-" is rejected because it would read as a CLI flag;
 //   - any character outside the model-id allowlist (every shell metacharacter
-//     and all whitespace) is rejected as requiring shell interpolation.
+//     and all whitespace) is rejected as requiring shell interpolation;
+//   - malformed slash-form ids are rejected so the launch boundary matches
+//     discovery's model-id safety rules.
 //
 // Valid "provider/model" ids and any OpenCode-meaningful suffix pass unchanged.
 func validateBackendModel(backend string) error {
 	if backend == "" {
 		return fmt.Errorf("empty OpenCode model selection: an explicit provider/model backend is required")
+	}
+	if tokenPrefixPattern.MatchString(backend) {
+		return fmt.Errorf("invalid OpenCode model: credential-like content is not allowed in backend model selection")
 	}
 	if strings.HasPrefix(backend, "-") {
 		return fmt.Errorf("invalid OpenCode model %q: a leading %q looks like a CLI flag", backend, "-")
@@ -192,20 +198,25 @@ func validateBackendModel(backend string) error {
 			return fmt.Errorf("invalid OpenCode model %q: unsupported character %q requires shell interpolation", backend, string(r))
 		}
 	}
+	provider, model, ok := strings.Cut(backend, "/")
+	if !ok || provider == "" || model == "" {
+		return fmt.Errorf("invalid OpenCode model: expected non-empty provider/model backend")
+	}
 	return nil
 }
 
 // isSafeModelRune reports whether r may appear in an OpenCode backend
 // "provider/model" identifier. The allowlist covers slash-form ids, version and
-// variant tokens, and tag separators while excluding whitespace and every shell
-// metacharacter, so a backend that passes never needs shell quoting.
+// variant tokens, tag separators, and provider path prefixes such as
+// Portkey's "@fireworks/..." model namespace while excluding whitespace and
+// every shell metacharacter, so a backend that passes never needs shell quoting.
 func isSafeModelRune(r rune) bool {
 	switch {
 	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
 		return true
 	}
 	switch r {
-	case '/', '-', '_', '.', ':':
+	case '/', '-', '_', '.', ':', '@':
 		return true
 	default:
 		return false

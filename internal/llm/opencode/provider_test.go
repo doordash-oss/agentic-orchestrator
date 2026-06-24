@@ -249,28 +249,34 @@ func TestBuildCommand_StripsRoutingPrefixBeforeModelEnv(t *testing.T) {
 // silently fall back to OpenCode's default model.
 func TestBuildCommand_RejectsInvalidBackendModels(t *testing.T) {
 	p := New()
+	const secret = "sk-ant-deadbeefdeadbeefdeadbeef0123"
 	cases := []struct {
-		name  string
-		model string
+		name        string
+		model       string
+		mustNotLeak string
 	}{
-		{"empty selection", ""},
-		{"routing prefix only", "opencode:"},
-		{"routing prefix with whitespace backend", "opencode:   "},
-		{"flag-shaped bare", "--dangerously-skip"},
-		{"flag-shaped behind prefix", "opencode:--dangerously-skip"},
-		{"command substitution", "anthropic/$(whoami)"},
-		{"variable interpolation", "anthropic/${HOME}"},
-		{"backtick", "anthropic/`id`"},
-		{"semicolon chain", "anthropic/claude;rm -rf /"},
-		{"pipe", "anthropic/claude|cat"},
-		{"ampersand", "anthropic/claude&"},
-		{"redirect", "anthropic/claude>out"},
-		{"embedded space", "anthropic/claude sonnet"},
-		{"embedded newline", "anthropic/cla\nude"},
-		{"double quote", "anthropic/\"claude\""},
+		{"empty selection", "", ""},
+		{"routing prefix only", "opencode:", ""},
+		{"routing prefix with whitespace backend", "opencode:   ", ""},
+		{"flag-shaped bare", "--dangerously-skip", ""},
+		{"flag-shaped behind prefix", "opencode:--dangerously-skip", ""},
+		{"at sign without slash form", "opencode:foo@bar", ""},
+		{"at sign with empty model", "opencode:@fireworks", ""},
+		{"command substitution", "anthropic/$(whoami)", ""},
+		{"variable interpolation", "anthropic/${HOME}", ""},
+		{"backtick", "anthropic/`id`", ""},
+		{"semicolon chain", "anthropic/claude;rm -rf /", ""},
+		{"pipe", "anthropic/claude|cat", ""},
+		{"ampersand", "anthropic/claude&", ""},
+		{"redirect", "anthropic/claude>out", ""},
+		{"embedded space", "anthropic/claude sonnet", ""},
+		{"embedded newline", "anthropic/cla\nude", ""},
+		{"double quote", "anthropic/\"claude\"", ""},
+		{"credential-like backend", "opencode:anthropic/" + secret + "@example", ""},
+		{"credential-like backend with unsafe rune", "opencode:anthropic/" + secret + "@example$bad", secret},
 		// A space behind a context-window suffix is still rejected: the suffix is
 		// stripped first, exposing the unsafe space underneath.
-		{"unsafe value behind suffix", "anthropic/claude sonnet[200K]"},
+		{"unsafe value behind suffix", "anthropic/claude sonnet[200K]", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -280,6 +286,9 @@ func TestBuildCommand_RejectsInvalidBackendModels(t *testing.T) {
 			}
 			if cmd != nil || env != nil {
 				t.Fatalf("BuildCommand(%q) returned cmd=%v env=%v on rejection, want nil/nil", tc.model, cmd, env)
+			}
+			if tc.mustNotLeak != "" && strings.Contains(err.Error(), tc.mustNotLeak) {
+				t.Fatalf("BuildCommand(%q) error leaked credential-like backend content: %q", tc.model, err)
 			}
 		})
 	}
@@ -292,12 +301,13 @@ func TestBuildCommand_RejectsInvalidBackendModels(t *testing.T) {
 func TestBuildCommand_PreservesValidSlashFormModels(t *testing.T) {
 	p := New()
 	cases := map[string]string{
-		"anthropic/claude-sonnet-4-5":          "anthropic/claude-sonnet-4-5",
-		"openai/gpt-5-codex":                   "openai/gpt-5-codex",
-		"opencode:openai/gpt-5":                "openai/gpt-5",
-		"opencode:anthropic/claude-sonnet-4-5": "anthropic/claude-sonnet-4-5",
-		"ollama/llama3.1:8b":                   "ollama/llama3.1:8b",
-		"  opencode:x/y  ":                     "x/y",
+		"anthropic/claude-sonnet-4-5":                                   "anthropic/claude-sonnet-4-5",
+		"openai/gpt-5-codex":                                            "openai/gpt-5-codex",
+		"opencode:openai/gpt-5":                                         "openai/gpt-5",
+		"opencode:anthropic/claude-sonnet-4-5":                          "anthropic/claude-sonnet-4-5",
+		"opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2": "portkey/@fireworks/accounts/fireworks/models/glm-5p2",
+		"ollama/llama3.1:8b":                                            "ollama/llama3.1:8b",
+		"  opencode:x/y  ":                                              "x/y",
 		// The Agentico context-window suffix is selection metadata only: it is
 		// stripped so OpenCode receives the native backend model, with or without
 		// the routing prefix.

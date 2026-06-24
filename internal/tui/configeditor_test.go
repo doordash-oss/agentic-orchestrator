@@ -20,6 +20,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -121,7 +122,7 @@ func TestConfigEditor_RowCursor_FlatWalk_4Checkpoints(t *testing.T) {
 	}
 }
 
-func TestConfigEditor_Tab_CyclesModelsValueOnModelsRow(t *testing.T) {
+func TestConfigEditor_Tab_SelectsModelCellOnModelsRow(t *testing.T) {
 	t.Parallel()
 	fields := []struct {
 		row    int
@@ -149,18 +150,234 @@ func TestConfigEditor_Tab_CyclesModelsValueOnModelsRow(t *testing.T) {
 		before := tt.getter(e.Snapshot())
 
 		e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-		if after := tt.getter(e.Snapshot()); after == before {
-			t.Errorf("row %d: tab did not advance model (before=%q, after=%q)", tt.row, before, after)
+		if after := tt.getter(e.Snapshot()); after != before {
+			t.Errorf("row %d: tab changed model (before=%q, after=%q)", tt.row, before, after)
+		}
+		if e.activeModelCell != modelCellModel {
+			t.Errorf("row %d: tab activeModelCell = %v, want modelCellModel", tt.row, e.activeModelCell)
 		}
 		if e.rowCursor != origRow {
 			t.Errorf("row %d: tab should not move the cursor, got %d", tt.row, e.rowCursor)
 		}
 
-		// shift+tab reverses back to the original value.
 		e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-		if after := tt.getter(e.Snapshot()); after != before {
-			t.Errorf("row %d: shift+tab should undo tab (want %q, got %q)", tt.row, before, after)
+		if e.activeModelCell != modelCellAgent {
+			t.Errorf("row %d: shift+tab activeModelCell = %v, want modelCellAgent", tt.row, e.activeModelCell)
 		}
+		if after := tt.getter(e.Snapshot()); after != before {
+			t.Errorf("row %d: shift+tab changed model (want %q, got %q)", tt.row, before, after)
+		}
+	}
+}
+
+func TestConfigEditor_ModelsUseAgentFirstCells(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
+
+	if got := e.activeModelCell; got != modelCellAgent {
+		t.Fatalf("activeModelCell = %v, want modelCellAgent", got)
+	}
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := e.activeModelCell; got != modelCellModel {
+		t.Fatalf("after tab activeModelCell = %v, want modelCellModel", got)
+	}
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if got := e.activeModelCell; got != modelCellAgent {
+		t.Fatalf("after shift+tab activeModelCell = %v, want modelCellAgent", got)
+	}
+}
+
+func TestConfigEditor_ChangingAgentSelectsRecommendedModel(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: "claude:sonnet[200K]"}}, cat, true)
+	e.rowCursor = 0
+	e.activeModelCell = modelCellAgent
+
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	gotAgent := e.agentValueForField("Research")
+	if gotAgent != "opencode" {
+		t.Fatalf("agent after cycle = %q, want opencode", gotAgent)
+	}
+	gotModel := e.Snapshot().Models.Research
+	if gotModel != "opencode:anthropic/claude-sonnet-4-5[200K]" {
+		t.Fatalf("Research model = %q, want opencode recommended model", gotModel)
+	}
+}
+
+func TestConfigEditor_BlankModelValueInheritsDefaultAgent(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
+
+	if got := e.agentValueForField("Research"); got != "opencode" {
+		t.Fatalf("agentValueForField(Research) = %q, want opencode from phase default", got)
+	}
+
+	e.rowCursor = 0
+	e.activeModelCell = modelCellModel
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := e.agentValueForField("Research"); got != "opencode" {
+		t.Fatalf("after model cycle agentValueForField(Research) = %q, want opencode", got)
+	}
+	if got := e.Snapshot().Models.Research; !strings.HasPrefix(got, "opencode:") {
+		t.Fatalf("after model cycle Research model = %q, want opencode-scoped selection", got)
+	}
+}
+
+func TestConfigEditor_ModelFilteringIsScopedToSelectedAgent(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "claude",
+		models: []string{"sonnet"},
+		catalog: []llm.ModelInfo{
+			{ID: "sonnet", DisplayName: "Claude Sonnet", Category: "balanced"},
+		},
+	})
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"portkey/@fireworks/accounts/fireworks/models/glm-5p2", "ollama/gemma4:31b-256k"},
+		catalog: []llm.ModelInfo{
+			{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2", DisplayName: "GLM 5.2", Category: "balanced"},
+			{ID: "ollama/gemma4:31b-256k", DisplayName: "Gemma 4 31B Dense", Category: "balanced"},
+		},
+	})
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Planning: "opencode:ollama/gemma4:31b-256k"}}, cat, true)
+	e.rowCursor = 1
+	e.activeModelCell = modelCellModel
+
+	e, _ = e.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	e, _ = e.Update(tea.KeyPressMsg{Code: 'g', Text: "g"})
+	e, _ = e.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	e, _ = e.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
+
+	filtered := e.filteredModelEntriesForCurrentRow()
+	if len(filtered) != 1 {
+		t.Fatalf("filtered entries = %+v, want one GLM entry", filtered)
+	}
+	if filtered[0].Agent != "opencode" || filtered[0].DisplayName != "GLM 5.2" {
+		t.Fatalf("filtered[0] = %+v, want OpenCode GLM", filtered[0])
+	}
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := e.Snapshot().Models.Planning; got != "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2" {
+		t.Fatalf("Planning model after enter = %q, want selected GLM", got)
+	}
+}
+
+func TestConfigEditor_ModelFilterConsumesNavigationAndCellKeys(t *testing.T) {
+	t.Parallel()
+	keys := []tea.KeyPressMsg{
+		{Code: tea.KeyRight},
+		{Code: tea.KeyLeft},
+		{Code: tea.KeyTab},
+	}
+	for _, keyMsg := range keys {
+		e := newEditor(&feature.Feature{Models: config.ModelConfig{Research: "claude/sonnet-4-6"}}, true)
+		e.rowCursor = 0
+		e.activeModelCell = modelCellModel
+		e, _ = e.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+		e, _ = e.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+
+		beforeRow := e.rowCursor
+		beforeCell := e.activeModelCell
+		beforeModel := e.Snapshot().Models.Research
+		beforeFilter := e.modelFilter
+
+		e, _ = e.Update(keyMsg)
+
+		if e.rowCursor != beforeRow {
+			t.Fatalf("%s changed rowCursor: got %d, want %d", keyMsg.String(), e.rowCursor, beforeRow)
+		}
+		if e.activeModelCell != beforeCell {
+			t.Fatalf("%s changed activeModelCell: got %v, want %v", keyMsg.String(), e.activeModelCell, beforeCell)
+		}
+		if got := e.Snapshot().Models.Research; got != beforeModel {
+			t.Fatalf("%s changed Research model: got %q, want %q", keyMsg.String(), got, beforeModel)
+		}
+		if !e.ModelFilteringActive() {
+			t.Fatalf("%s cleared filter mode", keyMsg.String())
+		}
+		if e.modelFilter != beforeFilter {
+			t.Fatalf("%s changed filter: got %q, want %q", keyMsg.String(), e.modelFilter, beforeFilter)
+		}
+	}
+}
+
+func TestConfigEditor_EmptyFilterEnterPreservesCurrentModel(t *testing.T) {
+	t.Parallel()
+	e := newEditor(&feature.Feature{Models: config.ModelConfig{Research: "claude/opus-4-7"}}, true)
+	e.rowCursor = 0
+	e.activeModelCell = modelCellModel
+
+	e, _ = e.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if got := e.Snapshot().Models.Research; got != "claude/opus-4-7" {
+		t.Fatalf("Research model after empty filter enter = %q, want current model", got)
+	}
+	if e.ModelFilteringActive() {
+		t.Fatal("filter should close after enter")
+	}
+}
+
+func TestConfigEditor_SingleAgentCyclePreservesValidNonDefaultModel(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "claude",
+		models: []string{"sonnet", "opus"},
+		catalog: []llm.ModelInfo{
+			{ID: "sonnet", Category: "balanced"},
+			{ID: "opus", Category: "capable"},
+		},
+	})
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: "opus"}}, cat, true)
+	e.rowCursor = 0
+	e.activeModelCell = modelCellAgent
+
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := e.Snapshot().Models.Research; got != "opus" {
+		t.Fatalf("after right Research model = %q, want valid non-default opus", got)
+	}
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if got := e.Snapshot().Models.Research; got != "opus" {
+		t.Fatalf("after left Research model = %q, want valid non-default opus", got)
+	}
+}
+
+func TestConfigEditor_SingleAgentCyclePreservesBlankDefaultModel(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "claude",
+		models: []string{"sonnet", "opus"},
+		catalog: []llm.ModelInfo{
+			{ID: "sonnet", Category: "balanced"},
+			{ID: "opus", Category: "capable"},
+		},
+	})
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
+	e.rowCursor = 0
+	e.activeModelCell = modelCellAgent
+
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := e.Snapshot().Models.Research; got != "" {
+		t.Fatalf("after right Research model = %q, want blank default", got)
+	}
+	if e.ModelsChangeCount() != 0 || e.HasChanges() {
+		t.Fatalf("after right created model diff: ModelsChangeCount=%d HasChanges=%v", e.ModelsChangeCount(), e.HasChanges())
+	}
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if got := e.Snapshot().Models.Research; got != "" {
+		t.Fatalf("after left Research model = %q, want blank default", got)
+	}
+	if e.ModelsChangeCount() != 0 || e.HasChanges() {
+		t.Fatalf("after left created model diff: ModelsChangeCount=%d HasChanges=%v", e.ModelsChangeCount(), e.HasChanges())
 	}
 }
 
@@ -202,34 +419,36 @@ func TestConfigEditor_Tab_JumpsEditorsFromNonModelsRow(t *testing.T) {
 func TestConfigEditor_ModelsCycleForward(t *testing.T) {
 	t.Parallel()
 	e := newEditor(nil, true)
-	opts := e.catalog.ModelOptionsForField("Research")
-	if len(opts) < 2 {
-		t.Fatalf("catalog has too few Research options: %v", opts)
+	entries := e.catalog.EntriesForFieldAndAgent("Research", "claude")
+	if len(entries) < 2 {
+		t.Fatalf("catalog has too few claude Research entries: %+v", entries)
 	}
 	e.rowCursor = 0
+	e.activeModelCell = modelCellModel
 	// Seed to the first option.
-	e.models.Research = opts[0]
+	e.models.Research = e.catalog.SelectionValue(entries[0])
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if got := e.Snapshot().Models.Research; got != opts[1] {
-		t.Errorf("→ from %q: got %q, want %q", opts[0], got, opts[1])
+	if got, want := e.Snapshot().Models.Research, e.catalog.SelectionValue(entries[1]); got != want {
+		t.Errorf("→ from %q: got %q, want %q", e.catalog.SelectionValue(entries[0]), got, want)
 	}
 	// Cycle to the last option and verify wrap-to-first.
-	e.models.Research = opts[len(opts)-1]
+	e.models.Research = e.catalog.SelectionValue(entries[len(entries)-1])
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if got := e.Snapshot().Models.Research; got != opts[0] {
-		t.Errorf("→ wrap: got %q, want %q", got, opts[0])
+	if got, want := e.Snapshot().Models.Research, e.catalog.SelectionValue(entries[0]); got != want {
+		t.Errorf("→ wrap: got %q, want %q", got, want)
 	}
 }
 
 func TestConfigEditor_ModelsCycleBackward(t *testing.T) {
 	t.Parallel()
 	e := newEditor(nil, true)
-	opts := e.catalog.ModelOptionsForField("Research")
+	entries := e.catalog.EntriesForFieldAndAgent("Research", "claude")
 	e.rowCursor = 0
-	e.models.Research = opts[0]
+	e.activeModelCell = modelCellModel
+	e.models.Research = e.catalog.SelectionValue(entries[0])
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	if got := e.Snapshot().Models.Research; got != opts[len(opts)-1] {
-		t.Errorf("← from first: got %q, want %q", got, opts[len(opts)-1])
+	if got, want := e.Snapshot().Models.Research, e.catalog.SelectionValue(entries[len(entries)-1]); got != want {
+		t.Errorf("← from first: got %q, want %q", got, want)
 	}
 }
 
@@ -403,10 +622,12 @@ func TestConfigEditor_StaleModelPreservation(t *testing.T) {
 	}
 	// Forward cycle lands on the first eligible, dropping the stale value.
 	e.rowCursor = 0
+	e.activeModelCell = modelCellModel
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	opts := e.catalog.ModelOptionsForField("Research")
-	if got := e.Snapshot().Models.Research; got != opts[0] {
-		t.Errorf("forward cycle from stale: got %q, want first eligible %q", got, opts[0])
+	entries := e.catalog.EntriesForFieldAndAgent("Research", "claude")
+	want := e.catalog.SelectionValue(entries[0])
+	if got := e.Snapshot().Models.Research; got != want {
+		t.Errorf("forward cycle from stale: got %q, want first eligible %q", got, want)
 	}
 }
 
@@ -418,9 +639,10 @@ func TestConfigEditor_StaleModelPreservation(t *testing.T) {
 func TestConfigEditor_OpenCodeGroupRecommendedMarkerAndSlashForm(t *testing.T) {
 	t.Parallel()
 	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
-	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
-	// rowCursor defaults to 0 (the first Models row, Research), so the choice
-	// lines for Research — including provider group labels — are rendered.
+	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{
+		Research: "opencode:anthropic/claude-sonnet-4-5[200K]",
+	}}, cat, true)
+	e.activeModelCell = modelCellModel
 	view := e.renderModelsBox(120)
 	t.Logf("config editor Models view (OpenCode group + recommended marker):\n%s", view)
 
@@ -435,36 +657,24 @@ func TestConfigEditor_OpenCodeGroupRecommendedMarkerAndSlashForm(t *testing.T) {
 	}
 }
 
-// TestConfigEditor_OpenCodeSelectionPersistsBareSlashForm proves cycling onto an
-// OpenCode option persists the bare slash-form backend id (no opencode: prefix
-// injected, the "/" left intact) and that the value is recognized as eligible
-// rather than labelled "(unavailable)".
-func TestConfigEditor_OpenCodeSelectionPersistsBareSlashForm(t *testing.T) {
+// TestConfigEditor_OpenCodeSelectionPersistsRoutedSlashForm proves selecting an
+// OpenCode option persists the routed slash-form backend id and that the value
+// is recognized as eligible rather than labelled "(unavailable)".
+func TestConfigEditor_OpenCodeSelectionPersistsRoutedSlashForm(t *testing.T) {
 	t.Parallel()
 	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
-	opts := cat.ModelOptionsForField("Research")
+	e.rowCursor = 0
+	e.activeModelCell = modelCellModel
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	target := "anthropic/claude-sonnet-4-5[200K]"
-	idx := -1
-	for i, o := range opts {
-		if o == target {
-			idx = i
-			break
-		}
+	want := "opencode:" + target
+	if got := e.Snapshot().Models.Research; got != want {
+		t.Fatalf("persisted Research model = %q, want routed slash-form %q", got, want)
 	}
-	if idx < 0 {
-		t.Fatalf("ModelOptionsForField(Research) = %v, want it to include %q", opts, target)
-	}
-	// Cycle forward until the Research selection lands on the OpenCode model.
-	for i := 0; i <= idx; i++ {
-		e.cycleModelForward()
-	}
-	if got := e.Snapshot().Models.Research; got != target {
-		t.Fatalf("persisted Research model = %q, want bare slash-form %q", got, target)
-	}
-	if !e.modelValueEligible("Research", target) {
-		t.Errorf("bare slash-form %q reported ineligible", target)
+	if !e.modelValueEligible("Research", want) {
+		t.Errorf("routed slash-form %q reported ineligible", want)
 	}
 }
 
@@ -562,21 +772,11 @@ func TestConfigEditor_CycleFromPrefixedDefaultAdvances(t *testing.T) {
 	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
 
-	opts, _ := cat.FlatOptionsForField("Research")
-	// Locate the bare option the prefixed default refers to.
-	idx := -1
-	for i, o := range opts {
-		if o == "anthropic/claude-sonnet-4-5[200K]" {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		t.Fatalf("FlatOptionsForField(Research) = %v, want it to include the OpenCode backend id", opts)
-	}
 	e.rowCursor = 0
+	e.activeModelCell = modelCellModel
 	e.cycleModelForward()
-	want := opts[(idx+1)%len(opts)]
+	entries := cat.EntriesForFieldAndAgent("Research", "opencode")
+	want := cat.SelectionValue(entries[1])
 	if got := e.Snapshot().Models.Research; got != want {
 		t.Errorf("forward cycle from prefixed default: got %q, want next option %q (not first)", got, want)
 	}

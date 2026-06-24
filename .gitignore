@@ -43,3 +43,6 @@ id_ed25519*
 
 # Agentic generated repo knowledge
 .agentic/knowledge/
+
+# Superpowers brainstorming artifacts
+.superpowers/

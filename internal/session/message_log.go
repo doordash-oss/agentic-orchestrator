@@ -60,6 +60,9 @@ func (l *MessageLog) UpdateLastAssistantPartial(msg llm.SDKMessage) {
 	for i := len(l.messages) - 1; i >= 0; i-- {
 		existing := l.messages[i]
 		if existing.Assistant != nil && existing.Subtype == "partial" {
+			if !assistantPartialCanReplace(existing, msg) {
+				break
+			}
 			l.messages[i] = msg
 			return
 		}
@@ -68,6 +71,43 @@ func (l *MessageLog) UpdateLastAssistantPartial(msg llm.SDKMessage) {
 		}
 	}
 	l.messages = append(l.messages, msg)
+}
+
+func assistantPartialCanReplace(existing, incoming llm.SDKMessage) bool {
+	if existing.Assistant == nil || incoming.Assistant == nil {
+		return false
+	}
+	existingKinds := assistantContentKinds(existing.Assistant.Message.Content)
+	incomingKinds := assistantContentKinds(incoming.Assistant.Message.Content)
+	if len(existingKinds) == 0 || len(incomingKinds) == 0 {
+		return true
+	}
+	if existingKinds["thinking"] != incomingKinds["thinking"] {
+		return false
+	}
+	for kind := range existingKinds {
+		if incomingKinds[kind] {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantContentKinds(blocks []llm.ContentBlock) map[string]bool {
+	kinds := make(map[string]bool, len(blocks))
+	for _, block := range blocks {
+		switch {
+		case block.IsThinking():
+			kinds["thinking"] = true
+		case block.IsText():
+			kinds["text"] = true
+		case block.IsToolUse():
+			kinds["tool_use"] = true
+		case block.IsToolResult():
+			kinds["tool_result"] = true
+		}
+	}
+	return kinds
 }
 
 // isPartialCoalesceBoundary reports whether msg closes the streaming-partial

@@ -42,6 +42,8 @@ const (
 	configFocusPhaseList
 	configFocusAgentList
 	configFocusModelList
+	configFocusGateList
+	configFocusGateState
 )
 
 const (
@@ -103,7 +105,8 @@ func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPu
 //     focused.
 //   - down enters the active tab's body.
 //   - the Models body owns an explicit phase → agent → model focus chain.
-//   - Behavior and Gates keep delegating value changes to the embedded editor.
+//   - Behavior delegates value changes to the embedded editor.
+//   - Gates owns an explicit gate → on/off focus chain.
 //
 // AppModel.Update owns enter/esc/save dispatch on top of this — those keys
 // are short-circuited before reaching here.
@@ -143,20 +146,20 @@ func (m EditConfigModel) Update(msg tea.Msg) (EditConfigModel, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
-		} else {
+		}
+		if m.activeTab == tabGates {
+			if m.updateGatesWorkspaceKey(keyMsg) {
+				return m, nil
+			}
+			return m, nil
+		}
+		if m.activeTab == tabBehavior {
 			switch key {
 			case "up", "k":
-				lo, hi := m.tabRowRange()
-				if m.editor.rowCursor <= lo {
-					m.focus = configFocusTabs
-					m.editor.rowCursor = lo
-					return m, nil
-				}
-				m.editor.rowCursor = clampInRange(m.editor.rowCursor-1, lo, hi)
+				m.editor.inquireness = cycleInquireness(m.editor.inquireness, -1)
 				return m, nil
 			case "down", "j":
-				lo, hi := m.tabRowRange()
-				m.editor.rowCursor = clampInRange(m.editor.rowCursor+1, lo, hi)
+				m.editor.inquireness = cycleInquireness(m.editor.inquireness, +1)
 				return m, nil
 			case "tab":
 				m.focus = configFocusTabs
@@ -266,15 +269,23 @@ func (m EditConfigModel) renderModelsWorkspace() string {
 }
 
 func truncatePhaseLabel(label string) string {
+	return truncatePhaseLabelForWidth(label, modelPhasePanelWidth)
+}
+
+func truncatePhaseLabelForWidth(label string, panelWidth int) string {
+	labelWidth := modelPhaseLabelWidth
+	if panelWidth > 0 {
+		labelWidth = maxInt(panelWidth-8, 16)
+	}
 	const unavailableSuffix = " (unavailable))"
-	if strings.HasSuffix(label, unavailableSuffix) && len(label) > modelPhaseLabelWidth {
+	if strings.HasSuffix(label, unavailableSuffix) && len(label) > labelWidth {
 		head := strings.TrimSpace(strings.TrimSuffix(label, unavailableSuffix))
-		headWidth := modelPhaseLabelWidth - len(unavailableSuffix)
+		headWidth := labelWidth - len(unavailableSuffix)
 		if headWidth > 3 {
 			return truncateString(head, headWidth) + unavailableSuffix
 		}
 	}
-	return truncateString(label, modelPhaseLabelWidth)
+	return truncateString(label, labelWidth)
 }
 
 func titledConfigBox(title, body string, width, height int, focused bool) string {
@@ -386,11 +397,18 @@ func (m EditConfigModel) renderBehaviorValuesPanel() string {
 
 func (m EditConfigModel) renderBehaviorDetailsPanel() string {
 	lines := []string{
-		MutedStyle.Render("Current"),
-		SummarySelectedValueStyle.Render(string(m.editor.inquireness)),
+		MutedStyle.Render("Selected"),
+		"  " + SummarySelectedValueStyle.Render(string(m.editor.inquireness)),
 	}
 	if desc := inquirenessDescription(m.editor.inquireness); desc != "" {
-		lines = append(lines, "", MutedStyle.Render(desc))
+		lines = append(lines,
+			"",
+			MutedStyle.Render("Effect"),
+			"  "+MutedStyle.Render(desc),
+			"",
+			MutedStyle.Render("Scope"),
+			"  "+MutedStyle.Render("Applies to future planning questions"),
+		)
 	}
 	return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
 }
@@ -411,7 +429,7 @@ func (m EditConfigModel) renderGateListPanel() string {
 	fields := m.editor.visibleCheckpointFields()
 	onGates := m.editor.rowCategory() == rowCatCheckpoints
 	focusedIdx := -1
-	if onGates && m.focus == configFocusBody {
+	if onGates && m.gateListFocused() {
 		focusedIdx = m.editor.checkpointIndexForRow(m.editor.rowCursor)
 	}
 
@@ -420,40 +438,65 @@ func (m EditConfigModel) renderGateListPanel() string {
 		cp := fields[i]
 		prefix := "  "
 		label := cp.Label
-		if i == focusedIdx {
+		selected := i == m.editor.checkpointIndexForRow(m.editor.rowCursor)
+		focused := i == focusedIdx
+		switch {
+		case focused:
 			prefix = SelectedRowStyle.Render("▸ ")
 			label = SelectedRowStyle.Render(label)
+		case selected && m.focus == configFocusGateState:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
 		}
 		lines = append(lines, prefix+label)
 	}
-	return titledConfigBox("Gates", strings.Join(lines, "\n"), modelPhasePanelWidth, modelPanelHeight, m.focus == configFocusBody)
+	return titledConfigBox("Gates", strings.Join(lines, "\n"), modelPhasePanelWidth, modelPanelHeight, m.gateListFocused())
 }
 
 func (m EditConfigModel) renderGateStatePanel() string {
-	total := m.editor.visibleCheckpointCount()
-	fields := m.editor.visibleCheckpointFields()
-	lines := make([]string, 0, total)
-	for i := range total {
-		cp := fields[i]
-		label := "off"
-		box := MutedStyle.Render("[ ]")
-		if m.editor.checkpointValue(cp.Gate) {
-			label = "on"
-			box = SuccessStyle.Render("[x]")
-		}
-		line := fmt.Sprintf("%s %s", box, label)
-		if m.focus == configFocusBody && m.editor.rowCategory() == rowCatCheckpoints && i == m.editor.checkpointIndexForRow(m.editor.rowCursor) {
-			line = SummarySelectedValueStyle.Render(line)
-		}
-		lines = append(lines, "  "+line)
+	field, ok := m.selectedCheckpointField()
+	if !ok {
+		return titledConfigBox("State", MutedStyle.Render("No gate"), modelAgentPanelWidth, modelPanelHeight, m.focus == configFocusGateState)
 	}
-	return titledConfigBox("State", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, false)
+	current := m.editor.checkpointValue(field.Gate)
+	choices := []struct {
+		label string
+		value bool
+	}{
+		{"on", true},
+		{"off", false},
+	}
+	lines := make([]string, 0, len(choices))
+	for _, choice := range choices {
+		prefix := "  "
+		label := choice.label
+		selected := choice.value == current
+		focused := selected && m.focus == configFocusGateState
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("State", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, m.focus == configFocusGateState)
 }
 
 func (m EditConfigModel) renderGateDetailsPanel() string {
+	field, ok := m.selectedCheckpointField()
+	if !ok {
+		return titledConfigBox("Details", MutedStyle.Render("No gates"), modelListPanelWidth, modelPanelHeight, false)
+	}
+	return titledConfigBox("Details", MutedStyle.Render(field.Desc), modelListPanelWidth, modelPanelHeight, false)
+}
+
+func (m EditConfigModel) selectedCheckpointField() (checkpointField, bool) {
 	fields := m.editor.visibleCheckpointFields()
 	if len(fields) == 0 {
-		return titledConfigBox("Details", MutedStyle.Render("No gates"), modelListPanelWidth, modelPanelHeight, false)
+		return checkpointField{}, false
 	}
 	idx := 0
 	if m.editor.rowCategory() == rowCatCheckpoints {
@@ -462,12 +505,11 @@ func (m EditConfigModel) renderGateDetailsPanel() string {
 	if idx < 0 || idx >= len(fields) {
 		idx = 0
 	}
-	lines := []string{
-		SummarySelectedValueStyle.Render(fields[idx].Label),
-		"",
-		MutedStyle.Render(fields[idx].Desc),
-	}
-	return titledConfigBox("Details", strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, false)
+	return fields[idx], true
+}
+
+func (m EditConfigModel) gateListFocused() bool {
+	return m.focus == configFocusGateList || m.focus == configFocusBody
 }
 
 func renderConfigWorkspace(title string, left, middle, right string) string {
@@ -510,9 +552,16 @@ func (m EditConfigModel) renderHintBar() string {
 			keys = "↑↓ phase   → agents   / search   enter save   esc cancel"
 		}
 	case tabBehavior:
-		keys = "←→ choose   ↑ tabs   enter save   esc cancel"
+		keys = "↑↓ choose   tab tabs   enter save   esc cancel"
 	case tabGates:
-		keys = "↑↓ row   space toggle   ↑ tabs   enter save   esc cancel"
+		switch m.focus {
+		case configFocusGateList, configFocusBody:
+			keys = "↑↓ gate   → state   space toggle   enter save   esc cancel"
+		case configFocusGateState:
+			keys = "↑ on   ↓ off   ←/enter gates   esc cancel"
+		default:
+			keys = "↑↓ gate   → state   space toggle   enter save   esc cancel"
+		}
 	}
 	return hintStyle.Render(keys)
 }
@@ -562,8 +611,12 @@ func (m *EditConfigModel) enterActiveTabBody() {
 		lo, hi := m.tabRowRange()
 		m.editor.rowCursor = clampInRange(m.editor.rowCursor, lo, hi)
 		m.editor.activeModelCell = modelCellAgent
-	case tabBehavior, tabGates:
+	case tabBehavior:
 		m.focus = configFocusBody
+		lo, _ := m.tabRowRange()
+		m.editor.rowCursor = lo
+	case tabGates:
+		m.focus = configFocusGateList
 		lo, _ := m.tabRowRange()
 		m.editor.rowCursor = lo
 	}
@@ -632,8 +685,76 @@ func (m *EditConfigModel) updateModelsWorkspaceKey(keyMsg tea.KeyPressMsg) bool 
 	return false
 }
 
+func (m *EditConfigModel) updateGatesWorkspaceKey(keyMsg tea.KeyPressMsg) bool {
+	key := keyMsg.String()
+	lo, hi := m.tabRowRange()
+	switch m.focus {
+	case configFocusBody:
+		m.focus = configFocusGateList
+		fallthrough
+	case configFocusGateList:
+		switch key {
+		case "up", "k":
+			if m.editor.rowCursor <= lo {
+				m.focus = configFocusTabs
+				m.editor.rowCursor = lo
+				return true
+			}
+			m.editor.rowCursor = clampInRange(m.editor.rowCursor-1, lo, hi)
+			return true
+		case "down", "j":
+			m.editor.rowCursor = clampInRange(m.editor.rowCursor+1, lo, hi)
+			return true
+		case "right", "l":
+			m.focus = configFocusGateState
+			return true
+		case " ", "space":
+			m.editor.toggleCurrentCheckpoint()
+			return true
+		case "tab":
+			m.focus = configFocusTabs
+			m.cycleActiveTab(+1)
+			return true
+		case "shift+tab":
+			m.focus = configFocusTabs
+			m.cycleActiveTab(-1)
+			return true
+		}
+	case configFocusGateState:
+		field, ok := m.selectedCheckpointField()
+		if !ok {
+			m.focus = configFocusGateList
+			return true
+		}
+		switch key {
+		case "up", "k":
+			m.editor.setCheckpointValue(field.Gate, true)
+			return true
+		case "down", "j":
+			m.editor.setCheckpointValue(field.Gate, false)
+			return true
+		case " ", "space":
+			m.editor.setCheckpointValue(field.Gate, !m.editor.checkpointValue(field.Gate))
+			return true
+		case "left", "h", "enter":
+			m.focus = configFocusGateList
+			return true
+		case "tab":
+			m.focus = configFocusTabs
+			m.cycleActiveTab(+1)
+			return true
+		case "shift+tab":
+			m.focus = configFocusTabs
+			m.cycleActiveTab(-1)
+			return true
+		}
+	}
+	return false
+}
+
 func (m EditConfigModel) EnterIsLocal() bool {
-	return m.activeTab == tabModels && (m.editor.ModelFilteringActive() || m.focus == configFocusAgentList || m.focus == configFocusModelList)
+	return (m.activeTab == tabModels && (m.editor.ModelFilteringActive() || m.focus == configFocusAgentList || m.focus == configFocusModelList)) ||
+		(m.activeTab == tabGates && m.focus == configFocusGateState)
 }
 
 // tabRowRange returns the inclusive [lo, hi] row-cursor range that maps

@@ -56,6 +56,71 @@ func TestOpenCodeAttachThinkingChunkRendersGenericThinking(t *testing.T) {
 	}
 }
 
+func TestOpenCodeAttachBuildsFileEventsFromToolMetadata(t *testing.T) {
+	p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+
+	editMsgs, err := p.ParseLine(mustJSONLine(t, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "session/update",
+		"params": map[string]any{
+			"sessionId": "ses_x",
+			"update": map[string]any{
+				"sessionUpdate": "tool_call_update",
+				"toolCallId":    "call_edit",
+				"kind":          "edit",
+				"title":         "write",
+				"status":        "completed",
+				"locations":     []map[string]any{{"path": "/repo/README.md"}},
+				"content":       []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": "wrote file\n"}}},
+				"rawInput": map[string]any{
+					"filePath": "/repo/README.md",
+					"oldText":  "old",
+					"newText":  "new",
+				},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("ParseLine edit: %v", err)
+	}
+	editEvents := buildAttachFileEvents(editMsgs, 0)
+	if len(editEvents) != 1 {
+		t.Fatalf("edit file events = %+v, want one", editEvents)
+	}
+	if got := editEvents[0].change.Path; got != "/repo/README.md" {
+		t.Fatalf("edit event path = %q, want /repo/README.md", got)
+	}
+
+	bashMsgs, err := p.ParseLine(mustJSONLine(t, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "session/update",
+		"params": map[string]any{
+			"sessionId": "ses_x",
+			"update": map[string]any{
+				"sessionUpdate": "tool_call_update",
+				"toolCallId":    "call_bash",
+				"kind":          "execute",
+				"title":         "cat > /repo/README.it.md <<'EOF'\nciao\nEOF",
+				"status":        "completed",
+				"content":       []map[string]any{{"type": "content", "content": map[string]any{"type": "text", "text": "done\n"}}},
+				"rawInput": map[string]any{
+					"command": "cat > /repo/README.it.md <<'EOF'\nciao\nEOF",
+				},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("ParseLine bash: %v", err)
+	}
+	bashEvents := buildAttachFileEvents(bashMsgs, len(editMsgs))
+	if len(bashEvents) != 1 {
+		t.Fatalf("bash file events = %+v, want one", bashEvents)
+	}
+	if got := bashEvents[0].change.Path; got != "/repo/README.it.md" {
+		t.Fatalf("bash event path = %q, want /repo/README.it.md", got)
+	}
+}
+
 // TestOpenCodeAttachRenderArtifacts proves an OpenCode permission request and an
 // OpenCode question request render through the existing attach-view controls
 // (the same renderPermMenu / renderQuestion paths every provider uses), and

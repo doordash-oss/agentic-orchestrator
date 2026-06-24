@@ -65,6 +65,7 @@ type modelCell int
 const (
 	modelCellAgent modelCell = iota
 	modelCellModel
+	modelCellPhase
 )
 
 // Row-layout constants. Callers use methods (modelsCount, inquirenessRow,
@@ -763,9 +764,14 @@ func inquirenessDescription(v feature.Inquireness) string {
 }
 
 func (m ConfigEditorModel) renderModelsWorkspaceWithFocus(focus configFocusZone) string {
+	return m.renderModelsWorkspaceWithFocusWidth(focus, 0)
+}
+
+func (m ConfigEditorModel) renderModelsWorkspaceWithFocusWidth(focus configFocusZone, width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Model Selection")
-	phasePane := m.renderModelPhaseList(focus)
-	inspector := m.renderModelInspector(focus)
+	phaseWidth, agentWidth, modelWidth := modelWorkspacePanelWidths(width)
+	phasePane := m.renderModelPhaseList(focus, phaseWidth)
+	inspector := m.renderModelInspector(focus, agentWidth, modelWidth)
 	return strings.Join([]string{
 		title,
 		"",
@@ -773,14 +779,47 @@ func (m ConfigEditorModel) renderModelsWorkspaceWithFocus(focus configFocusZone)
 	}, "\n")
 }
 
-func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone) string {
+func modelWorkspacePanelWidths(width int) (int, int, int) {
+	phaseWidth, agentWidth, modelWidth := modelPhasePanelWidth, modelAgentPanelWidth, modelListPanelWidth
+	if width <= 0 {
+		return phaseWidth, agentWidth, modelWidth
+	}
+	available := width - 4 // two 2-space gutters between the three panels
+	if available <= 0 {
+		return phaseWidth, agentWidth, modelWidth
+	}
+	overflow := phaseWidth + agentWidth + modelWidth - available
+	if overflow <= 0 {
+		return phaseWidth, agentWidth, modelWidth
+	}
+	shrink := func(current, minWidth int) int {
+		if overflow <= 0 {
+			return current
+		}
+		delta := current - minWidth
+		if delta > overflow {
+			delta = overflow
+		}
+		if delta < 0 {
+			delta = 0
+		}
+		overflow -= delta
+		return current - delta
+	}
+	modelWidth = shrink(modelWidth, 44)
+	phaseWidth = shrink(phaseWidth, 34)
+	agentWidth = shrink(agentWidth, 16)
+	return phaseWidth, agentWidth, modelWidth
+}
+
+func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int) string {
 	fields := m.catalog.Fields
 	if len(fields) == 0 {
 		fields = phaseCatalogFields
 	}
 	lines := []string{}
 	for i, field := range fields {
-		label := truncatePhaseLabel(m.phaseAssignmentLabel(field))
+		label := truncatePhaseLabelForWidth(m.phaseAssignmentLabel(field), width)
 		prefix := "  "
 		selected := i == m.rowCursor
 		focused := selected && focus == configFocusPhaseList
@@ -794,55 +833,57 @@ func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone) string {
 		}
 		lines = append(lines, prefix+label)
 	}
-	return titledConfigBox("Phases", strings.Join(lines, "\n"), modelPhasePanelWidth, modelPanelHeight, focus == configFocusPhaseList)
+	return titledConfigBox("Phases", strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusPhaseList)
 }
 
-func (m ConfigEditorModel) renderModelInspector(focus configFocusZone) string {
+func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidth, modelWidth int) string {
 	field := m.currentModelField()
 	if field == "" {
-		emptyAgents := titledConfigBox("Agents", MutedStyle.Render("No phase"), modelAgentPanelWidth, modelPanelHeight, focus == configFocusAgentList)
-		emptyModels := titledConfigBox("Models", MutedStyle.Render("No phase"), modelListPanelWidth, modelPanelHeight, focus == configFocusModelList)
+		emptyAgents := titledConfigBox("Agents", MutedStyle.Render("No phase"), agentWidth, modelPanelHeight, focus == configFocusAgentList)
+		emptyModels := titledConfigBox("Models", MutedStyle.Render("No phase"), modelWidth, modelPanelHeight, focus == configFocusModelList)
 		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels)
 	}
 	agent := m.agentValueForField(field)
-	agents := m.renderAgentPicker(field, agent, focus)
-	models := m.renderModelPicker(field, agent, focus)
+	agents := m.renderAgentPicker(field, agent, focus, agentWidth)
+	models := m.renderModelPicker(field, agent, focus, modelWidth)
 	return lipgloss.JoinHorizontal(lipgloss.Top, agents, "  ", models)
 }
 
-func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone) string {
+func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone, width int) string {
 	agents := m.agentOptionsForField(field)
 	if len(agents) == 0 {
-		return titledConfigBox("Agents", MutedStyle.Render("No agents"), modelAgentPanelWidth, modelPanelHeight, focus == configFocusAgentList)
+		return titledConfigBox("Agents", MutedStyle.Render("No agents"), width, modelPanelHeight, focus == configFocusAgentList)
 	}
 	var lines []string
 	for _, agent := range agents {
 		prefix := "  "
-		label := agent
+		label := truncateString(agent, maxInt(width-6, 8))
 		selected := agent == currentAgent
 		focused := selected && focus == configFocusAgentList
 		switch {
 		case focused:
 			prefix = SelectedRowStyle.Render("▸ ")
-			label = SelectedRowStyle.Render(agent)
+			label = SelectedRowStyle.Render(label)
 		case selected && focus != configFocusTabs:
 			prefix = MutedStyle.Render("✓ ")
-			label = SummarySelectedValueStyle.Render(agent)
+			label = SummarySelectedValueStyle.Render(label)
 		}
 		lines = append(lines, prefix+label)
 	}
-	return titledConfigBox("Agents", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, focus == configFocusAgentList)
+	return titledConfigBox("Agents", strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusAgentList)
 }
 
-func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFocusZone) string {
+func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFocusZone, width int) string {
 	entries := m.filteredModelEntriesForCurrentRow()
 	panelFocused := focus == configFocusModelList || m.ModelFilteringActive()
+	title := truncateString("Models for "+agent, maxInt(width-4, 8))
 	if len(entries) == 0 {
-		return titledConfigBox("Models for "+agent, MutedStyle.Render("No models"), modelListPanelWidth, modelPanelHeight, panelFocused)
+		return titledConfigBox(title, MutedStyle.Render("No models"), width, modelPanelHeight, panelFocused)
 	}
 	current := m.modelValueForField(field)
 	focusIdx := m.modelPickerFocusIndex(entries, current)
 	start, end := visibleWindow(len(entries), focusIdx, 9)
+	labelWidth := modelEntryLabelWidth(width)
 
 	var lines []string
 	if m.ModelFilteringActive() {
@@ -867,7 +908,7 @@ func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFo
 		prefix := "  "
 		label := compactModelEntryLabel(entry, entry.ModelID)
 		meta := compactModelEntryMeta(entry)
-		line := fmt.Sprintf("%-44s %s", truncateString(label, 44), meta)
+		line := fmt.Sprintf("%-*s %s", labelWidth, truncateString(label, labelWidth), meta)
 		focused := highlighted && panelFocused
 		switch {
 		case focused:
@@ -882,7 +923,18 @@ func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFo
 	if end < len(entries) {
 		lines = append(lines, MutedStyle.Render("  ..."))
 	}
-	return titledConfigBox("Models for "+agent, strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, panelFocused)
+	return titledConfigBox(title, strings.Join(lines, "\n"), width, modelPanelHeight, panelFocused)
+}
+
+func modelEntryLabelWidth(panelWidth int) int {
+	width := panelWidth - 30
+	if width < 18 {
+		return 18
+	}
+	if width > 44 {
+		return 44
+	}
+	return width
 }
 
 func (m ConfigEditorModel) modelPickerFocusIndex(entries []PhaseModelEntry, current string) int {

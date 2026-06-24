@@ -228,14 +228,19 @@ type SessionUpdateParams struct {
 type SessionUpdate struct {
 	SessionUpdate string `json:"sessionUpdate"`
 
-	// agent_message_chunk / agent_thought_chunk / user_message_chunk
-	Content *UpdateContent `json:"content,omitempty"`
+	// agent_message_chunk / agent_thought_chunk carry an object content block;
+	// tool_call_update may carry an array of output content blocks. Keep it raw
+	// so the polymorphic shape cannot make the whole session/update fail to
+	// decode.
+	Content json.RawMessage `json:"content,omitempty"`
 
 	// tool_call / tool_call_update
-	ToolCallID string `json:"toolCallId,omitempty"`
-	Title      string `json:"title,omitempty"`
-	Kind       string `json:"kind,omitempty"`
-	Status     string `json:"status,omitempty"`
+	ToolCallID string             `json:"toolCallId,omitempty"`
+	Title      string             `json:"title,omitempty"`
+	Kind       string             `json:"kind,omitempty"`
+	Status     string             `json:"status,omitempty"`
+	Locations  []ToolCallLocation `json:"locations,omitempty"`
+	RawInput   json.RawMessage    `json:"rawInput,omitempty"`
 
 	// usage_update: Used is the tokens currently in context (input + cache read),
 	// Size is the model's total context window, and Cost is the cumulative
@@ -268,6 +273,14 @@ const (
 type UpdateContent struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
+}
+
+// ToolCallLocation is an ACP source/file location attached to a tool call.
+// OpenCode uses it for edit targets and, for some shell commands, the directory
+// context where the command ran.
+type ToolCallLocation struct {
+	Path string `json:"path,omitempty"`
+	Line int    `json:"line,omitempty"`
 }
 
 // --- session/request_permission (agent->client request) ---

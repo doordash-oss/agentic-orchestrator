@@ -4422,10 +4422,18 @@ func fileChangesFromToolUse(block llm.ContentBlock) []attachFileChange {
 }
 
 func fileChangesFromToolProgress(progress llm.ToolProgressMessage) []attachFileChange {
-	if progress.ToolName != "Write" && progress.ToolName != "Edit" {
+	if toolProgressFailed(progress.Data) {
 		return nil
 	}
-	path := extractFilePathFromProgress(progress.Data)
+	var path string
+	switch progress.ToolName {
+	case "Write", "Edit":
+		path = extractFilePathFromProgress(progress.Data)
+	case "Bash":
+		path = extractExplicitProgressFile(progress.Data)
+	default:
+		return nil
+	}
 	if path == "" {
 		return nil
 	}
@@ -4435,6 +4443,27 @@ func fileChangesFromToolProgress(progress llm.ToolProgressMessage) []attachFileC
 		Operation: "update",
 		Detail:    detail,
 	}}
+}
+
+var attachExplicitProgressFileRe = regexp.MustCompile(`(?m)^File:\s*(\S+)`)
+
+func extractExplicitProgressFile(data string) string {
+	matches := attachExplicitProgressFileRe.FindStringSubmatch(data)
+	if len(matches) < 2 {
+		return ""
+	}
+	return strings.Trim(matches[1], "\"'.,:;)")
+}
+
+func toolProgressFailed(data string) bool {
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(strings.ToLower(line))
+		if line == "" {
+			continue
+		}
+		return line == "failed" || strings.HasPrefix(line, "status: failed")
+	}
+	return false
 }
 
 func renderFileEventDetail(detail string) string {

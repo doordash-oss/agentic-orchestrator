@@ -701,6 +701,93 @@ func TestEditConfig_AllTabsUseStableThreePanelWorkspace(t *testing.T) {
 	}
 }
 
+func TestEditConfig_GatesStatePanelIsOnOffPicker(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	f := &feature.Feature{
+		ID:       "f1",
+		Name:     "gates",
+		Pipeline: feature.PipelineMedium,
+		Checkpoints: feature.Checkpoints{
+			PlanReview:    true,
+			ManualPublish: true,
+		},
+	}
+	app = withOverlay(t, app, f)
+	app.editConfig.activeTab = tabGates
+	app.editConfig.focus = configFocusTabs
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got := updated.(AppModel)
+	if got.editConfig.focus != configFocusGateList {
+		t.Fatalf("down into Gates focus = %v, want gate list", got.editConfig.focus)
+	}
+
+	view := stripANSI(got.editConfig.View())
+	for _, want := range []string{"State", "on", "off", "Pause after planning before implementation"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("Gates view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Count(view, "Plan Review") != 1 {
+		t.Fatalf("Details panel should not repeat Plan Review; view:\n%s", view)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	got = updated.(AppModel)
+	if got.editConfig.focus != configFocusGateState {
+		t.Fatalf("right from gate list focus = %v, want gate state", got.editConfig.focus)
+	}
+	view = stripANSI(got.editConfig.View())
+	if !strings.Contains(view, "▸ on") {
+		t.Fatalf("state picker did not focus selected on row:\n%s", view)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got = updated.(AppModel)
+	if got.editConfig.editor.checkpoints.PlanReview {
+		t.Fatal("down in state picker should set Plan Review off")
+	}
+	view = stripANSI(got.editConfig.View())
+	if !strings.Contains(view, "▸ off") {
+		t.Fatalf("state picker did not focus off row after change:\n%s", view)
+	}
+}
+
+func TestEditConfig_BehaviorValuesUseVerticalNavigation(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	f := &feature.Feature{ID: "f1", Name: "behavior", Inquireness: feature.InquirenessMedium}
+	app = withOverlay(t, app, f)
+	app.editConfig.activeTab = tabBehavior
+	app.editConfig.focus = configFocusTabs
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got := updated.(AppModel)
+	if got.editConfig.focus != configFocusBody {
+		t.Fatalf("down into Behavior focus = %v, want body", got.editConfig.focus)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got = updated.(AppModel)
+	if got.editConfig.editor.inquireness != feature.InquirenessHigh {
+		t.Fatalf("down in Behavior selected %q, want %q", got.editConfig.editor.inquireness, feature.InquirenessHigh)
+	}
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	got = updated.(AppModel)
+	if got.editConfig.editor.inquireness != feature.InquirenessMedium {
+		t.Fatalf("up in Behavior selected %q, want %q", got.editConfig.editor.inquireness, feature.InquirenessMedium)
+	}
+
+	view := stripANSI(got.editConfig.View())
+	for _, want := range []string{"Selected", "medium", "Effect", "Harness surfaces key planning questions", "↑↓ choose"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("Behavior view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "←→ choose") {
+		t.Fatalf("Behavior hints still advertise horizontal value selection:\n%s", view)
+	}
+}
+
 func TestEditConfig_UpDownLeavesModelPhasesThroughTabsAndClampsBodyRows(t *testing.T) {
 	app, _ := newTestAppModel(t)
 	f := &feature.Feature{ID: "f1", Name: "walk", Inquireness: feature.InquirenessMedium}
@@ -729,8 +816,8 @@ func TestEditConfig_UpDownLeavesModelPhasesThroughTabsAndClampsBodyRows(t *testi
 	}
 	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	got = updated.(AppModel)
-	if want := got.editConfig.editor.inquirenessRow(); got.editConfig.editor.rowCursor != want {
-		t.Errorf("down in single-row Behavior rowCursor = %d, want clamped %d", got.editConfig.editor.rowCursor, want)
+	if got.editConfig.editor.inquireness != feature.InquirenessHigh {
+		t.Errorf("down in Behavior selected %q, want %q", got.editConfig.editor.inquireness, feature.InquirenessHigh)
 	}
 }
 

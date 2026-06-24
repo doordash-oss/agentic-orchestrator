@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -91,6 +92,12 @@ type Protocol struct {
 	assistantBuf  strings.Builder
 	resultEmitted bool
 
+	// toolCalls retains ACP tool-call metadata across start/update events. Some
+	// OpenCode updates carry only the status and id after the initial event; the
+	// attach/live-preview surfaces still need the normalized tool name and any
+	// file target discovered earlier in the call lifecycle.
+	toolCalls map[string]toolCallState
+
 	// Control-request bookkeeping. pendingPerms maps a permission request id to
 	// the allow/reject option ids the user's approve/deny decision selects;
 	// pendingQuestionOpts maps a structured-question request id to its answer
@@ -113,6 +120,13 @@ type Protocol struct {
 type permissionOptions struct {
 	allowID  string
 	rejectID string
+}
+
+type toolCallState struct {
+	title   string
+	kind    string
+	path    string
+	command string
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -665,18 +679,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		}
 
 	case UpdateToolCall, UpdateToolCallUpdate:
-		name := su.Update.Title
-		if name == "" {
-			name = su.Update.Kind
-		}
+		progress := p.toolProgressFromUpdate(su.Update)
 		out = append(out, llm.SDKMessage{
-			Type: "tool_progress",
-			ToolProgress: &llm.ToolProgressMessage{
-				Type:      "tool_progress",
-				ToolUseID: su.Update.ToolCallID,
-				ToolName:  name,
-				Data:      su.Update.Status,
-			},
+			Type:         "tool_progress",
+			ToolProgress: &progress,
 		})
 
 	case UpdateUsage:
@@ -692,11 +698,138 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 
 // updateText returns the text of a message-chunk content block, or "" when
 // absent.
-func updateText(c *UpdateContent) string {
-	if c == nil {
+func updateText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var c UpdateContent
+	if err := json.Unmarshal(raw, &c); err != nil {
 		return ""
 	}
 	return c.Text
+}
+
+func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgressMessage {
+	p.mu.Lock()
+	if p.toolCalls == nil {
+		p.toolCalls = make(map[string]toolCallState)
+	}
+	state := p.toolCalls[update.ToolCallID]
+	state = mergeToolCallState(state, update)
+	if update.ToolCallID != "" {
+		p.toolCalls[update.ToolCallID] = state
+	}
+	p.mu.Unlock()
+
+	return llm.ToolProgressMessage{
+		Type:      "tool_progress",
+		ToolUseID: update.ToolCallID,
+		ToolName:  normalizedProgressToolName(state),
+		Data:      normalizedProgressData(update.Status, state),
+	}
+}
+
+func mergeToolCallState(state toolCallState, update SessionUpdate) toolCallState {
+	if strings.TrimSpace(update.Title) != "" {
+		state.title = strings.TrimSpace(update.Title)
+	}
+	if strings.TrimSpace(update.Kind) != "" {
+		state.kind = strings.TrimSpace(update.Kind)
+	}
+	if command := firstStringField(update.RawInput, "", "command", "cmd", "script"); command != "" {
+		state.command = command
+	}
+	if path := toolCallPath(update, state); path != "" {
+		state.path = path
+	}
+	return state
+}
+
+func toolCallPath(update SessionUpdate, state toolCallState) string {
+	if path := firstStringField(update.RawInput, "", "filePath", "file_path", "filepath", "path", "target_file"); path != "" {
+		return path
+	}
+	kind := strings.ToLower(strings.TrimSpace(update.Kind))
+	if kind == "" {
+		kind = strings.ToLower(strings.TrimSpace(state.kind))
+	}
+	command := firstStringField(update.RawInput, "", "command", "cmd", "script")
+	if command == "" {
+		command = state.command
+	}
+	if kind == ToolKindExecute {
+		return shellWriteTargetPath(command)
+	}
+	if len(update.Locations) > 0 {
+		for _, loc := range update.Locations {
+			if strings.TrimSpace(loc.Path) != "" {
+				return strings.TrimSpace(loc.Path)
+			}
+		}
+	}
+	return ""
+}
+
+func normalizedProgressToolName(state toolCallState) string {
+	kind := strings.ToLower(strings.TrimSpace(state.kind))
+	title := strings.TrimSpace(state.title)
+	switch kind {
+	case ToolKindExecute:
+		return "Bash"
+	case ToolKindEdit:
+		if strings.Contains(strings.ToLower(title), "write") {
+			return "Write"
+		}
+		return "Edit"
+	}
+	if title != "" {
+		return title
+	}
+	if kind != "" {
+		return kind
+	}
+	return "tool"
+}
+
+func normalizedProgressData(status string, state toolCallState) string {
+	var lines []string
+	if strings.TrimSpace(state.command) != "" {
+		lines = append(lines, strings.TrimSpace(state.command))
+	}
+	if strings.TrimSpace(state.path) != "" {
+		lines = append(lines, "File: "+strings.TrimSpace(state.path))
+	}
+	status = strings.TrimSpace(status)
+	if status != "" {
+		if len(lines) == 0 {
+			lines = append(lines, status)
+		} else {
+			lines = append(lines, "Status: "+status)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+var shellWriteTargetRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)(?:^|[;&|]\s*)cat\s+>{1,2}\s*(?:"([^"]+)"|'([^']+)'|([^\s<>;&|]+))`),
+	regexp.MustCompile(`(?m)(?:^|[;&|]\s*)tee(?:\s+-a)?\s+(?:"([^"]+)"|'([^']+)'|([^\s<>;&|]+))`),
+	regexp.MustCompile(`(?m)(?:^|[;&|]\s*)touch\s+(?:"([^"]+)"|'([^']+)'|([^\s<>;&|]+))`),
+}
+
+func shellWriteTargetPath(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return ""
+	}
+	for _, re := range shellWriteTargetRes {
+		m := re.FindStringSubmatch(command)
+		for i := 1; i < len(m); i++ {
+			if strings.TrimSpace(m[i]) != "" {
+				return strings.TrimSpace(m[i])
+			}
+		}
+	}
+	return ""
 }
 
 // failClosed responds to an unsupported agent->client request with a JSON-RPC

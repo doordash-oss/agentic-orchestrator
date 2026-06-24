@@ -740,6 +740,9 @@ func (m WizardModel) wizardModelFocus() configFocusZone {
 	if m.configEditor.ModelFilteringActive() || m.configEditor.activeModelCell == modelCellModel {
 		return configFocusModelList
 	}
+	if m.configEditor.activeModelCell == modelCellPhase {
+		return configFocusPhaseList
+	}
 	return configFocusAgentList
 }
 
@@ -853,6 +856,9 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 			m.summaryEditing = false
 			return m, nil
 		}
+		if m.summaryCursor == summaryFieldModels {
+			return m.handleSummaryModelEditingKey(msg)
+		}
 		// Checkpoints: reshape tab/shift+tab -> space so the editor's space
 		// toggle fires instead of the editor's cross-axis Tab jump. Preserves
 		// the wizard's Tab-toggles contract.
@@ -916,6 +922,75 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 			m.exitInput, cmd = m.exitInput.Update(msg)
 			return m, cmd
 		}
+	}
+	return m, nil
+}
+
+func (m WizardModel) handleSummaryModelEditingKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+
+	prevSub := m.wizardSubCursor()
+	m.syncConfigEditorFromWizard()
+	before := m.configEditor.Snapshot()
+	handled := true
+
+	switch m.configEditor.activeModelCell {
+	case modelCellPhase:
+		switch keyMsg.String() {
+		case "up", "k":
+			m.configEditor.rowCursor = clampInRange(m.configEditor.rowCursor-1, 0, m.configEditor.modelsCount()-1)
+		case "down", "j":
+			m.configEditor.rowCursor = clampInRange(m.configEditor.rowCursor+1, 0, m.configEditor.modelsCount()-1)
+		case "right", "l", "tab":
+			m.configEditor.activeModelCell = modelCellAgent
+		case "left", "h", "shift+tab":
+			m.configEditor.activeModelCell = modelCellModel
+		default:
+			handled = false
+		}
+	case modelCellAgent:
+		switch keyMsg.String() {
+		case "up", "k":
+			m.configEditor.cycleAgent(-1)
+		case "down", "j":
+			m.configEditor.cycleAgent(+1)
+		case "right", "l", "tab":
+			m.configEditor.activeModelCell = modelCellModel
+		case "left", "h", "shift+tab":
+			m.configEditor.activeModelCell = modelCellPhase
+		default:
+			handled = false
+		}
+	case modelCellModel:
+		switch keyMsg.String() {
+		case "up", "k":
+			m.configEditor.cycleModelBackward()
+		case "down", "j":
+			m.configEditor.cycleModelForward()
+		case "right", "l", "tab":
+			m.configEditor.activeModelCell = modelCellPhase
+		case "left", "h", "shift+tab":
+			m.configEditor.activeModelCell = modelCellAgent
+		case "/":
+			m.configEditor.startModelFilter()
+		default:
+			handled = false
+		}
+	default:
+		m.configEditor.activeModelCell = modelCellPhase
+	}
+	if !handled {
+		return m, nil
+	}
+
+	m.clampConfigEditorToActiveAxis(prevSub)
+	after := m.configEditor.Snapshot()
+	m.syncWizardFromConfigEditor()
+	if before.Models != after.Models {
+		m.modelsManuallySet = true
 	}
 	return m, nil
 }
@@ -1240,6 +1315,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 					m.summaryEditing = true
 					m.modelCursor = 0
 					m.configEditor = NewConfigEditorModel(m.virtualConfigFeature(), m.configCatalog, m.provisionalPublishable)
+					m.configEditor.activeModelCell = modelCellPhase
 					return m, nil
 				case summaryFieldCheckpoints:
 					m.summaryEditing = true
@@ -3060,7 +3136,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		if m.summaryEditing && m.summaryCursor == summaryFieldModels {
 			renderRow(summaryFieldModels, "Models", "", "")
 			m.syncConfigEditorFromWizard()
-			content := m.configEditor.renderModelsWorkspaceWithFocus(m.wizardModelFocus())
+			content := m.configEditor.renderModelsWorkspaceWithFocusWidth(m.wizardModelFocus(), reviewEditorContentWidth(inputBoxWidth-4))
 			card.WriteString("    " + strings.ReplaceAll(content, "\n", "\n    ") + "\n")
 		} else {
 			renderRow(summaryFieldModels, "Models",
@@ -3156,7 +3232,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 			case summaryFieldRisk, summaryFieldInquireness:
 				footer = KeyHelpStyle.Render(" [←/→] Change   [enter/esc] Done")
 			case summaryFieldModels:
-				footer = KeyHelpStyle.Render(" [tab] Agent/Model   [←/→] Change   [/] Filter   [↑/↓] Phase   [enter/esc] Done")
+				footer = KeyHelpStyle.Render(" [←/→/tab] Panel   [↑/↓] Select   [/] Filter   [enter/esc] Done")
 			case summaryFieldCheckpoints:
 				footer = KeyHelpStyle.Render(" [space/tab] Toggle   [↑/↓] Navigate   [enter/esc] Done")
 			case summaryFieldExitCriteria:

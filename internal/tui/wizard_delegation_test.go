@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -68,34 +69,38 @@ func TestWizardReviewDelegation_ModelsCycleRoundTrip(t *testing.T) {
 	}
 
 	first := m.models.Research
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.configEditor.activeModelCell; got != modelCellAgent {
+		t.Fatalf("Right activeModelCell = %v, want modelCellAgent", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if got := m.configEditor.activeModelCell; got != modelCellModel {
-		t.Fatalf("Tab activeModelCell = %v, want modelCellModel", got)
+		t.Fatalf("second Right activeModelCell = %v, want modelCellModel", got)
 	}
 	if got := m.models.Research; got != first {
-		t.Fatalf("Tab changed Research: got %q, want %q", got, first)
+		t.Fatalf("panel focus changed Research: got %q, want %q", got, first)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	second := m.models.Research
 	if second == first {
-		t.Fatalf("Right on Model cell did not cycle Research: %q == %q", second, first)
+		t.Fatalf("Down on Model panel did not cycle Research: %q == %q", second, first)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	firstSelection := "claude:" + first
 	if got := m.models.Research; got != firstSelection {
-		t.Errorf("Left on Model cell did not cycle back: got %q, want %q", got, firstSelection)
+		t.Errorf("Up on Model panel did not cycle back: got %q, want %q", got, firstSelection)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if got := m.configEditor.activeModelCell; got != modelCellAgent {
 		t.Errorf("Shift+Tab activeModelCell = %v, want modelCellAgent", got)
 	}
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	providerValue := m.models.Research
 	if providerValue == firstSelection {
-		t.Errorf("Right on Agent cell did not select a different provider model: got %q", providerValue)
+		t.Errorf("Down on Agent panel did not select a different provider model: got %q", providerValue)
 	}
 
 	if !m.modelsManuallySet {
@@ -156,16 +161,84 @@ func TestWizardReviewDelegation_ModelsSubRowCycle(t *testing.T) {
 	}
 	origImpl := m.models.Implementation
 	origResearch := m.models.Research
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if got := m.configEditor.activeModelCell; got != modelCellModel {
-		t.Fatalf("Tab activeModelCell = %v, want modelCellModel", got)
-	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("second Right activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.models.Implementation == origImpl {
-		t.Error("Right on Implementation model cell did not cycle Implementation")
+		t.Error("Down on Implementation model panel did not cycle Implementation")
 	}
 	if m.models.Research != origResearch {
 		t.Error("Implementation model edit accidentally changed Research")
+	}
+}
+
+func TestWizardReviewDelegation_ModelSelectionPanelsUseVerticalSelection(t *testing.T) {
+	providerModels := map[string][]string{
+		"claude":   {"opus", "sonnet"},
+		"opencode": {"glm-5p2", "gemma4"},
+	}
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"claude", "opencode"}, nil)
+	m.summaryCursor = summaryFieldModels
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if got := m.wizardModelFocus(); got != configFocusPhaseList {
+		t.Fatalf("initial model editor focus = %v, want phase list", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.wizardModelFocus(); got != configFocusAgentList {
+		t.Fatalf("right from phase focus = %v, want agent list", got)
+	}
+	m.syncConfigEditorFromWizard()
+	beforeCursor := m.modelCursor
+	beforeAgent := m.configEditor.agentValueForField("Research")
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.syncConfigEditorFromWizard()
+	if m.modelCursor != beforeCursor {
+		t.Fatalf("down in agent panel moved phase cursor to %d, want %d", m.modelCursor, beforeCursor)
+	}
+	if got := m.configEditor.agentValueForField("Research"); got == beforeAgent {
+		t.Fatalf("down in agent panel kept agent %q, want next agent", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.wizardModelFocus(); got != configFocusModelList {
+		t.Fatalf("right from agent focus = %v, want model list", got)
+	}
+	beforeCursor = m.modelCursor
+	beforeModel := m.models.Research
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != beforeCursor {
+		t.Fatalf("down in model panel moved phase cursor to %d, want %d", m.modelCursor, beforeCursor)
+	}
+	if got := m.models.Research; got == beforeModel {
+		t.Fatalf("down in model panel kept model %q, want next model", got)
+	}
+}
+
+func TestWizardReviewDelegation_ModelSelectionViewFitsReviewWidth(t *testing.T) {
+	const terminalWidth = 160
+	providerModels := map[string][]string{
+		"opencode": {
+			"ollama/gemma4:26b-256k[262K]",
+			"ollama/gemma4:31b-256k[262K]",
+			"portkey/@fireworks/accounts/fireworks/models/glm-5p2[1M]",
+		},
+	}
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"opencode"}, nil)
+	m.summaryCursor = summaryFieldModels
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.width = terminalWidth
+	m.height = 40
+
+	view := stripANSI(m.View())
+	for i, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > terminalWidth {
+			t.Fatalf("line %d width = %d, want <= %d:\n%s", i+1, w, terminalWidth, line)
+		}
 	}
 }
 
@@ -463,7 +536,8 @@ func TestWizardReviewDelegation_ModelFilterEnterDoesNotCloseEditing(t *testing.T
 	}
 	beforePlanning := m.models.Planning
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if got := m.configEditor.activeModelCell; got != modelCellModel {
 		t.Fatalf("activeModelCell = %v, want modelCellModel", got)
 	}

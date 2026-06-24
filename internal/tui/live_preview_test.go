@@ -551,6 +551,60 @@ func TestLivePreviewOpenCodeStreamingRendersCompactRows(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("thought survives later text chunk", func(t *testing.T) {
+		t.Parallel()
+		p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+		msgs := parseOpenCodeLivePreviewMessages(t, p,
+			mustJSONLine(t, map[string]any{
+				"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{
+					"sessionId": "ses_x",
+					"update": map[string]any{
+						"sessionUpdate": "agent_thought_chunk",
+						"content":       map[string]any{"type": "text", "text": "raw hidden thought token"},
+					},
+				},
+			}),
+			mustJSONLine(t, map[string]any{
+				"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{
+					"sessionId": "ses_x",
+					"update": map[string]any{
+						"sessionUpdate": "tool_call",
+						"toolCallId":    "call_read",
+						"title":         "Read README.md",
+						"kind":          "read",
+						"status":        "running",
+					},
+				},
+			}),
+			mustJSONLine(t, map[string]any{
+				"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{
+					"sessionId": "ses_x",
+					"update": map[string]any{
+						"sessionUpdate": "agent_message_chunk",
+						"content":       map[string]any{"type": "text", "text": "I found the README workflow."},
+					},
+				},
+			}),
+		)
+		sess := openCodeLivePreviewSession("opencode-thinking-with-text", feature.PhasePlan, msgs...)
+		view := stripANSI(newLivePreviewModel(&feature.Feature{
+			Status:       feature.StatusPlanning,
+			CurrentPhase: feature.PhasePlan,
+		}).withSession(sess).withHeight(24).ViewCompact(120))
+
+		for _, want := range []string{"* Thinking...", "$ Read README.md", "I found the README workflow."} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("opencode live preview missing %q in:\n%s", want, view)
+			}
+		}
+		if strings.Contains(view, "raw hidden thought token") {
+			t.Fatalf("opencode live preview leaked raw thought token:\n%s", view)
+		}
+	})
 }
 
 func TestLivePreviewTranscriptEmphasis(t *testing.T) {

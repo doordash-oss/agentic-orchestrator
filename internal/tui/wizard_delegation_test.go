@@ -69,32 +69,45 @@ func TestWizardReviewDelegation_ModelsCycleRoundTrip(t *testing.T) {
 
 	first := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	second := m.models.Research
-	if second == first {
-		t.Fatalf("Tab did not cycle Research: %q == %q", second, first)
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("Tab activeModelCell = %v, want modelCellModel", got)
+	}
+	if got := m.models.Research; got != first {
+		t.Fatalf("Tab changed Research: got %q, want %q", got, first)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	third := m.models.Research
-	if third == second {
-		t.Errorf("second Tab did not cycle Research: %q == %q", third, second)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	second := m.models.Research
+	if second == first {
+		t.Fatalf("Right on Model cell did not cycle Research: %q == %q", second, first)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	firstSelection := "claude:" + first
+	if got := m.models.Research; got != firstSelection {
+		t.Errorf("Left on Model cell did not cycle back: got %q, want %q", got, firstSelection)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-	if got := m.models.Research; got != second {
-		t.Errorf("Shift+Tab did not cycle back: got %q, want %q", got, second)
+	if got := m.configEditor.activeModelCell; got != modelCellAgent {
+		t.Errorf("Shift+Tab activeModelCell = %v, want modelCellAgent", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	providerValue := m.models.Research
+	if providerValue == firstSelection {
+		t.Errorf("Right on Agent cell did not select a different provider model: got %q", providerValue)
 	}
 
 	if !m.modelsManuallySet {
-		t.Error("expected modelsManuallySet=true after cycling")
+		t.Error("expected modelsManuallySet=true after changing model/provider")
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.summaryEditing {
 		t.Error("expected summaryEditing=false after Esc")
 	}
-	if got := m.models.Research; got != second {
-		t.Errorf("cycled value lost after Esc: got %q, want %q", got, second)
+	if got := m.models.Research; got != providerValue {
+		t.Errorf("changed value lost after Esc: got %q, want %q", got, providerValue)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
@@ -102,8 +115,8 @@ func TestWizardReviewDelegation_ModelsCycleRoundTrip(t *testing.T) {
 	if r == nil {
 		t.Fatal("expected non-nil Result")
 	}
-	if r.Models.Research != second {
-		t.Errorf("WizardResult.Models.Research = %q, want %q", r.Models.Research, second)
+	if r.Models.Research != providerValue {
+		t.Errorf("WizardResult.Models.Research = %q, want %q", r.Models.Research, providerValue)
 	}
 }
 
@@ -144,11 +157,15 @@ func TestWizardReviewDelegation_ModelsSubRowCycle(t *testing.T) {
 	origImpl := m.models.Implementation
 	origResearch := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("Tab activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.models.Implementation == origImpl {
-		t.Error("Tab on Implementation row did not cycle Implementation")
+		t.Error("Right on Implementation model cell did not cycle Implementation")
 	}
 	if m.models.Research != origResearch {
-		t.Error("Tab on Implementation row accidentally changed Research")
+		t.Error("Implementation model edit accidentally changed Research")
 	}
 }
 
@@ -411,17 +428,72 @@ func TestWizardReviewDelegation_ModelsEditorRendersAssignmentsAndChoices(t *test
 	view := m.View()
 	needles := []string{
 		"Model Selection",
+		"Phase",
+		"Agent",
+		"Model",
 		"Research",
 		"Planning",
 		"Implementation",
 		"Review",
 		"KB Build",
-		"Choices for Research",
 	}
 	for _, needle := range needles {
 		if !strings.Contains(view, needle) {
 			t.Errorf("rendered Models editor missing %q", needle)
 		}
+	}
+	if strings.Contains(view, "Choices for Research") {
+		t.Errorf("rendered Models editor still uses old Choices copy:\n%s", view)
+	}
+}
+
+func TestWizardReviewDelegation_ModelFilterEnterDoesNotCloseEditing(t *testing.T) {
+	const filteredPlanning = "portkey/@fireworks/accounts/fireworks/models/glm-5p2"
+	m := newWizardAtReviewForDelegation(t,
+		map[string][]string{"opencode": {"anthropic/claude-sonnet-4-5[200K]", filteredPlanning}},
+		[]string{"opencode"},
+		map[string]map[string][]string{"Planning": {"opencode": {"anthropic/claude-sonnet-4-5[200K]", filteredPlanning}}},
+	)
+	m.summaryCursor = summaryFieldModels
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != 1 {
+		t.Fatalf("modelCursor = %d, want Planning row 1", m.modelCursor)
+	}
+	beforePlanning := m.models.Planning
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'g', Text: "g"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'l', Text: "l"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if !m.summaryEditing {
+		t.Fatal("summaryEditing = false, want still editing after filter enter")
+	}
+	if m.configEditor.ModelFilteringActive() {
+		t.Fatal("filter still active after enter, want accepted")
+	}
+	if got := m.models.Planning; got != filteredPlanning {
+		t.Fatalf("Planning model = %q, want filtered model %q (before %q)", got, filteredPlanning, beforePlanning)
+	}
+	if !m.modelsManuallySet {
+		t.Fatal("modelsManuallySet = false, want true after accepting filtered model")
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
+	result := m.Result()
+	if result == nil {
+		t.Fatal("Result() = nil")
+	}
+	if got := result.Models.Planning; got != filteredPlanning {
+		t.Fatalf("WizardResult.Models.Planning = %q, want %q", got, filteredPlanning)
 	}
 }
 

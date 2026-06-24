@@ -820,6 +820,17 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 		return m, nil
 
 	case summaryFieldInquireness, summaryFieldModels, summaryFieldCheckpoints:
+		if m.summaryCursor == summaryFieldModels && m.configEditor.ModelFilteringActive() {
+			m.syncConfigEditorFromWizard()
+			before := m.configEditor.Snapshot()
+			m.configEditor, _ = m.configEditor.Update(msg)
+			after := m.configEditor.Snapshot()
+			m.syncWizardFromConfigEditor()
+			if before.Models != after.Models {
+				m.modelsManuallySet = true
+			}
+			return m, nil
+		}
 		// Lifecycle keys owned by the wizard: enter collapses (always); esc
 		// on Inquireness reverts the cursor + manually-set flag, esc on
 		// Models/Checkpoints collapses preserving cycled/toggled values.
@@ -845,19 +856,9 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 				outMsg = tea.KeyPressMsg{Code: ' ', Text: " "}
 			}
 		}
-		// Pre-Phase-3 Models-axis contract: modelsManuallySet flipped
-		// unconditionally on any cycling key (tab/right/left/shift+tab),
-		// even when the cycle is a no-op because opts is empty. Matched
-		// here so existing tests pass without modification.
-		forceModelsManuallySet := m.summaryCursor == summaryFieldModels &&
-			(key.Matches(msg, key.NewBinding(key.WithKeys("tab"))) ||
-				key.Matches(msg, key.NewBinding(key.WithKeys("shift+tab"))) ||
-				key.Matches(msg, key.NewBinding(key.WithKeys("right"))) ||
-				key.Matches(msg, key.NewBinding(key.WithKeys("left"))))
 		// Sync editor from wizard, capture before-snapshot, delegate Update,
 		// axis-clamp the editor's rowCursor, sync wizard back. Manually-set
-		// flag is flipped when the resulting snapshot differs (or always
-		// for the Models cycle-key case above).
+		// flag is flipped when the resulting snapshot differs.
 		prevSub := m.wizardSubCursor()
 		m.syncConfigEditorFromWizard()
 		before := m.configEditor.Snapshot()
@@ -868,7 +869,7 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 		changed := before != after
 		switch m.summaryCursor {
 		case summaryFieldModels:
-			if changed || forceModelsManuallySet {
+			if changed {
 				m.modelsManuallySet = true
 			}
 		case summaryFieldInquireness:
@@ -3149,7 +3150,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 			case summaryFieldRisk, summaryFieldInquireness:
 				footer = KeyHelpStyle.Render(" [←/→] Change   [enter/esc] Done")
 			case summaryFieldModels:
-				footer = KeyHelpStyle.Render(" [←/→/tab] Cycle model   [↑/↓] Navigate   [enter/esc] Done")
+				footer = KeyHelpStyle.Render(" [tab] Agent/Model   [←/→] Change   [/] Filter   [↑/↓] Phase   [enter/esc] Done")
 			case summaryFieldCheckpoints:
 				footer = KeyHelpStyle.Render(" [space/tab] Toggle   [↑/↓] Navigate   [enter/esc] Done")
 			case summaryFieldExitCriteria:

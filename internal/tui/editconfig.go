@@ -86,6 +86,12 @@ func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPu
 // AppModel.Update owns enter/esc/save dispatch on top of this — those keys
 // are short-circuited before reaching here.
 func (m EditConfigModel) Update(msg tea.Msg) (EditConfigModel, tea.Cmd) {
+	if m.activeTab == tabModels && m.editor.ModelFilteringActive() {
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.Update(msg)
+		return m, cmd
+	}
+
 	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 		switch keyMsg.String() {
 		case "tab":
@@ -282,7 +288,7 @@ func (m EditConfigModel) renderHintBar() string {
 	var keys string
 	switch m.activeTab {
 	case tabModels:
-		keys = "↑↓ row   ←→ choose   tab next section   enter save   esc cancel"
+		keys = "↑↓ phase   tab agent/model   ←→ choose   / filter   enter save   esc cancel"
 	case tabBehavior:
 		keys = "←→ choose   tab next section   enter save   esc cancel"
 	case tabGates:

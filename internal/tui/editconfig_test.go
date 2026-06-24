@@ -400,6 +400,74 @@ func TestEditConfig_StaleModel_RendersUnavailable(t *testing.T) {
 	}
 }
 
+func TestEditConfig_ModelFilterEscLeavesEditorOpen(t *testing.T) {
+	reg := openCodeWinningRegistry()
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	f := &feature.Feature{ID: "feat", Name: "Feature", Models: config.ModelConfig{Research: "opencode:anthropic/claude-sonnet-4-5[200K]"}}
+	m := NewEditConfigModel(f, cat, true)
+	m.editor.activeModelCell = modelCellModel
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if cmd != nil {
+		t.Fatal("unexpected command from filter start")
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.editor.ModelFilteringActive() {
+		t.Fatal("filter still active after esc")
+	}
+}
+
+func TestAppModel_EditConfigModelFilterEnterLeavesOverlayOpen(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	reg := openCodeWinningRegistry()
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	f := &feature.Feature{
+		ID:     "feat",
+		Name:   "Feature",
+		Models: config.ModelConfig{Research: "opencode:anthropic/claude-sonnet-4-5[200K]"},
+	}
+	app.editConfig = NewEditConfigModel(f, cat, true)
+	app.editConfigActive = true
+	app.editConfig.activeTab = tabModels
+	app.editConfig.editor.activeModelCell = modelCellModel
+
+	var cmd tea.Cmd
+	updated, cmd := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if cmd != nil {
+		t.Fatal("unexpected command from filter start")
+	}
+	got := updated.(AppModel)
+	if !got.editConfigActive {
+		t.Fatal("editConfigActive = false after filter start")
+	}
+	if !got.editConfig.editor.ModelFilteringActive() {
+		t.Fatal("filter not active after slash")
+	}
+
+	for _, r := range "gpt" {
+		updated, cmd = got.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		if cmd != nil {
+			t.Fatalf("unexpected command while typing filter %q", r)
+		}
+		got = updated.(AppModel)
+	}
+	updated, cmd = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("unexpected save command from filter enter")
+	}
+	got = updated.(AppModel)
+	if !got.editConfigActive {
+		t.Fatal("editConfigActive = false, want overlay to remain open after filter enter")
+	}
+	if got.editConfig.editor.ModelFilteringActive() {
+		t.Fatal("filter still active after enter")
+	}
+	if got.editConfig.editor.models.Research != "opencode:openai/gpt-5" {
+		t.Fatalf("Research model = %q, want opencode:openai/gpt-5", got.editConfig.editor.models.Research)
+	}
+}
+
 // TestEditConfig_TabCyclesSegmentedTabs asserts the segmented-tab
 // navigation grammar: tab/shift+tab cycle the active tab (Models →
 // Behavior → Gates) and snap the editor's cursor to the first row of the

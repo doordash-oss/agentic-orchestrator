@@ -801,7 +801,7 @@ func (m ConfigEditorModel) renderModelsBox(width int) string {
 
 	if onModelsRow {
 		field := m.currentModelField()
-		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Choices for "+field))
+		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Selection for "+field))
 		lines = append(lines, m.renderModelCascadeDetails(field, width)...)
 	}
 	return strings.Join(lines, "\n")

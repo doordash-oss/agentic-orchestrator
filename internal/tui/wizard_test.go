@@ -2650,8 +2650,10 @@ func TestWizardSummaryEditingFooter(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view = m.View()
-	if !containsString(view, "Cycle") {
-		t.Error("expected 'Cycle' in footer during Models editing")
+	for _, needle := range []string{"Agent/Model", "Filter"} {
+		if !containsString(view, needle) {
+			t.Errorf("expected %q in footer during Models editing", needle)
+		}
 	}
 
 	// Exit editing
@@ -2761,11 +2763,15 @@ func TestWizardSummaryModelsTabCycles(t *testing.T) {
 	origModel := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 
-	if m.models.Research == origModel {
-		t.Error("expected Research model to change after Tab")
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Errorf("after Tab activeModelCell = %v, want modelCellModel", got)
 	}
-	if !m.modelsManuallySet {
-		t.Error("expected modelsManuallySet=true after Tab")
+	if m.models.Research != origModel {
+		t.Errorf("Tab changed Research model: got %q, want %q", m.models.Research, origModel)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if got := m.configEditor.activeModelCell; got != modelCellAgent {
+		t.Errorf("after Shift+Tab activeModelCell = %v, want modelCellAgent", got)
 	}
 }
 
@@ -2782,15 +2788,19 @@ func TestWizardSummaryModelsRightLeftCycles(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	origModel := m.models.Research
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.models.Research == origModel {
-		t.Error("expected Research model to change after Right")
+		t.Error("expected Research model to change after Right on Model cell")
 	}
 
 	afterRight := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if m.models.Research == afterRight {
-		t.Error("expected Research model to change after Left (cycle back)")
+		t.Error("expected Research model to change after Left on Model cell")
+	}
+	if m.models.Research != origModel {
+		t.Errorf("expected Research model to cycle back to %q, got %q", origModel, m.models.Research)
 	}
 }
 
@@ -2828,16 +2838,17 @@ func TestWizardSummaryModelsEscCollapses(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	// Cycle a model
+	// Change a model.
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	cycledModel := m.models.Research
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	changedModel := m.models.Research
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.summaryEditing {
 		t.Error("expected summaryEditing=false after Esc")
 	}
-	if m.models.Research != cycledModel {
-		t.Error("expected cycled model to be preserved after Esc")
+	if m.models.Research != changedModel {
+		t.Error("expected changed model to be preserved after Esc")
 	}
 }
 
@@ -2862,8 +2873,12 @@ func TestWizardSummaryModelsSubRowNavAndCycle(t *testing.T) {
 
 	origImpl := m.models.Implementation
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("after Tab activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.models.Implementation == origImpl {
-		t.Error("expected Implementation model to change after Tab")
+		t.Error("expected Implementation model to change after Right on Model cell")
 	}
 	if !m.modelsManuallySet {
 		t.Error("expected modelsManuallySet=true")
@@ -3182,7 +3197,8 @@ func TestWizardSummaryModelsEditingBlocksG(t *testing.T) {
 }
 
 func TestWizardSummaryModelsProvenanceClearedAfterEdit(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus"}}
+	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3196,6 +3212,7 @@ func TestWizardSummaryModelsProvenanceClearedAfterEdit(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	if !m.modelsManuallySet {
@@ -3279,8 +3296,8 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 		},
 	}
 	providerModels := map[string][]string{
-		"claude": {"claude:opus", "claude:sonnet"},
-		"codex":  {"codex:gpt-5.4"},
+		"claude": {"opus", "sonnet"},
+		"codex":  {"gpt-5.4"},
 	}
 	providerOrder := []string{"claude", "codex"}
 
@@ -3289,17 +3306,13 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	if !containsString(view, "Assignments") {
-		t.Error("expected expanded Models view to contain 'Assignments'")
+	for _, needle := range []string{"Model Selection", "Phase", "Agent", "Model", "Research", "Selection for Research", "Agents", "Models", "opus", "codex"} {
+		if !containsString(view, needle) {
+			t.Errorf("expected expanded Models view to contain %q", needle)
+		}
 	}
-	if !containsString(view, "Choices for Research") {
-		t.Error("expected expanded Models view to contain 'Choices for Research'")
-	}
-	if !containsString(view, "claude / opus") {
-		t.Error("expected assignment summary to show provider and model")
-	}
-	if !containsString(view, "codex") {
-		t.Error("expected provider-grouped choices to contain 'codex'")
+	if containsString(view, "Choices for Research") {
+		t.Error("expected expanded Models view to omit old 'Choices for Research' copy")
 	}
 }
 
@@ -3384,10 +3397,12 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 	m, _ = m.advance()
 	m, _ = m.advance()
 
-	// Research starts at "opus" (first option). Cycle it to "sonnet".
+	// Research starts at "opus" (first option). Move to the Model cell and
+	// cycle it to "sonnet".
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // cycle Research: opus -> sonnet
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // focus Model cell
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // cycle Research: opus -> sonnet
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
@@ -3485,7 +3500,8 @@ func TestWizardSummaryEditedExitCriteriaInResult(t *testing.T) {
 }
 
 func TestWizardSummaryFullIntegration(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus"}}
+	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3501,7 +3517,8 @@ func TestWizardSummaryFullIntegration(t *testing.T) {
 	// 2. Edit Models
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // cycle
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // focus Model cell
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // change model
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	// 3. Edit Checkpoints
@@ -3542,8 +3559,10 @@ func TestWizardSummaryModelsFooterShowsHint(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "Cycle model") {
-		t.Error("expected footer to contain 'Cycle model' hint when editing Models")
+	for _, needle := range []string{"Agent/Model", "Filter", "Phase"} {
+		if !containsString(view, needle) {
+			t.Errorf("expected footer to contain %q hint when editing Models", needle)
+		}
 	}
 }
 
@@ -4001,11 +4020,15 @@ func TestWizardSummaryModelsKBBuildCycles(t *testing.T) {
 		t.Fatalf("expected modelCursor = 4, got %d", m.modelCursor)
 	}
 
-	// Cycle KB Build model
+	// Cycle KB Build model from the Model cell.
 	if m.models.KBBuild != "opus[1m]" {
 		t.Fatalf("expected initial KBBuild = opus[1m], got %q", m.models.KBBuild)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("after Tab activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.models.KBBuild != "opus" {
 		t.Errorf("expected KBBuild = opus after cycle, got %q", m.models.KBBuild)
 	}
@@ -4025,12 +4048,13 @@ func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	// Navigate to KB Build and cycle
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 0 -> 1
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})  // cycle KB Build
+	// Navigate to KB Build and cycle its Model cell.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 0 -> 1
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 1 -> 2
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 2 -> 3
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // focus Model cell
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // cycle KB Build
 
 	// Close model editing (Enter), then create feature (G)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // close model editing
@@ -4087,8 +4111,8 @@ func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 		},
 	}
 	providerModels := map[string][]string{
-		"claude": {"claude:opus", "claude:sonnet"},
-		"codex":  {"codex:gpt-5.4"},
+		"claude": {"opus", "sonnet"},
+		"codex":  {"gpt-5.4"},
 	}
 	providerOrder := []string{"claude", "codex"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
@@ -4099,24 +4123,31 @@ func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
 
-	// Cycle through prefixed KB Build models
+	// Cycle through prefixed KB Build models scoped to the selected agent.
 	if m.models.KBBuild != "claude:opus" {
 		t.Fatalf("expected initial KBBuild = claude:opus, got %q", m.models.KBBuild)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // cycle forward
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // focus Model cell
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // cycle within claude
 	if m.models.KBBuild != "claude:sonnet" {
 		t.Errorf("expected KBBuild = claude:sonnet after first cycle, got %q", m.models.KBBuild)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // cycle forward
-	if m.models.KBBuild != "codex:gpt-5.4" {
-		t.Errorf("expected KBBuild = codex:gpt-5.4 after second cycle, got %q", m.models.KBBuild)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // wrap within claude
+	if m.models.KBBuild != "claude:opus" {
+		t.Errorf("expected KBBuild = claude:opus after scoped wrap, got %q", m.models.KBBuild)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // cycle wraps
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}) // focus Agent cell
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})                  // switch provider
+	if m.models.KBBuild != "codex:gpt-5.4" {
+		t.Errorf("expected KBBuild = codex:gpt-5.4 after provider cycle, got %q", m.models.KBBuild)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // provider wraps
 	if m.models.KBBuild != "claude:opus" {
-		t.Errorf("expected KBBuild = claude:opus after wrap, got %q", m.models.KBBuild)
+		t.Errorf("expected KBBuild = claude:opus after provider wrap, got %q", m.models.KBBuild)
 	}
 }
 

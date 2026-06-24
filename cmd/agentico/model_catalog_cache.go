@@ -82,28 +82,36 @@ func providerCatalogCachePath(cacheRoot, provider, version string) string {
 	)
 }
 
-func loadProviderCatalogCache(cacheRoot, provider, version string) ([]llm.ModelInfo, error) {
+func loadProviderCatalogCacheFile(cacheRoot, provider, version string) (providerCatalogCacheFile, error) {
 	if !cacheableVersion(version) {
 		// Refuse before building a cache path from the version: an unvalidated
 		// version could otherwise embed credential-like or terminal-control
 		// content into the path that callers echo in cache-read warnings.
-		return nil, errUncacheableVersion
+		return providerCatalogCacheFile{}, errUncacheableVersion
 	}
 	path := providerCatalogCachePath(cacheRoot, provider, version)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return providerCatalogCacheFile{}, err
 	}
 
 	var cached providerCatalogCacheFile
 	if err := json.Unmarshal(data, &cached); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return providerCatalogCacheFile{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if cached.Provider != provider || cached.Version != version {
-		return nil, fmt.Errorf("cache metadata mismatch in %s", path)
+		return providerCatalogCacheFile{}, fmt.Errorf("cache metadata mismatch in %s", path)
 	}
 	if len(cached.Models) == 0 {
-		return nil, fmt.Errorf("empty model catalog in %s", path)
+		return providerCatalogCacheFile{}, fmt.Errorf("empty model catalog in %s", path)
+	}
+	return cached, nil
+}
+
+func loadProviderCatalogCache(cacheRoot, provider, version string) ([]llm.ModelInfo, error) {
+	cached, err := loadProviderCatalogCacheFile(cacheRoot, provider, version)
+	if err != nil {
+		return nil, err
 	}
 	return cached.Models, nil
 }

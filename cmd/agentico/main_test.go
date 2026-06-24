@@ -37,7 +37,7 @@ import (
 
 func failingLauncher(t *testing.T) tuiLauncher {
 	t.Helper()
-	return func(string, string, bool, []string) {
+	return func(string, string, bool, []string, bool) {
 		t.Fatal("TUI launcher invoked unexpectedly")
 	}
 }
@@ -146,7 +146,7 @@ func TestDiscoverProviderCatalogsSetsCatalogAndWarnsOnFailure(t *testing.T) {
 	}
 	plain := &stubProvider{name: "plain", hasCLI: true}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{success, failure, plain}, t.TempDir(), nil)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{success, failure, plain}, t.TempDir(), nil, false)
 	if len(success.catalog) != 1 || success.catalog[0].ID != "live-model" {
 		t.Fatalf("success catalog = %+v, want live-model", success.catalog)
 	}
@@ -172,7 +172,7 @@ func TestDiscoverProviderCatalogsReportsDiscoveredModels(t *testing.T) {
 
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, "", func(provider string, model llm.ModelInfo) {
 		reported = append(reported, provider+":"+model.DisplayName)
-	})
+	}, false)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)
 	}
@@ -214,7 +214,7 @@ func TestDiscoverProviderCatalogsRunsProvidersConcurrently(t *testing.T) {
 	defer cancel()
 	done := make(chan []string, 1)
 	go func() {
-		done <- discoverProviderCatalogs(ctx, []llm.LLMProvider{first, second}, "", nil)
+		done <- discoverProviderCatalogs(ctx, []llm.LLMProvider{first, second}, "", nil, false)
 	}()
 
 	seen := make(map[string]bool)
@@ -260,7 +260,7 @@ func TestDiscoverProviderCatalogsLoadsVersionedCache(t *testing.T) {
 		discoverErr: errors.New("discovery should not run"),
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, false)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)
 	}
@@ -285,7 +285,7 @@ func TestDiscoverProviderCatalogsWritesVersionedCacheOnMiss(t *testing.T) {
 		discovered:  discovered,
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, false)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none", warnings)
 	}
@@ -320,7 +320,7 @@ func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 		},
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, false)
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "ignoring cached corrupt model catalog") {
 		t.Fatalf("warnings = %v, want corrupt cache warning", warnings)
 	}
@@ -333,6 +333,126 @@ func TestDiscoverProviderCatalogsRefreshesCorruptVersionedCache(t *testing.T) {
 	}
 	if len(cached) != 1 || cached[0].ID != "refreshed-model" {
 		t.Fatalf("cached models = %+v, want refreshed-model", cached)
+	}
+}
+
+func TestDiscoverProviderCatalogsRefreshModelsSkipsCacheAndOverwrites(t *testing.T) {
+	cacheRoot := t.TempDir()
+	if err := saveProviderCatalogCache(cacheRoot, "refreshable", "2.0.0", []llm.ModelInfo{
+		{ID: "cached-model", DisplayName: "Cached Model", ContextWindow: 100_000, Category: "balanced"},
+	}); err != nil {
+		t.Fatalf("saveProviderCatalogCache() error: %v", err)
+	}
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "refreshable", hasCLI: true},
+		versionInfo:  "refreshable 2.0.0",
+		discovered: []llm.ModelInfo{
+			{ID: "live-model", DisplayName: "Live Model", ContextWindow: 200_000, Category: "capable"},
+		},
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, true)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1 when refresh skips cache", p.discoveries)
+	}
+	if len(p.catalog) != 1 || p.catalog[0].ID != "live-model" {
+		t.Fatalf("catalog = %+v, want live-model", p.catalog)
+	}
+	cached, err := loadProviderCatalogCache(cacheRoot, "refreshable", "2.0.0")
+	if err != nil {
+		t.Fatalf("loadProviderCatalogCache() error: %v", err)
+	}
+	if len(cached) != 1 || cached[0].ID != "live-model" {
+		t.Fatalf("cached = %+v, want overwritten live-model", cached)
+	}
+}
+
+func TestDiscoverProviderCatalogsRefreshModelsUsesStaleCacheOnFailure(t *testing.T) {
+	cacheRoot := t.TempDir()
+	stale := []llm.ModelInfo{
+		{ID: "stale-model", DisplayName: "Stale Model", ContextWindow: 100_000, Category: "balanced"},
+	}
+	if err := saveProviderCatalogCache(cacheRoot, "stale", "2.0.0", stale); err != nil {
+		t.Fatalf("saveProviderCatalogCache() error: %v", err)
+	}
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "stale", hasCLI: true},
+		versionInfo:  "stale 2.0.0",
+		discoverErr:  errors.New("network down"),
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, true)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one stale-cache warning", warnings)
+	}
+	if !strings.Contains(warnings[0], "could not refresh stale model catalog") ||
+		!strings.Contains(warnings[0], "using stale cache") ||
+		!strings.Contains(warnings[0], "network down") {
+		t.Fatalf("warning = %q, want refresh failure + stale cache detail", warnings[0])
+	}
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
+	}
+	if len(p.catalog) != 1 || p.catalog[0].ID != "stale-model" {
+		t.Fatalf("catalog = %+v, want stale-model", p.catalog)
+	}
+}
+
+func TestDiscoverProviderCatalogsRefreshModelsUsesStaleCacheOnEmptyCatalog(t *testing.T) {
+	cacheRoot := t.TempDir()
+	stale := []llm.ModelInfo{
+		{ID: "stale-model", DisplayName: "Stale Model", ContextWindow: 100_000, Category: "balanced"},
+	}
+	if err := saveProviderCatalogCache(cacheRoot, "empty", "2.0.0", stale); err != nil {
+		t.Fatalf("saveProviderCatalogCache() error: %v", err)
+	}
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "empty", hasCLI: true},
+		versionInfo:  "empty 2.0.0",
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, true)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one stale-cache warning", warnings)
+	}
+	if !strings.Contains(warnings[0], "could not refresh empty model catalog") ||
+		!strings.Contains(warnings[0], "discovered empty catalog") ||
+		!strings.Contains(warnings[0], "using stale cache") {
+		t.Fatalf("warning = %q, want empty refresh + stale cache detail", warnings[0])
+	}
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
+	}
+	if len(p.catalog) != 1 || p.catalog[0].ID != "stale-model" {
+		t.Fatalf("catalog = %+v, want stale-model", p.catalog)
+	}
+}
+
+func TestDiscoverProviderCatalogsRefreshModelsUsesBuiltinFallbackOnFailureWithoutStaleCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	p := &stubCatalogDiscoveryProvider{
+		stubProvider: stubProvider{name: "uncached", hasCLI: true},
+		versionInfo:  "uncached 2.0.0",
+		discoverErr:  errors.New("network down"),
+	}
+
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, true)
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %v, want one built-in fallback warning", warnings)
+	}
+	if !strings.Contains(warnings[0], "could not discover uncached model catalog") ||
+		!strings.Contains(warnings[0], "using built-in fallback") ||
+		!strings.Contains(warnings[0], "network down") {
+		t.Fatalf("warning = %q, want refresh failure + built-in fallback detail", warnings[0])
+	}
+	if p.discoveries != 1 {
+		t.Fatalf("discovery calls = %d, want 1", p.discoveries)
+	}
+	if len(p.catalog) != 0 {
+		t.Fatalf("catalog = %+v, want unchanged empty catalog", p.catalog)
 	}
 }
 
@@ -466,7 +586,7 @@ func TestDiscoverProviderCatalogs_RejectsUnparseableVersionWithoutLeak(t *testin
 		},
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, false)
 	if p.discoveries != 1 {
 		t.Fatalf("discovery calls = %d, want 1 (discovery still runs without caching)", p.discoveries)
 	}
@@ -510,7 +630,7 @@ func TestDiscoverProviderCatalogs_PrefixedVersionNormalizesToCacheKey(t *testing
 				versionInfo:  tc.versionInfo,
 				discovered:   discovered,
 			}
-			if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p1}, cacheRoot, nil); len(warnings) != 0 {
+			if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p1}, cacheRoot, nil, false); len(warnings) != 0 {
 				t.Fatalf("first-startup warnings = %v, want none", warnings)
 			}
 			if p1.discoveries != 1 {
@@ -530,7 +650,7 @@ func TestDiscoverProviderCatalogs_PrefixedVersionNormalizesToCacheKey(t *testing
 				versionInfo:  tc.versionInfo,
 				discoverErr:  errors.New("discovery should not run on cache hit"),
 			}
-			if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil); len(warnings) != 0 {
+			if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil, false); len(warnings) != 0 {
 				t.Fatalf("second-startup warnings = %v, want none", warnings)
 			}
 			if p2.discoveries != 0 {
@@ -558,7 +678,7 @@ func TestDiscoverProviderCatalogs_NormalizesHostileVersionLineWithoutLeak(t *tes
 		},
 	}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, cacheRoot, nil, false)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings = %v, want none (hostile line normalizes to a clean semver)", warnings)
 	}
@@ -606,7 +726,7 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 
 	// First startup: cache miss → discovery runs, catalog populated and cached.
 	p1 := opencode.NewWithRunner(runner)
-	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p1}, cacheRoot, nil); len(warnings) != 0 {
+	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p1}, cacheRoot, nil, false); len(warnings) != 0 {
 		t.Fatalf("first-startup warnings = %v, want none", warnings)
 	}
 	if verboseCalls != 1 {
@@ -618,7 +738,7 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 
 	// Second startup at the same version: cache hit → discovery does NOT run.
 	p2 := opencode.NewWithRunner(runner)
-	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil); len(warnings) != 0 {
+	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil, false); len(warnings) != 0 {
 		t.Fatalf("second-startup warnings = %v, want none", warnings)
 	}
 	if verboseCalls != 1 {
@@ -653,7 +773,7 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 	}
 
 	p := opencode.NewWithRunner(runner)
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, t.TempDir(), nil)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, t.TempDir(), nil, false)
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "opencode") || !strings.Contains(warnings[0], "built-in fallback") {
 		t.Fatalf("warnings = %v, want one opencode built-in-fallback warning", warnings)
 	}
@@ -672,7 +792,7 @@ func TestRunArgsLaunchesTUIByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var launched bool
 	wantParent := pickRuntimeParent(os.Stat)
-	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) {
+	code := runArgs(nil, &stdout, &stderr, func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) {
 		launched = true
 		if configPath != filepath.Join(wantParent, defaultConfigBasename) {
 			t.Errorf("configPath = %q, want default", configPath)
@@ -707,7 +827,7 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 		[]string{"--config", "/tmp/agentic-config.yaml", "--state-dir", "/tmp/agentic-features", "--providers", "codex, claude", "--dangerously-skip-permissions"},
 		&stdout,
 		&stderr,
-		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) {
+		func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, _ bool) {
 			gotConfig = configPath
 			gotState = stateDir
 			gotDangerouslySkipPerms = dangerouslySkipPerms
@@ -735,6 +855,29 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 	}
 }
 
+func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var gotRefresh bool
+	code := runArgs(
+		[]string{"--refresh-models"},
+		&stdout,
+		&stderr,
+		func(_ string, _ string, _ bool, _ []string, refreshModels bool) {
+			gotRefresh = refreshModels
+		},
+		failingUpdater(t),
+	)
+	if code != 0 {
+		t.Fatalf("runArgs() code = %d; stderr = %q", code, stderr.String())
+	}
+	if !gotRefresh {
+		t.Fatal("refreshModels = false, want true")
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("stdout = %q stderr = %q, want both empty", stdout.String(), stderr.String())
+	}
+}
+
 func TestRunArgsValidateArtifactsCatchesMalformedYAML(t *testing.T) {
 	iterDir := t.TempDir()
 	writeReviewFeedback(t, filepath.Join(iterDir, "review-feedback.md"), "- **High**: needs work", "CHANGES_REQUESTED")
@@ -755,7 +898,7 @@ func TestRunArgsValidateArtifactsCatchesMalformedYAML(t *testing.T) {
 		[]string{"validate-artifacts", "--phase", "review", "--role", string(agent.RoleFinalReviewer), "--dir", iterDir},
 		&stdout,
 		&stderr,
-		func(string, string, bool, []string) {
+		func(string, string, bool, []string, bool) {
 			launchedTUI = true
 		},
 		func(bool, io.Writer, io.Writer) int {
@@ -812,7 +955,6 @@ func TestParseLaunchArgsRejectsRemovedSurface(t *testing.T) {
 		{name: "run alias", args: []string{"run"}, wantErr: "unknown command: run"},
 		{name: "feature list", args: []string{"feature", "list"}, wantErr: "unknown command: feature"},
 		{name: "feature create", args: []string{"feature", "create", "--name", "x"}, wantErr: "unknown command: feature"},
-		{name: "refresh models", args: []string{"--refresh-models"}, wantErr: "unknown flag: --refresh-models"},
 		{name: "feature create flag at top level", args: []string{"--name", "x"}, wantErr: "unknown flag: --name"},
 	}
 	for _, tt := range tests {

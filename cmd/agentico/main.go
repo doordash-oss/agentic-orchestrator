@@ -81,6 +81,7 @@ type launchOptions struct {
 	stateDir             string
 	dangerouslySkipPerms bool
 	enabledProviders     []string
+	refreshModels        bool
 	mode                 launchMode
 	validateArtifacts    validateArtifactsOptions
 	// updateCheck is set when update mode was selected with --check / -n,
@@ -94,7 +95,7 @@ type validateArtifactsOptions struct {
 	dir   string
 }
 
-type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string)
+type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool)
 
 // updater is the injectable update seam. It mirrors tuiLauncher: production
 // wiring passes the real updater, tests pass a fake. It returns the process
@@ -153,7 +154,7 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
 	default:
-		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders)
+		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 		return 0
 	}
 }
@@ -202,7 +203,7 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 			opts.mode = launchModeVersion
 			return opts, nil
 		case "--refresh-models":
-			return opts, fmt.Errorf("unknown flag: --refresh-models")
+			opts.refreshModels = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown flag: %s", arg)
@@ -474,7 +475,7 @@ type providerCatalogDiscoveryJob struct {
 	enricher   llm.CatalogEnricher
 }
 
-func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress) []string {
+func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []string {
 	var jobs []providerCatalogDiscoveryJob
 	for i, p := range providers {
 		discoverer, ok := p.(llm.CatalogDiscoverer)
@@ -511,7 +512,7 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 	for _, job := range jobs {
 		go func(job providerCatalogDiscoveryJob) {
 			defer wg.Done()
-			warningsByProvider[job.index] = discoverOneProviderCatalog(ctx, job.provider, job.discoverer, job.enricher, cacheRoot, reportProgress)
+			warningsByProvider[job.index] = discoverOneProviderCatalog(ctx, job.provider, job.discoverer, job.enricher, cacheRoot, reportProgress, refreshModels)
 		}(job)
 	}
 	wg.Wait()
@@ -523,7 +524,7 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 	return warnings
 }
 
-func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress) []string {
+func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []string {
 	var warnings []string
 	providerName := p.Name()
 	reportModel := func(model llm.ModelInfo) {
@@ -556,7 +557,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 			}
 		}
 	}
-	if version != "" {
+	if version != "" && !refreshModels {
 		models, err := loadProviderCatalogCache(cacheRoot, providerName, version)
 		if err == nil {
 			enricher.SetModelCatalog(models)
@@ -579,6 +580,18 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 	models, err := discoverModelCatalog(discoveryCtx, discoverer, reportModel)
 	cancel()
 	if err != nil {
+		if refreshModels && cacheRoot != "" && version != "" {
+			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
+				enricher.SetModelCatalog(cached.Models)
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: could not refresh %s model catalog; using stale cache from %s: %v",
+					providerName,
+					cached.DiscoveredAt.Format(time.RFC3339),
+					err,
+				))
+				return warnings
+			}
+		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: could not discover %s model catalog; using built-in fallback: %v",
 			providerName,
@@ -587,6 +600,17 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		return warnings
 	}
 	if len(models) == 0 {
+		if refreshModels && cacheRoot != "" && version != "" {
+			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
+				enricher.SetModelCatalog(cached.Models)
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: could not refresh %s model catalog; discovered empty catalog; using stale cache from %s",
+					providerName,
+					cached.DiscoveredAt.Format(time.RFC3339),
+				))
+				return warnings
+			}
+		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: discovered empty %s model catalog; using built-in fallback",
 			providerName,
@@ -662,7 +686,7 @@ func formatNoReadyProviderMessage(all []llm.LLMProvider, issues []providerReadin
 	return b.String()
 }
 
-func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) {
+func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) {
 	lock, acquired, owner, err := instancelock.Acquire(filepath.Dir(stateDir), stateDir, configPath, tui.GetVersion())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error acquiring instance lock: %v\n", err)
@@ -798,7 +822,7 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	}
 
 	modelDiscovery := newModelDiscoveryProgressPrinter(os.Stderr)
-	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir), modelDiscovery.Report)
+	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir), modelDiscovery.Report, refreshModels)
 	modelDiscovery.Done()
 	for _, w := range catalogWarnings {
 		fmt.Fprintln(os.Stderr, w)

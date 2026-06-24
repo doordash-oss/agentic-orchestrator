@@ -254,3 +254,268 @@ func TestBuildPhaseModelCatalog_PlanningUsesBalancedDefaultAndOptions(t *testing
 		t.Errorf("Planning options = %v, want cheap model excluded", opts)
 	}
 }
+
+func TestPhaseModelCatalog_DisplayEntriesCarryAgentAndMetadata(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"portkey/@fireworks/accounts/fireworks/models/glm-5p2"},
+		catalog: []llm.ModelInfo{
+			{
+				ID:            "portkey/@fireworks/accounts/fireworks/models/glm-5p2",
+				DisplayName:   "GLM 5.2",
+				ContextWindow: 131_000,
+				Category:      "balanced",
+				Aliases:       []string{"glm-5p2", "fireworks/glm-5p2"},
+			},
+		},
+	})
+
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	entries := cat.ModelEntriesForField("Planning")
+	if len(entries) != 1 {
+		t.Fatalf("ModelEntriesForField(Planning) = %+v, want one entry", entries)
+	}
+	got := entries[0]
+	if got.Agent != "opencode" {
+		t.Fatalf("Agent = %q, want opencode", got.Agent)
+	}
+	if got.ModelID != "portkey/@fireworks/accounts/fireworks/models/glm-5p2" {
+		t.Fatalf("ModelID = %q", got.ModelID)
+	}
+	if got.DisplayName != "GLM 5.2" {
+		t.Fatalf("DisplayName = %q, want GLM 5.2", got.DisplayName)
+	}
+	if got.FullID != got.ModelID {
+		t.Fatalf("FullID = %q, want ModelID %q", got.FullID, got.ModelID)
+	}
+	if got.ContextWindow != 131_000 {
+		t.Fatalf("ContextWindow = %d, want 131000", got.ContextWindow)
+	}
+	if got.Category != "balanced" {
+		t.Fatalf("Category = %q, want balanced", got.Category)
+	}
+	if !slices.Equal(got.Aliases, []string{"glm-5p2", "fireworks/glm-5p2"}) {
+		t.Fatalf("Aliases = %v, want [glm-5p2 fireworks/glm-5p2]", got.Aliases)
+	}
+}
+
+func TestPhaseModelCatalog_ModelEntriesForFieldSynthesizesStringOnlyCatalog(t *testing.T) {
+	t.Parallel()
+	cat := PhaseModelCatalog{
+		ProviderOrder: []string{"claude", "opencode"},
+		ProviderModels: map[string][]string{
+			"claude":   {"sonnet[200K]"},
+			"opencode": {"vendor/model"},
+		},
+		PhaseProviderModels: map[string]map[string][]string{
+			"Research": {
+				"opencode": {"vendor/model"},
+			},
+		},
+		PhaseDefaults: map[string]string{
+			"Research": "opencode:vendor/model",
+		},
+	}
+
+	entries := cat.ModelEntriesForField("Research")
+	if len(entries) != 1 {
+		t.Fatalf("ModelEntriesForField(Research) = %+v, want one synthesized entry", entries)
+	}
+	got := entries[0]
+	if got.Agent != "opencode" {
+		t.Fatalf("Agent = %q, want opencode", got.Agent)
+	}
+	if got.ModelID != "vendor/model" {
+		t.Fatalf("ModelID = %q, want vendor/model", got.ModelID)
+	}
+	if got.DisplayName != "vendor/model" {
+		t.Fatalf("DisplayName = %q, want vendor/model", got.DisplayName)
+	}
+	if got.FullID != "vendor/model" {
+		t.Fatalf("FullID = %q, want vendor/model", got.FullID)
+	}
+	if !got.Recommended {
+		t.Fatalf("Recommended = false, want true for opencode:vendor/model default")
+	}
+}
+
+func TestPhaseModelCatalog_ProviderEntryGroupsForFieldUsesStringFallback(t *testing.T) {
+	t.Parallel()
+	cat := PhaseModelCatalog{
+		ProviderOrder: []string{"claude"},
+		ProviderModels: map[string][]string{
+			"claude": {"sonnet[200K]"},
+		},
+		PhaseProviderModels: map[string]map[string][]string{
+			"Research": {
+				"opencode": {"vendor/model"},
+			},
+		},
+		PhaseDefaults: map[string]string{
+			"Research": "sonnet[200K]",
+		},
+	}
+
+	stringGroups := cat.ProviderGroupsForField("Research")
+	entryGroups := cat.ProviderEntryGroupsForField("Research")
+	if len(entryGroups) != len(stringGroups) {
+		t.Fatalf("ProviderEntryGroupsForField groups = %+v, want same count as ProviderGroupsForField %+v", entryGroups, stringGroups)
+	}
+	if len(entryGroups) != 1 {
+		t.Fatalf("ProviderEntryGroupsForField groups = %+v, want one fallback group", entryGroups)
+	}
+	if entryGroups[0].Name != stringGroups[0].Name {
+		t.Fatalf("entry group name = %q, want %q", entryGroups[0].Name, stringGroups[0].Name)
+	}
+	if len(entryGroups[0].Models) != len(stringGroups[0].Models) {
+		t.Fatalf("entry group models = %+v, want same count as string models %+v", entryGroups[0].Models, stringGroups[0].Models)
+	}
+	for i, entry := range entryGroups[0].Models {
+		if entry.ModelID != stringGroups[0].Models[i] {
+			t.Fatalf("entry model %d = %q, want string option %q", i, entry.ModelID, stringGroups[0].Models[i])
+		}
+	}
+}
+
+func TestPhaseModelCatalog_ProviderCatalogAliasesAreDeepCopied(t *testing.T) {
+	t.Parallel()
+	catalog := []llm.ModelInfo{
+		{
+			ID:            "vendor/glm",
+			DisplayName:   "Vendor GLM",
+			ContextWindow: 131_000,
+			Category:      "balanced",
+			Aliases:       []string{"glm-original"},
+		},
+	}
+	reg := llm.NewRegistry()
+	provider := &phaseCatalogStubProvider{
+		name:    "opencode",
+		models:  []string{"vendor/glm"},
+		catalog: catalog,
+	}
+	reg.Register(provider)
+
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	provider.catalog[0].Aliases[0] = "glm-mutated"
+
+	entries := cat.ModelEntriesForField("Planning")
+	if len(entries) != 1 {
+		t.Fatalf("ModelEntriesForField(Planning) = %+v, want one entry", entries)
+	}
+	if !slices.Equal(entries[0].Aliases, []string{"glm-original"}) {
+		t.Fatalf("Aliases after provider mutation = %v, want [glm-original]", entries[0].Aliases)
+	}
+}
+
+func TestPhaseModelCatalog_PartialProviderCatalogSynthesizesMissingAvailableModels(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"vendor/rich", "vendor/missing"},
+		catalog: []llm.ModelInfo{
+			{ID: "vendor/rich", DisplayName: "Rich Model", Category: "balanced"},
+		},
+	})
+
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	infos := cat.ProviderModelInfos["opencode"]
+	if len(infos) != 2 {
+		t.Fatalf("ProviderModelInfos[opencode] = %+v, want rich and synthetic missing entries", infos)
+	}
+	if infos[0].ID != "vendor/rich" || infos[0].DisplayName != "Rich Model" {
+		t.Fatalf("ProviderModelInfos[opencode][0] = %+v, want rich catalog metadata", infos[0])
+	}
+	if infos[1].ID != "vendor/missing" {
+		t.Fatalf("ProviderModelInfos[opencode][1] = %+v, want synthetic vendor/missing", infos[1])
+	}
+
+	entries := cat.ModelEntriesForField("Unknown")
+	var foundMissing bool
+	for _, entry := range entries {
+		if entry.ModelID == "vendor/missing" {
+			foundMissing = true
+			if entry.DisplayName != "vendor/missing" {
+				t.Fatalf("synthetic missing DisplayName = %q, want vendor/missing", entry.DisplayName)
+			}
+		}
+	}
+	if !foundMissing {
+		t.Fatalf("ModelEntriesForField(Unknown) = %+v, want synthetic vendor/missing entry", entries)
+	}
+}
+
+func TestPhaseModelCatalog_SelectionValuePrefixesWhenMultipleAgents(t *testing.T) {
+	t.Parallel()
+	multi := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	entry, ok := multi.RecommendedEntryForAgent("Research", "opencode")
+	if !ok {
+		t.Fatal("missing recommended opencode Research entry")
+	}
+	if got := multi.SelectionValue(entry); got != "opencode:"+entry.ModelID {
+		t.Fatalf("SelectionValue(multi) = %q, want opencode:%s", got, entry.ModelID)
+	}
+
+	soloReg := llm.NewRegistry()
+	soloReg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"vendor/model"},
+		catalog: []llm.ModelInfo{
+			{ID: "vendor/model", DisplayName: "Vendor Model", Category: "balanced"},
+		},
+	})
+	solo := BuildPhaseModelCatalog(soloReg, config.DefaultsConfig{})
+	soloEntry, ok := solo.RecommendedEntryForAgent("Planning", "opencode")
+	if !ok {
+		t.Fatal("missing solo opencode Planning entry")
+	}
+	if got := solo.SelectionValue(soloEntry); got != "vendor/model" {
+		t.Fatalf("SelectionValue(solo) = %q, want bare vendor/model", got)
+	}
+}
+
+func TestPhaseModelCatalog_EntriesForFieldAndAgentMarkRecommended(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	entries := cat.EntriesForFieldAndAgent("Research", "opencode")
+	if len(entries) == 0 {
+		t.Fatal("EntriesForFieldAndAgent(Research, opencode) returned no entries")
+	}
+
+	for _, entry := range entries {
+		if entry.ModelID != "anthropic/claude-sonnet-4-5[200K]" {
+			continue
+		}
+		if !entry.Recommended {
+			t.Fatalf("opencode winning Research entry Recommended = false, want true: %+v", entry)
+		}
+		return
+	}
+	t.Fatalf("EntriesForFieldAndAgent(Research, opencode) = %+v, want winning OpenCode model", entries)
+}
+
+func TestPhaseModelCatalog_ProviderEntryGroupsForFieldMarkRecommended(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	groups := cat.ProviderEntryGroupsForField("Research")
+
+	for _, group := range groups {
+		if group.Name != "opencode" {
+			continue
+		}
+		for _, entry := range group.Models {
+			if entry.ModelID != "anthropic/claude-sonnet-4-5[200K]" {
+				continue
+			}
+			if !entry.Recommended {
+				t.Fatalf("opencode winning Research group entry Recommended = false, want true: %+v", entry)
+			}
+			return
+		}
+		t.Fatalf("opencode Research group = %+v, want winning OpenCode model", group.Models)
+	}
+	t.Fatalf("ProviderEntryGroupsForField(Research) = %+v, want opencode group", groups)
+}

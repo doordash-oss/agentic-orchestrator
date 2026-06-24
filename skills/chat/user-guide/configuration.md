@@ -50,6 +50,8 @@ An OpenCode selection can take three forms, and they resolve differently:
 
 When a ready OpenCode CLI is detected, Agentico discovers its live model catalog with `opencode models --verbose` and contributes those entries to the per-phase pickers; if discovery fails it falls back to a small built-in OpenCode catalog. Context-window suffixes such as `[200K]` are Agentico selection metadata and are stripped before the native backend id is handed to OpenCode. When OpenCode does not report pricing for a model (for example a local Ollama model), Agentico records that session at zero cost rather than guessing — the run still completes; only the cost roll-up shows `$0.00`.
 
+Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
+
 See [Provider Selection](#provider-selection) for installing, authenticating, and troubleshooting OpenCode.
 
 ## Provider Selection
@@ -213,6 +215,7 @@ Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agen
 | `--config <path>` | Config file path | `~/.agentic-orchestrator/config.yaml` |
 | `--state-dir <path>` | State directory path | `~/.agentic-orchestrator/features` |
 | `--providers <list>` | Comma-separated provider list (e.g., `claude,codex,opencode`) | all detected |
+| `--refresh-models` | Refresh provider model catalogs before opening the TUI | `false` |
 | `--dangerously-skip-permissions` | Skip all permission prompts | `false` |
 | `--help`, `-h` | Print usage | - |
 | `--version`, `-v` | Print version | - |

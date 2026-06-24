@@ -276,6 +276,7 @@ Flags:
   --state-dir <path>               State directory path (default: ~/.agentic-orchestrator/features)
   --providers <list>               Comma-separated provider list (default: all)
                                    Available: claude, codex, opencode
+  --refresh-models                 Refresh provider model catalogs before opening the TUI
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
   --help, -h                       Show this help

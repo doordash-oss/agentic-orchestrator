@@ -1406,6 +1406,14 @@ func TestPrintUsageAdvertisesRenamedDefaults(t *testing.T) {
 	}
 }
 
+func TestUsageListsRefreshModels(t *testing.T) {
+	var usage strings.Builder
+	printUsage(&usage)
+	if !strings.Contains(usage.String(), "--refresh-models") {
+		t.Fatalf("usage missing --refresh-models:\n%s", usage.String())
+	}
+}
+
 func TestCheckRequiredProviders_NoneDetected(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: false, installHint: "install claude"})

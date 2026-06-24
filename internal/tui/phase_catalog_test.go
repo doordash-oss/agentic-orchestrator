@@ -301,6 +301,59 @@ func TestPhaseModelCatalog_DisplayEntriesCarryAgentAndMetadata(t *testing.T) {
 	}
 }
 
+func TestPhaseModelCatalog_EntriesForFieldAndAgentIncludeDiscoveredModelsWithUnknownCategory(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"ollama/gemma4:31b-256k[262K]", "portkey/@fireworks/accounts/fireworks/models/glm-5p2"},
+		catalog: []llm.ModelInfo{
+			{ID: "ollama/gemma4:31b-256k[262K]", DisplayName: "Gemma 4 31B Dense", ContextWindow: 262_144, Category: "balanced"},
+			{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2", DisplayName: "GLM 5.2", ContextWindow: 131_072},
+		},
+	})
+
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	entries := cat.EntriesForFieldAndAgent("Research", "opencode")
+	var foundGLM bool
+	for _, entry := range entries {
+		if entry.ModelID == "portkey/@fireworks/accounts/fireworks/models/glm-5p2" {
+			foundGLM = true
+			if entry.DisplayName != "GLM 5.2" {
+				t.Fatalf("GLM DisplayName = %q, want GLM 5.2", entry.DisplayName)
+			}
+		}
+	}
+	if !foundGLM {
+		t.Fatalf("EntriesForFieldAndAgent(Research, opencode) = %+v, want discovered GLM even without a phase category", entries)
+	}
+}
+
+func TestPhaseModelCatalog_NormalizesCachedGLMMetadata(t *testing.T) {
+	t.Parallel()
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"portkey/@fireworks/accounts/fireworks/models/glm-5p2"},
+		catalog: []llm.ModelInfo{
+			{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2", DisplayName: "glm-5p2"},
+		},
+	})
+
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	entries := cat.EntriesForFieldAndAgent("Research", "opencode")
+	if len(entries) != 1 {
+		t.Fatalf("EntriesForFieldAndAgent = %+v, want one GLM entry", entries)
+	}
+	got := entries[0]
+	if got.Category != "balanced" {
+		t.Fatalf("GLM Category = %q, want balanced", got.Category)
+	}
+	if got.ContextWindow != 1_000_000 {
+		t.Fatalf("GLM ContextWindow = %d, want 1000000", got.ContextWindow)
+	}
+}
+
 func TestPhaseModelCatalog_ModelEntriesForFieldSynthesizesStringOnlyCatalog(t *testing.T) {
 	t.Parallel()
 	cat := PhaseModelCatalog{
@@ -320,10 +373,10 @@ func TestPhaseModelCatalog_ModelEntriesForFieldSynthesizesStringOnlyCatalog(t *t
 	}
 
 	entries := cat.ModelEntriesForField("Research")
-	if len(entries) != 1 {
-		t.Fatalf("ModelEntriesForField(Research) = %+v, want one synthesized entry", entries)
+	if len(entries) != 2 {
+		t.Fatalf("ModelEntriesForField(Research) = %+v, want provider catalog plus phase entry", entries)
 	}
-	got := entries[0]
+	got := entries[1]
 	if got.Agent != "opencode" {
 		t.Fatalf("Agent = %q, want opencode", got.Agent)
 	}
@@ -360,21 +413,18 @@ func TestPhaseModelCatalog_ProviderEntryGroupsForFieldUsesStringFallback(t *test
 
 	stringGroups := cat.ProviderGroupsForField("Research")
 	entryGroups := cat.ProviderEntryGroupsForField("Research")
-	if len(entryGroups) != len(stringGroups) {
-		t.Fatalf("ProviderEntryGroupsForField groups = %+v, want same count as ProviderGroupsForField %+v", entryGroups, stringGroups)
-	}
 	if len(entryGroups) != 1 {
 		t.Fatalf("ProviderEntryGroupsForField groups = %+v, want one fallback group", entryGroups)
 	}
-	if entryGroups[0].Name != stringGroups[0].Name {
-		t.Fatalf("entry group name = %q, want %q", entryGroups[0].Name, stringGroups[0].Name)
+	if entryGroups[0].Name != "claude" {
+		t.Fatalf("entry group name = %q, want claude", entryGroups[0].Name)
 	}
-	if len(entryGroups[0].Models) != len(stringGroups[0].Models) {
+	if len(entryGroups[0].Models) != len(cat.ProviderModels["claude"]) {
 		t.Fatalf("entry group models = %+v, want same count as string models %+v", entryGroups[0].Models, stringGroups[0].Models)
 	}
 	for i, entry := range entryGroups[0].Models {
-		if entry.ModelID != stringGroups[0].Models[i] {
-			t.Fatalf("entry model %d = %q, want string option %q", i, entry.ModelID, stringGroups[0].Models[i])
+		if entry.ModelID != cat.ProviderModels["claude"][i] {
+			t.Fatalf("entry model %d = %q, want provider option %q", i, entry.ModelID, cat.ProviderModels["claude"][i])
 		}
 	}
 }

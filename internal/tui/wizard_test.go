@@ -3306,13 +3306,15 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	for _, needle := range []string{"Model Selection", "Phase", "Agent", "Model", "Research", "Selection for Research", "Agents", "Models", "opus", "codex"} {
+	for _, needle := range []string{"Model Selection", "Phases", "Agents", "Models for", "Research", "opus", "codex"} {
 		if !containsString(view, needle) {
 			t.Errorf("expected expanded Models view to contain %q", needle)
 		}
 	}
-	if containsString(view, "Choices for Research") {
-		t.Error("expected expanded Models view to omit old 'Choices for Research' copy")
+	for _, forbidden := range []string{"Selection for Research", "Choices for Research", "Details agent"} {
+		if containsString(view, forbidden) {
+			t.Errorf("expected expanded Models view to omit old model cascade copy %q", forbidden)
+		}
 	}
 }
 

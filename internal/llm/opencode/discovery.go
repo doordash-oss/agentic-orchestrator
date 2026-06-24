@@ -379,7 +379,7 @@ var (
 	cheapModelTokens     = []string{"nano", "haiku", "flash", "lite", "tiny", "embed"}
 	balancedShrinkTokens = []string{"mini", "small"}
 	capableModelTokens   = []string{"opus", "gpt-5", "-pro", "ultra", "-max", "405b", "reasoner", "deepseek-r"}
-	balancedModelTokens  = []string{"sonnet", "gpt-4", "claude-3", "gemini", "llama", "mistral", "qwen", "gemma", "grok", "deepseek", "codex", "command"}
+	balancedModelTokens  = []string{"sonnet", "gpt-4", "claude-3", "gemini", "llama", "mistral", "qwen", "gemma", "glm", "grok", "deepseek", "codex", "command"}
 )
 
 func categoryForModel(id, displayName string) string {

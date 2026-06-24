@@ -762,6 +762,182 @@ func inquirenessDescription(v feature.Inquireness) string {
 	}
 }
 
+func (m ConfigEditorModel) renderModelsWorkspaceWithFocus(focus configFocusZone) string {
+	title := lipgloss.NewStyle().Bold(true).Render("Model Selection")
+	phasePane := m.renderModelPhaseList(focus)
+	inspector := m.renderModelInspector(focus)
+	return strings.Join([]string{
+		title,
+		"",
+		lipgloss.JoinHorizontal(lipgloss.Top, phasePane, "  ", inspector),
+	}, "\n")
+}
+
+func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone) string {
+	fields := m.catalog.Fields
+	if len(fields) == 0 {
+		fields = phaseCatalogFields
+	}
+	lines := []string{}
+	for i, field := range fields {
+		label := truncatePhaseLabel(m.phaseAssignmentLabel(field))
+		prefix := "  "
+		selected := i == m.rowCursor
+		focused := selected && focus == configFocusPhaseList
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Phases", strings.Join(lines, "\n"), modelPhasePanelWidth, modelPanelHeight, focus == configFocusPhaseList)
+}
+
+func (m ConfigEditorModel) renderModelInspector(focus configFocusZone) string {
+	field := m.currentModelField()
+	if field == "" {
+		emptyAgents := titledConfigBox("Agents", MutedStyle.Render("No phase"), modelAgentPanelWidth, modelPanelHeight, focus == configFocusAgentList)
+		emptyModels := titledConfigBox("Models", MutedStyle.Render("No phase"), modelListPanelWidth, modelPanelHeight, focus == configFocusModelList)
+		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels)
+	}
+	agent := m.agentValueForField(field)
+	agents := m.renderAgentPicker(field, agent, focus)
+	models := m.renderModelPicker(field, agent, focus)
+	return lipgloss.JoinHorizontal(lipgloss.Top, agents, "  ", models)
+}
+
+func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone) string {
+	agents := m.agentOptionsForField(field)
+	if len(agents) == 0 {
+		return titledConfigBox("Agents", MutedStyle.Render("No agents"), modelAgentPanelWidth, modelPanelHeight, focus == configFocusAgentList)
+	}
+	var lines []string
+	for _, agent := range agents {
+		prefix := "  "
+		label := agent
+		selected := agent == currentAgent
+		focused := selected && focus == configFocusAgentList
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(agent)
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(agent)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Agents", strings.Join(lines, "\n"), modelAgentPanelWidth, modelPanelHeight, focus == configFocusAgentList)
+}
+
+func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFocusZone) string {
+	entries := m.filteredModelEntriesForCurrentRow()
+	panelFocused := focus == configFocusModelList || m.ModelFilteringActive()
+	if len(entries) == 0 {
+		return titledConfigBox("Models for "+agent, MutedStyle.Render("No models"), modelListPanelWidth, modelPanelHeight, panelFocused)
+	}
+	current := m.modelValueForField(field)
+	focusIdx := m.modelPickerFocusIndex(entries, current)
+	start, end := visibleWindow(len(entries), focusIdx, 9)
+
+	var lines []string
+	if m.ModelFilteringActive() {
+		filter := m.modelFilter
+		if filter == "" {
+			filter = " "
+		}
+		lines = append(lines, MutedStyle.Render("Search  ")+SummarySelectedValueStyle.Render(filter), "")
+	} else {
+		lines = append(lines, MutedStyle.Render("/ search"), "")
+	}
+	if start > 0 {
+		lines = append(lines, MutedStyle.Render("  ..."))
+	}
+	for i := start; i < end; i++ {
+		entry := entries[i]
+		selected := m.catalogEntrySelected(entry, current)
+		highlighted := selected
+		if m.ModelFilteringActive() {
+			highlighted = i == m.modelFilterCursor
+		}
+		prefix := "  "
+		label := compactModelEntryLabel(entry, entry.ModelID)
+		meta := compactModelEntryMeta(entry)
+		line := fmt.Sprintf("%-44s %s", truncateString(label, 44), meta)
+		focused := highlighted && panelFocused
+		switch {
+		case focused:
+			line = SelectedRowStyle.Render(line)
+			prefix = SelectedRowStyle.Render("▸ ")
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			line = SummarySelectedValueStyle.Render(line)
+		}
+		lines = append(lines, prefix+line)
+	}
+	if end < len(entries) {
+		lines = append(lines, MutedStyle.Render("  ..."))
+	}
+	return titledConfigBox("Models for "+agent, strings.Join(lines, "\n"), modelListPanelWidth, modelPanelHeight, panelFocused)
+}
+
+func (m ConfigEditorModel) modelPickerFocusIndex(entries []PhaseModelEntry, current string) int {
+	if len(entries) == 0 {
+		return 0
+	}
+	if m.ModelFilteringActive() {
+		if m.modelFilterCursor < 0 {
+			return 0
+		}
+		if m.modelFilterCursor >= len(entries) {
+			return len(entries) - 1
+		}
+		return m.modelFilterCursor
+	}
+	for i, entry := range entries {
+		if m.catalogEntrySelected(entry, current) {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m ConfigEditorModel) catalogEntrySelected(entry PhaseModelEntry, current string) bool {
+	return m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current)
+}
+
+func (m ConfigEditorModel) phaseAssignmentLabel(field string) string {
+	agent := m.agentValueForField(field)
+	value := m.modelValueForField(field)
+	if value == "" {
+		if agent == "" {
+			return field + " (default)"
+		}
+		return fmt.Sprintf("%s (%s/default)", field, agent)
+	}
+	model := value
+	unavailable := ""
+	if entry, ok := m.entryForFieldValue(field, value); ok {
+		model = compactModelEntryLabel(entry, value)
+	} else if value != "" {
+		if provider, modelID := splitProviderModel(value); provider != "" {
+			agent = provider
+			model = modelID
+		} else {
+			model = value
+		}
+		unavailable = " (unavailable)"
+	}
+	if agent == "" {
+		return field + " (" + model + unavailable + ")"
+	}
+	return fmt.Sprintf("%s (%s/%s%s)", field, agent, model, unavailable)
+}
+
 // renderModelsBox renders the Models sub-editor as a Phase | Agent | Model
 // cascade. The focused row expands into agent choices and model choices scoped
 // to the selected agent.
@@ -908,25 +1084,20 @@ func (m ConfigEditorModel) renderModelCascadeDetails(field string, width int) []
 		highlightIdx = 0
 	}
 	entry := entries[highlightIdx]
-	detail := entry.ModelID
-	if entry.FullID != "" && entry.FullID != entry.ModelID {
-		detail = entry.FullID
-	}
 	var parts []string
 	parts = append(parts, "agent "+entry.Agent)
 	if entry.Category != "" {
 		parts = append(parts, "category "+entry.Category)
 	}
 	if entry.ContextWindow > 0 {
-		parts = append(parts, fmt.Sprintf("context %d", entry.ContextWindow))
+		parts = append(parts, "context "+compactContextWindow(entry.ContextWindow))
 	}
 	if entry.Recommended {
 		parts = append(parts, "recommended")
 	}
 	if len(parts) > 0 {
-		detail += " (" + strings.Join(parts, ", ") + ")"
+		lines = append(lines, MutedStyle.Render("Details ")+strings.Join(parts, ", "))
 	}
-	lines = append(lines, MutedStyle.Render("ID      ")+truncateString(detail, 140))
 	return lines
 }
 

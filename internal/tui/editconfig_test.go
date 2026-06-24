@@ -21,6 +21,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 
 	tea "charm.land/bubbletea/v2"
@@ -394,6 +395,7 @@ func TestEditConfig_StaleModel_RendersUnavailable(t *testing.T) {
 		Models: config.ModelConfig{Research: "this-model-does-not-exist-xyz"},
 	}
 	app.editConfig = NewEditConfigModel(f, cat, true)
+	app.editConfig.focus = configFocusPhaseList
 	view := app.editConfig.View()
 	if !strings.Contains(view, "(unavailable)") {
 		t.Errorf("expected (unavailable) in view for stale model; view:\n%s", view)
@@ -431,6 +433,7 @@ func TestAppModel_EditConfigModelFilterEnterLeavesOverlayOpen(t *testing.T) {
 	app.editConfigActive = true
 	app.editConfig.activeTab = tabModels
 	app.editConfig.editor.activeModelCell = modelCellModel
+	app.editConfig.focus = configFocusModelList
 
 	var cmd tea.Cmd
 	updated, cmd := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
@@ -518,44 +521,216 @@ func TestEditConfig_TabCyclesSegmentedTabs(t *testing.T) {
 	}
 }
 
-// TestEditConfig_UpDownWrapsWithinActiveTab asserts ↑/↓ are scoped to
-// the active tab's row range and wrap inside it — the flat-walk cursor
-// can no longer cross tab boundaries from the overlay's nav keys.
-func TestEditConfig_UpDownWrapsWithinActiveTab(t *testing.T) {
+func TestEditConfig_ModelTabFocusStartsOnTabsThenDownEntersPhaseList(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	f := &feature.Feature{ID: "f1", Name: "focus"}
+	app = withOverlay(t, app, f)
+
+	if got := app.editConfig.focus; got != configFocusTabs {
+		t.Fatalf("initial focus = %v, want tabs", got)
+	}
+	view := app.editConfig.View()
+	if !strings.Contains(view, "▸ Models") {
+		t.Fatalf("initial view missing focused Models tab arrow:\n%s", view)
+	}
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	got := updated.(AppModel)
+	if got.editConfig.activeTab != tabBehavior {
+		t.Fatalf("tab while tabs focused activeTab = %v, want Behavior", got.editConfig.activeTab)
+	}
+	if got.editConfig.focus != configFocusTabs {
+		t.Fatalf("tab while tabs focused focus = %v, want tabs", got.editConfig.focus)
+	}
+
+	app = withOverlay(t, app, f)
+	updated, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got = updated.(AppModel)
+	if got.editConfig.focus != configFocusPhaseList {
+		t.Fatalf("down from tabs focus = %v, want phase list", got.editConfig.focus)
+	}
+	if got.editConfig.editor.rowCursor != 0 {
+		t.Fatalf("down from tabs rowCursor = %d, want first phase", got.editConfig.editor.rowCursor)
+	}
+}
+
+func TestEditConfig_ModelTabPhaseAndPickerKeyboard(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	f := &feature.Feature{ID: "f1", Name: "picker", Models: config.ModelConfig{Research: "claude:sonnet[200K]"}}
+	app = withOverlay(t, app, f)
+
+	var updated tea.Model
+	updated, _ = app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got := updated.(AppModel)
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got = updated.(AppModel)
+	if got.editConfig.editor.rowCursor != 1 {
+		t.Fatalf("down in phase list rowCursor = %d, want Planning row", got.editConfig.editor.rowCursor)
+	}
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	got = updated.(AppModel)
+	if got.editConfig.editor.rowCursor != 0 {
+		t.Fatalf("up in phase list rowCursor = %d, want Research row", got.editConfig.editor.rowCursor)
+	}
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	got = updated.(AppModel)
+	if got.editConfig.focus != configFocusTabs {
+		t.Fatalf("up from first phase focus = %v, want tabs", got.editConfig.focus)
+	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got = updated.(AppModel)
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	got = updated.(AppModel)
+	if got.editConfig.focus != configFocusAgentList {
+		t.Fatalf("right from phase focus = %v, want agent list", got.editConfig.focus)
+	}
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	got = updated.(AppModel)
+	if got.editConfig.focus != configFocusModelList {
+		t.Fatalf("right from agent list focus = %v, want model list", got.editConfig.focus)
+	}
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	got = updated.(AppModel)
+	if got.editConfig.focus != configFocusPhaseList {
+		t.Fatalf("enter from model list focus = %v, want phase list", got.editConfig.focus)
+	}
+	if got.editConfig.saving {
+		t.Fatal("enter from model list should not dispatch save")
+	}
+}
+
+func TestEditConfig_ModelWorkspaceRendersRightSidePickerWithoutIDAndWithCompactContext(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5.4[1M]"},
+		catalog: []llm.ModelInfo{
+			{ID: "anthropic/claude-sonnet-4-5[200K]", DisplayName: "Claude Sonnet 4.5", ContextWindow: 200_000, Category: "balanced"},
+			{ID: "openai/gpt-5.4[1M]", DisplayName: "GPT-5.4", ContextWindow: 1_000_000, Category: "capable"},
+		},
+	})
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	f := &feature.Feature{ID: "feat", Name: "Feature", Models: config.ModelConfig{Research: "anthropic/claude-sonnet-4-5[200K]"}}
+	m := NewEditConfigModel(f, cat, true)
+	m.focus = configFocusPhaseList
+
+	view := m.View()
+	for _, want := range []string{"Agents", "Models for opencode", "Research (opencode/", "200K"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("view missing %q:\n%s", want, view)
+		}
+	}
+	for _, forbidden := range []string{"ID      ", "context 200000", "context 1000000"} {
+		if strings.Contains(view, forbidden) {
+			t.Fatalf("view contained %q, want no raw ID/context detail:\n%s", forbidden, view)
+		}
+	}
+	if !strings.Contains(view, "1M") {
+		t.Fatalf("view missing compact 1M context label:\n%s", view)
+	}
+}
+
+func TestEditConfig_ModelWorkspaceAlwaysShowsThreePanelsAndOneFocusCursor(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&phaseCatalogStubProvider{
+		name:   "opencode",
+		models: []string{"ollama/gemma4:26b-256k[262K]", "ollama/gemma4:31b-256k[262K]"},
+		catalog: []llm.ModelInfo{
+			{ID: "ollama/gemma4:26b-256k[262K]", DisplayName: "Gemma 4 26B 256k (Local) (262K)", ContextWindow: 262_144, Category: "balanced"},
+			{ID: "ollama/gemma4:31b-256k[262K]", DisplayName: "Gemma 4 31B Dense 256k (Local) (262K)", ContextWindow: 262_144, Category: "balanced"},
+		},
+	})
+	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
+	f := &feature.Feature{
+		ID:     "feat",
+		Name:   "Feature",
+		Models: config.ModelConfig{Research: "ollama/gemma4:26b-256k[262K]"},
+	}
+
+	for _, tc := range []struct {
+		name  string
+		focus configFocusZone
+	}{
+		{"tabs", configFocusTabs},
+		{"phase", configFocusPhaseList},
+		{"agent", configFocusAgentList},
+		{"model", configFocusModelList},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewEditConfigModel(f, cat, true)
+			m.focus = tc.focus
+			view := m.View()
+			for _, want := range []string{"Phases", "Agents", "Models for opencode"} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("focus %v view missing stable panel %q:\n%s", tc.focus, want, view)
+				}
+			}
+			if got := strings.Count(view, "▸"); got != 1 {
+				t.Fatalf("focus %v rendered %d focus cursors, want exactly one:\n%s", tc.focus, got, view)
+			}
+			if strings.Contains(view, "\n(262K") {
+				t.Fatalf("phase label wrapped context onto its own line:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestEditConfig_AllTabsUseStableThreePanelWorkspace(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	f := &feature.Feature{ID: "f1", Name: "stable", Inquireness: feature.InquirenessMedium}
+	app = withOverlay(t, app, f)
+
+	lineCounts := map[configTab]int{}
+	for _, tab := range []configTab{tabModels, tabBehavior, tabGates} {
+		m := app.editConfig
+		m.activeTab = tab
+		m.focus = configFocusTabs
+		view := stripANSI(m.View())
+		lineCounts[tab] = len(strings.Split(strings.TrimRight(view, "\n"), "\n"))
+		if got := strings.Count(view, "┌"); got < 3 {
+			t.Fatalf("tab %v rendered %d workspace panels, want at least 3:\n%s", tab, got, view)
+		}
+	}
+
+	if lineCounts[tabBehavior] != lineCounts[tabModels] {
+		t.Fatalf("Behavior line count = %d, want Models count %d", lineCounts[tabBehavior], lineCounts[tabModels])
+	}
+	if lineCounts[tabGates] != lineCounts[tabModels] {
+		t.Fatalf("Gates line count = %d, want Models count %d", lineCounts[tabGates], lineCounts[tabModels])
+	}
+}
+
+func TestEditConfig_UpDownLeavesModelPhasesThroughTabsAndClampsBodyRows(t *testing.T) {
 	app, _ := newTestAppModel(t)
 	f := &feature.Feature{ID: "f1", Name: "walk", Inquireness: feature.InquirenessMedium}
 	app = withOverlay(t, app, f)
 
-	// Models tab: cursor starts at 0. Up wraps to last Models row.
-	modelsLast := app.editConfig.editor.modelsCount() - 1
-	updated, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	updated, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	got := updated.(AppModel)
-	if got.editConfig.editor.rowCursor != modelsLast {
-		t.Errorf("up-wrap in Models tab: rowCursor = %d, want %d", got.editConfig.editor.rowCursor, modelsLast)
+	if got.editConfig.focus != configFocusPhaseList {
+		t.Fatalf("down from tabs focus = %v, want phase list", got.editConfig.focus)
 	}
-	// Down from last Models row wraps back to 0, not across to Behavior.
-	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	got = updated.(AppModel)
-	if got.editConfig.editor.rowCursor != 0 {
-		t.Errorf("down-wrap in Models tab: rowCursor = %d, want 0", got.editConfig.editor.rowCursor)
-	}
-
-	// Jump to Gates, walk rows there.
-	got.editConfig.activeTab = tabGates
-	got.editConfig.editor.rowCursor = got.editConfig.editor.checkpointsStart()
-	start := got.editConfig.editor.checkpointsStart()
-	last := got.editConfig.editor.lastRow()
-	// Up from first checkpoint wraps to last.
 	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	got = updated.(AppModel)
-	if got.editConfig.editor.rowCursor != last {
-		t.Errorf("up-wrap in Gates tab: rowCursor = %d, want %d", got.editConfig.editor.rowCursor, last)
+	if got.editConfig.focus != configFocusTabs {
+		t.Errorf("up from first model phase focus = %v, want tabs", got.editConfig.focus)
 	}
-	// Down from last wraps to start, not past into another tab.
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	got = updated.(AppModel)
+	if got.editConfig.activeTab != tabBehavior {
+		t.Fatalf("tab from tabs activeTab = %v, want Behavior", got.editConfig.activeTab)
+	}
 	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	got = updated.(AppModel)
-	if got.editConfig.editor.rowCursor != start {
-		t.Errorf("down-wrap in Gates tab: rowCursor = %d, want %d", got.editConfig.editor.rowCursor, start)
+	if got.editConfig.focus != configFocusBody {
+		t.Fatalf("down into Behavior focus = %v, want body", got.editConfig.focus)
+	}
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got = updated.(AppModel)
+	if want := got.editConfig.editor.inquirenessRow(); got.editConfig.editor.rowCursor != want {
+		t.Errorf("down in single-row Behavior rowCursor = %d, want clamped %d", got.editConfig.editor.rowCursor, want)
 	}
 }
 

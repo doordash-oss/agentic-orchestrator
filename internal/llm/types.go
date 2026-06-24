@@ -69,6 +69,37 @@ func StripModelContextWindow(model string) string {
 	return model
 }
 
+// ParseModelContextWindow returns the token window encoded in a trailing
+// [<number>K] or [<number>M] selector suffix. It returns 0 when no valid context
+// suffix is present.
+func ParseModelContextWindow(model string) int {
+	if !strings.HasSuffix(model, "]") {
+		return 0
+	}
+	idx := strings.LastIndex(model, "[")
+	if idx <= 0 {
+		return 0
+	}
+	label := strings.TrimSpace(model[idx+1 : len(model)-1])
+	if label == "" {
+		return 0
+	}
+	multiplier := 0
+	switch suffix := strings.ToUpper(label[len(label)-1:]); suffix {
+	case "K":
+		multiplier = 1_000
+	case "M":
+		multiplier = 1_000_000
+	default:
+		return 0
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(label[:len(label)-1]), 64)
+	if err != nil || value <= 0 {
+		return 0
+	}
+	return int(value*float64(multiplier) + 0.5)
+}
+
 // AppendUniqueAlias returns aliases with alias appended if not already present
 // case-insensitively and not equal to the canonical ID.
 func AppendUniqueAlias(aliases []string, id, alias string) []string {

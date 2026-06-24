@@ -535,6 +535,15 @@ func TestCostAndContext_ZeroWithoutMetadata(t *testing.T) {
 	if got := p.ContextWindowForModel("anthropic/claude-sonnet-4-5"); got != 200_000 {
 		t.Fatalf("ContextWindowForModel(alias) = %d, want 200000", got)
 	}
+	p.SetModelCatalog([]llm.ModelInfo{
+		{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2"},
+	})
+	if got := p.ContextWindowForModel("portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"); got != 1_040_000 {
+		t.Fatalf("ContextWindowForModel(suffix fallback) = %d, want 1040000", got)
+	}
+	if got := p.ContextWindowForModel("opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"); got != 1_040_000 {
+		t.Fatalf("ContextWindowForModel(prefixed suffix fallback) = %d, want 1040000", got)
+	}
 }
 
 func TestEnvVarsToExclude_Nil(t *testing.T) {

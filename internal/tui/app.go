@@ -1539,6 +1539,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.editConfig = EditConfigModel{}
 				return m, nil
 			case "enter":
+				if m.editConfig.EnterIsLocal() {
+					var cmd tea.Cmd
+					m.editConfig, cmd = m.editConfig.Update(msg)
+					return m, cmd
+				}
 				if m.editConfig.saving {
 					return m, nil
 				}

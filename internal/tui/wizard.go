@@ -736,6 +736,13 @@ func (m *WizardModel) syncConfigEditorFromWizard() {
 	m.configEditor.rowCursor = start + m.wizardSubCursor()
 }
 
+func (m WizardModel) wizardModelFocus() configFocusZone {
+	if m.configEditor.ModelFilteringActive() || m.configEditor.activeModelCell == modelCellModel {
+		return configFocusModelList
+	}
+	return configFocusAgentList
+}
+
 // syncWizardFromConfigEditor copies the editor's post-Update internal state
 // back into wizard fields. Uses the editor's raw internal `checkpoints`
 // field — NOT `Snapshot()` — so the wizard's pre-Phase-3 semantics where
@@ -3053,9 +3060,8 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		if m.summaryEditing && m.summaryCursor == summaryFieldModels {
 			renderRow(summaryFieldModels, "Models", "", "")
 			m.syncConfigEditorFromWizard()
-			content := m.configEditor.renderModelsBox(reviewEditorContentWidth(inputBoxWidth - 4))
-			rendered := renderReviewEditorBox("Model Selection", inputBoxWidth-4, content)
-			card.WriteString("    " + strings.ReplaceAll(rendered, "\n", "\n    ") + "\n")
+			content := m.configEditor.renderModelsWorkspaceWithFocus(m.wizardModelFocus())
+			card.WriteString("    " + strings.ReplaceAll(content, "\n", "\n    ") + "\n")
 		} else {
 			renderRow(summaryFieldModels, "Models",
 				MutedStyle.Render(fmt.Sprintf("R:%s P:%s I:%s Rev:%s KB:%s",

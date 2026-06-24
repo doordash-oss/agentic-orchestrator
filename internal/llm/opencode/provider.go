@@ -335,21 +335,28 @@ func (p *Provider) lookupRate(model string) (modelRate, bool) {
 // which callers treat as "unknown" without corrupting behavior.
 func (p *Provider) ContextWindowForModel(model string) int {
 	model = strings.TrimSpace(model)
+	model = strings.TrimPrefix(model, RoutingPrefix)
+	model = strings.TrimSpace(model)
 	if model == "" {
 		return 0
 	}
+	suffixWindow := llm.ParseModelContextWindow(model)
+	strippedModel := strings.TrimSpace(llm.StripModelContextWindow(model))
 	for _, entry := range p.catalogOrFallback() {
 		if entry.ContextWindow <= 0 {
 			continue
 		}
-		if strings.EqualFold(entry.ID, model) {
+		if strings.EqualFold(entry.ID, model) || strings.EqualFold(entry.ID, strippedModel) {
 			return entry.ContextWindow
 		}
 		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
+			if strings.EqualFold(alias, model) || strings.EqualFold(alias, strippedModel) {
 				return entry.ContextWindow
 			}
 		}
+	}
+	if suffixWindow > 0 {
+		return suffixWindow
 	}
 	return 0
 }

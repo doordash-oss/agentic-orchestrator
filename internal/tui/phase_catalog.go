@@ -179,6 +179,23 @@ type modelEntryGroup struct {
 func (c PhaseModelCatalog) ProviderEntryGroupsForField(field string) []modelEntryGroup {
 	defaultValue := c.PhaseDefaults[field]
 	var groups []modelEntryGroup
+	for _, provider := range c.ProviderOrder {
+		ids := c.orderedProviderModelIDsForField(field, provider)
+		if len(ids) == 0 {
+			continue
+		}
+		group := modelEntryGroup{Name: provider}
+		for _, id := range ids {
+			info := c.modelInfoForEntryGroup(field, provider, id)
+			entry := c.entryFromInfo(provider, info)
+			entry.Recommended = c.MatchesModelValue(entry.Agent, entry.ModelID, defaultValue)
+			group.Models = append(group.Models, entry)
+		}
+		groups = append(groups, group)
+	}
+	if len(groups) > 0 {
+		return groups
+	}
 	for _, stringGroup := range c.ProviderGroupsForField(field) {
 		group := modelEntryGroup{Name: stringGroup.Name}
 		for _, id := range stringGroup.Models {
@@ -190,6 +207,34 @@ func (c PhaseModelCatalog) ProviderEntryGroupsForField(field string) []modelEntr
 		groups = append(groups, group)
 	}
 	return groups
+}
+
+func (c PhaseModelCatalog) orderedProviderModelIDsForField(field, provider string) []string {
+	all := c.ProviderModels[provider]
+	if len(all) == 0 {
+		return nil
+	}
+	eligible := c.PhaseProviderModels[field][provider]
+	if len(eligible) == 0 {
+		return append([]string(nil), all...)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(all))
+	for _, id := range eligible {
+		if id == "" || seen[id] {
+			continue
+		}
+		out = append(out, id)
+		seen[id] = true
+	}
+	for _, id := range all {
+		if id == "" || seen[id] {
+			continue
+		}
+		out = append(out, id)
+		seen[id] = true
+	}
+	return out
 }
 
 func (c PhaseModelCatalog) EntriesForFieldAndAgent(field, agent string) []PhaseModelEntry {
@@ -357,6 +402,7 @@ func modelInfoFromList(infos []llm.ModelInfo, id string) llm.ModelInfo {
 }
 
 func (c PhaseModelCatalog) entryFromInfo(agent string, info llm.ModelInfo) PhaseModelEntry {
+	info = normalizeCatalogModelInfo(info)
 	display := info.DisplayName
 	if display == "" {
 		display = info.ID
@@ -370,6 +416,50 @@ func (c PhaseModelCatalog) entryFromInfo(agent string, info llm.ModelInfo) Phase
 		Category:      info.Category,
 		Aliases:       append([]string(nil), info.Aliases...),
 	}
+}
+
+func normalizeCatalogModelInfo(info llm.ModelInfo) llm.ModelInfo {
+	text := strings.ToLower(strings.Join(append([]string{info.ID, info.DisplayName}, info.Aliases...), " "))
+	if info.Category == "" {
+		info.Category = inferCatalogCategory(text)
+	}
+	if info.ContextWindow <= 0 {
+		info.ContextWindow = inferCatalogContextWindow(text)
+	}
+	return info
+}
+
+func inferCatalogCategory(text string) string {
+	switch {
+	case containsAnyCatalogToken(text, []string{"nano", "haiku", "flash", "lite", "tiny", "embed"}):
+		return "cheap"
+	case containsAnyCatalogToken(text, []string{"mini", "small"}):
+		return "balanced"
+	case containsAnyCatalogToken(text, []string{"opus", "gpt-5", "-pro", "ultra", "-max", "405b", "reasoner", "deepseek-r"}):
+		return "capable"
+	case containsAnyCatalogToken(text, []string{"sonnet", "gpt-4", "claude-3", "gemini", "llama", "mistral", "qwen", "gemma", "glm", "grok", "deepseek", "codex", "command"}):
+		return "balanced"
+	default:
+		return ""
+	}
+}
+
+func inferCatalogContextWindow(text string) int {
+	switch {
+	case strings.Contains(text, "glm-5p2"), strings.Contains(text, "glm-5.2"), strings.Contains(text, "glm 5.2"):
+		return 1_000_000
+	default:
+		return 0
+	}
+}
+
+func containsAnyCatalogToken(text string, tokens []string) bool {
+	for _, token := range tokens {
+		if strings.Contains(text, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c PhaseModelCatalog) modelInfoForEntryGroup(field, provider, id string) llm.ModelInfo {

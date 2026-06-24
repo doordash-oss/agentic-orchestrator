@@ -622,7 +622,7 @@ func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, wid
 		return nil
 	}
 
-	rows := livePreviewTranscriptRows(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), livePreviewShouldIncludeToolProgress(sess))
+	rows := livePreviewTranscriptRows(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), livePreviewShouldIncludeStreamingRows(sess))
 	if len(rows) == 0 {
 		return nil
 	}
@@ -655,11 +655,19 @@ func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, wid
 	return lines
 }
 
-func livePreviewShouldIncludeToolProgress(sess session.SessionView) bool {
-	return sess != nil && strings.EqualFold(sess.ProviderName(), "codex")
+func livePreviewShouldIncludeStreamingRows(sess session.SessionView) bool {
+	if sess == nil {
+		return false
+	}
+	switch strings.ToLower(sess.ProviderName()) {
+	case "codex", "opencode":
+		return true
+	default:
+		return false
+	}
 }
 
-func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeToolProgress bool) []livePreviewTranscriptRow {
+func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool) []livePreviewTranscriptRow {
 	var rows []livePreviewTranscriptRow
 	toolNames := make(map[string]string)
 	toolProgressStarted := make(map[string]struct{})
@@ -685,13 +693,15 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeToolProgress bool) 
 		case msg.Init != nil:
 			continue
 		case msg.Assistant != nil:
-			if msg.Subtype == "partial" {
+			if msg.Subtype == "partial" && !includeStreamingRows {
 				continue
 			}
 			for _, block := range msg.Assistant.Message.Content {
 				switch {
 				case block.IsText():
 					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptAssistant, text: block.Text})
+				case block.IsThinking():
+					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptTask, text: "Thinking..."})
 				case block.IsToolUse():
 					if block.ID != "" && block.Name != "" {
 						toolNames[block.ID] = block.Name
@@ -718,7 +728,7 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeToolProgress bool) 
 			appendRow(livePreviewTaskNotificationRow(msg.TaskNotification))
 		case msg.Compact != nil:
 			appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptMuted, text: "Context compacted"})
-		case includeToolProgress && msg.ToolProgress != nil:
+		case includeStreamingRows && msg.ToolProgress != nil:
 			for _, row := range livePreviewToolProgressRows(msg.ToolProgress, toolProgressStarted) {
 				appendRow(row)
 			}

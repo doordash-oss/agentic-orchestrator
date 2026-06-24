@@ -15,6 +15,7 @@
 package session
 
 import (
+	"io"
 	"strconv"
 	"strings"
 	"testing"
@@ -147,6 +148,43 @@ func TestOpenCodeSessionZeroCostWithoutPricing(t *testing.T) {
 	}
 	if s.Cost() != nil && s.Cost().TotalCostUSD != 0 {
 		t.Errorf("Cost().TotalCostUSD = %v, want 0 (no pricing → zero-cost fallback)", s.Cost().TotalCostUSD)
+	}
+}
+
+// TestOpenCodeSessionFallsBackToResultTokensWhenUsageUpdateUsedIsZero proves
+// OpenCode backends that report usage_update.used=0 still leave Agentico with a
+// non-zero context percentage once the prompt result supplies token usage.
+func TestOpenCodeSessionFallsBackToResultTokensWhenUsageUpdateUsedIsZero(t *testing.T) {
+	s, p := newOpenCodeSession(t)
+	const promptID = 904
+	p.SetRequestIDsForTest(0, 0, 0, promptID)
+
+	runSessionWithStdoutLines(t, s, []string{
+		ocUsageUpdate(`"used":0,"size":200000`),
+		ocPromptResult(promptID, "end_turn", `{"inputTokens":50000,"outputTokens":1000}`),
+	}, nil)
+
+	if pct := s.ContextPercentage(); pct != 25 {
+		t.Errorf("ContextPercentage() = %d, want 25 (fallback to result tokens when OpenCode used=0)", pct)
+	}
+}
+
+// TestOpenCodeSessionEstimatesContextWhenOpenCodeReportsZeroTelemetry proves
+// OpenCode backends that report both usage_update.used=0 and zero prompt-result
+// tokens still move the context meter from the prompt text Agentico sent.
+func TestOpenCodeSessionEstimatesContextWhenOpenCodeReportsZeroTelemetry(t *testing.T) {
+	s, p := newOpenCodeSession(t)
+	p.SetStdin(io.Discard)
+	if err := p.SendUserMessage(strings.Repeat("abcd", 100)); err != nil {
+		t.Fatalf("SendUserMessage() error = %v", err)
+	}
+
+	runSessionWithStdoutLines(t, s, []string{
+		ocUsageUpdate(`"used":0,"size":2000`),
+	}, nil)
+
+	if pct := s.ContextPercentage(); pct != 5 {
+		t.Errorf("ContextPercentage() = %d, want 5 (estimated 100 tokens / 2000 window)", pct)
 	}
 }
 

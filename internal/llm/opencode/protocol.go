@@ -84,6 +84,7 @@ type Protocol struct {
 	// supplies none). usageSeen is true once any usage signal has been observed.
 	inTok, outTok, cacheRead, cacheCreate int
 	contextFill, contextWindow            int
+	estimatedContextTokens                int
 	costUSD                               float64
 	usageSeen                             bool
 
@@ -119,6 +120,7 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	return &Protocol{
 		opts:            opts,
 		model:           BackendModel(opts.Model),
+		contextWindow:   opts.ContextWindow,
 		resumeSessionID: strings.TrimSpace(opts.ResumeSessionID),
 	}
 }
@@ -326,6 +328,7 @@ func (p *Protocol) sendPrompt(text string) error {
 	if err := p.writeJSON(req); err != nil {
 		return fmt.Errorf("sending session/prompt request: %w", err)
 	}
+	p.addEstimatedContextText(text)
 	return nil
 }
 
@@ -650,6 +653,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		if text := updateText(su.Update.Content); text != "" {
 			p.mu.Lock()
 			p.assistantBuf.WriteString(text)
+			p.estimatedContextTokens += estimateContextTokens(text)
 			accumulated := p.assistantBuf.String()
 			p.mu.Unlock()
 			out = append(out, assistantPartial(llm.ContentBlock{Type: "text", Text: accumulated}))
@@ -774,19 +778,52 @@ func (p *Protocol) accumulateResultUsage(u *PromptUsage) (llm.SDKMessage, bool) 
 	return llm.SDKMessage{Type: "usage_update", UsageUpdate: &usage}, true
 }
 
+// addEstimatedContextText records a coarse local token estimate for text Agentico
+// knows entered the conversation. It is used only when OpenCode reports a
+// context window but leaves both usage_update.used and result token usage at 0.
+func (p *Protocol) addEstimatedContextText(text string) {
+	tokens := estimateContextTokens(text)
+	if tokens == 0 {
+		return
+	}
+	p.mu.Lock()
+	p.estimatedContextTokens += tokens
+	p.mu.Unlock()
+}
+
+// estimateContextTokens intentionally stays simple and deterministic. OpenCode
+// already owns exact accounting when the backend reports it; this keeps the
+// context meter useful for zero-telemetry backends without pretending to be a
+// provider tokenizer.
+func estimateContextTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	const charsPerToken = 4
+	return (len(text) + charsPerToken - 1) / charsPerToken
+}
+
 // usageLocked snapshots the cumulative normalized usage. Callers must hold p.mu.
 // ContextBaseline is 0 (OpenCode, like Claude, has no fixed overhead to
-// subtract). ContextWindow/ContextTotalTokens are populated only when OpenCode
-// supplied them, so the session reports context usage solely when backed by
-// provider metadata.
+// subtract). ContextWindow comes from OpenCode's usage_update.size or the
+// provider-selected model metadata. ContextTotalTokens prefers OpenCode's exact
+// usage_update.used, then result token usage, then the local text estimate for
+// zero-telemetry backends.
 func (p *Protocol) usageLocked() llm.Usage {
+	contextFill := p.contextFill
+	if contextFill == 0 {
+		contextFill = p.inTok + p.cacheRead + p.cacheCreate
+	}
+	if contextFill == 0 {
+		contextFill = p.estimatedContextTokens
+	}
 	return llm.Usage{
 		InputTokens:              p.inTok,
 		OutputTokens:             p.outTok,
 		CacheReadInputTokens:     p.cacheRead,
 		CacheCreationInputTokens: p.cacheCreate,
-		ContextInputTokens:       p.contextFill,
-		ContextTotalTokens:       p.contextFill,
+		ContextInputTokens:       contextFill,
+		ContextTotalTokens:       contextFill,
 		ContextWindow:            p.contextWindow,
 		ContextBaseline:          0,
 	}

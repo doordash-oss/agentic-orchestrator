@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
@@ -478,6 +479,78 @@ func TestLivePreviewCodexToolProgressRendersCompactToolRows(t *testing.T) {
 	if strings.Count(view, "$ Bash") != 1 {
 		t.Fatalf("codex live preview should render one Bash tool-use row, got:\n%s", view)
 	}
+}
+
+func TestLivePreviewOpenCodeStreamingRendersCompactRows(t *testing.T) {
+	t.Parallel()
+
+	t.Run("thought chunk", func(t *testing.T) {
+		t.Parallel()
+		p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+		msgs := parseOpenCodeLivePreviewMessages(t, p, mustJSONLine(t, map[string]any{
+			"jsonrpc": "2.0", "method": "session/update",
+			"params": map[string]any{
+				"sessionId": "ses_x",
+				"update": map[string]any{
+					"sessionUpdate": "agent_thought_chunk",
+					"content":       map[string]any{"type": "text", "text": "raw hidden thought token"},
+				},
+			},
+		}))
+		sess := openCodeLivePreviewSession("opencode-thinking", feature.PhasePlan, msgs...)
+		view := stripANSI(newLivePreviewModel(&feature.Feature{
+			Status:       feature.StatusPlanning,
+			CurrentPhase: feature.PhasePlan,
+		}).withSession(sess).withHeight(24).ViewCompact(120))
+
+		if !strings.Contains(view, "* Thinking...") {
+			t.Fatalf("opencode live preview missing generic thinking row:\n%s", view)
+		}
+		if strings.Contains(view, "raw hidden thought token") {
+			t.Fatalf("opencode live preview leaked raw thought token:\n%s", view)
+		}
+	})
+
+	t.Run("tool progress and assistant text", func(t *testing.T) {
+		t.Parallel()
+		p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+		msgs := parseOpenCodeLivePreviewMessages(t, p,
+			mustJSONLine(t, map[string]any{
+				"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{
+					"sessionId": "ses_x",
+					"update": map[string]any{
+						"sessionUpdate": "tool_call",
+						"toolCallId":    "call_read",
+						"title":         "Read README.md",
+						"kind":          "read",
+						"status":        "running",
+					},
+				},
+			}),
+			mustJSONLine(t, map[string]any{
+				"jsonrpc": "2.0", "method": "session/update",
+				"params": map[string]any{
+					"sessionId": "ses_x",
+					"update": map[string]any{
+						"sessionUpdate": "agent_message_chunk",
+						"content":       map[string]any{"type": "text", "text": "I found the README workflow."},
+					},
+				},
+			}),
+		)
+		sess := openCodeLivePreviewSession("opencode-stream", feature.PhasePlan, msgs...)
+		view := stripANSI(newLivePreviewModel(&feature.Feature{
+			Status:       feature.StatusPlanning,
+			CurrentPhase: feature.PhasePlan,
+		}).withSession(sess).withHeight(24).ViewCompact(120))
+
+		for _, want := range []string{"$ Read README.md", "Read README.md result: running", "I found the README workflow."} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("opencode live preview missing %q in:\n%s", want, view)
+			}
+		}
+	})
 }
 
 func TestLivePreviewTranscriptEmphasis(t *testing.T) {
@@ -1080,6 +1153,33 @@ func codexLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDK
 		sess.MessageLog().Append(msg)
 	}
 	return sess
+}
+
+func openCodeLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
+	sess := session.NewSession(id, "feat-live", phase)
+	sess.SetProviderName("opencode")
+	sess.SetStatus(session.SessionRunning)
+	for _, msg := range messages {
+		if msg.Assistant != nil {
+			sess.MessageLog().UpdateLastAssistantPartial(msg)
+			continue
+		}
+		sess.MessageLog().Append(msg)
+	}
+	return sess
+}
+
+func parseOpenCodeLivePreviewMessages(t *testing.T, p *opencode.Protocol, lines ...[]byte) []llm.SDKMessage {
+	t.Helper()
+	var out []llm.SDKMessage
+	for _, line := range lines {
+		msgs, err := p.ParseLine(line)
+		if err != nil {
+			t.Fatalf("ParseLine(%s) error: %v", line, err)
+		}
+		out = append(out, msgs...)
+	}
+	return out
 }
 
 func tweakLivePreviewSession(id string, messages ...llm.SDKMessage) session.SessionView {

@@ -244,6 +244,9 @@ func TestDiscover_AcceptsPortkeyFireworksBackendID(t *testing.T) {
 	if models[0].DisplayName != "glm-5p2" {
 		t.Fatalf("DisplayName = %q, want glm-5p2", models[0].DisplayName)
 	}
+	if models[0].Category != "balanced" {
+		t.Fatalf("Category = %q, want balanced", models[0].Category)
+	}
 }
 
 // TestDiscover_MissingDisplayName proves a model with no name still gets a

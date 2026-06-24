@@ -675,7 +675,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 
 	case UpdateAgentThoughtChunk:
 		if text := updateText(su.Update.Content); text != "" {
-			out = append(out, assistantPartial(llm.ContentBlock{Type: "thinking", Thinking: text}))
+			out = append(out, assistantPartial(llm.ContentBlock{Type: "thinking", Thinking: "Thinking..."}))
 		}
 
 	case UpdateToolCall, UpdateToolCallUpdate:

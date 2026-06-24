@@ -786,6 +786,15 @@ func TestEditConfig_BehaviorValuesUseVerticalNavigation(t *testing.T) {
 	if strings.Contains(view, "←→ choose") {
 		t.Fatalf("Behavior hints still advertise horizontal value selection:\n%s", view)
 	}
+
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	got = updated.(AppModel)
+	if got.editConfig.focus != configFocusTabs {
+		t.Fatalf("enter in Behavior focus = %v, want tabs", got.editConfig.focus)
+	}
+	if got.editConfig.saving {
+		t.Fatal("enter in Behavior should not save")
+	}
 }
 
 func TestEditConfig_UpDownLeavesModelPhasesThroughTabsAndClampsBodyRows(t *testing.T) {

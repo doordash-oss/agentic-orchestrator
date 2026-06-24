@@ -161,6 +161,9 @@ func (m EditConfigModel) Update(msg tea.Msg) (EditConfigModel, tea.Cmd) {
 			case "down", "j":
 				m.editor.inquireness = cycleInquireness(m.editor.inquireness, +1)
 				return m, nil
+			case "enter":
+				m.focus = configFocusTabs
+				return m, nil
 			case "tab":
 				m.focus = configFocusTabs
 				m.cycleActiveTab(+1)
@@ -552,7 +555,7 @@ func (m EditConfigModel) renderHintBar() string {
 			keys = "↑↓ phase   → agents   / search   enter save   esc cancel"
 		}
 	case tabBehavior:
-		keys = "↑↓ choose   tab tabs   enter save   esc cancel"
+		keys = "↑↓ choose   enter tabs   tab tabs   esc cancel"
 	case tabGates:
 		switch m.focus {
 		case configFocusGateList, configFocusBody:
@@ -754,6 +757,7 @@ func (m *EditConfigModel) updateGatesWorkspaceKey(keyMsg tea.KeyPressMsg) bool {
 
 func (m EditConfigModel) EnterIsLocal() bool {
 	return (m.activeTab == tabModels && (m.editor.ModelFilteringActive() || m.focus == configFocusAgentList || m.focus == configFocusModelList)) ||
+		(m.activeTab == tabBehavior && m.focus == configFocusBody) ||
 		(m.activeTab == tabGates && m.focus == configFocusGateState)
 }
 

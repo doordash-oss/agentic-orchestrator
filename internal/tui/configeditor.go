@@ -658,16 +658,41 @@ func trimLastRune(s string) string {
 }
 
 func displayModelLabel(entry PhaseModelEntry, fallback string) string {
-	if entry.DisplayName != "" {
+	if entry.DisplayName != "" && entry.DisplayName != entry.ModelID && entry.DisplayName != entry.FullID {
 		return entry.DisplayName
 	}
 	if fallback != "" {
-		if _, model := splitProviderModel(fallback); model != "" {
-			return model
-		}
-		return fallback
+		return compactModelValueLabel(fallback)
 	}
-	return entry.ModelID
+	return compactModelIDLabel(entry.ModelID)
+}
+
+func compactModelValueLabel(value string) string {
+	provider, model := splitProviderModel(value)
+	if provider != "" {
+		return provider + ":" + compactModelIDLabel(model)
+	}
+	return compactModelIDLabel(value)
+}
+
+func compactModelIDLabel(id string) string {
+	const modelsSegment = "/models/"
+	if idx := strings.LastIndex(id, modelsSegment); idx >= 0 {
+		tail := strings.TrimSpace(id[idx+len(modelsSegment):])
+		if tail != "" {
+			return tail
+		}
+	}
+	return id
+}
+
+func compactModelSummary(models config.ModelConfig, separator string) string {
+	return fmt.Sprintf("R:%s%sP:%s%sI:%s%sRev:%s%sKB:%s",
+		compactModelValueLabel(models.Research), separator,
+		compactModelValueLabel(models.Planning), separator,
+		compactModelValueLabel(models.Implementation), separator,
+		compactModelValueLabel(models.Review), separator,
+		compactModelValueLabel(models.KBBuild))
 }
 
 // --- Checkpoint helpers ---
@@ -1046,7 +1071,7 @@ func (m ConfigEditorModel) modelAssignmentSummary(field, value string) string {
 	if entry, ok := m.entryForFieldValue(field, value); ok {
 		label = displayModelLabel(entry, value)
 	} else if provider, model := splitProviderModel(value); provider != "" {
-		label = provider + " / " + model
+		label = provider + " / " + compactModelIDLabel(model)
 	}
 	if !m.modelValueEligible(field, value) {
 		label += " (unavailable)"

@@ -290,14 +290,20 @@ func TestParseLine_ThoughtChunkSurfacesAsThinking(t *testing.T) {
 	p, _, _ := newPostHandshakeProtocol(t)
 	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
-		"update":    map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "thinking..."}},
+		"update":    map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "raw hidden thought token"}},
 	}))
 	if len(msgs) != 1 || msgs[0].Assistant == nil {
 		t.Fatalf("thought chunk produced %+v, want one assistant message", msgs)
 	}
 	block := msgs[0].Assistant.Message.Content[0]
-	if !block.IsThinking() || block.Thinking != "thinking..." {
-		t.Fatalf("thought block = %+v, want thinking 'thinking...'", block)
+	if !block.IsThinking() {
+		t.Fatalf("thought block = %+v, want thinking block", block)
+	}
+	if block.Thinking != "Thinking..." {
+		t.Fatalf("thought block = %+v, want generic Thinking... marker", block)
+	}
+	if strings.Contains(block.Thinking, "raw hidden thought token") {
+		t.Fatalf("thought block leaked raw OpenCode thought text: %+v", block)
 	}
 }
 

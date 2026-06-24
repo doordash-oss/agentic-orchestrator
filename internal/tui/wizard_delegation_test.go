@@ -242,6 +242,52 @@ func TestWizardReviewDelegation_ModelSelectionViewFitsReviewWidth(t *testing.T) 
 	}
 }
 
+func TestWizardReviewDelegation_ModelSelectionViewUsesShortModelNames(t *testing.T) {
+	providerModels := map[string][]string{
+		"opencode": {
+			"ollama/gemma4:26b-256k[262K]",
+			"portkey/@fireworks/accounts/fireworks/models/glm-5p2[1M]",
+		},
+	}
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"opencode"}, nil)
+	m.summaryCursor = summaryFieldModels
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.width = 160
+	m.height = 40
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "portkey/@fireworks/accounts/fireworks/models") {
+		t.Fatalf("model selection rendered routed model ID, want compact model name:\n%s", view)
+	}
+	if !strings.Contains(view, "glm-5p2[1M]") {
+		t.Fatalf("model selection missing compact model name glm-5p2[1M]:\n%s", view)
+	}
+}
+
+func TestWizardReviewDelegation_ModelSummaryUsesShortModelNames(t *testing.T) {
+	const routedModel = "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	m := newWizardAtReviewForDelegation(t, nil, nil, nil)
+	m.models = config.ModelConfig{
+		Research:       routedModel,
+		Planning:       routedModel,
+		Implementation: routedModel,
+		Review:         routedModel,
+		KBBuild:        routedModel,
+	}
+	m.summaryCursor = summaryFieldRisk
+	m.summaryEditing = false
+	m.width = 180
+	m.height = 40
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "portkey/@fireworks/accounts/fireworks/models") {
+		t.Fatalf("review summary rendered routed model ID, want compact model name:\n%s", view)
+	}
+	if !strings.Contains(view, "R:opencode:glm-5p2[1.04M]") {
+		t.Fatalf("review summary missing compact model summary:\n%s", view)
+	}
+}
+
 // -- Inquireness axis --
 
 func TestWizardReviewDelegation_InquirenessRightLeft(t *testing.T) {

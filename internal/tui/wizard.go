@@ -2563,7 +2563,7 @@ func (m *WizardModel) modelAssignmentSummary(field string) string {
 
 	provider, model := splitProviderModel(value)
 	if provider != "" {
-		return provider + " / " + model
+		return provider + " / " + compactModelIDLabel(model)
 	}
 
 	groups := m.modelProviderGroups(field)
@@ -3140,8 +3140,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 			card.WriteString("    " + strings.ReplaceAll(content, "\n", "\n    ") + "\n")
 		} else {
 			renderRow(summaryFieldModels, "Models",
-				MutedStyle.Render(fmt.Sprintf("R:%s P:%s I:%s Rev:%s KB:%s",
-					m.models.Research, m.models.Planning, m.models.Implementation, m.models.Review, m.models.KBBuild)),
+				MutedStyle.Render(compactModelSummary(m.models, " ")),
 				"")
 		}
 

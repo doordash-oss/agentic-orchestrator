@@ -448,7 +448,7 @@ func livePreviewPhaseLabel(f *feature.Feature, sess session.SessionView) string 
 func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string {
 	if sess != nil {
 		if model := firstNonEmpty(sess.Model()); model != "" {
-			return model
+			return compactModelValueLabel(model)
 		}
 	}
 	if f == nil {
@@ -460,15 +460,15 @@ func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string 
 	}
 	switch phase {
 	case feature.PhaseKnowledgeBase:
-		return firstNonEmpty(f.Models.KBBuild, "—")
+		return compactModelValueLabel(firstNonEmpty(f.Models.KBBuild, "—"))
 	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
-		return firstNonEmpty(f.Models.Research, "—")
+		return compactModelValueLabel(firstNonEmpty(f.Models.Research, "—"))
 	case feature.PhasePlan, feature.PhasePublish:
-		return firstNonEmpty(f.Models.Planning, "—")
+		return compactModelValueLabel(firstNonEmpty(f.Models.Planning, "—"))
 	case feature.PhaseImplement:
-		return firstNonEmpty(f.Models.Implementation, "—")
+		return compactModelValueLabel(firstNonEmpty(f.Models.Implementation, "—"))
 	case feature.PhaseReview, feature.PhaseFinalReview:
-		return firstNonEmpty(f.Models.Review, "—")
+		return compactModelValueLabel(firstNonEmpty(f.Models.Review, "—"))
 	default:
 		return "—"
 	}

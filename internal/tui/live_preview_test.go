@@ -845,6 +845,35 @@ func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 	}
 }
 
+func TestLivePreviewUpperMetadataUsesShortPhaseModelName(t *testing.T) {
+	t.Parallel()
+	const routedModel = "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	f := &feature.Feature{
+		ID:           "feat-short-model",
+		Status:       feature.StatusBuildingKB,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Models:       config.ModelConfig{KBBuild: routedModel},
+	}
+
+	view := stripANSI(newLivePreviewModel(f).withHeight(24).ViewCompact(120))
+	if strings.Contains(view, "portkey/@fireworks/accounts/fireworks/models") {
+		t.Fatalf("live preview rendered routed model ID, want compact model name:\n%s", view)
+	}
+	if !strings.Contains(view, "Phase Model") || !strings.Contains(view, "opencode:glm-5p2[1.04M]") {
+		t.Fatalf("live preview missing compact phase model:\n%s", view)
+	}
+
+	sess := session.NewSession("feat-short-model-kb", f.ID, feature.PhaseKnowledgeBase)
+	sess.SetModel(routedModel)
+	withSession := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	if strings.Contains(withSession, "portkey/@fireworks/accounts/fireworks/models") {
+		t.Fatalf("live preview session model rendered routed model ID, want compact model name:\n%s", withSession)
+	}
+	if !strings.Contains(withSession, "opencode:glm-5p2[1.04M]") {
+		t.Fatalf("live preview session model missing compact phase model:\n%s", withSession)
+	}
+}
+
 func TestLivePreviewTranscriptRowsWrapToContentWidth(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}

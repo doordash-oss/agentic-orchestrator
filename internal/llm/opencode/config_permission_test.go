@@ -64,6 +64,7 @@ func TestEditPermission_EmitsExactFileRoot(t *testing.T) {
 	}
 
 	relPath := "../../../features/feature/runs/run-002/roadmap/attempt-01/validate-scope/validation-scope-feedback.md"
+	strippedPath := "Users/x/.agentic-workflow/features/feature/runs/run-002/roadmap/attempt-01/validate-scope/validation-scope-feedback.md"
 
 	if patterns[catchAllPattern] != "deny" {
 		t.Errorf("catch-all = %q, want deny", patterns[catchAllPattern])
@@ -74,47 +75,25 @@ func TestEditPermission_EmitsExactFileRoot(t *testing.T) {
 	if patterns[relPath] != "ask" {
 		t.Errorf("exact cwd-relative file pattern %q = %q, want ask", relPath, patterns[relPath])
 	}
-}
-
-// TestPermissionConfig_DelegateEditsToClient_EditIsBareAsk guards the bounded
-// review-helper fix: OpenCode resolves permissions by last-matching-rule (not
-// most-specific) and matches the edit surface against a worktree-relative path
-// the orchestrator's generated globs never reproduce, so an exact-file edit map
-// collapses to the catch-all "*"->deny and the helper's own feedback/phase_complete
-// writes are denied before the client is ever asked. With edits delegated, every
-// file-edit surface is a bare "ask" so OpenCode forwards each edit to the client
-// permission handler, which enforces the exact allowed artifact paths.
-func TestPermissionConfig_DelegateEditsToClient_EditIsBareAsk(t *testing.T) {
-	workDir := "/Users/x/.agentic-workflow/worktrees/feature/repo"
-	feedback := "/Users/x/.agentic-workflow/features/f/runs/run-002/roadmap/attempt-01/validate-scope/validation-scope-feedback.md"
-
-	perm := permissionConfig(false, workDir, []string{feedback}, []string{workDir}, true)
-
-	for _, key := range fileEditPermKeys {
-		if got := perm[key]; got != "ask" {
-			t.Errorf("perm[%q] = %#v, want bare \"ask\" (delegated to client handler)", key, got)
-		}
-	}
-
-	// External-directory roots must be preserved so the helper can still reach
-	// paths outside cwd; only the edit surface changes.
-	if _, ok := perm[permKeyExternal].(map[string]string); !ok {
-		t.Errorf("perm[%q] = %#v, want path-pattern map (mounted roots preserved)", permKeyExternal, perm[permKeyExternal])
+	// The leading-slash-stripped form is what OpenCode actually evaluates the edit
+	// against, so the helper's feedback write resolves to ask through the plain
+	// glob map — no edit delegation needed.
+	if patterns[strippedPath] != "ask" {
+		t.Errorf("exact leading-slash-stripped file pattern %q = %q, want ask", strippedPath, patterns[strippedPath])
 	}
 }
 
-// TestPermissionConfig_NoDelegate_EditRemainsPatternMap confirms the default
-// (non-delegated) edit surface is unchanged: a writable root still yields the
-// path-pattern map so non-helper sessions keep their existing bounded-edit
-// behavior.
-func TestPermissionConfig_NoDelegate_EditRemainsPatternMap(t *testing.T) {
+// TestPermissionConfig_EditIsPatternMapForWritableRoots confirms a writable root
+// yields the path-pattern edit map (catch-all deny + per-root globs) that bounds
+// edits to mounted roots.
+func TestPermissionConfig_EditIsPatternMapForWritableRoots(t *testing.T) {
 	workDir := "/Users/x/.agentic-workflow/worktrees/feature/repo"
 	kbRoot := "/Users/x/.agentic-workflow/knowledge-base/repo"
 
-	perm := permissionConfig(false, workDir, []string{kbRoot}, []string{workDir}, false)
+	perm := permissionConfig(false, workDir, []string{kbRoot}, []string{workDir})
 
 	if _, ok := perm[permKeyEdit].(map[string]string); !ok {
-		t.Errorf("perm[%q] = %#v, want path-pattern map when edits are not delegated", permKeyEdit, perm[permKeyEdit])
+		t.Errorf("perm[%q] = %#v, want path-pattern map", permKeyEdit, perm[permKeyEdit])
 	}
 }
 

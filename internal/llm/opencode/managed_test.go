@@ -331,33 +331,6 @@ func TestManagedConfig_WritableRootsBoundEdits(t *testing.T) {
 	}
 }
 
-func TestManagedConfig_DelegateEditsToClientMakesEditBareAsk(t *testing.T) {
-	state := t.TempDir()
-	worktree := t.TempDir()
-	p := New()
-	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
-		Model:                 "openai/gpt-5",
-		StateDir:              state,
-		WritableRoots:         []string{state, worktree},
-		DelegateEditsToClient: true,
-	})
-	if err != nil {
-		t.Fatalf("BuildCommand: %v", err)
-	}
-	perm := readManagedConfigFile(t, env).Permission
-	for _, key := range []string{"edit", "write", "apply_patch"} {
-		raw, ok := perm[key]
-		if !ok {
-			t.Fatalf("permission missing %q", key)
-		}
-		// Delegated edits are a bare "ask" string (forwarded to the client
-		// handler), not a path-pattern object.
-		if string(raw) != `"ask"` {
-			t.Errorf("permission[%q] = %s, want bare \"ask\" when edits are delegated to the client", key, raw)
-		}
-	}
-}
-
 func TestManagedConfig_DangerousSkipBoundsWritesToRoots(t *testing.T) {
 	state := t.TempDir()
 	p := New()

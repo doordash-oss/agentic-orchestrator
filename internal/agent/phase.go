@@ -1187,9 +1187,6 @@ type BuildSessionOpts struct {
 	// so each provider resumes via its own supported path. Empty means a normal
 	// new session, leaving providers that do not resume unchanged.
 	ResumeSessionID string
-	// DelegateEditsToClient is forwarded to llm.CommandBuildOpts.DelegateEditsToClient;
-	// bounded helpers set it so OpenCode delegates edits to the client handler.
-	DelegateEditsToClient bool
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1316,23 +1313,22 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	opts.AllowedTools = append(opts.AllowedTools, "WebSearch", "WebFetch")
 
 	buildOpts := llm.CommandBuildOpts{
-		Model:                 bareModel,
-		Prompt:                opts.Prompt,
-		SystemPrompt:          opts.SystemPrompt,
-		AllowedTools:          opts.AllowedTools,
-		DisallowedTools:       opts.DisallowedTools,
-		DangerouslySkipPerms:  pr.DangerouslySkipPermissions,
-		AdditionalDirs:        opts.AdditionalDirs,
-		StateDir:              pr.StateDir,
-		AgentsJSON:            agentsJSON,
-		AgentNames:            opts.AgentNames,
-		EffortLevel:           opts.EffortLevel,
-		PermissionMode:        grillingPhasePermissionMode(opts.Phase),
-		ResumeSessionID:       opts.ResumeSessionID,
-		WritableRoots:         openCodeWritableRoots,
-		ReadRoots:             readRoots,
-		WorkDir:               opts.WorkDir,
-		DelegateEditsToClient: opts.DelegateEditsToClient,
+		Model:                bareModel,
+		Prompt:               opts.Prompt,
+		SystemPrompt:         opts.SystemPrompt,
+		AllowedTools:         opts.AllowedTools,
+		DisallowedTools:      opts.DisallowedTools,
+		DangerouslySkipPerms: pr.DangerouslySkipPermissions,
+		AdditionalDirs:       opts.AdditionalDirs,
+		StateDir:             pr.StateDir,
+		AgentsJSON:           agentsJSON,
+		AgentNames:           opts.AgentNames,
+		EffortLevel:          opts.EffortLevel,
+		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
+		ResumeSessionID:      opts.ResumeSessionID,
+		WritableRoots:        openCodeWritableRoots,
+		ReadRoots:            readRoots,
+		WorkDir:              opts.WorkDir,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)

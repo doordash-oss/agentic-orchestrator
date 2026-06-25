@@ -92,66 +92,6 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 	}
 }
 
-func TestRunReadOnlyReviewHelper_DelegatesEditsToClient(t *testing.T) {
-	root := t.TempDir()
-	helperDir := filepath.Join(root, "review")
-	if err := os.MkdirAll(helperDir, 0o755); err != nil {
-		t.Fatalf("mkdir helper dir: %v", err)
-	}
-	workDir := filepath.Join(root, "work")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		t.Fatalf("mkdir work dir: %v", err)
-	}
-
-	script := testutil.WriteScript(t, root, "reviewer.sh", testutil.WriteReviewApprovedInDir(helperDir)+`
-touch "`+filepath.Join(helperDir, "phase_complete")+`"
-`+testutil.JSONLInit+`
-`+testutil.JSONLSuccess)
-
-	var got BuildSessionOpts
-	pr := &PhaseRunner{
-		StateDir:       root,
-		SessionManager: session.NewManager(make(chan interface{}, 10)),
-		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			got = opts
-			return []string{"bash", script}, nil, &ports.SessionOpts{
-				PermHandler:       opts.PermHandler,
-				DebugSystemPrompt: opts.SystemPrompt,
-				ProviderName:      "mock",
-			}, nil
-		},
-	}
-	t.Cleanup(func() { pr.SessionManager.Shutdown() })
-
-	_, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
-		SessionID:              "review-helper-delegate",
-		FeatureID:              "feature-1",
-		Phase:                  feature.PhaseReview,
-		Model:                  "test-model",
-		Prompt:                 "review the diff",
-		PromptPath:             filepath.Join(helperDir, "review-prompt.md"),
-		ResponsePath:           filepath.Join(helperDir, "review-output.txt"),
-		FeedbackPath:           filepath.Join(helperDir, "review-feedback.md"),
-		HelperIterDir:          helperDir,
-		Role:                   RoleIterationReviewer,
-		WorkDir:                workDir,
-		LogPath:                filepath.Join(helperDir, "review-output.txt"),
-		SystemPromptPrefix:     "review",
-		CompletionAskingClause: "Ask at most one blocking question.",
-		EffortLevel:            llm.EffortMedium,
-	})
-	if err != nil {
-		t.Fatalf("RunReadOnlyReviewHelper() error = %v", err)
-	}
-	// Bounded helpers must delegate edits to the client handler: OpenCode's own
-	// edit glob map collapses to a catch-all deny for the helper's worktree-relative
-	// artifact paths, so the helper's feedback/phase_complete writes are denied
-	// before the client handler (which allows exactly those paths) is ever asked.
-	if !got.DelegateEditsToClient {
-		t.Fatalf("BuildSessionOpts.DelegateEditsToClient = false, want true for bounded review helper")
-	}
-}
-
 func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "attempt-01", "validate-scope")

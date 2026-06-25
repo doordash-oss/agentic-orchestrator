@@ -135,7 +135,6 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		SystemPrompt:                   systemPrompt,
 		AdditionalDirs:                 cfg.AdditionalDirs,
 		WritableRoots:                  allowedPaths,
-		DelegateEditsToClient:          true,
 		PIDDir:                         pidDir,
 		PermHandler:                    permission.Guarded(&permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}),
 		RepoName:                       cfg.RepoName,

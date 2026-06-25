@@ -121,7 +121,7 @@ func buildManagedSession(opts llm.CommandBuildOpts) (args, env []string, err err
 	cfg := managedConfig{
 		Schema:     openCodeConfigSchema,
 		Model:      backend,
-		Permission: permissionConfig(opts.DangerouslySkipPerms, opts.WorkDir, opts.WritableRoots, opts.ReadRoots, opts.DelegateEditsToClient),
+		Permission: permissionConfig(opts.DangerouslySkipPerms, opts.WorkDir, opts.WritableRoots, opts.ReadRoots),
 		Share:      "disabled",
 		Autoupdate: boolPtr(false),
 	}

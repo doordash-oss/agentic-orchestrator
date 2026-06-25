@@ -131,6 +131,8 @@ type toolCallState struct {
 	command            string
 	rawInput           json.RawMessage
 	taskToolUseEmitted bool
+	estimatedInput     bool
+	estimatedOutput    bool
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -703,6 +705,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		}
 
 	case UpdateToolCall, UpdateToolCallUpdate:
+		p.addEstimatedToolContext(su.Update)
 		if msg, ok := p.taskToolUseFromUpdate(su.Update); ok {
 			out = append(out, msg)
 		}
@@ -711,6 +714,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 			Type:         "tool_progress",
 			ToolProgress: &progress,
 		})
+		if msg, ok := p.estimatedUsageUpdate(); ok {
+			out = append(out, msg)
+		}
 
 	case UpdateUsage:
 		// usage_update carries context fill, context window, and cumulative cost;
@@ -734,6 +740,33 @@ func updateText(raw json.RawMessage) string {
 		return ""
 	}
 	return c.Text
+}
+
+func toolContentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if text := updateText(raw); text != "" {
+		return text
+	}
+	var blocks []struct {
+		Text    string        `json:"text,omitempty"`
+		Content UpdateContent `json:"content,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, block := range blocks {
+		if block.Text != "" {
+			b.WriteString(block.Text)
+			continue
+		}
+		if block.Content.Text != "" {
+			b.WriteString(block.Content.Text)
+		}
+	}
+	return b.String()
 }
 
 func (p *Protocol) taskToolUseFromUpdate(update SessionUpdate) (llm.SDKMessage, bool) {
@@ -983,6 +1016,44 @@ func (p *Protocol) addEstimatedContextText(text string) {
 	p.mu.Lock()
 	p.estimatedContextTokens += tokens
 	p.mu.Unlock()
+}
+
+func (p *Protocol) addEstimatedToolContext(update SessionUpdate) {
+	var tokens int
+	p.mu.Lock()
+	if p.toolCalls == nil {
+		p.toolCalls = make(map[string]toolCallState)
+	}
+	state := p.toolCalls[update.ToolCallID]
+	state = mergeToolCallState(state, update)
+	if meaningfulRawJSON(update.RawInput) && !state.estimatedInput {
+		tokens += estimateContextTokens(string(update.RawInput))
+		state.estimatedInput = true
+	}
+	if strings.EqualFold(update.Status, "completed") && !state.estimatedOutput {
+		output := toolContentText(update.Content)
+		if output != "" {
+			tokens += estimateContextTokens(output)
+		} else if meaningfulRawJSON(update.RawOutput) {
+			tokens += estimateContextTokens(string(update.RawOutput))
+		}
+		state.estimatedOutput = true
+	}
+	if update.ToolCallID != "" {
+		p.toolCalls[update.ToolCallID] = state
+	}
+	p.estimatedContextTokens += tokens
+	p.mu.Unlock()
+}
+
+func meaningfulRawJSON(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return false
+	}
+	return !bytes.Equal(trimmed, []byte("{}")) &&
+		!bytes.Equal(trimmed, []byte("[]")) &&
+		!bytes.Equal(trimmed, []byte("null"))
 }
 
 func (p *Protocol) estimatedUsageUpdate() (llm.SDKMessage, bool) {

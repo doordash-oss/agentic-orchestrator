@@ -211,13 +211,6 @@ type CommandBuildOpts struct {
 	// Empty means the provider applies its default writable scope; providers that
 	// do not consume it leave their behavior unchanged.
 	WritableRoots []string
-	// DelegateEditsToClient makes a config-driven provider (OpenCode) forward every
-	// edit to the client permission handler as a bare "ask" instead of a
-	// WritableRoots-derived path map — which OpenCode resolves by last-matching rule
-	// against a worktree-relative path that exact-file roots never match, collapsing
-	// to a catch-all deny. Bounded helpers set it; other providers ignore it
-	// (default false preserves the WritableRoots-derived edit scope).
-	DelegateEditsToClient bool
 	// ReadRoots lists the directories a provider may read without per-call
 	// mediation, mirroring the read mounts Agentico granted (feature state, work
 	// dir, and additional read roots such as skills, guidelines, worktrees,

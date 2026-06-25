@@ -246,6 +246,7 @@ type SessionUpdate struct {
 	Status     string             `json:"status,omitempty"`
 	Locations  []ToolCallLocation `json:"locations,omitempty"`
 	RawInput   json.RawMessage    `json:"rawInput,omitempty"`
+	RawOutput  json.RawMessage    `json:"rawOutput,omitempty"`
 
 	// usage_update: Used is the tokens currently in context (input + cache read),
 	// Size is the model's total context window, and Cost is the cumulative

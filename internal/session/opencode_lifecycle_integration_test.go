@@ -71,6 +71,14 @@ func ocThoughtChunk(text string) string {
 	return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_x","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"` + text + `"}}}}`
 }
 
+func ocCompletedToolUpdate(id, prompt, output string) string {
+	return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_x","update":{"sessionUpdate":"tool_call_update","toolCallId":"` + id + `","status":"completed","kind":"read","rawInput":{"prompt":` + strconv.Quote(prompt) + `},"content":[{"type":"content","content":{"type":"text","text":` + strconv.Quote(output) + `}}]}}}`
+}
+
+func ocPendingToolCall(id string) string {
+	return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_x","update":{"sessionUpdate":"tool_call","toolCallId":"` + id + `","status":"pending","kind":"read","rawInput":{}}}}`
+}
+
 // ocPromptResult builds a session/prompt JSON-RPC response with the given id,
 // stop reason, and (optional) end-turn token usage body.
 func ocPromptResult(id int, stopReason, usage string) string {
@@ -210,6 +218,46 @@ func TestOpenCodeSessionEstimatesContextFromStreamingThoughtWithoutUsageUpdate(t
 	}
 	if got := s.AccumulatedUsage(); got.InputTokens != 0 || got.OutputTokens != 0 {
 		t.Errorf("AccumulatedUsage() = %+v, want no synthetic token accounting", got)
+	}
+}
+
+func TestOpenCodeSessionEstimatesContextFromToolPayloadWithoutUsageUpdate(t *testing.T) {
+	s := NewSession("oc-lifecycle-tool-estimate", "feat-1", feature.PhaseImplement)
+	p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5", ContextWindow: 2000})
+	s.protocol = p
+	p.SetStdin(io.Discard)
+	if err := p.SendUserMessage(strings.Repeat("abcd", 100)); err != nil {
+		t.Fatalf("SendUserMessage() error = %v", err)
+	}
+
+	runSessionWithStdoutLines(t, s, []string{
+		ocCompletedToolUpdate("tool_1", strings.Repeat("abcd", 100), strings.Repeat("abcd", 100)),
+	}, nil)
+
+	if pct := s.ContextPercentage(); pct != 15 {
+		t.Errorf("ContextPercentage() = %d, want 15 (estimated prompt + tool input + tool output / 2000 window)", pct)
+	}
+	if got := s.AccumulatedUsage(); got.InputTokens != 0 || got.OutputTokens != 0 {
+		t.Errorf("AccumulatedUsage() = %+v, want no synthetic token accounting", got)
+	}
+}
+
+func TestOpenCodeSessionEstimatesLaterToolInputAfterEmptyPendingCall(t *testing.T) {
+	s := NewSession("oc-lifecycle-tool-estimate-empty-pending", "feat-1", feature.PhaseImplement)
+	p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5", ContextWindow: 2000})
+	s.protocol = p
+	p.SetStdin(io.Discard)
+	if err := p.SendUserMessage(strings.Repeat("abcd", 100)); err != nil {
+		t.Fatalf("SendUserMessage() error = %v", err)
+	}
+
+	runSessionWithStdoutLines(t, s, []string{
+		ocPendingToolCall("tool_1"),
+		ocCompletedToolUpdate("tool_1", strings.Repeat("abcd", 100), strings.Repeat("abcd", 100)),
+	}, nil)
+
+	if pct := s.ContextPercentage(); pct != 15 {
+		t.Errorf("ContextPercentage() = %d, want 15 (empty pending rawInput must not suppress later real tool input)", pct)
 	}
 }
 

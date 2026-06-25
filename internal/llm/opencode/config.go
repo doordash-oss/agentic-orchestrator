@@ -79,16 +79,7 @@ const catchAllPattern = "*"
 //     roots: when roots are known, each becomes a path-pattern map allowing the
 //     mode decision inside "<root>/**" and explicitly denying everything else;
 //     with no known roots they fall back to the mode decision as a plain value.
-//
-// delegateEdits, when true, makes every file-edit surface a bare decision
-// ("ask"/"allow") instead of a path-pattern map. Bounded helpers set this so
-// OpenCode forwards each edit to the client permission handler rather than
-// resolving its own glob map: OpenCode matches the edit surface by
-// last-matching-rule against a worktree-relative request path the generated
-// globs do not reproduce, so an exact-file map collapses to the catch-all
-// "*"->deny and the helper's own artifact writes are denied before the client
-// is asked. External-directory and read roots are unaffected.
-func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string, delegateEdits bool) map[string]any {
+func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string) map[string]any {
 	toolDecision := "ask"
 	if dangerouslySkipPerms {
 		toolDecision = "allow"
@@ -102,10 +93,7 @@ func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, 
 	perm[permKeyRead] = readPermission(dangerouslySkipPerms, workDir, readRoots)
 	perm[permKeyExternal] = externalDirectoryPermission(dangerouslySkipPerms, workDir, writableRoots, readRoots)
 
-	editDecision := any(toolDecision)
-	if !delegateEdits {
-		editDecision = editPermission(toolDecision, workDir, writableRoots)
-	}
+	editDecision := editPermission(toolDecision, workDir, writableRoots)
 	for _, key := range fileEditPermKeys {
 		perm[key] = editDecision
 	}

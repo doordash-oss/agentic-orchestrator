@@ -26,16 +26,17 @@ import (
 // OpenCode permission/tool keys verified against the installed CLI. Unlisted
 // keys default to allow, so every surface Agentico mediates is listed explicitly.
 const (
-	permKeyBash       = "bash"        // shell execution
-	permKeyEdit       = "edit"        // file edits
-	permKeyWrite      = "write"       // file writes
-	permKeyApplyPatch = "apply_patch" // patch application
-	permKeyRead       = "read"        // file reads
-	permKeyWebfetch   = "webfetch"    // web fetch
-	permKeyWebsearch  = "websearch"   // web search
-	permKeyTask       = "task"        // subagent / task tool
-	permKeySkill      = "skill"       // skill invocation
-	permKeyQuestion   = "question"    // user-facing questions
+	permKeyBash       = "bash"               // shell execution
+	permKeyEdit       = "edit"               // file edits
+	permKeyWrite      = "write"              // file writes
+	permKeyApplyPatch = "apply_patch"        // patch application
+	permKeyRead       = "read"               // file reads
+	permKeyWebfetch   = "webfetch"           // web fetch
+	permKeyWebsearch  = "websearch"          // web search
+	permKeyTask       = "task"               // subagent / task tool
+	permKeySkill      = "skill"              // skill invocation
+	permKeyQuestion   = "question"           // user-facing questions
+	permKeyExternal   = "external_directory" // access to paths outside the session cwd
 )
 
 // fileEditPermKeys are the file-mutating surfaces bounded to writable roots.
@@ -67,6 +68,9 @@ const catchAllPattern = "*"
 //     external-directory read pauses through Agentico, and noninteractive in
 //     dangerous-skip mode. OpenCode is not OS-sandboxed, so this mediates rather
 //     than enforces a boundary.
+//   - External-directory access (see externalDirectoryPermission) is bounded to
+//     the same mounted roots so paths outside the session cwd that Agentico
+//     mounted stay reachable past OpenCode's separate external_directory gate.
 //   - File-editing surfaces (edit/write/apply_patch) are bounded to writable
 //     roots: when roots are known, each becomes a path-pattern map allowing the
 //     mode decision inside "<root>/**" and explicitly denying everything else;
@@ -83,6 +87,7 @@ func permissionConfig(dangerouslySkipPerms bool, writableRoots, readRoots []stri
 	}
 	perm[permKeyQuestion] = "ask"
 	perm[permKeyRead] = readPermission(dangerouslySkipPerms, readRoots)
+	perm[permKeyExternal] = externalDirectoryPermission(dangerouslySkipPerms, writableRoots, readRoots)
 
 	editDecision := editPermission(toolDecision, writableRoots)
 	for _, key := range fileEditPermKeys {
@@ -116,6 +121,68 @@ func readPermission(dangerouslySkipPerms bool, readRoots []string) any {
 		patterns[rootGlob(root)] = "allow"
 	}
 	return patterns
+}
+
+// externalDirectoryPermission returns the permission value for OpenCode's
+// external_directory surface, the separate gate OpenCode applies to any path
+// outside the session's working directory. OpenCode's built-in default asks for
+// every external path (allowing only the cwd and tmp), so the read pattern map
+// alone does not keep mounted roots readable: a root Agentico mounts outside the
+// cwd — feature state, skills, guidelines, sibling worktrees — still trips this
+// gate. Left unconfigured, that ask cannot be answered in a subagent session
+// (OpenCode does not forward subagent permission requests over ACP) and stalls
+// the run. Mirroring readPermission, every mounted root (read and writable) is
+// allowed and everything else asks in normal mode, or is allowed in
+// dangerous-skip mode.
+func externalDirectoryPermission(dangerouslySkipPerms bool, writableRoots, readRoots []string) any {
+	if dangerouslySkipPerms {
+		return "allow"
+	}
+	roots := normalizeRoots(append(append([]string(nil), readRoots...), writableRoots...))
+	if len(roots) == 0 {
+		return "ask"
+	}
+	patterns := make(map[string]string, len(roots)+1)
+	patterns[catchAllPattern] = "ask"
+	for _, root := range roots {
+		patterns[rootGlob(root)] = "allow"
+	}
+	return patterns
+}
+
+// subagentPermissionConfig returns the non-interactive permission profile for a
+// managed subagent session. OpenCode's ACP bridge silently drops permission
+// requests originating from internally-spawned child sessions (its handler bails
+// when the session is absent from the ACP client's session registry, which
+// task-spawned children never join), so a subagent that reaches an "ask"
+// decision blocks forever. This profile therefore resolves every surface
+// deterministically: surfaces Agentico already auto-approves (reads,
+// external-directory access, web, subagent spawning, and edits bounded to
+// writable roots) are allowed; user questions are denied because a subagent
+// cannot obtain a human answer; and human-gated surfaces (shell, skill
+// invocation) are denied in normal mode so the subagent fails fast rather than
+// hanging, or allowed under dangerous-skip mode where the whole run is already
+// noninteractive.
+func subagentPermissionConfig(dangerouslySkipPerms bool, writableRoots []string) map[string]any {
+	humanGated := "deny"
+	if dangerouslySkipPerms {
+		humanGated = "allow"
+	}
+	perm := map[string]any{
+		permKeyRead:      "allow",
+		permKeyExternal:  "allow",
+		permKeyWebfetch:  "allow",
+		permKeyWebsearch: "allow",
+		permKeyTask:      "allow",
+		permKeyQuestion:  "deny",
+		permKeyBash:      humanGated,
+		permKeySkill:     humanGated,
+	}
+	editDecision := editPermission("allow", writableRoots)
+	for _, key := range fileEditPermKeys {
+		perm[key] = editDecision
+	}
+	return perm
 }
 
 // editPermission returns the permission value for a file-mutating surface. With
@@ -176,7 +243,11 @@ type agentJSONShape struct {
 // backend id, so an Agentico-internal model name (e.g. a category alias) is
 // omitted rather than passed through as a bad value. Empty input yields no
 // agents; malformed input is an error whose message never echoes the input.
-func convertAgents(agentsJSON string) (map[string]managedAgent, error) {
+//
+// Every converted subagent carries a non-interactive permission override (see
+// subagentPermissionConfig) because OpenCode's ACP bridge cannot forward a
+// child session's permission request, so a subagent must never reach an "ask".
+func convertAgents(agentsJSON string, dangerouslySkipPerms bool, writableRoots []string) (map[string]managedAgent, error) {
 	s := strings.TrimSpace(agentsJSON)
 	if s == "" {
 		return nil, nil
@@ -194,6 +265,7 @@ func convertAgents(agentsJSON string) (map[string]managedAgent, error) {
 			Description: def.Description,
 			Prompt:      def.Prompt,
 			Mode:        "subagent",
+			Permission:  subagentPermissionConfig(dangerouslySkipPerms, writableRoots),
 		}
 		// Include the model only when it is already a valid OpenCode backend id in
 		// slash form; an Agentico-internal alias (e.g. "sonnet") is omitted so the

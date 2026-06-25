@@ -67,6 +67,7 @@ func TestParseLine_PermissionRequestsSurfaceAsControl(t *testing.T) {
 		{"web fetch", ToolKindFetch, "Fetch docs", map[string]any{"url": "https://example.com"}, "WebFetch", "url", "https://example.com"},
 		{"web search", ToolKindSearch, "Search", map[string]any{"query": "golang acp"}, "WebSearch", "query", "golang acp"},
 		{"external dir", ToolKindRead, "Read /etc", map[string]any{"path": "/etc/hosts"}, "ExternalDirectory", "path", "/etc/hosts"},
+		{"subagent spawn", ToolKindThink, "Research api-surface", map[string]any{"subagent_type": "api-surface-researcher", "description": "Research api-surface"}, "Agent", "subagent_type", "api-surface-researcher"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

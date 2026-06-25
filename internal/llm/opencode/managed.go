@@ -98,10 +98,11 @@ type managedConfig struct {
 // emitted; the model is included only when it is already a valid OpenCode backend
 // id so an Agentico-internal model name can never reach OpenCode as a bad value.
 type managedAgent struct {
-	Description string `json:"description,omitempty"`
-	Mode        string `json:"mode,omitempty"`
-	Prompt      string `json:"prompt,omitempty"`
-	Model       string `json:"model,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Mode        string         `json:"mode,omitempty"`
+	Prompt      string         `json:"prompt,omitempty"`
+	Model       string         `json:"model,omitempty"`
+	Permission  map[string]any `json:"permission,omitempty"`
 }
 
 // buildManagedSession produces the launch args and environment for a managed
@@ -125,7 +126,7 @@ func buildManagedSession(opts llm.CommandBuildOpts) (args, env []string, err err
 		Autoupdate: boolPtr(false),
 	}
 
-	agents, err := convertAgents(opts.AgentsJSON)
+	agents, err := convertAgents(opts.AgentsJSON, opts.DangerouslySkipPerms, opts.WritableRoots)
 	if err != nil {
 		// The agent JSON is Agentico-internal; name the operation without echoing
 		// its contents so a malformed definition cannot leak into diagnostics.

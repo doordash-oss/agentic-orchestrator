@@ -232,7 +232,8 @@ type SessionUpdate struct {
 	// tool_call_update may carry an array of output content blocks. Keep it raw
 	// so the polymorphic shape cannot make the whole session/update fail to
 	// decode.
-	Content json.RawMessage `json:"content,omitempty"`
+	MessageID string          `json:"messageId,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 
 	// tool_call / tool_call_update
 	ToolCallID string             `json:"toolCallId,omitempty"`
@@ -336,6 +337,7 @@ const (
 	ToolKindFetch    = "fetch"
 	ToolKindSearch   = "search"
 	ToolKindRead     = "read"
+	ToolKindThink    = "think" // OpenCode's kind for the task (subagent-spawn) tool
 	ToolKindOther    = "other"
 	ToolKindQuestion = "question"
 )

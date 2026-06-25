@@ -32,10 +32,11 @@ type fullManagedConfig struct {
 	Instructions []string                   `json:"instructions"`
 	Permission   map[string]json.RawMessage `json:"permission"`
 	Agent        map[string]struct {
-		Description string `json:"description"`
-		Mode        string `json:"mode"`
-		Prompt      string `json:"prompt"`
-		Model       string `json:"model"`
+		Description string                     `json:"description"`
+		Mode        string                     `json:"mode"`
+		Prompt      string                     `json:"prompt"`
+		Model       string                     `json:"model"`
+		Permission  map[string]json.RawMessage `json:"permission"`
 	} `json:"agent"`
 	Provider   map[string]json.RawMessage `json:"provider"`
 	Share      string                     `json:"share"`
@@ -410,6 +411,131 @@ func TestManagedConfig_DangerousSkipAllowsReads(t *testing.T) {
 	}
 	if got := permString(t, readManagedConfigFile(t, env).Permission, "read"); got != "allow" {
 		t.Errorf("dangerous-skip permission[read] = %q, want allow (reads are noninteractive)", got)
+	}
+}
+
+// TestManagedConfig_ExternalDirectoryAllowsMountedRoots proves the
+// external_directory surface — OpenCode's separate gate for any path outside the
+// session cwd — is configured to allow every root Agentico mounts (state,
+// skills, guidelines, other repos) and ask for anything else. Without this,
+// OpenCode's built-in external_directory default asks for every mounted root,
+// and a subagent (whose ask is not forwarded over ACP) stalls reading a mounted
+// skill directory.
+func TestManagedConfig_ExternalDirectoryAllowsMountedRoots(t *testing.T) {
+	state := t.TempDir()
+	readRoots := []string{state, "/skills", "/guidelines", "/repo-b"}
+	p := New()
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:         "openai/gpt-5",
+		StateDir:      state,
+		ReadRoots:     readRoots,
+		WritableRoots: []string{state},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	raw, ok := readManagedConfigFile(t, env).Permission["external_directory"]
+	if !ok {
+		t.Fatalf("permission missing external_directory")
+	}
+	var patterns map[string]string
+	if err := json.Unmarshal(raw, &patterns); err != nil {
+		t.Fatalf("permission[external_directory] = %s, want path-pattern object: %v", raw, err)
+	}
+	if patterns["*"] != "ask" {
+		t.Errorf("permission[external_directory] default = %q, want ask outside mounted roots", patterns["*"])
+	}
+	for _, root := range readRoots {
+		glob := root + "/**"
+		if patterns[glob] != "allow" {
+			t.Errorf("permission[external_directory][%q] = %q, want allow inside mounted root", glob, patterns[glob])
+		}
+	}
+}
+
+// TestManagedConfig_DangerousSkipAllowsExternalDirectory proves external_directory
+// access is noninteractive in dangerous-skip mode, mirroring reads.
+func TestManagedConfig_DangerousSkipAllowsExternalDirectory(t *testing.T) {
+	state := t.TempDir()
+	p := New()
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:                "openai/gpt-5",
+		StateDir:             state,
+		ReadRoots:            []string{state, "/repo-b"},
+		WritableRoots:        []string{state},
+		DangerouslySkipPerms: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	if got := permString(t, readManagedConfigFile(t, env).Permission, "external_directory"); got != "allow" {
+		t.Errorf("dangerous-skip permission[external_directory] = %q, want allow", got)
+	}
+}
+
+// TestManagedConfig_SubagentsRunNonInteractive proves every converted subagent
+// carries a permission override that resolves deterministically. OpenCode's ACP
+// bridge silently drops permission requests from internally-spawned child
+// sessions, so a subagent that reaches an "ask" decision deadlocks. Surfaces
+// Agentico auto-approves resolve to allow; human-gated surfaces (bash, skill)
+// deny in normal mode (fail fast, not hang); questions deny (no human answer).
+func TestManagedConfig_SubagentsRunNonInteractive(t *testing.T) {
+	state := t.TempDir()
+	agentsJSON := `{"api-surface-researcher":{"description":"Researches API surface","prompt":"You research."}}`
+	p := New()
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:         "openai/gpt-5",
+		StateDir:      state,
+		AgentsJSON:    agentsJSON,
+		WritableRoots: []string{state},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	ag, ok := readManagedConfigFile(t, env).Agent["api-surface-researcher"]
+	if !ok {
+		t.Fatalf("converted agents missing api-surface-researcher")
+	}
+	if ag.Permission == nil {
+		t.Fatalf("subagent carries no permission override; an un-forwardable ask would deadlock it")
+	}
+	for _, key := range []string{"read", "external_directory", "webfetch", "websearch", "task"} {
+		if got := permString(t, ag.Permission, key); got != "allow" {
+			t.Errorf("subagent permission[%q] = %q, want allow", key, got)
+		}
+	}
+	for _, key := range []string{"bash", "skill"} {
+		if got := permString(t, ag.Permission, key); got != "deny" {
+			t.Errorf("subagent permission[%q] = %q, want deny in normal mode", key, got)
+		}
+	}
+	if got := permString(t, ag.Permission, "question"); got != "deny" {
+		t.Errorf("subagent permission[question] = %q, want deny", got)
+	}
+}
+
+// TestManagedConfig_SubagentBashAllowedUnderDangerousSkip proves the human-gated
+// surfaces become allow for subagents under dangerous-skip mode, where the whole
+// run is already noninteractive.
+func TestManagedConfig_SubagentBashAllowedUnderDangerousSkip(t *testing.T) {
+	state := t.TempDir()
+	agentsJSON := `{"api-surface-researcher":{"description":"d","prompt":"p"}}`
+	p := New()
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:                "openai/gpt-5",
+		StateDir:             state,
+		AgentsJSON:           agentsJSON,
+		WritableRoots:        []string{state},
+		DangerouslySkipPerms: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand: %v", err)
+	}
+	ag := readManagedConfigFile(t, env).Agent["api-surface-researcher"]
+	for _, key := range []string{"bash", "skill"} {
+		if got := permString(t, ag.Permission, key); got != "allow" {
+			t.Errorf("dangerous-skip subagent permission[%q] = %q, want allow", key, got)
+		}
 	}
 }
 

@@ -119,6 +119,17 @@ func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
 		return "WebSearch", inputObject("query", firstStringField(tc.RawInput, tc.Title, "query", "q", "search"))
 	case ToolKindRead:
 		return "ExternalDirectory", inputObject("path", firstStringField(tc.RawInput, tc.Title, "path", "directory", "dir"))
+	case ToolKindThink:
+		// OpenCode's task (subagent-spawn) permission. Surface it under the
+		// canonical "Agent" tool name so the shared permission handlers
+		// auto-approve subagent spawning (subagents are sandboxed) instead of
+		// prompting on an opaque "think" name. The native input already carries
+		// description/subagent_type, so it is passed through for display when
+		// present.
+		if len(tc.RawInput) > 0 {
+			return "Agent", tc.RawInput
+		}
+		return "Agent", inputObject("subagent_type", tc.Title)
 	case ToolKindOther:
 		if tc.Title == "external_directory" {
 			return "ExternalDirectory", inputObject("path", firstStringField(tc.RawInput, tc.Title, "path", "filepath", "filePath", "directory", "dir", "parentDir"))

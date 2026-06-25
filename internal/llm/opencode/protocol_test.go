@@ -273,17 +273,47 @@ func TestParseLine_AssistantTextAccumulatesWithoutLoss(t *testing.T) {
 
 	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
-		"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Hello "}},
+		"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "msg_1", "content": map[string]any{"type": "text", "text": "Hello "}},
 	}))
 	assertAssistantText(t, msgs, "Hello ")
 
 	msgs = mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
-		"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "world"}},
+		"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "msg_1", "content": map[string]any{"type": "text", "text": "world"}},
 	}))
 	// Chunks accumulate; the partial carries the full text so far, never just
 	// the latest delta and never a duplicate.
 	assertAssistantText(t, msgs, "Hello world")
+}
+
+func TestParseLine_AssistantTextResetsOnNewMessageID(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t)
+
+	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "msg_1", "content": map[string]any{"type": "text", "text": "First."}},
+	}))
+	assertAssistantText(t, msgs, "First.")
+
+	msgs = mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_read",
+			"status":        "completed",
+			"kind":          "read",
+			"title":         "README.md",
+		},
+	}))
+	if len(msgs) != 1 || msgs[0].ToolProgress == nil {
+		t.Fatalf("tool update = %+v, want tool_progress", msgs)
+	}
+
+	msgs = mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "messageId": "msg_2", "content": map[string]any{"type": "text", "text": "Second."}},
+	}))
+	assertAssistantText(t, msgs, "Second.")
 }
 
 func TestParseLine_ThoughtChunkSurfacesAsThinking(t *testing.T) {

@@ -89,8 +89,9 @@ type Protocol struct {
 	costUSD                               float64
 	usageSeen                             bool
 
-	assistantBuf  strings.Builder
-	resultEmitted bool
+	assistantBuf       strings.Builder
+	assistantMessageID string
+	resultEmitted      bool
 
 	// toolCalls retains ACP tool-call metadata across start/update events. Some
 	// OpenCode updates carry only the status and id after the initial event; the
@@ -328,6 +329,7 @@ func (p *Protocol) sendPrompt(text string) error {
 	// next turn's question detection (and streamed partial) reflects only that
 	// turn, not text carried over from a prior answered question.
 	p.assistantBuf.Reset()
+	p.assistantMessageID = ""
 	p.mu.Unlock()
 
 	req := Request{
@@ -666,6 +668,10 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 	case UpdateAgentMessageChunk:
 		if text := updateText(su.Update.Content); text != "" {
 			p.mu.Lock()
+			if su.Update.MessageID != "" && su.Update.MessageID != p.assistantMessageID {
+				p.assistantBuf.Reset()
+				p.assistantMessageID = su.Update.MessageID
+			}
 			p.assistantBuf.WriteString(text)
 			p.estimatedContextTokens += estimateContextTokens(text)
 			accumulated := p.assistantBuf.String()

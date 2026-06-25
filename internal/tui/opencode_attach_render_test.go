@@ -121,6 +121,67 @@ func TestOpenCodeAttachBuildsFileEventsFromToolMetadata(t *testing.T) {
 	}
 }
 
+func TestOpenCodeAttachRendersTaskPromptBox(t *testing.T) {
+	p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+	promptLines := []string{
+		"Line 01: inspect README.md.",
+		"Line 02: inspect CONTRIBUTING.md.",
+		"Line 03: inspect docs.",
+		"Line 04: inspect CI.",
+		"Line 05: inspect hooks.",
+		"Line 06: inspect markdown tooling.",
+		"Line 07: inspect release docs.",
+		"Line 08: inspect test scripts.",
+		"Line 09: inspect package metadata.",
+		"Line 10: inspect make targets.",
+		"Line 11: inspect link checker config.",
+		"Line 12: inspect formatting config.",
+		"Line 13: inspect generated docs.",
+		"Line 14: inspect translation docs.",
+		"Line 15: inspect all remaining docs.",
+		"Line 16: this line should be trimmed.",
+	}
+
+	msgs, err := p.ParseLine(mustJSONLine(t, map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "session/update",
+		"params": map[string]any{
+			"sessionId": "ses_x",
+			"update": map[string]any{
+				"sessionUpdate": "tool_call_update",
+				"toolCallId":    "call_task",
+				"kind":          "think",
+				"title":         "Find markdown/link CI checks & hooks",
+				"status":        "in_progress",
+				"rawInput": map[string]any{
+					"description":   "Find markdown/link CI checks & hooks",
+					"subagent_type": "codebase-locator",
+					"prompt":        strings.Join(promptLines, "\n"),
+				},
+			},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("ParseLine task: %v", err)
+	}
+
+	rendered := stripANSI(renderAttachMessages(msgs, filterAll, 100, nil))
+	for _, want := range []string{
+		"Task: Find markdown/link CI checks & hooks",
+		"codebase-locator",
+		"Line 01: inspect README.md.",
+		"Line 14: inspect translation docs.",
+		"...",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("task prompt render missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Line 16: this line should be trimmed.") {
+		t.Fatalf("task prompt render did not trim long prompt:\n%s", rendered)
+	}
+}
+
 // TestOpenCodeAttachRenderArtifacts proves an OpenCode permission request and an
 // OpenCode question request render through the existing attach-view controls
 // (the same renderPermMenu / renderQuestion paths every provider uses), and

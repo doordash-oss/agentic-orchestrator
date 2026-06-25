@@ -17,6 +17,7 @@ package opencode
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -75,7 +76,7 @@ const catchAllPattern = "*"
 //     roots: when roots are known, each becomes a path-pattern map allowing the
 //     mode decision inside "<root>/**" and explicitly denying everything else;
 //     with no known roots they fall back to the mode decision as a plain value.
-func permissionConfig(dangerouslySkipPerms bool, writableRoots, readRoots []string) map[string]any {
+func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string) map[string]any {
 	toolDecision := "ask"
 	if dangerouslySkipPerms {
 		toolDecision = "allow"
@@ -86,10 +87,10 @@ func permissionConfig(dangerouslySkipPerms bool, writableRoots, readRoots []stri
 		perm[key] = toolDecision
 	}
 	perm[permKeyQuestion] = "ask"
-	perm[permKeyRead] = readPermission(dangerouslySkipPerms, readRoots)
-	perm[permKeyExternal] = externalDirectoryPermission(dangerouslySkipPerms, writableRoots, readRoots)
+	perm[permKeyRead] = readPermission(dangerouslySkipPerms, workDir, readRoots)
+	perm[permKeyExternal] = externalDirectoryPermission(dangerouslySkipPerms, workDir, writableRoots, readRoots)
 
-	editDecision := editPermission(toolDecision, writableRoots)
+	editDecision := editPermission(toolDecision, workDir, writableRoots)
 	for _, key := range fileEditPermKeys {
 		perm[key] = editDecision
 	}
@@ -107,7 +108,7 @@ func permissionConfig(dangerouslySkipPerms bool, writableRoots, readRoots []stri
 //     readable.
 //   - In normal mode with no known read roots it asks rather than silently
 //     allowing arbitrary reads.
-func readPermission(dangerouslySkipPerms bool, readRoots []string) any {
+func readPermission(dangerouslySkipPerms bool, workDir string, readRoots []string) any {
 	if dangerouslySkipPerms {
 		return "allow"
 	}
@@ -118,7 +119,9 @@ func readPermission(dangerouslySkipPerms bool, readRoots []string) any {
 	patterns := make(map[string]string, len(roots)+1)
 	patterns[catchAllPattern] = "ask"
 	for _, root := range roots {
-		patterns[rootGlob(root)] = "allow"
+		for _, glob := range rootGlobs(workDir, root) {
+			patterns[glob] = "allow"
+		}
 	}
 	return patterns
 }
@@ -134,7 +137,7 @@ func readPermission(dangerouslySkipPerms bool, readRoots []string) any {
 // the run. Mirroring readPermission, every mounted root (read and writable) is
 // allowed and everything else asks in normal mode, or is allowed in
 // dangerous-skip mode.
-func externalDirectoryPermission(dangerouslySkipPerms bool, writableRoots, readRoots []string) any {
+func externalDirectoryPermission(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string) any {
 	if dangerouslySkipPerms {
 		return "allow"
 	}
@@ -145,7 +148,9 @@ func externalDirectoryPermission(dangerouslySkipPerms bool, writableRoots, readR
 	patterns := make(map[string]string, len(roots)+1)
 	patterns[catchAllPattern] = "ask"
 	for _, root := range roots {
-		patterns[rootGlob(root)] = "allow"
+		for _, glob := range rootGlobs(workDir, root) {
+			patterns[glob] = "allow"
+		}
 	}
 	return patterns
 }
@@ -163,7 +168,7 @@ func externalDirectoryPermission(dangerouslySkipPerms bool, writableRoots, readR
 // invocation) are denied in normal mode so the subagent fails fast rather than
 // hanging, or allowed under dangerous-skip mode where the whole run is already
 // noninteractive.
-func subagentPermissionConfig(dangerouslySkipPerms bool, writableRoots []string) map[string]any {
+func subagentPermissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots []string) map[string]any {
 	humanGated := "deny"
 	if dangerouslySkipPerms {
 		humanGated = "allow"
@@ -178,7 +183,7 @@ func subagentPermissionConfig(dangerouslySkipPerms bool, writableRoots []string)
 		permKeyBash:      humanGated,
 		permKeySkill:     humanGated,
 	}
-	editDecision := editPermission("allow", writableRoots)
+	editDecision := editPermission("allow", workDir, writableRoots)
 	for _, key := range fileEditPermKeys {
 		perm[key] = editDecision
 	}
@@ -189,7 +194,7 @@ func subagentPermissionConfig(dangerouslySkipPerms bool, writableRoots []string)
 // writable roots it returns a path-pattern map that allows the decision inside
 // each "<root>/**" and denies everywhere else; with no roots it returns the bare
 // decision so behavior is unchanged from a non-bounded session.
-func editPermission(decision string, writableRoots []string) any {
+func editPermission(decision string, workDir string, writableRoots []string) any {
 	roots := normalizeRoots(writableRoots)
 	if len(roots) == 0 {
 		return decision
@@ -197,7 +202,9 @@ func editPermission(decision string, writableRoots []string) any {
 	patterns := make(map[string]string, len(roots)+1)
 	patterns[catchAllPattern] = "deny"
 	for _, root := range roots {
-		patterns[rootGlob(root)] = decision
+		for _, glob := range rootGlobs(workDir, root) {
+			patterns[glob] = decision
+		}
 	}
 	return patterns
 }
@@ -207,6 +214,27 @@ func editPermission(decision string, writableRoots []string) any {
 func rootGlob(root string) string {
 	root = strings.TrimRight(root, "/")
 	return root + "/**"
+}
+
+// rootGlobs returns every tool-path glob that should match a mounted root.
+// OpenCode evaluates the edit surface against the path the tool supplies, which
+// is relative to the session cwd (e.g. "../../../knowledge-base/<repo>/**"),
+// while external_directory is evaluated against the resolved absolute path. An
+// absolute-only glob therefore matches external_directory but never the relative
+// edit path, so every edit outside cwd falls through to the catch-all deny.
+// Emitting both the absolute glob and a cwd-relative one keeps a root matchable
+// on either surface. An empty or non-relativizable workDir yields the absolute
+// glob alone, preserving prior behavior.
+func rootGlobs(workDir, root string) []string {
+	globs := []string{rootGlob(root)}
+	if workDir == "" {
+		return globs
+	}
+	rel, err := filepath.Rel(workDir, root)
+	if err != nil || rel == "" || rel == "." {
+		return globs
+	}
+	return append(globs, rootGlob(rel))
 }
 
 // normalizeRoots trims, drops empties, and de-duplicates writable roots while
@@ -247,7 +275,7 @@ type agentJSONShape struct {
 // Every converted subagent carries a non-interactive permission override (see
 // subagentPermissionConfig) because OpenCode's ACP bridge cannot forward a
 // child session's permission request, so a subagent must never reach an "ask".
-func convertAgents(agentsJSON string, dangerouslySkipPerms bool, writableRoots []string) (map[string]managedAgent, error) {
+func convertAgents(agentsJSON string, dangerouslySkipPerms bool, workDir string, writableRoots []string) (map[string]managedAgent, error) {
 	s := strings.TrimSpace(agentsJSON)
 	if s == "" {
 		return nil, nil
@@ -265,7 +293,7 @@ func convertAgents(agentsJSON string, dangerouslySkipPerms bool, writableRoots [
 			Description: def.Description,
 			Prompt:      def.Prompt,
 			Mode:        "subagent",
-			Permission:  subagentPermissionConfig(dangerouslySkipPerms, writableRoots),
+			Permission:  subagentPermissionConfig(dangerouslySkipPerms, workDir, writableRoots),
 		}
 		// Include the model only when it is already a valid OpenCode backend id in
 		// slash form; an Agentico-internal alias (e.g. "sonnet") is omitted so the

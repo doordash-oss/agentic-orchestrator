@@ -370,6 +370,65 @@ func TestParseLine_ToolProgressKeepsStableID(t *testing.T) {
 	}
 }
 
+func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t)
+
+	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_task",
+			"kind":          "think",
+			"title":         "Find markdown/link CI checks & hooks",
+			"status":        "in_progress",
+			"rawInput": map[string]any{
+				"description":   "Find markdown/link CI checks & hooks",
+				"subagent_type": "codebase-locator",
+				"prompt":        "Inspect README.md, docs, and CI config. Return the files and commands that validate markdown links.",
+			},
+		},
+	}))
+	if len(msgs) != 2 {
+		t.Fatalf("task update produced %+v, want assistant task tool_use plus tool_progress", msgs)
+	}
+	if msgs[0].Assistant == nil || len(msgs[0].Assistant.Message.Content) != 1 {
+		t.Fatalf("first message = %+v, want assistant task tool_use", msgs[0])
+	}
+	block := msgs[0].Assistant.Message.Content[0]
+	if !block.IsToolUse() || block.Name != "Task" || block.ID != "call_task" {
+		t.Fatalf("task block = %+v, want Task tool_use with id call_task", block)
+	}
+	var input map[string]string
+	if err := json.Unmarshal(block.Input, &input); err != nil {
+		t.Fatalf("task input is not JSON object: %v", err)
+	}
+	if input["prompt"] == "" || input["description"] != "Find markdown/link CI checks & hooks" {
+		t.Fatalf("task input = %+v, want preserved description and prompt", input)
+	}
+	if msgs[1].ToolProgress == nil || msgs[1].ToolProgress.ToolName != "Find markdown/link CI checks & hooks" {
+		t.Fatalf("second message = %+v, want task tool_progress", msgs[1])
+	}
+
+	duplicate := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "tool_call_update",
+			"toolCallId":    "call_task",
+			"kind":          "think",
+			"title":         "Find markdown/link CI checks & hooks",
+			"status":        "completed",
+			"rawInput": map[string]any{
+				"description":   "Find markdown/link CI checks & hooks",
+				"subagent_type": "codebase-locator",
+				"prompt":        "Inspect README.md, docs, and CI config. Return the files and commands that validate markdown links.",
+			},
+		},
+	}))
+	if len(duplicate) != 1 || duplicate[0].ToolProgress == nil {
+		t.Fatalf("duplicate task update produced %+v, want only tool_progress", duplicate)
+	}
+}
+
 func TestParseLine_PromptEndTurnIsSuccess(t *testing.T) {
 	p, _, promptID := newPostHandshakeProtocol(t)
 	msgs := mustParse(t, p, responseLine(t, promptID, map[string]any{"stopReason": "end_turn"}))

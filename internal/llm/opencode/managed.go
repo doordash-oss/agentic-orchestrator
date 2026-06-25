@@ -121,12 +121,12 @@ func buildManagedSession(opts llm.CommandBuildOpts) (args, env []string, err err
 	cfg := managedConfig{
 		Schema:     openCodeConfigSchema,
 		Model:      backend,
-		Permission: permissionConfig(opts.DangerouslySkipPerms, opts.WritableRoots, opts.ReadRoots),
+		Permission: permissionConfig(opts.DangerouslySkipPerms, opts.WorkDir, opts.WritableRoots, opts.ReadRoots),
 		Share:      "disabled",
 		Autoupdate: boolPtr(false),
 	}
 
-	agents, err := convertAgents(opts.AgentsJSON, opts.DangerouslySkipPerms, opts.WritableRoots)
+	agents, err := convertAgents(opts.AgentsJSON, opts.DangerouslySkipPerms, opts.WorkDir, opts.WritableRoots)
 	if err != nil {
 		// The agent JSON is Agentico-internal; name the operation without echoing
 		// its contents so a malformed definition cannot leak into diagnostics.

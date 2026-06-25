@@ -575,7 +575,12 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		Model:                          kbModel,
 		Prompt:                         prompt,
 		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 []string{pr.StateDir},
+		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), not a
+		// descendant, so it must be mounted explicitly: this makes it readable and,
+		// via the default writable-root derivation, writable — without it OpenCode's
+		// generated edit permission denies every KB output write and the phase can
+		// never produce its required index.md.
+		AdditionalDirs:                 []string{pr.StateDir, kbDir},
 		AgentNames:                     knowledgeBaseAgentNames(),
 		PIDDir:                         pidDir,
 		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
@@ -1323,6 +1328,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		ResumeSessionID:      opts.ResumeSessionID,
 		WritableRoots:        openCodeWritableRoots,
 		ReadRoots:            readRoots,
+		WorkDir:              opts.WorkDir,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)

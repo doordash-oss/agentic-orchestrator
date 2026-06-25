@@ -124,10 +124,12 @@ type permissionOptions struct {
 }
 
 type toolCallState struct {
-	title   string
-	kind    string
-	path    string
-	command string
+	title              string
+	kind               string
+	path               string
+	command            string
+	rawInput           json.RawMessage
+	taskToolUseEmitted bool
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -685,6 +687,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		}
 
 	case UpdateToolCall, UpdateToolCallUpdate:
+		if msg, ok := p.taskToolUseFromUpdate(su.Update); ok {
+			out = append(out, msg)
+		}
 		progress := p.toolProgressFromUpdate(su.Update)
 		out = append(out, llm.SDKMessage{
 			Type:         "tool_progress",
@@ -713,6 +718,36 @@ func updateText(raw json.RawMessage) string {
 		return ""
 	}
 	return c.Text
+}
+
+func (p *Protocol) taskToolUseFromUpdate(update SessionUpdate) (llm.SDKMessage, bool) {
+	p.mu.Lock()
+	if p.toolCalls == nil {
+		p.toolCalls = make(map[string]toolCallState)
+	}
+	state := p.toolCalls[update.ToolCallID]
+	state = mergeToolCallState(state, update)
+	rawInput := state.rawInput
+	kind := strings.ToLower(strings.TrimSpace(state.kind))
+	prompt := firstStringField(rawInput, "", "prompt")
+	alreadyEmitted := state.taskToolUseEmitted
+	if kind == ToolKindThink && prompt != "" && !alreadyEmitted {
+		state.taskToolUseEmitted = true
+	}
+	if update.ToolCallID != "" {
+		p.toolCalls[update.ToolCallID] = state
+	}
+	p.mu.Unlock()
+
+	if kind != ToolKindThink || prompt == "" || alreadyEmitted {
+		return llm.SDKMessage{}, false
+	}
+	return assistantToolUse(llm.ContentBlock{
+		Type:  "tool_use",
+		ID:    update.ToolCallID,
+		Name:  "Task",
+		Input: rawInput,
+	}), true
 }
 
 func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgressMessage {
@@ -744,6 +779,9 @@ func mergeToolCallState(state toolCallState, update SessionUpdate) toolCallState
 	}
 	if command := firstStringField(update.RawInput, "", "command", "cmd", "script"); command != "" {
 		state.command = command
+	}
+	if len(update.RawInput) > 0 {
+		state.rawInput = update.RawInput
 	}
 	if path := toolCallPath(update, state); path != "" {
 		state.path = path
@@ -1067,6 +1105,19 @@ func assistantPartial(block llm.ContentBlock) llm.SDKMessage {
 		Assistant: &llm.AssistantMessage{
 			Type:    "assistant",
 			Subtype: "partial",
+			Message: llm.ConversationMsg{
+				Role:    "assistant",
+				Content: []llm.ContentBlock{block},
+			},
+		},
+	}
+}
+
+func assistantToolUse(block llm.ContentBlock) llm.SDKMessage {
+	return llm.SDKMessage{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{
+			Type: "assistant",
 			Message: llm.ConversationMsg{
 				Role:    "assistant",
 				Content: []llm.ContentBlock{block},

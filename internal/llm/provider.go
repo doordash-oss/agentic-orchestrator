@@ -220,6 +220,12 @@ type CommandBuildOpts struct {
 	// mode reads stay noninteractive. Empty means the provider applies its default
 	// read scope; providers that do not consume it leave their behavior unchanged.
 	ReadRoots []string
+	// WorkDir is the session's working directory (cwd). Providers that bound
+	// edits through generated config (OpenCode) need it because OpenCode evaluates
+	// the edit surface against the tool-supplied path relative to cwd, so a
+	// writable root outside cwd must also be expressed as a cwd-relative glob to
+	// match. Empty leaves a provider's path matching unchanged.
+	WorkDir string
 	// PermissionMode pins the provider's session-level permission mode. Empty
 	// means inherit the user's default (e.g. ~/.claude/settings.json). Set this
 	// for phases whose prompts require behavior that the user's defaults could

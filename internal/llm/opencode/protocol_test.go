@@ -262,10 +262,14 @@ func TestHandshake_TimesOutWhenNoResponse(t *testing.T) {
 
 // newPostHandshakeProtocol returns a protocol with handshake request ids pinned
 // so response/notification handling can be exercised directly.
-func newPostHandshakeProtocol(t *testing.T) (*Protocol, *syncBuffer, int) {
+func newPostHandshakeProtocol(t *testing.T, opts ...llm.ProtocolOpts) (*Protocol, *syncBuffer, int) {
 	t.Helper()
 	buf := &syncBuffer{}
-	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
+	protocolOpts := llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"}
+	if len(opts) > 0 {
+		protocolOpts = opts[0]
+	}
+	p := NewProtocol(protocolOpts)
 	p.SetStdin(buf)
 	const initID, sessionNewID, promptID = 100, 101, 102
 	p.setRequestIDsForTest(initID, sessionNewID, promptID)
@@ -339,6 +343,32 @@ func TestParseLine_ThoughtChunkSurfacesAsThinking(t *testing.T) {
 	}
 	if strings.Contains(block.Thinking, "raw hidden thought token") {
 		t.Fatalf("thought block leaked raw OpenCode thought text: %+v", block)
+	}
+}
+
+func TestParseLine_EstimatesContextUntilUsageUpdateArrives(t *testing.T) {
+	p, _, _ := newPostHandshakeProtocol(t, llm.ProtocolOpts{ContextWindow: 2000})
+	p.SetStdin(io.Discard)
+	if err := p.SendUserMessage(strings.Repeat("abcd", 100)); err != nil {
+		t.Fatalf("SendUserMessage() error = %v", err)
+	}
+
+	msgs := mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update": map[string]any{
+			"sessionUpdate": "agent_thought_chunk",
+			"content":       map[string]any{"type": "text", "text": strings.Repeat("abcd", 100)},
+		},
+	}))
+	u := lastUsageUpdate(t, msgs)
+	if u.ContextTotalTokens != 200 || u.ContextWindow != 2000 {
+		t.Fatalf("estimated context = total %d window %d, want 200/2000", u.ContextTotalTokens, u.ContextWindow)
+	}
+
+	msgs = mustParse(t, p, usageUpdateLine(t, map[string]any{"used": 512, "size": 2000}))
+	u = lastUsageUpdate(t, msgs)
+	if u.ContextTotalTokens != 512 || u.ContextWindow != 2000 {
+		t.Fatalf("provider context = total %d window %d, want 512/2000", u.ContextTotalTokens, u.ContextWindow)
 	}
 }
 

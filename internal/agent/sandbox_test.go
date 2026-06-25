@@ -16,13 +16,11 @@ package agent
 
 import "testing"
 
-// TestMaybeWrapHelperSandbox_NonOpenCodeUnchanged is platform-agnostic: no
-// provider other than OpenCode is ever wrapped, on any OS.
-func TestMaybeWrapHelperSandbox_NonOpenCodeUnchanged(t *testing.T) {
-	cmd := []string{"opencode", "acp"}
-	got, sandboxed, cleanup := maybeWrapHelperSandbox(cmd, "claude", "/Users/x/.agentic-workflow/features")
+func TestMaybeWrapHelperSandbox_DisabledUnchanged(t *testing.T) {
+	cmd := []string{"helper", "run"}
+	got, sandboxed, cleanup := maybeWrapHelperSandbox(cmd, false, "/Users/x/.agentic-workflow/features")
 	cleanup()
-	if sandboxed || len(got) != 2 || got[0] != "opencode" || got[1] != "acp" {
-		t.Errorf("non-opencode provider: got=%v sandboxed=%v, want unchanged [opencode acp]", got, sandboxed)
+	if sandboxed || len(got) != 2 || got[0] != "helper" || got[1] != "run" {
+		t.Errorf("disabled sandbox: got=%v sandboxed=%v, want unchanged [helper run]", got, sandboxed)
 	}
 }

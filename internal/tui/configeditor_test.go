@@ -193,7 +193,7 @@ func TestConfigEditor_Tab_SelectsModelCellOnModelsRow(t *testing.T) {
 
 func TestConfigEditor_ModelsUseAgentFirstCells(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
 	if got := e.activeModelCell; got != modelCellAgent {
@@ -211,39 +211,39 @@ func TestConfigEditor_ModelsUseAgentFirstCells(t *testing.T) {
 
 func TestConfigEditor_ChangingAgentSelectsRecommendedModel(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: "claude:sonnet[200K]"}}, cat, true)
 	e.rowCursor = 0
 	e.activeModelCell = modelCellAgent
 
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	gotAgent := e.agentValueForField("Research")
-	if gotAgent != "opencode" {
-		t.Fatalf("agent after cycle = %q, want opencode", gotAgent)
+	if gotAgent != "gateway" {
+		t.Fatalf("agent after cycle = %q, want gateway", gotAgent)
 	}
 	gotModel := e.Snapshot().Models.Research
-	if gotModel != "opencode:anthropic/claude-sonnet-4-5[200K]" {
-		t.Fatalf("Research model = %q, want opencode recommended model", gotModel)
+	if gotModel != "gateway:vendor/sonnet[200K]" {
+		t.Fatalf("Research model = %q, want gateway recommended model", gotModel)
 	}
 }
 
 func TestConfigEditor_BlankModelValueInheritsDefaultAgent(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
-	if got := e.agentValueForField("Research"); got != "opencode" {
-		t.Fatalf("agentValueForField(Research) = %q, want opencode from phase default", got)
+	if got := e.agentValueForField("Research"); got != "gateway" {
+		t.Fatalf("agentValueForField(Research) = %q, want gateway from phase default", got)
 	}
 
 	e.rowCursor = 0
 	e.activeModelCell = modelCellModel
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	if got := e.agentValueForField("Research"); got != "opencode" {
-		t.Fatalf("after model cycle agentValueForField(Research) = %q, want opencode", got)
+	if got := e.agentValueForField("Research"); got != "gateway" {
+		t.Fatalf("after model cycle agentValueForField(Research) = %q, want gateway", got)
 	}
-	if got := e.Snapshot().Models.Research; !strings.HasPrefix(got, "opencode:") {
-		t.Fatalf("after model cycle Research model = %q, want opencode-scoped selection", got)
+	if got := e.Snapshot().Models.Research; !strings.HasPrefix(got, "gateway:") {
+		t.Fatalf("after model cycle Research model = %q, want gateway-scoped selection", got)
 	}
 }
 
@@ -258,7 +258,7 @@ func TestConfigEditor_ModelFilteringIsScopedToSelectedAgent(t *testing.T) {
 		},
 	})
 	reg.Register(&phaseCatalogStubProvider{
-		name:   "opencode",
+		name:   "gateway",
 		models: []string{"portkey/@fireworks/accounts/fireworks/models/glm-5p2", "ollama/gemma4:31b-256k"},
 		catalog: []llm.ModelInfo{
 			{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2", DisplayName: "GLM 5.2", Category: "balanced"},
@@ -266,7 +266,7 @@ func TestConfigEditor_ModelFilteringIsScopedToSelectedAgent(t *testing.T) {
 		},
 	})
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
-	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Planning: "opencode:ollama/gemma4:31b-256k"}}, cat, true)
+	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Planning: "gateway:ollama/gemma4:31b-256k"}}, cat, true)
 	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 
@@ -279,11 +279,11 @@ func TestConfigEditor_ModelFilteringIsScopedToSelectedAgent(t *testing.T) {
 	if len(filtered) != 1 {
 		t.Fatalf("filtered entries = %+v, want one GLM entry", filtered)
 	}
-	if filtered[0].Agent != "opencode" || filtered[0].DisplayName != "GLM 5.2" {
-		t.Fatalf("filtered[0] = %+v, want OpenCode GLM", filtered[0])
+	if filtered[0].Agent != "gateway" || filtered[0].DisplayName != "GLM 5.2" {
+		t.Fatalf("filtered[0] = %+v, want gateway GLM", filtered[0])
 	}
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if got := e.Snapshot().Models.Planning; got != "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2" {
+	if got := e.Snapshot().Models.Planning; got != "gateway:portkey/@fireworks/accounts/fireworks/models/glm-5p2" {
 		t.Fatalf("Planning model after enter = %q, want selected GLM", got)
 	}
 }
@@ -726,45 +726,45 @@ func TestConfigEditor_StaleModelPreservation(t *testing.T) {
 	}
 }
 
-// TestConfigEditor_OpenCodeGroupRecommendedMarkerAndSlashForm proves the config
-// editor surfaces an OpenCode provider group, renders slash-form backend ids in
+// TestConfigEditor_ProviderGroupRecommendedMarkerAndSlashForm proves the config
+// editor surfaces a provider group, renders slash-form backend ids in
 // full (never mistaking the "/" for a provider prefix split), and marks the
 // recommended default with a ★ even though the option string is bare while the
-// catalog default carries the opencode: routing prefix (multi-provider form).
-func TestConfigEditor_OpenCodeGroupRecommendedMarkerAndSlashForm(t *testing.T) {
+// catalog default carries the gateway: routing prefix (multi-provider form).
+func TestConfigEditor_ProviderGroupRecommendedMarkerAndSlashForm(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{
-		Research: "opencode:anthropic/claude-sonnet-4-5[200K]",
+		Research: "gateway:vendor/sonnet[200K]",
 	}}, cat, true)
 	e.activeModelCell = modelCellModel
 	view := e.renderModelsBox(120)
-	t.Logf("config editor Models view (OpenCode group + recommended marker):\n%s", view)
+	t.Logf("config editor Models view (gateway group + recommended marker):\n%s", view)
 
-	if !strings.Contains(view, "opencode") {
-		t.Errorf("missing opencode provider group; view:\n%s", view)
+	if !strings.Contains(view, "gateway") {
+		t.Errorf("missing gateway provider group; view:\n%s", view)
 	}
-	if !strings.Contains(view, "anthropic/claude-sonnet-4-5[200K]") {
-		t.Errorf("slash-form opencode backend id not rendered in full; view:\n%s", view)
+	if !strings.Contains(view, "vendor/sonnet[200K]") {
+		t.Errorf("slash-form gateway backend id not rendered in full; view:\n%s", view)
 	}
 	if !strings.Contains(view, "★") {
-		t.Errorf("recommended ★ marker not shown for the OpenCode default; view:\n%s", view)
+		t.Errorf("recommended ★ marker not shown for the gateway default; view:\n%s", view)
 	}
 }
 
-// TestConfigEditor_OpenCodeSelectionPersistsRoutedSlashForm proves selecting an
-// OpenCode option persists the routed slash-form backend id and that the value
+// TestConfigEditor_ProviderSelectionPersistsRoutedSlashForm proves selecting a
+// provider option persists the routed slash-form backend id and that the value
 // is recognized as eligible rather than labelled "(unavailable)".
-func TestConfigEditor_OpenCodeSelectionPersistsRoutedSlashForm(t *testing.T) {
+func TestConfigEditor_ProviderSelectionPersistsRoutedSlashForm(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
 	e.rowCursor = 0
 	e.activeModelCell = modelCellModel
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
-	target := "anthropic/claude-sonnet-4-5[200K]"
-	want := "opencode:" + target
+	target := "vendor/sonnet[200K]"
+	want := "gateway:" + target
 	if got := e.Snapshot().Models.Research; got != want {
 		t.Fatalf("persisted Research model = %q, want routed slash-form %q", got, want)
 	}
@@ -832,26 +832,26 @@ func TestConfigEditor_ChangeCounters(t *testing.T) {
 	}
 }
 
-// TestConfigEditor_PrefixedOpenCodeDefaultEligible proves a valid
+// TestConfigEditor_PrefixedProviderDefaultEligible proves a valid
 // multi-provider default persisted in routing-prefix form
-// ("opencode:anthropic/claude-sonnet-4-5[200K]") is recognized as eligible even
+// ("gateway:vendor/sonnet[200K]") is recognized as eligible even
 // though the per-provider option lists carry bare backend ids. The assignment
 // summary must not append "(unavailable)" to a model the picker highlights.
-func TestConfigEditor_PrefixedOpenCodeDefaultEligible(t *testing.T) {
+func TestConfigEditor_PrefixedProviderDefaultEligible(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
-	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	const prefixed = "gateway:vendor/sonnet[200K]"
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
 
 	if !e.modelValueEligible("Research", prefixed) {
-		t.Errorf("prefixed OpenCode default %q reported ineligible", prefixed)
+		t.Errorf("prefixed provider default %q reported ineligible", prefixed)
 	}
 	if got := e.modelAssignmentSummary("Research", prefixed); strings.Contains(got, "(unavailable)") {
 		t.Errorf("modelAssignmentSummary(%q) = %q, want no (unavailable) suffix", prefixed, got)
 	}
 	// The Models box must not flag the highlighted recommended default as unavailable.
 	view := e.renderModelsBox(120)
-	t.Logf("config editor Models view (persisted prefixed OpenCode default, eligible + selected):\n%s", view)
+	t.Logf("config editor Models view (persisted prefixed provider default, eligible + selected):\n%s", view)
 	if strings.Contains(view, "(unavailable)") {
 		t.Errorf("renderModelsBox marked a valid prefixed default unavailable:\n%s", view)
 	}
@@ -863,14 +863,14 @@ func TestConfigEditor_PrefixedOpenCodeDefaultEligible(t *testing.T) {
 // when the current value carried a routing prefix).
 func TestConfigEditor_CycleFromPrefixedDefaultAdvances(t *testing.T) {
 	t.Parallel()
-	cat := BuildPhaseModelCatalog(openCodeWinningRegistry(), config.DefaultsConfig{})
-	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+	const prefixed = "gateway:vendor/sonnet[200K]"
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
 
 	e.rowCursor = 0
 	e.activeModelCell = modelCellModel
 	e.cycleModelForward()
-	entries := cat.EntriesForFieldAndAgent("Research", "opencode")
+	entries := cat.EntriesForFieldAndAgent("Research", "gateway")
 	want := cat.SelectionValue(entries[1])
 	if got := e.Snapshot().Models.Research; got != want {
 		t.Errorf("forward cycle from prefixed default: got %q, want next option %q (not first)", got, want)

@@ -578,9 +578,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		SystemPrompt: systemPrompt,
 		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), not a
 		// descendant, so it must be mounted explicitly: this makes it readable and,
-		// via the default writable-root derivation, writable — without it OpenCode's
-		// generated edit permission denies every KB output write and the phase can
-		// never produce its required index.md.
+		// via the default writable-root derivation, writable for managed providers.
 		AdditionalDirs:                 []string{pr.StateDir, kbDir},
 		AgentNames:                     knowledgeBaseAgentNames(),
 		PIDDir:                         pidDir,
@@ -1154,12 +1152,9 @@ type BuildSessionOpts struct {
 	AllowedTools    []string
 	DisallowedTools []string
 	AdditionalDirs  []string
-	// WritableRoots overrides the provider write boundary (Codex sandbox writable
-	// roots and OpenCode managed-config edit roots). Nil preserves the default
-	// StateDir + AdditionalDirs behavior, except that the read-only context mounts
-	// (skills, guidelines) are kept out of the OpenCode edit set; pass an explicit
-	// slice for bounded helpers that must read mounted directories without making
-	// them writable.
+	// WritableRoots overrides the provider write surface. Nil preserves the
+	// default StateDir + AdditionalDirs behavior, except that read-only context
+	// mounts are not passed as command-level writable roots.
 	WritableRoots []string
 	PIDDir        string
 	PermHandler   ports.PermissionHandler
@@ -1183,10 +1178,8 @@ type BuildSessionOpts struct {
 	// PTY sessions); the provider falls back to its legacy heuristic.
 	MarkerPath string
 	// ResumeSessionID, when set, asks the provider to resume that prior session
-	// identity rather than start a fresh one. It is forwarded to both the
-	// command (Claude's --resume) and the protocol (OpenCode's ACP session/load)
-	// so each provider resumes via its own supported path. Empty means a normal
-	// new session, leaving providers that do not resume unchanged.
+	// identity rather than start a fresh one. It is forwarded to both command and
+	// protocol setup so each provider resumes via its own supported path.
 	ResumeSessionID string
 }
 
@@ -1194,16 +1187,21 @@ type BuildSessionOpts struct {
 // Used by TUI components and loop configs that need to create sessions.
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
-var openCodeSessionWatchdogConfig = ports.SessionWatchdogConfig{
+var pendingToolWatchdogConfig = ports.SessionWatchdogConfig{
 	PendingToolIdleTimeout: 5 * time.Minute,
 	PollInterval:           time.Second,
 }
 
-func watchdogConfigForProvider(providerName string) *ports.SessionWatchdogConfig {
-	if providerName != openCodeProviderName {
+type pendingToolWatchdogProvider interface {
+	EnablesPendingToolWatchdog() bool
+}
+
+func watchdogConfigForProvider(provider llm.LLMProvider) *ports.SessionWatchdogConfig {
+	p, ok := provider.(pendingToolWatchdogProvider)
+	if !ok || !p.EnablesPendingToolWatchdog() {
 		return nil
 	}
-	cfg := openCodeSessionWatchdogConfig
+	cfg := pendingToolWatchdogConfig
 	return &cfg
 }
 
@@ -1263,8 +1261,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 
 	// Skills and guidelines are read-only context mounts: agents must be able to
 	// read them, but they are global shared resources that must never become
-	// writable by default. Track them so providers that bound writes through
-	// generated config (OpenCode) keep them readable without granting writes.
+	// writable by default.
 	var readOnlyContextDirs []string
 
 	// Skills injection: grant agents filesystem access to reconciled skill files.
@@ -1298,23 +1295,16 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	// Read roots are everything a provider may read without per-call mediation:
 	// the feature state, the working directory, and every additional mounted dir
 	// (skills, guidelines, worktrees, knowledge base, images, attachments).
-	// Providers that bound reads through generated config (OpenCode) allow reads
-	// inside these and route reads outside them through Agentico.
 	readRoots := append([]string{pr.StateDir}, opts.AdditionalDirs...)
 	if opts.WorkDir != "" {
 		readRoots = append(readRoots, opts.WorkDir)
 	}
 
-	// OpenCode encodes edit boundaries in generated config rather than an
-	// OS-level sandbox. When writable roots default to the feature state plus all
-	// additional mounts, the read-only context mounts (skills, guidelines) must
-	// be subtracted so they stay readable without becoming writable. An explicit
-	// caller-supplied WritableRoots is the "explicitly allowed" path and is
-	// honored verbatim. Codex's OS-sandbox writable roots (ProtocolOpts) keep
-	// their established scope, so this only narrows the OpenCode edit set.
-	openCodeWritableRoots := writableRoots
+	// Command-level writable roots omit read-only context mounts unless the
+	// caller supplied an explicit writable-root list.
+	commandWritableRoots := writableRoots
 	if opts.WritableRoots == nil {
-		openCodeWritableRoots = subtractRoots(writableRoots, readOnlyContextDirs)
+		commandWritableRoots = subtractRoots(writableRoots, readOnlyContextDirs)
 	}
 
 	agentsJSON, err := AgentsJSONForNames(opts.AgentNames)
@@ -1340,7 +1330,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		EffortLevel:          opts.EffortLevel,
 		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
 		ResumeSessionID:      opts.ResumeSessionID,
-		WritableRoots:        openCodeWritableRoots,
+		WritableRoots:        commandWritableRoots,
 		ReadRoots:            readRoots,
 		WorkDir:              opts.WorkDir,
 	}
@@ -1380,7 +1370,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		Protocol:          protocol,
 		DebugSystemPrompt: opts.SystemPrompt,
 		TurnMode:          opts.TurnMode,
-		Watchdog:          watchdogConfigForProvider(prov.Name()),
+		Watchdog:          watchdogConfigForProvider(prov),
 	}
 	return cmd, env, sessOpts, nil
 }

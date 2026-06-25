@@ -188,7 +188,7 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 		}
 		// The prefix is not a registered provider, so this colon may instead be
 		// part of a bare catalog id whose model segment carries a colon-form tag
-		// (e.g. an OpenCode backend id like "ollama/llama3.1:8b"). Try resolving
+		// (e.g. a backend id like "ollama/llama3.1:8b"). Try resolving
 		// the whole string as a bare catalog id before rejecting it; only fall
 		// back to the unknown-provider error when no catalog matches.
 		if p, canonical, ok := r.resolveBareLocked(model); ok {
@@ -478,7 +478,7 @@ func betterRoleCandidate(a, b roleCandidate, role PhaseRole) bool {
 }
 
 // CatalogDefaultModels returns a ModelConfig with catalog-driven defaults per
-// phase role. Claude, Codex, and OpenCode compete as peers: each detected
+// phase role. All detected providers compete as peers: each detected
 // provider contributes its best model for the role (by role category, honoring
 // per-provider model hints), and the cross-provider winner is chosen by
 // betterRoleCandidate — category fit, then model metadata, then a deterministic

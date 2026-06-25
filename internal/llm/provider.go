@@ -81,13 +81,11 @@ type ReadinessChecker interface {
 // VersionEnforcer is implemented by providers whose installed CLI must meet
 // MinVersion() to be usable at startup. When EnforcesMinVersion reports true and
 // the installed CLI is older than MinVersion(), the provider is excluded from
-// the ready set just like a failed readiness probe — it is filtered out of
-// routing rather than left selectable with only a warning.
+// the ready set just like a failed readiness probe.
 //
 // Providers that do not implement this interface (or that return false) keep the
 // warn-only version policy: a below-minimum CLI logs a startup warning but the
-// provider stays selectable. OpenCode enforces because its ACP wire behavior is
-// only verified at or above its MinVersion.
+// provider stays selectable.
 type VersionEnforcer interface {
 	EnforcesMinVersion() bool
 }
@@ -205,26 +203,19 @@ type CommandBuildOpts struct {
 	PermissionPromptTool string
 	EffortLevel          EffortLevel // pipeline-driven effort level; each provider maps to its own naming
 	// WritableRoots lists the only locations a provider may edit/patch in normal
-	// operation, mirroring ProtocolOpts.WritableRoots. Providers that bound edits
-	// through generated config rather than a protocol-level sandbox (e.g. OpenCode,
-	// whose managed config encodes path-pattern edit permissions) read it here.
-	// Empty means the provider applies its default writable scope; providers that
-	// do not consume it leave their behavior unchanged.
+	// operation, mirroring ProtocolOpts.WritableRoots. Empty means the provider
+	// applies its default writable scope; providers that do not consume it leave
+	// their behavior unchanged.
 	WritableRoots []string
 	// ReadRoots lists the directories a provider may read without per-call
 	// mediation, mirroring the read mounts Agentico granted (feature state, work
 	// dir, and additional read roots such as skills, guidelines, worktrees,
-	// knowledge base, images, and attachments). Providers that bound reads
-	// through generated config (e.g. OpenCode) allow reads inside these roots and
-	// route reads outside them through Agentico in normal mode; in dangerous-skip
-	// mode reads stay noninteractive. Empty means the provider applies its default
-	// read scope; providers that do not consume it leave their behavior unchanged.
+	// knowledge base, images, and attachments). Empty means the provider applies
+	// its default read scope; providers that do not consume it leave their
+	// behavior unchanged.
 	ReadRoots []string
-	// WorkDir is the session's working directory (cwd). Providers that bound
-	// edits through generated config (OpenCode) need it because OpenCode evaluates
-	// the edit surface against the tool-supplied path relative to cwd, so a
-	// writable root outside cwd must also be expressed as a cwd-relative glob to
-	// match. Empty leaves a provider's path matching unchanged.
+	// WorkDir is the session's working directory (cwd). Empty leaves a provider's
+	// path matching unchanged.
 	WorkDir string
 	// PermissionMode pins the provider's session-level permission mode. Empty
 	// means inherit the user's default (e.g. ~/.claude/settings.json). Set this
@@ -248,11 +239,9 @@ type ProtocolOpts struct {
 	StateDir       string
 	MarkerPath     string
 	// ResumeSessionID, when non-empty, asks the protocol to resume a prior
-	// provider session identity rather than start a fresh one. Providers that
-	// resume at the protocol handshake (e.g. OpenCode's ACP session/load) read
-	// it here; providers that resume via a CLI flag (Claude's --resume) read the
-	// equivalent CommandBuildOpts.ResumeSessionID instead. Empty means a normal
-	// new session, so providers that do not resume leave their behavior unchanged.
+	// provider session identity rather than start a fresh one. Empty means a
+	// normal new session, so providers that do not resume leave their behavior
+	// unchanged.
 	ResumeSessionID string
 }
 

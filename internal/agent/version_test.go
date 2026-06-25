@@ -213,7 +213,7 @@ func TestBelowMinVersion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := &mockVersionProvider{name: "opencode", version: tt.version, versionErr: tt.versionErr, minVer: tt.minVer}
+			p := &mockVersionProvider{name: "provider", version: tt.version, versionErr: tt.versionErr, minVer: tt.minVer}
 			below, version, minVer := BelowMinVersion(p)
 			if below != tt.wantBelow {
 				t.Fatalf("BelowMinVersion below = %v, want %v", below, tt.wantBelow)

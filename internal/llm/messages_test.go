@@ -313,7 +313,7 @@ func TestClassifyTermination_Priorities(t *testing.T) {
 		}
 	})
 	// A reported error must beat a stale/present phase_complete marker: a failed
-	// invocation (e.g. an OpenCode fail-closed control event) cannot be laundered
+	// invocation (for example a fail-closed control event) cannot be laundered
 	// into a clean completion just because a marker is on disk.
 	t.Run("error beats phase_complete marker", func(t *testing.T) {
 		in := TerminationInputs{

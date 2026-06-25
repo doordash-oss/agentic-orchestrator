@@ -1530,7 +1530,7 @@ func TestRenderMetadataCompact_WorkDir_ParentDirForMultiRepo(t *testing.T) {
 
 func TestRenderMetadata_UsesShortModelNames(t *testing.T) {
 	t.Parallel()
-	const routedModel = "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	const routedModel = "gateway:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
 	f := &feature.Feature{
 		ID:     "feat-1",
 		Slug:   "test",
@@ -1551,7 +1551,7 @@ func TestRenderMetadata_UsesShortModelNames(t *testing.T) {
 		if strings.Contains(got, "portkey/@fireworks/accounts/fireworks/models") {
 			t.Fatalf("%s metadata rendered routed model ID, want compact model name:\n%s", name, got)
 		}
-		if !strings.Contains(got, "R:opencode:glm-5p2[1.04M]") {
+		if !strings.Contains(got, "R:gateway:glm-5p2[1.04M]") {
 			t.Fatalf("%s metadata missing compact model summary:\n%s", name, got)
 		}
 	}

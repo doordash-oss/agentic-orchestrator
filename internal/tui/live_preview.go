@@ -622,7 +622,8 @@ func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, wid
 		return nil
 	}
 
-	rows := livePreviewTranscriptRows(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), livePreviewShouldIncludeStreamingRows(sess))
+	msgs := sess.MessageLog().LastN(livePreviewTranscriptMessageLimit)
+	rows := livePreviewTranscriptRows(msgs, livePreviewShouldIncludeStreamingRows(sess, msgs))
 	if len(rows) == 0 {
 		return nil
 	}
@@ -655,16 +656,16 @@ func livePreviewTranscriptTail(f *feature.Feature, sess session.SessionView, wid
 	return lines
 }
 
-func livePreviewShouldIncludeStreamingRows(sess session.SessionView) bool {
-	if sess == nil {
+func livePreviewShouldIncludeStreamingRows(sess session.SessionView, msgs []llm.SDKMessage) bool {
+	if sess == nil || sess.ProviderName() == "" {
 		return false
 	}
-	switch strings.ToLower(sess.ProviderName()) {
-	case "codex", "opencode":
-		return true
-	default:
-		return false
+	for _, msg := range msgs {
+		if msg.Subtype == "partial" || msg.ToolProgress != nil {
+			return true
+		}
 	}
+	return false
 }
 
 func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool) []livePreviewTranscriptRow {

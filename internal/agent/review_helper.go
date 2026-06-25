@@ -133,6 +133,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	})
 	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
 	boundedHandler := &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
+	sandboxRequested := pr.boundedHelperSandboxForModel(cfg.Model)
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         cfg.Prompt,
@@ -167,14 +168,13 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		}
 	}
 
-	// For OpenCode helpers, run the process under a read-only-worktree sandbox and
-	// lift the shell allowlist: some models abort their turn on a permission denial,
-	// so their read-only analysis must not be denied, while worktree mutation is
-	// blocked at the kernel (a write there fails as an ordinary shell error absorbed).
+	// Some helper adapters need an OS sandbox so read-only analysis can run
+	// without tool-denial control flow while worktree mutation is blocked below
+	// the process.
 	var sandboxCleanup func()
 	if sessOpts != nil {
 		var sandboxed bool
-		command, sandboxed, sandboxCleanup = maybeWrapHelperSandbox(command, sessOpts.ProviderName, pr.StateDir)
+		command, sandboxed, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
 		boundedHandler.Sandboxed = sandboxed
 	}
 	if sandboxCleanup != nil {

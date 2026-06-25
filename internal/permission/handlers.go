@@ -232,8 +232,7 @@ type BoundedHelperArtifactHandler struct {
 	// sandbox that makes the reviewed worktree read-only at the kernel layer. When
 	// set, shell access is unrestricted (any worktree write fails as an ordinary
 	// non-zero shell result the model absorbs) instead of gated by the read-only
-	// command allowlist. Only the OpenCode provider sets this, paired with the
-	// sandbox wrapper; other providers leave it false and keep the allowlist.
+	// command allowlist.
 	Sandboxed bool
 }
 
@@ -296,8 +295,7 @@ func toolInputFilePath(input string) (string, bool) {
 // boundedHelperReadOnlyBashAllowed reports whether a bounded helper's bash
 // command is a conservative read-only inspection: no chaining/redirection/
 // substitution metacharacters, and every &&/||/| segment is a known read-only
-// program. Used for non-sandboxed helpers (e.g. Claude/Codex); OpenCode helpers
-// run under an OS sandbox and bypass this via Sandboxed.
+// program. Sandboxed helpers bypass this via Sandboxed.
 func boundedHelperReadOnlyBashAllowed(input string) bool {
 	command := strings.TrimSpace(extractBashCommand(input))
 	if command == "" {

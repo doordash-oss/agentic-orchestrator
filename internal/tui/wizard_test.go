@@ -4317,13 +4317,13 @@ func TestWizardPhaseDefaultsClamping(t *testing.T) {
 	}
 }
 
-// TestWizardClampKeepsPrefixedOpenCodeDefault proves the wizard's default
+// TestWizardClampKeepsPrefixedProviderDefault proves the wizard's default
 // clamp keeps a valid multi-provider default persisted in "<provider>:<id>"
 // routing form rather than discarding it for the first bare option. The
 // per-provider option lists carry bare backend ids while the default is
 // prefixed, exactly the Phase 6 multi-provider shape.
-func TestWizardClampKeepsPrefixedOpenCodeDefault(t *testing.T) {
-	const prefixed = "opencode:anthropic/claude-sonnet-4-5[200K]"
+func TestWizardClampKeepsPrefixedProviderDefault(t *testing.T) {
+	const prefixed = "gateway:vendor/sonnet[200K]"
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
 			Research:       prefixed,
@@ -4334,15 +4334,15 @@ func TestWizardClampKeepsPrefixedOpenCodeDefault(t *testing.T) {
 		},
 	}
 	providerModels := map[string][]string{
-		"claude":   {"sonnet[200K]", "opus[200K]"},
-		"opencode": {"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5"},
+		"claude":  {"sonnet[200K]", "opus[200K]"},
+		"gateway": {"vendor/sonnet[200K]", "vendor/gpt-5"},
 	}
-	providerOrder := []string{"claude", "opencode"}
+	providerOrder := []string{"claude", "gateway"}
 	phaseModels := map[string]map[string][]string{}
 	for _, f := range []string{"Research", "Planning", "Implementation", "Review", "KB Build"} {
 		phaseModels[f] = map[string][]string{
-			"claude":   {"sonnet[200K]", "opus[200K]"},
-			"opencode": {"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5"},
+			"claude":  {"sonnet[200K]", "opus[200K]"},
+			"gateway": {"vendor/sonnet[200K]", "vendor/gpt-5"},
 		}
 	}
 

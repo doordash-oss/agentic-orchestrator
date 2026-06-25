@@ -43,8 +43,6 @@ import (
 //     filepicker_test.go, markdown_editor_test.go, skillpicker_test.go,
 //     workspace_manager_test.go: scan or mutate test-scoped filesystem trees
 //     and should stay serial until the filesystem fixtures are narrowed.
-//   - opencode_attach_render_test.go: renders attach-view permission/question
-//     controls and optionally writes screenshot artifacts to a filesystem dir.
 //   - icons_test.go and notify_test.go: mutate terminal-related environment
 //     with t.Setenv.
 //   - clipboard_test.go: probes host clipboard integration.
@@ -91,7 +89,6 @@ var tuiParallelIneligibleTestFiles = []string{
 	"need_user_input_test.go",
 	"notify_test.go",
 	"observe_test.go",
-	"opencode_attach_render_test.go",
 	"orchestrator_bridge_test.go",
 	"publish_test.go",
 	"qa_persistence_gate_test.go",

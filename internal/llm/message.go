@@ -387,7 +387,7 @@ type TerminationInputs struct {
 // ClassifyTermination returns the TerminationClass for a completed invocation
 // based on the observable signals. The ordering matters: a reported error is
 // terminal and beats everything else — including a phase_complete marker that
-// happens to be on disk — so a failed invocation (e.g. an OpenCode fail-closed
+// happens to be on disk — so a failed invocation (for example a fail-closed
 // control event) can never be laundered into a clean completion. After errors,
 // the completion marker wins, then formal questions; truncation is inferred
 // from stop_reason only after the earlier cases are ruled out.

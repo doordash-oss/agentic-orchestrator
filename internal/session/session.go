@@ -867,10 +867,8 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		s.mu.Unlock()
 
 		// Parse the line via the provider protocol. A single line can yield
-		// more than one SDK message — e.g. an OpenCode agent_message_chunk that
-		// carries both content.text and a token snapshot becomes an assistant
-		// partial plus a usage update — so every parsed message is dispatched,
-		// not just the first. Dropping the rest silently loses usage/context.
+		// more than one SDK message, so every parsed message is dispatched, not
+		// just the first. Dropping the rest silently loses usage/context.
 		var parsed []llm.SDKMessage
 		if s.protocol != nil {
 			msgs, _ := s.protocol.ParseLine(line)
@@ -999,11 +997,11 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					} else if msg.UsageUpdate.ContextBaseline == 0 && (msg.UsageUpdate.InputTokens > 0 ||
 						msg.UsageUpdate.CacheReadInputTokens > 0 ||
 						msg.UsageUpdate.CacheCreationInputTokens > 0) {
-						// OpenCode sometimes reports usage_update.used=0 for a
-						// completed turn while the prompt result still carries
-						// token usage. Keep the provider-reported window, but
-						// fall back to result tokens for the fill numerator so
-						// the context meter does not stay pinned at 0%.
+						// Some providers report usage_update.used=0 for a completed
+						// turn while the prompt result still carries token usage. Keep
+						// the provider-reported window, but fall back to result tokens
+						// for the fill numerator so the context meter does not stay
+						// pinned at 0%.
 						s.latestUsage.InputTokens = msg.UsageUpdate.InputTokens
 						s.latestUsage.CacheReadInputTokens = msg.UsageUpdate.CacheReadInputTokens
 						s.latestUsage.CacheCreationInputTokens = msg.UsageUpdate.CacheCreationInputTokens

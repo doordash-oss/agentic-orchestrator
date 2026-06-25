@@ -92,66 +92,6 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 	}
 }
 
-// TestRunReadOnlyReviewHelper_OpenCodeCompletesUnderSandbox exercises the
-// OpenCode path: on macOS the helper command is wrapped with sandbox-exec
-// (read-only worktree), so this verifies the wrap doesn't break the run — the
-// reviewer still writes its feedback + phase_complete (outside any worktree) and
-// completes without a protocol violation. On non-macOS the wrap is skipped and
-// the run is identical.
-func TestRunReadOnlyReviewHelper_OpenCodeCompletesUnderSandbox(t *testing.T) {
-	root := t.TempDir()
-	helperDir := filepath.Join(root, "review")
-	if err := os.MkdirAll(helperDir, 0o755); err != nil {
-		t.Fatalf("mkdir helper dir: %v", err)
-	}
-	workDir := filepath.Join(root, "work")
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		t.Fatalf("mkdir work dir: %v", err)
-	}
-
-	script := testutil.WriteScript(t, root, "reviewer.sh", testutil.WriteReviewApprovedInDir(helperDir)+`
-touch "`+filepath.Join(helperDir, "phase_complete")+`"
-`+testutil.JSONLInit+`
-`+testutil.JSONLSuccess)
-
-	pr := &PhaseRunner{
-		StateDir:       root,
-		SessionManager: session.NewManager(make(chan interface{}, 10)),
-		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			return []string{"bash", script}, nil, &ports.SessionOpts{
-				PermHandler:       opts.PermHandler,
-				DebugSystemPrompt: opts.SystemPrompt,
-				ProviderName:      "opencode",
-			}, nil
-		},
-	}
-	t.Cleanup(func() { pr.SessionManager.Shutdown() })
-
-	result, err := pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
-		SessionID:              "review-helper-opencode",
-		FeatureID:              "feature-1",
-		Phase:                  feature.PhaseReview,
-		Model:                  "opencode:test-model",
-		Prompt:                 "review the diff",
-		PromptPath:             filepath.Join(helperDir, "review-prompt.md"),
-		ResponsePath:           filepath.Join(helperDir, "review-output.txt"),
-		FeedbackPath:           filepath.Join(helperDir, "review-feedback.md"),
-		HelperIterDir:          helperDir,
-		Role:                   RoleIterationReviewer,
-		WorkDir:                workDir,
-		LogPath:                filepath.Join(helperDir, "review-output.txt"),
-		SystemPromptPrefix:     "review",
-		CompletionAskingClause: "Ask at most one blocking question.",
-		EffortLevel:            llm.EffortMedium,
-	})
-	if err != nil {
-		t.Fatalf("RunReadOnlyReviewHelper() error = %v", err)
-	}
-	if result == nil || result.Status == ReviewChangesRequested {
-		t.Fatalf("helper did not complete cleanly: result=%+v (a protocol violation would force ChangesRequested)", result)
-	}
-}
-
 func TestRunReadOnlyReviewHelper_NarrowsWritableRootsToDeclaredArtifacts(t *testing.T) {
 	root := t.TempDir()
 	helperDir := filepath.Join(root, "attempt-01", "validate-scope")

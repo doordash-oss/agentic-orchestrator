@@ -23,14 +23,14 @@ import (
 
 func TestWrapWithBwrap_RebindsWorktreesReadOnly(t *testing.T) {
 	wt := "/home/x/.agentic-workflow/worktrees"
-	got := wrapWithBwrap([]string{"opencode", "acp"}, wt)
+	got := wrapWithBwrap([]string{"helper", "run"}, wt)
 	want := []string{
 		"bwrap",
 		"--dev-bind", "/", "/",
 		"--ro-bind", wt, wt,
 		"--die-with-parent",
 		"--",
-		"opencode", "acp",
+		"helper", "run",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("wrapWithBwrap argv =\n%v\nwant\n%v", got, want)

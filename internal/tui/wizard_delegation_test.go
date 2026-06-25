@@ -177,10 +177,10 @@ func TestWizardReviewDelegation_ModelsSubRowCycle(t *testing.T) {
 
 func TestWizardReviewDelegation_ModelSelectionPanelsUseVerticalSelection(t *testing.T) {
 	providerModels := map[string][]string{
-		"claude":   {"opus", "sonnet"},
-		"opencode": {"glm-5p2", "gemma4"},
+		"claude":  {"opus", "sonnet"},
+		"gateway": {"glm-5p2", "gemma4"},
 	}
-	m := newWizardAtReviewForDelegation(t, providerModels, []string{"claude", "opencode"}, nil)
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"claude", "gateway"}, nil)
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
@@ -222,13 +222,13 @@ func TestWizardReviewDelegation_ModelSelectionPanelsUseVerticalSelection(t *test
 func TestWizardReviewDelegation_ModelSelectionViewFitsReviewWidth(t *testing.T) {
 	const terminalWidth = 160
 	providerModels := map[string][]string{
-		"opencode": {
+		"gateway": {
 			"ollama/gemma4:26b-256k[262K]",
 			"ollama/gemma4:31b-256k[262K]",
 			"portkey/@fireworks/accounts/fireworks/models/glm-5p2[1M]",
 		},
 	}
-	m := newWizardAtReviewForDelegation(t, providerModels, []string{"opencode"}, nil)
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"gateway"}, nil)
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.width = terminalWidth
@@ -244,12 +244,12 @@ func TestWizardReviewDelegation_ModelSelectionViewFitsReviewWidth(t *testing.T) 
 
 func TestWizardReviewDelegation_ModelSelectionViewUsesShortModelNames(t *testing.T) {
 	providerModels := map[string][]string{
-		"opencode": {
+		"gateway": {
 			"ollama/gemma4:26b-256k[262K]",
 			"portkey/@fireworks/accounts/fireworks/models/glm-5p2[1M]",
 		},
 	}
-	m := newWizardAtReviewForDelegation(t, providerModels, []string{"opencode"}, nil)
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"gateway"}, nil)
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m.width = 160
@@ -265,7 +265,7 @@ func TestWizardReviewDelegation_ModelSelectionViewUsesShortModelNames(t *testing
 }
 
 func TestWizardReviewDelegation_ModelSummaryUsesShortModelNames(t *testing.T) {
-	const routedModel = "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	const routedModel = "gateway:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
 	m := newWizardAtReviewForDelegation(t, nil, nil, nil)
 	m.models = config.ModelConfig{
 		Research:       routedModel,
@@ -283,7 +283,7 @@ func TestWizardReviewDelegation_ModelSummaryUsesShortModelNames(t *testing.T) {
 	if strings.Contains(view, "portkey/@fireworks/accounts/fireworks/models") {
 		t.Fatalf("review summary rendered routed model ID, want compact model name:\n%s", view)
 	}
-	if !strings.Contains(view, "R:opencode:glm-5p2[1.04M]") {
+	if !strings.Contains(view, "R:gateway:glm-5p2[1.04M]") {
 		t.Fatalf("review summary missing compact model summary:\n%s", view)
 	}
 }
@@ -569,9 +569,9 @@ func TestWizardReviewDelegation_ModelsEditorRendersAssignmentsAndChoices(t *test
 func TestWizardReviewDelegation_ModelFilterEnterDoesNotCloseEditing(t *testing.T) {
 	const filteredPlanning = "portkey/@fireworks/accounts/fireworks/models/glm-5p2"
 	m := newWizardAtReviewForDelegation(t,
-		map[string][]string{"opencode": {"anthropic/claude-sonnet-4-5[200K]", filteredPlanning}},
-		[]string{"opencode"},
-		map[string]map[string][]string{"Planning": {"opencode": {"anthropic/claude-sonnet-4-5[200K]", filteredPlanning}}},
+		map[string][]string{"gateway": {"vendor/sonnet[200K]", filteredPlanning}},
+		[]string{"gateway"},
+		map[string]map[string][]string{"Planning": {"gateway": {"vendor/sonnet[200K]", filteredPlanning}}},
 	)
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})

@@ -404,20 +404,20 @@ func TestRegistry_ResolveModel_ColonEdgeCases(t *testing.T) {
 
 // TestRegistry_ResolveModel_ColonInModelSegment is a regression for a catalog
 // entry (or alias) whose backend id carries a colon-form tag in its model
-// segment, e.g. an OpenCode/Ollama backend id like "ollama/llama3.1:8b". The
+// segment, e.g. an Ollama backend id like "ollama/llama3.1:8b". The
 // first colon in such a bare id is part of the model name, not an explicit
 // "provider:model" routing prefix, so it must resolve through normal catalog
 // matching rather than being parsed as provider "ollama/llama3.1" and rejected
-// as unknown. Explicit "opencode:" routing for the same colon-tagged id must
+// as unknown. Explicit provider routing for the same colon-tagged id must
 // keep working, and a genuinely unknown colon-bearing prefix must still be
 // rejected with the "unknown provider" error.
 func TestRegistry_ResolveModel_ColonInModelSegment(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubCatalogProvider{
-		stubProvider: stubProvider{name: "opencode", models: []string{"ollama/llama3.1:8b", "anthropic/claude-sonnet-4-5"}, hasCLI: true},
+		stubProvider: stubProvider{name: "gateway", models: []string{"ollama/llama3.1:8b", "vendor/sonnet"}, hasCLI: true},
 		catalog: []llm.ModelInfo{
 			{ID: "ollama/llama3.1:8b", Aliases: []string{"ollama/llama3.1:latest"}},
-			{ID: "anthropic/claude-sonnet-4-5"},
+			{ID: "vendor/sonnet"},
 		},
 	})
 
@@ -429,9 +429,9 @@ func TestRegistry_ResolveModel_ColonInModelSegment(t *testing.T) {
 		wantErr       bool
 		errContains   string
 	}{
-		{"bare colon-tagged id resolves via catalog", "ollama/llama3.1:8b", "opencode", "ollama/llama3.1:8b", false, ""},
-		{"bare colon-tagged alias canonicalizes via catalog", "ollama/llama3.1:latest", "opencode", "ollama/llama3.1:8b", false, ""},
-		{"explicit opencode routing preserves colon tag", "opencode:ollama/llama3.1:8b", "opencode", "ollama/llama3.1:8b", false, ""},
+		{"bare colon-tagged id resolves via catalog", "ollama/llama3.1:8b", "gateway", "ollama/llama3.1:8b", false, ""},
+		{"bare colon-tagged alias canonicalizes via catalog", "ollama/llama3.1:latest", "gateway", "ollama/llama3.1:8b", false, ""},
+		{"explicit provider routing preserves colon tag", "gateway:ollama/llama3.1:8b", "gateway", "ollama/llama3.1:8b", false, ""},
 		{"unknown colon-bearing prefix still rejected", "ollama/llama3.1:70b", "", "", true, "unknown provider"},
 	}
 
@@ -1072,12 +1072,13 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 	})
 }
 
-// TestRegistry_OpenCodeProviderGroup proves OpenCode is surfaced as a normal
-// provider-backed catalog source once ready: its discovered backend ids appear
-// under the "opencode" provider group in AllModels, ModelsForProvider, and the
-// phase-eligible lists alongside Claude and Codex, filtered by the same category
-// rules; uncategorized entries are excluded; and provider order is preserved.
-func TestRegistry_OpenCodeProviderGroup(t *testing.T) {
+// TestRegistry_ProviderGroup proves an additional provider is surfaced as a
+// normal provider-backed catalog source once ready: its discovered backend ids
+// appear under its provider group in AllModels, ModelsForProvider, and the
+// phase-eligible lists alongside Claude and Codex, filtered by the same
+// category rules; uncategorized entries are excluded; and provider order is
+// preserved.
+func TestRegistry_ProviderGroup(t *testing.T) {
 	r := llm.NewRegistry()
 	claude := &stubCatalogProvider{
 		stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet"}, hasCLI: true},
@@ -1092,99 +1093,99 @@ func TestRegistry_OpenCodeProviderGroup(t *testing.T) {
 			{ID: "gpt-5.4", Category: "balanced"},
 		},
 	}
-	opencode := &stubCatalogProvider{
-		stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5", "openai/gpt-5-nano[400K]", "vendor/unknown"}, hasCLI: true},
+	gateway := &stubCatalogProvider{
+		stubProvider: stubProvider{name: "gateway", models: []string{"vendor/sonnet[200K]", "vendor/gpt-5", "vendor/gpt-5-nano[400K]", "vendor/unknown"}, hasCLI: true},
 		catalog: []llm.ModelInfo{
-			{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000, Category: "balanced"},
-			{ID: "openai/gpt-5", Category: "capable"},
-			{ID: "openai/gpt-5-nano[400K]", ContextWindow: 400_000, Category: "cheap"},
+			{ID: "vendor/sonnet[200K]", Aliases: []string{"vendor/sonnet"}, ContextWindow: 200_000, Category: "balanced"},
+			{ID: "vendor/gpt-5", Category: "capable"},
+			{ID: "vendor/gpt-5-nano[400K]", ContextWindow: 400_000, Category: "cheap"},
 			{ID: "vendor/unknown", Category: ""}, // uncategorized: excluded from eligible lists
 		},
 	}
 	r.Register(claude)
 	r.Register(codex)
-	r.Register(opencode)
+	r.Register(gateway)
 
-	t.Run("ModelsForProvider returns OpenCode catalog when ready", func(t *testing.T) {
-		got := r.ModelsForProvider("opencode")
+	t.Run("ModelsForProvider returns provider catalog when ready", func(t *testing.T) {
+		got := r.ModelsForProvider("gateway")
 		if len(got) != 4 {
-			t.Fatalf("ModelsForProvider(opencode) = %+v, want 4 entries", got)
+			t.Fatalf("ModelsForProvider(gateway) = %+v, want 4 entries", got)
 		}
-		if got[0].ID != "anthropic/claude-sonnet-4-5[200K]" {
-			t.Errorf("first OpenCode model = %q, want suffixed sonnet id", got[0].ID)
+		if got[0].ID != "vendor/sonnet[200K]" {
+			t.Errorf("first gateway model = %q, want suffixed sonnet id", got[0].ID)
 		}
 	})
 
-	t.Run("AllModels includes OpenCode in registration order", func(t *testing.T) {
+	t.Run("AllModels includes provider in registration order", func(t *testing.T) {
 		all := r.AllModels()
 		var ids []string
 		for _, m := range all {
 			ids = append(ids, m.ID)
 		}
-		// claude + codex precede opencode (registration order preserved).
-		if !slices.Contains(ids, "openai/gpt-5") || !slices.Contains(ids, "anthropic/claude-sonnet-4-5[200K]") {
-			t.Fatalf("AllModels missing OpenCode entries: %v", ids)
+		// claude + codex precede gateway (registration order preserved).
+		if !slices.Contains(ids, "vendor/gpt-5") || !slices.Contains(ids, "vendor/sonnet[200K]") {
+			t.Fatalf("AllModels missing gateway entries: %v", ids)
 		}
 		idxCodex := slices.Index(ids, "gpt-5.4")
-		idxOpenCode := slices.Index(ids, "openai/gpt-5")
-		if idxCodex < 0 || idxOpenCode < 0 || idxOpenCode < idxCodex {
+		idxGateway := slices.Index(ids, "vendor/gpt-5")
+		if idxCodex < 0 || idxGateway < 0 || idxGateway < idxCodex {
 			t.Errorf("provider order regressed: ids = %v", ids)
 		}
 	})
 
-	t.Run("phase-eligible list includes OpenCode by category, excludes uncategorized", func(t *testing.T) {
+	t.Run("phase-eligible list includes provider by category, excludes uncategorized", func(t *testing.T) {
 		research := r.EligibleModelsForPhase(llm.PhaseResearch) // capable + balanced
-		oc := research["opencode"]
-		if !slices.Contains(oc, "openai/gpt-5") || !slices.Contains(oc, "anthropic/claude-sonnet-4-5[200K]") {
-			t.Errorf("opencode research eligible = %v, want capable + balanced entries", oc)
+		got := research["gateway"]
+		if !slices.Contains(got, "vendor/gpt-5") || !slices.Contains(got, "vendor/sonnet[200K]") {
+			t.Errorf("gateway research eligible = %v, want capable + balanced entries", got)
 		}
-		if slices.Contains(oc, "vendor/unknown") {
-			t.Error("uncategorized OpenCode model leaked into eligible list")
+		if slices.Contains(got, "vendor/unknown") {
+			t.Error("uncategorized gateway model leaked into eligible list")
 		}
-		if slices.Contains(oc, "openai/gpt-5-nano[400K]") {
-			t.Error("cheap OpenCode model should be excluded from research eligible list")
+		if slices.Contains(got, "vendor/gpt-5-nano[400K]") {
+			t.Error("cheap gateway model should be excluded from research eligible list")
 		}
 
 		chat := r.EligibleModelsForPhase(llm.PhaseChat) // balanced + cheap
-		ocChat := chat["opencode"]
-		if !slices.Contains(ocChat, "openai/gpt-5-nano[400K]") || !slices.Contains(ocChat, "anthropic/claude-sonnet-4-5[200K]") {
-			t.Errorf("opencode chat eligible = %v, want balanced + cheap entries", ocChat)
+		chatGot := chat["gateway"]
+		if !slices.Contains(chatGot, "vendor/gpt-5-nano[400K]") || !slices.Contains(chatGot, "vendor/sonnet[200K]") {
+			t.Errorf("gateway chat eligible = %v, want balanced + cheap entries", chatGot)
 		}
-		if slices.Contains(ocChat, "openai/gpt-5") {
-			t.Error("capable OpenCode model should be excluded from chat eligible list")
+		if slices.Contains(chatGot, "vendor/gpt-5") {
+			t.Error("capable gateway model should be excluded from chat eligible list")
 		}
 	})
 
-	t.Run("OpenCode contributes nothing when its CLI is not detected", func(t *testing.T) {
-		opencode.hasCLI = false
-		defer func() { opencode.hasCLI = true }()
-		if got := r.ModelsForProvider("opencode"); got != nil {
-			t.Errorf("ModelsForProvider(opencode) = %v, want nil when undetected", got)
+	t.Run("provider contributes nothing when its CLI is not detected", func(t *testing.T) {
+		gateway.hasCLI = false
+		defer func() { gateway.hasCLI = true }()
+		if got := r.ModelsForProvider("gateway"); got != nil {
+			t.Errorf("ModelsForProvider(gateway) = %v, want nil when undetected", got)
 		}
-		if got := r.EligibleModelsForPhase(llm.PhaseResearch)["opencode"]; got != nil {
-			t.Errorf("eligible opencode = %v, want absent when undetected", got)
+		if got := r.EligibleModelsForPhase(llm.PhaseResearch)["gateway"]; got != nil {
+			t.Errorf("eligible gateway = %v, want absent when undetected", got)
 		}
 	})
 }
 
 // TestRegistry_CatalogDefaults_ProviderNeutralRanking proves Phase 6's
-// provider-neutral default selection: Claude, Codex, and OpenCode compete as
-// peers under the same role-category and model-metadata rules. OpenCode can win
+// provider-neutral default selection: all providers compete as
+// peers under the same role-category and model-metadata rules. Any provider can win
 // any role when its catalog entry outranks the others, equal-ranked candidates
 // resolve by a stable provider+model-ID order (never registration order or a
 // hardcoded provider preference), and the persisted form follows the
-// single-vs-multi provider rule (bare backend id vs. opencode: routing prefix).
+// single-vs-multi provider rule (bare backend id vs. provider routing prefix).
 func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
-	newOpenCode := func(hasCLI bool) *stubCatalogProvider {
+	newGateway := func(hasCLI bool) *stubCatalogProvider {
 		return &stubCatalogProvider{
-			stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/big[400K]"}, hasCLI: hasCLI},
+			stubProvider: stubProvider{name: "gateway", models: []string{"vendor/big[400K]"}, hasCLI: hasCLI},
 			catalog: []llm.ModelInfo{
-				{ID: "anthropic/big[400K]", Aliases: []string{"anthropic/big"}, ContextWindow: 400_000, Category: "balanced"},
+				{ID: "vendor/big[400K]", Aliases: []string{"vendor/big"}, ContextWindow: 400_000, Category: "balanced"},
 			},
 		}
 	}
 
-	t.Run("opencode wins every role when its balanced model has the largest context window", func(t *testing.T) {
+	t.Run("provider wins every role when its balanced model has the largest context window", func(t *testing.T) {
 		r := llm.NewRegistry()
 		r.Register(&stubCatalogProvider{
 			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
@@ -1194,7 +1195,7 @@ func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
 			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
 			catalog:      []llm.ModelInfo{{ID: "gpt-5.4", ContextWindow: 272_000, Category: "balanced"}},
 		})
-		r.Register(newOpenCode(true))
+		r.Register(newGateway(true))
 
 		mc := r.CatalogDefaultModels()
 		roles := map[string]string{
@@ -1202,18 +1203,18 @@ func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
 			"review": mc.Review, "chat": mc.Utilities, "kb_build": mc.KBBuild,
 		}
 		for role, got := range roles {
-			if got != "opencode:anthropic/big[400K]" {
-				t.Errorf("%s: got %q, want opencode:anthropic/big[400K] (largest balanced context window wins)", role, got)
+			if got != "gateway:vendor/big[400K]" {
+				t.Errorf("%s: got %q, want gateway:vendor/big[400K] (largest balanced context window wins)", role, got)
 			}
 		}
 	})
 
 	t.Run("equal-ranked candidates resolve by provider+model-ID, not registration order", func(t *testing.T) {
-		// Register opencode FIRST to prove registration order does not break ties.
+		// Register gateway FIRST to prove registration order does not break ties.
 		r := llm.NewRegistry()
 		r.Register(&stubCatalogProvider{
-			stubProvider: stubProvider{name: "opencode", models: []string{"anthropic/claude-sonnet-4-5[200K]"}, hasCLI: true},
-			catalog:      []llm.ModelInfo{{ID: "anthropic/claude-sonnet-4-5[200K]", ContextWindow: 200_000, Category: "balanced"}},
+			stubProvider: stubProvider{name: "gateway", models: []string{"vendor/sonnet[200K]"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "vendor/sonnet[200K]", ContextWindow: 200_000, Category: "balanced"}},
 		})
 		r.Register(&stubCatalogProvider{
 			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
@@ -1225,7 +1226,7 @@ func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
 		})
 
 		mc := r.CatalogDefaultModels()
-		// All three are balanced @ 200K; "claude" < "codex" < "opencode" so claude
+		// All three are balanced @ 200K; "claude" < "codex" < "gateway" so claude
 		// wins deterministically regardless of registration order.
 		if mc.Planning != "claude:sonnet" {
 			t.Errorf("planning tie-break: got %q, want claude:sonnet", mc.Planning)
@@ -1237,11 +1238,11 @@ func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
 		}
 	})
 
-	t.Run("single-provider OpenCode persists bare backend id; multi-provider adds opencode prefix", func(t *testing.T) {
+	t.Run("single provider persists bare backend id; multi-provider adds routing prefix", func(t *testing.T) {
 		solo := llm.NewRegistry()
-		solo.Register(newOpenCode(true))
-		if got := solo.CatalogDefaultModels().Implementation; got != "anthropic/big[400K]" {
-			t.Errorf("single-provider opencode: got %q, want bare anthropic/big[400K]", got)
+		solo.Register(newGateway(true))
+		if got := solo.CatalogDefaultModels().Implementation; got != "vendor/big[400K]" {
+			t.Errorf("single-provider gateway: got %q, want bare vendor/big[400K]", got)
 		}
 
 		multi := llm.NewRegistry()
@@ -1249,9 +1250,9 @@ func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
 			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
 			catalog:      []llm.ModelInfo{{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"}},
 		})
-		multi.Register(newOpenCode(true))
-		if got := multi.CatalogDefaultModels().Implementation; got != "opencode:anthropic/big[400K]" {
-			t.Errorf("multi-provider opencode: got %q, want opencode:anthropic/big[400K]", got)
+		multi.Register(newGateway(true))
+		if got := multi.CatalogDefaultModels().Implementation; got != "gateway:vendor/big[400K]" {
+			t.Errorf("multi-provider gateway: got %q, want gateway:vendor/big[400K]", got)
 		}
 	})
 }

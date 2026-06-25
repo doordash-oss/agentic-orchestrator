@@ -347,7 +347,7 @@ func TestRunKnowledgeBaseForRepo_SessionID(t *testing.T) {
 
 // TestRunKnowledgeBaseForRepo_MountsKBDirWritable guards the regression where the
 // KB output dir (a sibling of StateDir under knowledge-base/<repo>) was not mounted
-// on the session, so OpenCode's generated edit permission denied every KB write and
+// on the session, so managed provider edit permissions denied every KB write and
 // the phase could never produce its index.md. The KB dir must be an AdditionalDir,
 // which makes it both readable and (via the default writable-root derivation) writable.
 func TestRunKnowledgeBaseForRepo_MountsKBDirWritable(t *testing.T) {

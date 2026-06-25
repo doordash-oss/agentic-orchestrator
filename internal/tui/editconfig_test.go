@@ -408,9 +408,9 @@ func TestEditConfig_StaleModel_RendersUnavailable(t *testing.T) {
 }
 
 func TestEditConfig_ModelFilterEscLeavesEditorOpen(t *testing.T) {
-	reg := openCodeWinningRegistry()
+	reg := gatewayWinningRegistry()
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
-	f := &feature.Feature{ID: "feat", Name: "Feature", Models: config.ModelConfig{Research: "opencode:anthropic/claude-sonnet-4-5[200K]"}}
+	f := &feature.Feature{ID: "feat", Name: "Feature", Models: config.ModelConfig{Research: "gateway:vendor/sonnet[200K]"}}
 	m := NewEditConfigModel(f, cat, true)
 	m.editor.activeModelCell = modelCellModel
 
@@ -427,12 +427,12 @@ func TestEditConfig_ModelFilterEscLeavesEditorOpen(t *testing.T) {
 
 func TestAppModel_EditConfigModelFilterEnterLeavesOverlayOpen(t *testing.T) {
 	app, _ := newTestAppModel(t)
-	reg := openCodeWinningRegistry()
+	reg := gatewayWinningRegistry()
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
 	f := &feature.Feature{
 		ID:     "feat",
 		Name:   "Feature",
-		Models: config.ModelConfig{Research: "opencode:anthropic/claude-sonnet-4-5[200K]"},
+		Models: config.ModelConfig{Research: "gateway:vendor/sonnet[200K]"},
 	}
 	app.editConfig = NewEditConfigModel(f, cat, true)
 	app.editConfigActive = true
@@ -471,8 +471,8 @@ func TestAppModel_EditConfigModelFilterEnterLeavesOverlayOpen(t *testing.T) {
 	if got.editConfig.editor.ModelFilteringActive() {
 		t.Fatal("filter still active after enter")
 	}
-	if got.editConfig.editor.models.Research != "opencode:openai/gpt-5" {
-		t.Fatalf("Research model = %q, want opencode:openai/gpt-5", got.editConfig.editor.models.Research)
+	if got.editConfig.editor.models.Research != "gateway:vendor/gpt-5" {
+		t.Fatalf("Research model = %q, want gateway:vendor/gpt-5", got.editConfig.editor.models.Research)
 	}
 }
 
@@ -608,20 +608,20 @@ func TestEditConfig_ModelTabPhaseAndPickerKeyboard(t *testing.T) {
 func TestEditConfig_ModelWorkspaceRendersRightSidePickerWithoutIDAndWithCompactContext(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&phaseCatalogStubProvider{
-		name:   "opencode",
-		models: []string{"anthropic/claude-sonnet-4-5[200K]", "openai/gpt-5.4[1M]"},
+		name:   "gateway",
+		models: []string{"vendor/sonnet[200K]", "vendor/gpt-5.4[1M]"},
 		catalog: []llm.ModelInfo{
-			{ID: "anthropic/claude-sonnet-4-5[200K]", DisplayName: "Claude Sonnet 4.5", ContextWindow: 200_000, Category: "balanced"},
-			{ID: "openai/gpt-5.4[1M]", DisplayName: "GPT-5.4", ContextWindow: 1_000_000, Category: "capable"},
+			{ID: "vendor/sonnet[200K]", DisplayName: "Vendor Sonnet", ContextWindow: 200_000, Category: "balanced"},
+			{ID: "vendor/gpt-5.4[1M]", DisplayName: "Vendor GPT-5.4", ContextWindow: 1_000_000, Category: "capable"},
 		},
 	})
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
-	f := &feature.Feature{ID: "feat", Name: "Feature", Models: config.ModelConfig{Research: "anthropic/claude-sonnet-4-5[200K]"}}
+	f := &feature.Feature{ID: "feat", Name: "Feature", Models: config.ModelConfig{Research: "vendor/sonnet[200K]"}}
 	m := NewEditConfigModel(f, cat, true)
 	m.focus = configFocusPhaseList
 
 	view := m.View()
-	for _, want := range []string{"Agents", "Models for opencode", "Research (opencode/", "200K"} {
+	for _, want := range []string{"Agents", "Models for gateway", "Research (gateway/", "200K"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -639,7 +639,7 @@ func TestEditConfig_ModelWorkspaceRendersRightSidePickerWithoutIDAndWithCompactC
 func TestEditConfig_ModelWorkspaceAlwaysShowsThreePanelsAndOneFocusCursor(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&phaseCatalogStubProvider{
-		name:   "opencode",
+		name:   "gateway",
 		models: []string{"ollama/gemma4:26b-256k[262K]", "ollama/gemma4:31b-256k[262K]"},
 		catalog: []llm.ModelInfo{
 			{ID: "ollama/gemma4:26b-256k[262K]", DisplayName: "Gemma 4 26B 256k (Local) (262K)", ContextWindow: 262_144, Category: "balanced"},
@@ -666,7 +666,7 @@ func TestEditConfig_ModelWorkspaceAlwaysShowsThreePanelsAndOneFocusCursor(t *tes
 			m := NewEditConfigModel(f, cat, true)
 			m.focus = tc.focus
 			view := m.View()
-			for _, want := range []string{"Phases", "Agents", "Models for opencode"} {
+			for _, want := range []string{"Phases", "Agents", "Models for gateway"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("focus %v view missing stable panel %q:\n%s", tc.focus, want, view)
 				}

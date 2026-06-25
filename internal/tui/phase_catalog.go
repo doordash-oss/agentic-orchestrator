@@ -308,8 +308,8 @@ func (c PhaseModelCatalog) AllModels() []string {
 // default (CatalogDefaultModels) or a persisted selection may carry the routing
 // prefix when multiple providers are detected. Matching both the bare id and
 // the "<provider>:<opt>" form lets the picker mark the recommended default and
-// the current selection regardless of which form the value takes — including
-// OpenCode slash-form ids such as "opencode:anthropic/claude-sonnet-4-5[200K]".
+// the current selection regardless of which form the value takes, including
+// slash-form backend ids such as "gateway:vendor/model[200K]".
 func (c PhaseModelCatalog) MatchesModelValue(provider, opt, value string) bool {
 	if value == "" || opt == "" {
 		return false
@@ -334,7 +334,7 @@ func (c PhaseModelCatalog) FlatOptionsForField(field string) (opts []string, pro
 
 // ClampModelValue keeps value when it is still an eligible option for field —
 // matching either a bare backend id or its "<provider>:<id>" routing form, so a
-// multi-provider default persisted as "opencode:anthropic/claude-sonnet-4-5[200K]"
+// multi-provider default persisted as "gateway:vendor/model[200K]"
 // is preserved rather than silently replaced. When value is not eligible it
 // returns the first eligible option; an empty option set leaves value unchanged.
 func (c PhaseModelCatalog) ClampModelValue(field, value string) string {

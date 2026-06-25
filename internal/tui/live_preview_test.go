@@ -26,7 +26,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
@@ -459,11 +458,11 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 	}
 }
 
-func TestLivePreviewCodexToolProgressRendersCompactToolRows(t *testing.T) {
+func TestLivePreviewToolProgressRendersCompactToolRows(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
-	longResult := strings.Repeat("codex-output-", 20)
-	sess := codexLivePreviewSession("codex-tools", feature.PhaseImplement,
+	longResult := strings.Repeat("tool-output-", 20)
+	sess := streamingLivePreviewSession("streaming-tools", feature.PhaseImplement,
 		assistantMessage(llm.ContentBlock{Type: "text", Text: "checking files"}),
 		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "PASS\nok ./..."}},
 		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: longResult}},
@@ -471,140 +470,14 @@ func TestLivePreviewCodexToolProgressRendersCompactToolRows(t *testing.T) {
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
 
-	for _, want := range []string{"$ Bash", "Bash result: PASS ok ./...", "Bash result: codex-output-", "[...]", "$ Write", "Write result: A README.scn.md"} {
+	for _, want := range []string{"$ Bash", "Bash result: PASS ok ./...", "Bash result: tool-output-", "[...]", "$ Write", "Write result: A README.scn.md"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("codex live preview missing %q in:\n%s", want, view)
+			t.Fatalf("live preview missing %q in:\n%s", want, view)
 		}
 	}
 	if strings.Count(view, "$ Bash") != 1 {
-		t.Fatalf("codex live preview should render one Bash tool-use row, got:\n%s", view)
+		t.Fatalf("live preview should render one Bash tool-use row, got:\n%s", view)
 	}
-}
-
-func TestLivePreviewOpenCodeStreamingRendersCompactRows(t *testing.T) {
-	t.Parallel()
-
-	t.Run("thought chunk", func(t *testing.T) {
-		t.Parallel()
-		p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
-		msgs := parseOpenCodeLivePreviewMessages(t, p, mustJSONLine(t, map[string]any{
-			"jsonrpc": "2.0", "method": "session/update",
-			"params": map[string]any{
-				"sessionId": "ses_x",
-				"update": map[string]any{
-					"sessionUpdate": "agent_thought_chunk",
-					"content":       map[string]any{"type": "text", "text": "raw hidden thought token"},
-				},
-			},
-		}))
-		sess := openCodeLivePreviewSession("opencode-thinking", feature.PhasePlan, msgs...)
-		view := stripANSI(newLivePreviewModel(&feature.Feature{
-			Status:       feature.StatusPlanning,
-			CurrentPhase: feature.PhasePlan,
-		}).withSession(sess).withHeight(24).ViewCompact(120))
-
-		if !strings.Contains(view, "* Thinking...") {
-			t.Fatalf("opencode live preview missing generic thinking row:\n%s", view)
-		}
-		if strings.Contains(view, "raw hidden thought token") {
-			t.Fatalf("opencode live preview leaked raw thought token:\n%s", view)
-		}
-	})
-
-	t.Run("tool progress and assistant text", func(t *testing.T) {
-		t.Parallel()
-		p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
-		msgs := parseOpenCodeLivePreviewMessages(t, p,
-			mustJSONLine(t, map[string]any{
-				"jsonrpc": "2.0", "method": "session/update",
-				"params": map[string]any{
-					"sessionId": "ses_x",
-					"update": map[string]any{
-						"sessionUpdate": "tool_call",
-						"toolCallId":    "call_read",
-						"title":         "Read README.md",
-						"kind":          "read",
-						"status":        "running",
-					},
-				},
-			}),
-			mustJSONLine(t, map[string]any{
-				"jsonrpc": "2.0", "method": "session/update",
-				"params": map[string]any{
-					"sessionId": "ses_x",
-					"update": map[string]any{
-						"sessionUpdate": "agent_message_chunk",
-						"content":       map[string]any{"type": "text", "text": "I found the README workflow."},
-					},
-				},
-			}),
-		)
-		sess := openCodeLivePreviewSession("opencode-stream", feature.PhasePlan, msgs...)
-		view := stripANSI(newLivePreviewModel(&feature.Feature{
-			Status:       feature.StatusPlanning,
-			CurrentPhase: feature.PhasePlan,
-		}).withSession(sess).withHeight(24).ViewCompact(120))
-
-		for _, want := range []string{"$ Read README.md", "Read README.md result: running", "I found the README workflow."} {
-			if !strings.Contains(view, want) {
-				t.Fatalf("opencode live preview missing %q in:\n%s", want, view)
-			}
-		}
-	})
-
-	t.Run("thought survives later text chunk", func(t *testing.T) {
-		t.Parallel()
-		p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
-		msgs := parseOpenCodeLivePreviewMessages(t, p,
-			mustJSONLine(t, map[string]any{
-				"jsonrpc": "2.0", "method": "session/update",
-				"params": map[string]any{
-					"sessionId": "ses_x",
-					"update": map[string]any{
-						"sessionUpdate": "agent_thought_chunk",
-						"content":       map[string]any{"type": "text", "text": "raw hidden thought token"},
-					},
-				},
-			}),
-			mustJSONLine(t, map[string]any{
-				"jsonrpc": "2.0", "method": "session/update",
-				"params": map[string]any{
-					"sessionId": "ses_x",
-					"update": map[string]any{
-						"sessionUpdate": "tool_call",
-						"toolCallId":    "call_read",
-						"title":         "Read README.md",
-						"kind":          "read",
-						"status":        "running",
-					},
-				},
-			}),
-			mustJSONLine(t, map[string]any{
-				"jsonrpc": "2.0", "method": "session/update",
-				"params": map[string]any{
-					"sessionId": "ses_x",
-					"update": map[string]any{
-						"sessionUpdate": "agent_message_chunk",
-						"content":       map[string]any{"type": "text", "text": "I found the README workflow."},
-					},
-				},
-			}),
-		)
-		sess := openCodeLivePreviewSession("opencode-thinking-with-text", feature.PhasePlan, msgs...)
-		view := stripANSI(newLivePreviewModel(&feature.Feature{
-			Status:       feature.StatusPlanning,
-			CurrentPhase: feature.PhasePlan,
-		}).withSession(sess).withHeight(24).ViewCompact(120))
-
-		for _, want := range []string{"* Thinking...", "$ Read README.md", "I found the README workflow."} {
-			if !strings.Contains(view, want) {
-				t.Fatalf("opencode live preview missing %q in:\n%s", want, view)
-			}
-		}
-		if strings.Contains(view, "raw hidden thought token") {
-			t.Fatalf("opencode live preview leaked raw thought token:\n%s", view)
-		}
-	})
 }
 
 func TestLivePreviewTranscriptEmphasis(t *testing.T) {
@@ -847,7 +720,7 @@ func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 
 func TestLivePreviewUpperMetadataUsesShortPhaseModelName(t *testing.T) {
 	t.Parallel()
-	const routedModel = "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	const routedModel = "gateway:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
 	f := &feature.Feature{
 		ID:           "feat-short-model",
 		Status:       feature.StatusBuildingKB,
@@ -859,7 +732,7 @@ func TestLivePreviewUpperMetadataUsesShortPhaseModelName(t *testing.T) {
 	if strings.Contains(view, "portkey/@fireworks/accounts/fireworks/models") {
 		t.Fatalf("live preview rendered routed model ID, want compact model name:\n%s", view)
 	}
-	if !strings.Contains(view, "Phase Model") || !strings.Contains(view, "opencode:glm-5p2[1.04M]") {
+	if !strings.Contains(view, "Phase Model") || !strings.Contains(view, "gateway:glm-5p2[1.04M]") {
 		t.Fatalf("live preview missing compact phase model:\n%s", view)
 	}
 
@@ -869,7 +742,7 @@ func TestLivePreviewUpperMetadataUsesShortPhaseModelName(t *testing.T) {
 	if strings.Contains(withSession, "portkey/@fireworks/accounts/fireworks/models") {
 		t.Fatalf("live preview session model rendered routed model ID, want compact model name:\n%s", withSession)
 	}
-	if !strings.Contains(withSession, "opencode:glm-5p2[1.04M]") {
+	if !strings.Contains(withSession, "gateway:glm-5p2[1.04M]") {
 		t.Fatalf("live preview session model missing compact phase model:\n%s", withSession)
 	}
 }
@@ -1228,41 +1101,14 @@ func newLivePreviewSessionWithIteration(id string, phase feature.Phase, iteratio
 	return sess
 }
 
-func codexLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
+func streamingLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
 	sess := session.NewSession(id, "feat-live", phase)
-	sess.SetProviderName("codex")
+	sess.SetProviderName("streaming")
 	sess.SetStatus(session.SessionRunning)
 	for _, msg := range messages {
 		sess.MessageLog().Append(msg)
 	}
 	return sess
-}
-
-func openCodeLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
-	sess := session.NewSession(id, "feat-live", phase)
-	sess.SetProviderName("opencode")
-	sess.SetStatus(session.SessionRunning)
-	for _, msg := range messages {
-		if msg.Assistant != nil {
-			sess.MessageLog().UpdateLastAssistantPartial(msg)
-			continue
-		}
-		sess.MessageLog().Append(msg)
-	}
-	return sess
-}
-
-func parseOpenCodeLivePreviewMessages(t *testing.T, p *opencode.Protocol, lines ...[]byte) []llm.SDKMessage {
-	t.Helper()
-	var out []llm.SDKMessage
-	for _, line := range lines {
-		msgs, err := p.ParseLine(line)
-		if err != nil {
-			t.Fatalf("ParseLine(%s) error: %v", line, err)
-		}
-		out = append(out, msgs...)
-	}
-	return out
 }
 
 func tweakLivePreviewSession(id string, messages ...llm.SDKMessage) session.SessionView {

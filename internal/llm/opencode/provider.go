@@ -91,6 +91,16 @@ func NewWithRunner(runner clirun.CommandRunner) *Provider {
 
 func (p *Provider) Name() string { return providerName }
 
+// EnablesPendingToolWatchdog opts this adapter into the generic session
+// watchdog for providers that can report a tool as pending without surfacing a
+// permission request.
+func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
+
+// UsesBoundedHelperSandbox opts bounded helper sessions into OS-level worktree
+// sandboxing so helper shell probes fail as process errors rather than provider
+// permission denials.
+func (p *Provider) UsesBoundedHelperSandbox() bool { return true }
+
 // MatchesModel reports whether this provider handles the given model string.
 //
 // An explicit "opencode:" routing prefix always matches when a backend model

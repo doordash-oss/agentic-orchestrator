@@ -32,18 +32,18 @@ func TestReadOnlySandboxProfile_DeniesWorktreeWritesAllowsRest(t *testing.T) {
 	}
 }
 
-func TestMaybeWrapHelperSandbox_OpenCodeWrapsWithSandboxExec(t *testing.T) {
+func TestMaybeWrapHelperSandbox_EnabledWrapsWithSandboxExec(t *testing.T) {
 	if !sandboxExecAvailable() {
 		t.Skip("sandbox-exec not available on this host")
 	}
-	cmd := []string{"opencode", "acp"}
-	got, sandboxed, cleanup := maybeWrapHelperSandbox(cmd, "opencode", "/Users/x/.agentic-workflow/features")
+	cmd := []string{"helper", "run"}
+	got, sandboxed, cleanup := maybeWrapHelperSandbox(cmd, true, "/Users/x/.agentic-workflow/features")
 	defer cleanup()
 	if !sandboxed {
-		t.Fatalf("opencode: sandboxed=false, want true on darwin")
+		t.Fatalf("sandboxed=false, want true on darwin")
 	}
-	if len(got) < 4 || got[0] != sandboxExecPath || got[1] != "-f" || got[len(got)-2] != "opencode" || got[len(got)-1] != "acp" {
-		t.Fatalf("opencode: wrapped argv = %v, want [sandbox-exec -f <profile> opencode acp]", got)
+	if len(got) < 4 || got[0] != sandboxExecPath || got[1] != "-f" || got[len(got)-2] != "helper" || got[len(got)-1] != "run" {
+		t.Fatalf("wrapped argv = %v, want [sandbox-exec -f <profile> helper run]", got)
 	}
 	if _, err := os.Stat(got[2]); err != nil {
 		t.Fatalf("sandbox profile %q not written: %v", got[2], err)

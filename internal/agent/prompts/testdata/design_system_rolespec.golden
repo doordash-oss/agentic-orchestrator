@@ -9,7 +9,7 @@ Never end a turn with soft-confirmation prose such as "if this looks right, I'll
 
 For large output artifacts, prefer editing an existing skeleton over rewriting the whole file. Keep individual write/edit payloads below roughly 20KB.
 
-Sub-agents are available. Sub-agents MUST be used when requested by the SKILL instructions. For broad independent work, delegate focused tracks to sub-agents, wait for them, then synthesize. If spawning hits a limit, wait for and close active sub-agents, then retry remaining tracks.
+Sub-agents are available. Sub-agents MUST be used when requested by the SKILL instructions. For broad independent work, delegate focused tracks to sub-agents, wait for them, then synthesize. Scope each sub-agent to a distinct, self-contained track; don't spawn another for a track already delegated, and synthesize from the results you have rather than re-spawning to re-investigate the same ground. Keep only a handful of sub-agents in flight at once. If spawning hits a limit, wait for and close active sub-agents, then retry remaining tracks.
 
 ## Output Roots
 

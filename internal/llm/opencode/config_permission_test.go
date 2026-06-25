@@ -48,11 +48,45 @@ func TestEditPermission_EmitsCwdRelativeGlob(t *testing.T) {
 	}
 }
 
-// TestRootGlobs_NoWorkDirIsAbsoluteOnly confirms the additive nature of the fix:
-// with no cwd known, only the absolute glob is emitted, preserving prior behavior.
-func TestRootGlobs_NoWorkDirIsAbsoluteOnly(t *testing.T) {
+// TestEditPermission_EmitsExactFileRoot guards bounded review helpers, which
+// pass exact artifact file paths (for example validation feedback and
+// phase_complete) as writable roots. OpenCode evaluates a write to the file
+// path itself, so a recursive child-only pattern like "<file>/**" does not
+// match and the tool falls through to the catch-all deny.
+func TestEditPermission_EmitsExactFileRoot(t *testing.T) {
+	workDir := "/Users/x/.agentic-workflow/worktrees/feature/repo"
+	feedbackPath := "/Users/x/.agentic-workflow/features/feature/runs/run-002/roadmap/attempt-01/validate-scope/validation-scope-feedback.md"
+
+	got := editPermission("ask", workDir, []string{feedbackPath})
+	patterns, ok := got.(map[string]string)
+	if !ok {
+		t.Fatalf("editPermission returned %T, want map[string]string", got)
+	}
+
+	relPath := "../../../features/feature/runs/run-002/roadmap/attempt-01/validate-scope/validation-scope-feedback.md"
+
+	if patterns[catchAllPattern] != "deny" {
+		t.Errorf("catch-all = %q, want deny", patterns[catchAllPattern])
+	}
+	if patterns[feedbackPath] != "ask" {
+		t.Errorf("exact absolute file pattern %q = %q, want ask", feedbackPath, patterns[feedbackPath])
+	}
+	if patterns[relPath] != "ask" {
+		t.Errorf("exact cwd-relative file pattern %q = %q, want ask", relPath, patterns[relPath])
+	}
+}
+
+// TestRootGlobs_NoWorkDirIsAbsolutePatternsOnly confirms that with no cwd known,
+// only absolute patterns are emitted.
+func TestRootGlobs_NoWorkDirIsAbsolutePatternsOnly(t *testing.T) {
 	globs := rootGlobs("", "/Users/x/state")
-	if len(globs) != 1 || globs[0] != "/Users/x/state/**" {
-		t.Fatalf("rootGlobs(\"\", root) = %v, want [\"/Users/x/state/**\"]", globs)
+	want := []string{"/Users/x/state", "/Users/x/state/**"}
+	if len(globs) != len(want) {
+		t.Fatalf("rootGlobs(\"\", root) = %v, want %v", globs, want)
+	}
+	for i := range want {
+		if globs[i] != want[i] {
+			t.Fatalf("rootGlobs(\"\", root) = %v, want %v", globs, want)
+		}
 	}
 }

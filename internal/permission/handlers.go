@@ -221,10 +221,11 @@ func (h *ReviewFeedbackHandler) CanUseTool(req ports.ToolPermissionRequest) (por
 	return ports.PermissionDecision{Behavior: "deny", Reason: "review helper is read-only except for review-feedback.md"}, nil
 }
 
-// BoundedHelperArtifactHandler auto-approves read-only inspection tools and
-// file edits only for the exact artifact paths declared by the harness.
-// Shells, subagents, and undeclared file writes are hard-denied so bounded
-// helpers cannot mutate the worktree or escape their helper directory.
+// BoundedHelperArtifactHandler auto-approves read-only inspection tools,
+// conservative read-only shell probes, and file edits only for the exact
+// artifact paths declared by the harness. Mutating shells, subagents, and
+// undeclared file writes are hard-denied so bounded helpers cannot mutate the
+// worktree or escape their helper directory.
 type BoundedHelperArtifactHandler struct {
 	AllowedPaths []string
 }
@@ -234,6 +235,15 @@ func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionReques
 	switch req.ToolName {
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory", "WebSearch", "WebFetch":
 		return ports.PermissionDecision{Behavior: "allow"}, nil
+
+	case "Bash":
+		if boundedHelperReadOnlyBashAllowed(req.Input) {
+			return ports.PermissionDecision{Behavior: "allow"}, nil
+		}
+		return ports.PermissionDecision{
+			Behavior: "deny",
+			Reason:   "bounded helper shell access is limited to read-only inspection commands",
+		}, nil
 
 	case "Edit", "Write", "NotebookEdit":
 		path, ok := toolInputFilePath(req.Input)
@@ -248,7 +258,7 @@ func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionReques
 
 	return ports.PermissionDecision{
 		Behavior: "deny",
-		Reason:   "bounded helper may not run shell commands, spawn agents, or mutate undeclared files",
+		Reason:   "bounded helper may not spawn agents or mutate undeclared files",
 	}, nil
 }
 
@@ -274,6 +284,110 @@ func toolInputFilePath(input string) (string, bool) {
 		return "", false
 	}
 	return payload.FilePath, true
+}
+
+func boundedHelperReadOnlyBashAllowed(input string) bool {
+	command := strings.TrimSpace(extractBashCommand(input))
+	if command == "" {
+		return false
+	}
+	command = stripReadOnlyShellRedirections(command)
+	if strings.ContainsAny(command, "\n\r;`<>") || strings.Contains(command, "$(") {
+		return false
+	}
+	parts := splitReadOnlyShellSegments(command)
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if !readOnlySimpleCommandAllowed(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func stripReadOnlyShellRedirections(command string) string {
+	replacer := strings.NewReplacer(
+		"2>/dev/null", "",
+		"2> /dev/null", "",
+		"2>&1", "",
+	)
+	return replacer.Replace(command)
+}
+
+func splitReadOnlyShellSegments(command string) []string {
+	normalized := strings.NewReplacer(
+		"&&", "\x00",
+		"||", "\x00",
+		"|", "\x00",
+	).Replace(command)
+	rawParts := strings.Split(normalized, "\x00")
+	parts := make([]string, 0, len(rawParts))
+	for _, part := range rawParts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+func readOnlySimpleCommandAllowed(command string) bool {
+	if strings.Contains(command, "&") {
+		return false
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return false
+	}
+	name := filepath.Base(fields[0])
+	switch name {
+	case "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "rg", "echo", "true", "false", "sort", "uniq", "cut", "tr":
+		return true
+	case "test", "[":
+		return true
+	case "find":
+		return !hasAnyShellToken(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir")
+	case "sed":
+		return !hasSedInPlaceFlag(fields[1:])
+	case "git":
+		return gitReadOnlySubcommandAllowed(fields[1:])
+	default:
+		return false
+	}
+}
+
+func hasAnyShellToken(fields []string, denied ...string) bool {
+	for _, field := range fields {
+		for _, token := range denied {
+			if field == token {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasSedInPlaceFlag(fields []string) bool {
+	for _, field := range fields {
+		if field == "-i" || strings.HasPrefix(field, "-i.") || strings.HasPrefix(field, "-i'") || strings.HasPrefix(field, `-i"`) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitReadOnlySubcommandAllowed(fields []string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case "status", "diff", "log", "show", "ls-files", "rev-parse", "branch":
+		return true
+	default:
+		return false
+	}
 }
 
 // RewindReviewHandler auto-approves read-only tools and file edits ONLY to the

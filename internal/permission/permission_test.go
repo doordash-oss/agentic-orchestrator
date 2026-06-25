@@ -53,7 +53,11 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
 	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(filepath.Dir(helperDir), "review-feedback.md")+`"}`)
 	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(helperDir, "..", "review-feedback.md")+`"}`)
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"ls `+helperDir+` 2>/dev/null || echo \"DIR_NOT_FOUND\""}`)
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"test -f `+feedbackPath+` && echo \"FEEDBACK_EXISTS\" || echo \"FEEDBACK_NOT_FOUND\""}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"touch phase_complete"}`)
+	requirePermissionDenied(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
+	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
 	requirePermissionDenied(t, handler, "Agent", `{"prompt":"write the file for me"}`)
 }
 

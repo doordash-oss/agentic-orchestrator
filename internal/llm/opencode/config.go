@@ -166,12 +166,19 @@ func externalDirectoryPermission(dangerouslySkipPerms bool, workDir string, writ
 // forwards child-session permission prompts to the ACP client. This profile
 // therefore resolves every surface
 // deterministically: surfaces Agentico already auto-approves (reads,
-// external-directory access, web, subagent spawning, and edits bounded to
-// writable roots) are allowed; user questions are denied because a subagent
-// cannot obtain a human answer; and human-gated surfaces (shell, skill
-// invocation) are denied in normal mode so the subagent fails fast rather than
-// hanging, or allowed under dangerous-skip mode where the whole run is already
-// noninteractive.
+// external-directory access, web, and edits bounded to writable roots) are
+// allowed; user questions are denied because a subagent cannot obtain a human
+// answer; and human-gated surfaces (shell, skill invocation) are denied in normal
+// mode so the subagent fails fast rather than hanging, or allowed under
+// dangerous-skip mode where the whole run is already noninteractive.
+//
+// Subagent task-spawning is denied unconditionally — in every mode — to enforce
+// depth-1 delegation: only the primary session may spawn subagents. This is a
+// structural recursion limit, not a human-gating choice, so it holds even under
+// dangerous-skip. Without it, a subagent can spawn subagents that spawn more,
+// producing multiplicative fan-out: a glm-5p2 research session let
+// web-search-researcher children recurse into thousands of grandchildren and
+// exhausted memory.
 func subagentPermissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots []string) map[string]any {
 	humanGated := "deny"
 	if dangerouslySkipPerms {
@@ -182,7 +189,7 @@ func subagentPermissionConfig(dangerouslySkipPerms bool, workDir string, writabl
 		permKeyExternal:  "allow",
 		permKeyWebfetch:  "allow",
 		permKeyWebsearch: "allow",
-		permKeyTask:      "allow",
+		permKeyTask:      "deny",
 		permKeyQuestion:  "deny",
 		permKeyBash:      humanGated,
 		permKeySkill:     humanGated,
@@ -195,9 +202,10 @@ func subagentPermissionConfig(dangerouslySkipPerms bool, workDir string, writabl
 }
 
 // editPermission returns the permission value for a file-mutating surface. With
-// writable roots it returns a path-pattern map that allows the decision inside
-// each "<root>/**" and denies everywhere else; with no roots it returns the bare
-// decision so behavior is unchanged from a non-bounded session.
+// writable roots it returns a path-pattern map that allows the decision for
+// each root itself and inside each "<root>/**", then denies everywhere else;
+// with no roots it returns the bare decision so behavior is unchanged from a
+// non-bounded session.
 func editPermission(decision string, workDir string, writableRoots []string) any {
 	roots := normalizeRoots(writableRoots)
 	if len(roots) == 0 {
@@ -213,24 +221,41 @@ func editPermission(decision string, workDir string, writableRoots []string) any
 	return patterns
 }
 
-// rootGlob turns a mounted root directory into the recursive glob OpenCode
-// matches tool paths (reads, edits) against.
+// rootGlob turns a mounted root into the recursive child glob OpenCode matches
+// tool paths (reads, edits) against.
 func rootGlob(root string) string {
-	root = strings.TrimRight(root, "/")
+	root = rootPattern(root)
+	if root == "/" {
+		return "/**"
+	}
 	return root + "/**"
 }
 
-// rootGlobs returns every tool-path glob that should match a mounted root.
+// rootPattern returns the exact path pattern for a mounted root. It preserves
+// "/" while trimming trailing slashes from ordinary roots so exact file roots
+// and their recursive child globs share the same canonical prefix.
+func rootPattern(root string) string {
+	root = strings.TrimRight(root, "/")
+	if root == "" {
+		return "/"
+	}
+	return root
+}
+
+// rootGlobs returns every tool-path pattern that should match a mounted root.
 // OpenCode evaluates the edit surface against the path the tool supplies, which
 // is relative to the session cwd (e.g. "../../../knowledge-base/<repo>/**"),
 // while external_directory is evaluated against the resolved absolute path. An
 // absolute-only glob therefore matches external_directory but never the relative
 // edit path, so every edit outside cwd falls through to the catch-all deny.
-// Emitting both the absolute glob and a cwd-relative one keeps a root matchable
-// on either surface. An empty or non-relativizable workDir yields the absolute
-// glob alone, preserving prior behavior.
+// Emitting both the absolute patterns and cwd-relative patterns keeps a root
+// matchable on either surface. The exact pattern matters for bounded helpers
+// that pass file roots such as validation feedback artifacts and phase_complete;
+// without it OpenCode only allows children of those files and denies the actual
+// artifact write. An empty or non-relativizable workDir yields the absolute
+// patterns alone.
 func rootGlobs(workDir, root string) []string {
-	globs := []string{rootGlob(root)}
+	globs := []string{rootPattern(root), rootGlob(root)}
 	if workDir == "" {
 		return globs
 	}
@@ -238,7 +263,7 @@ func rootGlobs(workDir, root string) []string {
 	if err != nil || rel == "" || rel == "." {
 		return globs
 	}
-	return append(globs, rootGlob(rel))
+	return append(globs, rootPattern(rel), rootGlob(rel))
 }
 
 // normalizeRoots trims, drops empties, and de-duplicates writable roots while

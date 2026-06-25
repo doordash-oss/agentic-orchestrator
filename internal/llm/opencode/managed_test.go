@@ -499,14 +499,17 @@ func TestManagedConfig_SubagentsRunNonInteractive(t *testing.T) {
 	if ag.Permission == nil {
 		t.Fatalf("subagent carries no permission override; an un-forwardable ask would deadlock it")
 	}
-	for _, key := range []string{"read", "external_directory", "webfetch", "websearch", "task"} {
+	for _, key := range []string{"read", "external_directory", "webfetch", "websearch"} {
 		if got := permString(t, ag.Permission, key); got != "allow" {
 			t.Errorf("subagent permission[%q] = %q, want allow", key, got)
 		}
 	}
-	for _, key := range []string{"bash", "skill"} {
+	// bash/skill deny in normal mode (fail fast, not hang). task denies
+	// unconditionally: subagents must not spawn subagents (depth-1 delegation
+	// prevents multiplicative fan-out).
+	for _, key := range []string{"bash", "skill", "task"} {
 		if got := permString(t, ag.Permission, key); got != "deny" {
-			t.Errorf("subagent permission[%q] = %q, want deny in normal mode", key, got)
+			t.Errorf("subagent permission[%q] = %q, want deny", key, got)
 		}
 	}
 	if got := permString(t, ag.Permission, "question"); got != "deny" {
@@ -574,11 +577,12 @@ func TestManagedConfig_AgentsConverted(t *testing.T) {
 	}
 }
 
-// TestManagedConfig_OnlyBuiltinOverridesWhenEmpty proves that with no embedded
+// TestManagedConfig_BuiltinOverridesWhenEmpty proves that with no embedded
 // agents, the config still pins OpenCode's built-in spawnable subagents to the
-// deterministic deny profile (so they cannot inherit the top-level "ask" and
-// hang); no Agentico-defined agents are added.
-func TestManagedConfig_OnlyBuiltinOverridesWhenEmpty(t *testing.T) {
+// deterministic deny profile — they cannot inherit the top-level "ask" and hang,
+// and they cannot spawn their own subagents (depth-1 delegation). No other
+// Agentico-defined agents are added.
+func TestManagedConfig_BuiltinOverridesWhenEmpty(t *testing.T) {
 	state := t.TempDir()
 	p := New()
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "openai/gpt-5", StateDir: state})
@@ -595,7 +599,12 @@ func TestManagedConfig_OnlyBuiltinOverridesWhenEmpty(t *testing.T) {
 			t.Fatalf("built-in subagent %q missing from config; got %v", name, cfg.Agent)
 		}
 		if string(ag.Permission["bash"]) != `"deny"` {
-			t.Errorf("built-in %q bash = %s, want \"deny\" so it fails fast instead of hanging on an unanswerable ask", name, ag.Permission["bash"])
+			t.Errorf("built-in %q bash = %s, want \"deny\"", name, ag.Permission["bash"])
+		}
+		// Subagents must not spawn subagents — depth-1 delegation prevents the
+		// multiplicative fan-out that exhausts memory.
+		if string(ag.Permission["task"]) != `"deny"` {
+			t.Errorf("built-in subagent %q task = %s, want \"deny\" (no sub-subagents)", name, ag.Permission["task"])
 		}
 	}
 }

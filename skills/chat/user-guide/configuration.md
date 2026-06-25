@@ -95,22 +95,28 @@ Checkpoints are review gates that pause the pipeline between phases for human re
 ```yaml
 defaults:
   checkpoints:
-    inquiry_review: false
-    research_review: false
-    design_review: false
-    plan_review: false
+    inquiry_review: true
+    research_review: true
+    design_review: true
+    roadmap_review: true
+    phase_plan_review: true
     manual_publish: true
 ```
 
 | Checkpoint | Gates Before | Default |
 |------------|-------------|---------|
-| `inquiry_review` | Research phase | `false` |
-| `research_review` | Design phase | `false` |
-| `design_review` | Plan phase | `false` |
-| `plan_review` | Implementation phase | `false` |
+| `inquiry_review` | Research phase | `true` |
+| `research_review` | Design phase | `true` |
+| `design_review` | Plan phase | `true` |
+| `roadmap_review` | Phase planning | `true` |
+| `phase_plan_review` | Implementation phase | `true` |
 | `manual_publish` | Publish step | `true` |
 
-When a feature is created, these defaults are combined with the pipeline profile's defaults (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints-review-gates)). Individual checkpoints can be toggled per-feature in the creation wizard.
+When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints-review-gates)). Individual checkpoints can be toggled per-feature in the creation wizard.
+
+Omitted checkpoint fields in `defaults.checkpoints` or repo `pipeline_gates` default to `true` when the checkpoint is compatible with the selected pipeline. Config saves write all checkpoint fields explicitly. The legacy `plan_review` key is ignored by new config handling; replace it with `roadmap_review` and `phase_plan_review`.
+
+In the TUI, Roadmap Review controls the planning review group and Phase Plan Review appears beneath it. Turning Roadmap Review off also turns Phase Plan Review off; turning it back on enables Phase Plan Review by default. Advanced YAML can still set `phase_plan_review: true` with `roadmap_review: false`, and that runtime combination is honored.
 
 ## Iteration Limits
 
@@ -160,8 +166,11 @@ repos:
     path: /Users/you/Projects/my-project
     pipeline_gates:
       moonshot:
+        inquiry_review: true
+        research_review: true
         design_review: true
-        plan_review: true
+        roadmap_review: true
+        phase_plan_review: true
         manual_publish: true
 ```
 

@@ -53,7 +53,7 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 					Research: "old-research",
 				},
 				Inquireness: feature.InquirenessMedium,
-				Checkpoints: feature.Checkpoints{PlanReview: true},
+				Checkpoints: feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true},
 			}
 			lc := lifecycleForFeature(f)
 			fs := newFeatureStore(f)
@@ -87,8 +87,8 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 			if !f.Checkpoints.InquiryReview || !f.Checkpoints.ManualPublish {
 				t.Errorf("Checkpoints not updated: %+v", f.Checkpoints)
 			}
-			if f.Checkpoints.PlanReview {
-				t.Errorf("Checkpoints overwritten to zero-valued fields — PlanReview should now be false, got true")
+			if f.Checkpoints.RoadmapReview || f.Checkpoints.PhasePlanReview {
+				t.Errorf("Checkpoints overwritten to zero-valued planning gates — RoadmapReview/PhasePlanReview should now be false, got %+v", f.Checkpoints)
 			}
 
 			if hookCount != 1 {
@@ -258,17 +258,18 @@ func TestUpdateFeatureConfig_NormalizesCheckpointsForPipeline(t *testing.T) {
 
 	input := orchestrator.UpdateFeatureConfigInput{
 		Checkpoints: feature.Checkpoints{
-			InquiryReview: true,
-			DesignReview:  true,
-			PlanReview:    true,
-			ManualPublish: true,
+			InquiryReview:   true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 	if err := o.UpdateFeatureConfig("feat-1", input); err != nil {
 		t.Fatalf("UpdateFeatureConfig: %v", err)
 	}
-	if got := f.Checkpoints; got != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("normalized checkpoints = %+v, want PlanReview+ManualPublish", got)
+	if got := f.Checkpoints; got != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("normalized checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", got)
 	}
 }
 

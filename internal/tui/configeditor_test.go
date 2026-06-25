@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -72,6 +73,26 @@ func checkpointRowForGate(t *testing.T, e ConfigEditorModel, gate feature.GateIn
 	}
 	t.Fatalf("gate %v not visible in editor", gate)
 	return 0
+}
+
+func checkpointViewContainsLabel(view, label string) bool {
+	for _, line := range strings.Split(ansi.Strip(view), "\n") {
+		row := strings.TrimSpace(line)
+		row = strings.TrimPrefix(row, "▸ ")
+		switch {
+		case strings.HasPrefix(row, "[x] "):
+			row = strings.TrimPrefix(row, "[x] ")
+		case strings.HasPrefix(row, "[ ] "):
+			row = strings.TrimPrefix(row, "[ ] ")
+		default:
+			continue
+		}
+		row = strings.TrimLeft(row, " ")
+		if row == label || strings.HasPrefix(row, label+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestConfigEditor_RowCursor_FlatWalk(t *testing.T) {
@@ -515,7 +536,7 @@ func TestConfigEditor_CheckpointsToggle(t *testing.T) {
 		{"InquiryReview", feature.GateInquiryReview, func(c feature.Checkpoints) bool { return c.InquiryReview }},
 		{"ResearchReview", feature.GateResearchReview, func(c feature.Checkpoints) bool { return c.ResearchReview }},
 		{"DesignReview", feature.GateDesignReview, func(c feature.Checkpoints) bool { return c.DesignReview }},
-		{"PlanReview", feature.GatePlanReview, func(c feature.Checkpoints) bool { return c.PlanReview }},
+		{"RoadmapReview", feature.GateRoadmapReview, func(c feature.Checkpoints) bool { return c.RoadmapReview }},
 	}
 	for _, tc := range toggles {
 		t.Run(tc.name, func(t *testing.T) {
@@ -537,12 +558,12 @@ func TestConfigEditor_CheckpointsToggle(t *testing.T) {
 func TestConfigEditor_CheckpointsToggle_ManualPublishHidden(t *testing.T) {
 	t.Parallel()
 	e := newEditor(&feature.Feature{Pipeline: feature.PipelineMoonshot}, false) // ManualPublish hidden
-	e.rowCursor = checkpointRowForGate(t, e, feature.GatePlanReview)
+	e.rowCursor = checkpointRowForGate(t, e, feature.GateRoadmapReview)
 	before := e.Snapshot().Checkpoints
 	e, _ = e.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
 	after := e.Snapshot().Checkpoints
-	if after.PlanReview == before.PlanReview {
-		t.Errorf("space on last visible row did not toggle PlanReview")
+	if after.RoadmapReview == before.RoadmapReview {
+		t.Errorf("space on last visible row did not toggle RoadmapReview")
 	}
 	// ManualPublish remains forced on regardless of internal state.
 	if !after.ManualPublish {
@@ -561,26 +582,35 @@ func TestConfigEditor_CheckpointRowsFollowPipelineProfile(t *testing.T) {
 		wantCP      feature.Checkpoints
 	}{
 		{
-			name: "medium shows plan and manual publish",
+			name: "medium shows roadmap phase-plan and manual publish",
 			feature: &feature.Feature{
-				Pipeline:    feature.PipelineMedium,
-				Checkpoints: feature.Checkpoints{InquiryReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
+				Pipeline: feature.PipelineMedium,
+				Checkpoints: feature.Checkpoints{
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   true,
+				},
 			},
 			publishable: true,
-			wantRows:    []string{"Plan Review", "Manual Publish"},
-			wantHidden:  []string{"Inquiry Review", "Research Review", "Design Review"},
-			wantCP:      feature.Checkpoints{PlanReview: true, ManualPublish: true},
+			wantRows:    []string{"Roadmap Review", "Phase Plan Review", "Manual Publish"},
+			wantHidden:  []string{"Inquiry Review", "Research Review", "Design Review", "Plan Review"},
+			wantCP:      feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 		},
 		{
 			name: "unpublished large hides manual publish row but keeps every review gate",
 			feature: &feature.Feature{
-				Pipeline:    feature.PipelineLarge,
-				Checkpoints: feature.Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: false},
+				Pipeline: feature.PipelineLarge,
+				Checkpoints: feature.Checkpoints{
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   false,
+				},
 			},
 			publishable: false,
-			wantRows:    []string{"Inquiry Review", "Research Review", "Design Review", "Plan Review"},
-			wantHidden:  []string{"Manual Publish"},
-			wantCP:      feature.Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: true},
+			wantRows:    []string{"Inquiry Review", "Research Review", "Design Review", "Roadmap Review", "Phase Plan Review"},
+			wantHidden:  []string{"Manual Publish", "Plan Review"},
+			wantCP:      feature.Checkpoints{DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 		},
 	}
 
@@ -589,12 +619,12 @@ func TestConfigEditor_CheckpointRowsFollowPipelineProfile(t *testing.T) {
 			e := newEditor(tt.feature, tt.publishable)
 			view := e.renderCheckpointsBox(120)
 			for _, label := range tt.wantRows {
-				if !strings.Contains(view, label) {
+				if !checkpointViewContainsLabel(view, label) {
 					t.Fatalf("renderCheckpointsBox missing %q\n%s", label, view)
 				}
 			}
 			for _, label := range tt.wantHidden {
-				if strings.Contains(view, label) {
+				if checkpointViewContainsLabel(view, label) {
 					t.Fatalf("renderCheckpointsBox unexpectedly contained %q\n%s", label, view)
 				}
 			}
@@ -602,6 +632,71 @@ func TestConfigEditor_CheckpointRowsFollowPipelineProfile(t *testing.T) {
 				t.Fatalf("Snapshot checkpoints = %+v, want %+v", got, tt.wantCP)
 			}
 		})
+	}
+}
+
+func TestConfigEditor_PhasePlanReviewVisibilityFollowsRoadmapReview(t *testing.T) {
+	t.Parallel()
+
+	e := newEditor(&feature.Feature{
+		Pipeline:    feature.PipelineMedium,
+		Checkpoints: feature.Checkpoints{ManualPublish: true},
+	}, true)
+
+	view := e.renderCheckpointsBox(120)
+	if strings.Contains(view, "Phase Plan Review") {
+		t.Fatalf("phase plan review should be hidden when both planning gates are off:\n%s", view)
+	}
+
+	e.rowCursor = checkpointRowForGate(t, e, feature.GateRoadmapReview)
+	e, _ = e.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	cp := e.Snapshot().Checkpoints
+	if !cp.RoadmapReview || !cp.PhasePlanReview {
+		t.Fatalf("turning roadmap review on should restore phase plan review on, got %+v", cp)
+	}
+
+	e, _ = e.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+	cp = e.Snapshot().Checkpoints
+	if cp.RoadmapReview || cp.PhasePlanReview {
+		t.Fatalf("turning roadmap review off should turn phase plan review off, got %+v", cp)
+	}
+}
+
+func TestConfigEditor_PhasePlanOnlyManualConfigIsVisible(t *testing.T) {
+	t.Parallel()
+
+	e := newEditor(&feature.Feature{
+		Pipeline: feature.PipelineMedium,
+		Checkpoints: feature.Checkpoints{
+			PhasePlanReview: true,
+			ManualPublish:   true,
+		},
+	}, true)
+
+	view := e.renderCheckpointsBox(120)
+	if !strings.Contains(view, "Phase Plan Review") {
+		t.Fatalf("manual phase-plan-only config should be visible:\n%s", view)
+	}
+}
+
+func TestConfigEditor_PhasePlanOnlyUnpublishedToggleClampsCursor(t *testing.T) {
+	t.Parallel()
+
+	e := newEditor(&feature.Feature{
+		Pipeline: feature.PipelineMedium,
+		Checkpoints: feature.Checkpoints{
+			PhasePlanReview: true,
+		},
+	}, false)
+
+	e.rowCursor = checkpointRowForGate(t, e, feature.GatePhasePlanReview)
+	e, _ = e.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
+
+	if e.rowCursor > e.lastRow() {
+		t.Fatalf("rowCursor should be clamped after hiding phase plan review: got rowCursor=%d lastRow=%d", e.rowCursor, e.lastRow())
+	}
+	if want := checkpointRowForGate(t, e, feature.GateRoadmapReview); e.rowCursor != want {
+		t.Fatalf("rowCursor should land on roadmap review after phase plan row hides: got %d, want %d", e.rowCursor, want)
 	}
 }
 

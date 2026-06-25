@@ -84,6 +84,16 @@ const (
 	summaryFieldExitCriteria
 )
 
+const (
+	checkpointInquiryReview = iota
+	checkpointResearchReview
+	checkpointDesignReview
+	checkpointRoadmapReview
+	checkpointPhasePlanReview
+	checkpointManualPublish
+	checkpointCount
+)
+
 type modelProviderGroup struct {
 	Name   string
 	Models []string
@@ -159,8 +169,9 @@ type WizardModel struct {
 	branchOptionCursor      int              // 0 = start from default branch (recommended), 1 = start from current branch
 	branchChoices           map[string]bool  // repo name -> useCurrentBranch (true = start from current HEAD)
 	showBranchWarning       bool             // true when the dedicated branch-selection screen replaces the Where panel
-	checkpointsCursor       int              // which row is focused (0-4)
-	checkpoints             [5]bool          // toggle state for each checkpoint item
+	checkpointsCursor       int              // which checkpoint row is focused
+	checkpoints             [checkpointCount]bool
+	checkpointDefaults      feature.Checkpoints
 	result                  *WizardResult
 	cancelled               bool
 	width, height           int
@@ -294,12 +305,14 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	crni.CharLimit = 100
 
 	// Initialize checkpoint toggles from config defaults.
-	var initCheckpoints [5]bool
-	initCheckpoints[0] = defaults.Checkpoints.InquiryReview
-	initCheckpoints[1] = defaults.Checkpoints.ResearchReview
-	initCheckpoints[2] = defaults.Checkpoints.DesignReview
-	initCheckpoints[3] = defaults.Checkpoints.PlanReview
-	initCheckpoints[4] = defaults.Checkpoints.ManualPublish
+	checkpointDefaults := feature.ConfigCheckpointsToFeature(defaults.Checkpoints)
+	var initCheckpoints [checkpointCount]bool
+	initCheckpoints[checkpointInquiryReview] = checkpointDefaults.InquiryReview
+	initCheckpoints[checkpointResearchReview] = checkpointDefaults.ResearchReview
+	initCheckpoints[checkpointDesignReview] = checkpointDefaults.DesignReview
+	initCheckpoints[checkpointRoadmapReview] = checkpointDefaults.RoadmapReview
+	initCheckpoints[checkpointPhasePlanReview] = checkpointDefaults.PhasePlanReview
+	initCheckpoints[checkpointManualPublish] = checkpointDefaults.ManualPublish
 
 	pipelineOptions := []string{
 		feature.PipelineMedium.ConfigKey(),
@@ -356,6 +369,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		inquirenessOptions:     []string{"none", "medium", "high"},
 		inquirenessCursor:      inquirenessCursor,
 		checkpoints:            initCheckpoints,
+		checkpointDefaults:     checkpointDefaults,
 		riskOptions:            []string{"low", "medium", "high"},
 		riskCursor:             1, // default to medium
 		pipelineOptions:        pipelineOptions,
@@ -519,7 +533,7 @@ func (m *WizardModel) pipelineCheckpointOverrides(opt string) []feature.Checkpoi
 func (m *WizardModel) mergedPipelineCheckpoints(opt string) (feature.Checkpoints, bool) {
 	profile := pipelineProfileFromKey(opt)
 	projection := profile.ProjectMergedGates(
-		feature.DefaultCheckpointsForProfile(profile),
+		m.checkpointDefaults,
 		m.pipelineCheckpointOverrides(opt),
 		m.provisionalPublishable,
 	)
@@ -528,26 +542,28 @@ func (m *WizardModel) mergedPipelineCheckpoints(opt string) (feature.Checkpoints
 
 func (m *WizardModel) checkpointState() feature.Checkpoints {
 	return feature.Checkpoints{
-		InquiryReview:  m.checkpoints[0],
-		ResearchReview: m.checkpoints[1],
-		DesignReview:   m.checkpoints[2],
-		PlanReview:     m.checkpoints[3],
-		ManualPublish:  m.checkpoints[4],
+		InquiryReview:   m.checkpoints[checkpointInquiryReview],
+		ResearchReview:  m.checkpoints[checkpointResearchReview],
+		DesignReview:    m.checkpoints[checkpointDesignReview],
+		RoadmapReview:   m.checkpoints[checkpointRoadmapReview],
+		PhasePlanReview: m.checkpoints[checkpointPhasePlanReview],
+		ManualPublish:   m.checkpoints[checkpointManualPublish],
 	}
 }
 
 func (m *WizardModel) setCheckpointState(cp feature.Checkpoints) {
-	m.checkpoints[0] = cp.InquiryReview
-	m.checkpoints[1] = cp.ResearchReview
-	m.checkpoints[2] = cp.DesignReview
-	m.checkpoints[3] = cp.PlanReview
-	m.checkpoints[4] = cp.ManualPublish
+	m.checkpoints[checkpointInquiryReview] = cp.InquiryReview
+	m.checkpoints[checkpointResearchReview] = cp.ResearchReview
+	m.checkpoints[checkpointDesignReview] = cp.DesignReview
+	m.checkpoints[checkpointRoadmapReview] = cp.RoadmapReview
+	m.checkpoints[checkpointPhasePlanReview] = cp.PhasePlanReview
+	m.checkpoints[checkpointManualPublish] = cp.ManualPublish
 }
 
 func (m *WizardModel) projectedPipelineCheckpoints(opt string) feature.GateProjection {
 	profile := pipelineProfileFromKey(opt)
 	return profile.ProjectMergedGates(
-		feature.DefaultCheckpointsForProfile(profile),
+		m.checkpointDefaults,
 		m.pipelineCheckpointOverrides(opt),
 		m.provisionalPublishable,
 	)
@@ -576,9 +592,13 @@ func gateLabels(projection feature.GateProjection) []string {
 			if projection.Checkpoints.DesignReview {
 				gates = append(gates, "Design review")
 			}
-		case feature.GatePlanReview:
-			if projection.Checkpoints.PlanReview {
-				gates = append(gates, "Plan review")
+		case feature.GateRoadmapReview:
+			if projection.Checkpoints.RoadmapReview {
+				gates = append(gates, "Roadmap review")
+			}
+		case feature.GatePhasePlanReview:
+			if projection.Checkpoints.PhasePlanReview {
+				gates = append(gates, "Phase plan review")
 			}
 		case feature.GateManualPublish:
 			if projection.Checkpoints.ManualPublish {
@@ -599,8 +619,10 @@ func availableGateLabels(projection feature.GateProjection) []string {
 			gates = append(gates, "Research review")
 		case feature.GateDesignReview:
 			gates = append(gates, "Design review")
-		case feature.GatePlanReview:
-			gates = append(gates, "Plan review")
+		case feature.GateRoadmapReview:
+			gates = append(gates, "Roadmap review")
+		case feature.GatePhasePlanReview:
+			gates = append(gates, "Phase plan review")
 		case feature.GateManualPublish:
 			gates = append(gates, "Publish review")
 		}
@@ -609,14 +631,14 @@ func availableGateLabels(projection feature.GateProjection) []string {
 }
 
 // applyPipelineDefaults updates checkpoints to match the selected pipeline profile.
-// It first applies the profile defaults, then checks for per-repo pipeline_gates
+// It first applies the configured defaults, then checks for per-repo pipeline_gates
 // config overrides (matching the logic used for card rendering in step 3).
 func (m *WizardModel) applyPipelineDefaults() {
 	opt := m.pipelineOptions[m.pipelineCursor]
 	projection := m.projectedPipelineCheckpoints(opt)
 	m.setCheckpointState(projection.Checkpoints)
 	if !m.provisionalPublishable {
-		m.checkpoints[4] = true // force ManualPublish when unpublished
+		m.checkpoints[checkpointManualPublish] = true // force ManualPublish when unpublished
 	}
 }
 
@@ -677,13 +699,7 @@ func (m *WizardModel) virtualConfigFeature() *feature.Feature {
 		Pipeline:    pipelineProfileFromKey(m.currentPipelineKey()),
 		Models:      m.models,
 		Inquireness: inq,
-		Checkpoints: feature.Checkpoints{
-			InquiryReview:  m.checkpoints[0],
-			ResearchReview: m.checkpoints[1],
-			DesignReview:   m.checkpoints[2],
-			PlanReview:     m.checkpoints[3],
-			ManualPublish:  m.checkpoints[4],
-		},
+		Checkpoints: m.checkpointState(),
 	}
 }
 
@@ -749,8 +765,8 @@ func (m WizardModel) wizardModelFocus() configFocusZone {
 // syncWizardFromConfigEditor copies the editor's post-Update internal state
 // back into wizard fields. Uses the editor's raw internal `checkpoints`
 // field — NOT `Snapshot()` — so the wizard's pre-Phase-3 semantics where
-// m.checkpoints[4] retains its init value when !provisionalPublishable are
-// preserved (Snapshot() forces ManualPublish=true).
+// m.checkpoints[checkpointManualPublish] retains its init value when
+// !provisionalPublishable are preserved (Snapshot() forces ManualPublish=true).
 func (m *WizardModel) syncWizardFromConfigEditor() {
 	m.models = m.configEditor.models
 	m.inquirenessCursor = indexOfInquireness(m.configEditor.inquireness, m.inquirenessOptions)

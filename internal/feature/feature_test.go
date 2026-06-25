@@ -1100,7 +1100,7 @@ func TestCheckpointsHasGateForPhase(t *testing.T) {
 		{"inquiry gate for research", Checkpoints{InquiryReview: true}, PhaseResearch, true},
 		{"research gate for design", Checkpoints{ResearchReview: true}, PhaseDesign, true},
 		{"design gate for plan", Checkpoints{DesignReview: true}, PhasePlan, true},
-		{"plan gate for implement", Checkpoints{PlanReview: true}, PhaseImplement, true},
+		{"phase-plan gate for implement", Checkpoints{PhasePlanReview: true}, PhaseImplement, true},
 		{"no gate for publish", Checkpoints{ManualPublish: true}, PhasePublish, false},
 		{"no gate for KB", Checkpoints{InquiryReview: true}, PhaseKnowledgeBase, false},
 		{"zero value has no gates", Checkpoints{}, PhaseResearch, false},
@@ -1142,11 +1142,12 @@ func TestCheckpointsYAMLRoundTrip(t *testing.T) {
 		ID:   "test",
 		Name: "test",
 		Checkpoints: Checkpoints{
-			InquiryReview:  true,
-			ResearchReview: false,
-			DesignReview:   true,
-			PlanReview:     false,
-			ManualPublish:  true,
+			InquiryReview:   true,
+			ResearchReview:  false,
+			DesignReview:    true,
+			RoadmapReview:   false,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 	data, err := yaml.Marshal(f)

@@ -42,7 +42,7 @@ type ConfigEditorModel struct {
 	// rowCursor indexes into a flat logical row list:
 	//   0 .. len(catalog.Fields)-1     : Models rows
 	//   modelsCount                    : Inquireness
-	//   modelsCount+1 .. lastRow()     : Checkpoints (4 base + 1 when publishable)
+	//   modelsCount+1 .. lastRow()     : Checkpoints visible for the active pipeline
 	rowCursor int
 
 	activeModelCell   modelCell
@@ -85,7 +85,8 @@ var checkpointFields = []checkpointField{
 	{Gate: feature.GateInquiryReview, Label: "Inquiry Review", Desc: "Pause after inquiry before research"},
 	{Gate: feature.GateResearchReview, Label: "Research Review", Desc: "Pause after research before design"},
 	{Gate: feature.GateDesignReview, Label: "Design Review", Desc: "Pause after design before planning"},
-	{Gate: feature.GatePlanReview, Label: "Plan Review", Desc: "Pause after planning before implementation"},
+	{Gate: feature.GateRoadmapReview, Label: "Roadmap Review", Desc: "Pause after roadmap before phase planning"},
+	{Gate: feature.GatePhasePlanReview, Label: "Phase Plan Review", Desc: "Pause after each phase plan before implementation"},
 	{Gate: feature.GateManualPublish, Label: "Manual Publish", Desc: "Review diff and PR before publishing"},
 }
 
@@ -298,7 +299,10 @@ func (m ConfigEditorModel) CheckpointsChangeCount() int {
 	if cp.DesignReview != orig.DesignReview {
 		count++
 	}
-	if cp.PlanReview != orig.PlanReview {
+	if cp.RoadmapReview != orig.RoadmapReview {
+		count++
+	}
+	if cp.PhasePlanReview != orig.PhasePlanReview {
 		count++
 	}
 	if cp.ManualPublish != orig.ManualPublish {
@@ -708,6 +712,9 @@ func (m *ConfigEditorModel) toggleCurrentCheckpoint() {
 		return
 	}
 	m.setCheckpointValue(fields[idx].Gate, !m.checkpointValue(fields[idx].Gate))
+	if last := m.lastRow(); m.rowCursor > last {
+		m.rowCursor = last
+	}
 }
 
 func (m ConfigEditorModel) checkpointValue(gate feature.GateIndex) bool {
@@ -718,8 +725,10 @@ func (m ConfigEditorModel) checkpointValue(gate feature.GateIndex) bool {
 		return m.checkpoints.ResearchReview
 	case feature.GateDesignReview:
 		return m.checkpoints.DesignReview
-	case feature.GatePlanReview:
-		return m.checkpoints.PlanReview
+	case feature.GateRoadmapReview:
+		return m.checkpoints.RoadmapReview
+	case feature.GatePhasePlanReview:
+		return m.checkpoints.PhasePlanReview
 	case feature.GateManualPublish:
 		return m.checkpoints.ManualPublish
 	}
@@ -734,8 +743,11 @@ func (m *ConfigEditorModel) setCheckpointValue(gate feature.GateIndex, value boo
 		m.checkpoints.ResearchReview = value
 	case feature.GateDesignReview:
 		m.checkpoints.DesignReview = value
-	case feature.GatePlanReview:
-		m.checkpoints.PlanReview = value
+	case feature.GateRoadmapReview:
+		m.checkpoints.RoadmapReview = value
+		m.checkpoints.PhasePlanReview = value
+	case feature.GatePhasePlanReview:
+		m.checkpoints.PhasePlanReview = value
 	case feature.GateManualPublish:
 		m.checkpoints.ManualPublish = value
 	}
@@ -745,6 +757,9 @@ func (m ConfigEditorModel) visibleCheckpointFields() []checkpointField {
 	projection := m.pipeline.ProjectGates(m.checkpoints, m.provisionalPublishable)
 	fields := make([]checkpointField, 0, len(projection.Visible))
 	for _, gate := range projection.Visible {
+		if gate == feature.GatePhasePlanReview && !m.checkpoints.RoadmapReview && !m.checkpoints.PhasePlanReview {
+			continue
+		}
 		for _, field := range checkpointFields {
 			if field.Gate == gate {
 				fields = append(fields, field)
@@ -1225,15 +1240,18 @@ func (m ConfigEditorModel) renderCheckpointsBox(_ int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Gates")
 	lines := []string{title}
 	fields := m.visibleCheckpointFields()
-	for i, cp := range fields {
+	for i, field := range fields {
 		box := "[ ]"
-		if m.checkpointValue(cp.Gate) {
+		if m.checkpointValue(field.Gate) {
 			box = SuccessStyle.Render("[x]")
 		} else {
 			box = MutedStyle.Render("[ ]")
 		}
-		label := cp.Label
-		desc := MutedStyle.Render(cp.Desc)
+		label := field.Label
+		if field.Gate == feature.GatePhasePlanReview {
+			label = "  " + label
+		}
+		desc := MutedStyle.Render(field.Desc)
 		prefix := "  "
 		rendered := fmt.Sprintf("%s %-18s %s", box, label, desc)
 		if m.rowCategory() == rowCatCheckpoints && m.checkpointIndexForRow(m.rowCursor) == i {

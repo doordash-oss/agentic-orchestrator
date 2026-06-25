@@ -17,7 +17,7 @@ That is the real "oneshot" value: an engineer can describe a large feature once,
 - **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
 - **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
 - **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
-- **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
+- **Human attention is reserved for decisions** — Optional gates pause on inquiry review, research review, design review, roadmap review, phase plan review, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
 - **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
 - **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add more to split the work. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
 
@@ -115,7 +115,7 @@ When creating a feature, choose a pipeline depth:
 |---------|--------|----------|
 | **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
 | **Large** | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features (default) |
-| **Moonshot** | Same phase sequence as Large, with max effort, plan-review defaults, and per-iteration implementation review | High-risk or highly ambiguous changes |
+| **Moonshot** | Same phase sequence as Large, with max effort and per-iteration implementation review | High-risk or highly ambiguous changes |
 
 ### Worktree Isolation
 
@@ -172,8 +172,8 @@ Press `n` from the dashboard to open the wizard:
 
 1. **What** — Name and describe the feature. Supports pasting images (`Ctrl+V`) and attaching files (`@`).
 2. **Where** — Select target repo(s). Browse for new directories or create repos on the fly.
-3. **Pipeline** — Choose Medium, Large, or Moonshot. Toggle individual checkpoints (inquiry review, research review, design review, plan review, manual publish).
-4. **Review** — Adjust risk level, models per phase, exit criteria. Submit to start.
+3. **Pipeline** — Choose Medium, Large, or Moonshot and see the available gate options.
+4. **Review** — Adjust risk level, models per phase, checkpoints (inquiry review, research review, design review, roadmap review, phase plan review, manual publish), exit criteria. Submit to start.
 
 ### Interacting with Agents
 

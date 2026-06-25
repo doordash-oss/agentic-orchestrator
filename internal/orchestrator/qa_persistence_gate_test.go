@@ -146,10 +146,11 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 				// a checkpoint and short-circuits rather than dispatching a
 				// real downstream phase that would need a model registry.
 				Checkpoints: feature.Checkpoints{
-					InquiryReview:  true,
-					ResearchReview: true,
-					DesignReview:   true,
-					PlanReview:     true,
+					InquiryReview:   true,
+					ResearchReview:  true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
 				},
 			}
 
@@ -236,10 +237,11 @@ func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 		CurrentPhase: feature.PhaseInquire,
 		Pipeline:     feature.PipelineLarge,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview:  true,
-			ResearchReview: true,
-			DesignReview:   true,
-			PlanReview:     true,
+			InquiryReview:   true,
+			ResearchReview:  true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
 		},
 	}
 
@@ -308,10 +310,11 @@ func TestInquirePhase_AutoPickAnnotationPreserved(t *testing.T) {
 		CurrentPhase: feature.PhaseInquire,
 		Pipeline:     feature.PipelineLarge,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview:  true,
-			ResearchReview: true,
-			DesignReview:   true,
-			PlanReview:     true,
+			InquiryReview:   true,
+			ResearchReview:  true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
 		},
 	}
 	phaseDir := filepath.Join(agent.ActiveRunDir(tmpStateDir, f), "inquire")
@@ -373,10 +376,11 @@ func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 		CurrentPhase: feature.PhaseInquire,
 		Pipeline:     feature.PipelineLarge,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview:  true,
-			ResearchReview: true,
-			DesignReview:   true,
-			PlanReview:     true,
+			InquiryReview:   true,
+			ResearchReview:  true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
 		},
 	}
 	phaseDir := filepath.Join(agent.ActiveRunDir(tmpStateDir, f), "inquire")
@@ -432,10 +436,11 @@ func TestInquirePhase_RefPrefix_WritesQAFile(t *testing.T) {
 		// any non-empty prefix exercises the prefixed-path branch.
 		RefactorPrompt: "polish",
 		Checkpoints: feature.Checkpoints{
-			InquiryReview:  true,
-			ResearchReview: true,
-			DesignReview:   true,
-			PlanReview:     true,
+			InquiryReview:   true,
+			ResearchReview:  true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
 		},
 	}
 	f.SetRefactorCount(1)

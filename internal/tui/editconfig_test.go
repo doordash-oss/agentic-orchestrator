@@ -713,8 +713,9 @@ func TestEditConfig_GatesStatePanelIsOnOffPicker(t *testing.T) {
 		Name:     "gates",
 		Pipeline: feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{
-			PlanReview:    true,
-			ManualPublish: true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 	app = withOverlay(t, app, f)
@@ -727,14 +728,16 @@ func TestEditConfig_GatesStatePanelIsOnOffPicker(t *testing.T) {
 		t.Fatalf("down into Gates focus = %v, want gate list", got.editConfig.focus)
 	}
 
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	got = updated.(AppModel)
 	view := stripANSI(got.editConfig.View())
-	for _, want := range []string{"State", "on", "off", "Pause after planning before implementation"} {
+	for _, want := range []string{"State", "on", "off", "Pause after each phase plan before implementation"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("Gates view missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Count(view, "Plan Review") != 1 {
-		t.Fatalf("Details panel should not repeat Plan Review; view:\n%s", view)
+	if strings.Count(view, "Phase Plan Review") != 1 {
+		t.Fatalf("Details panel should not repeat Phase Plan Review; view:\n%s", view)
 	}
 
 	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -749,7 +752,7 @@ func TestEditConfig_GatesStatePanelIsOnOffPicker(t *testing.T) {
 
 	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	got = updated.(AppModel)
-	if got.editConfig.editor.checkpoints.PlanReview {
+	if got.editConfig.editor.checkpoints.PhasePlanReview {
 		t.Fatal("down in state picker should set Plan Review off")
 	}
 	view = stripANSI(got.editConfig.View())

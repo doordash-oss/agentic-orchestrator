@@ -516,7 +516,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		PreviousFeedback:                     previousFeedback,
 		Iteration:                            iteration,
 		RoadmapPath:                          cfg.Feature.Artifacts["roadmap"],
-		DesignArtifactPath:               cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
 		Images:                               cfg.Feature.Images,
 		PhaseType:                            cfg.Feature.RoadmapPhaseType,
 		FeedbackPath:                         feedbackPath,
@@ -549,7 +549,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		Prompt:                         prompt,
 		SystemPrompt:                   systemPrompt,
 		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     []string{},
+		AgentNames:                     explorationAgentNames(),
 		PIDDir:                         s.stateDir,
 		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
 		WorkDir:                        s.workspace.Cwd,
@@ -642,7 +642,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		VerificationReportPath: verificationReportPath,
 		Iteration:              iteration,
 		Publishable:            cfg.Feature.IsPublishable(),
-		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
 		Images:                 cfg.Feature.Images,
 	})
 

@@ -568,6 +568,9 @@ func TestRoadmapPlanningLoopUsesAttemptDirCompletionMarker(t *testing.T) {
 	if planOpts == nil {
 		t.Fatal("no non-helper planning session found")
 	}
+	if !reflect.DeepEqual(planOpts.AgentNames, explorationAgentNames()) {
+		t.Fatalf("roadmap planner AgentNames = %v, want exploration set %v", planOpts.AgentNames, explorationAgentNames())
+	}
 	wantMarker := filepath.Join(planDir, "attempt-01", "phase_complete")
 	if !strings.Contains(planOpts.SystemPrompt, wantMarker) {
 		t.Fatalf("SystemPrompt missing attempt marker path %q:\n%s", wantMarker, planOpts.SystemPrompt)
@@ -1853,6 +1856,9 @@ func TestPhasePlanLoop_SkillReadInstruction(t *testing.T) {
 	}
 	if planOpts == nil {
 		t.Fatal("no non-helper planning session found")
+	}
+	if !reflect.DeepEqual(planOpts.AgentNames, explorationAgentNames()) {
+		t.Fatalf("phase-plan planner AgentNames = %v, want exploration set %v", planOpts.AgentNames, explorationAgentNames())
 	}
 
 	if !strings.Contains(planOpts.SystemPrompt, "## Output Roots") || !strings.Contains(planOpts.SystemPrompt, "## Completion") {

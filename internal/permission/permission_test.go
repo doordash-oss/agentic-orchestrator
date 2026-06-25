@@ -57,31 +57,31 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	requirePermissionAllowed(t, handler, "Bash", `{"command":"test -f `+feedbackPath+` && echo \"FEEDBACK_EXISTS\" || echo \"FEEDBACK_NOT_FOUND\""}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"touch phase_complete"}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
-	// Writing to a declared artifact via shell is allowed; writing elsewhere is not.
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
-	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+filepath.Join(helperDir, "scratch.txt")+`"}`)
+	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
 	requirePermissionDenied(t, handler, "Agent", `{"prompt":"write the file for me"}`)
 }
 
-func TestBoundedHelperArtifactHandler_AllowsValidateArtifactsPreflight(t *testing.T) {
+// TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell confirms that when the
+// helper process runs under an OS read-only-worktree sandbox (Sandboxed=true),
+// shell is unrestricted — the read-only-analysis constructs the allowlist rejects
+// (command substitution, loops) are permitted, since the kernel, not the
+// allowlist, prevents worktree mutation. Non-sandboxed helpers keep the
+// restrictive allowlist, and edits stay gated to declared artifacts either way.
+func TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell(t *testing.T) {
 	helperDir := t.TempDir()
-	handler := &BoundedHelperArtifactHandler{
-		AllowedPaths: []string{
-			filepath.Join(helperDir, "validation-scope-feedback.md"),
-			filepath.Join(helperDir, "phase_complete"),
-		},
-	}
+	allowed := []string{filepath.Join(helperDir, "review-feedback.md"), filepath.Join(helperDir, "phase_complete")}
+	// The real read-only analysis (loop + command substitution) that aborts a
+	// non-sandboxed glm helper.
+	analysis := `{"command":"for s in a b; do c=$(grep -c \"$s\" README.md); echo \"$s: $c\"; done"}`
 
-	// The bounded-helper system prompt instructs running this read-only artifact
-	// check before creating phase_complete. It invokes $AGENTICO_BIN, which is not
-	// a generic read-only shell builtin, so the read-only allowlist denies it and
-	// the helper can never complete its preflight. It must be allowed explicitly.
-	preflight := `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase plan --role validate_roadmap_architecture --dir \"` + helperDir + `\""}`
-	requirePermissionAllowed(t, handler, "Bash", preflight)
+	sandboxed := &BoundedHelperArtifactHandler{AllowedPaths: allowed, Sandboxed: true}
+	requirePermissionAllowed(t, sandboxed, "Bash", analysis)
+	requirePermissionAllowed(t, sandboxed, "Bash", `{"command":"\"$AGENTICO_BIN\" validate-artifacts --dir x"}`)
+	requirePermissionAllowed(t, sandboxed, "Write", `{"file_path":"`+allowed[0]+`"}`)
+	requirePermissionDenied(t, sandboxed, "Write", `{"file_path":"`+filepath.Join(helperDir, "other.md")+`"}`)
 
-	// Tight: only the validate-artifacts subcommand is allowed; any other
-	// $AGENTICO_BIN invocation stays denied so the carve-out cannot mutate state.
-	requirePermissionDenied(t, handler, "Bash", `{"command":"\"$AGENTICO_BIN\" publish --feature f"}`)
+	strict := &BoundedHelperArtifactHandler{AllowedPaths: allowed}
+	requirePermissionDenied(t, strict, "Bash", analysis)
 }
 
 func requirePermissionAllowed(t *testing.T, handler ports.PermissionHandler, toolName, input string) {

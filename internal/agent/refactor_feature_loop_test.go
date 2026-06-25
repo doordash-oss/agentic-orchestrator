@@ -877,6 +877,28 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationCanRecover(t *testing.T
 	}
 }
 
+func TestRunRefactorPlanStep_ProvisionsExplorationSubagents(t *testing.T) {
+	stateDir := t.TempDir()
+	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-agents", []string{"api"})
+	sm := session.NewManager(make(chan interface{}, 10))
+	defer sm.Shutdown()
+
+	in := refactorPlanStepTestInput(t, store, f, stateDir, artifactDir, "")
+	var captured BuildSessionOpts
+	in.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		captured = opts
+		return nil, nil, nil, fmt.Errorf("test: stop after capture")
+	}
+
+	if _, err := runRefactorPlanStep(in, sm); err == nil {
+		t.Fatal("runRefactorPlanStep() error = nil, want error from capturing BuildSession")
+	}
+	if !reflect.DeepEqual(captured.AgentNames, explorationAgentNames()) {
+		t.Fatalf("refactor-plan AgentNames = %v, want exploration set %v", captured.AgentNames, explorationAgentNames())
+	}
+}
+
 func TestRunRefactorPlanStep_MissingPlanAfterPhaseCompleteReturnsProtocolViolation(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")

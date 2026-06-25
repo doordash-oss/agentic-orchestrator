@@ -228,6 +228,13 @@ func (h *ReviewFeedbackHandler) CanUseTool(req ports.ToolPermissionRequest) (por
 // worktree or escape their helper directory.
 type BoundedHelperArtifactHandler struct {
 	AllowedPaths []string
+	// Sandboxed indicates the helper process itself runs under an OS filesystem
+	// sandbox that makes the reviewed worktree read-only at the kernel layer. When
+	// set, shell access is unrestricted (any worktree write fails as an ordinary
+	// non-zero shell result the model absorbs) instead of gated by the read-only
+	// command allowlist. Only the OpenCode provider sets this, paired with the
+	// sandbox wrapper; other providers leave it false and keep the allowlist.
+	Sandboxed bool
 }
 
 // CanUseTool approves reads and exact declared artifact writes.
@@ -237,12 +244,12 @@ func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionReques
 		return ports.PermissionDecision{Behavior: "allow"}, nil
 
 	case "Bash":
-		if h.bashAllowed(req.Input) {
+		if h.Sandboxed || boundedHelperReadOnlyBashAllowed(req.Input) {
 			return ports.PermissionDecision{Behavior: "allow"}, nil
 		}
 		return ports.PermissionDecision{
 			Behavior: "deny",
-			Reason:   "bounded helper shell is limited to read-only inspection and writes to its declared artifacts",
+			Reason:   "bounded helper shell access is limited to read-only inspection commands",
 		}, nil
 
 	case "Edit", "Write", "NotebookEdit":
@@ -286,27 +293,72 @@ func toolInputFilePath(input string) (string, bool) {
 	return payload.FilePath, true
 }
 
-// boundedHelperPreflightAllowed reports whether the command is the read-only
-// artifact preflight the bounded-helper prompt instructs: a single invocation of
-// $AGENTICO_BIN (or its absolute path) with the validate-artifacts subcommand,
-// which only inspects the helper's own output. Any other invocation stays denied.
-func boundedHelperPreflightAllowed(input string) bool {
+// boundedHelperReadOnlyBashAllowed reports whether a bounded helper's bash
+// command is a conservative read-only inspection: no chaining/redirection/
+// substitution metacharacters, and every &&/||/| segment is a known read-only
+// program. Used for non-sandboxed helpers (e.g. Claude/Codex); OpenCode helpers
+// run under an OS sandbox and bypass this via Sandboxed.
+func boundedHelperReadOnlyBashAllowed(input string) bool {
 	command := strings.TrimSpace(extractBashCommand(input))
 	if command == "" {
 		return false
 	}
-	if strings.ContainsAny(command, "\n\r;|&<>`") || strings.Contains(command, "$(") {
+	command = stripReadOnlyShellRedirections(command)
+	if strings.ContainsAny(command, "\n\r;`<>") || strings.Contains(command, "$(") {
+		return false
+	}
+	parts := splitReadOnlyShellSegments(command)
+	if len(parts) == 0 {
+		return false
+	}
+	for _, part := range parts {
+		if !readOnlySimpleCommandAllowed(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func splitReadOnlyShellSegments(command string) []string {
+	normalized := strings.NewReplacer(
+		"&&", "\x00",
+		"||", "\x00",
+		"|", "\x00",
+	).Replace(command)
+	rawParts := strings.Split(normalized, "\x00")
+	parts := make([]string, 0, len(rawParts))
+	for _, part := range rawParts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+func readOnlySimpleCommandAllowed(command string) bool {
+	if strings.Contains(command, "&") {
 		return false
 	}
 	fields := strings.Fields(command)
-	if len(fields) < 2 {
+	if len(fields) == 0 {
 		return false
 	}
-	prog := strings.Trim(fields[0], `"'`)
-	if prog != "$AGENTICO_BIN" && !strings.HasPrefix(prog, "/") {
+	name := filepath.Base(fields[0])
+	switch name {
+	case "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "rg", "echo", "true", "false", "sort", "uniq", "cut", "tr":
+		return true
+	case "test", "[":
+		return true
+	case "find":
+		return !hasAnyShellToken(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir")
+	case "sed":
+		return !hasSedInPlaceFlag(fields[1:])
+	case "git":
+		return gitReadOnlySubcommandAllowed(fields[1:])
+	default:
 		return false
 	}
-	return fields[1] == "validate-artifacts"
 }
 
 func stripReadOnlyShellRedirections(command string) string {

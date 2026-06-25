@@ -1885,8 +1885,8 @@ func TestRunResearchFromQuestions_PassesResearchTracerAgentNames(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from mock BuildSession")
 	}
-	if !reflect.DeepEqual(captured.AgentNames, researchAgentNames()) {
-		t.Fatalf("captured AgentNames = %v, want %v", captured.AgentNames, researchAgentNames())
+	if !reflect.DeepEqual(captured.AgentNames, explorationAgentNames()) {
+		t.Fatalf("captured AgentNames = %v, want %v", captured.AgentNames, explorationAgentNames())
 	}
 }
 

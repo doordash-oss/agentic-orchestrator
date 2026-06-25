@@ -532,6 +532,9 @@ fi`,
 		if !opts.SystemPromptHasUsefulResources {
 			t.Errorf("reviewer SystemPromptHasUsefulResources = false, want true")
 		}
+		if got, want := strings.Join(opts.AgentNames, ","), strings.Join(explorationAgentNames(), ","); got != want {
+			t.Errorf("reviewer AgentNames = %v, want exploration set %v", opts.AgentNames, explorationAgentNames())
+		}
 	}
 }
 

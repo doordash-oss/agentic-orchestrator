@@ -419,13 +419,14 @@ func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPat
 		SkillName:     "research-codebase",
 		SessionSuffix: "-research",
 		Phase:         feature.PhaseResearch,
-		AgentNames:    researchAgentNames(),
+		AgentNames:    explorationAgentNames(),
 		KBInfos:       kbInfos,
 	})
 }
 
-// researchAgentNames returns the subagents allowed in Research sessions.
-func researchAgentNames() []string {
+// explorationAgentNames returns the codebase- and web-exploration subagents
+// shared by research and the planning, review, and refactor phases.
+func explorationAgentNames() []string {
 	return []string{
 		"codebase-locator",
 		"codebase-analyzer",

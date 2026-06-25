@@ -127,8 +127,12 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		SkillsDir:     pr.SkillsDir,
 		GuidelinesDir: pr.GuidelinesDir,
 		AskingClause:  cfg.CompletionAskingClause,
+		// Bounded helpers run with no sub-agents; advertising them makes a model
+		// that aborts on a denial attempt a task spawn the handler rejects.
+		SuppressSubagents: true,
 	})
 	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
+	boundedHandler := &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         cfg.Prompt,
@@ -136,7 +140,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		AdditionalDirs:                 cfg.AdditionalDirs,
 		WritableRoots:                  allowedPaths,
 		PIDDir:                         pidDir,
-		PermHandler:                    permission.Guarded(&permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}),
+		PermHandler:                    permission.Guarded(boundedHandler),
 		RepoName:                       cfg.RepoName,
 		WorkDir:                        cfg.WorkDir,
 		LogPath:                        cfg.LogPath,
@@ -161,6 +165,20 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		if cfg.Label != "" {
 			sessOpts.Label = cfg.Label
 		}
+	}
+
+	// For OpenCode helpers, run the process under a read-only-worktree sandbox and
+	// lift the shell allowlist: some models abort their turn on a permission denial,
+	// so their read-only analysis must not be denied, while worktree mutation is
+	// blocked at the kernel (a write there fails as an ordinary shell error absorbed).
+	var sandboxCleanup func()
+	if sessOpts != nil {
+		var sandboxed bool
+		command, sandboxed, sandboxCleanup = maybeWrapHelperSandbox(command, sessOpts.ProviderName, pr.StateDir)
+		boundedHandler.Sandboxed = sandboxed
+	}
+	if sandboxCleanup != nil {
+		defer sandboxCleanup()
 	}
 
 	// requireOutput stays false: the verdict lives in FeedbackPath, not in

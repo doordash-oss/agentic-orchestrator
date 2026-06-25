@@ -242,6 +242,10 @@ type Session struct {
 	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
 	// bundles before they enter pending TUI routing.
 	askUserAutoPick *ports.AskUserAutoPickConfig
+
+	// watchdog monitors provider-specific lifecycle stalls that do not surface
+	// as normal Result, Done, or control_request events.
+	watchdog *sessionWatchdog
 }
 
 // AttachDropReporter receives a notification every time a critical SDK
@@ -757,6 +761,9 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 	// Start the stream-ring drainer before any producer goroutines
 	// begin pushing events.
 	s.ensureStreamDrainer()
+	if s.watchdog != nil {
+		s.watchdog.Start()
+	}
 
 	go s.readMessages(onMessage)
 
@@ -890,6 +897,10 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		}
 
 		for _, msg := range parsed {
+			if s.watchdog != nil {
+				s.watchdog.Observe(msg)
+			}
+
 			// Handle init message to capture model
 			if msg.Init != nil {
 				s.mu.Lock()

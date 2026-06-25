@@ -104,6 +104,131 @@ func TestSessionStartAndCapture(t *testing.T) {
 	}
 }
 
+func TestOpenCodeWatchdogFailsIdlePendingTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "opencode-stall.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-empty-write","tool_name":"Write","data":"pending"}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"opencode-watchdog-stall",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "opencode",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout: 25 * time.Millisecond,
+				PollInterval:           5 * time.Millisecond,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "FAILED" {
+			t.Fatalf("StatusCh = %q, want FAILED", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for watchdog failure status")
+	}
+
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for watchdog to stop session")
+	}
+
+	if got := sess.ErrorDetail(); !strings.Contains(got, "provider watchdog stalled with pending tool Write") {
+		t.Fatalf("ErrorDetail() = %q, want pending Write watchdog detail", got)
+	}
+}
+
+func TestOpenCodeWatchdogIgnoresCompletedPendingTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "opencode-completed-tool.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"pending"}'
+sleep 0.01
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"completed"}'
+sleep 0.06
+printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"opencode-watchdog-completed",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "opencode",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout: 25 * time.Millisecond,
+				PollInterval:           5 * time.Millisecond,
+			},
+			ResultShutdownGrace: 20 * time.Millisecond,
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "SUCCESS" {
+			t.Fatalf("StatusCh = %q, want SUCCESS", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for success status")
+	}
+}
+
+func TestWatchdogPendingToolDataMatchesStatusLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "bare pending status", data: "pending", want: true},
+		{name: "opencode status line", data: "File: report.md\nStatus: pending", want: true},
+		{name: "completed command mentions pending", data: "grep pending report.md\nStatus: completed", want: false},
+		{name: "path mentions pending", data: "File: pending-report.md\nStatus: completed", want: false},
+		{name: "running is not pending", data: "Status: running", want: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isWatchdogPendingToolData(tt.data); got != tt.want {
+				t.Fatalf("isWatchdogPendingToolData(%q) = %v, want %v", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSessionStop(t *testing.T) {
 	// parallel-exempt: subprocess-shutdown representative for the fast suite.
 	dir := t.TempDir()

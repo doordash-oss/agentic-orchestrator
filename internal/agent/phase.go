@@ -1194,6 +1194,19 @@ type BuildSessionOpts struct {
 // Used by TUI components and loop configs that need to create sessions.
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
+var openCodeSessionWatchdogConfig = ports.SessionWatchdogConfig{
+	PendingToolIdleTimeout: 5 * time.Minute,
+	PollInterval:           time.Second,
+}
+
+func watchdogConfigForProvider(providerName string) *ports.SessionWatchdogConfig {
+	if providerName != openCodeProviderName {
+		return nil
+	}
+	cfg := openCodeSessionWatchdogConfig
+	return &cfg
+}
+
 // grillingPhasePermissionMode returns the provider permission mode to pin for
 // phases whose prompts rely on the [grill-me] directive. Returns "default" for
 // grilling phases so the user's Claude Code "auto" defaultMode setting does
@@ -1367,6 +1380,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		Protocol:          protocol,
 		DebugSystemPrompt: opts.SystemPrompt,
 		TurnMode:          opts.TurnMode,
+		Watchdog:          watchdogConfigForProvider(prov.Name()),
 	}
 	return cmd, env, sessOpts, nil
 }

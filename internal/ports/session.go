@@ -160,6 +160,15 @@ type AskUserAutoPickConfig struct {
 	OnQuestionAutoPicked func(question, answer string, confidence float64)
 }
 
+// SessionWatchdogConfig enables provider-specific lifecycle safety rails for a
+// session. The first watchdog watches for a provider that reports a pending
+// tool call and then goes silent without emitting a permission request, result,
+// or process exit.
+type SessionWatchdogConfig struct {
+	PendingToolIdleTimeout time.Duration
+	PollInterval           time.Duration
+}
+
 // ToolPermissionRequest describes a pending tool-use permission check.
 type ToolPermissionRequest struct {
 	RequestID    string
@@ -230,6 +239,8 @@ type SessionOpts struct {
 	// policy for allowlisted creator sessions. Nil preserves pass-through
 	// routing for every AskUserQuestion bundle.
 	AskUserAutoPick *AskUserAutoPickConfig
+	// Watchdog enables generic session lifecycle watchdogs. Nil disables them.
+	Watchdog *SessionWatchdogConfig
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK

@@ -157,6 +157,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.turnMode = opts[0].TurnMode
 		s.label = opts[0].Label
 		s.askUserAutoPick = opts[0].AskUserAutoPick
+		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
 		// Set log file before Start() so the read goroutine can write from
 		// the first line. This avoids a race with fast sessions (codex)
 		// where readMessages exits before SetLogFile is called.

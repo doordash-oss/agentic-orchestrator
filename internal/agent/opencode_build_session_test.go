@@ -96,6 +96,12 @@ func TestOpenCodeBuildSessionReceivesSamePromptAndMarkerContract(t *testing.T) {
 	if sessOpts == nil || sessOpts.ProviderName != "opencode" {
 		t.Fatalf("BuildSession() sessOpts = %#v, want ProviderName opencode", sessOpts)
 	}
+	if sessOpts.Watchdog == nil {
+		t.Fatal("BuildSession() Watchdog = nil, want OpenCode watchdog config")
+	}
+	if sessOpts.Watchdog.PendingToolIdleTimeout <= 0 {
+		t.Fatalf("BuildSession() Watchdog.PendingToolIdleTimeout = %s, want enabled", sessOpts.Watchdog.PendingToolIdleTimeout)
+	}
 	proto, ok := sessOpts.Protocol.(*opencode.Protocol)
 	if !ok {
 		t.Fatalf("BuildSession() Protocol type = %T, want *opencode.Protocol", sessOpts.Protocol)
@@ -111,6 +117,44 @@ func TestOpenCodeBuildSessionReceivesSamePromptAndMarkerContract(t *testing.T) {
 	}
 	if got := proto.BackendModelForTest(); got != "anthropic/claude-sonnet-4-5" {
 		t.Fatalf("OpenCode protocol backend model = %q, want anthropic/claude-sonnet-4-5", got)
+	}
+}
+
+func TestBuildSessionOnlyEnablesWatchdogForOpenCode(t *testing.T) {
+	dir := t.TempDir()
+	eventCh := make(chan interface{}, 8)
+	sm := session.NewManager(eventCh)
+	store := feature.NewStore(dir)
+	pr := NewPhaseRunner(sm, store, dir)
+	pr.Registry = newRegistryWithOpenCode()
+
+	_, _, openCodeOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:        "opencode:anthropic/claude-sonnet-4-5",
+		Prompt:       "prompt",
+		SystemPrompt: "system",
+		WorkDir:      dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession(OpenCode) error: %v", err)
+	}
+	if openCodeOpts == nil || openCodeOpts.Watchdog == nil {
+		t.Fatalf("BuildSession(OpenCode) Watchdog = %#v, want config", openCodeOpts)
+	}
+
+	_, _, claudeOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:        "sonnet",
+		Prompt:       "prompt",
+		SystemPrompt: "system",
+		WorkDir:      dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession(Claude) error: %v", err)
+	}
+	if claudeOpts == nil {
+		t.Fatal("BuildSession(Claude) sessOpts = nil")
+	}
+	if claudeOpts.Watchdog != nil {
+		t.Fatalf("BuildSession(Claude) Watchdog = %#v, want nil", claudeOpts.Watchdog)
 	}
 }
 

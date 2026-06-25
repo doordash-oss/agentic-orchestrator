@@ -237,12 +237,12 @@ func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionReques
 		return ports.PermissionDecision{Behavior: "allow"}, nil
 
 	case "Bash":
-		if boundedHelperReadOnlyBashAllowed(req.Input) {
+		if h.bashAllowed(req.Input) {
 			return ports.PermissionDecision{Behavior: "allow"}, nil
 		}
 		return ports.PermissionDecision{
 			Behavior: "deny",
-			Reason:   "bounded helper shell access is limited to read-only inspection commands",
+			Reason:   "bounded helper shell is limited to read-only inspection and writes to its declared artifacts",
 		}, nil
 
 	case "Edit", "Write", "NotebookEdit":
@@ -286,25 +286,27 @@ func toolInputFilePath(input string) (string, bool) {
 	return payload.FilePath, true
 }
 
-func boundedHelperReadOnlyBashAllowed(input string) bool {
+// boundedHelperPreflightAllowed reports whether the command is the read-only
+// artifact preflight the bounded-helper prompt instructs: a single invocation of
+// $AGENTICO_BIN (or its absolute path) with the validate-artifacts subcommand,
+// which only inspects the helper's own output. Any other invocation stays denied.
+func boundedHelperPreflightAllowed(input string) bool {
 	command := strings.TrimSpace(extractBashCommand(input))
 	if command == "" {
 		return false
 	}
-	command = stripReadOnlyShellRedirections(command)
-	if strings.ContainsAny(command, "\n\r;`<>") || strings.Contains(command, "$(") {
+	if strings.ContainsAny(command, "\n\r;|&<>`") || strings.Contains(command, "$(") {
 		return false
 	}
-	parts := splitReadOnlyShellSegments(command)
-	if len(parts) == 0 {
+	fields := strings.Fields(command)
+	if len(fields) < 2 {
 		return false
 	}
-	for _, part := range parts {
-		if !readOnlySimpleCommandAllowed(part) {
-			return false
-		}
+	prog := strings.Trim(fields[0], `"'`)
+	if prog != "$AGENTICO_BIN" && !strings.HasPrefix(prog, "/") {
+		return false
 	}
-	return true
+	return fields[1] == "validate-artifacts"
 }
 
 func stripReadOnlyShellRedirections(command string) string {
@@ -314,48 +316,6 @@ func stripReadOnlyShellRedirections(command string) string {
 		"2>&1", "",
 	)
 	return replacer.Replace(command)
-}
-
-func splitReadOnlyShellSegments(command string) []string {
-	normalized := strings.NewReplacer(
-		"&&", "\x00",
-		"||", "\x00",
-		"|", "\x00",
-	).Replace(command)
-	rawParts := strings.Split(normalized, "\x00")
-	parts := make([]string, 0, len(rawParts))
-	for _, part := range rawParts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			parts = append(parts, part)
-		}
-	}
-	return parts
-}
-
-func readOnlySimpleCommandAllowed(command string) bool {
-	if strings.Contains(command, "&") {
-		return false
-	}
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return false
-	}
-	name := filepath.Base(fields[0])
-	switch name {
-	case "cd", "pwd", "ls", "cat", "head", "tail", "wc", "grep", "rg", "echo", "true", "false", "sort", "uniq", "cut", "tr":
-		return true
-	case "test", "[":
-		return true
-	case "find":
-		return !hasAnyShellToken(fields[1:], "-delete", "-exec", "-execdir", "-ok", "-okdir")
-	case "sed":
-		return !hasSedInPlaceFlag(fields[1:])
-	case "git":
-		return gitReadOnlySubcommandAllowed(fields[1:])
-	default:
-		return false
-	}
 }
 
 func hasAnyShellToken(fields []string, denied ...string) bool {

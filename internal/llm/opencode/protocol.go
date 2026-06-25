@@ -86,6 +86,7 @@ type Protocol struct {
 	inTok, outTok, cacheRead, cacheCreate int
 	contextFill, contextWindow            int
 	estimatedContextTokens                int
+	lastEstimatedUsageEmitTokens          int
 	costUSD                               float64
 	usageSeen                             bool
 
@@ -687,11 +688,18 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 			accumulated := p.assistantBuf.String()
 			p.mu.Unlock()
 			out = append(out, assistantPartial(llm.ContentBlock{Type: "text", Text: accumulated}))
+			if msg, ok := p.estimatedUsageUpdate(); ok {
+				out = append(out, msg)
+			}
 		}
 
 	case UpdateAgentThoughtChunk:
 		if text := updateText(su.Update.Content); text != "" {
+			p.addEstimatedContextText(text)
 			out = append(out, assistantPartial(llm.ContentBlock{Type: "thinking", Thinking: "Thinking..."}))
+			if msg, ok := p.estimatedUsageUpdate(); ok {
+				out = append(out, msg)
+			}
 		}
 
 	case UpdateToolCall, UpdateToolCallUpdate:
@@ -975,6 +983,32 @@ func (p *Protocol) addEstimatedContextText(text string) {
 	p.mu.Lock()
 	p.estimatedContextTokens += tokens
 	p.mu.Unlock()
+}
+
+func (p *Protocol) estimatedUsageUpdate() (llm.SDKMessage, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.usageSeen || p.contextWindow <= 0 || p.estimatedContextTokens <= 0 {
+		return llm.SDKMessage{}, false
+	}
+	if p.lastEstimatedUsageEmitTokens > 0 &&
+		p.estimatedContextTokens-p.lastEstimatedUsageEmitTokens < p.estimatedUsageEmitStepLocked() {
+		return llm.SDKMessage{}, false
+	}
+	p.lastEstimatedUsageEmitTokens = p.estimatedContextTokens
+	usage := p.usageLocked()
+	return llm.SDKMessage{Type: "usage_update", UsageUpdate: &usage}, true
+}
+
+func (p *Protocol) estimatedUsageEmitStepLocked() int {
+	step := p.contextWindow / 100
+	if step < 100 {
+		return 100
+	}
+	if step > 5000 {
+		return 5000
+	}
+	return step
 }
 
 // estimateContextTokens intentionally stays simple and deterministic. OpenCode

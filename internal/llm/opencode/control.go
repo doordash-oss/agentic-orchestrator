@@ -112,7 +112,10 @@ func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
 	case ToolKindExecute:
 		return "Bash", inputObject("command", firstStringField(tc.RawInput, tc.Title, "command", "cmd", "script"))
 	case ToolKindEdit:
-		return "Write", inputObject("file_path", firstStringField(tc.RawInput, tc.Title, "filePath", "file_path", "path"))
+		// OpenCode's write tool reports "filePath" (camelCase) while its edit tool
+		// reports "filepath" (lowercase); accept both so an edit to a declared
+		// artifact is not mistaken for the tool title and denied.
+		return "Write", inputObject("file_path", firstStringField(tc.RawInput, tc.Title, "filePath", "filepath", "file_path", "path"))
 	case ToolKindFetch:
 		return "WebFetch", inputObject("url", firstStringField(tc.RawInput, tc.Title, "url", "uri"))
 	case ToolKindSearch:

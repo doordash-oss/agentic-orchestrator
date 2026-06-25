@@ -67,6 +67,10 @@ func ocContentChunk(text string) string {
 	return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_x","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"` + text + `"}}}}`
 }
 
+func ocThoughtChunk(text string) string {
+	return `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_x","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"` + text + `"}}}}`
+}
+
 // ocPromptResult builds a session/prompt JSON-RPC response with the given id,
 // stop reason, and (optional) end-turn token usage body.
 func ocPromptResult(id int, stopReason, usage string) string {
@@ -185,6 +189,27 @@ func TestOpenCodeSessionEstimatesContextWhenOpenCodeReportsZeroTelemetry(t *test
 
 	if pct := s.ContextPercentage(); pct != 5 {
 		t.Errorf("ContextPercentage() = %d, want 5 (estimated 100 tokens / 2000 window)", pct)
+	}
+}
+
+func TestOpenCodeSessionEstimatesContextFromStreamingThoughtWithoutUsageUpdate(t *testing.T) {
+	s := NewSession("oc-lifecycle-stream-estimate", "feat-1", feature.PhaseImplement)
+	p := opencode.NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5", ContextWindow: 2000})
+	s.protocol = p
+	p.SetStdin(io.Discard)
+	if err := p.SendUserMessage(strings.Repeat("abcd", 100)); err != nil {
+		t.Fatalf("SendUserMessage() error = %v", err)
+	}
+
+	runSessionWithStdoutLines(t, s, []string{
+		ocThoughtChunk(strings.Repeat("abcd", 100)),
+	}, nil)
+
+	if pct := s.ContextPercentage(); pct != 10 {
+		t.Errorf("ContextPercentage() = %d, want 10 (estimated prompt + streamed thought / 2000 window)", pct)
+	}
+	if got := s.AccumulatedUsage(); got.InputTokens != 0 || got.OutputTokens != 0 {
+		t.Errorf("AccumulatedUsage() = %+v, want no synthetic token accounting", got)
 	}
 }
 

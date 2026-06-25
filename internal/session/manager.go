@@ -138,6 +138,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 			s.permHandler = opts[0].PermHandler
 		}
 		s.initialPrompt = opts[0].InitialPrompt
+		s.seedInitialPromptContextEstimate(opts[0].InitialPrompt, opts[0].ContextWindow)
 		s.repoName = opts[0].RepoName
 		s.permCacheScope = opts[0].PermCacheScope
 		s.providerName = opts[0].ProviderName

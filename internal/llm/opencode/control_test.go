@@ -23,6 +23,33 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
+// TestNormalizePermissionInput_EditFilepathLowercase guards the bug where the
+// OpenCode edit tool reports its target under the lowercase "filepath" key (with
+// a "diff"), unlike the write tool's camelCase "filePath". When unrecognized, the
+// path falls back to the tool title ("edit") and a bounded-helper handler denies
+// the write to its own feedback artifact, aborting the helper.
+func TestNormalizePermissionInput_EditFilepathLowercase(t *testing.T) {
+	want := "/x/validate-architecture/validation-architecture-feedback.md"
+	tc := PermissionToolCall{
+		Kind:     ToolKindEdit,
+		Title:    "edit",
+		RawInput: json.RawMessage(`{"filepath":"` + want + `","diff":"--- a\n+++ b\n"}`),
+	}
+	name, input := normalizePermissionInput(tc)
+	if name != "Write" {
+		t.Fatalf("toolName = %q, want Write", name)
+	}
+	var got struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := json.Unmarshal(input, &got); err != nil {
+		t.Fatalf("unmarshal normalized input: %v", err)
+	}
+	if got.FilePath != want {
+		t.Fatalf("file_path = %q, want %q (edit tool uses lowercase \"filepath\")", got.FilePath, want)
+	}
+}
+
 // permissionRequestLine builds a session/request_permission server request with
 // the given tool-call kind, raw input, and a standard allow/reject option set.
 func permissionRequestLine(t *testing.T, id int, kind, title string, rawInput map[string]any) []byte {

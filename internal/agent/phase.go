@@ -572,9 +572,9 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	pidDir := filepath.Join(pr.StateDir, f.ID)
 	logPath := filepath.Join(kbDir, "output.txt")
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          kbModel,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
+		Model:        kbModel,
+		Prompt:       prompt,
+		SystemPrompt: systemPrompt,
 		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), not a
 		// descendant, so it must be mounted explicitly: this makes it readable and,
 		// via the default writable-root derivation, writable — without it OpenCode's
@@ -1187,6 +1187,9 @@ type BuildSessionOpts struct {
 	// so each provider resumes via its own supported path. Empty means a normal
 	// new session, leaving providers that do not resume unchanged.
 	ResumeSessionID string
+	// DelegateEditsToClient is forwarded to llm.CommandBuildOpts.DelegateEditsToClient;
+	// bounded helpers set it so OpenCode delegates edits to the client handler.
+	DelegateEditsToClient bool
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
@@ -1313,22 +1316,23 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	opts.AllowedTools = append(opts.AllowedTools, "WebSearch", "WebFetch")
 
 	buildOpts := llm.CommandBuildOpts{
-		Model:                bareModel,
-		Prompt:               opts.Prompt,
-		SystemPrompt:         opts.SystemPrompt,
-		AllowedTools:         opts.AllowedTools,
-		DisallowedTools:      opts.DisallowedTools,
-		DangerouslySkipPerms: pr.DangerouslySkipPermissions,
-		AdditionalDirs:       opts.AdditionalDirs,
-		StateDir:             pr.StateDir,
-		AgentsJSON:           agentsJSON,
-		AgentNames:           opts.AgentNames,
-		EffortLevel:          opts.EffortLevel,
-		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
-		ResumeSessionID:      opts.ResumeSessionID,
-		WritableRoots:        openCodeWritableRoots,
-		ReadRoots:            readRoots,
-		WorkDir:              opts.WorkDir,
+		Model:                 bareModel,
+		Prompt:                opts.Prompt,
+		SystemPrompt:          opts.SystemPrompt,
+		AllowedTools:          opts.AllowedTools,
+		DisallowedTools:       opts.DisallowedTools,
+		DangerouslySkipPerms:  pr.DangerouslySkipPermissions,
+		AdditionalDirs:        opts.AdditionalDirs,
+		StateDir:              pr.StateDir,
+		AgentsJSON:            agentsJSON,
+		AgentNames:            opts.AgentNames,
+		EffortLevel:           opts.EffortLevel,
+		PermissionMode:        grillingPhasePermissionMode(opts.Phase),
+		ResumeSessionID:       opts.ResumeSessionID,
+		WritableRoots:         openCodeWritableRoots,
+		ReadRoots:             readRoots,
+		WorkDir:               opts.WorkDir,
+		DelegateEditsToClient: opts.DelegateEditsToClient,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)
@@ -1359,6 +1363,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		PIDDir:            opts.PIDDir,
 		PermHandler:       opts.PermHandler,
 		InitialPrompt:     opts.Prompt,
+		ContextWindow:     contextWindow,
 		RepoName:          opts.RepoName,
 		LogPath:           opts.LogPath,
 		ProviderName:      prov.Name(),

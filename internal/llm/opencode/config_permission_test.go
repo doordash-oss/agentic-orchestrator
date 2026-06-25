@@ -76,11 +76,80 @@ func TestEditPermission_EmitsExactFileRoot(t *testing.T) {
 	}
 }
 
-// TestRootGlobs_NoWorkDirIsAbsolutePatternsOnly confirms that with no cwd known,
-// only absolute patterns are emitted.
-func TestRootGlobs_NoWorkDirIsAbsolutePatternsOnly(t *testing.T) {
+// TestPermissionConfig_DelegateEditsToClient_EditIsBareAsk guards the bounded
+// review-helper fix: OpenCode resolves permissions by last-matching-rule (not
+// most-specific) and matches the edit surface against a worktree-relative path
+// the orchestrator's generated globs never reproduce, so an exact-file edit map
+// collapses to the catch-all "*"->deny and the helper's own feedback/phase_complete
+// writes are denied before the client is ever asked. With edits delegated, every
+// file-edit surface is a bare "ask" so OpenCode forwards each edit to the client
+// permission handler, which enforces the exact allowed artifact paths.
+func TestPermissionConfig_DelegateEditsToClient_EditIsBareAsk(t *testing.T) {
+	workDir := "/Users/x/.agentic-workflow/worktrees/feature/repo"
+	feedback := "/Users/x/.agentic-workflow/features/f/runs/run-002/roadmap/attempt-01/validate-scope/validation-scope-feedback.md"
+
+	perm := permissionConfig(false, workDir, []string{feedback}, []string{workDir}, true)
+
+	for _, key := range fileEditPermKeys {
+		if got := perm[key]; got != "ask" {
+			t.Errorf("perm[%q] = %#v, want bare \"ask\" (delegated to client handler)", key, got)
+		}
+	}
+
+	// External-directory roots must be preserved so the helper can still reach
+	// paths outside cwd; only the edit surface changes.
+	if _, ok := perm[permKeyExternal].(map[string]string); !ok {
+		t.Errorf("perm[%q] = %#v, want path-pattern map (mounted roots preserved)", permKeyExternal, perm[permKeyExternal])
+	}
+}
+
+// TestPermissionConfig_NoDelegate_EditRemainsPatternMap confirms the default
+// (non-delegated) edit surface is unchanged: a writable root still yields the
+// path-pattern map so non-helper sessions keep their existing bounded-edit
+// behavior.
+func TestPermissionConfig_NoDelegate_EditRemainsPatternMap(t *testing.T) {
+	workDir := "/Users/x/.agentic-workflow/worktrees/feature/repo"
+	kbRoot := "/Users/x/.agentic-workflow/knowledge-base/repo"
+
+	perm := permissionConfig(false, workDir, []string{kbRoot}, []string{workDir}, false)
+
+	if _, ok := perm[permKeyEdit].(map[string]string); !ok {
+		t.Errorf("perm[%q] = %#v, want path-pattern map when edits are not delegated", permKeyEdit, perm[permKeyEdit])
+	}
+}
+
+// TestRootGlobs_EmitsLeadingSlashStrippedAbsoluteForm guards the implement-phase
+// regression where worktree edits were denied: OpenCode evaluates an edit against
+// a leading-slash-stripped absolute path ("Users/x/.../repo/file") when its
+// git-worktree detection resolves to "/", so an absolute ("/Users/...") or
+// cwd-relative glob matches neither and the write falls through to the catch-all
+// deny. The stripped form must also be emitted.
+func TestRootGlobs_EmitsLeadingSlashStrippedAbsoluteForm(t *testing.T) {
+	workDir := "/Users/x/.agentic-workflow/worktrees/feat"
+	root := "/Users/x/.agentic-workflow/worktrees/feat/repo"
+	got := rootGlobs(workDir, root)
+	for _, want := range []string{
+		"Users/x/.agentic-workflow/worktrees/feat/repo",
+		"Users/x/.agentic-workflow/worktrees/feat/repo/**",
+	} {
+		found := false
+		for _, g := range got {
+			if g == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("rootGlobs(%q, %q) = %v; missing leading-slash-stripped pattern %q", workDir, root, got, want)
+		}
+	}
+}
+
+// TestRootGlobs_NoWorkDirIsAbsoluteAndStrippedOnly confirms that with no cwd
+// known, only the absolute and its leading-slash-stripped forms are emitted (no
+// cwd-relative form).
+func TestRootGlobs_NoWorkDirIsAbsoluteAndStrippedOnly(t *testing.T) {
 	globs := rootGlobs("", "/Users/x/state")
-	want := []string{"/Users/x/state", "/Users/x/state/**"}
+	want := []string{"/Users/x/state", "/Users/x/state/**", "Users/x/state", "Users/x/state/**"}
 	if len(globs) != len(want) {
 		t.Fatalf("rootGlobs(\"\", root) = %v, want %v", globs, want)
 	}

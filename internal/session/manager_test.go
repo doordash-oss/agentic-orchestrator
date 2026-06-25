@@ -299,6 +299,54 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	}
 }
 
+func TestStartSessionSeedsInitialPromptContextEstimate(t *testing.T) {
+	eventCh := make(chan interface{}, 100)
+	sm := NewManager(eventCh)
+	defer sm.Shutdown()
+
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "initial-context.sh")
+	if err := os.WriteFile(scriptPath, []byte(`#!/bin/bash
+echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
+read -t 2 line || true
+echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}'
+`), 0o755); err != nil {
+		t.Fatalf("writing script: %v", err)
+	}
+
+	const contextWindow = 2000
+	prompt := strings.Repeat("abcd", 100)
+	sess, err := sm.StartSession("context-seed-test", "feat-1", feature.PhaseResearch,
+		[]string{"bash", scriptPath}, tmpDir, nil,
+		&SessionOpts{InitialPrompt: prompt, ContextWindow: contextWindow})
+	if err != nil {
+		t.Fatalf("starting session: %v", err)
+	}
+
+	select {
+	case <-sess.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not complete within timeout")
+	}
+
+	usage := sess.LatestUsage()
+	if usage == nil {
+		t.Fatal("LatestUsage() = nil, want initial prompt context estimate")
+	}
+	if usage.ContextWindow != contextWindow {
+		t.Fatalf("ContextWindow = %d, want %d", usage.ContextWindow, contextWindow)
+	}
+	if usage.ContextTotalTokens != 100 {
+		t.Fatalf("ContextTotalTokens = %d, want 100", usage.ContextTotalTokens)
+	}
+	if got := sess.AccumulatedUsage(); got.ContextTotalTokens != 0 || got.ContextWindow != 0 || got.InputTokens != 0 {
+		t.Fatalf("AccumulatedUsage() = %+v, want no synthetic usage accounting", got)
+	}
+	if got := sess.ContextPercentage(); got != 5 {
+		t.Fatalf("ContextPercentage() = %d, want 5", got)
+	}
+}
+
 func TestStartSessionWithoutInitialPrompt(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

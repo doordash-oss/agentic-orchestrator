@@ -48,9 +48,12 @@ var fileEditPermKeys = []string{permKeyEdit, permKeyWrite, permKeyApplyPatch}
 // decision ("ask" in normal mode, "allow" in dangerous-skip mode).
 var mediatedToolPermKeys = []string{permKeyBash, permKeyWebfetch, permKeyWebsearch, permKeyTask, permKeySkill}
 
-// catchAllPattern is the glob whose decision applies to any path no more
-// specific root pattern matches. OpenCode resolves the most specific matching
-// pattern, so a mounted-root glob overrides this default inside that root. Its
+// catchAllPattern is the glob applied when no root pattern matches. OpenCode
+// resolves a surface by last-matching rule (not most-specific; default "ask"),
+// and Go marshals map keys sorted, so "*" precedes the "<root>/**" globs and a
+// matching root glob — evaluated later — overrides it. The catch-all wins only
+// when no root glob matches: an exact-file edit root never matches OpenCode's
+// worktree-relative request path and collapses here (see delegateEdits). Its
 // value differs by surface: "deny" for file edits (nothing writable outside
 // writable roots) and "ask" for reads (external reads pause through Agentico).
 const catchAllPattern = "*"
@@ -76,7 +79,16 @@ const catchAllPattern = "*"
 //     roots: when roots are known, each becomes a path-pattern map allowing the
 //     mode decision inside "<root>/**" and explicitly denying everything else;
 //     with no known roots they fall back to the mode decision as a plain value.
-func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string) map[string]any {
+//
+// delegateEdits, when true, makes every file-edit surface a bare decision
+// ("ask"/"allow") instead of a path-pattern map. Bounded helpers set this so
+// OpenCode forwards each edit to the client permission handler rather than
+// resolving its own glob map: OpenCode matches the edit surface by
+// last-matching-rule against a worktree-relative request path the generated
+// globs do not reproduce, so an exact-file map collapses to the catch-all
+// "*"->deny and the helper's own artifact writes are denied before the client
+// is asked. External-directory and read roots are unaffected.
+func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string, delegateEdits bool) map[string]any {
 	toolDecision := "ask"
 	if dangerouslySkipPerms {
 		toolDecision = "allow"
@@ -90,7 +102,10 @@ func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, 
 	perm[permKeyRead] = readPermission(dangerouslySkipPerms, workDir, readRoots)
 	perm[permKeyExternal] = externalDirectoryPermission(dangerouslySkipPerms, workDir, writableRoots, readRoots)
 
-	editDecision := editPermission(toolDecision, workDir, writableRoots)
+	editDecision := any(toolDecision)
+	if !delegateEdits {
+		editDecision = editPermission(toolDecision, workDir, writableRoots)
+	}
 	for _, key := range fileEditPermKeys {
 		perm[key] = editDecision
 	}
@@ -243,19 +258,24 @@ func rootPattern(root string) string {
 }
 
 // rootGlobs returns every tool-path pattern that should match a mounted root.
-// OpenCode evaluates the edit surface against the path the tool supplies, which
-// is relative to the session cwd (e.g. "../../../knowledge-base/<repo>/**"),
-// while external_directory is evaluated against the resolved absolute path. An
-// absolute-only glob therefore matches external_directory but never the relative
-// edit path, so every edit outside cwd falls through to the catch-all deny.
-// Emitting both the absolute patterns and cwd-relative patterns keeps a root
-// matchable on either surface. The exact pattern matters for bounded helpers
-// that pass file roots such as validation feedback artifacts and phase_complete;
-// without it OpenCode only allows children of those files and denies the actual
-// artifact write. An empty or non-relativizable workDir yields the absolute
-// patterns alone.
+// OpenCode evaluates an edit against an inconsistent path form: cwd-relative
+// ("../../../knowledge-base/<repo>/**") when it can relativize, but a
+// leading-slash-STRIPPED absolute path ("Users/x/.../repo/file") when its
+// git-worktree detection resolves to "/" — observed for both the implementation
+// worktree and out-of-cwd helper artifacts. An absolute-only ("/Users/...") glob
+// matches neither stripped nor relative forms, so the edit falls through to the
+// catch-all deny. Emitting the absolute, the slash-stripped absolute, and (when
+// workDir is known) the cwd-relative forms keeps a root matchable on every
+// surface. The exact (non-/**) pattern matters for bounded helpers that pass file
+// roots such as validation feedback artifacts and phase_complete; without it
+// OpenCode only allows children of those files and denies the actual artifact
+// write. An empty or non-relativizable workDir yields the absolute forms alone.
 func rootGlobs(workDir, root string) []string {
-	globs := []string{rootPattern(root), rootGlob(root)}
+	abs := rootPattern(root)
+	globs := []string{abs, rootGlob(root)}
+	if stripped := strings.TrimPrefix(abs, "/"); stripped != abs && stripped != "" {
+		globs = append(globs, stripped, stripped+"/**")
+	}
 	if workDir == "" {
 		return globs
 	}

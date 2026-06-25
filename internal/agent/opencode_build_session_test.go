@@ -114,6 +114,32 @@ func TestOpenCodeBuildSessionReceivesSamePromptAndMarkerContract(t *testing.T) {
 	}
 }
 
+func TestOpenCodeBuildSessionCarriesSuffixedContextWindowToSession(t *testing.T) {
+	dir := t.TempDir()
+	eventCh := make(chan interface{}, 8)
+	sm := session.NewManager(eventCh)
+	store := feature.NewStore(dir)
+	pr := NewPhaseRunner(sm, store, dir)
+	pr.Registry = newRegistryWithOpenCode()
+
+	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:       "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]",
+		Prompt:      "rendered prompt",
+		PIDDir:      filepath.Join(dir, "pid"),
+		PermHandler: permHandlerFor(false, nil, ""),
+		WorkDir:     dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+	if sessOpts == nil {
+		t.Fatal("BuildSession() session opts = nil")
+	}
+	if got := sessOpts.ContextWindow; got != 1_040_000 {
+		t.Fatalf("SessionOpts.ContextWindow = %d, want 1040000", got)
+	}
+}
+
 // TestOpenCodeBuildSessionRejectsInvalidModelBeforeLaunch proves the real
 // launch path (PhaseRunner.BuildSession -> provider.BuildCommand) fails closed
 // for empty, flag-shaped, and shell/interpolation-shaped OpenCode selections, so

@@ -57,8 +57,31 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	requirePermissionAllowed(t, handler, "Bash", `{"command":"test -f `+feedbackPath+` && echo \"FEEDBACK_EXISTS\" || echo \"FEEDBACK_NOT_FOUND\""}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"touch phase_complete"}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
-	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
+	// Writing to a declared artifact via shell is allowed; writing elsewhere is not.
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
+	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+filepath.Join(helperDir, "scratch.txt")+`"}`)
 	requirePermissionDenied(t, handler, "Agent", `{"prompt":"write the file for me"}`)
+}
+
+func TestBoundedHelperArtifactHandler_AllowsValidateArtifactsPreflight(t *testing.T) {
+	helperDir := t.TempDir()
+	handler := &BoundedHelperArtifactHandler{
+		AllowedPaths: []string{
+			filepath.Join(helperDir, "validation-scope-feedback.md"),
+			filepath.Join(helperDir, "phase_complete"),
+		},
+	}
+
+	// The bounded-helper system prompt instructs running this read-only artifact
+	// check before creating phase_complete. It invokes $AGENTICO_BIN, which is not
+	// a generic read-only shell builtin, so the read-only allowlist denies it and
+	// the helper can never complete its preflight. It must be allowed explicitly.
+	preflight := `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase plan --role validate_roadmap_architecture --dir \"` + helperDir + `\""}`
+	requirePermissionAllowed(t, handler, "Bash", preflight)
+
+	// Tight: only the validate-artifacts subcommand is allowed; any other
+	// $AGENTICO_BIN invocation stays denied so the carve-out cannot mutate state.
+	requirePermissionDenied(t, handler, "Bash", `{"command":"\"$AGENTICO_BIN\" publish --feature f"}`)
 }
 
 func requirePermissionAllowed(t *testing.T, handler ports.PermissionHandler, toolName, input string) {

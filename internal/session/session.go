@@ -313,6 +313,31 @@ func (s *Session) AccumulatedUsage() llm.Usage {
 	defer s.mu.Unlock()
 	return s.accumulatedUsage
 }
+
+func (s *Session) seedInitialPromptContextEstimate(prompt string, contextWindow int) {
+	if prompt == "" || contextWindow <= 0 {
+		return
+	}
+	tokens := estimateInitialPromptContextTokens(prompt)
+	if tokens <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.latestUsage = &llm.Usage{
+		ContextTotalTokens: tokens,
+		ContextInputTokens: tokens,
+		ContextWindow:      contextWindow,
+	}
+	s.mu.Unlock()
+}
+
+func estimateInitialPromptContextTokens(prompt string) int {
+	if prompt == "" {
+		return 0
+	}
+	return (len(prompt) + 3) / 4
+}
+
 func (s *Session) MessageLog() ports.MessageLog { return s.messageLog }
 func (s *Session) Cost() *llm.ResultMessage     { return s.cost }
 func (s *Session) StatusCh() <-chan string      { return s.statusCh }

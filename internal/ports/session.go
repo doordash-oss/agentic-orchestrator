@@ -187,10 +187,14 @@ type PermissionHandler interface {
 // ports package so orchestrator / agent code can construct session options
 // without importing internal/session.
 type SessionOpts struct {
-	PIDDir            string
-	Iteration         int
-	PermHandler       PermissionHandler
-	InitialPrompt     string
+	PIDDir        string
+	Iteration     int
+	PermHandler   PermissionHandler
+	InitialPrompt string
+	// ContextWindow is the resolved model window for the session. It lets the
+	// session expose an initial prompt context estimate before provider
+	// telemetry arrives.
+	ContextWindow     int
 	LogPath           string
 	StderrPath        string
 	RepoName          string

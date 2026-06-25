@@ -70,16 +70,20 @@ type ClientInfo struct {
 }
 
 // ClientCapabilities declares which client-side capabilities Agentico supports.
-// Phase 1 declares none: OpenCode must use its own filesystem/terminal tools,
-// and any agent->client filesystem or terminal request fails closed.
+// Agentico hosts the client filesystem surface (fs/read_text_file,
+// fs/write_text_file) because OpenCode delegates I/O for paths outside its
+// session workspace to the client; without it, an out-of-workspace artifact
+// write (knowledge-base graph, feature-state artifact) would fail closed. The
+// terminal surface stays unhosted, so terminal/* requests still fail closed.
 type ClientCapabilities struct {
 	FS FSCapability `json:"fs"`
-	// Terminal is intentionally false for Phase 1 — Agentico does not host an
-	// ACP terminal for OpenCode.
+	// Terminal is intentionally false — Agentico does not host an ACP terminal
+	// for OpenCode.
 	Terminal bool `json:"terminal"`
 }
 
-// FSCapability declares client filesystem capabilities. Both false for Phase 1.
+// FSCapability declares client filesystem capabilities. Both true: Agentico
+// hosts fs/read_text_file and fs/write_text_file (see clientfs.go).
 type FSCapability struct {
 	ReadTextFile  bool `json:"readTextFile"`
 	WriteTextFile bool `json:"writeTextFile"`
@@ -371,6 +375,39 @@ type PermissionOutcomeResult struct {
 type PermissionOutcome struct {
 	Outcome  string `json:"outcome"`
 	OptionID string `json:"optionId,omitempty"`
+}
+
+// --- client filesystem (fs/* agent->client requests; see clientfs.go) ---
+
+// WriteTextFileParams is the params of an fs/write_text_file request: OpenCode
+// asks the client to write Content to Path. ACP fs paths are absolute; a
+// relative path is resolved against the session working directory.
+type WriteTextFileParams struct {
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+}
+
+// ReadTextFileParams is the params of an fs/read_text_file request. Line is an
+// optional 1-based start line and Limit an optional maximum number of lines.
+type ReadTextFileParams struct {
+	SessionID string `json:"sessionId"`
+	Path      string `json:"path"`
+	Line      *int   `json:"line,omitempty"`
+	Limit     *int   `json:"limit,omitempty"`
+}
+
+// ReadTextFileResult is the result of a hosted fs/read_text_file request.
+type ReadTextFileResult struct {
+	Content string `json:"content"`
+}
+
+// FSResultResponse is an outbound JSON-RPC result for a hosted fs/* request:
+// Result is null for a successful write and a ReadTextFileResult for a read.
+type FSResultResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result"`
 }
 
 // ACP permission outcome discriminators.

@@ -574,15 +574,29 @@ func TestManagedConfig_AgentsConverted(t *testing.T) {
 	}
 }
 
-func TestManagedConfig_NoAgentsWhenEmpty(t *testing.T) {
+// TestManagedConfig_OnlyBuiltinOverridesWhenEmpty proves that with no embedded
+// agents, the config still pins OpenCode's built-in spawnable subagents to the
+// deterministic deny profile (so they cannot inherit the top-level "ask" and
+// hang); no Agentico-defined agents are added.
+func TestManagedConfig_OnlyBuiltinOverridesWhenEmpty(t *testing.T) {
 	state := t.TempDir()
 	p := New()
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "openai/gpt-5", StateDir: state})
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
 	}
-	if cfg := readManagedConfigFile(t, env); len(cfg.Agent) != 0 {
-		t.Fatalf("agents = %v, want none for empty AgentsJSON", cfg.Agent)
+	cfg := readManagedConfigFile(t, env)
+	if len(cfg.Agent) != len(openCodeBuiltinSubagents) {
+		t.Fatalf("agents = %v, want only the %d built-in subagent overrides", cfg.Agent, len(openCodeBuiltinSubagents))
+	}
+	for _, name := range openCodeBuiltinSubagents {
+		ag, ok := cfg.Agent[name]
+		if !ok {
+			t.Fatalf("built-in subagent %q missing from config; got %v", name, cfg.Agent)
+		}
+		if string(ag.Permission["bash"]) != `"deny"` {
+			t.Errorf("built-in %q bash = %s, want \"deny\" so it fails fast instead of hanging on an unanswerable ask", name, ag.Permission["bash"])
+		}
 	}
 }
 

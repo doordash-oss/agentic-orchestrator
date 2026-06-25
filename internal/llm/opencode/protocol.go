@@ -264,7 +264,7 @@ func (p *Protocol) sendInitialize() error {
 				Version: "0.1.0",
 			},
 			ClientCapabilities: ClientCapabilities{
-				FS:       FSCapability{ReadTextFile: false, WriteTextFile: false},
+				FS:       FSCapability{ReadTextFile: true, WriteTextFile: true},
 				Terminal: false,
 			},
 		},
@@ -395,18 +395,26 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 		return p.handleResponse(env), nil
 	}
 
-	// Server-initiated (agent->client) request: has id and method. Phase 2
+	// Server-initiated (agent->client) request: has id and method. Agentico
 	// supports the permission/question control surface (session/request_permission)
-	// and surfaces it through Agentico's shared decision flow; client filesystem
-	// and terminal requests and any unknown method are capabilities Agentico did
-	// not declare, so they still fail closed. The JSON-RPC reply is always written
-	// so OpenCode can unblock, and only the first terminal result reaches the
-	// session.
+	// and the hosted client filesystem surface (fs/read_text_file,
+	// fs/write_text_file); the filesystem handlers reply with a JSON-RPC result or
+	// a per-request error and never seal the turn. The terminal surface and any
+	// unknown method are capabilities Agentico did not declare, so they still fail
+	// closed. The JSON-RPC reply is always written so OpenCode can unblock, and
+	// only the first terminal result reaches the session.
 	if hasID && env.Method != "" {
-		if env.Method == requestPermissionMethod {
+		switch env.Method {
+		case requestPermissionMethod:
 			if msg, ok := p.handleRequestPermission(env.ID, env.Params); ok {
 				return []llm.SDKMessage{msg}, nil
 			}
+			return nil, nil
+		case writeTextFileMethod:
+			p.handleWriteTextFile(env.ID, env.Params)
+			return nil, nil
+		case readTextFileMethod:
+			p.handleReadTextFile(env.ID, env.Params)
 			return nil, nil
 		}
 		if msg, ok := p.failClosed(env.ID, env.Method); ok {
@@ -879,12 +887,13 @@ func shellWriteTargetPath(command string) string {
 // failClosed responds to an unsupported agent->client request with a JSON-RPC
 // error (so OpenCode is never left waiting) and produces a terminal non-success
 // result naming the unsupported surface. The tracer supports the permission and
-// question control surface (session/request_permission); it does NOT host client
-// filesystem (fs/*) or client terminal (terminal/*) capabilities — Agentico
-// declared neither — and treats any other unknown method as corruption. The
-// JSON-RPC error is always written so OpenCode can unblock, but the bool is false
-// when a terminal result was already emitted, in which case the caller suppresses
-// the duplicate terminal message: the first terminal result wins.
+// question control surface (session/request_permission) and the hosted client
+// filesystem surface (fs/read_text_file, fs/write_text_file); it does NOT host a
+// client terminal (terminal/*) — Agentico did not declare it — and treats any
+// other unknown method as corruption. The JSON-RPC error is always written so
+// OpenCode can unblock, but the bool is false when a terminal result was already
+// emitted, in which case the caller suppresses the duplicate terminal message:
+// the first terminal result wins.
 func (p *Protocol) failClosed(rawID json.RawMessage, method string) (llm.SDKMessage, bool) {
 	_ = p.writeJSON(ErrorResponse{
 		JSONRPC: "2.0",
@@ -901,7 +910,7 @@ func (p *Protocol) failClosed(rawID json.RawMessage, method string) (llm.SDKMess
 // fail-closed control path, documenting the tracer's supported surface.
 func unsupportedSurfaceDiagnostic(method string) string {
 	return fmt.Sprintf(
-		"OpenCode requested an unsupported ACP control path (%s). The tracer supports initialize, session/new, session/prompt, streamed session/update events, and the session/request_permission permission/question surface; it does not host client filesystem or client terminal capabilities, and treats any other method as corruption. Failing closed.",
+		"OpenCode requested an unsupported ACP control path (%s). The tracer supports initialize, session/new, session/prompt, streamed session/update events, the session/request_permission permission/question surface, and the client filesystem surface (fs/read_text_file, fs/write_text_file); it does not host a client terminal, and treats any other method as corruption. Failing closed.",
 		method,
 	)
 }

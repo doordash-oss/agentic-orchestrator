@@ -160,7 +160,11 @@ func externalDirectoryPermission(dangerouslySkipPerms bool, workDir string, writ
 // requests originating from internally-spawned child sessions (its handler bails
 // when the session is absent from the ACP client's session registry, which
 // task-spawned children never join), so a subagent that reaches an "ask"
-// decision blocks forever. This profile therefore resolves every surface
+// decision blocks forever. This tracks OpenCode upstream issue #32388
+// (https://github.com/anomalyco/opencode/issues/32388), still open; this
+// deterministic profile is the workaround and can be revisited once OpenCode
+// forwards child-session permission prompts to the ACP client. This profile
+// therefore resolves every surface
 // deterministically: surfaces Agentico already auto-approves (reads,
 // external-directory access, web, subagent spawning, and edits bounded to
 // writable roots) are allowed; user questions are denied because a subagent
@@ -276,35 +280,61 @@ type agentJSONShape struct {
 // subagentPermissionConfig) because OpenCode's ACP bridge cannot forward a
 // child session's permission request, so a subagent must never reach an "ask".
 func convertAgents(agentsJSON string, dangerouslySkipPerms bool, workDir string, writableRoots []string) (map[string]managedAgent, error) {
-	s := strings.TrimSpace(agentsJSON)
-	if s == "" {
-		return nil, nil
-	}
-	var raw map[string]agentJSONShape
-	if err := json.Unmarshal([]byte(s), &raw); err != nil {
-		return nil, fmt.Errorf("invalid embedded-agent JSON")
-	}
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	out := make(map[string]managedAgent, len(raw))
-	for name, def := range raw {
-		agent := managedAgent{
-			Description: def.Description,
-			Prompt:      def.Prompt,
-			Mode:        "subagent",
-			Permission:  subagentPermissionConfig(dangerouslySkipPerms, workDir, writableRoots),
+	subPerm := subagentPermissionConfig(dangerouslySkipPerms, workDir, writableRoots)
+	out := make(map[string]managedAgent)
+
+	if s := strings.TrimSpace(agentsJSON); s != "" {
+		var raw map[string]agentJSONShape
+		if err := json.Unmarshal([]byte(s), &raw); err != nil {
+			return nil, fmt.Errorf("invalid embedded-agent JSON")
 		}
-		// Include the model only when it is already a valid OpenCode backend id in
-		// slash form; an Agentico-internal alias (e.g. "sonnet") is omitted so the
-		// subagent inherits the session model rather than receiving a bad value.
-		if _, _, ok := splitBackend(def.Model); ok && validateBackendModel(def.Model) == nil {
-			agent.Model = def.Model
+		for name, def := range raw {
+			agent := managedAgent{
+				Description: def.Description,
+				Prompt:      def.Prompt,
+				Mode:        "subagent",
+				Permission:  subPerm,
+			}
+			// Include the model only when it is already a valid OpenCode backend id
+			// in slash form; an Agentico-internal alias (e.g. "sonnet") is omitted so
+			// the subagent inherits the session model rather than receiving a bad value.
+			if _, _, ok := splitBackend(def.Model); ok && validateBackendModel(def.Model) == nil {
+				agent.Model = def.Model
+			}
+			out[name] = agent
 		}
-		out[name] = agent
+	}
+
+	// OpenCode's built-in subagents (general, explore) are spawnable via the task
+	// tool but are absent from Agentico's converted set, so without an override
+	// they inherit the session's top-level permission (bash=ask). A subagent that
+	// reaches "ask" blocks forever — OpenCode's ACP bridge cannot forward a child
+	// session's permission request (upstream issue #32388, open:
+	// https://github.com/anomalyco/opencode/issues/32388) — so each built-in is
+	// pinned to the same deterministic, non-interactive subagent profile
+	// (bash/skill deny in normal mode) to fail fast instead of hanging. The
+	// override carries only mode and permission, leaving the built-in's own
+	// description/prompt intact through OpenCode's config merge. This workaround
+	// becomes unnecessary once OpenCode resolves that issue.
+	for _, name := range openCodeBuiltinSubagents {
+		if _, ok := out[name]; ok {
+			continue
+		}
+		out[name] = managedAgent{Mode: "subagent", Permission: subPerm}
+	}
+
+	if len(out) == 0 {
+		return nil, nil
 	}
 	return out, nil
 }
+
+// openCodeBuiltinSubagents are OpenCode's built-in agents the model can spawn as
+// child sessions via the task tool. They are not part of Agentico's converted
+// agent set, so convertAgents pins them to the deterministic subagent permission
+// profile; otherwise they inherit the top-level "ask" and hang, since a child
+// session's permission request cannot be answered over ACP.
+var openCodeBuiltinSubagents = []string{"general", "explore"}
 
 // effortSupportedProviders names the OpenCode backend providers that expose a
 // stable, documented reasoning-effort control ("reasoningEffort"). Effort is

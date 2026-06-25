@@ -156,8 +156,13 @@ func TestHandshake_HappyPath(t *testing.T) {
 	if initParams.ProtocolVersion != 1 {
 		t.Fatalf("initialize protocolVersion = %d, want 1", initParams.ProtocolVersion)
 	}
-	if initParams.ClientCapabilities.FS.ReadTextFile || initParams.ClientCapabilities.FS.WriteTextFile || initParams.ClientCapabilities.Terminal {
-		t.Fatalf("initialize declared client capabilities = %+v, want all false", initParams.ClientCapabilities)
+	// Agentico hosts the client filesystem surface (see clientfs.go) so it must
+	// advertise it; it does not host a client terminal.
+	if !initParams.ClientCapabilities.FS.ReadTextFile || !initParams.ClientCapabilities.FS.WriteTextFile {
+		t.Fatalf("initialize FS capability = %+v, want both true", initParams.ClientCapabilities.FS)
+	}
+	if initParams.ClientCapabilities.Terminal {
+		t.Fatalf("initialize declared terminal capability = true, want false")
 	}
 	h.feed(t, responseLine(t, mustID(t, initReq.ID), map[string]any{
 		"protocolVersion": 1,
@@ -644,17 +649,17 @@ func TestPromptSuccessRequiresMarkerToCompletePhase(t *testing.T) {
 // --- fail-closed control tests (Task 5) ---
 
 func TestParseLine_FailsClosedOnUnsupportedServerRequests(t *testing.T) {
-	// session/request_permission is now a supported control surface (see
-	// control_test.go); the surfaces below remain unsupported because Agentico
-	// declared no client filesystem or terminal capabilities, and any other
-	// method is treated as corruption.
+	// session/request_permission and the client filesystem surface
+	// (fs/read_text_file, fs/write_text_file) are now supported (see
+	// control_test.go and clientfs_test.go); the surfaces below remain
+	// unsupported because Agentico declared no client terminal capability, and any
+	// other method is treated as corruption.
 	cases := []struct {
 		name   string
 		method string
 	}{
-		{"client read", "fs/read_text_file"},
-		{"client write", "fs/write_text_file"},
 		{"terminal create", "terminal/create"},
+		{"terminal output", "terminal/output"},
 		{"unknown method", "session/some_future_thing"},
 	}
 	for _, tc := range cases {
@@ -703,7 +708,7 @@ func TestParseLine_FailsClosedOnUnsupportedServerRequests(t *testing.T) {
 // marker-present case is asserted explicitly, not assumed.
 func TestFailClosedControlNeverSatisfiesPhase(t *testing.T) {
 	p, _, _ := newPostHandshakeProtocol(t)
-	msgs := mustParse(t, p, serverRequestLine(t, 5, "fs/read_text_file", map[string]any{"sessionId": "ses_x"}))
+	msgs := mustParse(t, p, serverRequestLine(t, 5, "terminal/create", map[string]any{"sessionId": "ses_x"}))
 	result := msgs[0].Result
 	if result.IsSuccess() {
 		t.Fatal("fail-closed result reported success")
@@ -767,7 +772,7 @@ func TestParseLine_TerminalResultIsStickyOverLaterControlRequest(t *testing.T) {
 
 	// 2. A late unsupported control request emits no further terminal SDK message...
 	const reqID = 888
-	later := mustParse(t, p, serverRequestLine(t, reqID, "fs/write_text_file", map[string]any{"sessionId": "ses_x"}))
+	later := mustParse(t, p, serverRequestLine(t, reqID, "terminal/create", map[string]any{"sessionId": "ses_x"}))
 	if len(later) != 0 {
 		t.Fatalf("control request after terminal success produced %+v, want no messages", later)
 	}

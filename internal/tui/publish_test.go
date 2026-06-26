@@ -868,7 +868,7 @@ func TestNewPublishViewport_BuildsViewportTitleBody(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DraftPublish field tests (Task 4)
+// DraftPublish field tests
 // ---------------------------------------------------------------------------
 
 func TestNewPublishModel_DraftFromFeatureCheckpoints_True(t *testing.T) {
@@ -937,7 +937,7 @@ func TestPublishModel_StepCounter_TruthTable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Draft toggle tests (Tasks 1–3 of Phase 2)
+// Draft toggle tests
 // ---------------------------------------------------------------------------
 
 func TestPublishConfirmStep_DraftIndicator_InitialTrue(t *testing.T) {

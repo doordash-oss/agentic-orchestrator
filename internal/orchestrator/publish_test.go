@@ -474,7 +474,7 @@ func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t 
 }
 
 // ---------------------------------------------------------------------------
-// TestOrchestrator_PublishRepo_DraftPublish — draft flag wired through
+// DraftPublish — draft flag threaded from feature checkpoints to CreatePR
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {

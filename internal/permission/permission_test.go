@@ -58,7 +58,7 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	requirePermissionDenied(t, handler, "Bash", `{"command":"touch phase_complete"}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
-	requirePermissionDenied(t, handler, "Agent", `{"prompt":"write the file for me"}`)
+	requirePermissionAllowed(t, handler, "Agent", `{"prompt":"explore the implementation"}`)
 }
 
 // TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell confirms that when the

@@ -25,7 +25,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -191,6 +193,244 @@ func TestRunBoundedHelper_FailsOnEmptyRequiredOutput(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "without output") {
 		t.Errorf("error = %q, want empty output context", err)
+	}
+}
+
+// boundedNudgeSession is a SessionHandle test double for the bounded-helper
+// statusCh nudge arm. It exposes a controllable statusCh and a never-closed
+// Done channel, records nudge messages, and returns a settable result.
+type boundedNudgeSession struct {
+	*utilityTestSession
+	statusC   chan string
+	doneC     chan struct{}
+	result    *llm.ResultMessage
+	nudges    chan string
+	stopCalls int
+}
+
+func newBoundedNudgeSession(result *llm.ResultMessage) *boundedNudgeSession {
+	return &boundedNudgeSession{
+		utilityTestSession: newUtilityTestSession(),
+		statusC:            make(chan string, 4),
+		doneC:              make(chan struct{}),
+		result:             result,
+		nudges:             make(chan string, 4),
+	}
+}
+
+func (s *boundedNudgeSession) StatusCh() <-chan string  { return s.statusC }
+func (s *boundedNudgeSession) Done() <-chan struct{}    { return s.doneC }
+func (s *boundedNudgeSession) Cost() *llm.ResultMessage { return s.result }
+func (s *boundedNudgeSession) SendUserMessage(text string) error {
+	s.nudges <- text
+	return nil
+}
+func (s *boundedNudgeSession) Stop() error { s.stopCalls++; return nil }
+
+// TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes proves the bounded
+// helper's statusCh arm nudges the same live session when it ends a turn without
+// phase_complete (capability armed), then finalizes as completed once the nudged
+// turn writes the marker.
+func TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:            "helper-nudge",
+			workDir:              t.TempDir(),
+			phaseCompleteDir:     phaseDir,
+			finishOrViolateNudge: true,
+		})
+		resultCh <- result
+	}()
+
+	// First turn ends without phase_complete → expect a nudge.
+	sess.statusC <- "SUCCESS"
+	select {
+	case <-sess.nudges:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a finish-or-violate nudge on missing phase_complete")
+	}
+
+	// The nudged turn writes the marker, then ends its turn again.
+	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	sess.statusC <- "SUCCESS"
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize")
+	}
+}
+
+// TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes proves the
+// nudge handles the full contract scenario: with a contractRole set, the nudged
+// turn writing only phase_complete is not enough — once it also writes the
+// required review-feedback artifact, finalization is BoundedHelperStatusCompleted
+// rather than a protocol violation.
+func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:            "helper-contract",
+			workDir:              t.TempDir(),
+			phaseCompleteDir:     phaseDir,
+			contractPhase:        feature.PhaseReview,
+			contractRole:         RoleIterationReviewer,
+			finishOrViolateNudge: true,
+		})
+		resultCh <- result
+	}()
+
+	// First turn ends without the marker → expect a nudge.
+	sess.statusC <- "SUCCESS"
+	select {
+	case <-sess.nudges:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a finish-or-violate nudge on missing phase_complete")
+	}
+
+	// The nudged turn writes BOTH the required contract artifact and the
+	// marker, then ends its turn.
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	sess.statusC <- "SUCCESS"
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize")
+	}
+}
+
+// TestRunBoundedHelper_DoneBranchDoesNotNudge proves the Done() arm never
+// nudges: a session that exits without the marker finalizes immediately as a
+// protocol violation, even with the capability armed.
+func TestRunBoundedHelper_DoneBranchDoesNotNudge(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:            "helper-done",
+			workDir:              t.TempDir(),
+			phaseCompleteDir:     phaseDir,
+			contractRole:         RoleIterationReviewer,
+			finishOrViolateNudge: true,
+		})
+		resultCh <- result
+	}()
+
+	// Process exits without the marker — the Done arm must finalize, not nudge.
+	close(sess.doneC)
+
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusProtocolViolation {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusProtocolViolation)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for bounded helper to finalize on Done")
+	}
+
+	select {
+	case <-sess.nudges:
+		t.Fatal("Done arm must never send a nudge")
+	default:
+	}
+
+	// The Done arm must finalize via the single deferred Stop, never an
+	// eager Stop inside the loop. A regression that routed Done through the
+	// nudge/decide path would change this count.
+	if sess.stopCalls != 1 {
+		t.Errorf("stopCalls = %d, want 1 (single deferred Stop)", sess.stopCalls)
+	}
+}
+
+// TestRunBoundedHelper_NudgeCapThenViolation proves the nudge budget is bounded:
+// after maxFinishOrViolateNudges nudges with the marker still missing, the run
+// finalizes as a protocol violation.
+func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
+	phaseDir := t.TempDir()
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:            "helper-cap",
+			workDir:              t.TempDir(),
+			phaseCompleteDir:     phaseDir,
+			contractRole:         RoleIterationReviewer,
+			finishOrViolateNudge: true,
+		})
+		resultCh <- result
+	}()
+
+	// Each end_turn without the marker, up to the cap, draws a nudge.
+	for i := 0; i < maxFinishOrViolateNudges; i++ {
+		sess.statusC <- "SUCCESS"
+		select {
+		case <-sess.nudges:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("expected nudge %d", i+1)
+		}
+	}
+
+	// One more end_turn beyond the cap finalizes as a protocol violation.
+	sess.statusC <- "SUCCESS"
+	select {
+	case result := <-resultCh:
+		if result.Status != BoundedHelperStatusProtocolViolation {
+			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusProtocolViolation)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for protocol violation after nudge cap")
+	}
+
+	select {
+	case <-sess.nudges:
+		t.Fatal("no extra nudge expected beyond the cap")
+	default:
 	}
 }
 

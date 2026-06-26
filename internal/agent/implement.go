@@ -122,6 +122,13 @@ type ImplementConfig struct {
 	// Moonshot, multi-repo orchestration, repo-scoped cycles, and refactor loops
 	// keep per-iteration review enabled.
 	SkipIterationReview bool
+
+	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
+	// for this loop's sessions: the session runs in interactive turn mode and,
+	// on a deliberate end_turn without the completion marker, is nudged to
+	// finish before a protocol violation is recorded. Resolved per-model from
+	// the provider capability, so only capability-positive providers opt in.
+	FinishOrViolateNudge bool
 }
 
 // LoopResult represents the outcome of the full implementation loop.
@@ -384,6 +391,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			if cfg.FinishOrViolateNudge {
+				sessOpts.TurnMode = ports.TurnModeInteractive
+			}
 			WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 			// Merge iteration-specific fields into session opts
 			sessOpts.Iteration = i
@@ -456,6 +466,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					// No phase_complete yet — the agent is likely waiting for user input.
 					return false
 				},
+				FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+				MissingArtifacts:     []string{"progress.md", "verification-report.yaml"},
 				EnableContextHandoff: true,
 				OnContextHandoff: func(snap contextSnapshot) {
 					cfg.Observer.ContextHandoffTriggered(
@@ -1167,6 +1179,50 @@ const maxAutoResumeAttempts = 3
 // the completion protocol so a genuinely-finished agent can exit cleanly.
 const autoResumeMessage = "Continue where you left off. If you have already finished the task, write the phase_complete marker file now."
 
+// maxFinishOrViolateNudges caps how many times a session that ended its turn
+// without writing the required completion artifacts is nudged to finish on the
+// same live session before the turn is counted as a protocol violation.
+const maxFinishOrViolateNudges = 2
+
+// finishOrViolateNudgeFragment is a stable substring present in every
+// finish-or-violate nudge. Tests match on it to detect the nudge without
+// coupling to the full prompt wording.
+const finishOrViolateNudgeFragment = "do not re-investigate"
+
+// formatFinishOrViolateNudge builds the single-purpose continuation sent when a
+// session ended its turn without producing its required completion artifacts. It
+// names the missing artifacts (when known) so the agent finishes exactly that
+// work and nothing else.
+func formatFinishOrViolateNudge(missing []string) string {
+	if len(missing) == 0 {
+		return "You ended your turn but the required completion artifacts and the `phase_complete` marker are missing; write them now and nothing else. Do not start new work, " + finishOrViolateNudgeFragment + ", do not ask a question."
+	}
+	return fmt.Sprintf("You ended your turn without completing the required outputs. Still missing: %s. Do exactly this now and nothing else: write those artifacts to your output directory, then create the `phase_complete` marker. Do not start new work, %s, do not ask a question.",
+		strings.Join(missing, ", "), finishOrViolateNudgeFragment)
+}
+
+// decideFinishOrViolate sends one finish-or-violate nudge to the same live
+// session when it ended its turn (TermEndedAfterText) without writing its
+// completion artifacts, up to maxFinishOrViolateNudges times. It returns true
+// only when a nudge was sent and the caller should keep waiting on the session;
+// it returns false for any other termination class, once the budget is
+// exhausted, or when the send fails (stdin closed) so the caller falls through
+// to the protocol-violation path. The caller gates this on the provider
+// capability; the function itself is provider-agnostic.
+func decideFinishOrViolate(sess ports.SessionHandle, class llm.TerminationClass, nudges *int, missing []string) bool {
+	if class != llm.TermEndedAfterText {
+		return false
+	}
+	if *nudges >= maxFinishOrViolateNudges {
+		return false
+	}
+	*nudges++
+	if err := sess.SendUserMessage(formatFinishOrViolateNudge(missing)); err != nil {
+		return false
+	}
+	return true
+}
+
 const (
 	agentStatusSuccess           = "SUCCESS"
 	agentStatusFailed            = "FAILED"
@@ -1237,6 +1293,17 @@ type waitForStatusOptions struct {
 	// ContextHandoffPollHook is a test hook for observing ticker progress
 	// without sleeping. Production callers leave it nil.
 	ContextHandoffPollHook func()
+	// FinishOrViolateNudge arms the finish-or-violate auto-continuation
+	// retry: when a session ends its turn without writing the required
+	// completion artifacts, it is nudged to finish on the same live session
+	// before the turn is counted as a protocol violation. Resolved per-model
+	// from the provider capability, so only capability-positive sessions opt
+	// in.
+	FinishOrViolateNudge bool
+	// MissingArtifacts names the completion artifacts the session must
+	// produce. It is used only to build the nudge text, never for control
+	// flow.
+	MissingArtifacts []string
 }
 
 type waitForStatusResult struct {
@@ -1350,6 +1417,12 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 	// its own retry budget.
 	autoResumeAttempts := 0
 
+	// Counts finish-or-violate nudges sent when the session ended its turn
+	// without writing the completion marker. Bounded by
+	// maxFinishOrViolateNudges; armed only when opts.FinishOrViolateNudge is
+	// set (capability-positive providers).
+	finishOrViolateNudges := 0
+
 	// Periodically sample the session's context-window utilization and, on
 	// first crossing of the provider-specific threshold, nudge the agent to
 	// wrap up cleanly. Sending once is enough — the outer loop will restart
@@ -1396,6 +1469,16 @@ func waitForStatusDetailed(sess ports.SessionHandle, _ ports.SessionManager, _ s
 					_ = sess.Stop()
 					return agentStatusMissingMarker, true
 				}
+				return "", false
+			}
+
+			// The session deliberately ended its turn without writing the
+			// completion marker. For capability-positive providers, nudge the
+			// same live session to finish before escalating. On nudge, give the
+			// resumed turn a fresh truncation budget and keep waiting WITHOUT
+			// stopping the session.
+			if opts.FinishOrViolateNudge && decideFinishOrViolate(sess, class, &finishOrViolateNudges, opts.MissingArtifacts) {
+				autoResumeAttempts = 0
 				return "", false
 			}
 

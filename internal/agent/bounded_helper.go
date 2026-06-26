@@ -159,6 +159,12 @@ type boundedHelperRunConfig struct {
 	contractPhase    feature.Phase
 	contractRole     Role
 	parentSpanCtx    observe.SpanContext
+	// finishOrViolateNudge arms the finish-or-violate auto-continuation retry
+	// in the statusCh arm: when the helper ends its turn without its required
+	// completion artifacts, it is nudged on the same live session before the
+	// run is finalized as a protocol violation. Resolved per-model from the
+	// provider capability.
+	finishOrViolateNudge bool
 }
 
 func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*BoundedHelperResult, error) {
@@ -214,6 +220,11 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 		defer unregister()
 	}
 
+	// Counts finish-or-violate nudges for this invocation; bounded by
+	// maxFinishOrViolateNudges and armed only when cfg.finishOrViolateNudge is
+	// set (capability-positive providers).
+	finishOrViolateNudges := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -236,12 +247,47 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 			return result, fmt.Errorf("running %s: helper requested tool permission for %s", label, msg.ControlRequest.Request.ToolName)
 
 		case <-statusCh:
+			// Peek at why the turn ended (mirroring finalizeBoundedHelperResult's
+			// classification). For capability-positive providers, nudge the same
+			// live session to finish when it ended its turn without writing the
+			// completion artifacts, before finalizing as a protocol violation.
+			if cfg.finishOrViolateNudge && boundedHelperShouldNudge(sess, cfg.phaseCompleteDir) {
+				if decideFinishOrViolate(sess, llm.TermEndedAfterText, &finishOrViolateNudges, []string{PhaseCompleteFile}) {
+					continue
+				}
+			}
 			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
 
 		case <-sess.Done():
+			// The process already exited; there is nothing to nudge. Never unify
+			// this arm with the statusCh arm above.
 			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
 		}
 	}
+}
+
+// boundedHelperShouldNudge reports whether the just-ended turn is a deliberate
+// end_turn without the completion marker — the only case the finish-or-violate
+// nudge fires for. It mirrors finalizeBoundedHelperResult's inputs so the nudge
+// and the finalize verdict classify the turn identically.
+func boundedHelperShouldNudge(sess ports.SessionHandle, phaseCompleteDir string) bool {
+	if sess.HasPendingAskUserQuestion() || sess.LastControlRequest() != nil {
+		return false
+	}
+	result := sess.Cost()
+	if result == nil {
+		return false
+	}
+	phaseCompleteExists := false
+	if phaseCompleteDir != "" {
+		phaseCompleteExists = HasPhaseComplete(phaseCompleteDir)
+	}
+	class := llm.ClassifyTermination(llm.TerminationInputs{
+		Result:                 result,
+		PhaseCompleteExists:    phaseCompleteExists,
+		AskUserQuestionPending: false,
+	})
+	return class == llm.TermEndedAfterText && !phaseCompleteExists
 }
 
 func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, label string, requireOutput bool, phaseCompleteDir string, contractPhase feature.Phase, contractRole Role) (*BoundedHelperResult, error) {

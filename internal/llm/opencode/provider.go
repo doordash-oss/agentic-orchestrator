@@ -101,6 +101,12 @@ func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
 // permission denials.
 func (p *Provider) UsesBoundedHelperSandbox() bool { return true }
 
+// SupportsFinishOrViolateNudge opts this adapter into the shared
+// finish-or-violate auto-continuation retry: when a session ends its turn
+// without writing its required completion artifacts, the harness keeps the same
+// live session and nudges it to finish before declaring a protocol violation.
+func (p *Provider) SupportsFinishOrViolateNudge() bool { return true }
+
 // MatchesModel reports whether this provider handles the given model string.
 //
 // An explicit "opencode:" routing prefix always matches when a backend model

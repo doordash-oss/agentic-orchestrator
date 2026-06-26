@@ -20,7 +20,15 @@ type boundedHelperSandboxProvider interface {
 	UsesBoundedHelperSandbox() bool
 }
 
-func (pr *PhaseRunner) boundedHelperSandboxForModel(model string) bool {
+type finishOrViolateNudgeProvider interface {
+	SupportsFinishOrViolateNudge() bool
+}
+
+// finishOrViolateNudgeForModel reports whether the provider backing model opts
+// into the finish-or-violate auto-continuation retry. It returns false when the
+// registry is nil, the model is unresolved, or the provider does not implement
+// the capability.
+func (pr *PhaseRunner) finishOrViolateNudgeForModel(model string) bool {
 	if pr == nil || pr.Registry == nil {
 		return false
 	}
@@ -28,8 +36,15 @@ func (pr *PhaseRunner) boundedHelperSandboxForModel(model string) bool {
 	if err != nil {
 		return false
 	}
-	p, ok := provider.(boundedHelperSandboxProvider)
-	return ok && p.UsesBoundedHelperSandbox()
+	p, ok := provider.(finishOrViolateNudgeProvider)
+	return ok && p.SupportsFinishOrViolateNudge()
+}
+
+// FinishOrViolateNudgeForModel exposes the per-model finish-or-violate
+// capability resolution to callers in other packages (e.g. the refactor-cycle
+// wiring in the orchestrator).
+func (pr *PhaseRunner) FinishOrViolateNudgeForModel(model string) bool {
+	return pr.finishOrViolateNudgeForModel(model)
 }
 
 // maybeWrapHelperSandbox wraps a bounded-helper command so the reviewed worktree

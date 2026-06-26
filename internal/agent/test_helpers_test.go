@@ -167,6 +167,16 @@ func assertExplicitEmptyAgentNames(t *testing.T, got []string) {
 	}
 }
 
+// assertExplorationAgentNames asserts a bounded helper (validator/reviewer) was
+// given the shared exploration sub-agent set, matching the research-phase
+// treatment.
+func assertExplorationAgentNames(t *testing.T, got []string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, explorationAgentNames()) {
+		t.Fatalf("AgentNames = %#v, want exploration set %#v", got, explorationAgentNames())
+	}
+}
+
 type fakeGitRunner struct {
 	head string
 	log  string

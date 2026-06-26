@@ -562,6 +562,9 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		return ReviewFailed, "", fmt.Errorf("building feature final review session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
@@ -591,13 +594,17 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	sess.SetLogFile(logFile)
 
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
+	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
+		ReadyCheck: func() bool {
+			if HasPhaseComplete(iterDir) {
+				sess.SetHasUnansweredQuestion(false)
+				return true
+			}
+			return false
+		},
+		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+		MissingArtifacts:     []string{"review-feedback.md"},
+	}).Status
 
 	if agentStatus == agentStatusMissingMarker {
 		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
@@ -680,6 +687,9 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessionID := s.featureFinalReviewSessionID("fix", iteration)
@@ -709,13 +719,17 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	}
 	sess.SetLogFile(logFile)
 
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
+	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
+		ReadyCheck: func() bool {
+			if HasPhaseComplete(iterDir) {
+				sess.SetHasUnansweredQuestion(false)
+				return true
+			}
+			return false
+		},
+		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+		MissingArtifacts:     []string{"verification-report.yaml"},
+	}).Status
 	return agentStatus, nil
 }
 

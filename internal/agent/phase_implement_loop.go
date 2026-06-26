@@ -153,7 +153,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
 		RoadmapPath:                cfg.Feature.Artifacts["roadmap"],
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,
@@ -166,7 +166,8 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		// per-repo path historically used: Medium/Large skip per-
 		// iteration review and rely on Final Review for quality gating;
 		// Moonshot runs the per-iteration gate.
-		SkipIterationReview: cfg.Feature.EffectivePipeline().ShouldSkipIterationReview(),
+		SkipIterationReview:  cfg.Feature.EffectivePipeline().ShouldSkipIterationReview(),
+		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
 	}
 
 	// Mark mid-flight phase status at the feature level so observers and

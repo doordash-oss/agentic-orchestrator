@@ -1178,12 +1178,14 @@ func newRegistryWithProviders() *llm.Registry {
 }
 
 type captureProvider struct {
-	name          string
-	model         string
-	contextWindow int
-	watchdog      bool
-	buildOpts     llm.CommandBuildOpts
-	protocolOpts  llm.ProtocolOpts
+	name            string
+	model           string
+	contextWindow   int
+	watchdog        bool
+	finishOrViolate bool
+	boundedSandbox  bool
+	buildOpts       llm.CommandBuildOpts
+	protocolOpts    llm.ProtocolOpts
 }
 
 func (p *captureProvider) Name() string                 { return p.name }
@@ -1209,6 +1211,8 @@ func (p *captureProvider) EnvVarsToExclude() []string {
 func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
 func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
 func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
+func (p *captureProvider) SupportsFinishOrViolateNudge() bool       { return p.finishOrViolate }
+func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
 
 type captureProtocol struct{}
 
@@ -1307,6 +1311,40 @@ func TestWatchdogConfigForProviderCapability(t *testing.T) {
 	}
 	if got := watchdogConfigForProvider(&captureProvider{name: "watchdog", watchdog: true}); got == nil {
 		t.Fatal("watchdogConfigForProvider(enabled) = nil, want config")
+	}
+}
+
+func TestBuildSession_SurfacesBoundedHelperCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name    string
+		nudge   bool
+		sandbox bool
+	}{
+		{name: "capable provider", nudge: true, sandbox: true},
+		{name: "incapable provider", nudge: false, sandbox: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, finishOrViolate: tc.nudge, boundedSandbox: tc.sandbox}
+			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
+			pr.Registry = newRegistryWithCaptureProvider(provider)
+			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+				Model:        "model-a[1M]",
+				Prompt:       "p",
+				SystemPrompt: "s",
+				WorkDir:      dir,
+				MarkerPath:   filepath.Join(dir, "phase_complete"),
+			})
+			if err != nil {
+				t.Fatalf("BuildSession() error: %v", err)
+			}
+			if sessOpts.SupportsFinishOrViolateNudge != tc.nudge {
+				t.Errorf("SupportsFinishOrViolateNudge = %v, want %v", sessOpts.SupportsFinishOrViolateNudge, tc.nudge)
+			}
+			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
+				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
+			}
+		})
 	}
 }
 

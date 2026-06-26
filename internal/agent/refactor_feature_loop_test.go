@@ -978,6 +978,53 @@ func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsPlan(t *testing.T) {
 	}
 }
 
+// TestRunRefactorPlanStep_FinishOrViolateNudgeRecoversSameSession proves the
+// refactor-plan step recovers via the finish-or-violate nudge: the first turn
+// ends without refactor-plan.md + phase_complete, the harness nudges the same
+// live session, and the nudged turn writes both so the step returns the plan
+// path without a protocol violation.
+func TestRunRefactorPlanStep_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	stateDir := t.TempDir()
+	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
+	scriptsDir := t.TempDir()
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-nudge", []string{"api"})
+	planPath := filepath.Join(artifactDir, "refactor-plan.md")
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh", fmt.Sprintf(`%s
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+while IFS= read -r _line; do
+  case "$_line" in
+    %s)
+      mkdir -p %q
+      cat > %q <<'PLAN_EOF'
+%s
+PLAN_EOF
+      %s
+      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+      exit 0
+      ;;
+  esac
+done
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, artifactDir, planPath, validRefactorPlanText(), testutil.TouchPhaseCompleteInDir(artifactDir)))
+
+	sm := session.NewManager(make(chan interface{}, 10))
+	defer sm.Shutdown()
+
+	in := refactorPlanStepTestInput(t, store, f, stateDir, artifactDir, planScript)
+	in.FinishOrViolateNudge = true
+
+	got, err := runRefactorPlanStep(in, sm)
+	if err != nil {
+		t.Fatalf("runRefactorPlanStep() error = %v", err)
+	}
+	if got != planPath {
+		t.Fatalf("plan path = %q, want %q", got, planPath)
+	}
+}
+
 func refactorPlanStepTestInput(t *testing.T, store ports.FeatureStore, f *feature.Feature, stateDir, artifactDir, script string) refactorPlanStepInput {
 	t.Helper()
 	repoPaths := map[string]string{}

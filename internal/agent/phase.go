@@ -702,6 +702,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(planningModel),
 		Observer:                   pr.Observer,
 	}
 
@@ -764,6 +765,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			EffortLevel:                f.EffectivePipeline().EffortLevel(),
 			SkillsDir:                  pr.SkillsDir,
 			GuidelinesDir:              pr.GuidelinesDir,
+			FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(phasePlanModel),
 			Observer:                   pr.Observer,
 		},
 		RoadmapPath:         roadmapPath,
@@ -836,6 +838,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 	}
 
@@ -890,6 +893,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -950,6 +954,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		RunImplementFn:             pr.RunImplementFn,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
@@ -1001,6 +1006,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -1371,6 +1377,12 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		DebugSystemPrompt: opts.SystemPrompt,
 		TurnMode:          opts.TurnMode,
 		Watchdog:          watchdogConfigForProvider(prov),
+	}
+	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
+		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()
+	}
+	if c, ok := prov.(boundedHelperSandboxProvider); ok {
+		sessOpts.UsesBoundedHelperSandbox = c.UsesBoundedHelperSandbox()
 	}
 	return cmd, env, sessOpts, nil
 }

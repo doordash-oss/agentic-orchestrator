@@ -127,13 +127,9 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		SkillsDir:     pr.SkillsDir,
 		GuidelinesDir: pr.GuidelinesDir,
 		AskingClause:  cfg.CompletionAskingClause,
-		// Bounded helpers run with no sub-agents; advertising them makes a model
-		// that aborts on a denial attempt a task spawn the handler rejects.
-		SuppressSubagents: true,
 	})
 	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
 	boundedHandler := &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
-	sandboxRequested := pr.boundedHelperSandboxForModel(cfg.Model)
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
 		Prompt:                         cfg.Prompt,
@@ -146,7 +142,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		WorkDir:                        cfg.WorkDir,
 		LogPath:                        cfg.LogPath,
 		EffortLevel:                    cfg.EffortLevel,
-		AgentNames:                     []string{},
+		AgentNames:                     explorationAgentNames(),
 		Phase:                          cfg.Phase,
 		SystemPromptHasUsefulResources: true,
 		MarkerPath:                     filepath.Join(cfg.HelperIterDir, PhaseCompleteFile),
@@ -154,6 +150,11 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	if err != nil {
 		return nil, fmt.Errorf("running review helper: building session: %w", err)
 	}
+	// The provider's bounded-helper capabilities are resolved by BuildSession
+	// (which holds the registry) and surfaced on sessOpts, so they hold even
+	// when this helper runner carries no registry of its own.
+	nudgeSupported := sessOpts != nil && sessOpts.SupportsFinishOrViolateNudge
+	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
 		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
 	}
@@ -165,6 +166,9 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		}
 		if cfg.Label != "" {
 			sessOpts.Label = cfg.Label
+		}
+		if nudgeSupported {
+			sessOpts.TurnMode = ports.TurnModeInteractive
 		}
 	}
 
@@ -184,23 +188,24 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	// requireOutput stays false: the verdict lives in FeedbackPath, not in
 	// chat output, so an empty stdout body is a perfectly valid run.
 	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:        cfg.SessionID,
-		featureID:        cfg.FeatureID,
-		phase:            cfg.Phase,
-		label:            "review helper",
-		observerPhase:    "review",
-		model:            cfg.Model,
-		responsePath:     cfg.ResponsePath,
-		repoName:         cfg.RepoName,
-		workDir:          cfg.WorkDir,
-		command:          command,
-		env:              env,
-		sessOpts:         sessOpts,
-		requireOutput:    false,
-		phaseCompleteDir: cfg.HelperIterDir,
-		contractPhase:    cfg.Phase,
-		contractRole:     cfg.Role,
-		parentSpanCtx:    cfg.ParentSpanCtx,
+		sessionID:            cfg.SessionID,
+		featureID:            cfg.FeatureID,
+		phase:                cfg.Phase,
+		label:                "review helper",
+		observerPhase:        "review",
+		model:                cfg.Model,
+		responsePath:         cfg.ResponsePath,
+		repoName:             cfg.RepoName,
+		workDir:              cfg.WorkDir,
+		command:              command,
+		env:                  env,
+		sessOpts:             sessOpts,
+		requireOutput:        false,
+		phaseCompleteDir:     cfg.HelperIterDir,
+		contractPhase:        cfg.Phase,
+		contractRole:         cfg.Role,
+		parentSpanCtx:        cfg.ParentSpanCtx,
+		finishOrViolateNudge: nudgeSupported,
 	})
 	if boundedResult == nil {
 		return nil, runErr

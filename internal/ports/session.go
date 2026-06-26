@@ -241,6 +241,12 @@ type SessionOpts struct {
 	AskUserAutoPick *AskUserAutoPickConfig
 	// Watchdog enables generic session lifecycle watchdogs. Nil disables them.
 	Watchdog *SessionWatchdogConfig
+	// SupportsFinishOrViolateNudge and UsesBoundedHelperSandbox carry the
+	// resolved provider's bounded-helper capabilities. The session builder sets
+	// them so a bounded helper can read them off its session options without
+	// re-resolving the provider (its own runner may carry no provider registry).
+	SupportsFinishOrViolateNudge bool
+	UsesBoundedHelperSandbox     bool
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK

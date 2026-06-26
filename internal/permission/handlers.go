@@ -222,10 +222,10 @@ func (h *ReviewFeedbackHandler) CanUseTool(req ports.ToolPermissionRequest) (por
 }
 
 // BoundedHelperArtifactHandler auto-approves read-only inspection tools,
-// conservative read-only shell probes, and file edits only for the exact
-// artifact paths declared by the harness. Mutating shells, subagents, and
-// undeclared file writes are hard-denied so bounded helpers cannot mutate the
-// worktree or escape their helper directory.
+// conservative read-only shell probes, read-only sub-agent spawning, and file
+// edits only for the exact artifact paths declared by the harness. Mutating
+// shells and undeclared file writes are hard-denied so bounded helpers cannot
+// mutate the worktree or escape their helper directory.
 type BoundedHelperArtifactHandler struct {
 	AllowedPaths []string
 	// Sandboxed indicates the helper process itself runs under an OS filesystem
@@ -240,6 +240,12 @@ type BoundedHelperArtifactHandler struct {
 func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory", "WebSearch", "WebFetch":
+		return ports.PermissionDecision{Behavior: "allow"}, nil
+
+	// Sub-agent spawning — auto-approve. Spawned sub-agents inherit the
+	// provider's depth-1 profile (no sub-sub-agents) and cannot mutate the
+	// worktree, matching the research-phase treatment.
+	case "Agent":
 		return ports.PermissionDecision{Behavior: "allow"}, nil
 
 	case "Bash":
@@ -264,7 +270,7 @@ func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionReques
 
 	return ports.PermissionDecision{
 		Behavior: "deny",
-		Reason:   "bounded helper may not spawn agents or mutate undeclared files",
+		Reason:   "bounded helper may not mutate undeclared files",
 	}, nil
 }
 

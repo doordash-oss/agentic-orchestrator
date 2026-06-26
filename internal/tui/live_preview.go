@@ -505,8 +505,10 @@ func livePreviewConfiguredPhaseModel(f *feature.Feature, phase feature.Phase) st
 			return f.Models.Inquiry
 		}
 		return f.Models.Research
-	case feature.PhaseResearch, feature.PhaseDesign:
+	case feature.PhaseResearch:
 		return f.Models.Research
+	case feature.PhaseDesign:
+		return f.Models.Planning
 	case feature.PhasePlan, feature.PhasePublish:
 		return f.Models.Planning
 	case feature.PhaseImplement:

@@ -759,6 +759,7 @@ func TestLivePreviewConfiguredPhaseModelUsesInquiryForInquire(t *testing.T) {
 		Models: config.ModelConfig{
 			Inquiry:  "claude:clarify-model",
 			Research: "claude:research-model",
+			Planning: "claude:planning-model",
 		},
 	}
 
@@ -767,6 +768,9 @@ func TestLivePreviewConfiguredPhaseModelUsesInquiryForInquire(t *testing.T) {
 	}
 	if got := livePreviewConfiguredPhaseModel(f, feature.PhaseResearch); got != "claude:research-model" {
 		t.Errorf("PhaseResearch model = %q, want research model", got)
+	}
+	if got := livePreviewConfiguredPhaseModel(f, feature.PhaseDesign); got != "claude:planning-model" {
+		t.Errorf("PhaseDesign model = %q, want planning model", got)
 	}
 }
 

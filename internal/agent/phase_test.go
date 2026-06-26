@@ -140,6 +140,7 @@ func TestRunInteractivePhase_UsesPhaseSpecificModel(t *testing.T) {
 		Models: config.ModelConfig{
 			Inquiry:  "inquiry-model",
 			Research: "research-model",
+			Planning: "planning-model",
 		},
 	}
 
@@ -155,6 +156,13 @@ func TestRunInteractivePhase_UsesPhaseSpecificModel(t *testing.T) {
 	}
 	if got := captured[feature.PhaseResearch]; got != "research-model" {
 		t.Errorf("RunResearchFromQuestions model = %q, want research-model", got)
+	}
+
+	if _, err := pr.RunDesign(f, "", nil); err == nil {
+		t.Fatal("RunDesign error = nil, want injected BuildSession error")
+	}
+	if got := captured[feature.PhaseDesign]; got != "planning-model" {
+		t.Errorf("RunDesign model = %q, want planning-model", got)
 	}
 }
 
@@ -665,6 +673,7 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 				},
 				Models: config.ModelConfig{
 					Research: "test-model",
+					Planning: "test-model",
 				},
 			}
 

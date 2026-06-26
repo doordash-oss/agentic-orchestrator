@@ -291,6 +291,11 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 			return m, nil
 		}
 
+		if m.step == publishStepConfirm && key.Matches(msg, key.NewBinding(key.WithKeys("d"))) {
+			m.draft = !m.draft
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
 			m.step = publishStepDone
@@ -637,6 +642,13 @@ func (m PublishModel) View() string {
 		if m.branch != "" {
 			confirmContent += fmt.Sprintf("  Branch: %s\n", m.branch)
 		}
+		var draftIndicator string
+		if m.draft {
+			draftIndicator = BadgeStyle.Render("[Draft PR]")
+		} else {
+			draftIndicator = SuccessStyle.Render("[Ready for review]")
+		}
+		confirmContent += fmt.Sprintf("  %s\n", draftIndicator)
 		confirmContent += "\n  Press Enter to confirm, Esc to cancel"
 		content = confirmContent
 
@@ -677,6 +689,8 @@ func (m PublishModel) View() string {
 		b.WriteString(MutedStyle.Render(" Publishing in progress..."))
 	} else if m.step == publishStepRepoSelect {
 		b.WriteString(KeyHelpStyle.Render(" [↑/↓] Select   [enter] Confirm   [esc] Cancel"))
+	} else if m.step == publishStepConfirm {
+		b.WriteString(KeyHelpStyle.Render(" [enter] Next   [esc] Cancel   [d] Toggle draft"))
 	} else {
 		b.WriteString(KeyHelpStyle.Render(" [enter] Next   [esc] Cancel   [↑/↓] Scroll"))
 	}

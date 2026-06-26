@@ -7865,6 +7865,8 @@ func (e apiRuntimeConfigEditor) currentField() string {
 
 func (e apiRuntimeConfigEditor) modelValue(field string) string {
 	switch field {
+	case "Clarify":
+		return e.draft.Inquiry
 	case "Research":
 		return e.draft.Research
 	case "Planning":
@@ -7884,6 +7886,8 @@ func (e apiRuntimeConfigEditor) modelValue(field string) string {
 
 func (e *apiRuntimeConfigEditor) setModelValue(field, value string) {
 	switch field {
+	case "Clarify":
+		e.draft.Inquiry = value
 	case "Research":
 		e.draft.Research = value
 	case "Planning":
@@ -7978,6 +7982,7 @@ func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 		PhaseProviderModels: map[string]map[string][]string{},
 	}
 	missingProviders := map[string]bool{}
+	cat.PhaseDefaults["Clarify"] = resp.PhaseDefaults.Inquiry
 	cat.PhaseDefaults["Research"] = resp.PhaseDefaults.Research
 	cat.PhaseDefaults["Planning"] = resp.PhaseDefaults.Planning
 	cat.PhaseDefaults["Implementation"] = resp.PhaseDefaults.Implementation

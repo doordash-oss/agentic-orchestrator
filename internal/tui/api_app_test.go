@@ -3557,6 +3557,8 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 
 	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	editing = model.(APIAppModel)
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	editing = model.(APIAppModel)
 	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	editing = model.(APIAppModel)
 	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -3617,6 +3619,7 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
 			Defaults: config.ModelConfig{
+				Inquiry:        "codex:gpt-5.4",
 				Research:       "codex:gpt-5.4",
 				Planning:       "codex:gpt-5.4",
 				Implementation: "codex:gpt-5.4",
@@ -3634,6 +3637,7 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 				},
 			},
 			PhaseDefaults: config.ModelConfig{
+				Inquiry:  "codex:gpt-5.4",
 				Research: "codex:gpt-5.4",
 			},
 			PhaseProviderModels: map[string]map[string][]string{
@@ -3672,8 +3676,8 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	saved := model.(APIAppModel)
 
-	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Research != "codex:gpt-5.5" {
-		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited research default model", got)
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Inquiry != "codex:gpt-5.5" {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited inquiry default model", got)
 	}
 	view = stripANSI(saved.View().Content)
 	for _, want := range []string{"Completed Runtime Config"} {
@@ -3730,7 +3734,7 @@ func TestAPIAppModelRuntimeConfigEditorIncludesUtilitiesAndDiscoveredRoleOptions
 		}
 	}
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 		editing = model.(APIAppModel)
 	}

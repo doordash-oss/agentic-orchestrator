@@ -72,7 +72,7 @@ const (
 // checkpointsStart, lastRow) because the Checkpoints count depends on
 // provisionalPublishable.
 const (
-	configEditorModelsCount = 5
+	configEditorModelsCount = 6
 )
 
 type checkpointField struct {

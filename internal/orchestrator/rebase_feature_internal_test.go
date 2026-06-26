@@ -487,7 +487,7 @@ func TestStartFeatureRebaseManualPublishLeavesCodeReadyWithLocalChanges(t *testi
 	}
 }
 
-func TestStartFeatureRebasePlanRevisionClearsTransientRebaseState(t *testing.T) {
+func TestStartFeatureRebaseUnsupportedFinalReviewPlanRevisionClearsTransientRebaseState(t *testing.T) {
 	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{"api"})
 	fixture.feature.Pipeline = feature.PipelineMedium
 	fixture.saveFeature()
@@ -513,17 +513,26 @@ func TestStartFeatureRebasePlanRevisionClearsTransientRebaseState(t *testing.T) 
 	fixture.wait()
 
 	loaded := fixture.load()
-	if loaded.Status != feature.StatusPlanning {
-		t.Fatalf("Status = %q, want %q", loaded.Status, feature.StatusPlanning)
+	if loaded.Status != feature.StatusFailed {
+		t.Fatalf("Status = %q, want %q", loaded.Status, feature.StatusFailed)
+	}
+	if !strings.Contains(loaded.LastError, "final review requested unsupported phase-plan revision") {
+		t.Fatalf("LastError = %q, want unsupported final review plan revision", loaded.LastError)
+	}
+	if loaded.FailureType != feature.FailureInfrastructure {
+		t.Fatalf("FailureType = %q, want %q", loaded.FailureType, feature.FailureInfrastructure)
 	}
 	if loaded.RebaseOperation != nil {
-		t.Fatalf("RebaseOperation = %+v, want nil after plan revision dispatch", loaded.RebaseOperation)
+		t.Fatalf("RebaseOperation = %+v, want nil after final review failure", loaded.RebaseOperation)
 	}
 	if loaded.ActiveCycle != nil {
-		t.Fatalf("ActiveCycle = %+v, want nil after plan revision dispatch", loaded.ActiveCycle)
+		t.Fatalf("ActiveCycle = %+v, want nil after final review failure", loaded.ActiveCycle)
 	}
 	if loaded.ActiveCycleType() == feature.CycleRebase {
-		t.Fatalf("ActiveCycleType = %q, want non-rebase after plan revision dispatch", loaded.ActiveCycleType())
+		t.Fatalf("ActiveCycleType = %q, want non-rebase after final review failure", loaded.ActiveCycleType())
+	}
+	if got := loaded.RepoStates["api"].LastError; !strings.Contains(got, "rebase final review failed") {
+		t.Fatalf("RepoStates[api].LastError = %q, want rebase final review failure", got)
 	}
 	if got := countRebaseMockCalls(fixture.rebaser.Calls, "ForcePush"); got != 0 {
 		t.Fatalf("ForcePush calls = %d, want 0", got)

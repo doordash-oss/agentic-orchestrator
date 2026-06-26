@@ -3088,6 +3088,31 @@ func hasAnyModelConfig(m config.ModelConfig) bool {
 		m.KBBuild != ""
 }
 
+func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {
+	if overlay.Inquiry != "" {
+		base.Inquiry = overlay.Inquiry
+	}
+	if overlay.Research != "" {
+		base.Research = overlay.Research
+	}
+	if overlay.Planning != "" {
+		base.Planning = overlay.Planning
+	}
+	if overlay.Implementation != "" {
+		base.Implementation = overlay.Implementation
+	}
+	if overlay.Review != "" {
+		base.Review = overlay.Review
+	}
+	if overlay.Utilities != "" {
+		base.Utilities = overlay.Utilities
+	}
+	if overlay.KBBuild != "" {
+		base.KBBuild = overlay.KBBuild
+	}
+	return base
+}
+
 func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
 	return map[string]string{
 		"inquiry":        m.Inquiry,

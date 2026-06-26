@@ -211,7 +211,6 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 			touchPhaseComplete(t, iterDir)
 		case strings.Contains(id, "-final-review-02"):
 			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("", "", "APPROVED"))
-			markFinalReviewReportPassed(t, iterDir)
 			touchPhaseComplete(t, iterDir)
 		default:
 			t.Fatalf("unexpected session id %q", id)

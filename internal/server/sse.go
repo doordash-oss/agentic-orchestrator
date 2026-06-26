@@ -104,14 +104,14 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	ch := h.broker.subscribe()
+	defer h.broker.unsubscribe(ch)
+
 	connected := snapshotRequiredEvent(h.broker.newID(), "connected", ResourceDTO{Type: "runtime"})
 	if err := writeSSE(w, "connected", connected); err != nil {
 		return
 	}
 	flusher.Flush()
-
-	ch := h.broker.subscribe()
-	defer h.broker.unsubscribe(ch)
 
 	heartbeatEvery := heartbeatInterval(r)
 	ticker := time.NewTicker(heartbeatEvery)

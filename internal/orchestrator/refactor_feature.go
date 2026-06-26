@@ -140,7 +140,10 @@ func (o *Orchestrator) startFeatureRefactor(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
-		Observer:                   pr.Observer,
+		FinishOrViolateNudge: pr.FinishOrViolateNudgeForModel(f.Models.Implementation) &&
+			pr.FinishOrViolateNudgeForModel(f.Models.Planning) &&
+			pr.FinishOrViolateNudgeForModel(f.Models.Review),
+		Observer: pr.Observer,
 	}
 	_ = hintRepoName // diagnostic only under the unified flow.
 

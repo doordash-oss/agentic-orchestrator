@@ -421,10 +421,10 @@ type PlanLoopConfig struct {
 	// document, if one was produced. Retained for caller compatibility;
 	// downstream planning prompts no longer re-inject it.
 	DesignArtifactPath string
-	QAFilePaths            []string // paths to Q&A files from inquire/research/design
-	KBInfos                []KBInfo // repo knowledge base info
-	WorkDir                string   // repo working directory
-	AdditionalDirs         []string // additional directories for claude --add-dir
+	QAFilePaths        []string // paths to Q&A files from inquire/research/design
+	KBInfos            []KBInfo // repo knowledge base info
+	WorkDir            string   // repo working directory
+	AdditionalDirs     []string // additional directories for claude --add-dir
 
 	// MaxAttempts overrides the default maxPlanValidationAttempts.
 	// When zero, falls back to the hardcoded constant.
@@ -482,6 +482,13 @@ type PlanLoopConfig struct {
 	// all child spans (sessions, validation, validators) derive from this parent.
 	// Do not set externally — the loop function manages this.
 	PhaseSpanCtx observe.SpanContext
+
+	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
+	// for planner sessions: the session runs in interactive turn mode and, on a
+	// deliberate end_turn without the completion marker, is nudged to finish
+	// before a protocol violation is recorded. Resolved per-model from the
+	// provider capability, so only capability-positive providers opt in.
+	FinishOrViolateNudge bool
 }
 
 // PlanLoopResult represents the outcome of the planning loop.
@@ -1461,7 +1468,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				Prompt:                         prompt,
 				SystemPrompt:                   systemPrompt,
 				AdditionalDirs:                 addDirs,
-				AgentNames:                     []string{},
+				AgentNames:                     explorationAgentNames(),
 				PIDDir:                         pidDir,
 				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
 				WorkDir:                        cfg.WorkDir,
@@ -1474,6 +1481,9 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
 			}
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			if cfg.FinishOrViolateNudge {
+				sessOpts.TurnMode = ports.TurnModeInteractive
+			}
 			WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 			sessOpts.PermCacheScope = cfg.RepoName
 
@@ -1522,13 +1532,17 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				sess.SetLogFile(logFile)
 			}
 
-			agentStatus := waitForStatus(sess, sm, sessionID, func() bool {
-				if HasPhaseComplete(attemptDir) {
-					sess.SetHasUnansweredQuestion(false)
-					return true
-				}
-				return false
-			})
+			agentStatus := waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
+				ReadyCheck: func() bool {
+					if HasPhaseComplete(attemptDir) {
+						sess.SetHasUnansweredQuestion(false)
+						return true
+					}
+					return false
+				},
+				FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+				MissingArtifacts:     []string{"roadmap.md"},
+			}).Status
 
 			cost := ExtractSessionCost(sess)
 			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
@@ -1836,7 +1850,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				Prompt:                         prompt,
 				SystemPrompt:                   systemPrompt,
 				AdditionalDirs:                 addDirs,
-				AgentNames:                     []string{},
+				AgentNames:                     explorationAgentNames(),
 				PIDDir:                         pidDir,
 				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
 				WorkDir:                        cfg.WorkDir,
@@ -1849,6 +1863,9 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)
 			}
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			if cfg.FinishOrViolateNudge {
+				sessOpts.TurnMode = ports.TurnModeInteractive
+			}
 			WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 			sessOpts.PermCacheScope = cfg.RepoName
 
@@ -1897,13 +1914,17 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				sess.SetLogFile(logFile)
 			}
 
-			agentStatus := waitForStatus(sess, sm, sessionID, func() bool {
-				if HasPhaseComplete(attemptDir) {
-					sess.SetHasUnansweredQuestion(false)
-					return true
-				}
-				return false
-			})
+			agentStatus := waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
+				ReadyCheck: func() bool {
+					if HasPhaseComplete(attemptDir) {
+						sess.SetHasUnansweredQuestion(false)
+						return true
+					}
+					return false
+				},
+				FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+				MissingArtifacts:     []string{"plan.md"},
+			}).Status
 
 			cost := ExtractSessionCost(sess)
 			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {

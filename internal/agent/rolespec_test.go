@@ -708,6 +708,25 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 	}
 }
 
+func TestBuildRoleSystemPromptSuppressSubagents(t *testing.T) {
+	const clause = "Sub-agents are available."
+	spec := IterationReviewerRoleSpec()
+
+	// Default: the subagent clause is present (unchanged behavior for every
+	// session that does have subagents).
+	deflt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{Spec: spec, IterationDir: "/state/feat/run-001/iter"})
+	if !strings.Contains(deflt, clause) {
+		t.Fatalf("default BuildRoleSystemPrompt: subagent clause missing in:\n%s", deflt)
+	}
+
+	// Bounded helpers run with no subagents (AgentNames empty); the clause must
+	// be omitted so glm does not attempt a task spawn that the handler denies.
+	suppressed := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{Spec: spec, IterationDir: "/state/feat/run-001/iter", SuppressSubagents: true})
+	if strings.Contains(suppressed, clause) {
+		t.Fatalf("SuppressSubagents=true: subagent clause should be omitted in:\n%s", suppressed)
+	}
+}
+
 func TestBuildValidatorSystemPromptFromRoleSpec(t *testing.T) {
 	role, ok := PlanValidatorRoleForSkill("validate-roadmap-architecture")
 	if !ok {

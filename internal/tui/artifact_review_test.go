@@ -40,6 +40,16 @@ func newTestArtifactReview(t *testing.T, content, mode string) (ArtifactReviewMo
 	return m, f
 }
 
+func TestArtifactReviewHeaderSpellsAgentico(t *testing.T) {
+	header := stripANSI(ArtifactReviewModel{width: 80}.renderHeader())
+	if !strings.Contains(header, " ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀▀ █▀█") {
+		t.Errorf("artifact review header missing AGENTICO top row:\n%s", header)
+	}
+	if !strings.Contains(header, " █▀█ █▄█ ██▄ █░▀█ ░█░ █ █▄▄ █▄█") {
+		t.Errorf("artifact review header missing AGENTICO bottom row:\n%s", header)
+	}
+}
+
 func TestArtifactReview_EditorFocusedOnStart(t *testing.T) {
 	m, _ := newTestArtifactReview(t, "# Plan\nsome content", "plan")
 

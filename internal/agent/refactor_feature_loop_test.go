@@ -877,6 +877,28 @@ func TestRunRefactorFeatureLoop_PlanStepProtocolViolationCanRecover(t *testing.T
 	}
 }
 
+func TestRunRefactorPlanStep_ProvisionsExplorationSubagents(t *testing.T) {
+	stateDir := t.TempDir()
+	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-agents", []string{"api"})
+	sm := session.NewManager(make(chan interface{}, 10))
+	defer sm.Shutdown()
+
+	in := refactorPlanStepTestInput(t, store, f, stateDir, artifactDir, "")
+	var captured BuildSessionOpts
+	in.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		captured = opts
+		return nil, nil, nil, fmt.Errorf("test: stop after capture")
+	}
+
+	if _, err := runRefactorPlanStep(in, sm); err == nil {
+		t.Fatal("runRefactorPlanStep() error = nil, want error from capturing BuildSession")
+	}
+	if !reflect.DeepEqual(captured.AgentNames, explorationAgentNames()) {
+		t.Fatalf("refactor-plan AgentNames = %v, want exploration set %v", captured.AgentNames, explorationAgentNames())
+	}
+}
+
 func TestRunRefactorPlanStep_MissingPlanAfterPhaseCompleteReturnsProtocolViolation(t *testing.T) {
 	stateDir := t.TempDir()
 	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
@@ -953,6 +975,53 @@ func TestRunRefactorPlanStep_StalePlanWithFreshMarkerReturnsPlan(t *testing.T) {
 	}
 	if _, statErr := os.Stat(stalePlanPath); statErr != nil {
 		t.Fatalf("stale refactor-plan.md stat error = %v, want preserved", statErr)
+	}
+}
+
+// TestRunRefactorPlanStep_FinishOrViolateNudgeRecoversSameSession proves the
+// refactor-plan step recovers via the finish-or-violate nudge: the first turn
+// ends without refactor-plan.md + phase_complete, the harness nudges the same
+// live session, and the nudged turn writes both so the step returns the plan
+// path without a protocol violation.
+func TestRunRefactorPlanStep_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	stateDir := t.TempDir()
+	artifactDir := filepath.Join(stateDir, "runs", "run-001", "refactor-1")
+	scriptsDir := t.TempDir()
+	store, f, _ := newRefactorTestFeature(t, stateDir, "refactor-plan-nudge", []string{"api"})
+	planPath := filepath.Join(artifactDir, "refactor-plan.md")
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh", fmt.Sprintf(`%s
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+while IFS= read -r _line; do
+  case "$_line" in
+    %s)
+      mkdir -p %q
+      cat > %q <<'PLAN_EOF'
+%s
+PLAN_EOF
+      %s
+      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+      exit 0
+      ;;
+  esac
+done
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, artifactDir, planPath, validRefactorPlanText(), testutil.TouchPhaseCompleteInDir(artifactDir)))
+
+	sm := session.NewManager(make(chan interface{}, 10))
+	defer sm.Shutdown()
+
+	in := refactorPlanStepTestInput(t, store, f, stateDir, artifactDir, planScript)
+	in.FinishOrViolateNudge = true
+
+	got, err := runRefactorPlanStep(in, sm)
+	if err != nil {
+		t.Fatalf("runRefactorPlanStep() error = %v", err)
+	}
+	if got != planPath {
+		t.Fatalf("plan path = %q, want %q", got, planPath)
 	}
 }
 

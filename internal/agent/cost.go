@@ -16,7 +16,9 @@ package agent
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -52,6 +54,40 @@ func toSessionUsage(cost SessionCost) observe.SessionUsage {
 		CacheReadInputTokens:     cost.Usage.CacheReadInputTokens,
 		CacheCreationInputTokens: cost.Usage.CacheCreationInputTokens,
 	}
+}
+
+// accumulateSessionCostToFeature adds a session's cost to the latest active
+// timing key on the feature, falling back to fallbackKey when no active key is
+// recorded.
+func accumulateSessionCostToFeature(store ports.FeatureStore, featureID, fallbackKey string, cost SessionCost) error {
+	return accumulateSessionCost(store, featureID, fallbackKey, cost, true)
+}
+
+// accumulateSessionCostToFeatureKey adds a session's cost to key regardless of
+// ActiveTimingKey. Use this for phases such as Final Review where the lifecycle
+// phase can advance while the old timing key remains preserved for resume UI.
+func accumulateSessionCostToFeatureKey(store ports.FeatureStore, featureID, key string, cost SessionCost) error {
+	return accumulateSessionCost(store, featureID, key, cost, false)
+}
+
+func accumulateSessionCost(store ports.FeatureStore, featureID, fallbackKey string, cost SessionCost, preferActiveKey bool) error {
+	if store == nil || strings.TrimSpace(featureID) == "" || cost.TotalCostUSD <= 0 {
+		return nil
+	}
+	return store.Modify(featureID, func(f *feature.Feature) error {
+		costKey := ""
+		if preferActiveKey {
+			costKey = strings.TrimSpace(f.ActiveTimingKey)
+		}
+		if costKey == "" {
+			costKey = strings.TrimSpace(fallbackKey)
+		}
+		if costKey == "" {
+			return nil
+		}
+		f.AddPhaseCost(costKey, cost.TotalCostUSD)
+		return nil
+	})
 }
 
 // sessionErrFromStatus returns an error if the session ended in a failed state,

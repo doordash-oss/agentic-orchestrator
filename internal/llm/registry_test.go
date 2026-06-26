@@ -182,6 +182,16 @@ func TestRegistry_PromptAdapterForModel(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit_provider_prefix_uses_prompt_adapter", func(t *testing.T) {
+		pa, err := r.PromptAdapterForModel("full:unlisted-model")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pa.AskingQuestionsClause() != "ask questions this way" {
+			t.Errorf("got %q, want %q", pa.AskingQuestionsClause(), "ask questions this way")
+		}
+	})
+
 	t.Run("provider_does_not_implement_PromptAdapter", func(t *testing.T) {
 		_, err := r.PromptAdapterForModel("bare-model")
 		if err == nil {
@@ -402,6 +412,64 @@ func TestRegistry_ResolveModel_ColonEdgeCases(t *testing.T) {
 	}
 }
 
+// TestRegistry_ResolveModel_ColonInModelSegment is a regression for a catalog
+// entry (or alias) whose backend id carries a colon-form tag in its model
+// segment, e.g. an Ollama backend id like "ollama/llama3.1:8b". The
+// first colon in such a bare id is part of the model name, not an explicit
+// "provider:model" routing prefix, so it must resolve through normal catalog
+// matching rather than being parsed as provider "ollama/llama3.1" and rejected
+// as unknown. Explicit provider routing for the same colon-tagged id must
+// keep working, and a genuinely unknown colon-bearing prefix must still be
+// rejected with the "unknown provider" error.
+func TestRegistry_ResolveModel_ColonInModelSegment(t *testing.T) {
+	r := llm.NewRegistry()
+	r.Register(&stubCatalogProvider{
+		stubProvider: stubProvider{name: "gateway", models: []string{"ollama/llama3.1:8b", "vendor/sonnet"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "ollama/llama3.1:8b", Aliases: []string{"ollama/llama3.1:latest"}},
+			{ID: "vendor/sonnet"},
+		},
+	})
+
+	tests := []struct {
+		name          string
+		model         string
+		wantProvider  string
+		wantBareModel string
+		wantErr       bool
+		errContains   string
+	}{
+		{"bare colon-tagged id resolves via catalog", "ollama/llama3.1:8b", "gateway", "ollama/llama3.1:8b", false, ""},
+		{"bare colon-tagged alias canonicalizes via catalog", "ollama/llama3.1:latest", "gateway", "ollama/llama3.1:8b", false, ""},
+		{"explicit provider routing preserves colon tag", "gateway:ollama/llama3.1:8b", "gateway", "ollama/llama3.1:8b", false, ""},
+		{"unknown colon-bearing prefix still rejected", "ollama/llama3.1:70b", "", "", true, "unknown provider"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, bareModel, err := r.ResolveModel(tt.model)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if p.Name() != tt.wantProvider {
+				t.Errorf("got provider %q, want %q", p.Name(), tt.wantProvider)
+			}
+			if bareModel != tt.wantBareModel {
+				t.Errorf("got bareModel %q, want %q", bareModel, tt.wantBareModel)
+			}
+		})
+	}
+}
+
 func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubCatalogProvider{
@@ -426,8 +494,11 @@ func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	if defaults[llm.PhaseChat] != "claude:sonnet" {
 		t.Errorf("chat: got %q, want %q", defaults[llm.PhaseChat], "claude:sonnet")
 	}
-	if defaults[llm.PhaseReview] != "codex:gpt-5.4" {
-		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "codex:gpt-5.4")
+	// Review no longer carries a hardcoded codex preference. sonnet and gpt-5.4
+	// are both balanced @ 200K, so the provider-neutral tie-break (provider+
+	// model-ID order, "claude" < "codex") selects claude:sonnet.
+	if defaults[llm.PhaseReview] != "claude:sonnet" {
+		t.Errorf("review: got %q, want %q", defaults[llm.PhaseReview], "claude:sonnet")
 	}
 	if defaults[llm.PhaseKBBuild] != "claude:sonnet" {
 		t.Errorf("kb_build: got %q, want %q", defaults[llm.PhaseKBBuild], "claude:sonnet")
@@ -775,9 +846,11 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		if mc.Implementation != "claude:sonnet" {
 			t.Errorf("implementation: got %q, want %q", mc.Implementation, "claude:sonnet")
 		}
-		// Review prefers codex and uses its balanced default.
-		if mc.Review != "codex:gpt-5.4" {
-			t.Errorf("review: got %q, want %q", mc.Review, "codex:gpt-5.4")
+		// Review competes provider-neutrally: claude:sonnet and codex:gpt-5.4 are
+		// both balanced @ 200K, so the deterministic provider+model-ID tie-break
+		// ("claude" < "codex") wins. No role carries a hardcoded codex preference.
+		if mc.Review != "claude:sonnet" {
+			t.Errorf("review: got %q, want %q", mc.Review, "claude:sonnet")
 		}
 		if mc.Utilities != "claude:sonnet" {
 			t.Errorf("chat: got %q, want %q", mc.Utilities, "claude:sonnet")
@@ -1005,6 +1078,191 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 		}
 		if slices.Contains(result["claude"], "opus") {
 			t.Error("claude chat should not include opus")
+		}
+	})
+}
+
+// TestRegistry_ProviderGroup proves an additional provider is surfaced as a
+// normal provider-backed catalog source once ready: its discovered backend ids
+// appear under its provider group in AllModels, ModelsForProvider, and the
+// phase-eligible lists alongside Claude and Codex, filtered by the same
+// category rules; uncategorized entries are excluded; and provider order is
+// preserved.
+func TestRegistry_ProviderGroup(t *testing.T) {
+	r := llm.NewRegistry()
+	claude := &stubCatalogProvider{
+		stubProvider: stubProvider{name: "claude", models: []string{"opus", "sonnet"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "opus", Category: "capable"},
+			{ID: "sonnet", Category: "balanced"},
+		},
+	}
+	codex := &stubCatalogProvider{
+		stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "gpt-5.4", Category: "balanced"},
+		},
+	}
+	gateway := &stubCatalogProvider{
+		stubProvider: stubProvider{name: "gateway", models: []string{"vendor/sonnet[200K]", "vendor/gpt-5", "vendor/gpt-5-nano[400K]", "vendor/unknown"}, hasCLI: true},
+		catalog: []llm.ModelInfo{
+			{ID: "vendor/sonnet[200K]", Aliases: []string{"vendor/sonnet"}, ContextWindow: 200_000, Category: "balanced"},
+			{ID: "vendor/gpt-5", Category: "capable"},
+			{ID: "vendor/gpt-5-nano[400K]", ContextWindow: 400_000, Category: "cheap"},
+			{ID: "vendor/unknown", Category: ""}, // uncategorized: excluded from eligible lists
+		},
+	}
+	r.Register(claude)
+	r.Register(codex)
+	r.Register(gateway)
+
+	t.Run("ModelsForProvider returns provider catalog when ready", func(t *testing.T) {
+		got := r.ModelsForProvider("gateway")
+		if len(got) != 4 {
+			t.Fatalf("ModelsForProvider(gateway) = %+v, want 4 entries", got)
+		}
+		if got[0].ID != "vendor/sonnet[200K]" {
+			t.Errorf("first gateway model = %q, want suffixed sonnet id", got[0].ID)
+		}
+	})
+
+	t.Run("AllModels includes provider in registration order", func(t *testing.T) {
+		all := r.AllModels()
+		var ids []string
+		for _, m := range all {
+			ids = append(ids, m.ID)
+		}
+		// claude + codex precede gateway (registration order preserved).
+		if !slices.Contains(ids, "vendor/gpt-5") || !slices.Contains(ids, "vendor/sonnet[200K]") {
+			t.Fatalf("AllModels missing gateway entries: %v", ids)
+		}
+		idxCodex := slices.Index(ids, "gpt-5.4")
+		idxGateway := slices.Index(ids, "vendor/gpt-5")
+		if idxCodex < 0 || idxGateway < 0 || idxGateway < idxCodex {
+			t.Errorf("provider order regressed: ids = %v", ids)
+		}
+	})
+
+	t.Run("phase-eligible list includes provider by category, excludes uncategorized", func(t *testing.T) {
+		research := r.EligibleModelsForPhase(llm.PhaseResearch) // capable + balanced
+		got := research["gateway"]
+		if !slices.Contains(got, "vendor/gpt-5") || !slices.Contains(got, "vendor/sonnet[200K]") {
+			t.Errorf("gateway research eligible = %v, want capable + balanced entries", got)
+		}
+		if slices.Contains(got, "vendor/unknown") {
+			t.Error("uncategorized gateway model leaked into eligible list")
+		}
+		if slices.Contains(got, "vendor/gpt-5-nano[400K]") {
+			t.Error("cheap gateway model should be excluded from research eligible list")
+		}
+
+		chat := r.EligibleModelsForPhase(llm.PhaseChat) // balanced + cheap
+		chatGot := chat["gateway"]
+		if !slices.Contains(chatGot, "vendor/gpt-5-nano[400K]") || !slices.Contains(chatGot, "vendor/sonnet[200K]") {
+			t.Errorf("gateway chat eligible = %v, want balanced + cheap entries", chatGot)
+		}
+		if slices.Contains(chatGot, "vendor/gpt-5") {
+			t.Error("capable gateway model should be excluded from chat eligible list")
+		}
+	})
+
+	t.Run("provider contributes nothing when its CLI is not detected", func(t *testing.T) {
+		gateway.hasCLI = false
+		defer func() { gateway.hasCLI = true }()
+		if got := r.ModelsForProvider("gateway"); got != nil {
+			t.Errorf("ModelsForProvider(gateway) = %v, want nil when undetected", got)
+		}
+		if got := r.EligibleModelsForPhase(llm.PhaseResearch)["gateway"]; got != nil {
+			t.Errorf("eligible gateway = %v, want absent when undetected", got)
+		}
+	})
+}
+
+// TestRegistry_CatalogDefaults_ProviderNeutralRanking proves Phase 6's
+// provider-neutral default selection: all providers compete as
+// peers under the same role-category and model-metadata rules. Any provider can win
+// any role when its catalog entry outranks the others, equal-ranked candidates
+// resolve by a stable provider+model-ID order (never registration order or a
+// hardcoded provider preference), and the persisted form follows the
+// single-vs-multi provider rule (bare backend id vs. provider routing prefix).
+func TestRegistry_CatalogDefaults_ProviderNeutralRanking(t *testing.T) {
+	newGateway := func(hasCLI bool) *stubCatalogProvider {
+		return &stubCatalogProvider{
+			stubProvider: stubProvider{name: "gateway", models: []string{"vendor/big[400K]"}, hasCLI: hasCLI},
+			catalog: []llm.ModelInfo{
+				{ID: "vendor/big[400K]", Aliases: []string{"vendor/big"}, ContextWindow: 400_000, Category: "balanced"},
+			},
+		}
+	}
+
+	t.Run("provider wins every role when its balanced model has the largest context window", func(t *testing.T) {
+		r := llm.NewRegistry()
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "gpt-5.4", ContextWindow: 272_000, Category: "balanced"}},
+		})
+		r.Register(newGateway(true))
+
+		mc := r.CatalogDefaultModels()
+		roles := map[string]string{
+			"research": mc.Research, "planning": mc.Planning, "implementation": mc.Implementation,
+			"review": mc.Review, "chat": mc.Utilities, "kb_build": mc.KBBuild,
+		}
+		for role, got := range roles {
+			if got != "gateway:vendor/big[400K]" {
+				t.Errorf("%s: got %q, want gateway:vendor/big[400K] (largest balanced context window wins)", role, got)
+			}
+		}
+	})
+
+	t.Run("equal-ranked candidates resolve by provider+model-ID, not registration order", func(t *testing.T) {
+		// Register gateway FIRST to prove registration order does not break ties.
+		r := llm.NewRegistry()
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "gateway", models: []string{"vendor/sonnet[200K]"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "vendor/sonnet[200K]", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "codex", models: []string{"gpt-5.4"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "gpt-5.4", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		r.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"}},
+		})
+
+		mc := r.CatalogDefaultModels()
+		// All three are balanced @ 200K; "claude" < "codex" < "gateway" so claude
+		// wins deterministically regardless of registration order.
+		if mc.Planning != "claude:sonnet" {
+			t.Errorf("planning tie-break: got %q, want claude:sonnet", mc.Planning)
+		}
+		// Review no longer carries a hardcoded codex preference — it ties like any
+		// other role and resolves to claude by the provider+model-ID order.
+		if mc.Review != "claude:sonnet" {
+			t.Errorf("review tie-break: got %q, want claude:sonnet (review no longer prefers codex)", mc.Review)
+		}
+	})
+
+	t.Run("single provider persists bare backend id; multi-provider adds routing prefix", func(t *testing.T) {
+		solo := llm.NewRegistry()
+		solo.Register(newGateway(true))
+		if got := solo.CatalogDefaultModels().Implementation; got != "vendor/big[400K]" {
+			t.Errorf("single-provider gateway: got %q, want bare vendor/big[400K]", got)
+		}
+
+		multi := llm.NewRegistry()
+		multi.Register(&stubCatalogProvider{
+			stubProvider: stubProvider{name: "claude", models: []string{"sonnet"}, hasCLI: true},
+			catalog:      []llm.ModelInfo{{ID: "sonnet", ContextWindow: 200_000, Category: "balanced"}},
+		})
+		multi.Register(newGateway(true))
+		if got := multi.CatalogDefaultModels().Implementation; got != "gateway:vendor/big[400K]" {
+			t.Errorf("multi-provider gateway: got %q, want gateway:vendor/big[400K]", got)
 		}
 	})
 }

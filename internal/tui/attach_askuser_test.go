@@ -447,6 +447,115 @@ func TestRenderQuestion_ShowsConfidencePerOption(t *testing.T) {
 	}
 }
 
+func longQuestionAnswerModel() AttachModel {
+	longQuestion := strings.Join([]string{
+		"I've read the research, user answers, and skill. The user has made 8 decisions already.",
+		"Let me identify the unresolved design decisions and their dependencies.",
+		"The research surfaced a critical binding constraint that the answered questions did not address.",
+		"Question 9 - CI content-contract test literals:",
+		"The research found that two Go test files run in CI and assert literal substrings in README.md.",
+		"How should the translation handle these prose-like contract tokens?",
+	}, "\n\n")
+	return AttachModel{
+		width: 120,
+		pendingQuestions: []askUserQuestion{{
+			Question: longQuestion,
+			Options: []askUserOption{
+				{Label: "Preserve contract tokens in English", Confidence: floatPtr(0.82)},
+				{Label: "Translate naturally and update tests", Confidence: floatPtr(0.46)},
+				{Label: "Translate with additional accepted literals", Confidence: floatPtr(0.31)},
+			},
+		}},
+		currentQuestionIdx: 0,
+		selectedOption:     0,
+		inputHeight:        1,
+	}
+}
+
+func TestRenderQuestion_LongQuestionStillShowsAnswerLabels(t *testing.T) {
+	m := longQuestionAnswerModel()
+
+	output := m.renderQuestion()
+	for _, want := range []string{
+		"1. Preserve contract tokens in English",
+		"2. Translate naturally and update tests",
+		"3. Translate with additional accepted literals",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("long question render missing answer label %q:\n%s", want, output)
+		}
+	}
+	if !strings.Contains(output, "? full question") {
+		t.Fatalf("long question render missing full-question affordance:\n%s", output)
+	}
+}
+
+func TestRenderQuestion_LongQuestionCanExpandAndReturnToChoices(t *testing.T) {
+	m := longQuestionAnswerModel()
+	collapsed := m.renderQuestion()
+	if strings.Contains(collapsed, "How should the translation handle these prose-like contract tokens?") {
+		t.Fatalf("collapsed render should not spend option space on the full question:\n%s", collapsed)
+	}
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if cmd != nil {
+		t.Fatal("question expansion should not emit a command")
+	}
+	expanded := m.renderQuestion()
+	if !strings.Contains(expanded, "How should the translation handle these prose-like contract tokens?") {
+		t.Fatalf("expanded render missing full question tail:\n%s", expanded)
+	}
+	if !strings.Contains(expanded, "? back to choices") {
+		t.Fatalf("expanded render missing return affordance:\n%s", expanded)
+	}
+
+	m, cmd = m.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+	if cmd != nil {
+		t.Fatal("question collapse should not emit a command")
+	}
+	collapsed = m.renderQuestion()
+	if !strings.Contains(collapsed, "1. Preserve contract tokens in English") {
+		t.Fatalf("collapsed render after returning should show choices:\n%s", collapsed)
+	}
+}
+
+func TestRenderQuestion_TallTerminalUsesMoreQuestionPanelSpace(t *testing.T) {
+	m := longQuestionAnswerModel()
+	m.height = 60
+	m.pendingQuestions[0].Options = []askUserOption{
+		{
+			Label:       "Keep all tier names in English",
+			Description: "The tier names function as proper labels referenced in both the table and prose.",
+			Confidence:  floatPtr(0.78),
+		},
+		{
+			Label:       "Translate all tier names except TUI observability",
+			Description: "Maximizes Italian content but creates a visible inconsistency in a single column.",
+			Confidence:  floatPtr(0.32),
+		},
+		{
+			Label:       "Translate all tier names including TUI observability",
+			Description: "Fully Italian, but re-opens the CI-contract scope already closed earlier.",
+			Confidence:  floatPtr(0.15),
+		},
+	}
+
+	output := m.renderQuestion()
+	if got := m.chatPanelHeight(); got <= 20 {
+		t.Fatalf("chatPanelHeight() = %d, want tall terminal to allocate more than 20 lines", got)
+	}
+	for _, want := range []string{
+		"1. Keep all tier names in English",
+		"2. Translate all tier names except TUI observability",
+		"3. Translate all tier names including TUI observability",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("tall terminal render missing answer label %q:\n%s", want, output)
+		}
+	}
+}
+
 func TestParseAskUserQuestionsForDisplay_RecoversConfidenceFromToolUse(t *testing.T) {
 	strippedInput := json.RawMessage(`{"questions":[{"question":"Should games have a clock/time control?","header":"Time controls","multiSelect":false,"options":[{"label":"No clock - untimed only (Recommended)","description":"Players take as long as they want."},{"label":"Optional preset time controls","description":"User can choose untimed or pick a preset."}]}]}`)
 	toolUseInput := json.RawMessage(`{"questions":[{"question":"Should games have a clock/time control?","header":"Time controls","multiSelect":false,"options":[{"label":"No clock - untimed only (Recommended)","description":"Players take as long as they want.","confidence":0.6},{"label":"Optional preset time controls","description":"User can choose untimed or pick a preset.","confidence":0.35}]}]}`)

@@ -516,7 +516,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		PreviousFeedback:                     previousFeedback,
 		Iteration:                            iteration,
 		RoadmapPath:                          cfg.Feature.Artifacts["roadmap"],
-		DesignArtifactPath:               cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
 		Images:                               cfg.Feature.Images,
 		PhaseType:                            cfg.Feature.RoadmapPhaseType,
 		FeedbackPath:                         feedbackPath,
@@ -549,7 +549,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		Prompt:                         prompt,
 		SystemPrompt:                   systemPrompt,
 		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     []string{},
+		AgentNames:                     explorationAgentNames(),
 		PIDDir:                         s.stateDir,
 		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
 		WorkDir:                        s.workspace.Cwd,
@@ -562,6 +562,9 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		return ReviewFailed, "", fmt.Errorf("building feature final review session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
@@ -579,8 +582,9 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.ReviewModel)
 	defer func() {
+		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost)
 		if observed {
-			cost := ExtractSessionCost(sess)
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 	}()
@@ -591,13 +595,17 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	sess.SetLogFile(logFile)
 
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
+	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
+		ReadyCheck: func() bool {
+			if HasPhaseComplete(iterDir) {
+				sess.SetHasUnansweredQuestion(false)
+				return true
+			}
+			return false
+		},
+		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+		MissingArtifacts:     []string{"review-feedback.md"},
+	}).Status
 
 	if agentStatus == agentStatusMissingMarker {
 		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
@@ -642,7 +650,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		VerificationReportPath: verificationReportPath,
 		Iteration:              iteration,
 		Publishable:            cfg.Feature.IsPublishable(),
-		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
 		Images:                 cfg.Feature.Images,
 	})
 
@@ -680,6 +688,9 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessionID := s.featureFinalReviewSessionID("fix", iteration)
@@ -697,8 +708,9 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	}
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.Model)
 	defer func() {
+		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost)
 		if observed {
-			cost := ExtractSessionCost(sess)
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 	}()
@@ -709,13 +721,17 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	}
 	sess.SetLogFile(logFile)
 
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
+	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
+		ReadyCheck: func() bool {
+			if HasPhaseComplete(iterDir) {
+				sess.SetHasUnansweredQuestion(false)
+				return true
+			}
+			return false
+		},
+		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+		MissingArtifacts:     []string{"verification-report.yaml"},
+	}).Status
 	return agentStatus, nil
 }
 

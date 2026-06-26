@@ -398,9 +398,9 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "roadmap_user_multi_repo",
 			render: func() string {
 				in := RoadmapUserInput{
-					Name:                   "OAuth login",
-					Description:            "Sign in with Google.",
-					Repos:                  []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}},
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					Repos:              []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}},
 					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
 					VisualReferences: VisualReferencesInput{
 						Images: []string{"/tmp/login.png"},
@@ -494,7 +494,8 @@ func TestGoldenSnapshots(t *testing.T) {
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
-					AskingClause: "## Asking Questions\n\nAsk one question at a time.",
+					SubagentsAvailable: true,
+					AskingClause:       "## Asking Questions\n\nAsk one question at a time.",
 				})
 			},
 		},
@@ -518,7 +519,8 @@ func TestGoldenSnapshots(t *testing.T) {
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
-					AskingClause: "## Asking Questions\n\nUse numbered alternatives.",
+					SubagentsAvailable: true,
+					AskingClause:       "## Asking Questions\n\nUse numbered alternatives.",
 				})
 			},
 		},
@@ -661,6 +663,26 @@ func TestRoleSystemPromptSuppressesUsefulResourcesWhenEmpty(t *testing.T) {
 	})
 	if strings.Contains(got, "# Useful Resources") {
 		t.Fatalf("RoleSystemPrompt() rendered empty Useful Resources section:\n%s", got)
+	}
+}
+
+func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
+	const clause = "Sub-agents are available."
+	base := RoleSystemInput{
+		OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/state/feat-x/x"}},
+		MarkerPath:  "/state/feat-x/x/phase_complete",
+	}
+
+	avail := base
+	avail.SubagentsAvailable = true
+	if !strings.Contains(RoleSystemPrompt(avail), clause) {
+		t.Errorf("SubagentsAvailable=true: subagent clause missing")
+	}
+
+	unavail := base
+	unavail.SubagentsAvailable = false
+	if strings.Contains(RoleSystemPrompt(unavail), clause) {
+		t.Errorf("SubagentsAvailable=false: subagent clause should be omitted (helper has no subagents)")
 	}
 }
 

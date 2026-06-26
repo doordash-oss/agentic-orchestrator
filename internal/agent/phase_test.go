@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -1176,6 +1177,177 @@ func newRegistryWithProviders() *llm.Registry {
 	return reg
 }
 
+type captureProvider struct {
+	name            string
+	model           string
+	contextWindow   int
+	watchdog        bool
+	finishOrViolate bool
+	boundedSandbox  bool
+	buildOpts       llm.CommandBuildOpts
+	protocolOpts    llm.ProtocolOpts
+}
+
+func (p *captureProvider) Name() string                 { return p.name }
+func (p *captureProvider) VersionInfo() (string, error) { return "1.0.0", nil }
+func (p *captureProvider) InstallHint() string          { return "" }
+func (p *captureProvider) MatchesModel(model string) bool {
+	return model == p.model
+}
+func (p *captureProvider) DetectCLI() bool           { return true }
+func (p *captureProvider) AvailableModels() []string { return []string{p.model} }
+func (p *captureProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	p.buildOpts = opts
+	return []string{p.name}, nil, nil
+}
+func (p *captureProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
+	p.protocolOpts = opts
+	return captureProtocol{}
+}
+func (p *captureProvider) MinVersion() [3]int { return [3]int{} }
+func (p *captureProvider) EnvVarsToExclude() []string {
+	return nil
+}
+func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
+func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
+func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
+func (p *captureProvider) SupportsFinishOrViolateNudge() bool       { return p.finishOrViolate }
+func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
+
+type captureProtocol struct{}
+
+func (captureProtocol) SetStdin(io.Writer) {}
+func (captureProtocol) Handshake(context.Context) error {
+	return nil
+}
+func (captureProtocol) ParseLine([]byte) ([]llm.SDKMessage, error) { return nil, nil }
+func (captureProtocol) SendUserMessage(string) error               { return nil }
+func (captureProtocol) RespondToControl(string, bool, json.RawMessage, string) error {
+	return nil
+}
+func (captureProtocol) RespondToHook(string) error { return nil }
+func (captureProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+	return nil
+}
+func (captureProtocol) Interrupt() error       { return llm.ErrNotSupported }
+func (captureProtocol) SessionID() string      { return "" }
+func (captureProtocol) TranscriptPath() string { return "" }
+func (captureProtocol) Close() error           { return nil }
+
+func newRegistryWithCaptureProvider(p *captureProvider) *llm.Registry {
+	reg := llm.NewRegistry()
+	reg.Register(p)
+	return reg
+}
+
+func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "repo")
+	skillsDir := filepath.Join(dir, "skills")
+	guidelinesDir := filepath.Join(dir, "guidelines")
+	kbDir := filepath.Join(dir, "knowledge-base", "repo")
+	for _, d := range []string{workDir, skillsDir, guidelinesDir, kbDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, watchdog: true}
+	pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
+	pr.Registry = newRegistryWithCaptureProvider(provider)
+	pr.SkillsDir = skillsDir
+	pr.GuidelinesDir = guidelinesDir
+	markerPath := filepath.Join(dir, "phase_complete")
+
+	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:           "model-a[1M]",
+		Prompt:          "rendered prompt",
+		SystemPrompt:    "system prompt",
+		AdditionalDirs:  []string{kbDir},
+		WorkDir:         workDir,
+		MarkerPath:      markerPath,
+		ResumeSessionID: "session-prior",
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+
+	for _, want := range []string{dir, kbDir, skillsDir, guidelinesDir, workDir} {
+		if !slices.Contains(provider.buildOpts.ReadRoots, want) {
+			t.Fatalf("ReadRoots = %v, missing %q", provider.buildOpts.ReadRoots, want)
+		}
+	}
+	for _, want := range []string{dir, kbDir} {
+		if !slices.Contains(provider.buildOpts.WritableRoots, want) {
+			t.Fatalf("WritableRoots = %v, missing %q", provider.buildOpts.WritableRoots, want)
+		}
+	}
+	for _, forbidden := range []string{skillsDir, guidelinesDir} {
+		if slices.Contains(provider.buildOpts.WritableRoots, forbidden) {
+			t.Fatalf("WritableRoots = %v, should omit read-only context dir %q", provider.buildOpts.WritableRoots, forbidden)
+		}
+	}
+
+	if got := provider.protocolOpts.InitialPrompt; got != "rendered prompt" {
+		t.Fatalf("Protocol InitialPrompt = %q, want rendered prompt", got)
+	}
+	if got := provider.protocolOpts.MarkerPath; got != markerPath {
+		t.Fatalf("Protocol MarkerPath = %q, want %q", got, markerPath)
+	}
+	if got := provider.protocolOpts.ResumeSessionID; got != "session-prior" {
+		t.Fatalf("Protocol ResumeSessionID = %q, want session-prior", got)
+	}
+	if sessOpts == nil || sessOpts.ContextWindow != 1_000_000 {
+		t.Fatalf("SessionOpts.ContextWindow = %v, want 1000000", sessOpts)
+	}
+	if sessOpts.Watchdog == nil {
+		t.Fatalf("SessionOpts.Watchdog = nil, want provider-enabled config")
+	}
+}
+
+func TestWatchdogConfigForProviderCapability(t *testing.T) {
+	if got := watchdogConfigForProvider(&mockStartupProvider{name: "plain"}); got != nil {
+		t.Fatalf("watchdogConfigForProvider(plain) = %#v, want nil", got)
+	}
+	if got := watchdogConfigForProvider(&captureProvider{name: "watchdog", watchdog: true}); got == nil {
+		t.Fatal("watchdogConfigForProvider(enabled) = nil, want config")
+	}
+}
+
+func TestBuildSession_SurfacesBoundedHelperCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name    string
+		nudge   bool
+		sandbox bool
+	}{
+		{name: "capable provider", nudge: true, sandbox: true},
+		{name: "incapable provider", nudge: false, sandbox: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, finishOrViolate: tc.nudge, boundedSandbox: tc.sandbox}
+			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
+			pr.Registry = newRegistryWithCaptureProvider(provider)
+			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+				Model:        "model-a[1M]",
+				Prompt:       "p",
+				SystemPrompt: "s",
+				WorkDir:      dir,
+				MarkerPath:   filepath.Join(dir, "phase_complete"),
+			})
+			if err != nil {
+				t.Fatalf("BuildSession() error: %v", err)
+			}
+			if sessOpts.SupportsFinishOrViolateNudge != tc.nudge {
+				t.Errorf("SupportsFinishOrViolateNudge = %v, want %v", sessOpts.SupportsFinishOrViolateNudge, tc.nudge)
+			}
+			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
+				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
+			}
+		})
+	}
+}
+
 func TestBuildSession_Claude(t *testing.T) {
 	dir := t.TempDir()
 	eventCh := make(chan any, 100)
@@ -1885,8 +2057,8 @@ func TestRunResearchFromQuestions_PassesResearchTracerAgentNames(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from mock BuildSession")
 	}
-	if !reflect.DeepEqual(captured.AgentNames, researchAgentNames()) {
-		t.Fatalf("captured AgentNames = %v, want %v", captured.AgentNames, researchAgentNames())
+	if !reflect.DeepEqual(captured.AgentNames, explorationAgentNames()) {
+		t.Fatalf("captured AgentNames = %v, want %v", captured.AgentNames, explorationAgentNames())
 	}
 }
 

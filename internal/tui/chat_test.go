@@ -355,6 +355,34 @@ func TestChatUsesConfiguredModel(t *testing.T) {
 	}
 }
 
+// TestChatUsesConfiguredProviderModel proves chat hands an explicit provider
+// model selection to the normal provider-neutral session builder unchanged, and
+// stays intentionally markerless — chat is a conversational surface with no
+// phase_complete contract, so it must never thread a marker path.
+func TestChatUsesConfiguredProviderModel(t *testing.T) {
+	var capturedOpts agent.BuildSessionOpts
+	mockBuildSession := func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		capturedOpts = opts
+		return nil, nil, nil, fmt.Errorf("test: stop here")
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	const routedModel = "gateway:vendor/model"
+	m := NewChatModel(80, 24, sm, "/tmp", "test", mockBuildSession, routedModel, "")
+	cmd := m.startSessionCmd("test question")
+	cmd()
+
+	if capturedOpts.Model != routedModel {
+		t.Errorf("expected model %q, got %q", routedModel, capturedOpts.Model)
+	}
+	if capturedOpts.MarkerPath != "" {
+		t.Errorf("chat threaded a marker path %q; want markerless", capturedOpts.MarkerPath)
+	}
+}
+
 // TestChatRecoveryTickClearsRespondingWhenResultArrives verifies the
 // defensive safety net: if the session records a Result (Cost() returns
 // a new pointer) but the attachCh forward dropped the SDKMessage, the

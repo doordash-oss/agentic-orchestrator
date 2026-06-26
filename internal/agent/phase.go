@@ -419,13 +419,14 @@ func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPat
 		SkillName:     "research-codebase",
 		SessionSuffix: "-research",
 		Phase:         feature.PhaseResearch,
-		AgentNames:    researchAgentNames(),
+		AgentNames:    explorationAgentNames(),
 		KBInfos:       kbInfos,
 	})
 }
 
-// researchAgentNames returns the subagents allowed in Research sessions.
-func researchAgentNames() []string {
+// explorationAgentNames returns the codebase- and web-exploration subagents
+// shared by research and the planning, review, and refactor phases.
+func explorationAgentNames() []string {
 	return []string{
 		"codebase-locator",
 		"codebase-analyzer",
@@ -572,10 +573,13 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	pidDir := filepath.Join(pr.StateDir, f.ID)
 	logPath := filepath.Join(kbDir, "output.txt")
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          kbModel,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 []string{pr.StateDir},
+		Model:        kbModel,
+		Prompt:       prompt,
+		SystemPrompt: systemPrompt,
+		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), not a
+		// descendant, so it must be mounted explicitly: this makes it readable and,
+		// via the default writable-root derivation, writable for managed providers.
+		AdditionalDirs:                 []string{pr.StateDir, kbDir},
 		AgentNames:                     knowledgeBaseAgentNames(),
 		PIDDir:                         pidDir,
 		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
@@ -698,6 +702,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(planningModel),
 		Observer:                   pr.Observer,
 	}
 
@@ -760,6 +765,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			EffortLevel:                f.EffectivePipeline().EffortLevel(),
 			SkillsDir:                  pr.SkillsDir,
 			GuidelinesDir:              pr.GuidelinesDir,
+			FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(phasePlanModel),
 			Observer:                   pr.Observer,
 		},
 		RoadmapPath:         roadmapPath,
@@ -832,6 +838,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 	}
 
@@ -886,6 +893,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -946,6 +954,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		RunImplementFn:             pr.RunImplementFn,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
@@ -997,6 +1006,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -1148,10 +1158,9 @@ type BuildSessionOpts struct {
 	AllowedTools    []string
 	DisallowedTools []string
 	AdditionalDirs  []string
-	// WritableRoots overrides the Codex sandbox writable roots. Nil preserves
-	// the default StateDir + AdditionalDirs behavior; pass an explicit slice
-	// for bounded helpers that must read mounted directories without making
-	// them writable.
+	// WritableRoots overrides the provider write surface. Nil preserves the
+	// default StateDir + AdditionalDirs behavior, except that read-only context
+	// mounts are not passed as command-level writable roots.
 	WritableRoots []string
 	PIDDir        string
 	PermHandler   ports.PermissionHandler
@@ -1174,11 +1183,33 @@ type BuildSessionOpts struct {
 	// Leave empty for paths that don't have a marker contract (e.g. tweak
 	// PTY sessions); the provider falls back to its legacy heuristic.
 	MarkerPath string
+	// ResumeSessionID, when set, asks the provider to resume that prior session
+	// identity rather than start a fresh one. It is forwarded to both command and
+	// protocol setup so each provider resumes via its own supported path.
+	ResumeSessionID string
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
 // Used by TUI components and loop configs that need to create sessions.
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
+
+var pendingToolWatchdogConfig = ports.SessionWatchdogConfig{
+	PendingToolIdleTimeout: 5 * time.Minute,
+	PollInterval:           time.Second,
+}
+
+type pendingToolWatchdogProvider interface {
+	EnablesPendingToolWatchdog() bool
+}
+
+func watchdogConfigForProvider(provider llm.LLMProvider) *ports.SessionWatchdogConfig {
+	p, ok := provider.(pendingToolWatchdogProvider)
+	if !ok || !p.EnablesPendingToolWatchdog() {
+		return nil
+	}
+	cfg := pendingToolWatchdogConfig
+	return &cfg
+}
 
 // grillingPhasePermissionMode returns the provider permission mode to pin for
 // phases whose prompts rely on the [grill-me] directive. Returns "default" for
@@ -1191,6 +1222,27 @@ func grillingPhasePermissionMode(phase feature.Phase) string {
 		return "default"
 	}
 	return ""
+}
+
+// subtractRoots returns roots with every entry in remove omitted, preserving
+// order. Used to keep read-only context mounts (skills, guidelines) out of a
+// provider's writable set while leaving them in the read set.
+func subtractRoots(roots, remove []string) []string {
+	if len(remove) == 0 {
+		return roots
+	}
+	skip := make(map[string]struct{}, len(remove))
+	for _, r := range remove {
+		skip[r] = struct{}{}
+	}
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if _, ok := skip[r]; ok {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // BuildSession creates CLI command args, env vars, and session opts by
@@ -1213,9 +1265,15 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		return nil, nil, nil, fmt.Errorf("resolving provider for model %q: %w", opts.Model, err)
 	}
 
+	// Skills and guidelines are read-only context mounts: agents must be able to
+	// read them, but they are global shared resources that must never become
+	// writable by default.
+	var readOnlyContextDirs []string
+
 	// Skills injection: grant agents filesystem access to reconciled skill files.
 	if pr.SkillsDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.SkillsDir)
+		readOnlyContextDirs = append(readOnlyContextDirs, pr.SkillsDir)
 	}
 
 	// Guidelines injection: append discovery table for code-touching phases.
@@ -1231,12 +1289,28 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	// Guidelines injection: grant agents filesystem access to guideline files.
 	if pr.GuidelinesDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.GuidelinesDir)
+		readOnlyContextDirs = append(readOnlyContextDirs, pr.GuidelinesDir)
 	}
 
 	writableRoots := append([]string(nil), opts.WritableRoots...)
 	if opts.WritableRoots == nil {
 		writableRoots = []string{pr.StateDir}
 		writableRoots = append(writableRoots, opts.AdditionalDirs...)
+	}
+
+	// Read roots are everything a provider may read without per-call mediation:
+	// the feature state, the working directory, and every additional mounted dir
+	// (skills, guidelines, worktrees, knowledge base, images, attachments).
+	readRoots := append([]string{pr.StateDir}, opts.AdditionalDirs...)
+	if opts.WorkDir != "" {
+		readRoots = append(readRoots, opts.WorkDir)
+	}
+
+	// Command-level writable roots omit read-only context mounts unless the
+	// caller supplied an explicit writable-root list.
+	commandWritableRoots := writableRoots
+	if opts.WritableRoots == nil {
+		commandWritableRoots = subtractRoots(writableRoots, readOnlyContextDirs)
 	}
 
 	agentsJSON, err := AgentsJSONForNames(opts.AgentNames)
@@ -1261,6 +1335,10 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
 		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
+		ResumeSessionID:      opts.ResumeSessionID,
+		WritableRoots:        commandWritableRoots,
+		ReadRoots:            readRoots,
+		WorkDir:              opts.WorkDir,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)
@@ -1275,27 +1353,36 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
-		Model:         bareModel,
-		ContextWindow: contextWindow,
-		WorkDir:       opts.WorkDir,
-		SystemPrompt:  opts.SystemPrompt,
-		InitialPrompt: opts.Prompt,
-		WritableRoots: writableRoots,
-		DSP:           pr.DangerouslySkipPermissions,
-		StateDir:      pr.StateDir,
-		MarkerPath:    opts.MarkerPath,
+		Model:           bareModel,
+		ContextWindow:   contextWindow,
+		WorkDir:         opts.WorkDir,
+		SystemPrompt:    opts.SystemPrompt,
+		InitialPrompt:   opts.Prompt,
+		WritableRoots:   writableRoots,
+		DSP:             pr.DangerouslySkipPermissions,
+		StateDir:        pr.StateDir,
+		MarkerPath:      opts.MarkerPath,
+		ResumeSessionID: opts.ResumeSessionID,
 	})
 
 	sessOpts = &ports.SessionOpts{
 		PIDDir:            opts.PIDDir,
 		PermHandler:       opts.PermHandler,
 		InitialPrompt:     opts.Prompt,
+		ContextWindow:     contextWindow,
 		RepoName:          opts.RepoName,
 		LogPath:           opts.LogPath,
 		ProviderName:      prov.Name(),
 		Protocol:          protocol,
 		DebugSystemPrompt: opts.SystemPrompt,
 		TurnMode:          opts.TurnMode,
+		Watchdog:          watchdogConfigForProvider(prov),
+	}
+	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
+		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()
+	}
+	if c, ok := prov.(boundedHelperSandboxProvider); ok {
+		sessOpts.UsesBoundedHelperSandbox = c.UsesBoundedHelperSandbox()
 	}
 	return cmd, env, sessOpts, nil
 }

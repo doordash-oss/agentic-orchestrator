@@ -16,9 +16,11 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -26,6 +28,43 @@ import (
 )
 
 const providerCatalogCacheDirName = "model-catalogs"
+
+// versionTokenPattern matches a clean, bounded version token: a semver core
+// (MAJOR.MINOR.PATCH) with an optional leading "v" and optional pre-release /
+// build metadata drawn from a restricted character set. It is anchored at both
+// ends so a version carrying whitespace, terminal-control bytes, embedded
+// newlines, or trailing credential-like content (for example a hostile
+// `opencode --version` such as "1.17.9 sk-ant-...") fails to match.
+var versionTokenPattern = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+.][0-9A-Za-z][0-9A-Za-z.+_-]*)?$`)
+
+// maxCacheableVersionLen bounds a version token's length so an absurdly long
+// value cannot become a filename segment or persisted metadata even if it is
+// otherwise version-shaped.
+const maxCacheableVersionLen = 48
+
+// errUncacheableVersion is returned by the cache read/write helpers when a
+// provider version is not safe to use as a cache key, filename, or persisted
+// metadata. The sentinel deliberately omits the offending version so the
+// credential-like or terminal-control content a malformed version may carry can
+// never reach a warning, a log line, or captured evidence through the error.
+var errUncacheableVersion = errors.New("provider version is not cacheable")
+
+// cacheableVersion reports whether version is safe to use as a model-catalog
+// cache key, filename segment, persisted metadata value, and diagnostic token.
+// Only a bounded, version-shaped token qualifies; any other value — empty,
+// overlong, whitespace- or control-bearing, or carrying trailing credential-like
+// content — is rejected so it can never reach a cache path, the cache JSON, or a
+// warning string. The startup path first normalizes provider VersionInfo output
+// through clirun.ParseVersionOutput; this function is the final backstop the cache
+// read/write helpers apply independently, so a provider whose version cannot be
+// reduced to a clean token degrades to running discovery without caching rather
+// than leaking that output.
+func cacheableVersion(version string) bool {
+	if version == "" || len(version) > maxCacheableVersionLen {
+		return false
+	}
+	return versionTokenPattern.MatchString(version)
+}
 
 type providerCatalogCacheFile struct {
 	Provider     string          `json:"provider"`
@@ -43,22 +82,36 @@ func providerCatalogCachePath(cacheRoot, provider, version string) string {
 	)
 }
 
-func loadProviderCatalogCache(cacheRoot, provider, version string) ([]llm.ModelInfo, error) {
+func loadProviderCatalogCacheFile(cacheRoot, provider, version string) (providerCatalogCacheFile, error) {
+	if !cacheableVersion(version) {
+		// Refuse before building a cache path from the version: an unvalidated
+		// version could otherwise embed credential-like or terminal-control
+		// content into the path that callers echo in cache-read warnings.
+		return providerCatalogCacheFile{}, errUncacheableVersion
+	}
 	path := providerCatalogCachePath(cacheRoot, provider, version)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return providerCatalogCacheFile{}, err
 	}
 
 	var cached providerCatalogCacheFile
 	if err := json.Unmarshal(data, &cached); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return providerCatalogCacheFile{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if cached.Provider != provider || cached.Version != version {
-		return nil, fmt.Errorf("cache metadata mismatch in %s", path)
+		return providerCatalogCacheFile{}, fmt.Errorf("cache metadata mismatch in %s", path)
 	}
 	if len(cached.Models) == 0 {
-		return nil, fmt.Errorf("empty model catalog in %s", path)
+		return providerCatalogCacheFile{}, fmt.Errorf("empty model catalog in %s", path)
+	}
+	return cached, nil
+}
+
+func loadProviderCatalogCache(cacheRoot, provider, version string) ([]llm.ModelInfo, error) {
+	cached, err := loadProviderCatalogCacheFile(cacheRoot, provider, version)
+	if err != nil {
+		return nil, err
 	}
 	return cached.Models, nil
 }
@@ -66,6 +119,12 @@ func loadProviderCatalogCache(cacheRoot, provider, version string) ([]llm.ModelI
 func saveProviderCatalogCache(cacheRoot, provider, version string, models []llm.ModelInfo) error {
 	if len(models) == 0 {
 		return fmt.Errorf("cannot cache empty model catalog")
+	}
+	if !cacheableVersion(version) {
+		// Never persist a malformed version into the cache path or metadata: it
+		// could carry credential-like or terminal-control content, and the error
+		// (which omits the version) is what cache-write warnings surface.
+		return errUncacheableVersion
 	}
 	path := providerCatalogCachePath(cacheRoot, provider, version)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

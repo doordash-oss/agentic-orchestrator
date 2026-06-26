@@ -8,6 +8,7 @@ stdout 'Launches the Bubble Tea TUI dashboard'
 stdout '--config <path>'
 stdout '--state-dir <path>'
 stdout '--providers <list>'
+stdout '--refresh-models'
 stdout '--dangerously-skip-permissions'
 stdout '--version, -v'
 stdout '~/.agentic-orchestrator/config.yaml'
@@ -18,7 +19,6 @@ stdout '--check'
 ! stdout 'feature list'
 ! stdout 'feature create'
 ! stdout 'run             Launch'
-! stdout 'refresh-models'
 ! stderr .
 
 exec agentico --version

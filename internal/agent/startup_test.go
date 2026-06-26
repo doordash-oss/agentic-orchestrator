@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
@@ -84,103 +83,6 @@ func TestFormatNoCLIMessage_SingleProvider(t *testing.T) {
 	msg := FormatNoCLIMessage(providers)
 	if !strings.Contains(msg, "claude") {
 		t.Error("missing provider name for single provider")
-	}
-}
-
-// --- ShouldRunFirstSetup tests ---
-
-func TestShouldRunFirstSetup_BothCLIs_NewConfig(t *testing.T) {
-	if !ShouldRunFirstSetup(true, 2) {
-		t.Error("expected true when configIsNew=true and detectedCount=2")
-	}
-}
-
-func TestShouldRunFirstSetup_SingleCLI_NewConfig(t *testing.T) {
-	if ShouldRunFirstSetup(true, 1) {
-		t.Error("expected false when detectedCount=1 (need BOTH CLIs)")
-	}
-}
-
-func TestShouldRunFirstSetup_BothCLIs_ExistingConfig(t *testing.T) {
-	if ShouldRunFirstSetup(false, 2) {
-		t.Error("expected false when configIsNew=false")
-	}
-}
-
-func TestShouldRunFirstSetup_NoCLIs_NewConfig(t *testing.T) {
-	if ShouldRunFirstSetup(true, 0) {
-		t.Error("expected false when detectedCount=0")
-	}
-}
-
-// --- RunFirstSetup tests ---
-
-func TestRunFirstSetup_SelectFirst(t *testing.T) {
-	detected := []llm.LLMProvider{
-		&mockStartupProvider{name: "claude"},
-		&mockStartupProvider{name: "codex"},
-	}
-	in := strings.NewReader("1\n")
-	var out bytes.Buffer
-
-	choice := RunFirstSetup(detected, in, &out)
-	if choice != "claude" {
-		t.Errorf("expected 'claude', got %q", choice)
-	}
-	if !strings.Contains(out.String(), "Welcome to Agentic Orchestrator") {
-		t.Error("missing welcome message in output")
-	}
-}
-
-func TestRunFirstSetup_SelectSecond(t *testing.T) {
-	detected := []llm.LLMProvider{
-		&mockStartupProvider{name: "claude"},
-		&mockStartupProvider{name: "codex"},
-	}
-	in := strings.NewReader("2\n")
-	var out bytes.Buffer
-
-	choice := RunFirstSetup(detected, in, &out)
-	if choice != "codex" {
-		t.Errorf("expected 'codex', got %q", choice)
-	}
-}
-
-func TestRunFirstSetup_EmptyInput_DefaultsToFirst(t *testing.T) {
-	detected := []llm.LLMProvider{
-		&mockStartupProvider{name: "claude"},
-		&mockStartupProvider{name: "codex"},
-	}
-	in := strings.NewReader("\n")
-	var out bytes.Buffer
-
-	choice := RunFirstSetup(detected, in, &out)
-	if choice != "claude" {
-		t.Errorf("expected 'claude' as default, got %q", choice)
-	}
-}
-
-func TestRunFirstSetup_InvalidInput_DefaultsToFirst(t *testing.T) {
-	detected := []llm.LLMProvider{
-		&mockStartupProvider{name: "claude"},
-		&mockStartupProvider{name: "codex"},
-	}
-	in := strings.NewReader("xyz\n")
-	var out bytes.Buffer
-
-	choice := RunFirstSetup(detected, in, &out)
-	if choice != "claude" {
-		t.Errorf("expected 'claude' for invalid input, got %q", choice)
-	}
-}
-
-func TestRunFirstSetup_Empty(t *testing.T) {
-	in := strings.NewReader("\n")
-	var out bytes.Buffer
-
-	choice := RunFirstSetup(nil, in, &out)
-	if choice != "" {
-		t.Errorf("expected empty string for no providers, got %q", choice)
 	}
 }
 

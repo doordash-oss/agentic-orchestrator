@@ -160,6 +160,15 @@ type AskUserAutoPickConfig struct {
 	OnQuestionAutoPicked func(question, answer string, confidence float64)
 }
 
+// SessionWatchdogConfig enables provider-specific lifecycle safety rails for a
+// session. The first watchdog watches for a provider that reports a pending
+// tool call and then goes silent without emitting a permission request, result,
+// or process exit.
+type SessionWatchdogConfig struct {
+	PendingToolIdleTimeout time.Duration
+	PollInterval           time.Duration
+}
+
 // ToolPermissionRequest describes a pending tool-use permission check.
 type ToolPermissionRequest struct {
 	RequestID    string
@@ -187,10 +196,14 @@ type PermissionHandler interface {
 // ports package so orchestrator / agent code can construct session options
 // without importing internal/session.
 type SessionOpts struct {
-	PIDDir            string
-	Iteration         int
-	PermHandler       PermissionHandler
-	InitialPrompt     string
+	PIDDir        string
+	Iteration     int
+	PermHandler   PermissionHandler
+	InitialPrompt string
+	// ContextWindow is the resolved model window for the session. It lets the
+	// session expose an initial prompt context estimate before provider
+	// telemetry arrives.
+	ContextWindow     int
 	LogPath           string
 	StderrPath        string
 	RepoName          string
@@ -226,6 +239,14 @@ type SessionOpts struct {
 	// policy for allowlisted creator sessions. Nil preserves pass-through
 	// routing for every AskUserQuestion bundle.
 	AskUserAutoPick *AskUserAutoPickConfig
+	// Watchdog enables generic session lifecycle watchdogs. Nil disables them.
+	Watchdog *SessionWatchdogConfig
+	// SupportsFinishOrViolateNudge and UsesBoundedHelperSandbox carry the
+	// resolved provider's bounded-helper capabilities. The session builder sets
+	// them so a bounded helper can read them off its session options without
+	// re-resolving the provider (its own runner may carry no provider registry).
+	SupportsFinishOrViolateNudge bool
+	UsesBoundedHelperSandbox     bool
 }
 
 // MessageLog is the interface consumers use to observe a session's SDK

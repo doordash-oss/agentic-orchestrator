@@ -35,7 +35,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	claude "github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
 	codex "github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
+	opencode "github.com/doordash-oss/agentic-orchestrator/internal/llm/opencode"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -79,6 +81,7 @@ type launchOptions struct {
 	stateDir             string
 	dangerouslySkipPerms bool
 	enabledProviders     []string
+	refreshModels        bool
 	mode                 launchMode
 	validateArtifacts    validateArtifactsOptions
 	// updateCheck is set when update mode was selected with --check / -n,
@@ -92,7 +95,7 @@ type validateArtifactsOptions struct {
 	dir   string
 }
 
-type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string)
+type tuiLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool)
 
 // updater is the injectable update seam. It mirrors tuiLauncher: production
 // wiring passes the real updater, tests pass a fake. It returns the process
@@ -151,7 +154,7 @@ func runArgs(args []string, stdout, stderr io.Writer, launch tuiLauncher, update
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
 	default:
-		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders)
+		launch(opts.configPath, opts.stateDir, opts.dangerouslySkipPerms, opts.enabledProviders, opts.refreshModels)
 		return 0
 	}
 }
@@ -200,7 +203,7 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 			opts.mode = launchModeVersion
 			return opts, nil
 		case "--refresh-models":
-			return opts, fmt.Errorf("unknown flag: --refresh-models")
+			opts.refreshModels = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return opts, fmt.Errorf("unknown flag: %s", arg)
@@ -272,7 +275,8 @@ Flags:
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory path (default: ~/.agentic-orchestrator/features)
   --providers <list>               Comma-separated provider list (default: all)
-                                   Available: claude, codex
+                                   Available: claude, codex, opencode
+  --refresh-models                 Refresh provider model catalogs before opening the TUI
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
   --check, -n                      With 'update': check for a newer release without installing
   --help, -h                       Show this help
@@ -374,6 +378,12 @@ func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.
 }
 
 func checkProviderReadiness(ctx context.Context, p llm.LLMProvider) llm.ProviderReadiness {
+	// Enforce MinVersion before the readiness probe so a too-old CLI is treated
+	// as unavailable here — excluded from the ready set and from routing — rather
+	// than left selectable with only a later warning.
+	if status, ok := checkProviderVersionGate(p); !ok {
+		return status
+	}
 	checker, ok := p.(llm.ReadinessChecker)
 	if !ok {
 		return llm.ProviderReadiness{Ready: true}
@@ -385,6 +395,31 @@ func checkProviderReadiness(ctx context.Context, p llm.LLMProvider) llm.Provider
 		status.Detail = "not ready"
 	}
 	return status
+}
+
+// checkProviderVersionGate enforces MinVersion for providers that opt in via
+// llm.VersionEnforcer. It returns ok=false with a not-ready status when the
+// installed CLI is older than the provider's minimum, so the provider is
+// excluded from the ready set before readiness is even probed. This preserves
+// fallback to other ready providers and the existing no-ready-provider failure
+// when the too-old provider is the only selected one. Providers that do not
+// enforce, or whose version is acceptable or undeterminable, return ok=true and
+// proceed to the normal readiness probe.
+func checkProviderVersionGate(p llm.LLMProvider) (llm.ProviderReadiness, bool) {
+	enforcer, ok := p.(llm.VersionEnforcer)
+	if !ok || !enforcer.EnforcesMinVersion() {
+		return llm.ProviderReadiness{}, true
+	}
+	below, version, minVer := agent.BelowMinVersion(p)
+	if !below {
+		return llm.ProviderReadiness{}, true
+	}
+	return llm.ProviderReadiness{
+		Ready: false,
+		Detail: fmt.Sprintf("%s CLI version %s is below the required minimum %d.%d.%d",
+			p.Name(), version, minVer[0], minVer[1], minVer[2]),
+		Remedy: "Upgrade with: " + p.InstallHint(),
+	}, false
 }
 
 func formatReadinessProblem(status llm.ProviderReadiness) string {
@@ -441,7 +476,7 @@ type providerCatalogDiscoveryJob struct {
 	enricher   llm.CatalogEnricher
 }
 
-func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress) []string {
+func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []string {
 	var jobs []providerCatalogDiscoveryJob
 	for i, p := range providers {
 		discoverer, ok := p.(llm.CatalogDiscoverer)
@@ -478,7 +513,7 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 	for _, job := range jobs {
 		go func(job providerCatalogDiscoveryJob) {
 			defer wg.Done()
-			warningsByProvider[job.index] = discoverOneProviderCatalog(ctx, job.provider, job.discoverer, job.enricher, cacheRoot, reportProgress)
+			warningsByProvider[job.index] = discoverOneProviderCatalog(ctx, job.provider, job.discoverer, job.enricher, cacheRoot, reportProgress, refreshModels)
 		}(job)
 	}
 	wg.Wait()
@@ -490,7 +525,7 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 	return warnings
 }
 
-func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress) []string {
+func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []string {
 	var warnings []string
 	providerName := p.Name()
 	reportModel := func(model llm.ModelInfo) {
@@ -502,10 +537,28 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 	version := ""
 	if cacheRoot != "" {
 		if rawVersion, err := p.VersionInfo(); err == nil {
-			version = strings.TrimSpace(rawVersion)
+			// Normalize provider version output through the shared semver parser
+			// before using it as a cache key. Catalog providers' VersionInfo may
+			// return human-readable CLI output with a name or "v" prefix (for
+			// example "claude 2.1.112" or "OpenAI Codex v0.120.0"); the parser
+			// extracts the semver token and drops the surrounding text, including
+			// any trailing credential-like or terminal-control content a malformed
+			// version could carry. cacheableVersion is the final backstop on the
+			// parsed token.
+			if v, perr := clirun.ParseVersionOutput([]byte(rawVersion)); perr == nil && cacheableVersion(v) {
+				version = v
+			} else if strings.TrimSpace(rawVersion) != "" {
+				// Non-empty output with no recognizable semver: never echo it (it
+				// may carry credential-like content). Warn generically and run
+				// discovery without caching this startup.
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: %s reported an unrecognized CLI version; running model discovery without caching",
+					providerName,
+				))
+			}
 		}
 	}
-	if version != "" {
+	if version != "" && !refreshModels {
 		models, err := loadProviderCatalogCache(cacheRoot, providerName, version)
 		if err == nil {
 			enricher.SetModelCatalog(models)
@@ -520,10 +573,26 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		}
 	}
 
+	// On a discovery error or an empty result we leave the catalog unset and warn:
+	// the provider's CatalogProvider supplies the built-in fallback catalog (see
+	// the CatalogDiscoverer contract), so downstream model lists and routing still
+	// see a populated catalog rather than nothing.
 	discoveryCtx, cancel := context.WithTimeout(ctx, providerCatalogDiscoveryTimeout)
 	models, err := discoverModelCatalog(discoveryCtx, discoverer, reportModel)
 	cancel()
 	if err != nil {
+		if refreshModels && cacheRoot != "" && version != "" {
+			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
+				enricher.SetModelCatalog(cached.Models)
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: could not refresh %s model catalog; using stale cache from %s: %v",
+					providerName,
+					cached.DiscoveredAt.Format(time.RFC3339),
+					err,
+				))
+				return warnings
+			}
+		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: could not discover %s model catalog; using built-in fallback: %v",
 			providerName,
@@ -532,6 +601,17 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		return warnings
 	}
 	if len(models) == 0 {
+		if refreshModels && cacheRoot != "" && version != "" {
+			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
+				enricher.SetModelCatalog(cached.Models)
+				warnings = append(warnings, fmt.Sprintf(
+					"Warning: could not refresh %s model catalog; discovered empty catalog; using stale cache from %s",
+					providerName,
+					cached.DiscoveredAt.Format(time.RFC3339),
+				))
+				return warnings
+			}
+		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: discovered empty %s model catalog; using built-in fallback",
 			providerName,
@@ -607,7 +687,7 @@ func formatNoReadyProviderMessage(all []llm.LLMProvider, issues []providerReadin
 	return b.String()
 }
 
-func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string) {
+func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) {
 	lock, acquired, owner, err := instancelock.Acquire(filepath.Dir(stateDir), stateDir, configPath, tui.GetVersion())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error acquiring instance lock: %v\n", err)
@@ -743,37 +823,24 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	}
 
 	modelDiscovery := newModelDiscoveryProgressPrinter(os.Stderr)
-	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir), modelDiscovery.Report)
+	catalogWarnings := discoverProviderCatalogs(context.Background(), detected, filepath.Dir(stateDir), modelDiscovery.Report, refreshModels)
 	modelDiscovery.Done()
 	for _, w := range catalogWarnings {
 		fmt.Fprintln(os.Stderr, w)
 	}
 
-	// First-run setup: when both CLIs are detected and config is new,
-	// prompt user to choose a preferred provider.
-	var preferredProvider string
-	if agent.ShouldRunFirstSetup(configIsNew, len(detected)) {
-		preferredProvider = agent.RunFirstSetup(detected, os.Stdin, os.Stderr)
-	}
-
 	// Apply catalog-driven defaults after discovery. For a brand-new config,
 	// replace the bootstrap defaults entirely so persisted config reflects the
-	// discovered catalogs rather than built-in placeholders.
-	changed := applyCatalogModelDefaultsToConfig(cfg, registry, configIsNew, preferredProvider)
-
-	// When --providers limits the registry, remap model defaults that reference
-	// unavailable providers to valid models. This is a runtime adjustment only —
-	// don't persist provider-filtered defaults to the config file.
-	if enabledProviders != nil {
-		remapUnresolvableModels(cfg, registry)
-	} else if availabilityFiltered {
-		remapUnresolvableModels(cfg, registry)
-		if configIsNew && changed {
-			_ = config.Save(configPath, cfg)
-		}
-	} else if changed {
-		_ = config.Save(configPath, cfg)
-	}
+	// discovered catalogs rather than built-in placeholders. Defaults are
+	// provider-neutral: OpenCode competes with Claude and Codex as a peer and no
+	// first-run prompt biases the selection toward a single provider.
+	// Apply catalog-driven defaults, remap selections the (possibly
+	// provider-filtered) registry can no longer resolve, and persist when
+	// appropriate. A brand-new config persists its discovered provider-neutral
+	// defaults even under an explicit --providers filter or readiness filtering;
+	// an existing broader config keeps those remaps runtime-only so a transient
+	// launch flag never rewrites the user's selections.
+	reconcileModelDefaults(cfg, registry, configPath, configIsNew, enabledProviders != nil, availabilityFiltered)
 
 	showProviderStartupNotices(os.Stderr, startupNotices, providerReadinessNoticeDelay)
 
@@ -978,16 +1045,57 @@ func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 	remap(&m.KBBuild)
 }
 
+// shouldPersistCatalogDefaults reports whether catalog-derived model defaults
+// should be written back to the config file after discovery.
+//
+// A brand-new config persists its discovered provider-neutral defaults even when
+// an explicit --providers filter or readiness filtering narrowed the registry —
+// there is no prior user config to clobber, and the persisted config must
+// reflect the providers that are actually ready (bare backend IDs for a single
+// ready provider, prefixed when several are ready). An existing (broader) config
+// keeps provider-filtered or availability-filtered remaps runtime-only, so a
+// transient launch flag or a missing CLI never rewrites the user's selections.
+func shouldPersistCatalogDefaults(configIsNew, changed, providerFiltered, availabilityFiltered bool) bool {
+	if providerFiltered || availabilityFiltered {
+		return configIsNew && changed
+	}
+	return changed
+}
+
+// reconcileModelDefaults applies catalog-driven defaults to cfg after discovery,
+// remaps any model selections the active registry can no longer resolve, and
+// persists the result when shouldPersistCatalogDefaults allows. It returns true
+// when the config was written to disk.
+func reconcileModelDefaults(cfg *config.Config, registry *llm.Registry, configPath string, configIsNew, providerFiltered, availabilityFiltered bool) bool {
+	changed := applyCatalogModelDefaultsToConfig(cfg, registry, configIsNew)
+	if providerFiltered || availabilityFiltered {
+		remapUnresolvableModels(cfg, registry)
+	}
+	if shouldPersistCatalogDefaults(configIsNew, changed, providerFiltered, availabilityFiltered) {
+		_ = config.Save(configPath, cfg)
+		return true
+	}
+	return false
+}
+
 // providerFxModules returns the fx modules for the requested providers.
-// When enabled is nil, all providers are included (default behavior).
+//
+// When enabled is non-nil, exactly the named providers are registered (the
+// explicit `--providers` opt-in, which accepts claude, codex, and opencode in
+// any order). When enabled is nil, the default set is claude+codex+opencode:
+// OpenCode is a normal default provider that participates in readiness checks,
+// catalog discovery, provider-neutral defaults, and the setup UI exactly like
+// the others. A missing, unready, or too-old OpenCode is filtered out downstream
+// by the same readiness path as any other provider.
 func providerFxModules(enabled []string) []fx.Option {
 	all := map[string]fx.Option{
-		"claude": claude.Module,
-		"codex":  codex.Module,
+		"claude":   claude.Module,
+		"codex":    codex.Module,
+		"opencode": opencode.Module,
 	}
 
 	if enabled == nil {
-		return []fx.Option{claude.Module, codex.Module}
+		return []fx.Option{claude.Module, codex.Module, opencode.Module}
 	}
 
 	var modules []fx.Option
@@ -1015,28 +1123,6 @@ func hasAnyModelConfig(m config.ModelConfig) bool {
 		m.Review != "" ||
 		m.Utilities != "" ||
 		m.KBBuild != ""
-}
-
-func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {
-	if overlay.Research != "" {
-		base.Research = overlay.Research
-	}
-	if overlay.Planning != "" {
-		base.Planning = overlay.Planning
-	}
-	if overlay.Implementation != "" {
-		base.Implementation = overlay.Implementation
-	}
-	if overlay.Review != "" {
-		base.Review = overlay.Review
-	}
-	if overlay.Utilities != "" {
-		base.Utilities = overlay.Utilities
-	}
-	if overlay.KBBuild != "" {
-		base.KBBuild = overlay.KBBuild
-	}
-	return base
 }
 
 func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
@@ -1076,7 +1162,13 @@ func canonicalizeModelConfig(registry *llm.Registry, models config.ModelConfig) 
 	return updated, updated != models
 }
 
-func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registry, overwrite bool, preferredProvider string) bool {
+// applyCatalogModelDefaultsToConfig canonicalizes the config's existing model
+// selections against the live registry and fills in catalog-driven defaults.
+// The defaults are provider-neutral (CatalogDefaultModels ranks Claude, Codex,
+// and OpenCode as peers); first-run setup applies no provider-wide preference
+// override, so a brand-new config persists the same neutral defaults a returning
+// user would see.
+func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registry, overwrite bool) bool {
 	if cfg == nil || registry == nil {
 		return false
 	}
@@ -1084,11 +1176,7 @@ func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registr
 	models, changed := canonicalizeModelConfig(registry, cfg.Defaults.Models)
 	cfg.Defaults.Models = models
 
-	preferredDefaults := config.ModelConfig{}
-	if preferredProvider != "" {
-		preferredDefaults = registry.CatalogDefaultModelsForProvider(preferredProvider)
-	}
-	defaults := mergeModelConfig(preferredDefaults, registry.CatalogDefaultModels())
+	defaults := registry.CatalogDefaultModels()
 	if !hasAnyModelConfig(defaults) {
 		return changed
 	}

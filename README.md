@@ -211,6 +211,7 @@ Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first lau
 ```yaml
 defaults:
   models:
+    inquiry: "sonnet[200K]"      # Model for Clarify/Inquire phase
     research: "sonnet[200K]"     # Model for research phase
     planning: "opus[1M]"         # Model for planning phase
     implementation: "opus[1M]"   # Model for implementation phase
@@ -241,7 +242,7 @@ workspace_roots:
 
 ### Model Overrides
 
-Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) or as bare ids resolved against the provider registry. There are three ways a selection reaches OpenCode, and they are distinct:
+Each feature can override default models during creation via the wizard (step 4). The model editor shows the Inquire phase as **Clarify**, separately from **Research**, so requirement clarification and codebase research can use different models. Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) or as bare ids resolved against the provider registry. There are three ways a selection reaches OpenCode, and they are distinct:
 
 - A **plain alias** such as `opus`, `sonnet`, or `gpt-5.4` (no slash) resolves to its owning native provider (Claude or Codex) and **never** to OpenCode — OpenCode contributes only slash-form backend ids.
 - The explicit **`opencode:<provider>/<model>` prefix** always routes to OpenCode, passing the backend id straight through (it works even for a backend OpenCode discovers but Agentico does not pre-list).

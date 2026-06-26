@@ -26,6 +26,7 @@ import (
 func TestNewDefault(t *testing.T) {
 	cfg := NewDefault()
 	wantModels := ModelConfig{
+		Inquiry:        "sonnet[200K]",
 		Research:       "sonnet[200K]",
 		Planning:       "sonnet[200K]",
 		Implementation: "sonnet[200K]",
@@ -65,6 +66,7 @@ func TestSaveAndLoad(t *testing.T) {
 	original.Defaults.PipelinePreferences = map[string]PipelinePreference{
 		"medium": {
 			Models: ModelConfig{
+				Inquiry:        "claude:haiku",
 				Research:       "claude:haiku",
 				Planning:       "claude:haiku",
 				Implementation: "claude:sonnet",
@@ -89,6 +91,9 @@ func TestSaveAndLoad(t *testing.T) {
 
 	if loaded.Defaults.Models.Research != original.Defaults.Models.Research {
 		t.Errorf("models mismatch: got %s, want %s", loaded.Defaults.Models.Research, original.Defaults.Models.Research)
+	}
+	if loaded.Defaults.Models.Inquiry != original.Defaults.Models.Inquiry {
+		t.Errorf("inquiry model mismatch: got %s, want %s", loaded.Defaults.Models.Inquiry, original.Defaults.Models.Inquiry)
 	}
 	if loaded.Defaults.MaxIterations != original.Defaults.MaxIterations {
 		t.Errorf("max iterations mismatch: got %d, want %d", loaded.Defaults.MaxIterations, original.Defaults.MaxIterations)
@@ -159,6 +164,7 @@ func TestDefaultsConfigPreferenceForPipelineOverlaysRememberedValues(t *testing.
 	defaults.PipelinePreferences = map[string]PipelinePreference{
 		"moonshot": {
 			Models: ModelConfig{
+				Inquiry:        "claude:haiku",
 				Implementation: "claude:sonnet",
 				Review:         "codex:gpt-5.4-mini",
 			},
@@ -171,6 +177,9 @@ func TestDefaultsConfigPreferenceForPipelineOverlaysRememberedValues(t *testing.
 	if pref.Models.Research != defaults.Models.Research {
 		t.Errorf("research = %q, want fallback %q", pref.Models.Research, defaults.Models.Research)
 	}
+	if pref.Models.Inquiry != "claude:haiku" {
+		t.Errorf("inquiry = %q, want %q", pref.Models.Inquiry, "claude:haiku")
+	}
 	if pref.Models.Implementation != "claude:sonnet" {
 		t.Errorf("implementation = %q, want %q", pref.Models.Implementation, "claude:sonnet")
 	}
@@ -179,6 +188,27 @@ func TestDefaultsConfigPreferenceForPipelineOverlaysRememberedValues(t *testing.
 	}
 	if pref.Inquireness != "high" {
 		t.Errorf("inquireness = %q, want %q", pref.Inquireness, "high")
+	}
+}
+
+func TestLoadModelConfigMigratesMissingInquiryFromResearch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte("defaults:\n  models:\n    research: claude:custom-research\n")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Defaults.Models.Inquiry != "claude:custom-research" {
+		t.Errorf("inquiry = %q, want migrated research model", cfg.Defaults.Models.Inquiry)
+	}
+	if cfg.Defaults.Models.Research != "claude:custom-research" {
+		t.Errorf("research = %q, want configured research model", cfg.Defaults.Models.Research)
 	}
 }
 

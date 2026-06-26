@@ -87,6 +87,8 @@ func (pr *PhaseRunner) defaultModelForRole(role llm.PhaseRole) string {
 	}
 	defaults := pr.Registry.CatalogDefaultModels()
 	switch role {
+	case llm.PhaseInquiry:
+		return defaults.Inquiry
 	case llm.PhaseResearch:
 		return defaults.Research
 	case llm.PhasePlanning:
@@ -129,15 +131,17 @@ func (pr *PhaseRunner) resolvePhaseArtifactDir(f *feature.Feature, phaseName str
 // RoleSpec system prompt that owns skill discovery, useful resources, output
 // roots, and completion.
 type interactivePhaseConfig struct {
-	Prompt        string
-	Spec          RoleSpec
-	DirName       string        // artifact subdirectory: "inquire", "research", "design"
-	SkillName     string        // skill name (used for error messages and session naming)
-	SessionSuffix string        // appended to feature ID: "-inquire", "-research", "-design"
-	Phase         feature.Phase // feature.PhaseInquire, etc.
-	AgentNames    []string
-	GuidelinesDir string
-	KBInfos       []KBInfo
+	Prompt          string
+	Spec            RoleSpec
+	DirName         string        // artifact subdirectory: "inquire", "research", "design"
+	SkillName       string        // skill name (used for error messages and session naming)
+	SessionSuffix   string        // appended to feature ID: "-inquire", "-research", "-design"
+	Phase           feature.Phase // feature.PhaseInquire, etc.
+	ConfiguredModel string
+	ModelRole       llm.PhaseRole
+	AgentNames      []string
+	GuidelinesDir   string
+	KBInfos         []KBInfo
 }
 
 // runInteractivePhase contains the shared boilerplate for launching an async
@@ -147,7 +151,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	artifactDir := pr.resolvePhaseArtifactDir(f, cfg.DirName)
 	_ = os.MkdirAll(artifactDir, 0o755)
 	RemovePhaseComplete(artifactDir)
-	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
+	phaseModel := pr.modelForRole(cfg.ConfiguredModel, cfg.ModelRole)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          cfg.Spec,
@@ -155,7 +159,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		SkillsDir:     pr.SkillsDir,
 		GuidelinesDir: cfg.GuidelinesDir,
 		KBInfos:       cfg.KBInfos,
-		AskingClause:  pr.askingQuestionsClauseForModel(researchModel),
+		AskingClause:  pr.askingQuestionsClauseForModel(phaseModel),
 	})
 	sessionID := fmt.Sprintf("%s%s", f.ID, cfg.SessionSuffix)
 
@@ -167,7 +171,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	pr.Observer.PhaseStarted(phaseCtx, cfg.Phase.String())
 
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          researchModel,
+		Model:                          phaseModel,
 		Prompt:                         cfg.Prompt,
 		SystemPrompt:                   systemPrompt,
 		AdditionalDirs:                 additionalDirs,
@@ -209,7 +213,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	if sessOpts != nil {
 		providerName = sessOpts.ProviderName
 	}
-	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, f.Models.Research, "")
+	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, phaseModel, "")
 
 	// Track reads of KB/skill/guideline files for observability.
 	pr.installContextReadTracker(sess, sessionCtx, cfg.Phase.String(), sessionID, pr.StateDir)
@@ -397,15 +401,21 @@ func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionC
 // RunInquire starts an inquire session for a feature.
 // Returns the session ID. The session runs asynchronously.
 func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string, error) {
+	inquiryModel := f.Models.Inquiry
+	if inquiryModel == "" {
+		inquiryModel = f.Models.Research
+	}
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:        BuildInquirePrompt(f, pr.SkillsDir, kbInfos...),
-		Spec:          InquirerRoleSpec(),
-		DirName:       "inquire",
-		SkillName:     "inquire",
-		SessionSuffix: "-inquire",
-		Phase:         feature.PhaseInquire,
-		AgentNames:    []string{},
-		KBInfos:       kbInfos,
+		Prompt:          BuildInquirePrompt(f, pr.SkillsDir, kbInfos...),
+		Spec:            InquirerRoleSpec(),
+		DirName:         "inquire",
+		SkillName:       "inquire",
+		SessionSuffix:   "-inquire",
+		Phase:           feature.PhaseInquire,
+		ConfiguredModel: inquiryModel,
+		ModelRole:       llm.PhaseInquiry,
+		AgentNames:      []string{},
+		KBInfos:         kbInfos,
 	})
 }
 
@@ -413,14 +423,16 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 // Returns the session ID. The session runs asynchronously.
 func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:        BuildResearchFromQuestionsPrompt(f, pr.SkillsDir, questionsPath, kbInfos...),
-		Spec:          ResearcherRoleSpec(),
-		DirName:       "research",
-		SkillName:     "research-codebase",
-		SessionSuffix: "-research",
-		Phase:         feature.PhaseResearch,
-		AgentNames:    explorationAgentNames(),
-		KBInfos:       kbInfos,
+		Prompt:          BuildResearchFromQuestionsPrompt(f, pr.SkillsDir, questionsPath, kbInfos...),
+		Spec:            ResearcherRoleSpec(),
+		DirName:         "research",
+		SkillName:       "research-codebase",
+		SessionSuffix:   "-research",
+		Phase:           feature.PhaseResearch,
+		ConfiguredModel: f.Models.Research,
+		ModelRole:       llm.PhaseResearch,
+		AgentNames:      explorationAgentNames(),
+		KBInfos:         kbInfos,
 	})
 }
 
@@ -441,15 +453,17 @@ func explorationAgentNames() []string {
 // place; the session identity, skill, and prompt template are Design-facing.
 func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:        BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
-		Spec:          DesignerRoleSpec(),
-		DirName:       feature.PhaseDesign.DirName(),
-		SkillName:     "design",
-		SessionSuffix: "-design",
-		Phase:         feature.PhaseDesign,
-		AgentNames:    []string{},
-		GuidelinesDir: pr.GuidelinesDir,
-		KBInfos:       kbInfos,
+		Prompt:          BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
+		Spec:            DesignerRoleSpec(),
+		DirName:         feature.PhaseDesign.DirName(),
+		SkillName:       "design",
+		SessionSuffix:   "-design",
+		Phase:           feature.PhaseDesign,
+		ConfiguredModel: f.Models.Research,
+		ModelRole:       llm.PhaseResearch,
+		AgentNames:      []string{},
+		GuidelinesDir:   pr.GuidelinesDir,
+		KBInfos:         kbInfos,
 	})
 }
 

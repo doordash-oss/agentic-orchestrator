@@ -1037,6 +1037,7 @@ func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 		}
 	}
 
+	remap(&m.Inquiry)
 	remap(&m.Research)
 	remap(&m.Planning)
 	remap(&m.Implementation)
@@ -1117,7 +1118,8 @@ func providerFxModules(enabled []string) []fx.Option {
 }
 
 func hasAnyModelConfig(m config.ModelConfig) bool {
-	return m.Research != "" ||
+	return m.Inquiry != "" ||
+		m.Research != "" ||
 		m.Planning != "" ||
 		m.Implementation != "" ||
 		m.Review != "" ||
@@ -1127,6 +1129,7 @@ func hasAnyModelConfig(m config.ModelConfig) bool {
 
 func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
 	return map[string]string{
+		"inquiry":        m.Inquiry,
 		"research":       m.Research,
 		"planning":       m.Planning,
 		"implementation": m.Implementation,
@@ -1153,6 +1156,7 @@ func canonicalizeModel(registry *llm.Registry, model string) string {
 
 func canonicalizeModelConfig(registry *llm.Registry, models config.ModelConfig) (config.ModelConfig, bool) {
 	updated := models
+	updated.Inquiry = canonicalizeModel(registry, models.Inquiry)
 	updated.Research = canonicalizeModel(registry, models.Research)
 	updated.Planning = canonicalizeModel(registry, models.Planning)
 	updated.Implementation = canonicalizeModel(registry, models.Implementation)

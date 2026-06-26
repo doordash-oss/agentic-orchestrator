@@ -257,7 +257,10 @@ func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
 // bare names are used.
 func (r *Registry) DefaultModels() map[PhaseRole]string {
 	mc := r.CatalogDefaultModels()
-	result := make(map[PhaseRole]string, 6)
+	result := make(map[PhaseRole]string, 7)
+	if mc.Inquiry != "" {
+		result[PhaseInquiry] = mc.Inquiry
+	}
 	if mc.Research != "" {
 		result[PhaseResearch] = mc.Research
 	}
@@ -384,6 +387,7 @@ func (r *Registry) LargestContextModel() string {
 // remain selectable for phases that benefit from them, but balanced defaults
 // are the cost/performance starting point for new features.
 var categoryForRole = map[PhaseRole]string{
+	PhaseInquiry:        "balanced",
 	PhaseResearch:       "balanced",
 	PhasePlanning:       "balanced",
 	PhaseImplementation: "balanced",
@@ -393,6 +397,10 @@ var categoryForRole = map[PhaseRole]string{
 }
 
 var preferredModelHintsByRoleProvider = map[PhaseRole]map[string][]string{
+	PhaseInquiry: {
+		"claude": {"sonnet[200K]", "sonnet"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
+	},
 	PhaseResearch: {
 		"claude": {"sonnet[200K]", "sonnet"},
 		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
@@ -526,6 +534,7 @@ func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 	}
 
 	return config.ModelConfig{
+		Inquiry:        selectModel(PhaseInquiry),
 		Research:       selectModel(PhaseResearch),
 		Planning:       selectModel(PhasePlanning),
 		Implementation: selectModel(PhaseImplementation),
@@ -538,6 +547,7 @@ func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 // eligibleCategoriesForRole maps phase roles to the set of model categories
 // that are appropriate for that phase.
 var eligibleCategoriesForRole = map[PhaseRole]map[string]bool{
+	PhaseInquiry:        {"capable": true, "balanced": true},
 	PhaseResearch:       {"capable": true, "balanced": true},
 	PhasePlanning:       {"capable": true, "balanced": true},
 	PhaseImplementation: {"capable": true, "balanced": true},

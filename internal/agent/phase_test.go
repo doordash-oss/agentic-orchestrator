@@ -115,6 +115,49 @@ func TestPhaseRunnerRunResearchBuildPrompt(t *testing.T) {
 	}
 }
 
+func TestRunInteractivePhase_UsesPhaseSpecificModel(t *testing.T) {
+	dir := t.TempDir()
+	eventCh := make(chan any, 10)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(filepath.Join(dir, "state"))
+	pr := NewPhaseRunner(sm, store, filepath.Join(dir, "state"))
+
+	captured := map[feature.Phase]string{}
+	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		captured[opts.Phase] = opts.Model
+		return nil, nil, nil, fmt.Errorf("stop after capturing model")
+	}
+
+	f := &feature.Feature{
+		ID:          "feat-model-routing",
+		Name:        "Model Routing",
+		Description: "Verify phase-specific model routing",
+		Repos: []feature.FeatureRepo{
+			{Name: "repo", Path: dir},
+		},
+		Models: config.ModelConfig{
+			Inquiry:  "inquiry-model",
+			Research: "research-model",
+		},
+	}
+
+	if _, err := pr.RunInquire(f); err == nil {
+		t.Fatal("RunInquire error = nil, want injected BuildSession error")
+	}
+	if got := captured[feature.PhaseInquire]; got != "inquiry-model" {
+		t.Errorf("RunInquire model = %q, want inquiry-model", got)
+	}
+
+	if _, err := pr.RunResearchFromQuestions(f, filepath.Join(dir, "questions.md")); err == nil {
+		t.Fatal("RunResearchFromQuestions error = nil, want injected BuildSession error")
+	}
+	if got := captured[feature.PhaseResearch]; got != "research-model" {
+		t.Errorf("RunResearchFromQuestions model = %q, want research-model", got)
+	}
+}
+
 func TestBuildResearchPhaseSession_ClaudeProvider(t *testing.T) {
 	dir := t.TempDir()
 	eventCh := make(chan any, 100)

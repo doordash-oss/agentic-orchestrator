@@ -97,6 +97,7 @@ type PipelinePreference struct {
 }
 
 type ModelConfig struct {
+	Inquiry        string `yaml:"inquiry"`
 	Research       string `yaml:"research"`
 	Planning       string `yaml:"planning"`
 	Implementation string `yaml:"implementation"`
@@ -109,6 +110,7 @@ type ModelConfig struct {
 // If both keys are present, "utilities" takes precedence.
 func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	type aux struct {
+		Inquiry        string `yaml:"inquiry"`
 		Research       string `yaml:"research"`
 		Planning       string `yaml:"planning"`
 		Implementation string `yaml:"implementation"`
@@ -121,6 +123,7 @@ func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	if err := value.Decode(&a); err != nil {
 		return err
 	}
+	m.Inquiry = a.Inquiry
 	m.Research = a.Research
 	m.Planning = a.Planning
 	m.Implementation = a.Implementation
@@ -129,6 +132,9 @@ func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	m.KBBuild = a.KBBuild
 	if m.Utilities == "" && a.Chat != "" {
 		m.Utilities = a.Chat
+	}
+	if m.Inquiry == "" {
+		m.Inquiry = m.Research
 	}
 	return nil
 }
@@ -259,6 +265,13 @@ func DiscoverRepos(cfg *Config, baseDir string) int {
 
 func applyDefaults(cfg *Config) {
 	d := NewDefault()
+	if cfg.Defaults.Models.Inquiry == "" {
+		if cfg.Defaults.Models.Research != "" {
+			cfg.Defaults.Models.Inquiry = cfg.Defaults.Models.Research
+		} else {
+			cfg.Defaults.Models.Inquiry = d.Defaults.Models.Inquiry
+		}
+	}
 	if cfg.Defaults.Models.Research == "" {
 		cfg.Defaults.Models.Research = d.Defaults.Models.Research
 	}
@@ -546,6 +559,12 @@ func ApplyProviderDefaults(cfg *Config, defaults map[string]string) {
 		return
 	}
 	m := &cfg.Defaults.Models
+	if m.Inquiry == "" {
+		m.Inquiry = defaults["inquiry"]
+		if m.Inquiry == "" {
+			m.Inquiry = defaults["research"]
+		}
+	}
 	if m.Research == "" {
 		m.Research = defaults["research"]
 	}
@@ -588,6 +607,9 @@ func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference
 }
 
 func overlayModelConfig(base, override ModelConfig) ModelConfig {
+	if override.Inquiry != "" {
+		base.Inquiry = override.Inquiry
+	}
 	if override.Research != "" {
 		base.Research = override.Research
 	}

@@ -137,7 +137,7 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, cont
 		items = append(items, livePreviewMetadataItem{label: "Validators", value: validators})
 	}
 	if livePreviewShouldShowContext(f, sess) {
-		items = append(items, livePreviewMetadataItem{label: "Context", value: livePreviewContextText(contextPct)})
+		items = append(items, livePreviewMetadataItem{label: "Context", value: livePreviewContextText(contextPct, livePreviewContextWindow(f, sess))})
 	}
 	items = append(items,
 		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
@@ -157,11 +157,39 @@ func livePreviewShouldShowContext(f *feature.Feature, sess session.SessionView) 
 	return f.Status == feature.StatusCreated || f.Status.IsRunning() || featureHasRunningCycle(f)
 }
 
-func livePreviewContextText(contextPct int) string {
+func livePreviewContextWindow(f *feature.Feature, sess session.SessionView) int {
+	if sess != nil {
+		if usage := sess.LatestUsage(); usage != nil && usage.ContextWindow > 0 {
+			return usage.ContextWindow
+		}
+		if usage := sess.AccumulatedUsage(); usage.ContextWindow > 0 {
+			return usage.ContextWindow
+		}
+		if window := llm.ParseModelContextWindow(sess.Model()); window > 0 {
+			return window
+		}
+	}
+	var phase feature.Phase
+	if f != nil {
+		phase = f.CurrentPhase
+	}
+	if sess != nil {
+		phase = sess.Phase()
+	}
+	return llm.ParseModelContextWindow(livePreviewConfiguredPhaseModel(f, phase))
+}
+
+func livePreviewContextText(contextPct, contextWindow int) string {
 	if contextPct < 0 {
+		if label := llm.ContextWindowLabel(contextWindow); label != "" {
+			return MutedStyle.Render(fmt.Sprintf("%s (Calculating...)", label))
+		}
 		return MutedStyle.Render("Calculating...")
 	}
-	text := fmt.Sprintf("%d%%", contextPct)
+	text := fmt.Sprintf("%d%% used", contextPct)
+	if label := llm.ContextWindowLabel(contextWindow); label != "" {
+		text = fmt.Sprintf("%s (%s)", label, text)
+	}
 	switch {
 	case contextPct >= 80:
 		return ErrorStyle.Render(text)
@@ -446,32 +474,57 @@ func livePreviewPhaseLabel(f *feature.Feature, sess session.SessionView) string 
 }
 
 func livePreviewPhaseModel(f *feature.Feature, sess session.SessionView) string {
+	var phase feature.Phase
+	if f != nil {
+		phase = f.CurrentPhase
+	}
+	if sess != nil {
+		phase = sess.Phase()
+	}
+	configuredModel := livePreviewConfiguredPhaseModel(f, phase)
 	if sess != nil {
 		if model := firstNonEmpty(sess.Model()); model != "" {
-			return compactModelValueLabel(model)
+			return livePreviewSessionModelLabel(model, configuredModel)
 		}
 	}
 	if f == nil {
 		return "—"
 	}
-	phase := f.CurrentPhase
-	if sess != nil {
-		phase = sess.Phase()
+	return compactPhaseModelLabel(firstNonEmpty(configuredModel, "—"))
+}
+
+func livePreviewConfiguredPhaseModel(f *feature.Feature, phase feature.Phase) string {
+	if f == nil {
+		return ""
 	}
 	switch phase {
 	case feature.PhaseKnowledgeBase:
-		return compactModelValueLabel(firstNonEmpty(f.Models.KBBuild, "—"))
+		return f.Models.KBBuild
 	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
-		return compactModelValueLabel(firstNonEmpty(f.Models.Research, "—"))
+		return f.Models.Research
 	case feature.PhasePlan, feature.PhasePublish:
-		return compactModelValueLabel(firstNonEmpty(f.Models.Planning, "—"))
+		return f.Models.Planning
 	case feature.PhaseImplement:
-		return compactModelValueLabel(firstNonEmpty(f.Models.Implementation, "—"))
+		return f.Models.Implementation
 	case feature.PhaseReview, feature.PhaseFinalReview:
-		return compactModelValueLabel(firstNonEmpty(f.Models.Review, "—"))
+		return f.Models.Review
 	default:
-		return "—"
+		return ""
 	}
+}
+
+func livePreviewSessionModelLabel(sessionModel, configuredModel string) string {
+	if provider, _ := splitProviderModel(sessionModel); provider != "" {
+		return compactPhaseModelLabel(sessionModel)
+	}
+	if provider, _ := splitProviderModel(configuredModel); provider != "" {
+		return provider + ":" + compactModelIDLabel(llm.StripModelContextWindow(sessionModel))
+	}
+	return compactPhaseModelLabel(sessionModel)
+}
+
+func compactPhaseModelLabel(value string) string {
+	return compactModelValueLabel(llm.StripModelContextWindow(value))
 }
 
 func livePreviewStatusText(f *feature.Feature) string {

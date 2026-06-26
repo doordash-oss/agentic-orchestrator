@@ -412,6 +412,11 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 	}
 
 	if stem, options, ok := parseNumberedOptions(lastText); ok {
+		if !parsedOptionsHaveConfidence(options) {
+			if p.sendQuestionFormatReminder(lastText) {
+				return llm.SDKMessage{}, false, true
+			}
+		}
 		p.resetFormatRetry()
 		return p.synthesizeAskUser(stem, options), true, true
 	}
@@ -424,21 +429,28 @@ func (p *Protocol) maybeSynthesizeQuestion(lastText string) (msg llm.SDKMessage,
 	// A question without the required options, no marker: nudge it back into the
 	// one-question / three-option format once (up to maxQuestionFormatRetries)
 	// before falling back to a free-form synthetic question.
-	p.mu.Lock()
-	retry := p.formatRetryCount
-	p.mu.Unlock()
-	if retry < maxQuestionFormatRetries {
-		if err := p.sendPrompt(questionFormatReminder(lastText)); err != nil {
-			p.logDebug("[opencode] failed to send reformat reminder: %v", err)
-		} else {
-			p.mu.Lock()
-			p.formatRetryCount++
-			p.mu.Unlock()
-			return llm.SDKMessage{}, false, true
-		}
+	if p.sendQuestionFormatReminder(lastText) {
+		return llm.SDKMessage{}, false, true
 	}
 	p.resetFormatRetry()
 	return p.synthesizeAskUser(lastText, nil), true, true
+}
+
+func (p *Protocol) sendQuestionFormatReminder(lastText string) bool {
+	p.mu.Lock()
+	retry := p.formatRetryCount
+	p.mu.Unlock()
+	if retry >= maxQuestionFormatRetries {
+		return false
+	}
+	if err := p.sendPrompt(questionFormatReminder(lastText)); err != nil {
+		p.logDebug("[opencode] failed to send reformat reminder: %v", err)
+		return false
+	}
+	p.mu.Lock()
+	p.formatRetryCount++
+	p.mu.Unlock()
+	return true
 }
 
 func (p *Protocol) resetFormatRetry() {
@@ -519,6 +531,7 @@ type parsedOption struct {
 
 var numberedOptionRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)
 var confidenceSuffixRe = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
+var trailingRecommendedRe = regexp.MustCompile(`(?i)\s+\(recommended\)\s*$`)
 
 // parseNumberedOptions extracts a question stem and its numbered alternatives
 // from plain text. It returns ok=false when fewer than two options are present
@@ -528,25 +541,53 @@ func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	stem := make([]string, 0, len(lines))
 	raw := make([]string, 0, 4)
+	trailingStem := make([]string, 0, 2)
 	inOptions := false
+	inTrailingStem := false
+	sawBlankAfterOptions := false
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
-			if !inOptions && len(stem) > 0 && stem[len(stem)-1] != "" {
+			if inTrailingStem {
+				if len(trailingStem) > 0 && trailingStem[len(trailingStem)-1] != "" {
+					trailingStem = append(trailingStem, "")
+				}
+				continue
+			}
+			if inOptions {
+				if len(raw) > 0 {
+					sawBlankAfterOptions = true
+				}
+				continue
+			}
+			if len(stem) > 0 && stem[len(stem)-1] != "" {
 				stem = append(stem, "")
 			}
 			continue
 		}
-		if m := numberedOptionRe.FindStringSubmatch(trimmed); m != nil {
-			inOptions = true
-			raw = append(raw, strings.TrimSpace(m[1]))
+		if !inTrailingStem {
+			if m := numberedOptionRe.FindStringSubmatch(trimmed); m != nil {
+				inOptions = true
+				sawBlankAfterOptions = false
+				raw = append(raw, strings.TrimSpace(m[1]))
+				continue
+			}
+		}
+		if inTrailingStem {
+			trailingStem = append(trailingStem, trimmed)
 			continue
 		}
 		if inOptions {
+			if sawBlankAfterOptions && looksLikeTrailingQuestion(trimmed) {
+				inTrailingStem = true
+				trailingStem = append(trailingStem, trimmed)
+				continue
+			}
 			if len(raw) > 0 {
 				raw[len(raw)-1] += " " + trimmed
 			}
+			sawBlankAfterOptions = false
 			continue
 		}
 		stem = append(stem, trimmed)
@@ -567,8 +608,11 @@ func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 
 	options := make([]parsedOption, 0, len(raw))
 	for _, r := range raw {
-		trimmed, confidence := splitOptionConfidence(r)
+		trimmed, confidence, trailingRecommended := splitOptionConfidence(r)
 		label, desc := splitOptionLabelDesc(trimmed)
+		if trailingRecommended && !labelHasRecommended(label) {
+			label += " (Recommended)"
+		}
 		if label == "" {
 			return "", nil, false
 		}
@@ -576,10 +620,38 @@ func parseNumberedOptions(text string) (string, []parsedOption, bool) {
 	}
 
 	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
+	if len(trailingStem) > 0 {
+		cleaned = strings.TrimSpace(strings.Join(trailingStem, "\n"))
+	}
 	if cleaned == "" {
 		cleaned = text
 	}
 	return cleaned, options, true
+}
+
+func looksLikeTrailingQuestion(line string) bool {
+	return strings.HasSuffix(strings.TrimSpace(line), "?")
+}
+
+func parsedOptionsHaveConfidence(options []parsedOption) bool {
+	for _, opt := range options {
+		if opt.Confidence == nil {
+			return false
+		}
+	}
+	return len(options) > 0
+}
+
+func labelHasRecommended(label string) bool {
+	return strings.Contains(strings.ToLower(label), "(recommended)")
+}
+
+func trimTrailingRecommended(raw string) (string, bool) {
+	matches := trailingRecommendedRe.FindStringSubmatch(raw)
+	if matches == nil {
+		return raw, false
+	}
+	return strings.TrimSpace(raw[:len(raw)-len(matches[0])]), true
 }
 
 // trimFreeFormSentinel recognizes the explicit "FREE_FORM:" opt-out the reformat
@@ -610,18 +682,19 @@ func splitOptionLabelDesc(raw string) (string, string) {
 	return label, desc
 }
 
-func splitOptionConfidence(raw string) (string, *float64) {
+func splitOptionConfidence(raw string) (string, *float64, bool) {
 	raw = strings.TrimSpace(raw)
+	raw, trailingRecommended := trimTrailingRecommended(raw)
 	matches := confidenceSuffixRe.FindStringSubmatch(raw)
 	if matches == nil {
-		return raw, nil
+		return raw, nil, trailingRecommended
 	}
 	confidence, err := strconv.ParseFloat(matches[1], 64)
 	if err != nil {
-		return raw, nil
+		return raw, nil, trailingRecommended
 	}
 	trimmed := strings.TrimSpace(raw[:len(raw)-len(matches[0])])
-	return trimmed, &confidence
+	return trimmed, &confidence, trailingRecommended
 }
 
 // questionFormatReminder is the follow-up user turn sent when the agent emits a

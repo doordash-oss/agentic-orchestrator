@@ -405,6 +405,70 @@ func TestPromptEndTurn_NumberedOptionsSynthesizeAskUserWithConfidence(t *testing
 	}
 }
 
+// TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterConfidence
+// pins the real OpenCode drift where the model listed options before the final
+// question and put "(Recommended)" after the confidence suffix.
+func TestPromptEndTurn_NumberedOptionsToleratesTrailingStemAndRecommendedAfterConfidence(t *testing.T) {
+	p, _, promptID := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, strings.Join([]string{
+		"I read the research and need one final decision.",
+		"",
+		"1. Italian tech terms where established: Follow normal Italian developer-doc practice. [confidence: 0.85] (Recommended)",
+		"2. Keep all English tech terms untranslated: Simpler for developers but reads as code-switching. [confidence: 0.45]",
+		"3. Fully Italianize everything possible: Linguistically pure but risks awkward calques. [confidence: 0.25]",
+		"",
+		"Which technical-term strategy should the translation use?",
+	}, "\n"))
+	msgs := endTurn(t, p, promptID)
+	if len(msgs) != 1 || msgs[0].ControlRequest == nil || msgs[0].Result != nil {
+		t.Fatalf("numbered question produced %+v, want one AskUserQuestion control request and no result", msgs)
+	}
+	qs := askUserQuestionsFrom(t, msgs[0].ControlRequest)
+	if len(qs) != 1 {
+		t.Fatalf("questions = %+v, want one question", qs)
+	}
+	if qs[0].Question != "Which technical-term strategy should the translation use?" {
+		t.Fatalf("question = %q, want trailing question stem", qs[0].Question)
+	}
+	if len(qs[0].Options) != 3 {
+		t.Fatalf("options = %+v, want 3", qs[0].Options)
+	}
+	first := qs[0].Options[0]
+	if first.Label != "Italian tech terms where established (Recommended)" {
+		t.Fatalf("option 1 label = %q, want recommended marker on label", first.Label)
+	}
+	if first.Confidence == nil || *first.Confidence != 0.85 {
+		t.Fatalf("option 1 confidence = %v, want 0.85", first.Confidence)
+	}
+	if strings.Contains(first.Description, "confidence") || strings.Contains(first.Description, "Recommended") {
+		t.Fatalf("option 1 description still contains parser metadata: %q", first.Description)
+	}
+}
+
+func TestPromptEndTurn_NumberedOptionsMissingConfidenceRemindsBeforeSurfacing(t *testing.T) {
+	p, buf, promptID := newPostHandshakeProtocol(t)
+	streamAssistantText(t, p, strings.Join([]string{
+		"Which database should I target?",
+		"1. Postgres (Recommended): Mature and well-supported.",
+		"2. MySQL: Familiar but fewer features.",
+		"3. SQLite: Simplest but single-writer.",
+	}, "\n"))
+	if msgs := endTurn(t, p, promptID); len(msgs) != 0 {
+		t.Fatalf("missing-confidence question produced %+v, want no message while reminder is sent", msgs)
+	}
+	var reminder Request
+	if err := json.Unmarshal(buf.lastLine(t), &reminder); err != nil || reminder.Method != "session/prompt" {
+		t.Fatalf("expected a confidence-format reminder session/prompt; got %q (err %v)", buf.String(), err)
+	}
+	var pp PromptParams
+	if err := json.Unmarshal(mustMarshal(t, reminder.Params), &pp); err != nil {
+		t.Fatalf("decode reminder params: %v", err)
+	}
+	if !strings.Contains(pp.Prompt[0].Text, "[confidence: 0.00]") {
+		t.Fatalf("reminder = %q, want confidence suffix instruction", pp.Prompt[0].Text)
+	}
+}
+
 // TestPromptEndTurn_MalformedQuestionRemindsThenSynthesizes proves an unformatted
 // question first earns a reformat-reminder turn (no message, no result), and when
 // the agent still fails to format on the reminded turn the provider falls back to

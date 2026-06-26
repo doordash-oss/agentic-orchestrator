@@ -3434,6 +3434,7 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // cycle Research: opus -> sonnet
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // return to Phases panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
@@ -3554,6 +3555,7 @@ func TestWizardSummaryFullIntegration(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // change model
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // return to Phases panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	// 3. Edit Checkpoints
@@ -4093,7 +4095,8 @@ func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // cycle KB Build
 
-	// Close model editing (Enter), then create feature (G)
+	// Close model editing from the phase panel, then create feature (G)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // return to Phases panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // close model editing
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"}) // create -> done
 

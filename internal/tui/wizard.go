@@ -857,10 +857,16 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 			}
 			return m, nil
 		}
-		// Lifecycle keys owned by the wizard: enter collapses (always); esc
-		// on Inquireness reverts the cursor + manually-set flag, esc on
-		// Models/Checkpoints collapses preserving cycled/toggled values.
+		// Lifecycle keys owned by the wizard: enter closes scalar axes. In the
+		// three-panel model picker, nested panels first return to Phases; enter
+		// from Phases closes the picker. Esc on Inquireness reverts the cursor
+		// + manually-set flag, while Esc on Models/Checkpoints collapses
+		// preserving cycled/toggled values.
 		if key.Matches(msg, key.NewBinding(key.WithKeys("enter"))) {
+			if m.summaryCursor == summaryFieldModels && m.configEditor.activeModelCell != modelCellPhase {
+				m.configEditor.activeModelCell = modelCellPhase
+				return m, nil
+			}
 			m.summaryEditing = false
 			return m, nil
 		}

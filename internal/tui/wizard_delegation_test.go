@@ -219,6 +219,46 @@ func TestWizardReviewDelegation_ModelSelectionPanelsUseVerticalSelection(t *test
 	}
 }
 
+func TestWizardReviewDelegation_ModelSelectionEnterReturnsNestedPanelsToPhases(t *testing.T) {
+	providerModels := map[string][]string{
+		"claude":  {"opus", "sonnet"},
+		"gateway": {"glm-5p2", "gemma4"},
+	}
+	m := newWizardAtReviewForDelegation(t, providerModels, []string{"claude", "gateway"}, nil)
+	m.summaryCursor = summaryFieldModels
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.wizardModelFocus(); got != configFocusAgentList {
+		t.Fatalf("right from phase focus = %v, want agent list", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.summaryEditing {
+		t.Fatal("enter from agent list closed model editing")
+	}
+	if got := m.wizardModelFocus(); got != configFocusPhaseList {
+		t.Fatalf("enter from agent list focus = %v, want phase list", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.wizardModelFocus(); got != configFocusModelList {
+		t.Fatalf("second right from phase focus = %v, want model list", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.summaryEditing {
+		t.Fatal("enter from model list closed model editing")
+	}
+	if got := m.wizardModelFocus(); got != configFocusPhaseList {
+		t.Fatalf("enter from model list focus = %v, want phase list", got)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.summaryEditing {
+		t.Fatal("enter from phase list kept model editing open")
+	}
+}
+
 func TestWizardReviewDelegation_ModelSelectionViewFitsReviewWidth(t *testing.T) {
 	const terminalWidth = 160
 	providerModels := map[string][]string{
@@ -422,6 +462,7 @@ func TestWizardReviewDelegation_GateRoundTripAllThreeAxes(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	cycledResearch := m.models.Research
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // agent panel -> phase panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	// Advance Inquireness
@@ -606,6 +647,10 @@ func TestWizardReviewDelegation_ModelFilterEnterDoesNotCloseEditing(t *testing.T
 		t.Fatal("modelsManuallySet = false, want true after accepting filtered model")
 	}
 
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if got := m.wizardModelFocus(); got != configFocusPhaseList {
+		t.Fatalf("enter from model list focus = %v, want phase list", got)
+	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
 	result := m.Result()

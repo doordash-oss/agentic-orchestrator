@@ -132,7 +132,7 @@ func (r *Registry) DetectedProviders() []LLMProvider {
 // PromptAdapterForModel returns the PromptAdapter for the given model.
 // Returns an error if no provider matches or the provider doesn't implement PromptAdapter.
 func (r *Registry) PromptAdapterForModel(model string) (PromptAdapter, error) {
-	p, err := r.ForModel(model)
+	p, _, err := r.ResolveModel(model)
 	if err != nil {
 		return nil, err
 	}

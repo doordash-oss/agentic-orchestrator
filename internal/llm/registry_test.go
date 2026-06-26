@@ -182,6 +182,16 @@ func TestRegistry_PromptAdapterForModel(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit_provider_prefix_uses_prompt_adapter", func(t *testing.T) {
+		pa, err := r.PromptAdapterForModel("full:unlisted-model")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pa.AskingQuestionsClause() != "ask questions this way" {
+			t.Errorf("got %q, want %q", pa.AskingQuestionsClause(), "ask questions this way")
+		}
+	})
+
 	t.Run("provider_does_not_implement_PromptAdapter", func(t *testing.T) {
 		_, err := r.PromptAdapterForModel("bare-model")
 		if err == nil {

@@ -1042,7 +1042,7 @@ func TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs(t 
 	const want = "anthropic/claude-sonnet-4-5[200K]"
 	got := cfg.Defaults.Models
 	for field, val := range map[string]string{
-		"research": got.Research, "planning": got.Planning, "implementation": got.Implementation,
+		"inquiry": got.Inquiry, "research": got.Research, "planning": got.Planning, "implementation": got.Implementation,
 		"review": got.Review, "chat": got.Utilities, "kb_build": got.KBBuild,
 	} {
 		if val != want {
@@ -1091,6 +1091,7 @@ func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t
 
 	cfg := config.NewDefault()
 	cfg.Defaults.Models = config.ModelConfig{
+		Inquiry:  "claude:SONNET", // explicit prefix + non-canonical case
 		Research: "claude:SONNET", // explicit prefix + non-canonical case
 		Review:   "gpt-5.4",       // bare codex name
 		// Planning/Implementation/Utilities/KBBuild left empty → filled from defaults.
@@ -1099,6 +1100,9 @@ func TestApplyCatalogModelDefaultsToConfig_ExistingConfigCanonicalizesAndFills(t
 	changed := applyCatalogModelDefaultsToConfig(cfg, reg, false)
 	if !changed {
 		t.Fatal("expected changed=true (canonicalization + filled empties)")
+	}
+	if got := cfg.Defaults.Models.Inquiry; got != "claude:sonnet" {
+		t.Errorf("inquiry canonicalized = %q, want claude:sonnet (user choice preserved, canonicalized)", got)
 	}
 	if got := cfg.Defaults.Models.Research; got != "claude:sonnet" {
 		t.Errorf("research canonicalized = %q, want claude:sonnet (user choice preserved, canonicalized)", got)
@@ -1121,7 +1125,7 @@ func TestRemapUnresolvableModels(t *testing.T) {
 
 		// All fields should now be "gpt-5.4" since codex is the only provider
 		m := cfg.Defaults.Models
-		for _, field := range []string{m.Research, m.Planning, m.Implementation, m.Review, m.Utilities, m.KBBuild} {
+		for _, field := range []string{m.Inquiry, m.Research, m.Planning, m.Implementation, m.Review, m.Utilities, m.KBBuild} {
 			if field != "gpt-5.4" {
 				t.Errorf("expected gpt-5.4, got %q", field)
 			}
@@ -1136,6 +1140,9 @@ func TestRemapUnresolvableModels(t *testing.T) {
 		remapUnresolvableModels(cfg, r)
 
 		// canonical Claude defaults should stay; gpt-5.4[272K] (review) should become opus[1M].
+		if cfg.Defaults.Models.Inquiry != "sonnet[200K]" {
+			t.Errorf("inquiry should stay sonnet[200K], got %q", cfg.Defaults.Models.Inquiry)
+		}
 		if cfg.Defaults.Models.Research != "sonnet[200K]" {
 			t.Errorf("research should stay sonnet[200K], got %q", cfg.Defaults.Models.Research)
 		}

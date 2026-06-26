@@ -437,6 +437,7 @@ func TestAppModel_EditConfigModelFilterEnterLeavesOverlayOpen(t *testing.T) {
 	app.editConfig = NewEditConfigModel(f, cat, true)
 	app.editConfigActive = true
 	app.editConfig.activeTab = tabModels
+	app.editConfig.editor.rowCursor = 1
 	app.editConfig.editor.activeModelCell = modelCellModel
 	app.editConfig.focus = configFocusModelList
 
@@ -665,6 +666,7 @@ func TestEditConfig_ModelWorkspaceAlwaysShowsThreePanelsAndOneFocusCursor(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			m := NewEditConfigModel(f, cat, true)
 			m.focus = tc.focus
+			m.editor.rowCursor = 1
 			view := m.View()
 			for _, want := range []string{"Phases", "Agents", "Models for gateway"} {
 				if !strings.Contains(view, want) {
@@ -862,8 +864,8 @@ func TestEditConfig_CatalogBuiltAtModalOpen(t *testing.T) {
 	if !got.editConfigActive {
 		t.Fatal("right-panel `e` should open the overlay for a quiescent feature")
 	}
-	if n := len(got.editConfig.editor.catalog.Fields); n != 5 {
-		t.Errorf("catalog.Fields = %d entries, want 5", n)
+	if n := len(got.editConfig.editor.catalog.Fields); n != 6 {
+		t.Errorf("catalog.Fields = %d entries, want 6", n)
 	}
 
 	// Detail-view dispatch path.
@@ -879,7 +881,7 @@ func TestEditConfig_CatalogBuiltAtModalOpen(t *testing.T) {
 	if !got2.editConfigActive {
 		t.Fatal("detail-view `e` should open the overlay for a quiescent feature")
 	}
-	if n := len(got2.editConfig.editor.catalog.Fields); n != 5 {
-		t.Errorf("catalog.Fields = %d entries, want 5", n)
+	if n := len(got2.editConfig.editor.catalog.Fields); n != 6 {
+		t.Errorf("catalog.Fields = %d entries, want 6", n)
 	}
 }

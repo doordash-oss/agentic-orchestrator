@@ -482,6 +482,9 @@ func TestRegistry_DefaultModels_UsesCatalogDefaults(t *testing.T) {
 	})
 
 	defaults := r.DefaultModels()
+	if defaults[llm.PhaseInquiry] != "claude:sonnet" {
+		t.Errorf("inquiry: got %q, want %q", defaults[llm.PhaseInquiry], "claude:sonnet")
+	}
 	if defaults[llm.PhaseResearch] != "claude:sonnet" {
 		t.Errorf("research: got %q, want %q", defaults[llm.PhaseResearch], "claude:sonnet")
 	}
@@ -837,6 +840,9 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		mc := r.CatalogDefaultModels()
 
 		// Feature phases prefer balanced defaults where available.
+		if mc.Inquiry != "claude:sonnet" {
+			t.Errorf("inquiry: got %q, want %q", mc.Inquiry, "claude:sonnet")
+		}
 		if mc.Research != "claude:sonnet" {
 			t.Errorf("research: got %q, want %q", mc.Research, "claude:sonnet")
 		}
@@ -870,6 +876,9 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 		mc := r.CatalogDefaultModels()
 
 		// Single provider → bare names (no prefix)
+		if mc.Inquiry != "sonnet" {
+			t.Errorf("inquiry: got %q, want %q", mc.Inquiry, "sonnet")
+		}
 		if mc.Research != "sonnet" {
 			t.Errorf("research: got %q, want %q", mc.Research, "sonnet")
 		}
@@ -902,6 +911,9 @@ func TestRegistry_CatalogDefaultModels(t *testing.T) {
 
 		// Single provider → bare names (no prefix)
 		// Research prefers claude, but claude not available; falls back to a balanced codex model
+		if mc.Inquiry != "gpt-5.4" {
+			t.Errorf("inquiry: got %q, want %q", mc.Inquiry, "gpt-5.4")
+		}
 		if mc.Research != "gpt-5.4" {
 			t.Errorf("research: got %q, want %q", mc.Research, "gpt-5.4")
 		}
@@ -1042,6 +1054,19 @@ func TestRegistry_EligibleModelsForPhase(t *testing.T) {
 		// codex: gpt-5.4 is the recommended default; balanced mini remains available.
 		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
 			t.Errorf("codex research: got %v, want gpt-5.4 and gpt-5.4-mini", got)
+		}
+	})
+
+	t.Run("inquiry includes same capable and balanced options as research", func(t *testing.T) {
+		result := r.EligibleModelsForPhase(llm.PhaseInquiry)
+		if got := result["claude"]; !slices.Contains(got, "sonnet") || !slices.Contains(got, "opus") {
+			t.Errorf("claude inquiry: got %v, want sonnet and opus", got)
+		}
+		if slices.Contains(result["claude"], "haiku") {
+			t.Error("claude inquiry should not include haiku")
+		}
+		if got := result["codex"]; !slices.Contains(got, "gpt-5.4") || !slices.Contains(got, "gpt-5.4-mini") {
+			t.Errorf("codex inquiry: got %v, want gpt-5.4 and gpt-5.4-mini", got)
 		}
 	})
 

@@ -23,12 +23,12 @@ import (
 
 // phaseCatalogFields is the canonical ordered list of phase-role field names
 // consumed by both the wizard's inline catalog block and BuildPhaseModelCatalog.
-var phaseCatalogFields = []string{"Research", "Planning", "Implementation", "Review", "KB Build"}
+var phaseCatalogFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"}
 
-// phaseCatalogRoleToField maps llm.PhaseRole to catalog field name. The ground
-// truth for this mapping lives in AppModel.transitionToWizard (app.go); the
-// helper mirrors it while the wizard and edit-config overlay share the catalog.
+// phaseCatalogRoleToField maps llm.PhaseRole to catalog field name. The wizard
+// and edit-config overlay both consume this shared catalog mapping.
 var phaseCatalogRoleToField = map[llm.PhaseRole]string{
+	llm.PhaseInquiry:        "Clarify",
 	llm.PhaseResearch:       "Research",
 	llm.PhasePlanning:       "Planning",
 	llm.PhaseImplementation: "Implementation",
@@ -58,7 +58,7 @@ type PhaseModelCatalog struct {
 	ProviderModelInfos map[string][]llm.ModelInfo
 	// ProviderOrder is the display order of provider names.
 	ProviderOrder []string
-	// PhaseDefaults maps field name ("Research", "Planning",
+	// PhaseDefaults maps field name ("Clarify", "Research", "Planning",
 	// "Implementation", "Review", "KB Build") → recommended model ID.
 	PhaseDefaults map[string]string
 	// PhaseProviderModels maps field name → provider → eligible model IDs
@@ -68,14 +68,13 @@ type PhaseModelCatalog struct {
 	// metadata entries filtered by role category.
 	PhaseProviderModelInfos map[string]map[string][]llm.ModelInfo
 	// Fields is the canonical ordered list of phase-role field names. Always
-	// {"Research", "Planning", "Implementation", "Review", "KB Build"}.
+	// {"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"}.
 	Fields []string
 }
 
 // BuildPhaseModelCatalog builds a PhaseModelCatalog from the current
-// registry state. Mirrors the block currently inlined in
-// AppModel.transitionToWizard; both stay in shape-parity (guarded by
-// phase_catalog_test.go).
+// registry state. The wizard and edit-config overlay share this immutable
+// view of model availability and per-phase eligibility.
 //
 // The `defaults` parameter is accepted for forward compatibility.
 //
@@ -122,6 +121,7 @@ func BuildPhaseModelCatalog(reg *llm.Registry, _ config.DefaultsConfig) PhaseMod
 		}
 	}
 	catalogDefaults := reg.CatalogDefaultModels()
+	cat.PhaseDefaults["Clarify"] = catalogDefaults.Inquiry
 	cat.PhaseDefaults["Research"] = catalogDefaults.Research
 	cat.PhaseDefaults["Planning"] = catalogDefaults.Planning
 	cat.PhaseDefaults["Implementation"] = catalogDefaults.Implementation

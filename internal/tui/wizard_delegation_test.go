@@ -35,6 +35,7 @@ func newWizardAtReviewForDelegation(t *testing.T, providerModels map[string][]st
 	t.Helper()
 	defaults := config.NewDefault().Defaults
 	defaults.Models = config.ModelConfig{
+		Inquiry:        "opus",
 		Research:       "opus",
 		Planning:       "opus",
 		Implementation: "opus",
@@ -64,6 +65,7 @@ func TestWizardReviewDelegation_ModelsCycleRoundTrip(t *testing.T) {
 
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
 	if !m.summaryEditing {
 		t.Fatal("expected summaryEditing=true after Enter on Models")
 	}
@@ -136,12 +138,12 @@ func TestWizardReviewDelegation_ModelsUpDownClampedAtBounds(t *testing.T) {
 		t.Errorf("Up at modelCursor=0: got %d, want 0", m.modelCursor)
 	}
 
-	// Walk down to 4 and beyond: stays at 4
+	// Walk down to 5 and beyond: stays at 5
 	for i := 0; i < 10; i++ {
 		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if m.modelCursor != 4 {
-		t.Errorf("Down × 10 at top: got modelCursor=%d, want 4 (clamped)", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Errorf("Down × 10 at top: got modelCursor=%d, want 5 (clamped)", m.modelCursor)
 	}
 }
 
@@ -153,11 +155,12 @@ func TestWizardReviewDelegation_ModelsSubRowCycle(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	// Navigate to Implementation (row 2)
+	// Navigate to Implementation (row 3)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 2 {
-		t.Fatalf("modelCursor = %d, want 2", m.modelCursor)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != 3 {
+		t.Fatalf("modelCursor = %d, want 3", m.modelCursor)
 	}
 	origImpl := m.models.Implementation
 	origResearch := m.models.Research
@@ -183,6 +186,7 @@ func TestWizardReviewDelegation_ModelSelectionPanelsUseVerticalSelection(t *test
 	m := newWizardAtReviewForDelegation(t, providerModels, []string{"claude", "gateway"}, nil)
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
 
 	if got := m.wizardModelFocus(); got != configFocusPhaseList {
 		t.Fatalf("initial model editor focus = %v, want phase list", got)
@@ -618,8 +622,9 @@ func TestWizardReviewDelegation_ModelFilterEnterDoesNotCloseEditing(t *testing.T
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 1 {
-		t.Fatalf("modelCursor = %d, want Planning row 1", m.modelCursor)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != 2 {
+		t.Fatalf("modelCursor = %d, want Planning row 2", m.modelCursor)
 	}
 	beforePlanning := m.models.Planning
 

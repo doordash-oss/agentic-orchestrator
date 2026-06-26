@@ -500,7 +500,12 @@ func livePreviewConfiguredPhaseModel(f *feature.Feature, phase feature.Phase) st
 	switch phase {
 	case feature.PhaseKnowledgeBase:
 		return f.Models.KBBuild
-	case feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign:
+	case feature.PhaseInquire:
+		if f.Models.Inquiry != "" {
+			return f.Models.Inquiry
+		}
+		return f.Models.Research
+	case feature.PhaseResearch, feature.PhaseDesign:
 		return f.Models.Research
 	case feature.PhasePlan, feature.PhasePublish:
 		return f.Models.Planning

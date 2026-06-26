@@ -262,6 +262,9 @@ func (m ConfigEditorModel) ModelsChangeCount() int {
 	orig := m.original.Models
 	cur := m.models
 	count := 0
+	if cur.Inquiry != orig.Inquiry {
+		count++
+	}
 	if cur.Research != orig.Research {
 		count++
 	}
@@ -404,6 +407,8 @@ func (m ConfigEditorModel) currentModelField() string {
 
 func (m ConfigEditorModel) modelValueForField(field string) string {
 	switch field {
+	case "Clarify":
+		return m.models.Inquiry
 	case "Research":
 		return m.models.Research
 	case "Planning":
@@ -420,6 +425,8 @@ func (m ConfigEditorModel) modelValueForField(field string) string {
 
 func (m *ConfigEditorModel) setModelValueForField(field, value string) {
 	switch field {
+	case "Clarify":
+		m.models.Inquiry = value
 	case "Research":
 		m.models.Research = value
 	case "Planning":
@@ -691,7 +698,8 @@ func compactModelIDLabel(id string) string {
 }
 
 func compactModelSummary(models config.ModelConfig, separator string) string {
-	return fmt.Sprintf("R:%s%sP:%s%sI:%s%sRev:%s%sKB:%s",
+	return fmt.Sprintf("C:%s%sR:%s%sP:%s%sI:%s%sRev:%s%sKB:%s",
+		compactModelValueLabel(models.Inquiry), separator,
 		compactModelValueLabel(models.Research), separator,
 		compactModelValueLabel(models.Planning), separator,
 		compactModelValueLabel(models.Implementation), separator,

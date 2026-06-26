@@ -322,6 +322,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	pipelinePrefs := make(map[string]config.PipelinePreference, len(pipelineOptions))
 	for _, profile := range pipelineOptions {
 		pref := defaults.PreferenceForPipeline(profile)
+		pref.Models.Inquiry = configCatalog.ClampModelValue("Clarify", pref.Models.Inquiry)
 		pref.Models.Research = configCatalog.ClampModelValue("Research", pref.Models.Research)
 		pref.Models.Planning = configCatalog.ClampModelValue("Planning", pref.Models.Planning)
 		pref.Models.Implementation = configCatalog.ClampModelValue("Implementation", pref.Models.Implementation)
@@ -358,7 +359,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		selectedRepos:          make(map[string]bool),
 		repos:                  repoConfigs,
 		models:                 models,
-		modelFields:            []string{"Research", "Planning", "Implementation", "Review", "KB Build"},
+		modelFields:            append([]string(nil), phaseCatalogFields...),
 		providerModels:         providerModels,
 		providerOrder:          providerOrder,
 		phaseDefaults:          phaseDefaults,
@@ -667,6 +668,7 @@ func (m *WizardModel) applyPipelinePreference(profile string) {
 	if !ok {
 		return
 	}
+	pref.Models.Inquiry = m.configCatalog.ClampModelValue("Clarify", pref.Models.Inquiry)
 	pref.Models.Research = m.configCatalog.ClampModelValue("Research", pref.Models.Research)
 	pref.Models.Planning = m.configCatalog.ClampModelValue("Planning", pref.Models.Planning)
 	pref.Models.Implementation = m.configCatalog.ClampModelValue("Implementation", pref.Models.Implementation)
@@ -2523,6 +2525,8 @@ func (m *WizardModel) cycleModelReverse() {
 
 func (m *WizardModel) getModelField(field string) string {
 	switch field {
+	case "Clarify":
+		return m.models.Inquiry
 	case "Research":
 		return m.models.Research
 	case "Planning":
@@ -2539,6 +2543,8 @@ func (m *WizardModel) getModelField(field string) string {
 
 func (m *WizardModel) setModelField(field, value string) {
 	switch field {
+	case "Clarify":
+		m.models.Inquiry = value
 	case "Research":
 		m.models.Research = value
 	case "Planning":

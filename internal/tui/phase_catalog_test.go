@@ -86,7 +86,7 @@ func TestBuildPhaseModelCatalog_SurfacesProviderGroup(t *testing.T) {
 	if got := cat.ProviderModels["gateway"]; !slices.Contains(got, "vendor/sonnet[200K]") {
 		t.Errorf("gateway ProviderModels = %v, want the slash-form backend id", got)
 	}
-	for _, field := range []string{"Research", "Planning", "Implementation", "Review", "KB Build"} {
+	for _, field := range []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"} {
 		if _, ok := cat.PhaseProviderModels[field]["gateway"]; !ok {
 			t.Errorf("PhaseProviderModels[%q] missing gateway group", field)
 		}
@@ -104,7 +104,7 @@ func TestBuildPhaseModelCatalog_Shape(t *testing.T) {
 	reg := llm.NewRegistry()
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
 
-	wantFields := []string{"Research", "Planning", "Implementation", "Review", "KB Build"}
+	wantFields := []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"}
 	if !reflect.DeepEqual(cat.Fields, wantFields) {
 		t.Errorf("Fields = %v, want %v", cat.Fields, wantFields)
 	}
@@ -149,8 +149,8 @@ func TestBuildPhaseModelCatalog_Shape(t *testing.T) {
 func TestBuildPhaseModelCatalog_NilRegistry(t *testing.T) {
 	t.Parallel()
 	cat := BuildPhaseModelCatalog(nil, config.DefaultsConfig{})
-	if len(cat.Fields) != 5 {
-		t.Errorf("Fields = %d entries, want 5", len(cat.Fields))
+	if len(cat.Fields) != 6 {
+		t.Errorf("Fields = %d entries, want 6", len(cat.Fields))
 	}
 	if len(cat.ProviderOrder) != 0 {
 		t.Errorf("ProviderOrder should be empty for nil registry, got %v", cat.ProviderOrder)
@@ -173,7 +173,7 @@ func TestBuildPhaseModelCatalog_NilRegistry(t *testing.T) {
 func TestPhaseModelCatalog_ModelOptionsForField(t *testing.T) {
 	t.Parallel()
 	cat := PhaseModelCatalog{
-		Fields:        []string{"Research", "Planning", "Implementation", "Review", "KB Build"},
+		Fields:        []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"},
 		ProviderOrder: []string{"claude", "codex"},
 		ProviderModels: map[string][]string{
 			"claude": {"claude/sonnet-4-6", "claude/opus-4-7"},

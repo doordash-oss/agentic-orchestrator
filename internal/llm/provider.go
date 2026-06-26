@@ -263,6 +263,7 @@ var ErrNotSupported = fmt.Errorf("operation not supported by this provider")
 type PhaseRole string
 
 const (
+	PhaseInquiry        PhaseRole = "inquiry"
 	PhaseResearch       PhaseRole = "research"
 	PhasePlanning       PhaseRole = "planning"
 	PhaseImplementation PhaseRole = "implementation"

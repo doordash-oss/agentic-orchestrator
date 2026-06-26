@@ -31,13 +31,14 @@ import (
 // consume this catalog instead of a live *llm.Registry.
 func testCatalog() PhaseModelCatalog {
 	cat := PhaseModelCatalog{
-		Fields:        []string{"Research", "Planning", "Implementation", "Review", "KB Build"},
+		Fields:        []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"},
 		ProviderOrder: []string{"claude", "codex"},
 		ProviderModels: map[string][]string{
 			"claude": {"claude/sonnet-4-6", "claude/opus-4-7"},
 			"codex":  {"codex/gpt-5-codex"},
 		},
 		PhaseDefaults: map[string]string{
+			"Clarify":        "claude/sonnet-4-6",
 			"Research":       "claude/sonnet-4-6",
 			"Planning":       "claude/opus-4-7",
 			"Implementation": "claude/sonnet-4-6",
@@ -45,6 +46,7 @@ func testCatalog() PhaseModelCatalog {
 			"KB Build":       "claude/sonnet-4-6",
 		},
 		PhaseProviderModels: map[string]map[string][]string{
+			"Clarify":        {"claude": {"claude/sonnet-4-6", "claude/opus-4-7"}, "codex": {"codex/gpt-5-codex"}},
 			"Research":       {"claude": {"claude/sonnet-4-6", "claude/opus-4-7"}, "codex": {"codex/gpt-5-codex"}},
 			"Planning":       {"claude": {"claude/sonnet-4-6", "claude/opus-4-7"}, "codex": {"codex/gpt-5-codex"}},
 			"Implementation": {"claude": {"claude/sonnet-4-6", "claude/opus-4-7"}, "codex": {"codex/gpt-5-codex"}},
@@ -97,45 +99,45 @@ func checkpointViewContainsLabel(view, label string) bool {
 
 func TestConfigEditor_RowCursor_FlatWalk(t *testing.T) {
 	t.Parallel()
-	e := newEditor(nil, true) // 5 Models + 1 Inquireness + 5 Checkpoints = rows 0..10
+	e := newEditor(nil, true) // 6 Models + 1 Inquireness + 5 Checkpoints = rows 0..11
 	if e.rowCursor != 0 {
 		t.Fatalf("initial rowCursor = %d, want 0", e.rowCursor)
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if e.rowCursor != 10 {
-		t.Errorf("after 10 downs: rowCursor = %d, want 10", e.rowCursor)
+	if e.rowCursor != 11 {
+		t.Errorf("after 11 downs: rowCursor = %d, want 11", e.rowCursor)
 	}
 	// One more down wraps to 0.
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if e.rowCursor != 0 {
 		t.Errorf("after wrap-around down: rowCursor = %d, want 0", e.rowCursor)
 	}
-	// Up from 0 wraps to 10.
+	// Up from 0 wraps to 11.
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if e.rowCursor != 10 {
-		t.Errorf("up from 0 should wrap to 10, got %d", e.rowCursor)
+	if e.rowCursor != 11 {
+		t.Errorf("up from 0 should wrap to 11, got %d", e.rowCursor)
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 11; i++ {
 		e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	}
 	if e.rowCursor != 0 {
-		t.Errorf("after 10 ups from 10: rowCursor = %d, want 0", e.rowCursor)
+		t.Errorf("after 11 ups from 11: rowCursor = %d, want 0", e.rowCursor)
 	}
 }
 
 func TestConfigEditor_RowCursor_FlatWalk_4Checkpoints(t *testing.T) {
 	t.Parallel()
-	e := newEditor(nil, false) // ManualPublish hidden → 5 + 1 + 4 = rows 0..9
-	if e.lastRow() != 9 {
-		t.Fatalf("lastRow = %d, want 9", e.lastRow())
+	e := newEditor(nil, false) // ManualPublish hidden → 6 + 1 + 4 = rows 0..10
+	if e.lastRow() != 10 {
+		t.Fatalf("lastRow = %d, want 10", e.lastRow())
 	}
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 10; i++ {
 		e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
-	if e.rowCursor != 9 {
-		t.Errorf("after 9 downs: rowCursor = %d, want 9", e.rowCursor)
+	if e.rowCursor != 10 {
+		t.Errorf("after 10 downs: rowCursor = %d, want 10", e.rowCursor)
 	}
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if e.rowCursor != 0 {
@@ -149,15 +151,17 @@ func TestConfigEditor_Tab_SelectsModelCellOnModelsRow(t *testing.T) {
 		row    int
 		getter func(feature.ConfigSnapshot) string
 	}{
-		{0, func(s feature.ConfigSnapshot) string { return s.Models.Research }},
-		{1, func(s feature.ConfigSnapshot) string { return s.Models.Planning }},
-		{2, func(s feature.ConfigSnapshot) string { return s.Models.Implementation }},
-		{3, func(s feature.ConfigSnapshot) string { return s.Models.Review }},
-		{4, func(s feature.ConfigSnapshot) string { return s.Models.KBBuild }},
+		{0, func(s feature.ConfigSnapshot) string { return s.Models.Inquiry }},
+		{1, func(s feature.ConfigSnapshot) string { return s.Models.Research }},
+		{2, func(s feature.ConfigSnapshot) string { return s.Models.Planning }},
+		{3, func(s feature.ConfigSnapshot) string { return s.Models.Implementation }},
+		{4, func(s feature.ConfigSnapshot) string { return s.Models.Review }},
+		{5, func(s feature.ConfigSnapshot) string { return s.Models.KBBuild }},
 	}
 	// Seed each Models field to a known valid value so the reversibility
 	// assertion exercises normal cycling (not stale-model preservation).
 	seed := config.ModelConfig{
+		Inquiry:        "claude/sonnet-4-6",
 		Research:       "claude/sonnet-4-6",
 		Planning:       "claude/sonnet-4-6",
 		Implementation: "claude/sonnet-4-6",
@@ -213,7 +217,7 @@ func TestConfigEditor_ChangingAgentSelectsRecommendedModel(t *testing.T) {
 	t.Parallel()
 	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: "claude:sonnet[200K]"}}, cat, true)
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellAgent
 
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -236,7 +240,7 @@ func TestConfigEditor_BlankModelValueInheritsDefaultAgent(t *testing.T) {
 		t.Fatalf("agentValueForField(Research) = %q, want gateway from phase default", got)
 	}
 
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if got := e.agentValueForField("Research"); got != "gateway" {
@@ -267,7 +271,7 @@ func TestConfigEditor_ModelFilteringIsScopedToSelectedAgent(t *testing.T) {
 	})
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Planning: "gateway:ollama/gemma4:31b-256k"}}, cat, true)
-	e.rowCursor = 1
+	e.rowCursor = 2
 	e.activeModelCell = modelCellModel
 
 	e, _ = e.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
@@ -297,7 +301,7 @@ func TestConfigEditor_ModelFilterConsumesNavigationAndCellKeys(t *testing.T) {
 	}
 	for _, keyMsg := range keys {
 		e := newEditor(&feature.Feature{Models: config.ModelConfig{Research: "claude/sonnet-4-6"}}, true)
-		e.rowCursor = 0
+		e.rowCursor = 1
 		e.activeModelCell = modelCellModel
 		e, _ = e.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 		e, _ = e.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
@@ -330,7 +334,7 @@ func TestConfigEditor_ModelFilterConsumesNavigationAndCellKeys(t *testing.T) {
 func TestConfigEditor_EmptyFilterEnterPreservesCurrentModel(t *testing.T) {
 	t.Parallel()
 	e := newEditor(&feature.Feature{Models: config.ModelConfig{Research: "claude/opus-4-7"}}, true)
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 
 	e, _ = e.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
@@ -357,7 +361,7 @@ func TestConfigEditor_SingleAgentCyclePreservesValidNonDefaultModel(t *testing.T
 	})
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: "opus"}}, cat, true)
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellAgent
 
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -383,7 +387,7 @@ func TestConfigEditor_SingleAgentCyclePreservesBlankDefaultModel(t *testing.T) {
 	})
 	cat := BuildPhaseModelCatalog(reg, config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellAgent
 
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -444,7 +448,7 @@ func TestConfigEditor_ModelsCycleForward(t *testing.T) {
 	if len(entries) < 2 {
 		t.Fatalf("catalog has too few claude Research entries: %+v", entries)
 	}
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 	// Seed to the first option.
 	e.models.Research = e.catalog.SelectionValue(entries[0])
@@ -464,7 +468,7 @@ func TestConfigEditor_ModelsCycleBackward(t *testing.T) {
 	t.Parallel()
 	e := newEditor(nil, true)
 	entries := e.catalog.EntriesForFieldAndAgent("Research", "claude")
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 	e.models.Research = e.catalog.SelectionValue(entries[0])
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
@@ -716,7 +720,7 @@ func TestConfigEditor_StaleModelPreservation(t *testing.T) {
 		t.Errorf("renderer missing (unavailable) marker; view:\n%s", view)
 	}
 	// Forward cycle lands on the first eligible, dropping the stale value.
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	entries := e.catalog.EntriesForFieldAndAgent("Research", "claude")
@@ -760,7 +764,7 @@ func TestConfigEditor_ProviderSelectionPersistsRoutedSlashForm(t *testing.T) {
 	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
 	e := NewConfigEditorModel(&feature.Feature{}, cat, true)
 
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	target := "vendor/sonnet[200K]"
@@ -805,9 +809,9 @@ func TestConfigEditor_ChangeCounters(t *testing.T) {
 	t.Parallel()
 	e := newEditor(&feature.Feature{Inquireness: feature.InquirenessMedium}, true)
 	// Cycle Research and Planning rows forward.
-	e.rowCursor = 0
-	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	e.rowCursor = 1
+	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	e.rowCursor = 2
 	e, _ = e.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if got := e.ModelsChangeCount(); got != 2 {
 		t.Errorf("ModelsChangeCount = %d, want 2", got)
@@ -867,7 +871,7 @@ func TestConfigEditor_CycleFromPrefixedDefaultAdvances(t *testing.T) {
 	const prefixed = "gateway:vendor/sonnet[200K]"
 	e := NewConfigEditorModel(&feature.Feature{Models: config.ModelConfig{Research: prefixed}}, cat, true)
 
-	e.rowCursor = 0
+	e.rowCursor = 1
 	e.activeModelCell = modelCellModel
 	e.cycleModelForward()
 	entries := cat.EntriesForFieldAndAgent("Research", "gateway")

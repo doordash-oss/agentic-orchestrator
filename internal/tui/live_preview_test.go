@@ -753,6 +753,23 @@ func TestLivePreviewUpperMetadataUsesShortPhaseModelName(t *testing.T) {
 	}
 }
 
+func TestLivePreviewConfiguredPhaseModelUsesInquiryForInquire(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Models: config.ModelConfig{
+			Inquiry:  "claude:clarify-model",
+			Research: "claude:research-model",
+		},
+	}
+
+	if got := livePreviewConfiguredPhaseModel(f, feature.PhaseInquire); got != "claude:clarify-model" {
+		t.Errorf("PhaseInquire model = %q, want inquiry model", got)
+	}
+	if got := livePreviewConfiguredPhaseModel(f, feature.PhaseResearch); got != "claude:research-model" {
+		t.Errorf("PhaseResearch model = %q, want research model", got)
+	}
+}
+
 func TestLivePreviewUpperMetadataKeepsConfiguredProviderForBackendSessionModel(t *testing.T) {
 	t.Parallel()
 	const routedModel = "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"

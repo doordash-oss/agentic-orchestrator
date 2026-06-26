@@ -53,6 +53,7 @@ func TestWizardSteps(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -786,6 +787,7 @@ func TestWizardRepoFilter(t *testing.T) {
 	repos := []string{"alpha", "beta", "gamma", "geo-intel", "geo-proxy"}
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -2732,10 +2734,18 @@ func TestWizardSummaryModelsUpDownNavigation(t *testing.T) {
 		t.Errorf("expected modelCursor=4 after Down, got %d", m.modelCursor)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 4 {
-		t.Errorf("expected modelCursor=4 (clamped) after Down, got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor=5 after Down, got %d", m.modelCursor)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor=5 (clamped) after Down, got %d", m.modelCursor)
 	}
 
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.modelCursor != 4 {
+		t.Errorf("expected modelCursor=4 after Up, got %d", m.modelCursor)
+	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.modelCursor != 3 {
 		t.Errorf("expected modelCursor=3 after Up, got %d", m.modelCursor)
@@ -2769,6 +2779,7 @@ func TestWizardSummaryModelsTabCycles(t *testing.T) {
 
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
 
 	origModel := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -2800,6 +2811,7 @@ func TestWizardSummaryModelsVerticalSelectionCycles(t *testing.T) {
 
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
 
 	origModel := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
@@ -2882,11 +2894,12 @@ func TestWizardSummaryModelsSubRowNavAndCycle(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	// Navigate down to Implementation (index 2)
+	// Navigate down to Implementation (index 3)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 2 {
-		t.Fatalf("expected modelCursor=2, got %d", m.modelCursor)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != 3 {
+		t.Fatalf("expected modelCursor=3, got %d", m.modelCursor)
 	}
 
 	origImpl := m.models.Implementation
@@ -3431,6 +3444,7 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 	// cycle it to "sonnet".
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // Clarify -> Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // cycle Research: opus -> sonnet
@@ -4025,11 +4039,14 @@ func TestWizardSummaryModelsIncludesKBBuild(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	if len(m.modelFields) != 5 {
-		t.Errorf("expected 5 model fields, got %d", len(m.modelFields))
+	if len(m.modelFields) != 6 {
+		t.Errorf("expected 6 model fields, got %d", len(m.modelFields))
 	}
-	if m.modelFields[4] != "KB Build" {
-		t.Errorf("expected modelFields[4] = %q, got %q", "KB Build", m.modelFields[4])
+	if m.modelFields[0] != "Clarify" {
+		t.Errorf("expected modelFields[0] = %q, got %q", "Clarify", m.modelFields[0])
+	}
+	if m.modelFields[5] != "KB Build" {
+		t.Errorf("expected modelFields[5] = %q, got %q", "KB Build", m.modelFields[5])
 	}
 }
 
@@ -4047,14 +4064,15 @@ func TestWizardSummaryModelsKBBuildCycles(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	// Navigate down to KB Build row (index 4)
+	// Navigate down to KB Build row (index 5)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 0 -> 1
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 4 -> 5
 
-	if m.modelCursor != 4 {
-		t.Fatalf("expected modelCursor = 4, got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Fatalf("expected modelCursor = 5, got %d", m.modelCursor)
 	}
 
 	// Cycle KB Build model from the Model panel.
@@ -4075,6 +4093,7 @@ func TestWizardSummaryModelsKBBuildCycles(t *testing.T) {
 func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -4091,6 +4110,7 @@ func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 1 -> 2
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 4 -> 5
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // cycle KB Build
@@ -4109,9 +4129,10 @@ func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	}
 }
 
-func TestWizardSummaryModelsUpDownNavigation_FiveRows(t *testing.T) {
+func TestWizardSummaryModelsUpDownNavigation_SixRows(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -4123,26 +4144,28 @@ func TestWizardSummaryModelsUpDownNavigation_FiveRows(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	// Navigate down to index 4 (KB Build)
+	// Navigate down to index 5 (KB Build)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 0 -> 1
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 4 -> 5
 
-	if m.modelCursor != 4 {
-		t.Errorf("expected modelCursor = 4, got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor = 5, got %d", m.modelCursor)
 	}
 
-	// Down again: should stay at 4 (clamped)
+	// Down again: should stay at 5 (clamped)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 4 {
-		t.Errorf("expected modelCursor to stay at 4 (clamped), got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor to stay at 5 (clamped), got %d", m.modelCursor)
 	}
 }
 
 func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "claude:opus",
 			Research:       "claude:opus",
 			Planning:       "claude:opus",
 			Implementation: "claude:opus",
@@ -4162,6 +4185,7 @@ func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 4 -> 5
 
 	// Cycle through prefixed KB Build models scoped to the selected agent.
 	if m.models.KBBuild != "claude:opus" {
@@ -4195,6 +4219,7 @@ func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 func TestWizardSummaryModelsReviewShowsKBBuild(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -4270,7 +4295,7 @@ func TestWizardModelPickerEmptyProviders(t *testing.T) {
 		t.Errorf("expected empty allModels, got %v", m.allModels)
 	}
 	// cycleModel should be a no-op
-	m.modelCursor = 0
+	m.modelCursor = 1
 	m.cycleModel()
 	// Should not panic
 }
@@ -4342,7 +4367,7 @@ func TestWizardClampKeepsPrefixedProviderDefault(t *testing.T) {
 	}
 	providerOrder := []string{"claude", "gateway"}
 	phaseModels := map[string]map[string][]string{}
-	for _, f := range []string{"Research", "Planning", "Implementation", "Review", "KB Build"} {
+	for _, f := range []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"} {
 		phaseModels[f] = map[string][]string{
 			"claude":  {"sonnet[200K]", "opus[200K]"},
 			"gateway": {"vendor/sonnet[200K]", "vendor/gpt-5"},
@@ -4374,7 +4399,7 @@ func TestWizardModelCyclingForwardAndWrap(t *testing.T) {
 	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	// Forward: opus → sonnet
-	m.modelCursor = 0
+	m.modelCursor = 1
 	m.cycleModel()
 	if m.models.Research != "sonnet" {
 		t.Errorf("after cycle forward: Research = %q, want sonnet", m.models.Research)
@@ -4400,7 +4425,7 @@ func TestWizardModelCyclingReverseAndWrap(t *testing.T) {
 	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	// Reverse from opus → wraps to gpt-5.4
-	m.modelCursor = 0
+	m.modelCursor = 1
 	m.cycleModelReverse()
 	if m.models.Research != "gpt-5.4" {
 		t.Errorf("after reverse wrap: Research = %q, want gpt-5.4", m.models.Research)

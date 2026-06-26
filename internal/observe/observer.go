@@ -1100,6 +1100,7 @@ func (o *Observer) ConfigChanged(sc SpanContext, before, after feature.ConfigSna
 func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 	return map[string]any{
 		"models": map[string]any{
+			"inquiry":        s.Models.Inquiry,
 			"research":       s.Models.Research,
 			"planning":       s.Models.Planning,
 			"implementation": s.Models.Implementation,

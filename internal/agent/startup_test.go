@@ -91,6 +91,7 @@ func TestFormatNoCLIMessage_SingleProvider(t *testing.T) {
 func TestApplyStartupDefaults_FillsEmptyConfig(t *testing.T) {
 	cfg := &config.Config{}
 	defaults := map[string]string{
+		"inquiry":        "sonnet",
 		"research":       "opus",
 		"planning":       "opus",
 		"implementation": "opus",
@@ -102,6 +103,9 @@ func TestApplyStartupDefaults_FillsEmptyConfig(t *testing.T) {
 	if !changed {
 		t.Error("expected changed=true when filling empty config")
 	}
+	if cfg.Defaults.Models.Inquiry != "sonnet" {
+		t.Errorf("expected Inquiry='sonnet', got %q", cfg.Defaults.Models.Inquiry)
+	}
 	if cfg.Defaults.Models.Research != "opus" {
 		t.Errorf("expected Research='opus', got %q", cfg.Defaults.Models.Research)
 	}
@@ -112,8 +116,10 @@ func TestApplyStartupDefaults_FillsEmptyConfig(t *testing.T) {
 
 func TestApplyStartupDefaults_PreservesUserValues(t *testing.T) {
 	cfg := &config.Config{}
+	cfg.Defaults.Models.Inquiry = "haiku"
 	cfg.Defaults.Models.Research = "haiku"
 	defaults := map[string]string{
+		"inquiry":        "sonnet",
 		"research":       "opus",
 		"planning":       "opus",
 		"implementation": "opus",
@@ -124,6 +130,9 @@ func TestApplyStartupDefaults_PreservesUserValues(t *testing.T) {
 	changed := ApplyStartupDefaults(cfg, defaults)
 	if !changed {
 		t.Error("expected changed=true since other fields were empty")
+	}
+	if cfg.Defaults.Models.Inquiry != "haiku" {
+		t.Errorf("expected Inquiry='haiku' preserved, got %q", cfg.Defaults.Models.Inquiry)
 	}
 	if cfg.Defaults.Models.Research != "haiku" {
 		t.Errorf("expected Research='haiku' preserved, got %q", cfg.Defaults.Models.Research)
@@ -180,6 +189,7 @@ func TestCheckRequiredTools_ContainsInstallHints(t *testing.T) {
 
 func TestApplyStartupDefaults_NoChange(t *testing.T) {
 	cfg := &config.Config{}
+	cfg.Defaults.Models.Inquiry = "z"
 	cfg.Defaults.Models.Research = "a"
 	cfg.Defaults.Models.Planning = "b"
 	cfg.Defaults.Models.Implementation = "c"
@@ -188,6 +198,7 @@ func TestApplyStartupDefaults_NoChange(t *testing.T) {
 	cfg.Defaults.Models.KBBuild = "f"
 
 	defaults := map[string]string{
+		"inquiry":        "sonnet",
 		"research":       "opus",
 		"planning":       "opus",
 		"implementation": "opus",

@@ -540,20 +540,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			Context:      iterationContextMeta(sess, waitResult.Handoff),
 		}
 
-		// Accumulate iteration cost into feature.
-		// Read the latest ActiveTimingKey from the store rather than the
-		// initial snapshot (cfg.Feature) to avoid mis-attributing cost when
-		// the key has been updated (e.g., plan → implement transition).
-		if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
-			_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-				costKey := f.ActiveTimingKey
-				if costKey == "" {
-					costKey = "implement"
-				}
-				f.AddPhaseCost(costKey, cost.TotalCostUSD)
-				return nil
-			})
-		}
+		// Accumulate iteration cost into the latest active timing key rather
+		// than the initial config snapshot, which may be stale after phase
+		// transitions such as plan -> implement.
+		_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", cost)
 
 		// Handle based on agent status
 		if agentStatus == agentStatusMissingMarker {

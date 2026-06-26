@@ -180,6 +180,10 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 
 	sessionCtx := observe.SpanContext{}
 	sessionStart := time.Now()
+	observerPhase := cfg.observerPhase
+	if observerPhase == "" {
+		observerPhase = label
+	}
 	if pr.Observer != nil {
 		if cfg.parentSpanCtx.TraceID != "" || cfg.parentSpanCtx.SpanID != "" || cfg.parentSpanCtx.FeatureID != "" {
 			sessionCtx = cfg.parentSpanCtx.Child()
@@ -191,22 +195,15 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 		if cfg.sessOpts != nil {
 			providerName = cfg.sessOpts.ProviderName
 		}
-		observerPhase := cfg.observerPhase
-		if observerPhase == "" {
-			observerPhase = label
-		}
 		pr.Observer.SessionStarted(sessionCtx, observerPhase, cfg.sessionID, providerName, cfg.model, cfg.repoName)
 		pr.installContextReadTracker(sess, sessionCtx, observerPhase, cfg.sessionID, pr.StateDir)
 		pr.installSubagentProgressTracker(sess, sessionCtx, observerPhase, cfg.sessionID)
 	}
 
 	defer func() {
+		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeature(pr.FeatureStore, cfg.featureID, observerPhase, cost)
 		if pr.Observer != nil {
-			cost := ExtractSessionCost(sess)
-			observerPhase := cfg.observerPhase
-			if observerPhase == "" {
-				observerPhase = label
-			}
 			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 		_ = sess.Stop()

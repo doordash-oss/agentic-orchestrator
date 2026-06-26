@@ -57,6 +57,52 @@ func TestNewDefaultManualPublish(t *testing.T) {
 	}
 }
 
+func TestCheckpoints_DraftPublish_DefaultsFalse(t *testing.T) {
+	// A config YAML with no draft_publish key must unmarshal with DraftPublish==false.
+	input := `
+defaults:
+  checkpoints:
+    manual_publish: false
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if cfg.Defaults.Checkpoints.DraftPublish {
+		t.Error("DraftPublish should default to false when key is absent")
+	}
+}
+
+func TestCheckpoints_DraftPublish_TrueWhenSet(t *testing.T) {
+	input := `
+defaults:
+  checkpoints:
+    draft_publish: true
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !cfg.Defaults.Checkpoints.DraftPublish {
+		t.Error("DraftPublish should be true when set to true")
+	}
+}
+
+func TestCheckpoints_DraftPublish_FalseWhenExplicitFalse(t *testing.T) {
+	input := `
+defaults:
+  checkpoints:
+    draft_publish: false
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if cfg.Defaults.Checkpoints.DraftPublish {
+		t.Error("DraftPublish should be false when explicitly set to false")
+	}
+}
+
 func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

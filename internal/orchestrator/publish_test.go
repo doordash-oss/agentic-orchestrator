@@ -292,7 +292,7 @@ func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
 	pub.CommitBodiesFn = func(path, base string) (string, error) { return "commit bodies", nil }
 	pub.DiffStatFn = func(path, base string) (string, error) { return "stat", nil }
 	pub.PushFn = func(path, branch string) error { return nil }
-	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string) (string, error) {
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
 		return "https://github.com/org/r1/pull/1", nil
 	}
 
@@ -393,7 +393,7 @@ func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testin
 	pub.PushFn = func(path, branch string) error { return nil }
 
 	var gotTitle, gotBody string
-	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string) (string, error) {
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
 		gotTitle, gotBody = title, body
 		return "https://github.com/org/r1/pull/1", nil
 	}
@@ -440,7 +440,7 @@ func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t 
 	pub.PushFn = func(path, branch string) error { return nil }
 
 	var gotTitle, gotBody string
-	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string) (string, error) {
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
 		gotTitle, gotBody = title, body
 		return "https://github.com/org/r1/pull/1", nil
 	}
@@ -470,6 +470,92 @@ func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t 
 	}
 	if !strings.Contains(string(data), "description generation: generating description:") {
 		t.Errorf("error log = %q, want description generation context", string(data))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestOrchestrator_PublishRepo_DraftPublish — draft flag wired through
+// ---------------------------------------------------------------------------
+
+func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {
+	f := &feature.Feature{
+		ID:   "feat-draft-true",
+		Name: "draft-feature",
+		Slug: "draft-feature",
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+		},
+		Checkpoints: feature.Checkpoints{DraftPublish: true},
+	}
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockPublisher()
+	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
+	pub.CommitBodiesFn = func(path, base string) (string, error) { return "", nil }
+	pub.DiffStatFn = func(path, base string) (string, error) { return "", nil }
+	pub.PushFn = func(path, branch string) error { return nil }
+
+	var gotDraft bool
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+		gotDraft = draft
+		return "https://github.com/org/r1/pull/1", nil
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		Publisher: pub,
+	}, orchestrator.Hooks{})
+
+	if err := o.Publish("feat-draft-true"); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if !gotDraft {
+		t.Error("Publisher.CreatePR should receive draft=true when feature Checkpoints.DraftPublish is true")
+	}
+}
+
+func TestOrchestrator_PublishRepo_DraftPublish_False(t *testing.T) {
+	f := &feature.Feature{
+		ID:   "feat-draft-false",
+		Name: "no-draft-feature",
+		Slug: "no-draft-feature",
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+		},
+		// DraftPublish defaults to false
+	}
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockPublisher()
+	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
+	pub.CommitBodiesFn = func(path, base string) (string, error) { return "", nil }
+	pub.DiffStatFn = func(path, base string) (string, error) { return "", nil }
+	pub.PushFn = func(path, branch string) error { return nil }
+
+	var gotDraft bool
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+		gotDraft = draft
+		return "https://github.com/org/r1/pull/1", nil
+	}
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		Publisher: pub,
+	}, orchestrator.Hooks{})
+
+	if err := o.Publish("feat-draft-false"); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if gotDraft {
+		t.Error("Publisher.CreatePR should receive draft=false when feature Checkpoints.DraftPublish is false")
 	}
 }
 

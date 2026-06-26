@@ -601,7 +601,7 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 	publisher.DiffStatFn = func(string, string) (string, error) { return "", nil }
 	publisher.CommitBodiesFn = func(string, string) (string, error) { return "", nil }
 	publisher.PushFn = func(string, string) error { return nil }
-	publisher.CreatePRFn = func(string, string, string, string, string) (string, error) {
+	publisher.CreatePRFn = func(string, string, string, string, string, bool) (string, error) {
 		return "https://github.com/org/api/pull/1", nil
 	}
 
@@ -715,7 +715,7 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	publisher.DiffStatFn = func(string, string) (string, error) { return "", nil }
 	publisher.CommitBodiesFn = func(string, string) (string, error) { return "", nil }
 	publisher.PushFn = func(string, string) error { return nil }
-	publisher.CreatePRFn = func(repoPath, branch, title, body, baseBranch string) (string, error) {
+	publisher.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
 		return "https://github.com/org/" + filepath.Base(repoPath) + "/pull/1", nil
 	}
 

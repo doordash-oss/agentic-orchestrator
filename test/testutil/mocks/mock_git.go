@@ -26,7 +26,7 @@ import (
 // and call tracking.
 type MockPublisher struct {
 	PushFn                  func(worktreePath, branch string) error
-	CreatePRFn              func(repoPath, branch, title, body, baseBranch string) (string, error)
+	CreatePRFn              func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	ClosePRFn               func(prURL string) error
 	HasUncommittedChangesFn func(worktreePath string) (bool, error)
 	HasLocalCommitsFn       func(worktreePath string) (bool, error)
@@ -52,10 +52,10 @@ func (m *MockPublisher) Push(worktreePath, branch string) error {
 	return m.DefaultError
 }
 
-func (m *MockPublisher) CreatePR(repoPath, branch, title, body, baseBranch string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreatePR", Args: []any{repoPath, branch, title, body, baseBranch}})
+func (m *MockPublisher) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CreatePR", Args: []any{repoPath, branch, title, body, baseBranch, draft}})
 	if m.CreatePRFn != nil {
-		return m.CreatePRFn(repoPath, branch, title, body, baseBranch)
+		return m.CreatePRFn(repoPath, branch, title, body, baseBranch, draft)
 	}
 	return "", m.DefaultError
 }

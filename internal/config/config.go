@@ -141,12 +141,14 @@ type Checkpoints struct {
 	RoadmapReview   bool `yaml:"roadmap_review"`
 	PhasePlanReview bool `yaml:"phase_plan_review"`
 	ManualPublish   bool `yaml:"manual_publish"`
+	DraftPublish    bool `yaml:"draft_publish"`
 
 	parsed bool // set by UnmarshalYAML; not serialized
 }
 
-// UnmarshalYAML defaults omitted checkpoint fields to true. The legacy
-// plan_review key is accepted by the decoder but intentionally ignored.
+// UnmarshalYAML defaults omitted checkpoint fields to true, except DraftPublish
+// which defaults to false (opting into draft is the exception, not the rule).
+// The legacy plan_review key is accepted by the decoder but intentionally ignored.
 func (c *Checkpoints) UnmarshalYAML(value *yaml.Node) error {
 	type checkpointFields struct {
 		InquiryReview   *bool `yaml:"inquiry_review"`
@@ -155,6 +157,7 @@ func (c *Checkpoints) UnmarshalYAML(value *yaml.Node) error {
 		RoadmapReview   *bool `yaml:"roadmap_review"`
 		PhasePlanReview *bool `yaml:"phase_plan_review"`
 		ManualPublish   *bool `yaml:"manual_publish"`
+		DraftPublish    *bool `yaml:"draft_publish"`
 	}
 
 	var fields checkpointFields
@@ -168,6 +171,7 @@ func (c *Checkpoints) UnmarshalYAML(value *yaml.Node) error {
 	c.RoadmapReview = boolValueOrDefault(fields.RoadmapReview, true)
 	c.PhasePlanReview = boolValueOrDefault(fields.PhasePlanReview, true)
 	c.ManualPublish = boolValueOrDefault(fields.ManualPublish, true)
+	c.DraftPublish = boolValueOrDefault(fields.DraftPublish, false)
 	c.parsed = true
 	return nil
 }

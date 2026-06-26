@@ -40,14 +40,10 @@ func defaultPush(worktreePath, branch string) error {
 	return nil
 }
 
-// CreatePR creates a GitHub PR using the gh CLI.
-// If baseBranch is provided and non-empty, the PR targets that branch
-// instead of the repository's default branch (for stacked PRs).
-//
-// If a PR already exists for the branch, the existing PR URL is returned
-// instead of an error (the push already updated the remote branch).
-func CreatePR(repoPath, branch, title, body string, baseBranch ...string) (string, error) {
-	body = InjectPRSignature(body)
+// buildCreatePRArgs assembles the gh CLI argument slice for pr create.
+// Separated from CreatePR so tests can verify argument construction without
+// invoking the gh binary.
+func buildCreatePRArgs(branch, title, body string, draft bool, baseBranch ...string) []string {
 	args := []string{"pr", "create",
 		"--title", title,
 		"--body", body,
@@ -56,6 +52,22 @@ func CreatePR(repoPath, branch, title, body string, baseBranch ...string) (strin
 	if len(baseBranch) > 0 && baseBranch[0] != "" {
 		args = append(args, "--base", baseBranch[0])
 	}
+	if draft {
+		args = append(args, "--draft")
+	}
+	return args
+}
+
+// CreatePR creates a GitHub PR using the gh CLI.
+// If baseBranch is provided and non-empty, the PR targets that branch
+// instead of the repository's default branch (for stacked PRs).
+// When draft is true, --draft is appended so the PR is created as a draft.
+//
+// If a PR already exists for the branch, the existing PR URL is returned
+// instead of an error (the push already updated the remote branch).
+func CreatePR(repoPath, branch, title, body string, draft bool, baseBranch ...string) (string, error) {
+	body = InjectPRSignature(body)
+	args := buildCreatePRArgs(branch, title, body, draft, baseBranch...)
 	cmd := exec.Command("gh", args...)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()

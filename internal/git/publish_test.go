@@ -24,6 +24,44 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
+func TestCreatePR_DraftFlag_IncludesArg(t *testing.T) {
+	args := buildCreatePRArgs("feature/x", "title", "body", true)
+	for _, a := range args {
+		if a == "--draft" {
+			return
+		}
+	}
+	t.Errorf("expected --draft in args %v", args)
+}
+
+func TestCreatePR_NoDraftFlag_ExcludesArg(t *testing.T) {
+	args := buildCreatePRArgs("feature/x", "title", "body", false)
+	for _, a := range args {
+		if a == "--draft" {
+			t.Errorf("unexpected --draft in args %v", args)
+		}
+	}
+}
+
+func TestCreatePR_DraftFlag_WithBaseBranch(t *testing.T) {
+	args := buildCreatePRArgs("feature/x", "title", "body", true, "main")
+	hasDraft, hasBase := false, false
+	for _, a := range args {
+		if a == "--draft" {
+			hasDraft = true
+		}
+		if a == "--base" {
+			hasBase = true
+		}
+	}
+	if !hasDraft {
+		t.Errorf("expected --draft in args %v", args)
+	}
+	if !hasBase {
+		t.Errorf("expected --base in args %v", args)
+	}
+}
+
 func TestDiffSummary_MixedChanges(t *testing.T) {
 	t.Parallel()
 

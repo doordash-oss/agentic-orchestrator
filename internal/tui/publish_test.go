@@ -867,6 +867,42 @@ func TestNewPublishViewport_BuildsViewportTitleBody(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// DraftPublish field tests (Task 4)
+// ---------------------------------------------------------------------------
+
+func TestNewPublishModel_DraftFromFeatureCheckpoints_True(t *testing.T) {
+	f := &feature.Feature{
+		ID:    "feat-draft",
+		Repos: []feature.FeatureRepo{{Name: "r1"}},
+		Checkpoints: feature.Checkpoints{
+			DraftPublish: true,
+		},
+	}
+	repos := []publishRepoEntry{{
+		Name: "r1", Branch: "feature/x", WorktreeDir: "/tmp/wt", RepoPath: "/tmp/repo",
+	}}
+	m := NewPublishModel(f, repos, "", "", 80, 24)
+	if !m.draft {
+		t.Error("m.draft should be true when feature Checkpoints.DraftPublish is true")
+	}
+}
+
+func TestNewPublishModel_DraftFromFeatureCheckpoints_False(t *testing.T) {
+	f := &feature.Feature{
+		ID:    "feat-nodraft",
+		Repos: []feature.FeatureRepo{{Name: "r1"}},
+		// DraftPublish defaults to false
+	}
+	repos := []publishRepoEntry{{
+		Name: "r1", Branch: "feature/x", WorktreeDir: "/tmp/wt", RepoPath: "/tmp/repo",
+	}}
+	m := NewPublishModel(f, repos, "", "", 80, 24)
+	if m.draft {
+		t.Error("m.draft should be false when feature Checkpoints.DraftPublish is false")
+	}
+}
+
 func TestPublishModel_StepCounter_TruthTable(t *testing.T) {
 	tests := []struct {
 		name         string

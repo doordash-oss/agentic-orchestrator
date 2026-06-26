@@ -485,6 +485,7 @@ type Checkpoints struct {
 	RoadmapReview   bool `yaml:"roadmap_review,omitempty"`
 	PhasePlanReview bool `yaml:"phase_plan_review,omitempty"`
 	ManualPublish   bool `yaml:"manual_publish,omitempty"`
+	DraftPublish    bool `yaml:"draft_publish,omitempty"`
 }
 
 // HasGateForPhase returns true if a review gate is enabled for the given target phase.

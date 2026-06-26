@@ -114,6 +114,7 @@ type PublishModel struct {
 	crossRefEntries []git.CrossRefEntry // built from repos + RepoStates
 	existingPRURL   string              // set when re-publishing an already-published repo
 	publishable     bool                // true if all feature repos have origin remote
+	draft           bool                // true when the feature's checkpoints request a draft PR
 }
 
 // newPublishViewport builds the shared viewport, title input, and body
@@ -162,6 +163,11 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 		featureName = f.Name
 	}
 
+	var draft bool
+	if f != nil {
+		draft = f.Checkpoints.DraftPublish
+	}
+
 	m := PublishModel{
 		step:        publishStepDiff,
 		featureID:   featureID,
@@ -175,6 +181,7 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 		width:       width,
 		height:      height,
 		publishable: true,
+		draft:       draft,
 	}
 
 	if f != nil && len(f.Repos) > 1 {
@@ -435,6 +442,7 @@ func (m PublishModel) executePublish() tea.Cmd {
 	crossRefEntries := m.crossRefEntries
 	existingPRURL := m.existingPRURL
 	publishable := m.publishable
+	draft := m.draft
 
 	if worktreeDir == "" || branch == "" {
 		return func() tea.Msg {
@@ -524,7 +532,7 @@ func (m PublishModel) executePublish() tea.Cmd {
 			}
 		} else {
 			var err error
-			prURL, err = git.CreatePR(effectiveRepoPath, branch, prTitle, prBody, baseBranch)
+			prURL, err = git.CreatePR(effectiveRepoPath, branch, prTitle, prBody, draft, baseBranch)
 			if err != nil {
 				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("PR creation failed: %w", err)}
 			}

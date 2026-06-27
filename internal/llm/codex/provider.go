@@ -153,12 +153,7 @@ Self-check before sending every question. If any answer is "no" and the free-for
 }
 
 func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	r, ok := lookupRate(model)
-	if !ok {
-		return 0
-	}
-	return (float64(inputTokens)/1_000_000)*r.inputPerMToken +
-		(float64(outputTokens)/1_000_000)*r.outputPerMToken
+	return computeCost(model, int(inputTokens), 0, int(outputTokens))
 }
 
 func (p *Provider) ContextWindowForModel(model string) int {

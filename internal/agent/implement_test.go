@@ -2118,12 +2118,13 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("# Plan\nImplement something"), 0o644)
 
 	f := &feature.Feature{
-		ID:           "test-noskip-001",
-		Name:         "Test No Skip Review",
-		Slug:         "test-no-skip-review",
-		Description:  "No skip iteration review test",
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
+		ID:              "test-noskip-001",
+		Name:            "Test No Skip Review",
+		Slug:            "test-no-skip-review",
+		Description:     "No skip iteration review test",
+		Status:          feature.StatusImplementing,
+		CurrentPhase:    feature.PhaseImplement,
+		ActiveTimingKey: "implement",
 		Repos: []feature.FeatureRepo{
 			{Name: "test-repo", Path: workDir},
 		},
@@ -2167,6 +2168,25 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	}
 	assertExplicitEmptyAgentNames(t, (*captured)[0].AgentNames)
 	assertExplorationAgentNames(t, (*captured)[1].AgentNames)
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("implement"); got != 0.002 {
+		t.Errorf("PhaseCost(implement) = %v, want 0.002", got)
+	}
+	if len(updated.SessionCosts) != 2 {
+		t.Fatalf("len(SessionCosts) = %d, want 2", len(updated.SessionCosts))
+	}
+	implCost := updated.SessionCosts[0]
+	if implCost.SessionID != "test-noskip-001-impl-01" || implCost.PhaseKey != "implement" || implCost.ObserverPhase != "implement" || implCost.CostUSD != 0.001 {
+		t.Errorf("SessionCosts[0] = %+v, want implementation session cost under implement", implCost)
+	}
+	reviewCost := updated.SessionCosts[1]
+	if reviewCost.SessionID != "test-noskip-001-review-01" || reviewCost.PhaseKey != "implement" || reviewCost.ObserverPhase != "review" || reviewCost.CostUSD != 0.001 {
+		t.Errorf("SessionCosts[1] = %+v, want review helper session cost under implement", reviewCost)
+	}
 }
 
 func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {

@@ -583,7 +583,10 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.ReviewModel)
 	defer func() {
 		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseFinalReview.String(),
+		})
 		if observed {
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
@@ -709,7 +712,10 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.Model)
 	defer func() {
 		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseFinalReview.String(),
+		})
 		if observed {
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}

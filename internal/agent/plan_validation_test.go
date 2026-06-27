@@ -917,15 +917,23 @@ done
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
+	store := feature.NewStore(filepath.Join(tmpDir, "store"))
+	f := &feature.Feature{
+		ID:              "test-plan-001",
+		Name:            "Test Plan Feature",
+		RiskLevel:       feature.RiskMedium,
+		Status:          feature.StatusPlanning,
+		ActiveTimingKey: "phase-1-plan",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
 	cfg := PlanLoopConfig{
-		Feature: &feature.Feature{
-			ID:            "test-plan-001",
-			Name:          "Test Plan Feature",
-			RiskLevel:     feature.RiskMedium,
-			SchemaVersion: feature.SchemaVersionCurrent,
-		},
-		StateDir: tmpDir,
-		WorkDir:  workDir,
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     tmpDir,
+		WorkDir:      workDir,
 		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			got = opts
 			return []string{"bash", criticScript}, nil, &session.SessionOpts{
@@ -969,6 +977,29 @@ done
 	}
 	if !permissionHandlerIncludesBoundedArtifacts(got.PermHandler) {
 		t.Fatalf("PermHandler = %T, want bounded artifact handler", got.PermHandler)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("phase-1-plan"); got != 0.001 {
+		t.Errorf("PhaseCost(phase-1-plan) = %v, want 0.001", got)
+	}
+	if len(updated.SessionCosts) != 1 {
+		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
+	}
+	cost := updated.SessionCosts[0]
+	if cost.SessionID != "test-plan-001-planreview-scope-01" {
+		t.Errorf("SessionID = %q, want test-plan-001-planreview-scope-01", cost.SessionID)
+	}
+	if cost.PhaseKey != "phase-1-plan" {
+		t.Errorf("PhaseKey = %q, want phase-1-plan", cost.PhaseKey)
+	}
+	if cost.ObserverPhase != "review" {
+		t.Errorf("ObserverPhase = %q, want review", cost.ObserverPhase)
+	}
+	if cost.CostUSD != 0.001 {
+		t.Errorf("CostUSD = %v, want 0.001", cost.CostUSD)
 	}
 }
 
@@ -1143,6 +1174,110 @@ func TestLatestCompletedPlanAttempt(t *testing.T) {
 			t.Errorf("expected 0, got %d", got)
 		}
 	})
+}
+
+func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, dir := range []string{workDir, phasePlanDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+	if err := WritePlanAttemptMeta(phasePlanDir, PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  "SUCCESS",
+		ReviewStatus: "CHANGES_REQUESTED",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md"), []byte("revise this plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePlanAttemptMeta(phasePlanDir, PlanAttemptMeta{
+		Attempt:     2,
+		AgentStatus: "FAILED",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotSessionID string
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:      f,
+			FeatureStore: store,
+			StateDir:     tmpDir,
+			WorkDir:      workDir,
+			MaxAttempts:  3,
+			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
+			},
+			SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+				gotSessionID = id
+				return nil, session.ErrShuttingDown
+			},
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Restarted plan",
+			Type:   "tdd-fill-in",
+			Goal:   "Retry failed provider sessions without changing the plan attempt",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "interrupted" {
+		t.Fatalf("FinalStatus = %q, want interrupted", result.FinalStatus)
+	}
+	if gotSessionID != "test-plan-001-phase-01-plan-02-retry-02" {
+		t.Fatalf("sessionID = %q, want test-plan-001-phase-01-plan-02-retry-02", gotSessionID)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PlanIteration != 2 {
+		t.Fatalf("PlanIteration = %d, want 2", updated.PlanIteration)
+	}
+}
+
+func TestPlanRetrySessionAttempt(t *testing.T) {
+	dir := t.TempDir()
+	if got := nextPlanSessionAttempt(dir, 2); got != 1 {
+		t.Fatalf("nextPlanSessionAttempt(no meta) = %d, want 1", got)
+	}
+	if got := planAttemptSessionID("feature-phase-01-plan-02", 1); got != "feature-phase-01-plan-02" {
+		t.Fatalf("planAttemptSessionID(first) = %q", got)
+	}
+	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: "FAILED"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextPlanSessionAttempt(dir, 2); got != 2 {
+		t.Fatalf("nextPlanSessionAttempt(legacy failed) = %d, want 2", got)
+	}
+	if got := planAttemptSessionID("feature-phase-01-plan-02", 2); got != "feature-phase-01-plan-02-retry-02" {
+		t.Fatalf("planAttemptSessionID(retry) = %q", got)
+	}
+	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, SessionAttempt: 2, AgentStatus: "FAILED"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextPlanSessionAttempt(dir, 2); got != 3 {
+		t.Fatalf("nextPlanSessionAttempt(recorded failed retry) = %d, want 3", got)
+	}
+	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextPlanSessionAttempt(dir, 2); got != 1 {
+		t.Fatalf("nextPlanSessionAttempt(success) = %d, want 1", got)
+	}
 }
 
 func TestLoadPriorAxisApprovals(t *testing.T) {
@@ -1406,9 +1541,10 @@ func TestFrozenSectionsDigest(t *testing.T) {
 func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	meta := PlanAttemptMeta{
-		Attempt:      2,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
+		Attempt:        2,
+		SessionAttempt: 3,
+		AgentStatus:    "SUCCESS",
+		ReviewStatus:   "CHANGES_REQUESTED",
 	}
 	if err := WritePlanAttemptMeta(dir, meta); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -1418,7 +1554,7 @@ func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read error: %v", err)
 	}
-	if got.Attempt != 2 || got.AgentStatus != "SUCCESS" || got.ReviewStatus != "CHANGES_REQUESTED" {
+	if got.Attempt != 2 || got.SessionAttempt != 3 || got.AgentStatus != "SUCCESS" || got.ReviewStatus != "CHANGES_REQUESTED" {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }

@@ -111,6 +111,22 @@ type CostCalculator interface {
 	ContextWindowForModel(model string) int
 }
 
+// SessionCostAdjustment is provider-specific cost and usage that is not carried
+// by the primary session result. For example, OpenCode stores Task subagents as
+// child sessions outside the parent ACP usage_update total.
+type SessionCostAdjustment struct {
+	TotalCostUSD float64
+	Usage        Usage
+	SessionIDs   []string
+}
+
+// SessionCostAugmenter is an optional Protocol capability for providers that
+// need to account for provider-managed child sessions in addition to the parent
+// session's terminal result.
+type SessionCostAugmenter interface {
+	AdditionalSessionCost(ctx context.Context) (SessionCostAdjustment, error)
+}
+
 // CatalogProvider exposes the model catalog populated by discovery.
 // Providers implementing this interface allow the Registry to perform
 // category-based model selection from the live catalog.

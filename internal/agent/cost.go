@@ -15,8 +15,11 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -24,10 +27,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+const additionalSessionCostTimeout = 2 * time.Second
+
 // SessionCost holds cost and usage data extracted from a session.
 type SessionCost struct {
 	TotalCostUSD float64
 	Usage        llm.Usage
+}
+
+type additionalSessionCostProvider interface {
+	AdditionalSessionCost(context.Context) (llm.SessionCostAdjustment, error)
 }
 
 // SessionCostMetadata identifies the single session behind an accounted cost.
@@ -49,7 +58,28 @@ func ExtractSessionCost(sess ports.SessionView) SessionCost {
 	if sess.Cost() != nil {
 		sc.TotalCostUSD = sess.Cost().TotalCostUSD
 	}
+	if provider, ok := sess.(additionalSessionCostProvider); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), additionalSessionCostTimeout)
+		defer cancel()
+		adjustment, err := provider.AdditionalSessionCost(ctx)
+		if err != nil {
+			log.Printf("session cost: additional provider cost unavailable for %s: %v", sess.ID(), err)
+		} else {
+			applySessionCostAdjustment(&sc, adjustment)
+		}
+	}
 	return sc
+}
+
+func applySessionCostAdjustment(cost *SessionCost, adjustment llm.SessionCostAdjustment) {
+	if cost == nil {
+		return
+	}
+	cost.TotalCostUSD += adjustment.TotalCostUSD
+	cost.Usage.InputTokens += adjustment.Usage.InputTokens
+	cost.Usage.OutputTokens += adjustment.Usage.OutputTokens
+	cost.Usage.CacheReadInputTokens += adjustment.Usage.CacheReadInputTokens
+	cost.Usage.CacheCreationInputTokens += adjustment.Usage.CacheCreationInputTokens
 }
 
 // toSessionUsage converts a SessionCost to an observe.SessionUsage.

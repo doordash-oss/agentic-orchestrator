@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -45,6 +46,57 @@ func TestExtractSessionCostFromResult(t *testing.T) {
 	if cost.TotalCostUSD != 2.75 {
 		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
 	}
+}
+
+func TestExtractSessionCostIncludesProviderAdditionalSessionCost(t *testing.T) {
+	base := mocks.NewMockSessionView("sess-parent", "feat-1")
+	base.CostVal = &llm.ResultMessage{TotalCostUSD: 2.00}
+	base.AccumulatedUsageVal = llm.Usage{
+		InputTokens:              100,
+		OutputTokens:             20,
+		CacheReadInputTokens:     300,
+		CacheCreationInputTokens: 4,
+	}
+	sess := &additionalCostSession{
+		MockSessionView: base,
+		adjustment: llm.SessionCostAdjustment{
+			TotalCostUSD: 0.75,
+			Usage: llm.Usage{
+				InputTokens:              10,
+				OutputTokens:             2,
+				CacheReadInputTokens:     30,
+				CacheCreationInputTokens: 1,
+			},
+		},
+	}
+
+	cost := ExtractSessionCost(sess)
+
+	if cost.TotalCostUSD != 2.75 {
+		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
+	}
+	if cost.Usage.InputTokens != 110 {
+		t.Errorf("Usage.InputTokens = %d, want 110", cost.Usage.InputTokens)
+	}
+	if cost.Usage.OutputTokens != 22 {
+		t.Errorf("Usage.OutputTokens = %d, want 22", cost.Usage.OutputTokens)
+	}
+	if cost.Usage.CacheReadInputTokens != 330 {
+		t.Errorf("Usage.CacheReadInputTokens = %d, want 330", cost.Usage.CacheReadInputTokens)
+	}
+	if cost.Usage.CacheCreationInputTokens != 5 {
+		t.Errorf("Usage.CacheCreationInputTokens = %d, want 5", cost.Usage.CacheCreationInputTokens)
+	}
+}
+
+type additionalCostSession struct {
+	*mocks.MockSessionView
+	adjustment llm.SessionCostAdjustment
+	err        error
+}
+
+func (s *additionalCostSession) AdditionalSessionCost(context.Context) (llm.SessionCostAdjustment, error) {
+	return s.adjustment, s.err
 }
 
 func TestImplementCostAttributionUsesStoreKey(t *testing.T) {

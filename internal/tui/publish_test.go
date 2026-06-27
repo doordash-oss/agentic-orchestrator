@@ -899,3 +899,235 @@ func TestPublishModel_StepCounter_TruthTable(t *testing.T) {
 		})
 	}
 }
+
+func TestPublishPRDescViewportShowsBodyInPreview(t *testing.T) {
+	var longBody strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&longBody, "Line %d\n", i)
+	}
+	m := newTestPublishModel("feat-1", "diff", "log", "title", longBody.String(), 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	if m.step != publishStepPRDesc {
+		t.Fatalf("expected PR desc step, got %d", m.step)
+	}
+	if m.editingBody {
+		t.Error("expected editingBody to be false initially")
+	}
+
+	// In preview mode, the body should be rendered via the viewport
+	view := m.View()
+	if !strings.Contains(view, "Line 1") {
+		t.Error("expected view to contain body content rendered via viewport")
+	}
+	if strings.Contains(view, "PR body (markdown)") {
+		t.Error("expected view to NOT contain textarea placeholder (body should be viewport, not textarea)")
+	}
+}
+
+func TestPublishPRDescScrollIndicatorVisible(t *testing.T) {
+	// Build a body longer than the viewport height (height-14 = 10) so scrolling is possible
+	var longBody strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&longBody, "Line %d\n", i)
+	}
+	m := newTestPublishModel("feat-1", "diff", "log", "title", longBody.String(), 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	view := m.View()
+	// Should show scroll percentage indicator (0% since we're at top)
+	if !strings.Contains(view, "  0%") {
+		t.Errorf("expected scroll percentage indicator in preview mode, view: %s", view)
+	}
+}
+
+func TestPublishPRDescEscFromEditReturnsToPreview(t *testing.T) {
+	// Build a body longer than the viewport height (height-14 = 10) so scrolling is possible
+	var longBody strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&longBody, "Line %d\n", i)
+	}
+	m := newTestPublishModel("feat-1", "diff", "log", "title", longBody.String(), 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	// Enter edit mode
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.editingBody {
+		t.Fatal("expected editingBody to be true after Tab")
+	}
+
+	// Edit the body
+	m.bodyInput.SetValue("updated body content\nwith multiple lines\n" + longBody.String())
+
+	// Press Esc — should return to preview, not exit
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if m.editingBody {
+		t.Error("expected editingBody to be false after Esc in edit mode")
+	}
+	if m.step != publishStepPRDesc {
+		t.Errorf("expected step to remain publishStepPRDesc, got %d", m.step)
+	}
+	if m.IsDone() {
+		t.Error("expected wizard NOT to be done after Esc from edit mode")
+	}
+
+	// Viewport should show updated content from top
+	if m.viewport.ScrollPercent() != 0 {
+		t.Error("expected viewport to be at top after returning to preview")
+	}
+}
+
+func TestPublishPRDescEscFromPreviewExits(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body content", 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	if m.editingBody {
+		t.Fatal("expected to be in preview mode initially")
+	}
+
+	// Press Esc in preview mode — should exit
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !m.IsDone() {
+		t.Error("expected wizard to be done after Esc from preview mode")
+	}
+}
+
+func TestPublishPRDescHelpTextPreviewMode(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	view := m.View()
+	if !strings.Contains(view, "[tab] Edit body") {
+		t.Errorf("expected preview-mode help text to contain '[tab] Edit body', view: %s", view)
+	}
+	if !strings.Contains(view, "[↑/↓] Scroll") {
+		t.Errorf("expected preview-mode help text to contain '[↑/↓] Scroll', view: %s", view)
+	}
+	if !strings.Contains(view, "[esc] Cancel") {
+		t.Errorf("expected preview-mode help text to contain '[esc] Cancel', view: %s", view)
+	}
+}
+
+func TestPublishPRDescHelpTextEditMode(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	// Enter edit mode
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+
+	view := m.View()
+	if !strings.Contains(view, "[tab] Title") {
+		t.Errorf("expected edit-mode help text to contain '[tab] Title', view: %s", view)
+	}
+	if !strings.Contains(view, "[esc] Preview") {
+		t.Errorf("expected edit-mode help text to contain '[esc] Preview', view: %s", view)
+	}
+	if strings.Contains(view, "[↑/↓] Scroll") {
+		t.Error("expected edit-mode help text NOT to contain '[↑/↓] Scroll'")
+	}
+}
+
+func TestPublishPRDescScrollKeysRoutedToViewport(t *testing.T) {
+	longBody := "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11\nLine 12\nLine 13\nLine 14\nLine 15\nLine 16\nLine 17\nLine 18\nLine 19\nLine 20"
+	m := newTestPublishModel("feat-1", "diff", "log", "title", longBody, 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	// Scroll down
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	pct := m.viewport.ScrollPercent()
+	if pct == 0 {
+		t.Error("expected viewport to scroll down after Down key in preview mode")
+	}
+}
+
+func TestPublishPRDescTabSwitchesToEditAndBack(t *testing.T) {
+	// Build a body longer than the viewport height (height-14 = 10) so scrolling is possible
+	var longBody strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&longBody, "Line %d\n", i)
+	}
+	m := newTestPublishModel("feat-1", "diff", "log", "title", longBody.String(), 80, 24)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	// Tab to edit mode
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !m.editingBody {
+		t.Error("expected editingBody=true after Tab")
+	}
+
+	// Edit body
+	m.bodyInput.SetValue("edited body\n" + longBody.String())
+
+	// Tab back to preview mode
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if m.editingBody {
+		t.Error("expected editingBody=false after second Tab")
+	}
+	if m.viewport.ScrollPercent() != 0 {
+		t.Error("expected viewport to reset to top after returning to preview")
+	}
+	if !strings.Contains(m.viewport.View(), "edited body") {
+		t.Error("expected viewport to show updated body content after returning to preview")
+	}
+}
+
+func TestPublishPRDescViewportSetOnDescGenerated(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "", "", 80, 24)
+
+	// Advance to PR desc step (triggers generation)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	if !m.generating {
+		t.Fatal("expected generating to be true")
+	}
+
+	// Simulate description generation
+	m, _ = m.Update(publishDescGeneratedMsg{title: "Generated Title", body: "Generated body\nwith multiple lines\n"})
+
+	if m.generating {
+		t.Error("expected generating to be false after desc generated")
+	}
+	if m.editingBody {
+		t.Error("expected editingBody to be false after desc generated")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Generated body") {
+		t.Errorf("expected viewport to show generated body, view: %s", view)
+	}
+}
+
+func TestPublishPRDescOtherStepsEscUnchanged(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+
+	// Esc from diff step should exit as before
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !m.IsDone() {
+		t.Error("expected Esc from diff step to exit wizard")
+	}
+}

@@ -255,6 +255,8 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 		m.titleInput.Focus()
 		m.bodyInput.SetValue(msg.body)
 		m.editingBody = false
+		m.viewport.SetContent(m.bodyInput.Value())
+		m.viewport.GotoTop()
 		return m, textinput.Blink
 
 	case tea.KeyPressMsg:
@@ -286,6 +288,15 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, key.NewBinding(key.WithKeys("esc"))):
+			if m.step == publishStepPRDesc && m.editingBody {
+				// Return to preview mode without exiting the wizard
+				m.editingBody = false
+				m.bodyInput.Blur()
+				m.titleInput.Focus()
+				m.viewport.SetContent(m.bodyInput.Value())
+				m.viewport.GotoTop()
+				return m, textinput.Blink
+			}
 			m.step = publishStepDone
 			return m, nil
 		case key.Matches(msg, key.NewBinding(key.WithKeys("tab"))):
@@ -299,6 +310,8 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 				}
 				m.bodyInput.Blur()
 				m.titleInput.Focus()
+				m.viewport.SetContent(m.bodyInput.Value())
+				m.viewport.GotoTop()
 				return m, textinput.Blink
 			}
 		case key.Matches(msg, keys.Enter):
@@ -313,7 +326,7 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 			}
 		}
 
-		if m.step == publishStepDiff || m.step == publishStepCommits {
+		if m.step == publishStepDiff || m.step == publishStepCommits || (m.step == publishStepPRDesc && !m.editingBody) {
 			var cmd tea.Cmd
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
@@ -333,6 +346,11 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 		m.height = msg.Height
 		m.viewport.SetWidth(max(msg.Width-6, 40))
 		m.viewport.SetHeight(max(msg.Height-8, 10))
+		// Body viewport uses the same dimensions as bodyInput when on PR desc step
+		if m.step == publishStepPRDesc {
+			m.viewport.SetWidth(max(msg.Width-8, 40))
+			m.viewport.SetHeight(max(msg.Height-14, 8))
+		}
 		m.bodyInput.SetWidth(max(msg.Width-8, 40))
 		m.bodyInput.SetHeight(max(msg.Height-14, 8))
 	}
@@ -377,6 +395,8 @@ func (m PublishModel) advanceStep() (PublishModel, tea.Cmd) {
 		m.titleInput.Focus()
 		m.bodyInput.SetValue(m.prBody)
 		m.editingBody = false
+		m.viewport.SetContent(m.bodyInput.Value())
+		m.viewport.GotoTop()
 		return m, textinput.Blink
 	case publishStepPRDesc:
 		m.prTitle = m.titleInput.Value()
@@ -618,8 +638,10 @@ func (m PublishModel) View() string {
 		title = "PR Description"
 		if m.generating {
 			content = m.spinnerView + " Generating PR description..."
-		} else {
+		} else if m.editingBody {
 			content = "Title: " + m.titleInput.View() + "\n\nBody:\n" + m.bodyInput.View()
+		} else {
+			content = "Title: " + m.titleInput.View() + "\n\nBody:\n" + m.viewport.View()
 		}
 
 	case publishStepConfirm:
@@ -658,7 +680,7 @@ func (m PublishModel) View() string {
 	b.WriteString(" " + strings.ReplaceAll(box, "\n", "\n "))
 
 	// Scroll indicator for viewport steps
-	if m.step == publishStepDiff || m.step == publishStepCommits {
+	if m.step == publishStepDiff || m.step == publishStepCommits || (m.step == publishStepPRDesc && !m.editingBody && !m.generating) {
 		pct := m.viewport.ScrollPercent()
 		b.WriteString("\n")
 		b.WriteString(MutedStyle.Render(fmt.Sprintf("  %3.0f%%", pct*100)))
@@ -669,6 +691,12 @@ func (m PublishModel) View() string {
 		b.WriteString(MutedStyle.Render(" Publishing in progress..."))
 	} else if m.step == publishStepRepoSelect {
 		b.WriteString(KeyHelpStyle.Render(" [↑/↓] Select   [enter] Confirm   [esc] Cancel"))
+	} else if m.step == publishStepPRDesc {
+		if m.editingBody {
+			b.WriteString(KeyHelpStyle.Render(" [tab] Title   [esc] Preview"))
+		} else {
+			b.WriteString(KeyHelpStyle.Render(" [tab] Edit body   [enter] Next   [↑/↓] Scroll   [esc] Cancel"))
+		}
 	} else {
 		b.WriteString(KeyHelpStyle.Render(" [enter] Next   [esc] Cancel   [↑/↓] Scroll"))
 	}

@@ -1030,7 +1030,7 @@ type captureSink struct {
 }
 
 func newCaptureSink() *captureSink {
-	return &captureSink{done: make(chan struct{})}
+	return &captureSink{done: make(chan struct{}, 1)}
 }
 
 func (c *captureSink) Write(p []byte) (int, error) {
@@ -1054,9 +1054,9 @@ func (c *captureSink) contents() string {
 	return c.buf.String()
 }
 
-// waitForWrite blocks until the sink sees another write or the timeout
-// elapses. Drains any queued notifications up front so callers can issue
-// an action and then wait for the resulting write without racing.
+// waitForWrite blocks until the sink sees a write or the timeout elapses. The
+// sink retains one pending notification so callers do not race when the write
+// lands immediately after the triggering action.
 func (c *captureSink) waitForWrite(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	select {
@@ -1064,6 +1064,15 @@ func (c *captureSink) waitForWrite(t *testing.T, timeout time.Duration) {
 	case <-time.After(timeout):
 		t.Fatalf("timed out waiting for stdin write")
 	}
+}
+
+func TestCaptureSinkWaitForWriteObservesAlreadyCompletedWrite(t *testing.T) {
+	sink := newCaptureSink()
+	if _, err := sink.Write([]byte("already written")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	sink.waitForWrite(t, 10*time.Millisecond)
 }
 
 // attachCaptureSink installs a captureSink as the session's stdin. Returns

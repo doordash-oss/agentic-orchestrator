@@ -262,6 +262,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 		var (
 			iterDir      string
+			sessionID    string
 			agentStatus  string
 			duration     time.Duration
 			cost         SessionCost
@@ -400,7 +401,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			sessOpts.PermCacheScope = permRepoName
 
 			// Start session in interactive mode
-			var sessionID string
 			if cfg.Feature.CurrentRoadmapPhase > 0 {
 				sessionID = fmt.Sprintf("%s-phase-%02d-impl", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
 			} else {
@@ -543,7 +543,11 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		// Accumulate iteration cost into the latest active timing key rather
 		// than the initial config snapshot, which may be stale after phase
 		// transitions such as plan -> implement.
-		_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", cost)
+		_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: "implement",
+			RepoName:      cfg.RepoName,
+		})
 
 		// Handle based on agent status
 		if agentStatus == agentStatusMissingMarker {
@@ -1031,6 +1035,7 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	reviewID += fmt.Sprintf("-%02d", iteration)
 	helper := &PhaseRunner{
 		SessionManager: sm,
+		FeatureStore:   cfg.FeatureStore,
 		StateDir:       cfg.StateDir,
 		SkillsDir:      cfg.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,

@@ -917,15 +917,23 @@ done
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
+	store := feature.NewStore(filepath.Join(tmpDir, "store"))
+	f := &feature.Feature{
+		ID:              "test-plan-001",
+		Name:            "Test Plan Feature",
+		RiskLevel:       feature.RiskMedium,
+		Status:          feature.StatusPlanning,
+		ActiveTimingKey: "phase-1-plan",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
 	cfg := PlanLoopConfig{
-		Feature: &feature.Feature{
-			ID:            "test-plan-001",
-			Name:          "Test Plan Feature",
-			RiskLevel:     feature.RiskMedium,
-			SchemaVersion: feature.SchemaVersionCurrent,
-		},
-		StateDir: tmpDir,
-		WorkDir:  workDir,
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     tmpDir,
+		WorkDir:      workDir,
 		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			got = opts
 			return []string{"bash", criticScript}, nil, &session.SessionOpts{
@@ -969,6 +977,29 @@ done
 	}
 	if !permissionHandlerIncludesBoundedArtifacts(got.PermHandler) {
 		t.Fatalf("PermHandler = %T, want bounded artifact handler", got.PermHandler)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("phase-1-plan"); got != 0.001 {
+		t.Errorf("PhaseCost(phase-1-plan) = %v, want 0.001", got)
+	}
+	if len(updated.SessionCosts) != 1 {
+		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
+	}
+	cost := updated.SessionCosts[0]
+	if cost.SessionID != "test-plan-001-planreview-scope-01" {
+		t.Errorf("SessionID = %q, want test-plan-001-planreview-scope-01", cost.SessionID)
+	}
+	if cost.PhaseKey != "phase-1-plan" {
+		t.Errorf("PhaseKey = %q, want phase-1-plan", cost.PhaseKey)
+	}
+	if cost.ObserverPhase != "review" {
+		t.Errorf("ObserverPhase = %q, want review", cost.ObserverPhase)
+	}
+	if cost.CostUSD != 0.001 {
+		t.Errorf("CostUSD = %v, want 0.001", cost.CostUSD)
 	}
 }
 

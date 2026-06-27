@@ -2422,27 +2422,7 @@ func (m AppModel) handleSDKEvent(msg SDKSessionEventMsg) (tea.Model, tea.Cmd) {
 				}
 
 				if registryOwnedSingleShotPhase(phase) {
-					if sess != nil {
-						cost := agent.ExtractSessionCost(sess)
-						if cost.TotalCostUSD > 0 {
-							_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
-								f.AddPhaseCost(phase.DirName(), cost.TotalCostUSD)
-								return nil
-							})
-						}
-					}
 					return m.completeRegistryOwnedSingleShotPhase(fid, phase, evt.SessionID, sess)
-				}
-
-				// Capture cost from session's ResultMessage
-				if sess != nil {
-					cost := agent.ExtractSessionCost(sess)
-					if cost.TotalCostUSD > 0 {
-						_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
-							f.AddPhaseCost(phase.DirName(), cost.TotalCostUSD)
-							return nil
-						})
-					}
 				}
 
 				// Stop session gracefully in background
@@ -2704,18 +2684,6 @@ func (m AppModel) handleSessionDone(msg SessionDoneTUIMsg) (tea.Model, tea.Cmd) 
 	for key := range m.lastNotifyTime {
 		if key.featureID == fid {
 			delete(m.lastNotifyTime, key)
-		}
-	}
-
-	// Capture cost from session's ResultMessage.
-	if sess != nil && (phase == feature.PhaseResearch || phase == feature.PhaseKnowledgeBase ||
-		phase == feature.PhaseInquire || phase == feature.PhaseDesign) {
-		cost := agent.ExtractSessionCost(sess)
-		if cost.TotalCostUSD > 0 {
-			_ = m.featureManager.Store.Modify(fid, func(f *feature.Feature) error {
-				f.AddPhaseCost(phase.DirName(), cost.TotalCostUSD)
-				return nil
-			})
 		}
 	}
 

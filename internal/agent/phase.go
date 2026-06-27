@@ -224,6 +224,10 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		cost := ExtractSessionCost(sess)
 		usage := toSessionUsage(cost)
 		duration := time.Since(sessionStart)
+		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, cfg.Phase.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: cfg.Phase.String(),
+		})
 		pr.Observer.SessionEnded(sessionCtx, cfg.Phase.String(), sessionID, "", usage, duration, sessionErrFromStatus(sess))
 	})
 
@@ -382,7 +386,12 @@ func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionC
 				if key == "" {
 					key = "implement"
 				}
-				feat.AddPhaseCost(key, cost.TotalCostUSD)
+				feat.RecordSessionCost(feature.SessionCostRecord{
+					SessionID:     sessionID,
+					PhaseKey:      key,
+					ObserverPhase: feature.PhaseImplement.String(),
+					CostUSD:       cost.TotalCostUSD,
+				})
 				return nil
 			})
 		}
@@ -629,6 +638,11 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	sessionStart := time.Now()
 	sess.AddCleanupFunc(func() {
 		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, feature.PhaseKnowledgeBase.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseKnowledgeBase.String(),
+			RepoName:      repo.Name,
+		})
 		pr.Observer.SessionEnded(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, repo.Name, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 	})
 

@@ -637,6 +637,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
 	helper := &PhaseRunner{
 		SessionManager: sm,
+		FeatureStore:   cfg.FeatureStore,
 		StateDir:       cfg.StateDir,
 		SkillsDir:      cfg.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,
@@ -1547,7 +1548,13 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 			cost := ExtractSessionCost(sess)
 			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					f.AddPhaseCost("plan", cost.TotalCostUSD)
+					f.RecordSessionCost(feature.SessionCostRecord{
+						SessionID:     sessionID,
+						PhaseKey:      "plan",
+						ObserverPhase: "plan",
+						RepoName:      cfg.RepoName,
+						CostUSD:       cost.TotalCostUSD,
+					})
 					return nil
 				})
 			}
@@ -1930,7 +1937,13 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
 				costKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					f.AddPhaseCost(costKey, cost.TotalCostUSD)
+					f.RecordSessionCost(feature.SessionCostRecord{
+						SessionID:     sessionID,
+						PhaseKey:      costKey,
+						ObserverPhase: "plan",
+						RepoName:      cfg.RepoName,
+						CostUSD:       cost.TotalCostUSD,
+					})
 					return nil
 				})
 			}

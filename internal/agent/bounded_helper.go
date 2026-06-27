@@ -202,7 +202,11 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 
 	defer func() {
 		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeature(pr.FeatureStore, cfg.featureID, observerPhase, cost)
+		_ = accumulateSessionCostToFeature(pr.FeatureStore, cfg.featureID, observerPhase, cost, SessionCostMetadata{
+			SessionID:     cfg.sessionID,
+			ObserverPhase: observerPhase,
+			RepoName:      cfg.repoName,
+		})
 		if pr.Observer != nil {
 			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}

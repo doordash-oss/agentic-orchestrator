@@ -16,6 +16,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -345,6 +346,20 @@ func estimateInitialPromptContextTokens(prompt string) int {
 func (s *Session) MessageLog() ports.MessageLog { return s.messageLog }
 func (s *Session) Cost() *llm.ResultMessage     { return s.cost }
 func (s *Session) StatusCh() <-chan string      { return s.statusCh }
+
+// AdditionalSessionCost returns provider-specific child-session cost that is
+// not included in the primary result cost. Providers without this optional
+// capability return a zero adjustment.
+func (s *Session) AdditionalSessionCost(ctx context.Context) (llm.SessionCostAdjustment, error) {
+	if s == nil || s.protocol == nil {
+		return llm.SessionCostAdjustment{}, nil
+	}
+	augmenter, ok := s.protocol.(llm.SessionCostAugmenter)
+	if !ok {
+		return llm.SessionCostAdjustment{}, nil
+	}
+	return augmenter.AdditionalSessionCost(ctx)
+}
 
 // LastControlRequest returns the most recently arrived pending
 // control_request, or nil if none are outstanding. Preserves the historical

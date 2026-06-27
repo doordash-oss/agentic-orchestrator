@@ -1131,3 +1131,62 @@ func TestPublishPRDescOtherStepsEscUnchanged(t *testing.T) {
 		t.Error("expected Esc from diff step to exit wizard")
 	}
 }
+
+func TestPublishRefineKey_EmitsOpenDescriptionChatMsg(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff content", "commit log", "My Title", "My Body", 120, 40)
+
+	// Advance to PR desc step
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+
+	if m.step != publishStepPRDesc {
+		t.Fatalf("expected PR desc step, got %d", m.step)
+	}
+
+	// Press 'r' to refine
+	m, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
+	if cmd == nil {
+		t.Fatal("expected a cmd from refine key")
+	}
+	msg := cmd()
+	openMsg, ok := msg.(OpenDescriptionChatMsg)
+	if !ok {
+		t.Fatalf("expected OpenDescriptionChatMsg, got %T", msg)
+	}
+	if openMsg.ctx.FeatureID != "feat-1" {
+		t.Errorf("ctx.FeatureID = %q, want 'feat-1'", openMsg.ctx.FeatureID)
+	}
+	if openMsg.ctx.CurrentTitle != "My Title" {
+		t.Errorf("ctx.CurrentTitle = %q, want 'My Title'", openMsg.ctx.CurrentTitle)
+	}
+	if openMsg.ctx.CurrentBody != "My Body" {
+		t.Errorf("ctx.CurrentBody = %q, want 'My Body'", openMsg.ctx.CurrentBody)
+	}
+	if openMsg.ctx.DiffSummary != "diff content" {
+		t.Errorf("ctx.DiffSummary = %q, want 'diff content'", openMsg.ctx.DiffSummary)
+	}
+}
+
+func TestPublishRefineKey_GeneratingIsNoOp(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
+	m.step = publishStepPRDesc
+	m.generating = true
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
+	if cmd != nil {
+		t.Fatal("expected nil cmd when generating")
+	}
+}
+
+func TestPublishRefineKey_HelpText(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
+	m.step = publishStepPRDesc
+
+	view := m.View()
+	if !strings.Contains(view, "Refine with AI") {
+		t.Errorf("expected help text to contain 'Refine with AI', got: %s", view)
+	}
+	if !strings.Contains(view, "[r]") {
+		t.Errorf("expected help text to contain '[r]', got: %s", view)
+	}
+}

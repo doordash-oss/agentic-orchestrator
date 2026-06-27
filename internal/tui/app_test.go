@@ -10742,3 +10742,257 @@ func TestBuildRepoTabs_MultiRepo_TabWithoutSession(t *testing.T) {
 		t.Errorf("tabs[0].sess = non-nil, want nil for multi-repo with no live session")
 	}
 }
+
+func TestAppDescriptionChat_OpenDescriptionChatMsg(t *testing.T) {
+	m, _ := newTestAppModel(t)
+	m.publish = newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.publish.step = publishStepPRDesc
+
+	// Pre-set general chat state to verify isolation
+	m.chat = NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
+	m.chatReady = true
+
+	msg := OpenDescriptionChatMsg{ctx: DescriptionChatContext{
+		FeatureID:    "feat-1",
+		RepoName:     "test-repo",
+		CurrentTitle: "title",
+		CurrentBody:  "body",
+		DiffSummary:  "diff",
+	}}
+	updated, _ := m.Update(msg)
+	app := updated.(AppModel)
+
+	if app.currentView != ViewDescriptionChat {
+		t.Errorf("currentView = %v, want ViewDescriptionChat", app.currentView)
+	}
+	if app.descChat.ctx.FeatureID != "feat-1" {
+		t.Errorf("descChat.ctx.FeatureID = %q, want 'feat-1'", app.descChat.ctx.FeatureID)
+	}
+	if app.chatReady != true {
+		t.Error("general chat chatReady should be unchanged")
+	}
+}
+
+func TestAppDescriptionChat_PublishDescriptionUpdatedMsg(t *testing.T) {
+	m, _ := newTestAppModel(t)
+	m.publish = newTestPublishModel("feat-1", "diff", "log", "Old Title", "Old Body", 80, 24)
+	m.publish.step = publishStepPRDesc
+	m.currentView = ViewDescriptionChat
+
+	msg := PublishDescriptionUpdatedMsg{title: "New Title", body: "New Body"}
+	updated, _ := m.Update(msg)
+	app := updated.(AppModel)
+
+	if app.currentView != ViewPublish {
+		t.Errorf("currentView = %v, want ViewPublish", app.currentView)
+	}
+	if app.publish.prTitle != "New Title" {
+		t.Errorf("prTitle = %q, want 'New Title'", app.publish.prTitle)
+	}
+	if app.publish.prBody != "New Body" {
+		t.Errorf("prBody = %q, want 'New Body'", app.publish.prBody)
+	}
+	if app.publish.titleInput.Value() != "New Title" {
+		t.Errorf("titleInput = %q, want 'New Title'", app.publish.titleInput.Value())
+	}
+	if app.publish.bodyInput.Value() != "New Body" {
+		t.Errorf("bodyInput = %q, want 'New Body'", app.publish.bodyInput.Value())
+	}
+}
+
+func TestAppDescriptionChat_DescriptionChatExitMsg(t *testing.T) {
+	m, _ := newTestAppModel(t)
+	m.publish = newTestPublishModel("feat-1", "diff", "log", "Old Title", "Old Body", 80, 24)
+	m.publish.step = publishStepPRDesc
+	m.currentView = ViewDescriptionChat
+
+	msg := DescriptionChatExitMsg{}
+	updated, _ := m.Update(msg)
+	app := updated.(AppModel)
+
+	if app.currentView != ViewPublish {
+		t.Errorf("currentView = %v, want ViewPublish", app.currentView)
+	}
+	if app.publish.prTitle != "Old Title" {
+		t.Errorf("prTitle = %q, want 'Old Title'", app.publish.prTitle)
+	}
+	if app.publish.prBody != "Old Body" {
+		t.Errorf("prBody = %q, want 'Old Body'", app.publish.prBody)
+	}
+}
+
+func TestAppDescriptionChat_ChatUnchanged(t *testing.T) {
+	m, _ := newTestAppModel(t)
+	m.publish = newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.publish.step = publishStepPRDesc
+
+	m.chat = NewChatModel(80, 24, nil, "/tmp", "test", nil, "", "")
+	m.chatReady = true
+
+	msg := OpenDescriptionChatMsg{ctx: DescriptionChatContext{
+		FeatureID: "feat-1",
+	}}
+	updated, _ := m.Update(msg)
+	app := updated.(AppModel)
+
+	if app.chatReady != true {
+		t.Error("general chat chatReady should be unchanged")
+	}
+	if app.chatOpen {
+		t.Error("general chat chatOpen should be unchanged (false)")
+	}
+	if app.currentView != ViewDescriptionChat {
+		t.Errorf("currentView = %v, want ViewDescriptionChat", app.currentView)
+	}
+}
+
+func TestAppDescriptionChat_EndToEnd(t *testing.T) {
+	m, _ := newTestAppModel(t)
+	m.publish = newTestPublishModel("feat-1", "diff", "log", "Original Title", "Original Body", 80, 24)
+	m.publish.step = publishStepPRDesc
+	m.currentView = ViewPublish
+
+	// Step 1: Press 'r' in PR desc step — PublishModel returns OpenDescriptionChatMsg cmd
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
+	app := updated.(AppModel)
+	if app.currentView != ViewPublish {
+		t.Fatalf("expected ViewPublish after 'r' (cmd not yet applied), got %v", app.currentView)
+	}
+	if cmd == nil {
+		t.Fatal("expected cmd after 'r' key")
+	}
+	msg := cmd()
+	openMsg, ok := msg.(OpenDescriptionChatMsg)
+	if !ok {
+		t.Fatalf("expected OpenDescriptionChatMsg, got %T", msg)
+	}
+
+	// Apply the OpenDescriptionChatMsg to transition to ViewDescriptionChat
+	updated, _ = app.Update(openMsg)
+	app = updated.(AppModel)
+	if app.currentView != ViewDescriptionChat {
+		t.Fatalf("expected ViewDescriptionChat after applying OpenDescriptionChatMsg, got %v", app.currentView)
+	}
+
+	// Step 2: Inject chatMsgsMsg with UpdatePRDescription tool
+	toolInput := map[string]interface{}{"title": "Refined Title", "body": "Refined Body"}
+	rawInput, _ := json.Marshal(toolInput)
+	chatMsg := chatMsgsMsg{
+		messages: []llm.SDKMessage{
+			{
+				Type: "assistant",
+				Assistant: &llm.AssistantMessage{
+					Message: llm.ConversationMsg{
+						Role: "assistant",
+						Content: []llm.ContentBlock{
+							{Type: "tool_use", ID: "tool_1", Name: "UpdatePRDescription", Input: rawInput},
+						},
+					},
+				},
+			},
+		},
+	}
+	updated, cmd = app.Update(chatMsg)
+	app = updated.(AppModel)
+	if cmd == nil {
+		t.Fatal("expected cmd from chatMsgsMsg")
+	}
+	msg = cmd()
+	upd, ok := msg.(PublishDescriptionUpdatedMsg)
+	if !ok {
+		t.Fatalf("expected PublishDescriptionUpdatedMsg, got %T", msg)
+	}
+
+	// Step 3: Apply the update via AppModel.Update
+	updated, _ = app.Update(upd)
+	app = updated.(AppModel)
+	if app.currentView != ViewPublish {
+		t.Errorf("expected ViewPublish after update, got %v", app.currentView)
+	}
+	if app.publish.prTitle != "Refined Title" {
+		t.Errorf("prTitle = %q, want 'Refined Title'", app.publish.prTitle)
+	}
+	if app.publish.prBody != "Refined Body" {
+		t.Errorf("prBody = %q, want 'Refined Body'", app.publish.prBody)
+	}
+	if app.publish.titleInput.Value() != "Refined Title" {
+		t.Errorf("titleInput = %q, want 'Refined Title'", app.publish.titleInput.Value())
+	}
+	if app.publish.bodyInput.Value() != "Refined Body" {
+		t.Errorf("bodyInput = %q, want 'Refined Body'", app.publish.bodyInput.Value())
+	}
+
+	// Step 4: Second refine cycle with updated values
+	updated, cmd = app.Update(tea.KeyPressMsg{Code: 'r'})
+	app = updated.(AppModel)
+	if app.currentView != ViewPublish {
+		t.Fatalf("expected ViewPublish after second 'r' (cmd not yet applied), got %v", app.currentView)
+	}
+	if cmd == nil {
+		t.Fatal("expected cmd after second 'r' key")
+	}
+	msg = cmd()
+	openMsg, ok = msg.(OpenDescriptionChatMsg)
+	if !ok {
+		t.Fatalf("expected OpenDescriptionChatMsg on second refine, got %T", msg)
+	}
+	if openMsg.ctx.CurrentTitle != "Refined Title" {
+		t.Errorf("second refine ctx.CurrentTitle = %q, want 'Refined Title'", openMsg.ctx.CurrentTitle)
+	}
+	if openMsg.ctx.CurrentBody != "Refined Body" {
+		t.Errorf("second refine ctx.CurrentBody = %q, want 'Refined Body'", openMsg.ctx.CurrentBody)
+	}
+}
+
+func TestAppDescriptionChat_EscWithoutApply(t *testing.T) {
+	m, _ := newTestAppModel(t)
+	m.publish = newTestPublishModel("feat-1", "diff", "log", "Original Title", "Original Body", 80, 24)
+	m.publish.step = publishStepPRDesc
+	m.currentView = ViewPublish
+
+	// Press 'r' to open description chat — PublishModel returns cmd
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
+	app := updated.(AppModel)
+	if app.currentView != ViewPublish {
+		t.Fatalf("expected ViewPublish after 'r' (cmd not yet applied), got %v", app.currentView)
+	}
+	if cmd == nil {
+		t.Fatal("expected cmd after 'r' key")
+	}
+	msg := cmd()
+	openMsg, ok := msg.(OpenDescriptionChatMsg)
+	if !ok {
+		t.Fatalf("expected OpenDescriptionChatMsg, got %T", msg)
+	}
+
+	// Apply the cmd to transition to ViewDescriptionChat
+	updated, _ = app.Update(openMsg)
+	app = updated.(AppModel)
+	if app.currentView != ViewDescriptionChat {
+		t.Fatalf("expected ViewDescriptionChat, got %v", app.currentView)
+	}
+
+	// Press Esc to exit without applying — DescriptionChatModel returns cmd
+	updated, cmd = app.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	app = updated.(AppModel)
+	if cmd == nil {
+		t.Fatal("expected cmd from esc")
+	}
+	msg = cmd()
+	if _, ok := msg.(DescriptionChatExitMsg); !ok {
+		t.Fatalf("expected DescriptionChatExitMsg, got %T", msg)
+	}
+
+	// Apply the exit cmd
+	updated, _ = app.Update(msg)
+	app = updated.(AppModel)
+	if app.currentView != ViewPublish {
+		t.Errorf("expected ViewPublish after esc, got %v", app.currentView)
+	}
+	if app.publish.prTitle != "Original Title" {
+		t.Errorf("prTitle = %q, want 'Original Title'", app.publish.prTitle)
+	}
+	if app.publish.prBody != "Original Body" {
+		t.Errorf("prBody = %q, want 'Original Body'", app.publish.prBody)
+	}
+}

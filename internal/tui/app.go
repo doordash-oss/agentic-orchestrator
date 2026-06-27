@@ -66,6 +66,7 @@ const (
 	ViewChat
 	ViewArtifactReview
 	ViewWelcome
+	ViewDescriptionChat
 )
 
 // RefreshFeaturesMsg triggers a feature list refresh.
@@ -386,6 +387,7 @@ type AppModel struct {
 	publish        PublishModel
 	attach         AttachModel
 	chat           ChatModel
+	descChat       DescriptionChatModel
 	welcome        WelcomeModel
 	artifactReview ArtifactReviewModel
 	chatReady      bool // true after first lazy init; persists across esc/reopen
@@ -825,6 +827,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.currentView == ViewChat {
 			m.chat, _ = m.chat.Update(msg)
 		}
+		if m.currentView == ViewDescriptionChat {
+			m.descChat, _ = m.descChat.Update(msg)
+		}
 		if m.helpOverlayActive {
 			m.helpOverlay = NewHelpOverlayModel(m.helpOverlay.context, msg.Width, msg.Height)
 		}
@@ -1216,6 +1221,50 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatOpen = false
 		m.dashboard.height = m.height
 		return m, nil
+
+	case DescriptionChatExitMsg:
+		m.currentView = ViewPublish
+		_ = m.sessionManager.StopSession(fmt.Sprintf("%s-desc-chat", m.publish.featureID))
+		return m, nil
+
+	case OpenDescriptionChatMsg:
+		ctx := msg.ctx
+		if ctx.DiffSummary == "" && m.publish.diff != "" {
+			ctx.DiffSummary = m.publish.diff
+		}
+		chatModelName := "sonnet"
+		if m.featureManager != nil && m.featureManager.Config != nil && m.featureManager.Config.Defaults.Models.Utilities != "" {
+			chatModelName = m.featureManager.Config.Defaults.Models.Utilities
+		}
+		var buildSession agent.BuildSessionFunc
+		var skillsDir string
+		if m.phaseRunner != nil {
+			buildSession = m.phaseRunner.BuildSession
+			skillsDir = m.phaseRunner.SkillsDir
+		}
+		m.descChat = NewDescriptionChatModel(
+			m.width, m.height,
+			m.sessionManager,
+			m.workspaceDir,
+			ctx,
+			buildSession,
+			chatModelName,
+			skillsDir,
+		)
+		m.currentView = ViewDescriptionChat
+		return m, textarea.Blink
+
+	case PublishDescriptionUpdatedMsg:
+		m.publish.prTitle = msg.title
+		m.publish.prBody = msg.body
+		m.publish.titleInput.SetValue(msg.title)
+		m.publish.bodyInput.SetValue(msg.body)
+		m.publish.editingBody = false
+		m.publish.viewport.SetContent(m.publish.bodyInput.Value())
+		m.publish.viewport.GotoTop()
+		m.currentView = ViewPublish
+		_ = m.sessionManager.StopSession(fmt.Sprintf("%s-desc-chat", m.publish.featureID))
+		return m, textinput.Blink
 
 	case publishExecuteResultMsg:
 		// Handle pull-rebase conflict — enter resolution loop instead of showing error
@@ -1800,6 +1849,8 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateArtifactReview(msg)
 		case ViewChat:
 			return m.updateChat(msg)
+		case ViewDescriptionChat:
+			return m.updateDescriptionChat(msg)
 		case ViewWelcome:
 			return m.updateWelcome(msg)
 		}
@@ -2091,6 +2142,8 @@ func (m AppModel) View() tea.View {
 		view = m.artifactReview.View()
 	case ViewChat:
 		view = m.chat.View()
+	case ViewDescriptionChat:
+		view = m.descChat.View()
 	case ViewWelcome:
 		view = m.welcome.View()
 	default:
@@ -5409,6 +5462,12 @@ func (m AppModel) updateChat(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m AppModel) updateDescriptionChat(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.descChat, cmd = m.descChat.Update(msg)
+	return m, cmd
+}
+
 func (m AppModel) updateWelcome(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.welcome, cmd = m.welcome.Update(msg)
@@ -6436,6 +6495,17 @@ func (m AppModel) forwardToActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.chatReady {
 			var cmd tea.Cmd
 			m.chat, cmd = m.chat.Update(msg)
+			return m, cmd
+		}
+	}
+	// Description-chat async messages must reach the descChat model when the
+	// description chat view is active so that streaming responses and recovery
+	// ticks are not dropped while the user is in that view.
+	if m.currentView == ViewDescriptionChat {
+		switch msg.(type) {
+		case chatMsgsMsg, chatDoneMsg, chatSessionStartedMsg, chatSendErrorMsg, chatRecoveryTickMsg:
+			var cmd tea.Cmd
+			m.descChat, cmd = m.descChat.Update(msg)
 			return m, cmd
 		}
 	}

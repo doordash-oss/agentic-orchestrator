@@ -314,6 +314,19 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 				m.viewport.GotoTop()
 				return m, textinput.Blink
 			}
+		case key.Matches(msg, key.NewBinding(key.WithKeys("r"))):
+			if m.step == publishStepPRDesc && !m.generating {
+				ctx := DescriptionChatContext{
+					FeatureID:    m.featureID,
+					RepoName:     m.repoName,
+					CurrentTitle: m.titleInput.Value(),
+					CurrentBody:  m.bodyInput.Value(),
+					DiffSummary:  m.diff,
+				}
+				return m, func() tea.Msg {
+					return OpenDescriptionChatMsg{ctx: ctx}
+				}
+			}
 		case key.Matches(msg, keys.Enter):
 			if m.step == publishStepPRDesc && !m.editingBody {
 				// Capture edited values before advancing
@@ -695,7 +708,7 @@ func (m PublishModel) View() string {
 		if m.editingBody {
 			b.WriteString(KeyHelpStyle.Render(" [tab] Title   [esc] Preview"))
 		} else {
-			b.WriteString(KeyHelpStyle.Render(" [tab] Edit body   [enter] Next   [↑/↓] Scroll   [esc] Cancel"))
+			b.WriteString(KeyHelpStyle.Render(" [tab] Edit body   [enter] Next   [r] Refine with AI   [↑/↓] Scroll   [esc] Cancel"))
 		}
 	} else {
 		b.WriteString(KeyHelpStyle.Render(" [enter] Next   [esc] Cancel   [↑/↓] Scroll"))

@@ -19,29 +19,28 @@ import (
 	"testing"
 )
 
-func TestBuildFinalReviewPrompt_DoesNotEmitDesignBlock(t *testing.T) {
+func TestBuildFinalReviewPrompt_EmitsApprovedDesignContext(t *testing.T) {
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
-		FeatureDescription:     "Build a thing",
-		ExitCriteria:           "tests pass",
-		DiffBase:               "main",
-		WorkDir:                "/tmp/work",
-		VerificationPath:       "/tmp/v.yaml",
-		Iteration:              1,
-		RoadmapPath:            "/tmp/roadmap.md",
+		FeatureDescription: "Build a thing",
+		ExitCriteria:       "tests pass",
+		DiffBase:           "main",
+		WorkDir:            "/tmp/work",
+		Iteration:          1,
+		RoadmapPath:        "/tmp/roadmap.md",
 		DesignArtifactPath: "/tmp/design.md",
-		FeedbackPath:           "/tmp/feedback.md",
+		FeedbackPath:       "/tmp/feedback.md",
 	})
-	if strings.Contains(prompt, "Design Reference") {
-		t.Errorf("final review prompt unexpectedly includes design block")
+	if !strings.Contains(prompt, "Approved design") {
+		t.Errorf("final review prompt missing approved design label:\n%s", prompt)
 	}
-	if strings.Contains(prompt, "/tmp/design.md") {
-		t.Errorf("final review prompt unexpectedly includes design path")
+	if !strings.Contains(prompt, "/tmp/design.md") {
+		t.Errorf("final review prompt missing design path:\n%s", prompt)
 	}
 }
 
 // TestBuildFinalReviewPrompt_NoPathNoBlock ensures backward compatibility:
 // when no design path is supplied, no block is emitted and the prompt
-// starts at "# Review Context" as before.
+// starts at the product-acceptance context.
 func TestBuildFinalReviewPrompt_NoPathNoBlock(t *testing.T) {
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
 		FeatureDescription: "Build a thing",
@@ -52,36 +51,34 @@ func TestBuildFinalReviewPrompt_NoPathNoBlock(t *testing.T) {
 	if strings.Contains(prompt, "Design Reference") {
 		t.Errorf("final review prompt unexpectedly includes design block when path is empty")
 	}
-	if !strings.HasPrefix(prompt, "# Review Context") {
+	if !strings.HasPrefix(prompt, "# Product Acceptance Context") {
 		t.Errorf("final review prompt header changed; first 40 chars: %q", prompt[:min(40, len(prompt))])
 	}
 }
 
-func TestBuildFinalReviewPromptLeavesOutputContractToRoleSpec(t *testing.T) {
+func TestBuildFinalReviewPromptNamesOnlyReviewFeedbackOutput(t *testing.T) {
 	feedbackPath := "/tmp/review-feedback.md"
 	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
-		FeatureDescription:  "Build a thing",
-		ExitCriteria:        "tests pass",
-		TestingContractPath: "/tmp/testing-contract.yaml",
-		VerificationPath:    "/tmp/verification-report.yaml",
-		Iteration:           1,
-		FeedbackPath:        feedbackPath,
+		FeatureDescription: "Build a thing",
+		ExitCriteria:       "tests pass",
+		Iteration:          1,
+		FeedbackPath:       feedbackPath,
 	})
 
-	if strings.Contains(prompt, feedbackPath) {
-		t.Fatalf("BuildFinalReviewPrompt() rendered RoleSpec-owned feedback path %q:\n%s", feedbackPath, prompt)
+	if !strings.Contains(prompt, feedbackPath) {
+		t.Fatalf("BuildFinalReviewPrompt() did not render sole feedback path %q:\n%s", feedbackPath, prompt)
 	}
-	if strings.Contains(prompt, "Feedback file") {
-		t.Fatalf("BuildFinalReviewPrompt() rendered output handoff prose:\n%s", prompt)
+	if strings.Contains(prompt, "verification-report.yaml") || strings.Contains(prompt, "testing-contract.yaml") {
+		t.Fatalf("BuildFinalReviewPrompt() rendered verification paperwork context:\n%s", prompt)
 	}
 }
 
 func TestBuildFinalFixPrompt_DoesNotEmitDesignBlock(t *testing.T) {
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
-		Feedback:               "fix this",
-		ExitCriteria:           "tests pass",
-		IterDir:                "/tmp/iter",
-		Iteration:              1,
+		Feedback:           "fix this",
+		ExitCriteria:       "tests pass",
+		IterDir:            "/tmp/iter",
+		Iteration:          1,
 		DesignArtifactPath: "/tmp/design.md",
 	})
 	if strings.Contains(prompt, "Design Reference") {

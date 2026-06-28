@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -225,8 +226,6 @@ func TestPriorImplementationEvidenceContextForRunListsReferencedEvidenceArtifact
 
 	ctx := priorImplementationEvidenceContextForRun(runDir)
 	for _, want := range []string{
-		filepath.Join(phaseDir, "plan", "phase-plan.md"),
-		filepath.Join(phaseDir, "testing-contract.yaml"),
 		filepath.Join(iterDir, "verification-report.yaml"),
 		iterDir,
 		filepath.Join(iterDir, "screenshots", "setup.png"),
@@ -236,12 +235,18 @@ func TestPriorImplementationEvidenceContextForRunListsReferencedEvidenceArtifact
 			t.Errorf("priorImplementationEvidenceContextForRun() missing %s: %+v", want, ctx)
 		}
 	}
+	for _, unwanted := range []string{
+		filepath.Join(phaseDir, "plan", "phase-plan.md"),
+		filepath.Join(phaseDir, "testing-contract.yaml"),
+	} {
+		if containsPriorEvidencePath(ctx, unwanted) {
+			t.Errorf("priorImplementationEvidenceContextForRun() includes phase-planning artifact %s: %+v", unwanted, ctx)
+		}
+	}
 }
 
 func containsPriorEvidencePath(ctx priorImplementationEvidenceContext, want string) bool {
 	for _, paths := range [][]string{
-		ctx.PlanPaths,
-		ctx.ContractPaths,
 		ctx.ReportPaths,
 		ctx.EvidenceRootDirs,
 		ctx.EvidenceArtifactPaths,
@@ -900,7 +905,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerMalformedVerdictTripsProtocolViolatio
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_ReviewerMissingVerificationReportTripsProtocolViolation(t *testing.T) {
+func TestRunFeatureFinalReviewLoop_ReviewerApprovedWithoutVerificationReportPasses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -910,12 +915,8 @@ rm -f "$_d/verification-report.yaml"
 %s`, artDir, testutil.WriteFinalReviewApproved(artDir))
 	})
 
-	if result.FinalStatus != "protocol_violation" {
-		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
-	}
-	if !strings.Contains(result.LastError, "final_reviewer @") ||
-		!strings.Contains(result.LastError, "verification-report.yaml") {
-		t.Fatalf("LastError = %q, want verification-report violation", result.LastError)
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 }
 
@@ -1034,11 +1035,10 @@ func TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits(t *testing.T) {
 	}
 }
 
-// TestRunFeatureFinalReviewLoop_TestingContractIsFeatureLevelWithRepoTags
-// verifies the loop persists a feature-level testing contract whose every
-// item carries a `repo:` field — the unification gate that replaces N
-// per-repo contracts.
-func TestRunFeatureFinalReviewLoop_TestingContractIsFeatureLevelWithRepoTags(t *testing.T) {
+// TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract verifies
+// Final Review is an autonomous product review whose only reviewer-authored
+// contract artifact is review-feedback.md.
+func TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -1075,27 +1075,8 @@ func TestRunFeatureFinalReviewLoop_TestingContractIsFeatureLevelWithRepoTags(t *
 	}
 
 	contractPath := filepath.Join(artDir, "testing-contract.yaml")
-	contract, err := ReadTestingContract(contractPath)
-	if err != nil {
-		t.Fatalf("read contract: %v", err)
-	}
-	// Plan-less mode: only baseline rows. Each repo gets a baseline set;
-	// no plan-source items.
-	gotApi := 0
-	gotWeb := 0
-	for _, item := range contract.Items {
-		switch item.Repo {
-		case "api":
-			gotApi++
-		case "web":
-			gotWeb++
-		}
-		if item.Source == testingContractPlanSource {
-			t.Errorf("plan-source item leaked into plan-less FR contract: %+v", item)
-		}
-	}
-	if gotApi == 0 || gotWeb == 0 {
-		t.Errorf("expected per-repo baseline rows for both repos; got api=%d web=%d", gotApi, gotWeb)
+	if _, err := os.Stat(contractPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("testing contract stat error = %v, want not exists", err)
 	}
 }
 

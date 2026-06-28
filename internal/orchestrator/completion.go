@@ -920,7 +920,7 @@ func (o *Orchestrator) routeMissingEvidencePlanRevision(featureID string, f *fea
 	if strings.TrimSpace(feedback) == "" {
 		feedback = agent.MissingEvidencePlanRevisionFeedback(nil)
 	}
-	targetRoadmapPhase := agent.MissingEvidenceTargetPhase(feedback, f.CurrentRoadmapPhase)
+	targetRoadmapPhase := f.CurrentRoadmapPhase
 	if f.TotalRoadmapPhases > 0 && targetRoadmapPhase > f.TotalRoadmapPhases {
 		targetRoadmapPhase = f.CurrentRoadmapPhase
 	}
@@ -1380,11 +1380,9 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
 	case "plan_revision_required":
-		if err := o.routeMissingEvidencePlanRevision(featureID, f, res.PlanRevisionFeedback); err != nil {
-			return err
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New("missing evidence requires phase-plan revision"))
-		return errPlanRevisionDispatched
+		errMsg := "final review requested unsupported phase-plan revision"
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
+		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	case "failed":
 		errMsg := res.LastError
 		if errMsg == "" {

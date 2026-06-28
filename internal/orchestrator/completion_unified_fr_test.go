@@ -195,7 +195,7 @@ func TestOrchestrator_OnMultiReposPassed_MediumRunsDeferredFinalReview(t *testin
 	}
 }
 
-func TestOrchestrator_OnMultiReposPassed_MissingEvidenceFinalReviewRoutesPhasePlanRevision(t *testing.T) {
+func TestOrchestrator_OnMultiReposPassed_FinalReviewPlanRevisionResultFailsWithoutPlanning(t *testing.T) {
 	tests := []struct {
 		name     string
 		pipeline feature.PipelineProfile
@@ -206,9 +206,6 @@ func TestOrchestrator_OnMultiReposPassed_MissingEvidenceFinalReviewRoutesPhasePl
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cpr := newCapturingPhaseRunner(t)
-			cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-				return nil, session.ErrShuttingDown
-			}
 
 			featureID := "feat-fr-missing-evidence-" + tt.name
 			roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
@@ -244,7 +241,19 @@ func TestOrchestrator_OnMultiReposPassed_MissingEvidenceFinalReviewRoutesPhasePl
 			lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
 			lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
 			lc.MarkCodeReadyFn = func(id string) error {
-				t.Fatalf("MarkCodeReady called after final-review missing-evidence rejection")
+				t.Fatalf("MarkCodeReady called after unsupported final-review plan revision")
+				return nil
+			}
+			lc.MarkFailedFn = func(id, failureType, lastError string) error {
+				if failureType != feature.FailureInfrastructure {
+					t.Fatalf("failureType = %q, want %q", failureType, feature.FailureInfrastructure)
+				}
+				if !strings.Contains(lastError, "final review requested unsupported phase-plan revision") {
+					t.Fatalf("lastError = %q, want unsupported phase-plan revision", lastError)
+				}
+				f.Status = feature.StatusFailed
+				f.FailureType = failureType
+				f.LastError = lastError
 				return nil
 			}
 			fs := newFeatureStore(f)
@@ -271,37 +280,33 @@ func TestOrchestrator_OnMultiReposPassed_MissingEvidenceFinalReviewRoutesPhasePl
 			if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
 				Phase:           feature.PhaseImplement,
 				MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
-			}); err != nil {
-				t.Fatalf("HandlePhaseCompletion() error = %v", err)
+			}); err == nil || !strings.Contains(err.Error(), "final review requested unsupported phase-plan revision") {
+				t.Fatalf("HandlePhaseCompletion() error = %v, want unsupported phase-plan revision", err)
 			}
 
-			if f.Status != feature.StatusPlanning {
-				t.Fatalf("feature status = %v, want Planning after final-review evidence repair dispatch", f.Status)
+			if f.Status != feature.StatusFailed {
+				t.Fatalf("feature status = %v, want Failed after unsupported final-review plan revision", f.Status)
 			}
-			if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
-				t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
+			if captured := cpr.capturedOpts; len(captured) != 0 {
+				t.Fatalf("unexpected phase-plan revision session captured: %+v", captured)
 			}
-			data, err := os.ReadFile(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md"))
-			if err != nil {
-				t.Fatalf("read validation feedback: %v", err)
+			if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md")); !os.IsNotExist(err) {
+				t.Fatalf("final review must not write phase-plan validation feedback, stat err = %v", err)
 			}
-			if got := string(data); !strings.Contains(got, "MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.") {
-				t.Fatalf("validation feedback missing reviewer-authored requirement:\n%s", got)
-			}
-			if latest := agent.LatestCompletedPlanAttempt(phasePlanDir); latest != 0 {
-				t.Fatalf("LatestCompletedPlanAttempt() = %d, want 0 after invalidating approved phase plan", latest)
+			if latest := agent.LatestCompletedPlanAttempt(phasePlanDir); latest != 1 {
+				t.Fatalf("LatestCompletedPlanAttempt() = %d, want approved attempt to remain intact", latest)
 			}
 		})
 	}
 }
 
-func TestOrchestrator_OnMultiReposPassed_FinalReviewMissingEvidenceTargetsEarlierRoadmapPhase(t *testing.T) {
+func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurrentRoadmapPhase(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return nil, session.ErrShuttingDown
 	}
 
-	featureID := "feat-fr-missing-evidence-earlier-phase"
+	featureID := "feat-impl-missing-evidence-current-phase"
 	roadmapPath := filepath.Join(cpr.stateDir, "roadmap.md")
 	writeRoadmap(t, roadmapPath)
 	unpub := false
@@ -339,12 +344,6 @@ func TestOrchestrator_OnMultiReposPassed_FinalReviewMissingEvidenceTargetsEarlie
 	}
 
 	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
-	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.MarkCodeReadyFn = func(id string) error {
-		t.Fatalf("MarkCodeReady called after final-review missing-evidence rejection")
-		return nil
-	}
 	lc.StartPlanningFn = func(id string) error {
 		f.Status = feature.StatusPlanning
 		return nil
@@ -358,37 +357,31 @@ func TestOrchestrator_OnMultiReposPassed_FinalReviewMissingEvidenceTargetsEarlie
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
 	}, orchestrator.Hooks{})
-	o.SetRunMultiRepoFinalReviewFn(func(ff *feature.Feature, _ ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		ch := make(chan *agent.OrchestratorResult, 1)
-		ch <- &agent.OrchestratorResult{
+	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
+		Phase: feature.PhaseImplement,
+		MultiRepoResult: &agent.OrchestratorResult{
 			FinalStatus:          "plan_revision_required",
 			PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.",
-		}
-		return ch, nil
-	})
-
-	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
-		Phase:           feature.PhaseImplement,
-		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"},
+		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
 
-	if f.CurrentRoadmapPhase != 1 {
-		t.Fatalf("CurrentRoadmapPhase = %d, want targeted phase 1", f.CurrentRoadmapPhase)
+	if f.CurrentRoadmapPhase != 2 {
+		t.Fatalf("CurrentRoadmapPhase = %d, want current phase 2", f.CurrentRoadmapPhase)
 	}
 	if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
 		t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
 	}
-	data, err := os.ReadFile(filepath.Join(phase1PlanDir, "attempt-01", "validation-feedback.md"))
+	data, err := os.ReadFile(filepath.Join(phase2PlanDir, "attempt-01", "validation-feedback.md"))
 	if err != nil {
-		t.Fatalf("read phase 1 validation feedback: %v", err)
+		t.Fatalf("read phase 2 validation feedback: %v", err)
 	}
 	if got := string(data); !strings.Contains(got, "MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.") {
-		t.Fatalf("phase 1 validation feedback missing targeted reviewer requirement:\n%s", got)
+		t.Fatalf("phase 2 validation feedback missing reviewer requirement:\n%s", got)
 	}
-	if _, err := os.Stat(filepath.Join(phase2PlanDir, "attempt-01", "validation-feedback.md")); !os.IsNotExist(err) {
-		t.Fatalf("phase 2 validation feedback should not be overwritten for a phase 1 repair, stat err = %v", err)
+	if _, err := os.Stat(filepath.Join(phase1PlanDir, "attempt-01", "validation-feedback.md")); !os.IsNotExist(err) {
+		t.Fatalf("phase 1 validation feedback should not be overwritten for a current-phase repair, stat err = %v", err)
 	}
 }
 

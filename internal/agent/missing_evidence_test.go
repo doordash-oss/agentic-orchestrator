@@ -97,6 +97,10 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 		"only required durable output is `review-feedback.md`",
 		"Reuse last-phase evidence when it still proves current behavior",
 		"Request changes only for product defects",
+		"## Severity Classification",
+		"**Critical/High**: Blocking — functionality broken, tests failing, exit criteria not met",
+		"**Medium/Low**: Non-blocking suggestions for improvement",
+		"Only Critical/High findings may trigger `CHANGES_REQUESTED`",
 	} {
 		if !strings.Contains(string(finalReview), want) {
 			t.Errorf("%s missing %q", finalReviewPath, want)
@@ -104,6 +108,16 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 	}
 	if strings.Contains(string(finalReview), "MISSING_EVIDENCE_REQUIREMENT") {
 		t.Errorf("%s should not mention MISSING_EVIDENCE_REQUIREMENT markers", finalReviewPath)
+	}
+	for _, unwanted := range []string{
+		"playable test mode",
+		"sprite",
+		"entity with no behavior script",
+		"collision behavior",
+	} {
+		if strings.Contains(string(finalReview), unwanted) {
+			t.Errorf("%s should use product-agnostic examples, found %q", finalReviewPath, unwanted)
+		}
 	}
 }
 

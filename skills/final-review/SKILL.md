@@ -55,9 +55,17 @@ Non-blocking suggestions may cover polish, maintainability, or minor UX issues.
 
 Findings should be product-centered and directly actionable for the fix agent. Examples:
 
-- `- **High**: The playable test mode crashes when loading an entity with no behavior script.`
-- `- **High**: The approved design requires sprite collision behavior, but the current build has no collision validation.`
-- `- **Medium**: The sprite editor save button label is ambiguous after an autosave completes.`
+- `- **High**: The primary create flow reports success but does not persist the new record.`
+- `- **High**: The API response shape no longer matches the client parser, so saved items disappear after refresh.`
+- `- **Medium**: The confirmation message is ambiguous after the operation succeeds.`
+
+## Severity Classification
+
+Classify each finding:
+- **Critical/High**: Blocking — functionality broken, tests failing, exit criteria not met
+- **Medium/Low**: Non-blocking suggestions for improvement
+
+Only Critical/High findings may trigger `CHANGES_REQUESTED`. Never request changes for Medium/Low-only feedback.
 
 ## Handoff Contract
 
@@ -68,7 +76,5 @@ Three `## ` sections, in this exact order, are mandatory:
 1. `## Findings` — one severity-prefixed bullet per blocking or non-blocking issue you raised. Use `- (none)` when you found no findings.
 2. `## Suggestions` — non-blocking improvements. Use `- (none)` when you have nothing to suggest.
 3. `## Verdict` — exactly one of `APPROVED` or `CHANGES_REQUESTED` on its own line.
-
-Only Critical/High findings may trigger `CHANGES_REQUESTED`. Never request changes for Medium/Low-only feedback.
 
 When `review-feedback.md` is complete, create the `phase_complete` marker named by the system prompt as the last action.

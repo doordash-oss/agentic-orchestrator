@@ -67,10 +67,9 @@ func TestMissingEvidenceRequirements_ParsePhaseQualifiedMarkers(t *testing.T) {
 
 func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	for _, path := range []string{
-		filepath.Join(repoRoot, "skills", "review-implementation", "SKILL.md"),
-		filepath.Join(repoRoot, "skills", "final-review", "SKILL.md"),
-	} {
+	implementationReviewPath := filepath.Join(repoRoot, "skills", "review-implementation", "SKILL.md")
+	finalReviewPath := filepath.Join(repoRoot, "skills", "final-review", "SKILL.md")
+	for _, path := range []string{implementationReviewPath, finalReviewPath} {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("ReadFile(%s) error = %v", path, err)
@@ -80,14 +79,39 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 			"Missing Visual / Behavioral Evidence Safety Net",
 			"rendered UI, TUI screens, web/mobile/native views, CLI output",
 			"Existing",
-			"MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>",
-			"MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>",
 			"Do not",
-			"phase-plan revision",
 		} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s missing %q", path, want)
 			}
+		}
+	}
+
+	implementationReview, err := os.ReadFile(implementationReviewPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", implementationReviewPath, err)
+	}
+	for _, want := range []string{
+		"MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>",
+		"MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>",
+		"phase-plan revision",
+	} {
+		if !strings.Contains(string(implementationReview), want) {
+			t.Errorf("%s missing %q", implementationReviewPath, want)
+		}
+	}
+
+	finalReview, err := os.ReadFile(finalReviewPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", finalReviewPath, err)
+	}
+	for _, want := range []string{
+		"Final Review never reopens planning",
+		"Do not emit `MISSING_EVIDENCE_REQUIREMENT` markers in Final Review feedback",
+		"fix agent should capture the missing evidence artifacts",
+	} {
+		if !strings.Contains(string(finalReview), want) {
+			t.Errorf("%s missing %q", finalReviewPath, want)
 		}
 	}
 }

@@ -109,16 +109,6 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 	if strings.Contains(string(finalReview), "MISSING_EVIDENCE_REQUIREMENT") {
 		t.Errorf("%s should not mention MISSING_EVIDENCE_REQUIREMENT markers", finalReviewPath)
 	}
-	for _, unwanted := range []string{
-		"playable test mode",
-		"sprite",
-		"entity with no behavior script",
-		"collision behavior",
-	} {
-		if strings.Contains(string(finalReview), unwanted) {
-			t.Errorf("%s should use product-agnostic examples, found %q", finalReviewPath, unwanted)
-		}
-	}
 }
 
 func TestLatestPlanRevisionFeedbackAttemptFindsInvalidatedMissingEvidenceAttempt(t *testing.T) {

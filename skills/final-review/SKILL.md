@@ -53,12 +53,6 @@ Request changes only for product defects, unmet approved intent, broken behavior
 
 Non-blocking suggestions may cover polish, maintainability, or minor UX issues.
 
-Findings should be product-centered and directly actionable for the fix agent. Examples:
-
-- `- **High**: The primary create flow reports success but does not persist the new record.`
-- `- **High**: The API response shape no longer matches the client parser, so saved items disappear after refresh.`
-- `- **Medium**: The confirmation message is ambiguous after the operation succeeds.`
-
 ## Severity Classification
 
 Classify each finding:

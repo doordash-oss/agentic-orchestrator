@@ -1413,7 +1413,7 @@ func TestBuildSession_Claude(t *testing.T) {
 		Prompt:       "research this",
 		SystemPrompt: "you are a researcher",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -1452,7 +1452,7 @@ func TestBuildSessionInjectsAgenticoBinEnv(t *testing.T) {
 		Prompt:       "research this",
 		SystemPrompt: "you are a researcher",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -1499,7 +1499,7 @@ func TestBuildSession_PinsPermissionModeForGrillingPhases(t *testing.T) {
 				Prompt:       "test prompt",
 				SystemPrompt: "test system",
 				PIDDir:       filepath.Join(dir, "pid"),
-				PermHandler:  permHandlerFor(false, nil, ""),
+				PermHandler:  permHandlerFor(false, false, nil, "", nil),
 				WorkDir:      dir,
 				Phase:        tc.phase,
 			})
@@ -1546,7 +1546,7 @@ func TestBuildSession_ClaudeSeedsProtocolContextWindow(t *testing.T) {
 		Prompt:       "research this",
 		SystemPrompt: "you are a researcher",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -1600,7 +1600,7 @@ func TestBuildSession_CodexExplicitWritableRootsDoNotInheritStateOrAdditionalDir
 		AdditionalDirs: []string{additionalDir},
 		WritableRoots:  wantRoots,
 		PIDDir:         filepath.Join(stateDir, "pid"),
-		PermHandler:    permHandlerFor(false, nil, ""),
+		PermHandler:    permHandlerFor(false, false, nil, "", nil),
 		WorkDir:        workDir,
 		Phase:          feature.PhasePlan,
 	})
@@ -1673,7 +1673,7 @@ func TestBuildSession_Claude_AgentSelection(t *testing.T) {
 				Prompt:      "research this",
 				AgentNames:  tt.agentNames,
 				PIDDir:      filepath.Join(dir, "pid"),
-				PermHandler: permHandlerFor(false, nil, ""),
+				PermHandler: permHandlerFor(false, false, nil, "", nil),
 				WorkDir:     dir,
 			})
 			if tt.wantErrHas != "" {
@@ -1776,7 +1776,7 @@ func TestBuildSession_Claude_InvalidAgentNamesFailFast(t *testing.T) {
 				Prompt:      "research this",
 				AgentNames:  tt.agentNames,
 				PIDDir:      filepath.Join(dir, "pid"),
-				PermHandler: permHandlerFor(false, nil, ""),
+				PermHandler: permHandlerFor(false, false, nil, "", nil),
 				WorkDir:     dir,
 			})
 			if err == nil {
@@ -1865,7 +1865,7 @@ func TestBuildSession_Codex_UsesProviderNilEnv(t *testing.T) {
 		Prompt:       "research this",
 		SystemPrompt: "you are a researcher",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -1905,7 +1905,7 @@ func TestBuildSession_Codex_IgnoresAgentNamesSelection(t *testing.T) {
 		Prompt:      "research this",
 		AgentNames:  []string{"codebase-locator", "web-search-researcher"},
 		PIDDir:      filepath.Join(dir, "pid"),
-		PermHandler: permHandlerFor(false, nil, ""),
+		PermHandler: permHandlerFor(false, false, nil, "", nil),
 		WorkDir:     dir,
 	})
 	if err != nil {
@@ -1940,7 +1940,7 @@ func TestBuildSession_Codex_WrapsResolvedHomeFailures(t *testing.T) {
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:       "gpt-5.4",
 		Prompt:      "test",
-		PermHandler: permHandlerFor(false, nil, ""),
+		PermHandler: permHandlerFor(false, false, nil, "", nil),
 		WorkDir:     dir,
 	})
 	if err == nil {
@@ -1989,7 +1989,7 @@ func TestBuildSession_TestOverride(t *testing.T) {
 		Prompt:       "test prompt",
 		SystemPrompt: "test system",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		RepoName:     "test-repo",
 		WorkDir:      dir,
 	})
@@ -2291,7 +2291,7 @@ func TestBuildSession_AllowedToolsPropagation(t *testing.T) {
 		SystemPrompt: "test system",
 		AllowedTools: []string{"Read", "Edit"},
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -2334,7 +2334,7 @@ func TestBuildSession_WebSearchAlwaysAllowed(t *testing.T) {
 		Model:       "opus",
 		Prompt:      "research this",
 		PIDDir:      filepath.Join(dir, "pid"),
-		PermHandler: permHandlerFor(false, nil, ""),
+		PermHandler: permHandlerFor(false, false, nil, "", nil),
 		WorkDir:     dir,
 	})
 	if err != nil {
@@ -2445,7 +2445,7 @@ func TestBuildSession_SkillsInjection(t *testing.T) {
 		Prompt:       "implement this",
 		SystemPrompt: "you are an implementer",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 		Phase:        feature.PhaseImplement, // has utility skills (frontend-design)
 	})
@@ -2489,7 +2489,7 @@ func TestBuildSession_SkillsNoSystemPrompt(t *testing.T) {
 		Model:       "opus",
 		Prompt:      "research this",
 		PIDDir:      filepath.Join(dir, "pid"),
-		PermHandler: permHandlerFor(false, nil, ""),
+		PermHandler: permHandlerFor(false, false, nil, "", nil),
 		WorkDir:     dir,
 	})
 	if err != nil {
@@ -2524,7 +2524,7 @@ func TestBuildSession_EmptySkillsDir(t *testing.T) {
 		Prompt:       "research this",
 		SystemPrompt: "you are a researcher",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -2569,7 +2569,7 @@ func TestAvailabilityContract(t *testing.T) {
 		Prompt:       "research this",
 		SystemPrompt: "you are a researcher",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -2609,7 +2609,7 @@ func TestBuildSession_SkillsInjection_Codex(t *testing.T) {
 		Prompt:       "implement this",
 		SystemPrompt: "you are an implementer",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 		Phase:        feature.PhaseImplement, // has utility skills (frontend-design)
 	})
@@ -2662,7 +2662,7 @@ func TestBuildSession_SkillsInjection_Codex_EmptySkillsDir(t *testing.T) {
 		Prompt:       "research this",
 		SystemPrompt: "you are a researcher",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {

@@ -40,6 +40,7 @@ type Config struct {
 	Notifications   NotificationConfig    `yaml:"notifications,omitempty"`
 	UI              UIConfig              `yaml:"ui,omitempty"`
 	Observability   ObservabilityConfig   `yaml:"observability,omitempty"`
+	AutoReview      bool                  `yaml:"auto_review,omitempty"`
 }
 
 // ObservabilityConfig controls JSONL event emission and OTel export.

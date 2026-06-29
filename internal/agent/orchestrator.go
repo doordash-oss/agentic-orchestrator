@@ -79,6 +79,10 @@ type OrchestratorConfig struct {
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
 
+	// Classify is the injected classifier function used by the AutoReviewHandler.
+	// Passed through to ImplementConfig and used by final-review loops.
+	Classify permission.ClassifyFunc
+
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. Passed through to ImplementConfig.
 	BuildSession func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)

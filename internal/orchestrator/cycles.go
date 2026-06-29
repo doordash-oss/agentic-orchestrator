@@ -316,6 +316,8 @@ func (o *Orchestrator) restartPausedFeatureRebase(featureID, repoName string) er
 		KBInfos:                    o.computeKBInfos(f),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		AutoReview:                 pr.Config != nil && pr.Config.AutoReview,
+		Classify:                   pr.MakeClassify(),
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),

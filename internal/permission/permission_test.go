@@ -1138,3 +1138,179 @@ func TestGuarded_UsesDefaultThreshold(t *testing.T) {
 		t.Error("Guarded did not preserve inner handler")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// AutoReviewHandler tests
+// ---------------------------------------------------------------------------
+
+func TestAutoReviewHandler_NonBashDefer(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	classifyCalls := 0
+	classify := func(_, _ string) (bool, error) {
+		classifyCalls++
+		return true, nil
+	}
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: classify,
+	}
+	decision, err := h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Write", Input: `{"file_path":"/tmp/x"}`})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "" {
+		t.Errorf("behavior = %q, want empty (defer non-Bash)", decision.Behavior)
+	}
+	if classifyCalls != 0 {
+		t.Errorf("classify called %d times, want 0", classifyCalls)
+	}
+}
+
+func TestAutoReviewHandler_InnerAllowPassthrough(t *testing.T) {
+	inner := &mockHandler{behavior: "allow"}
+	classifyCalls := 0
+	classify := func(_, _ string) (bool, error) {
+		classifyCalls++
+		return true, nil
+	}
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: classify,
+	}
+	decision, err := h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "allow" {
+		t.Errorf("behavior = %q, want allow (inner passthrough)", decision.Behavior)
+	}
+	if classifyCalls != 0 {
+		t.Errorf("classify called %d times, want 0", classifyCalls)
+	}
+}
+
+func TestAutoReviewHandler_InnerDenyPassthrough(t *testing.T) {
+	inner := &mockHandler{behavior: "deny"}
+	classifyCalls := 0
+	classify := func(_, _ string) (bool, error) {
+		classifyCalls++
+		return true, nil
+	}
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: classify,
+	}
+	decision, err := h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "deny" {
+		t.Errorf("behavior = %q, want deny (inner passthrough)", decision.Behavior)
+	}
+	if classifyCalls != 0 {
+		t.Errorf("classify called %d times, want 0", classifyCalls)
+	}
+}
+
+func TestAutoReviewHandler_DenyListMatch(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	classifyCalls := 0
+	classify := func(_, _ string) (bool, error) {
+		classifyCalls++
+		return true, nil
+	}
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: classify,
+	}
+	decision, err := h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: `{"command":"rm -rf /tmp"}`})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "" {
+		t.Errorf("behavior = %q, want empty (deny-list match)", decision.Behavior)
+	}
+	if classifyCalls != 0 {
+		t.Errorf("classify called %d times, want 0 (deny-list short-circuit)", classifyCalls)
+	}
+}
+
+func TestAutoReviewHandler_ClassifyAllow_CachesRule(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	classify := func(_, _ string) (bool, error) { return true, nil }
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: classify,
+	}
+	req := ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."}
+
+	// First call: inner defers, deny-list passes, classify allows.
+	decision, err := h.CanUseTool(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "allow" {
+		t.Errorf("first call: behavior = %q, want allow", decision.Behavior)
+	}
+
+	// Second identical call: should be served from session cache.
+	classifyCalls := 0
+	h.Classify = func(_, _ string) (bool, error) {
+		classifyCalls++
+		return true, nil
+	}
+	decision, err = h.CanUseTool(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "allow" {
+		t.Errorf("second call: behavior = %q, want allow (cache hit)", decision.Behavior)
+	}
+	if classifyCalls != 0 {
+		t.Errorf("classify called %d times on second call, want 0 (cache hit)", classifyCalls)
+	}
+
+	// Verify nil Store: no rules on disk.
+	if h.Cache.StoreRef() != nil {
+		t.Error("session cache should have nil Store")
+	}
+}
+
+func TestAutoReviewHandler_ClassifyDefer(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	classify := func(_, _ string) (bool, error) { return false, nil }
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: classify,
+	}
+	decision, err := h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "" {
+		t.Errorf("behavior = %q, want empty (classify defer)", decision.Behavior)
+	}
+}
+
+func TestAutoReviewHandler_ClassifyError(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	classify := func(_, _ string) (bool, error) { return false, errors.New("classifier failed") }
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: classify,
+	}
+	decision, err := h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Behavior != "" {
+		t.Errorf("behavior = %q, want empty (classify error)", decision.Behavior)
+	}
+}

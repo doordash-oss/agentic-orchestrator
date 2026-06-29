@@ -457,6 +457,13 @@ type PlanLoopConfig struct {
 	// previously remembered tool requests. Nil means no caching.
 	PermissionCache *permission.Cache
 
+	// AutoReview enables the auto-review classifier for deferred Bash
+	// permission requests.
+	AutoReview bool
+
+	// Classify is the injected classifier function used by the AutoReviewHandler.
+	Classify permission.ClassifyFunc
+
 	// RepoName is the repo scope for permission caching. Empty means global
 	// scope. When set (e.g. from a refactor loop), planning sessions will
 	// scope permission rules to this repo.
@@ -1490,7 +1497,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				AdditionalDirs:                 addDirs,
 				AgentNames:                     explorationAgentNames(),
 				PIDDir:                         pidDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.AutoReview, cfg.PermissionCache, cfg.RepoName, cfg.Classify),
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,
@@ -1883,7 +1890,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				AdditionalDirs:                 addDirs,
 				AgentNames:                     explorationAgentNames(),
 				PIDDir:                         pidDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.AutoReview, cfg.PermissionCache, cfg.RepoName, cfg.Classify),
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,
 				Phase:                          feature.PhasePlan,

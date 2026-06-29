@@ -481,3 +481,65 @@ func assertDecisionBehavior(t *testing.T, handler *CachingHandler, input, want s
 		t.Fatalf("CanUseTool(%q) behavior = %q, want %q", input, decision.Behavior, want)
 	}
 }
+
+// TestAutoReviewHandler_Integration tests the full end-to-end auto-review
+// path: AcceptEditsHandler defers Bash → CachingHandler miss →
+// AutoReviewHandler with a mock-allow classifier → session cache populated →
+// a second identical call returns allow without re-invoking the classifier.
+func TestAutoReviewHandler_Integration(t *testing.T) {
+	sharedCache := NewCache(nil)
+	inner := &AcceptEditsHandler{}
+	caching := &CachingHandler{
+		Inner:    inner,
+		Cache:    sharedCache,
+		RepoName: "my-repo",
+	}
+
+	classifyCalls := 0
+	classify := func(_, _ string) (bool, error) {
+		classifyCalls++
+		return true, nil
+	}
+
+	autoReview := &AutoReviewHandler{
+		Inner:    caching,
+		Cache:    NewCache(nil), // session-only cache with nil Store
+		Classify: classify,
+	}
+
+	req := ports.ToolPermissionRequest{
+		RequestID: "req-1",
+		ToolName:  "Bash",
+		Input:     `{"command":"go test ./..."}`,
+	}
+
+	// First call: inner defers, caching misses, classify allows.
+	decision, err := autoReview.CanUseTool(req)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if decision.Behavior != "allow" {
+		t.Errorf("first call: behavior = %q, want allow", decision.Behavior)
+	}
+	if classifyCalls != 1 {
+		t.Errorf("classify called %d times on first call, want 1", classifyCalls)
+	}
+
+	// Second identical call: should be served from session cache.
+	classifyCalls = 0
+	decision, err = autoReview.CanUseTool(req)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if decision.Behavior != "allow" {
+		t.Errorf("second call: behavior = %q, want allow (session cache hit)", decision.Behavior)
+	}
+	if classifyCalls != 0 {
+		t.Errorf("classify called %d times on second call, want 0 (cache hit)", classifyCalls)
+	}
+
+	// Verify the session cache's Store is nil (no persistence).
+	if autoReview.Cache.StoreRef() != nil {
+		t.Error("session cache Store should be nil")
+	}
+}

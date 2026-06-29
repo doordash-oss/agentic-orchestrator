@@ -131,7 +131,7 @@ func TestBuildSession_AgentSelectionSmoke(t *testing.T) {
 				Prompt:      "tracer bullet",
 				AgentNames:  tt.agentNames,
 				PIDDir:      filepath.Join(dir, "pid"),
-				PermHandler: permHandlerFor(false, nil, ""),
+				PermHandler: permHandlerFor(false, false, nil, "", nil),
 				WorkDir:     dir,
 			})
 			if err != nil {

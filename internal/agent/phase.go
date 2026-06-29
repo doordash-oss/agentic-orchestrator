@@ -177,7 +177,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		AdditionalDirs:                 additionalDirs,
 		AgentNames:                     cfg.AgentNames,
 		PIDDir:                         pidDir,
-		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, ""),
+		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, "", pr.MakeClassify()),
 		WorkDir:                        workDir,
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
 		Phase:                          cfg.Phase,
@@ -337,7 +337,7 @@ func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionC
 		AdditionalDirs: additionalDirs,
 		AgentNames:     []string{},
 		PIDDir:         pidDir,
-		PermHandler:    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, ""),
+		PermHandler:    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, "", pr.MakeClassify()),
 		WorkDir:        workDir,
 		EffortLevel:    f.EffectivePipeline().EffortLevel(),
 		TurnMode:       ports.TurnModeInteractive,
@@ -605,7 +605,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		AdditionalDirs:                 []string{pr.StateDir, kbDir},
 		AgentNames:                     knowledgeBaseAgentNames(),
 		PIDDir:                         pidDir,
-		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
+		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, repo.Name, pr.MakeClassify()),
 		RepoName:                       repo.Name,
 		WorkDir:                        workDir,
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
@@ -724,6 +724,8 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		MaxAttempts:                f.MaxPlanIterations,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		AutoReview:                 pr.Config != nil && pr.Config.AutoReview,
+		Classify:                   pr.MakeClassify(),
 		RepoName:                   repoName,
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(planningModel),
@@ -787,6 +789,8 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			MaxAttempts:                maxAttempts,
 			DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 			PermissionCache:            pr.PermissionCache,
+			AutoReview:                 pr.Config != nil && pr.Config.AutoReview,
+			Classify:                   pr.MakeClassify(),
 			RepoName:                   planRepoName,
 			BuildSession:               pr.BuildSession,
 			AskingClause:               pr.askingQuestionsClauseForModel(phasePlanModel),
@@ -860,6 +864,8 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		AutoReview:                 pr.Config != nil && pr.Config.AutoReview,
+		Classify:                   pr.MakeClassify(),
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
@@ -916,6 +922,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		MaxConsecNoProgress:        maxNoProg,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		Classify:                   pr.MakeClassify(),
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
@@ -977,6 +984,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		KBInfos:                    kbInfos,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		Classify:                   pr.MakeClassify(),
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
@@ -1029,6 +1037,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		KBInfos:                    kbInfos,
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
+		Classify:                   pr.MakeClassify(),
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
@@ -1093,6 +1102,18 @@ func (pr *PhaseRunner) resolveLoopLimits(f *feature.Feature) (int, int, int) {
 	return maxIter, maxFails, maxNoProg
 }
 
+// MakeClassify constructs a production ClassifyFunc for the PhaseRunner when
+// auto_review is enabled. Returns nil when auto_review is disabled or when the
+// runner is unavailable so the permission chain falls back to normal defer.
+func (pr *PhaseRunner) MakeClassify() permission.ClassifyFunc {
+	if pr.Config == nil || !pr.Config.AutoReview || pr.CommandRunner == nil {
+		return nil
+	}
+	return permission.NewClassify(func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+		return pr.CommandRunner.Run(ctx, name, args, ports.CommandOpts{Env: env})
+	})
+}
+
 // permHandlerFor returns the appropriate PermissionHandler based on whether
 // permissions are being skipped.
 //
@@ -1102,11 +1123,16 @@ func (pr *PhaseRunner) resolveLoopLimits(f *feature.Feature) (int, int, int) {
 // When skip is false (normal mode): auto-approve reads and file edits;
 // leave Bash and other tools for the TUI to prompt.
 //
+// When autoReview is true and skip is false and classify is non-nil, the
+// existing Guarded(CachingHandler(AcceptEditsHandler)) chain is wrapped in an
+// AutoReviewHandler with a fresh nil-Store session cache and the injected
+// classifier.
+//
 // The returned handler is always wrapped in a SizeGuardHandler that denies
 // oversized Claude Write calls — see permission.SizeGuardHandler for the
 // failure mode (~20KB Write payloads have hung the tool call for minutes
 // and then dropped the turn with nothing written).
-func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.PermissionHandler {
+func permHandlerFor(skip bool, autoReview bool, cache *permission.Cache, repoName string, classify permission.ClassifyFunc) ports.PermissionHandler {
 	var inner ports.PermissionHandler
 	if skip {
 		inner = &permission.AutoApproveHandler{}
@@ -1119,6 +1145,13 @@ func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.P
 				Cache:    cache,
 				RepoName: repoName,
 			}
+		}
+	}
+	if autoReview && !skip && classify != nil {
+		inner = &permission.AutoReviewHandler{
+			Inner:    inner,
+			Cache:    permission.NewCache(nil),
+			Classify: classify,
 		}
 	}
 	return permission.Guarded(inner)

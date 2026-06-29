@@ -46,7 +46,7 @@ func TestCodexBuildSessionEnvContract(t *testing.T) {
 		SystemPrompt: "system prompt",
 		AgentNames:   []string{"codebase-locator", "web-search-researcher"},
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	})
 	if err != nil {
@@ -96,7 +96,7 @@ func TestCodexBuildSessionAgentNamesDoNotChangeReconciliation(t *testing.T) {
 		Prompt:       "test prompt",
 		SystemPrompt: "system prompt",
 		PIDDir:       filepath.Join(dir, "pid"),
-		PermHandler:  permHandlerFor(false, nil, ""),
+		PermHandler:  permHandlerFor(false, false, nil, "", nil),
 		WorkDir:      dir,
 	}
 
@@ -167,7 +167,7 @@ func TestCodexBuildSessionFailuresAbortBeforeLaunch(t *testing.T) {
 		Model:       "gpt-5.4",
 		Prompt:      "test prompt",
 		PIDDir:      filepath.Join(dir, "pid"),
-		PermHandler: permHandlerFor(false, nil, ""),
+		PermHandler: permHandlerFor(false, false, nil, "", nil),
 		WorkDir:     dir,
 	})
 	if err == nil {

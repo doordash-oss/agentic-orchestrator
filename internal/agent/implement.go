@@ -79,6 +79,15 @@ type ImplementConfig struct {
 	// previously remembered tool requests. Nil means no caching.
 	PermissionCache *permission.Cache
 
+	// AutoReview enables the auto-review classifier for deferred Bash
+	// permission requests. When true and DangerouslySkipPermissions is false,
+	// a nil-Store AutoReviewHandler is added as the outermost permission handler.
+	AutoReview bool
+
+	// Classify is the injected classifier function used by the AutoReviewHandler.
+	// Nil means no classifier (auto-review defers to TUI).
+	Classify permission.ClassifyFunc
+
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. In tests, provide a mock
 	// function. In production, set to PhaseRunner.BuildSession.
@@ -379,7 +388,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				AdditionalDirs:                 dirs,
 				AgentNames:                     []string{},
 				PIDDir:                         cfg.StateDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.AutoReview, cfg.PermissionCache, permRepoName, cfg.Classify),
 				RepoName:                       cfg.RepoName,
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,

@@ -156,6 +156,8 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
+		AutoReview:                 cfg.Config != nil && cfg.Config.AutoReview,
+		Classify:                   cfg.Classify,
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		EffortLevel:                cfg.EffortLevel,

@@ -1810,3 +1810,35 @@ func TestObservabilityConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestAutoReviewRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	original := NewDefault()
+	original.AutoReview = true
+	if err := Save(path, original); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !loaded.AutoReview {
+		t.Error("expected AutoReview=true after round-trip")
+	}
+
+	// Verify default is false when absent.
+	emptyPath := filepath.Join(dir, "empty.yaml")
+	if err := os.WriteFile(emptyPath, []byte("defaults:\n  models:\n    research: opus\n"), 0o644); err != nil {
+		t.Fatalf("write empty config: %v", err)
+	}
+	emptyCfg, err := Load(emptyPath)
+	if err != nil {
+		t.Fatalf("load empty: %v", err)
+	}
+	if emptyCfg.AutoReview {
+		t.Error("expected AutoReview=false when absent from YAML")
+	}
+}

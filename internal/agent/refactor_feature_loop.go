@@ -84,6 +84,8 @@ type RefactorFeatureLoopConfig struct {
 
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
+	AutoReview                 bool
+	Classify                   permission.ClassifyFunc
 	BuildSession               func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 	AskingClause               string
 	AskingClauseForModel       func(model string) string
@@ -254,6 +256,8 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				ImplementModel:             cfg.Model,
 				DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 				PermissionCache:            cfg.PermissionCache,
+				AutoReview:                 cfg.AutoReview,
+				Classify:                   cfg.Classify,
 				BuildSession:               cfg.BuildSession,
 				AskingClauseForModel:       cfg.AskingClauseForModel,
 				EffortLevel:                cfg.EffortLevel,
@@ -441,6 +445,8 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
+		AutoReview:                 cfg.AutoReview,
+		Classify:                   cfg.Classify,
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		EffortLevel:                cfg.EffortLevel,
@@ -617,6 +623,8 @@ type refactorPlanStepInput struct {
 	ImplementModel             string // fallback when PlanningModel is empty
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
+	AutoReview                 bool
+	Classify                   permission.ClassifyFunc
 	BuildSession               func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 	AskingClauseForModel       func(model string) string
 	EffortLevel                llm.EffortLevel
@@ -672,7 +680,7 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		AdditionalDirs:                 in.Workspace.AdditionalDirs,
 		AgentNames:                     explorationAgentNames(),
 		PIDDir:                         filepath.Join(in.StateDir, in.Feature.ID),
-		PermHandler:                    permHandlerFor(in.DangerouslySkipPermissions, in.PermissionCache, ""),
+		PermHandler:                    permHandlerFor(in.DangerouslySkipPermissions, in.AutoReview, in.PermissionCache, "", in.Classify),
 		WorkDir:                        in.Workspace.Cwd,
 		EffortLevel:                    in.EffortLevel,
 		Phase:                          feature.PhasePlan,

@@ -438,6 +438,71 @@ func (h *RewindReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 	return ports.PermissionDecision{}, nil
 }
 
+// AutoReviewHandler wraps an inner permission handler and adds an automated
+// review layer for Bash tools that the inner chain defers. It owns a
+// session-only cache (with a nil Store so rules never persist to disk) and
+// an injected Classify function.
+//
+// Routing order:
+//  1. Session cache check (deny-wins).
+//  2. Inner chain (allow/deny passthrough).
+//  3. Defer non-Bash.
+//  4. Static deny-list check.
+//  5. Classify — on allow, infer a wildcard rule into the session cache.
+type AutoReviewHandler struct {
+	Inner    ports.PermissionHandler
+	Cache    *Cache
+	Classify ClassifyFunc
+}
+
+// CanUseTool implements ports.PermissionHandler.
+func (h *AutoReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	// 1. Session cache check first.
+	if h.Cache != nil {
+		rule, found := h.Cache.Check(req.ToolName, req.Input, "")
+		if found {
+			return ports.PermissionDecision{
+				Behavior: rule.Effect,
+				Reason:   "cached rule: " + rule.ToolPattern,
+			}, nil
+		}
+	}
+
+	// 2. Inner chain.
+	decision, err := h.Inner.CanUseTool(req)
+	if err != nil {
+		return decision, err
+	}
+	if decision.Behavior != "" {
+		return decision, nil
+	}
+
+	// 3. Defer non-Bash.
+	if req.ToolName != "Bash" {
+		return ports.PermissionDecision{}, nil
+	}
+
+	// 4. Static deny check.
+	if DenyListMatch(req.Input) {
+		return ports.PermissionDecision{}, nil
+	}
+
+	// 5. Classify.
+	allow, err := h.Classify(req.ToolName, req.Input)
+	if err != nil {
+		return ports.PermissionDecision{}, nil
+	}
+	if !allow {
+		return ports.PermissionDecision{}, nil
+	}
+
+	// On allow, infer a wildcard rule into the session cache.
+	if h.Cache != nil {
+		h.Cache.RememberAllow(req.ToolName, req.Input, "")
+	}
+	return ports.PermissionDecision{Behavior: "allow", Reason: "auto-reviewed"}, nil
+}
+
 // DenyAllHandler denies all tool use requests.
 type DenyAllHandler struct{}
 

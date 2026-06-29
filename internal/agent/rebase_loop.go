@@ -91,6 +91,8 @@ type RebaseLoopConfig struct {
 
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
+	AutoReview                 bool
+	Classify                   permission.ClassifyFunc
 	BuildSession               func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 	AskingClause               string
 	EffortLevel                llm.EffortLevel
@@ -293,6 +295,8 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
+		AutoReview:                 cfg.AutoReview,
+		Classify:                   cfg.Classify,
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		EffortLevel:                cfg.EffortLevel,

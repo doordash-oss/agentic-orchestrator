@@ -101,6 +101,8 @@ type ReviewCommentsLoopConfig struct {
 
 	DangerouslySkipPermissions bool
 	PermissionCache            *permission.Cache
+	AutoReview                 bool
+	Classify                   permission.ClassifyFunc
 	BuildSession               func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 	AskingClause               string
 	EffortLevel                llm.EffortLevel
@@ -281,6 +283,8 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
+		AutoReview:                 cfg.AutoReview,
+		Classify:                   cfg.Classify,
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		EffortLevel:                cfg.EffortLevel,

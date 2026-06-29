@@ -607,6 +607,36 @@ func (o *Observer) PermissionResolved(sc SpanContext, sessionID string, repoName
 	}))
 }
 
+// AutoReviewed emits a permission.auto_reviewed event recording a single
+// classifier decision. toolInput is truncated to 200 characters. No
+// sessionID, repoName, or iteration are carried — the minimal envelope
+// decision keeps the emission closure uniform across all construction sites.
+func (o *Observer) AutoReviewed(sc SpanContext, toolName string, toolInput string, classifierDecision string) {
+	if o == nil || !o.enabled {
+		return
+	}
+	if len(toolInput) > 200 {
+		toolInput = toolInput[:200]
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "permission.auto_reviewed",
+		FeatureID:    sc.FeatureID,
+		Data: map[string]any{
+			"tool_name":           toolName,
+			"tool_input":          toolInput,
+			"classifier_decision": classifierDecision,
+		},
+	})
+	o.otel.AddSpanEvent(sc.ParentSpanID, "permission.auto_reviewed", addRunNumber(sc, map[string]string{
+		"tool_name":           toolName,
+		"classifier_decision": classifierDecision,
+	}))
+}
+
 // QuestionAsked emits a question.asked event.
 func (o *Observer) QuestionAsked(sc SpanContext, sessionID string, repoName string, iteration int, question string) {
 	if o == nil || !o.enabled {

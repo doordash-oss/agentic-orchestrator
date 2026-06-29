@@ -265,6 +265,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				SkillsDir:                  cfg.SkillsDir,
 				GuidelinesDir:              cfg.GuidelinesDir,
 				FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
+				Observer:                   cfg.Observer,
 			}, sm)
 		}
 	}
@@ -632,6 +633,7 @@ type refactorPlanStepInput struct {
 	SkillsDir                  string
 	GuidelinesDir              string
 	FinishOrViolateNudge       bool
+	Observer                   *observe.Observer
 }
 
 // runRefactorPlanStep launches a single Claude session to author the
@@ -680,7 +682,7 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		AdditionalDirs:                 in.Workspace.AdditionalDirs,
 		AgentNames:                     explorationAgentNames(),
 		PIDDir:                         filepath.Join(in.StateDir, in.Feature.ID),
-		PermHandler:                    permHandlerFor(in.DangerouslySkipPermissions, in.AutoReview, in.PermissionCache, "", in.Classify),
+		PermHandler:                    permHandlerFor(in.DangerouslySkipPermissions, in.AutoReview, in.PermissionCache, "", in.Classify, autoReviewDecisionHook(in.Observer, in.Feature)),
 		WorkDir:                        in.Workspace.Cwd,
 		EffortLevel:                    in.EffortLevel,
 		Phase:                          feature.PhasePlan,

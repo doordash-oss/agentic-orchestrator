@@ -388,7 +388,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				AdditionalDirs:                 dirs,
 				AgentNames:                     []string{},
 				PIDDir:                         cfg.StateDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.AutoReview, cfg.PermissionCache, permRepoName, cfg.Classify),
+				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.AutoReview, cfg.PermissionCache, permRepoName, cfg.Classify, autoReviewDecisionHook(cfg.Observer, cfg.Feature)),
 				RepoName:                       cfg.RepoName,
 				WorkDir:                        cfg.WorkDir,
 				EffortLevel:                    cfg.EffortLevel,

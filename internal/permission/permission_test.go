@@ -1314,3 +1314,144 @@ func TestAutoReviewHandler_ClassifyError(t *testing.T) {
 		t.Errorf("behavior = %q, want empty (classify error)", decision.Behavior)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// AutoReviewHandler OnDecision hook tests
+// ---------------------------------------------------------------------------
+
+func TestAutoReviewHandler_Hook_FiresOnAllow(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	var gotTool, gotInput string
+	var gotAllowed bool
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: func(_, _ string) (bool, error) { return true, nil },
+		OnDecision: func(tool, input string, allowed bool) {
+			gotTool, gotInput, gotAllowed = tool, input, allowed
+		},
+	}
+	req := ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."}
+	_, _ = h.CanUseTool(req)
+	if gotTool != "Bash" {
+		t.Errorf("tool = %q, want Bash", gotTool)
+	}
+	if gotInput != "go test ./..." {
+		t.Errorf("input = %q, want 'go test ./...'", gotInput)
+	}
+	if !gotAllowed {
+		t.Error("allowed = false, want true")
+	}
+}
+
+func TestAutoReviewHandler_Hook_FiresOnDefer(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	var fired bool
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: func(_, _ string) (bool, error) { return false, nil },
+		OnDecision: func(_, _ string, allowed bool) {
+			fired = true
+			if allowed {
+				t.Error("allowed = true, want false on defer")
+			}
+		},
+	}
+	_, _ = h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+	if !fired {
+		t.Error("OnDecision did not fire on classify defer")
+	}
+}
+
+func TestAutoReviewHandler_Hook_FiresOnError(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	var fired bool
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: func(_, _ string) (bool, error) { return false, errors.New("fail") },
+		OnDecision: func(_, _ string, allowed bool) {
+			fired = true
+			if allowed {
+				t.Error("allowed = true, want false on error")
+			}
+		},
+	}
+	_, _ = h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+	if !fired {
+		t.Error("OnDecision did not fire on classify error")
+	}
+}
+
+func TestAutoReviewHandler_Hook_DoesNotFireOnCacheHit(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	classify := func(_, _ string) (bool, error) { return true, nil }
+	cache := NewCache(nil)
+	cache.RememberAllow("Bash", "go test ./...", "")
+	h := &AutoReviewHandler{
+		Inner:      inner,
+		Cache:      cache,
+		Classify:   classify,
+		OnDecision: func(_, _ string, _ bool) { t.Error("OnDecision should not fire on cache hit") },
+	}
+	_, _ = h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+}
+
+func TestAutoReviewHandler_Hook_DoesNotFireOnInnerAllow(t *testing.T) {
+	inner := &mockHandler{behavior: "allow"}
+	h := &AutoReviewHandler{
+		Inner:      inner,
+		Cache:      NewCache(nil),
+		Classify:   func(_, _ string) (bool, error) { return true, nil },
+		OnDecision: func(_, _ string, _ bool) { t.Error("OnDecision should not fire on inner allow") },
+	}
+	_, _ = h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+}
+
+func TestAutoReviewHandler_Hook_DoesNotFireOnInnerDeny(t *testing.T) {
+	inner := &mockHandler{behavior: "deny"}
+	h := &AutoReviewHandler{
+		Inner:      inner,
+		Cache:      NewCache(nil),
+		Classify:   func(_, _ string) (bool, error) { return true, nil },
+		OnDecision: func(_, _ string, _ bool) { t.Error("OnDecision should not fire on inner deny") },
+	}
+	_, _ = h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+}
+
+func TestAutoReviewHandler_Hook_DoesNotFireOnNonBashDefer(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	h := &AutoReviewHandler{
+		Inner:      inner,
+		Cache:      NewCache(nil),
+		Classify:   func(_, _ string) (bool, error) { return true, nil },
+		OnDecision: func(_, _ string, _ bool) { t.Error("OnDecision should not fire on non-Bash defer") },
+	}
+	_, _ = h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Write", Input: `{"file_path":"/tmp/x"}`})
+}
+
+func TestAutoReviewHandler_Hook_DoesNotFireOnDenyListMatch(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	h := &AutoReviewHandler{
+		Inner:      inner,
+		Cache:      NewCache(nil),
+		Classify:   func(_, _ string) (bool, error) { return true, nil },
+		OnDecision: func(_, _ string, _ bool) { t.Error("OnDecision should not fire on deny-list match") },
+	}
+	_, _ = h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: `{"command":"rm -rf /tmp"}`})
+}
+
+func TestAutoReviewHandler_NilHookDoesNotPanic(t *testing.T) {
+	inner := &mockHandler{behavior: ""}
+	h := &AutoReviewHandler{
+		Inner:    inner,
+		Cache:    NewCache(nil),
+		Classify: func(_, _ string) (bool, error) { return true, nil },
+		OnDecision: nil,
+	}
+	_, err := h.CanUseTool(ports.ToolPermissionRequest{ToolName: "Bash", Input: "go test ./..."})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

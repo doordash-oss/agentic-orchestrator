@@ -177,7 +177,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		AdditionalDirs:                 additionalDirs,
 		AgentNames:                     cfg.AgentNames,
 		PIDDir:                         pidDir,
-		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, "", pr.MakeClassify()),
+		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, "", pr.MakeClassify(), autoReviewDecisionHook(pr.Observer, f)),
 		WorkDir:                        workDir,
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
 		Phase:                          cfg.Phase,
@@ -337,7 +337,7 @@ func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionC
 		AdditionalDirs: additionalDirs,
 		AgentNames:     []string{},
 		PIDDir:         pidDir,
-		PermHandler:    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, "", pr.MakeClassify()),
+		PermHandler:    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, "", pr.MakeClassify(), nil),
 		WorkDir:        workDir,
 		EffortLevel:    f.EffectivePipeline().EffortLevel(),
 		TurnMode:       ports.TurnModeInteractive,
@@ -605,7 +605,7 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 		AdditionalDirs:                 []string{pr.StateDir, kbDir},
 		AgentNames:                     knowledgeBaseAgentNames(),
 		PIDDir:                         pidDir,
-		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, repo.Name, pr.MakeClassify()),
+		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.Config != nil && pr.Config.AutoReview, pr.PermissionCache, repo.Name, pr.MakeClassify(), nil),
 		RepoName:                       repo.Name,
 		WorkDir:                        workDir,
 		EffortLevel:                    f.EffectivePipeline().EffortLevel(),
@@ -1132,7 +1132,24 @@ func (pr *PhaseRunner) MakeClassify() permission.ClassifyFunc {
 // oversized Claude Write calls — see permission.SizeGuardHandler for the
 // failure mode (~20KB Write payloads have hung the tool call for minutes
 // and then dropped the turn with nothing written).
-func permHandlerFor(skip bool, autoReview bool, cache *permission.Cache, repoName string, classify permission.ClassifyFunc) ports.PermissionHandler {
+// autoReviewDecisionHook builds a closure that maps a classifier outcome to a
+// permission.auto_reviewed Observer event. Returns nil when the observer or
+// feature is nil, so callers can pass the result directly to permHandlerFor.
+func autoReviewDecisionHook(observer *observe.Observer, f *feature.Feature) permission.DecisionHook {
+	if observer == nil || f == nil {
+		return nil
+	}
+	return func(toolName, toolInput string, allowed bool) {
+		decision := "defer"
+		if allowed {
+			decision = "allow"
+		}
+		sc := observe.SpanContextForFeature(f.ID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(f.ActiveRun).Child()
+		observer.AutoReviewed(sc, toolName, toolInput, decision)
+	}
+}
+
+func permHandlerFor(skip bool, autoReview bool, cache *permission.Cache, repoName string, classify permission.ClassifyFunc, onDecision permission.DecisionHook) ports.PermissionHandler {
 	var inner ports.PermissionHandler
 	if skip {
 		inner = &permission.AutoApproveHandler{}
@@ -1149,9 +1166,10 @@ func permHandlerFor(skip bool, autoReview bool, cache *permission.Cache, repoNam
 	}
 	if autoReview && !skip && classify != nil {
 		inner = &permission.AutoReviewHandler{
-			Inner:    inner,
-			Cache:    permission.NewCache(nil),
-			Classify: classify,
+			Inner:      inner,
+			Cache:      permission.NewCache(nil),
+			Classify:   classify,
+			OnDecision: onDecision,
 		}
 	}
 	return permission.Guarded(inner)

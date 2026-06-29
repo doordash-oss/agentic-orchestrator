@@ -438,6 +438,13 @@ func (h *RewindReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 	return ports.PermissionDecision{}, nil
 }
 
+// DecisionHook is an optional, observe-agnostic callback fired once for every
+// classifier invocation in AutoReviewHandler. It receives the tool name, the
+// tool input, and whether the classifier allowed the command. The hook is NOT
+// invoked on short-circuit paths (cache hit, inner allow/deny, non-Bash defer,
+// static-deny-list match).
+type DecisionHook func(toolName, toolInput string, allowed bool)
+
 // AutoReviewHandler wraps an inner permission handler and adds an automated
 // review layer for Bash tools that the inner chain defers. It owns a
 // session-only cache (with a nil Store so rules never persist to disk) and
@@ -450,9 +457,10 @@ func (h *RewindReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 //  4. Static deny-list check.
 //  5. Classify — on allow, infer a wildcard rule into the session cache.
 type AutoReviewHandler struct {
-	Inner    ports.PermissionHandler
-	Cache    *Cache
-	Classify ClassifyFunc
+	Inner      ports.PermissionHandler
+	Cache      *Cache
+	Classify   ClassifyFunc
+	OnDecision DecisionHook
 }
 
 // CanUseTool implements ports.PermissionHandler.
@@ -490,10 +498,20 @@ func (h *AutoReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.P
 	// 5. Classify.
 	allow, err := h.Classify(req.ToolName, req.Input)
 	if err != nil {
+		if h.OnDecision != nil {
+			h.OnDecision(req.ToolName, req.Input, false)
+		}
 		return ports.PermissionDecision{}, nil
 	}
 	if !allow {
+		if h.OnDecision != nil {
+			h.OnDecision(req.ToolName, req.Input, false)
+		}
 		return ports.PermissionDecision{}, nil
+	}
+
+	if h.OnDecision != nil {
+		h.OnDecision(req.ToolName, req.Input, true)
 	}
 
 	// On allow, infer a wildcard rule into the session cache.

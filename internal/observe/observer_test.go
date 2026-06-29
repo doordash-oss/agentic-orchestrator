@@ -1298,6 +1298,78 @@ func TestPermissionResolvedEmitsRepoAndIteration(t *testing.T) {
 	}
 }
 
+func TestAutoReviewedEmitsMinimalEnvelope(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "auto_rev_feat"
+	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+	obs := New(true, stateDir, false, "", false, "agentic")
+
+	sc := SpanContextForFeature(featureID, "", "", "").WithRun(3)
+
+	// Build a toolInput longer than 200 chars to verify truncation
+	longInput := ""
+	for i := 0; i < 250; i++ {
+		longInput += "x"
+	}
+	obs.AutoReviewed(sc, "Bash", longInput, "allow")
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.EventType != "permission.auto_reviewed" {
+		t.Errorf("EventType = %q, want %q", evt.EventType, "permission.auto_reviewed")
+	}
+	if evt.SessionID != "" {
+		t.Errorf("SessionID = %q, want empty", evt.SessionID)
+	}
+	if evt.RepoName != "" {
+		t.Errorf("RepoName = %q, want empty", evt.RepoName)
+	}
+	if evt.Iteration != 0 {
+		t.Errorf("Iteration = %d, want 0", evt.Iteration)
+	}
+	if evt.RunNumber != 3 {
+		t.Errorf("RunNumber = %d, want 3", evt.RunNumber)
+	}
+	if tn, ok := evt.Data["tool_name"].(string); !ok || tn != "Bash" {
+		t.Errorf("Data[tool_name] = %v, want %q", evt.Data["tool_name"], "Bash")
+	}
+	if dec, ok := evt.Data["classifier_decision"].(string); !ok || dec != "allow" {
+		t.Errorf("Data[classifier_decision] = %v, want %q", evt.Data["classifier_decision"], "allow")
+	}
+	// Verify truncation to 200 chars
+	ti, ok := evt.Data["tool_input"].(string)
+	if !ok {
+		t.Fatalf("Data[tool_input] type = %T, want string", evt.Data["tool_input"])
+	}
+	if len(ti) != 200 {
+		t.Errorf("Data[tool_input] length = %d, want 200 (truncated)", len(ti))
+	}
+}
+
+func TestAutoReviewedNilObserverIsNoOp(t *testing.T) {
+	var obs *Observer
+	sc := SpanContextForFeature("feat", "", "", "")
+	// Should not panic
+	obs.AutoReviewed(sc, "Bash", "input", "defer")
+}
+
+func TestAutoReviewedDisabledObserverIsNoOp(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "disabled_feat"
+	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+	obs := New(false, stateDir, false, "", false, "agentic")
+	sc := SpanContextForFeature(featureID, "", "", "")
+	obs.AutoReviewed(sc, "Bash", "input", "defer")
+
+	eventsPath := filepath.Join(stateDir, featureID, "events.jsonl")
+	if _, err := os.Stat(eventsPath); err == nil {
+		t.Error("expected no events.jsonl when observer is disabled")
+	}
+}
+
 func TestQuestionAskedEmitsRepoAndIteration(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "q_asked_feat"

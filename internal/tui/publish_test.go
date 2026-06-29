@@ -1132,61 +1132,96 @@ func TestPublishPRDescOtherStepsEscUnchanged(t *testing.T) {
 	}
 }
 
-func TestPublishRefineKey_EmitsOpenDescriptionChatMsg(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff content", "commit log", "My Title", "My Body", 120, 40)
+func TestPublishAutoOpenDescriptionChat(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff content", "commit log", "", "", 120, 40)
+	m.step = publishStepPRDesc
+	m.generating = true
 
-	// Advance to PR desc step
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to commits
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // to PR desc
+	// Simulate AI-generated description completion
+	m, cmd := m.Update(publishDescGeneratedMsg{title: "Generated Title", body: "Generated Body"})
 
-	if m.step != publishStepPRDesc {
-		t.Fatalf("expected PR desc step, got %d", m.step)
+	if m.generating {
+		t.Fatal("expected generating to be false after desc generated")
+	}
+	if m.prTitle != "Generated Title" {
+		t.Errorf("prTitle = %q, want 'Generated Title'", m.prTitle)
+	}
+	if m.prBody != "Generated Body" {
+		t.Errorf("prBody = %q, want 'Generated Body'", m.prBody)
 	}
 
-	// Press 'r' to refine
-	m, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
 	if cmd == nil {
-		t.Fatal("expected a cmd from refine key")
+		t.Fatal("expected a cmd from publishDescGeneratedMsg")
 	}
-	msg := cmd()
-	openMsg, ok := msg.(OpenDescriptionChatMsg)
-	if !ok {
-		t.Fatalf("expected OpenDescriptionChatMsg, got %T", msg)
+	msgs := executeBatchCmd(t, cmd)
+	var openMsg OpenDescriptionChatMsg
+	found := false
+	for _, m := range msgs {
+		if msg, ok := m.(OpenDescriptionChatMsg); ok {
+			openMsg = msg
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected OpenDescriptionChatMsg in batch, got %v", msgs)
 	}
 	if openMsg.ctx.FeatureID != "feat-1" {
 		t.Errorf("ctx.FeatureID = %q, want 'feat-1'", openMsg.ctx.FeatureID)
 	}
-	if openMsg.ctx.CurrentTitle != "My Title" {
-		t.Errorf("ctx.CurrentTitle = %q, want 'My Title'", openMsg.ctx.CurrentTitle)
+	if openMsg.ctx.CurrentTitle != "Generated Title" {
+		t.Errorf("ctx.CurrentTitle = %q, want 'Generated Title'", openMsg.ctx.CurrentTitle)
 	}
-	if openMsg.ctx.CurrentBody != "My Body" {
-		t.Errorf("ctx.CurrentBody = %q, want 'My Body'", openMsg.ctx.CurrentBody)
+	if openMsg.ctx.CurrentBody != "Generated Body" {
+		t.Errorf("ctx.CurrentBody = %q, want 'Generated Body'", openMsg.ctx.CurrentBody)
 	}
 	if openMsg.ctx.DiffSummary != "diff content" {
 		t.Errorf("ctx.DiffSummary = %q, want 'diff content'", openMsg.ctx.DiffSummary)
 	}
 }
 
-func TestPublishRefineKey_GeneratingIsNoOp(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
+func TestPublishAutoOpenDescriptionChat_UsesLatestInputValues(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff content", "commit log", "Initial Title", "Initial Body", 120, 40)
 	m.step = publishStepPRDesc
 	m.generating = true
 
-	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
-	if cmd != nil {
-		t.Fatal("expected nil cmd when generating")
+	// User edits title before generation completes
+	m.titleInput.SetValue("Edited Title")
+
+	m, cmd := m.Update(publishDescGeneratedMsg{title: "Generated Title", body: "Generated Body"})
+	if cmd == nil {
+		t.Fatal("expected a cmd from publishDescGeneratedMsg")
+	}
+	msgs := executeBatchCmd(t, cmd)
+	var openMsg OpenDescriptionChatMsg
+	found := false
+	for _, m := range msgs {
+		if msg, ok := m.(OpenDescriptionChatMsg); ok {
+			openMsg = msg
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected OpenDescriptionChatMsg in batch, got %v", msgs)
+	}
+	if openMsg.ctx.CurrentTitle != "Generated Title" {
+		t.Errorf("ctx.CurrentTitle = %q, want 'Generated Title'", openMsg.ctx.CurrentTitle)
+	}
+	if openMsg.ctx.CurrentBody != "Generated Body" {
+		t.Errorf("ctx.CurrentBody = %q, want 'Generated Body'", openMsg.ctx.CurrentBody)
 	}
 }
 
-func TestPublishRefineKey_HelpText(t *testing.T) {
+func TestPublishHelpTextNoRefine(t *testing.T) {
 	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
 	m.step = publishStepPRDesc
 
 	view := m.View()
-	if !strings.Contains(view, "Refine with AI") {
-		t.Errorf("expected help text to contain 'Refine with AI', got: %s", view)
+	if strings.Contains(view, "Refine with AI") {
+		t.Errorf("expected help text NOT to contain 'Refine with AI', got: %s", view)
 	}
-	if !strings.Contains(view, "[r]") {
-		t.Errorf("expected help text to contain '[r]', got: %s", view)
+	if strings.Contains(view, "[r]") {
+		t.Errorf("expected help text NOT to contain '[r]', got: %s", view)
 	}
 }

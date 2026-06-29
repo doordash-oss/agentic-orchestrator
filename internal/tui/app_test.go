@@ -10852,23 +10852,18 @@ func TestAppDescriptionChat_EndToEnd(t *testing.T) {
 	m.publish.step = publishStepPRDesc
 	m.currentView = ViewPublish
 
-	// Step 1: Press 'r' in PR desc step — PublishModel returns OpenDescriptionChatMsg cmd
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
-	app := updated.(AppModel)
-	if app.currentView != ViewPublish {
-		t.Fatalf("expected ViewPublish after 'r' (cmd not yet applied), got %v", app.currentView)
-	}
-	if cmd == nil {
-		t.Fatal("expected cmd after 'r' key")
-	}
-	msg := cmd()
-	openMsg, ok := msg.(OpenDescriptionChatMsg)
-	if !ok {
-		t.Fatalf("expected OpenDescriptionChatMsg, got %T", msg)
-	}
+	// Step 1: Simulate auto-open description chat after generation completes
+	openMsg := OpenDescriptionChatMsg{ctx: DescriptionChatContext{
+		FeatureID:    "feat-1",
+		RepoName:     "test-repo",
+		CurrentTitle: "Original Title",
+		CurrentBody:  "Original Body",
+		DiffSummary:  "diff",
+	}}
+	app := m
 
 	// Apply the OpenDescriptionChatMsg to transition to ViewDescriptionChat
-	updated, _ = app.Update(openMsg)
+	updated, _ := app.Update(openMsg)
 	app = updated.(AppModel)
 	if app.currentView != ViewDescriptionChat {
 		t.Fatalf("expected ViewDescriptionChat after applying OpenDescriptionChatMsg, got %v", app.currentView)
@@ -10892,12 +10887,12 @@ func TestAppDescriptionChat_EndToEnd(t *testing.T) {
 			},
 		},
 	}
-	updated, cmd = app.Update(chatMsg)
+	updated, cmd := app.Update(chatMsg)
 	app = updated.(AppModel)
 	if cmd == nil {
 		t.Fatal("expected cmd from chatMsgsMsg")
 	}
-	msg = cmd()
+	msg := cmd()
 	upd, ok := msg.(PublishDescriptionUpdatedMsg)
 	if !ok {
 		t.Fatalf("expected PublishDescriptionUpdatedMsg, got %T", msg)
@@ -10923,24 +10918,23 @@ func TestAppDescriptionChat_EndToEnd(t *testing.T) {
 	}
 
 	// Step 4: Second refine cycle with updated values
-	updated, cmd = app.Update(tea.KeyPressMsg{Code: 'r'})
+	openMsg2 := OpenDescriptionChatMsg{ctx: DescriptionChatContext{
+		FeatureID:    "feat-1",
+		RepoName:     "test-repo",
+		CurrentTitle: "Refined Title",
+		CurrentBody:  "Refined Body",
+		DiffSummary:  "diff",
+	}}
+	updated, _ = app.Update(openMsg2)
 	app = updated.(AppModel)
-	if app.currentView != ViewPublish {
-		t.Fatalf("expected ViewPublish after second 'r' (cmd not yet applied), got %v", app.currentView)
+	if app.currentView != ViewDescriptionChat {
+		t.Fatalf("expected ViewDescriptionChat after second refine, got %v", app.currentView)
 	}
-	if cmd == nil {
-		t.Fatal("expected cmd after second 'r' key")
+	if app.descChat.ctx.CurrentTitle != "Refined Title" {
+		t.Errorf("second refine descChat.ctx.CurrentTitle = %q, want 'Refined Title'", app.descChat.ctx.CurrentTitle)
 	}
-	msg = cmd()
-	openMsg, ok = msg.(OpenDescriptionChatMsg)
-	if !ok {
-		t.Fatalf("expected OpenDescriptionChatMsg on second refine, got %T", msg)
-	}
-	if openMsg.ctx.CurrentTitle != "Refined Title" {
-		t.Errorf("second refine ctx.CurrentTitle = %q, want 'Refined Title'", openMsg.ctx.CurrentTitle)
-	}
-	if openMsg.ctx.CurrentBody != "Refined Body" {
-		t.Errorf("second refine ctx.CurrentBody = %q, want 'Refined Body'", openMsg.ctx.CurrentBody)
+	if app.descChat.ctx.CurrentBody != "Refined Body" {
+		t.Errorf("second refine descChat.ctx.CurrentBody = %q, want 'Refined Body'", app.descChat.ctx.CurrentBody)
 	}
 }
 
@@ -10950,35 +10944,28 @@ func TestAppDescriptionChat_EscWithoutApply(t *testing.T) {
 	m.publish.step = publishStepPRDesc
 	m.currentView = ViewPublish
 
-	// Press 'r' to open description chat — PublishModel returns cmd
-	updated, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
-	app := updated.(AppModel)
-	if app.currentView != ViewPublish {
-		t.Fatalf("expected ViewPublish after 'r' (cmd not yet applied), got %v", app.currentView)
-	}
-	if cmd == nil {
-		t.Fatal("expected cmd after 'r' key")
-	}
-	msg := cmd()
-	openMsg, ok := msg.(OpenDescriptionChatMsg)
-	if !ok {
-		t.Fatalf("expected OpenDescriptionChatMsg, got %T", msg)
-	}
-
-	// Apply the cmd to transition to ViewDescriptionChat
-	updated, _ = app.Update(openMsg)
+	// Simulate auto-open description chat after generation completes
+	openMsg := OpenDescriptionChatMsg{ctx: DescriptionChatContext{
+		FeatureID:    "feat-1",
+		RepoName:     "test-repo",
+		CurrentTitle: "Original Title",
+		CurrentBody:  "Original Body",
+		DiffSummary:  "diff",
+	}}
+	app := m
+	updated, _ := app.Update(openMsg)
 	app = updated.(AppModel)
 	if app.currentView != ViewDescriptionChat {
 		t.Fatalf("expected ViewDescriptionChat, got %v", app.currentView)
 	}
 
 	// Press Esc to exit without applying — DescriptionChatModel returns cmd
-	updated, cmd = app.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	updated, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	app = updated.(AppModel)
 	if cmd == nil {
 		t.Fatal("expected cmd from esc")
 	}
-	msg = cmd()
+	msg := cmd()
 	if _, ok := msg.(DescriptionChatExitMsg); !ok {
 		t.Fatalf("expected DescriptionChatExitMsg, got %T", msg)
 	}

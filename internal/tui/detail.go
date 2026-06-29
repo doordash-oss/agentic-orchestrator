@@ -1311,32 +1311,7 @@ func needsReviewBanner(f *feature.Feature) string {
 
 // needsReviewLabel returns a human-readable label for the artifact awaiting review.
 func needsReviewLabel(f *feature.Feature) string {
-	if f.PendingReviewPhase != nil {
-		if f.IsRewind {
-			return WarningStyle.Bold(true).Render(fmt.Sprintf("Rewind to %s", f.PendingReviewPhase.String()))
-		}
-		return WarningStyle.Bold(true).Render(fmt.Sprintf("%s gate", f.PendingReviewPhase.String()))
-	}
-	switch f.Status {
-	case feature.StatusPlanNeedsReview:
-		if f.CurrentRoadmapPhase == 0 {
-			return WarningStyle.Bold(true).Render("Roadmap")
-		}
-		if f.TotalRoadmapPhases > 1 {
-			return WarningStyle.Bold(true).Render(fmt.Sprintf("Phase %d plan", f.CurrentRoadmapPhase))
-		}
-		return WarningStyle.Bold(true).Render("Plan")
-	case feature.StatusPromptNeedsReview:
-		return WarningStyle.Bold(true).Render("Prompt")
-	case feature.StatusInquiryNeedsReview:
-		return WarningStyle.Bold(true).Render("Inquiry")
-	case feature.StatusResearchNeedsReview:
-		return WarningStyle.Bold(true).Render("Research")
-	case feature.StatusDesignNeedsReview:
-		return WarningStyle.Bold(true).Render("Design")
-	default:
-		return WarningStyle.Bold(true).Render("Artifact")
-	}
+	return WarningStyle.Bold(true).Render(reviewArtifactLabel(f))
 }
 
 func (m DetailModel) FeatureID() string {
@@ -1428,12 +1403,8 @@ func formatDetailStatus(f *feature.Feature) string {
 		}
 		return ErrorStyle.Render(msg + " — press [r] to restart, [l] logs")
 	}
-	if f.Status.IsNeedsReview() && f.PendingReviewPhase != nil {
-		label := f.PendingReviewPhase.String()
-		if f.IsRewind {
-			return WarningStyle.Render(fmt.Sprintf("Rewind to %s needs review — [a] Review", label))
-		}
-		return WarningStyle.Render(fmt.Sprintf("%s gate needs review — [a] Review", label))
+	if f.Status.IsNeedsReview() {
+		return WarningStyle.Render(fmt.Sprintf("%s needs review — [a] Review", reviewArtifactLabel(f)))
 	}
 	switch f.Status {
 	case feature.StatusSettingUpWorktrees:

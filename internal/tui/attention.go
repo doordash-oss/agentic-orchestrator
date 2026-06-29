@@ -308,35 +308,43 @@ func permissionRequestSummary(p feature.PermissionRequest) string {
 }
 
 func reviewAttentionSummary(f *feature.Feature) string {
+	return reviewArtifactLabel(f) + " needs review"
+}
+
+func reviewArtifactLabel(f *feature.Feature) string {
 	if f == nil {
-		return "Artifact needs review"
+		return "Artifact"
 	}
-	if f.PendingReviewPhase != nil {
-		if f.IsRewind {
-			return fmt.Sprintf("Rewind to %s needs review", f.PendingReviewPhase.String())
-		}
-		return fmt.Sprintf("%s gate needs review", f.PendingReviewPhase.String())
+	if f.IsRewind && f.PendingReviewPhase != nil {
+		return fmt.Sprintf("Rewind to %s", f.PendingReviewPhase.String())
 	}
 	switch f.Status {
 	case feature.StatusPlanNeedsReview:
-		if f.CurrentRoadmapPhase == 0 {
-			return "Roadmap needs review"
-		}
-		if f.TotalRoadmapPhases > 1 {
-			return fmt.Sprintf("Phase %d plan needs review", f.CurrentRoadmapPhase)
-		}
-		return "Plan needs review"
+		return planReviewArtifactLabel(f)
 	case feature.StatusPromptNeedsReview:
-		return "Prompt needs review"
+		return "Prompt"
 	case feature.StatusInquiryNeedsReview:
-		return "Inquiry needs review"
+		return "Inquiry"
 	case feature.StatusResearchNeedsReview:
-		return "Research needs review"
+		return "Research"
 	case feature.StatusDesignNeedsReview:
-		return "Design needs review"
+		return "Design"
 	default:
-		return "Artifact needs review"
+		return "Artifact"
 	}
+}
+
+func planReviewArtifactLabel(f *feature.Feature) string {
+	if f == nil {
+		return "Plan"
+	}
+	if f.CurrentRoadmapPhase == 0 && f.TotalRoadmapPhases > 0 {
+		return "Roadmap"
+	}
+	if f.CurrentRoadmapPhase > 0 && f.TotalRoadmapPhases > 1 {
+		return fmt.Sprintf("Phase %d plan", f.CurrentRoadmapPhase)
+	}
+	return "Plan"
 }
 
 func reviewAttentionMode(f *feature.Feature) string {

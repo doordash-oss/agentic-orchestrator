@@ -4886,7 +4886,7 @@ func selectReviewArtifact(f *feature.Feature, resp server.ArtifactListResponse) 
 			}
 		}
 	}
-	if rewindReviewRequiresPreferredArtifact(f) {
+	if reviewRequiresPreferredArtifact(f) {
 		return server.ArtifactDTO{}, false, "Review artifact is still loading"
 	}
 	for _, artifact := range artifacts {
@@ -4897,8 +4897,8 @@ func selectReviewArtifact(f *feature.Feature, resp server.ArtifactListResponse) 
 	return server.ArtifactDTO{}, false, "Review artifact path is unavailable"
 }
 
-func rewindReviewRequiresPreferredArtifact(f *feature.Feature) bool {
-	return f != nil && f.IsRewind && f.PendingReviewPhase != nil
+func reviewRequiresPreferredArtifact(f *feature.Feature) bool {
+	return f != nil && f.Status.IsNeedsReview() && len(reviewArtifactIDs(f)) > 0
 }
 
 func reviewArtifactIDs(f *feature.Feature) []string {

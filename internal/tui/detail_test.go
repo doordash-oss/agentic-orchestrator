@@ -1370,6 +1370,24 @@ func TestDetailFormatStatusHidesPublishHintsForUnpublished(t *testing.T) {
 	}
 }
 
+func TestDetailFormatStatusNamesReviewedArtifactWhenPendingTargetIsNextPhase(t *testing.T) {
+	t.Parallel()
+
+	target := feature.PhaseDesign
+	f := &feature.Feature{
+		Status:             feature.StatusResearchNeedsReview,
+		PendingReviewPhase: &target,
+	}
+
+	got := stripANSI(formatDetailStatus(f))
+	if !strings.Contains(got, "Research needs review") {
+		t.Fatalf("formatDetailStatus() = %q, want Research needs review", got)
+	}
+	if strings.Contains(got, "Design gate") {
+		t.Fatalf("formatDetailStatus() = %q, should not label review by next target phase", got)
+	}
+}
+
 func TestDetailFormatStatus_ShowsWatchHintForActivePublishedCycle(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{

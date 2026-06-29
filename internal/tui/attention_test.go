@@ -28,6 +28,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 	t.Parallel()
 
 	reviewPhase := feature.PhaseImplement
+	designPhase := feature.PhaseDesign
 	tests := []struct {
 		name        string
 		f           *feature.Feature
@@ -55,7 +56,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 			sess:        pendingAttentionSession("perm-review", session.SessionWaitingPermission, pendingPermissionControlRequestForAttention("perm-1", "Bash", `{"command":"go test ./internal/tui"}`)),
 			wantKind:    attentionReview,
 			wantCTA:     "Review",
-			wantSummary: "Implement gate needs review",
+			wantSummary: "Plan needs review",
 		},
 		{
 			name: "review gate wins over stale or live ask user",
@@ -68,7 +69,17 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 			sess:        pendingAttentionSession("ask-review", session.SessionWaitingHelp, pendingAskUserControlRequestForAttention("ask-1", "Pick a path?")),
 			wantKind:    attentionReview,
 			wantCTA:     "Review",
-			wantSummary: "Implement gate needs review",
+			wantSummary: "Plan needs review",
+		},
+		{
+			name: "review summary names reviewed artifact not next target phase",
+			f: &feature.Feature{
+				Status:             feature.StatusResearchNeedsReview,
+				PendingReviewPhase: &designPhase,
+			},
+			wantKind:    attentionReview,
+			wantCTA:     "Review",
+			wantSummary: "Research needs review",
 		},
 		{
 			name: "review gate ignores stale feature help without live session",

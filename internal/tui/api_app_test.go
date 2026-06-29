@@ -5107,6 +5107,73 @@ func TestAPIAppModelContextualActionRejectsStaleRewindReviewArtifact(t *testing.
 	}
 }
 
+func TestAPIAppModelContextualActionRejectsStaleNonRewindGateArtifact(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	questionsPath := filepath.Join(tmp, "questions.md")
+	if err := os.WriteFile(questionsPath, []byte("# Questions\n"), 0o644); err != nil {
+		t.Fatalf("write stale questions artifact: %v", err)
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "ResearchNeedsReview",
+				CurrentPhase: "research",
+				ActiveRun:    1,
+				RunCount:     1,
+				CreatedAt:    time.Now(),
+			},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       "ResearchNeedsReview",
+				CurrentPhase: "research",
+				ActiveRun:    1,
+				RunCount:     1,
+			},
+			Pipeline: "moonshot",
+			ActiveRun: &server.RunSummaryDTO{
+				RunNumber:          1,
+				CurrentPhase:       "research",
+				PendingReviewPhase: "design",
+				ArtifactCount:      1,
+			},
+			Models: config.ModelConfig{Utilities: "test-utility"},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
+			{ID: "inquire", RunNumber: 1, Phase: "inquire", Path: questionsPath, Size: 12, ContentAvailable: true},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	if view := stripANSI(app.View().Content); !strings.Contains(view, "Research needs review") {
+		t.Fatalf("API app View() should label the reviewed research artifact, not the design target:\n%s", view)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	updated := model.(APIAppModel)
+	if updated.artifactReview != nil {
+		t.Fatalf("pressing a opened stale artifact review for %q; want fetch for research artifact", updated.artifactReview.ArtifactPath())
+	}
+	if cmd == nil {
+		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
+	}
+	if updated.statusMessage != "Loading review artifact" {
+		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
+	}
+}
+
 func TestAPIAppModelContextualActionRejectsDetachedStaleReviewAfterRewind(t *testing.T) {
 	t.Parallel()
 

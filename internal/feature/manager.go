@@ -1240,7 +1240,7 @@ func RewindablePhases(f *Feature) []Phase {
 	case StatusDesigning, StatusPlanReady, StatusResearchNeedsReview:
 		completedUpTo = PhaseDesign
 	case StatusDesignNeedsReview:
-		completedUpTo = PhasePlan
+		completedUpTo = PhaseDesign
 	case StatusPlanNeedsReview:
 		completedUpTo = PhasePlan
 		if f.PendingReviewPhase != nil && f.IsRewind && *f.PendingReviewPhase == PhaseImplement {
@@ -1292,7 +1292,7 @@ func RewindChoicesForFeature(f *Feature) []RewindChoice {
 	case StatusDesigning, StatusPlanReady, StatusResearchNeedsReview:
 		completedUpTo = PhaseDesign
 	case StatusDesignNeedsReview:
-		completedUpTo = PhasePlan
+		completedUpTo = PhaseDesign
 	case StatusPlanNeedsReview:
 		completedUpTo = PhasePlan
 		if f.PendingReviewPhase != nil && f.IsRewind && *f.PendingReviewPhase == PhaseImplement {

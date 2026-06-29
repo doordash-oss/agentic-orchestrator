@@ -720,6 +720,8 @@ func TestClientFetchRefreshSnapshotIncludesLivePreviewForSessionOutput(t *testin
 				Cursor:     CursorDTO{Total: 53, Start: 3, End: 53},
 				Messages:   []TranscriptMessageDTO{{Index: 52, Role: "assistant", Type: "text", Text: "fresh tail"}},
 			})
+		case "GET /api/v1/prompts":
+			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
 		case "GET /api/v1/features/feat-1/live-preview":
 			sawLivePreview = true
 			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}, Activity: "Using Bash..."})
@@ -752,6 +754,52 @@ func TestClientFetchRefreshSnapshotIncludesLivePreviewForSessionOutput(t *testin
 	}
 }
 
+func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *testing.T) {
+	var sawSessionDetail bool
+	var sawPrompts bool
+	var sawLivePreview bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/sessions/sess-1":
+			sawSessionDetail = true
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
+				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"},
+			}})
+		case "GET /api/v1/prompts":
+			sawPrompts = true
+			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
+		case "GET /api/v1/features/feat-1/live-preview":
+			sawLivePreview = true
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}, Activity: "Working"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event:    SSEEventDTO{Kind: "session.updated"},
+		Resource: ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"},
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "sess-1" {
+		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want sess-1 detail", snapshot.Session, sawSessionDetail)
+	}
+	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.AskUserQuestions) != 0 {
+		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want empty prompt snapshot to clear stale client prompts", snapshot.Prompts, sawPrompts)
+	}
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" {
+		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want feat-1 preview", snapshot.LivePreview, sawLivePreview)
+	}
+}
+
 func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.T) {
 	var sawSessionDetail bool
 	var sawLivePreview bool
@@ -764,6 +812,8 @@ func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.
 				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Done"},
 				TranscriptCursor:  CursorDTO{Total: 0, Start: 0, End: 0},
 			}})
+		case "GET /api/v1/prompts":
+			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
 		case "GET /api/v1/features/feat-1/live-preview":
 			sawLivePreview = true
 			writeJSON(w, http.StatusOK, LivePreviewResponse{

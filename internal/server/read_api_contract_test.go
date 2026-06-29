@@ -866,6 +866,23 @@ func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTarge
 	}
 }
 
+func TestFeatureDetailActionCatalogDesignReviewExcludesUnstartedPlan(t *testing.T) {
+	t.Parallel()
+	publishable := true
+	f := actionCatalogTestFeature(feature.StatusDesignNeedsReview, feature.Checkpoints{}, &publishable, nil)
+	f.CurrentPhase = feature.PhaseDesign
+	f.Pipeline = feature.PipelineMoonshot
+
+	rewind := actionDTOByID(t, actionCatalogDTOs(f), "rewind")
+	if !rewind.Enabled {
+		t.Fatalf("rewind enabled = false; want true")
+	}
+	targetOptions := actionInputDTOByName(t, rewind, "target_phase").Options
+	if got, want := strings.Join(targetOptions, ","), "inquire,research,design"; got != want {
+		t.Fatalf("target_phase options = %q; want %q", got, want)
+	}
+}
+
 func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	t.Parallel()
 	store, newest := seedReadFeature(t)

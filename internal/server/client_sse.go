@@ -234,6 +234,13 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 				featureID = session.Session.FeatureID
 			}
 			refreshFeatureDetail = isTerminalSessionStatus(session.Session.Status)
+			if featureID != "" && !isUtilityFeatureID(featureID) {
+				prompts, err := c.Prompts(ctx)
+				if err != nil {
+					return snapshot, err
+				}
+				snapshot.Prompts = &prompts
+			}
 			end := session.Session.TranscriptCursor.End
 			if end == 0 {
 				end = session.Session.TranscriptCursor.Total

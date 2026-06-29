@@ -2145,6 +2145,12 @@ func TestRewindablePhases(t *testing.T) {
 			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch},
 		},
 		{
+			name:       "design review allows through design",
+			status:     feature.StatusDesignNeedsReview,
+			phase:      feature.PhaseDesign,
+			wantPhases: []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign},
+		},
+		{
 			name:       "implementing allows all phases",
 			status:     feature.StatusImplementing,
 			phase:      feature.PhaseImplement,
@@ -4307,6 +4313,27 @@ func TestRewindChoicesForFeature_StandardNoEscalation(t *testing.T) {
 	for _, c := range choices {
 		if c.EscalatesTo != "" {
 			t.Errorf("phase %v: EscalatesTo = %q, want empty", c.Phase, c.EscalatesTo)
+		}
+	}
+}
+
+func TestRewindChoicesForFeature_DesignNeedsReviewExcludesPlan(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure lifecycle helper over an isolated feature value.
+	f := &feature.Feature{
+		Status:       feature.StatusDesignNeedsReview,
+		CurrentPhase: feature.PhaseDesign,
+		Pipeline:     feature.PipelineMoonshot,
+	}
+
+	choices := feature.RewindChoicesForFeature(f)
+	want := []feature.Phase{feature.PhaseInquire, feature.PhaseResearch, feature.PhaseDesign}
+	if len(choices) != len(want) {
+		t.Fatalf("got %d choices, want %d: %v", len(choices), len(want), choices)
+	}
+	for i, phase := range want {
+		if choices[i].Phase != phase {
+			t.Fatalf("choice[%d] = %v, want %v", i, choices[i].Phase, phase)
 		}
 	}
 }

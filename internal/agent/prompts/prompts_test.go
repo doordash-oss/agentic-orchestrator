@@ -249,20 +249,15 @@ type FinalReviewUserInput struct {
 	Iteration     int
 	IsCycleReview bool
 
-	PhaseType   string
-	DiffBase    string
-	RoadmapPath string
+	PhaseType          string
+	DiffBase           string
+	RoadmapPath        string
+	DesignArtifactPath string
 
 	FeatureDescription string
 	ExitCriteria       string
 	CycleFocus         string
 
-	TestingContractPath string
-
-	VerificationPath string
-
-	PriorImplementationPlanPaths         []string
-	PriorImplementationContractPaths     []string
 	PriorImplementationReportPaths       []string
 	PriorImplementationEvidenceRootDirs  []string
 	PriorImplementationEvidenceArtifacts []string
@@ -564,18 +559,17 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "final_review_user_phase",
 			render: func() string {
 				return FinalReviewUserPrompt(FinalReviewUserInput{
-					VisualReferences:    VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "conducting this final review"},
-					Iteration:           1,
-					IsCycleReview:       false,
-					PhaseType:           "tdd-fill-in",
-					DiffBase:            "main",
-					RoadmapPath:         "/state/feat-x/run-1/roadmap/plan.md",
-					FeatureDescription:  "Sign in with Google.",
-					ExitCriteria:        "Relevant tests pass.",
-					TestingContractPath: "/state/feat-x/run-1/phase-1/contract.yaml",
-					VerificationPath:    "/state/feat-x/run-1/phase-1/iter-2/verification-report.yaml",
-					FeedbackPath:        "/state/feat-x/run-1/final-review/iter-1/review-feedback.md",
-					Publishable:         true,
+					VisualReferences:   VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "conducting this final review"},
+					Iteration:          1,
+					IsCycleReview:      false,
+					PhaseType:          "tdd-fill-in",
+					DiffBase:           "main",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					FeatureDescription: "Sign in with Google.",
+					ExitCriteria:       "Relevant tests pass.",
+					FeedbackPath:       "/state/feat-x/run-1/final-review/iter-1/review-feedback.md",
+					Publishable:        true,
 				})
 			},
 		},

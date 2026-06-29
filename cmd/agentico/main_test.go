@@ -878,18 +878,19 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 	}
 }
 
-func TestRunArgsValidateArtifactsCatchesMalformedYAML(t *testing.T) {
+func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	iterDir := t.TempDir()
-	writeReviewFeedback(t, filepath.Join(iterDir, "review-feedback.md"), "- **High**: needs work", "CHANGES_REQUESTED")
-	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(strings.Join([]string{
-		"version: 2",
-		"additional_checks:",
-		"  - name: Source comparison spot-check",
-		"    command: manual: compare translated README against English source",
-		"    mode: manual",
-		"    status: failed",
+	if err := os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(strings.Join([]string{
+		"## Findings",
+		"- malformed verdict",
+		"",
+		"## Suggestions",
+		"- (none)",
+		"",
+		"## Verdict",
+		"LGTM",
 	}, "\n")), 0o644); err != nil {
-		t.Fatalf("write malformed report: %v", err)
+		t.Fatalf("write malformed review feedback: %v", err)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -912,8 +913,8 @@ func TestRunArgsValidateArtifactsCatchesMalformedYAML(t *testing.T) {
 	if launchedTUI || updateCalled {
 		t.Fatalf("validate-artifacts launched unrelated path: tui=%v update=%v", launchedTUI, updateCalled)
 	}
-	if got := stderr.String(); !strings.Contains(got, "verification-report.yaml") || !strings.Contains(got, "unparseable") {
-		t.Fatalf("stderr = %q, want verification-report.yaml unparseable violation", got)
+	if got := stderr.String(); !strings.Contains(got, "review-feedback.md") || !strings.Contains(got, "LGTM") {
+		t.Fatalf("stderr = %q, want review-feedback.md malformed verdict violation", got)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty on validation failure", stdout.String())
@@ -923,9 +924,6 @@ func TestRunArgsValidateArtifactsCatchesMalformedYAML(t *testing.T) {
 func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 	iterDir := t.TempDir()
 	writeReviewFeedback(t, filepath.Join(iterDir, "review-feedback.md"), "- (none)", "APPROVED")
-	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
-		t.Fatalf("write verification report: %v", err)
-	}
 
 	var stdout, stderr bytes.Buffer
 	code := runArgs(

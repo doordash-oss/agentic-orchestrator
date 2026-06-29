@@ -69,29 +69,16 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	implementationReviewPath := filepath.Join(repoRoot, "skills", "review-implementation", "SKILL.md")
 	finalReviewPath := filepath.Join(repoRoot, "skills", "final-review", "SKILL.md")
-	for _, path := range []string{implementationReviewPath, finalReviewPath} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("ReadFile(%s) error = %v", path, err)
-		}
-		body := string(data)
-		for _, want := range []string{
-			"Missing Visual / Behavioral Evidence Safety Net",
-			"rendered UI, TUI screens, web/mobile/native views, CLI output",
-			"Existing",
-			"Do not",
-		} {
-			if !strings.Contains(body, want) {
-				t.Errorf("%s missing %q", path, want)
-			}
-		}
-	}
 
 	implementationReview, err := os.ReadFile(implementationReviewPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s) error = %v", implementationReviewPath, err)
 	}
 	for _, want := range []string{
+		"Missing Visual / Behavioral Evidence Safety Net",
+		"rendered UI, TUI screens, web/mobile/native views, CLI output",
+		"Existing",
+		"Do not",
 		"MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>",
 		"MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>",
 		"phase-plan revision",
@@ -106,13 +93,21 @@ func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 		t.Fatalf("ReadFile(%s) error = %v", finalReviewPath, err)
 	}
 	for _, want := range []string{
-		"Final Review never reopens planning",
-		"Do not emit `MISSING_EVIDENCE_REQUIREMENT` markers in Final Review feedback",
-		"fix agent should capture the missing evidence artifacts",
+		"Validate whether the current product satisfies the approved user intent",
+		"only required durable output is `review-feedback.md`",
+		"Reuse last-phase evidence when it still proves current behavior",
+		"Request changes only for product defects",
+		"## Severity Classification",
+		"**Critical/High**: Blocking — functionality broken, tests failing, exit criteria not met",
+		"**Medium/Low**: Non-blocking suggestions for improvement",
+		"Only Critical/High findings may trigger `CHANGES_REQUESTED`",
 	} {
 		if !strings.Contains(string(finalReview), want) {
 			t.Errorf("%s missing %q", finalReviewPath, want)
 		}
+	}
+	if strings.Contains(string(finalReview), "MISSING_EVIDENCE_REQUIREMENT") {
+		t.Errorf("%s should not mention MISSING_EVIDENCE_REQUIREMENT markers", finalReviewPath)
 	}
 }
 

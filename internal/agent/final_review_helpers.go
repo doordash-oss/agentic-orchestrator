@@ -35,24 +35,20 @@ import (
 
 // FinalReviewPromptOpts contains the parameters for building the final review prompt.
 type FinalReviewPromptOpts struct {
-	FeatureDescription     string
-	ExitCriteria           string
-	DiffBase               string // branch to diff against (e.g., "main")
-	WorkDir                string // repo working directory
-	VerificationPath       string // implementation verification report (mutable single source of truth)
-	TestingContractPath    string // bound testing contract path
-	PreviousFeedback       string // feedback from prior review iteration (empty on first)
-	Iteration              int
-	RoadmapPath            string // path to the roadmap file (reviewer reads it via tool access)
+	FeatureDescription string
+	ExitCriteria       string
+	DiffBase           string // branch to diff against (e.g., "main")
+	WorkDir            string // repo working directory
+	PreviousFeedback   string // feedback from prior review iteration (empty on first)
+	Iteration          int
+	RoadmapPath        string // path to the roadmap file (reviewer reads it via tool access)
 	DesignArtifactPath string // retained for caller compatibility; no longer re-injected
-	Images                 []string
-	PhaseType              string // "tracer-bullet", "tdd-fill-in", "collapsed", or ""
-	CycleFocus             string // short description of the active cycle's review scope
-	FeedbackPath           string // path where the reviewer must write its feedback file
-	Publishable            bool   // whether the repo has a remote / is publishable
+	Images             []string
+	PhaseType          string // "tracer-bullet", "tdd-fill-in", "collapsed", or ""
+	CycleFocus         string // short description of the active cycle's review scope
+	FeedbackPath       string // path where the reviewer must write its feedback file
+	Publishable        bool   // whether the repo has a remote / is publishable
 
-	PriorImplementationPlanPaths         []string
-	PriorImplementationContractPaths     []string
 	PriorImplementationReportPaths       []string
 	PriorImplementationEvidenceRootDirs  []string
 	PriorImplementationEvidenceArtifacts []string
@@ -67,7 +63,7 @@ type FinalFixPromptOpts struct {
 	VerificationReportPath string
 	Iteration              int
 	Publishable            bool
-	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
+	DesignArtifactPath     string   // retained for caller compatibility; no longer re-injected
 	Images                 []string // user-attached visual references, re-injected per iteration
 }
 
@@ -88,13 +84,10 @@ func BuildFinalReviewPrompt(opts FinalReviewPromptOpts) string {
 		PhaseType:                            opts.PhaseType,
 		DiffBase:                             opts.DiffBase,
 		RoadmapPath:                          opts.RoadmapPath,
+		DesignArtifactPath:                   opts.DesignArtifactPath,
 		FeatureDescription:                   opts.FeatureDescription,
 		ExitCriteria:                         opts.ExitCriteria,
 		CycleFocus:                           opts.CycleFocus,
-		TestingContractPath:                  opts.TestingContractPath,
-		VerificationPath:                     opts.VerificationPath,
-		PriorImplementationPlanPaths:         opts.PriorImplementationPlanPaths,
-		PriorImplementationContractPaths:     opts.PriorImplementationContractPaths,
 		PriorImplementationReportPaths:       opts.PriorImplementationReportPaths,
 		PriorImplementationEvidenceRootDirs:  opts.PriorImplementationEvidenceRootDirs,
 		PriorImplementationEvidenceArtifacts: opts.PriorImplementationEvidenceArtifacts,
@@ -255,8 +248,6 @@ func latestImplementationVerificationReportPath(stateDir string, f *feature.Feat
 }
 
 type priorImplementationEvidenceContext struct {
-	PlanPaths             []string
-	ContractPaths         []string
 	ReportPaths           []string
 	EvidenceRootDirs      []string
 	EvidenceArtifactPaths []string
@@ -264,17 +255,7 @@ type priorImplementationEvidenceContext struct {
 
 func priorImplementationEvidenceContextForRun(runDir string) priorImplementationEvidenceContext {
 	var ctx priorImplementationEvidenceContext
-	addIfExists := func(dst *[]string, path string) {
-		if strings.TrimSpace(path) == "" {
-			return
-		}
-		if _, err := os.Stat(path); err == nil {
-			*dst = append(*dst, path)
-		}
-	}
 	addImplementationDir := func(scopeDir string) {
-		addIfExists(&ctx.PlanPaths, filepath.Join(scopeDir, "plan", "phase-plan.md"))
-		addIfExists(&ctx.ContractPaths, filepath.Join(scopeDir, "testing-contract.yaml"))
 		if reportPath := latestCompletedImplementationReportPath(filepath.Join(scopeDir, feature.PhaseImplement.DirName())); reportPath != "" {
 			ctx.ReportPaths = append(ctx.ReportPaths, reportPath)
 			ctx.EvidenceRootDirs = append(ctx.EvidenceRootDirs, filepath.Dir(reportPath))

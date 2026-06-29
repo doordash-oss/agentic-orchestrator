@@ -34,15 +34,6 @@ var finalReviewerRoleSpec = RoleSpec{
 	MarkerRoot: "iteration_dir",
 	Artifacts: []RoleArtifactSpec{
 		reviewFeedbackRoleArtifact("iteration_dir"),
-		{
-			Name:         "verification_report",
-			DisplayPath:  "verification-report.yaml",
-			RootName:     "iteration_dir",
-			RelativePath: "verification-report.yaml",
-			Presence:     ArtifactRequired,
-			Description:  "iteration-local final-review verification report updated by the reviewer",
-			Validate:     ValidatorFinalReviewVerificationReport,
-		},
 	},
 }
 
@@ -58,20 +49,15 @@ type FinalReviewUserInput struct {
 	Iteration     int
 	IsCycleReview bool
 
-	PhaseType   string
-	DiffBase    string
-	RoadmapPath string
+	PhaseType          string
+	DiffBase           string
+	RoadmapPath        string
+	DesignArtifactPath string
 
 	FeatureDescription string
 	ExitCriteria       string
 	CycleFocus         string
 
-	TestingContractPath string
-
-	VerificationPath string
-
-	PriorImplementationPlanPaths         []string
-	PriorImplementationContractPaths     []string
 	PriorImplementationReportPaths       []string
 	PriorImplementationEvidenceRootDirs  []string
 	PriorImplementationEvidenceArtifacts []string

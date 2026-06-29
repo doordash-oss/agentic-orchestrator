@@ -499,8 +499,7 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 			wantRoots:  []string{"iteration_dir"},
 			wantMarker: "/state/feat/run-001/review/iteration-01/phase_complete",
 			wantPaths: map[string]string{
-				"review_feedback":     "/state/feat/run-001/review/iteration-01/review-feedback.md",
-				"verification_report": "/state/feat/run-001/review/iteration-01/verification-report.yaml",
+				"review_feedback": "/state/feat/run-001/review/iteration-01/review-feedback.md",
 			},
 		},
 		{

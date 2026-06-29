@@ -30,8 +30,9 @@ const (
 )
 
 var (
-	autoPickNumberedOptionRe   = regexp.MustCompile(`^\d+\.\s+(.+)$`)
-	autoPickConfidenceSuffixRe = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
+	autoPickNumberedOptionRe      = regexp.MustCompile(`^\d+\.\s+(.+)$`)
+	autoPickConfidenceSuffixRe    = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
+	autoPickTrailingRecommendedRe = regexp.MustCompile(`(?i)\s+\(recommended\)\s*$`)
 )
 
 type askUserAutoPickDecisionContext struct {
@@ -280,20 +281,43 @@ func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOp
 	lines := strings.Split(strings.ReplaceAll(question, "\r\n", "\n"), "\n")
 	stem := make([]string, 0, len(lines))
 	rawOptions := make([]string, 0, 4)
+	trailingStem := make([]string, 0, 2)
 	inOptions := false
+	inTrailingStem := false
+	sawBlankAfterOptions := false
 
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if line == "" {
-			if !inOptions && len(stem) > 0 && stem[len(stem)-1] != "" {
+			if inTrailingStem {
+				if len(trailingStem) > 0 && trailingStem[len(trailingStem)-1] != "" {
+					trailingStem = append(trailingStem, "")
+				}
+				continue
+			}
+			if inOptions {
+				if len(rawOptions) > 0 {
+					sawBlankAfterOptions = true
+				}
+				continue
+			}
+			if len(stem) > 0 && stem[len(stem)-1] != "" {
 				stem = append(stem, "")
 			}
 			continue
 		}
 
-		if matches := autoPickNumberedOptionRe.FindStringSubmatch(line); matches != nil {
-			inOptions = true
-			rawOptions = append(rawOptions, strings.TrimSpace(matches[1]))
+		if !inTrailingStem {
+			if matches := autoPickNumberedOptionRe.FindStringSubmatch(line); matches != nil {
+				inOptions = true
+				sawBlankAfterOptions = false
+				rawOptions = append(rawOptions, strings.TrimSpace(matches[1]))
+				continue
+			}
+		}
+
+		if inTrailingStem {
+			trailingStem = append(trailingStem, line)
 			continue
 		}
 
@@ -301,15 +325,19 @@ func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOp
 			if isAutoPickReplyInstruction(line) {
 				continue
 			}
-			if len(rawOptions) > 0 {
-				rawOptions[len(rawOptions)-1] += " " + line
+			if sawBlankAfterOptions && isAutoPickTrailingQuestion(line) {
+				inTrailingStem = true
+				trailingStem = append(trailingStem, line)
 				continue
 			}
+			if len(rawOptions) > 0 {
+				rawOptions[len(rawOptions)-1] += " " + line
+			}
+			sawBlankAfterOptions = false
+			continue
 		}
 
-		if !inOptions {
-			stem = append(stem, line)
-		}
+		stem = append(stem, line)
 	}
 
 	if len(rawOptions) < 2 || looksLikeAutoPickQuestionBundle(rawOptions) {
@@ -326,10 +354,17 @@ func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOp
 	}
 
 	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
+	if len(trailingStem) > 0 {
+		cleaned = strings.TrimSpace(strings.Join(trailingStem, "\n"))
+	}
 	if cleaned == "" {
 		cleaned = question
 	}
 	return cleaned, options, true
+}
+
+func isAutoPickTrailingQuestion(line string) bool {
+	return strings.HasSuffix(strings.TrimSpace(line), "?")
 }
 
 func looksLikeAutoPickQuestionBundle(rawOptions []string) bool {
@@ -343,7 +378,7 @@ func looksLikeAutoPickQuestionBundle(rawOptions []string) bool {
 }
 
 func splitAutoPickOption(raw string) (string, *float64) {
-	raw, confidence := splitAutoPickOptionConfidence(raw)
+	raw, confidence, trailingRecommended := splitAutoPickOptionConfidence(raw)
 	if raw == "" {
 		return "", confidence
 	}
@@ -353,21 +388,33 @@ func splitAutoPickOption(raw string) (string, *float64) {
 	}
 	label = strings.Trim(label, "`")
 	label = strings.TrimSpace(label)
+	if trailingRecommended && !strings.Contains(strings.ToLower(label), "(recommended)") {
+		label += " (Recommended)"
+	}
 	return label, confidence
 }
 
-func splitAutoPickOptionConfidence(raw string) (string, *float64) {
+func splitAutoPickOptionConfidence(raw string) (string, *float64, bool) {
 	raw = strings.TrimSpace(raw)
+	raw, trailingRecommended := trimAutoPickTrailingRecommended(raw)
 	matches := autoPickConfidenceSuffixRe.FindStringSubmatch(raw)
 	if matches == nil {
-		return raw, nil
+		return raw, nil, trailingRecommended
 	}
 	confidence, err := strconv.ParseFloat(matches[1], 64)
 	if err != nil {
-		return raw, nil
+		return raw, nil, trailingRecommended
 	}
 	trimmed := strings.TrimSpace(raw[:len(raw)-len(matches[0])])
-	return trimmed, &confidence
+	return trimmed, &confidence, trailingRecommended
+}
+
+func trimAutoPickTrailingRecommended(raw string) (string, bool) {
+	matches := autoPickTrailingRecommendedRe.FindStringSubmatch(raw)
+	if matches == nil {
+		return raw, false
+	}
+	return strings.TrimSpace(raw[:len(raw)-len(matches[0])]), true
 }
 
 func isAutoPickReplyInstruction(line string) bool {

@@ -312,6 +312,28 @@ func TestClassifyTermination_Priorities(t *testing.T) {
 			t.Errorf("got %s, want Errored", got)
 		}
 	})
+	// A reported error must beat a stale/present phase_complete marker: a failed
+	// invocation (for example a fail-closed control event) cannot be laundered
+	// into a clean completion just because a marker is on disk.
+	t.Run("error beats phase_complete marker", func(t *testing.T) {
+		in := TerminationInputs{
+			Result:              &ResultMessage{Subtype: "error", IsError: true},
+			PhaseCompleteExists: true,
+		}
+		if got := ClassifyTermination(in); got != TermErrored {
+			t.Errorf("got %s, want Errored", got)
+		}
+	})
+	// Likewise when only is_error is set without an error subtype.
+	t.Run("is_error beats phase_complete marker", func(t *testing.T) {
+		in := TerminationInputs{
+			Result:              &ResultMessage{Subtype: "success", IsError: true},
+			PhaseCompleteExists: true,
+		}
+		if got := ClassifyTermination(in); got != TermErrored {
+			t.Errorf("got %s, want Errored", got)
+		}
+	})
 	t.Run("nil result is Unknown", func(t *testing.T) {
 		if got := ClassifyTermination(TerminationInputs{}); got != TermUnknown {
 			t.Errorf("got %s, want Unknown", got)

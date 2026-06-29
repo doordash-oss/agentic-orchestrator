@@ -87,6 +87,8 @@ func (pr *PhaseRunner) defaultModelForRole(role llm.PhaseRole) string {
 	}
 	defaults := pr.Registry.CatalogDefaultModels()
 	switch role {
+	case llm.PhaseInquiry:
+		return defaults.Inquiry
 	case llm.PhaseResearch:
 		return defaults.Research
 	case llm.PhasePlanning:
@@ -129,15 +131,17 @@ func (pr *PhaseRunner) resolvePhaseArtifactDir(f *feature.Feature, phaseName str
 // RoleSpec system prompt that owns skill discovery, useful resources, output
 // roots, and completion.
 type interactivePhaseConfig struct {
-	Prompt        string
-	Spec          RoleSpec
-	DirName       string        // artifact subdirectory: "inquire", "research", "design"
-	SkillName     string        // skill name (used for error messages and session naming)
-	SessionSuffix string        // appended to feature ID: "-inquire", "-research", "-design"
-	Phase         feature.Phase // feature.PhaseInquire, etc.
-	AgentNames    []string
-	GuidelinesDir string
-	KBInfos       []KBInfo
+	Prompt          string
+	Spec            RoleSpec
+	DirName         string        // artifact subdirectory: "inquire", "research", "design"
+	SkillName       string        // skill name (used for error messages and session naming)
+	SessionSuffix   string        // appended to feature ID: "-inquire", "-research", "-design"
+	Phase           feature.Phase // feature.PhaseInquire, etc.
+	ConfiguredModel string
+	ModelRole       llm.PhaseRole
+	AgentNames      []string
+	GuidelinesDir   string
+	KBInfos         []KBInfo
 }
 
 // runInteractivePhase contains the shared boilerplate for launching an async
@@ -147,7 +151,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	artifactDir := pr.resolvePhaseArtifactDir(f, cfg.DirName)
 	_ = os.MkdirAll(artifactDir, 0o755)
 	RemovePhaseComplete(artifactDir)
-	researchModel := pr.modelForRole(f.Models.Research, llm.PhaseResearch)
+	phaseModel := pr.modelForRole(cfg.ConfiguredModel, cfg.ModelRole)
 
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          cfg.Spec,
@@ -155,7 +159,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		SkillsDir:     pr.SkillsDir,
 		GuidelinesDir: cfg.GuidelinesDir,
 		KBInfos:       cfg.KBInfos,
-		AskingClause:  pr.askingQuestionsClauseForModel(researchModel),
+		AskingClause:  pr.askingQuestionsClauseForModel(phaseModel),
 	})
 	sessionID := fmt.Sprintf("%s%s", f.ID, cfg.SessionSuffix)
 
@@ -167,7 +171,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	pr.Observer.PhaseStarted(phaseCtx, cfg.Phase.String())
 
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          researchModel,
+		Model:                          phaseModel,
 		Prompt:                         cfg.Prompt,
 		SystemPrompt:                   systemPrompt,
 		AdditionalDirs:                 additionalDirs,
@@ -209,7 +213,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	if sessOpts != nil {
 		providerName = sessOpts.ProviderName
 	}
-	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, f.Models.Research, "")
+	pr.Observer.SessionStarted(sessionCtx, cfg.Phase.String(), sessionID, providerName, phaseModel, "")
 
 	// Track reads of KB/skill/guideline files for observability.
 	pr.installContextReadTracker(sess, sessionCtx, cfg.Phase.String(), sessionID, pr.StateDir)
@@ -220,6 +224,10 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		cost := ExtractSessionCost(sess)
 		usage := toSessionUsage(cost)
 		duration := time.Since(sessionStart)
+		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, cfg.Phase.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: cfg.Phase.String(),
+		})
 		pr.Observer.SessionEnded(sessionCtx, cfg.Phase.String(), sessionID, "", usage, duration, sessionErrFromStatus(sess))
 	})
 
@@ -378,7 +386,12 @@ func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionC
 				if key == "" {
 					key = "implement"
 				}
-				feat.AddPhaseCost(key, cost.TotalCostUSD)
+				feat.RecordSessionCost(feature.SessionCostRecord{
+					SessionID:     sessionID,
+					PhaseKey:      key,
+					ObserverPhase: feature.PhaseImplement.String(),
+					CostUSD:       cost.TotalCostUSD,
+				})
 				return nil
 			})
 		}
@@ -397,15 +410,21 @@ func (pr *PhaseRunner) RunTweakSession(f *feature.Feature, cfgs ...TweakSessionC
 // RunInquire starts an inquire session for a feature.
 // Returns the session ID. The session runs asynchronously.
 func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string, error) {
+	inquiryModel := f.Models.Inquiry
+	if inquiryModel == "" {
+		inquiryModel = f.Models.Research
+	}
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:        BuildInquirePrompt(f, pr.SkillsDir, kbInfos...),
-		Spec:          InquirerRoleSpec(),
-		DirName:       "inquire",
-		SkillName:     "inquire",
-		SessionSuffix: "-inquire",
-		Phase:         feature.PhaseInquire,
-		AgentNames:    []string{},
-		KBInfos:       kbInfos,
+		Prompt:          BuildInquirePrompt(f, pr.SkillsDir, kbInfos...),
+		Spec:            InquirerRoleSpec(),
+		DirName:         "inquire",
+		SkillName:       "inquire",
+		SessionSuffix:   "-inquire",
+		Phase:           feature.PhaseInquire,
+		ConfiguredModel: inquiryModel,
+		ModelRole:       llm.PhaseInquiry,
+		AgentNames:      []string{},
+		KBInfos:         kbInfos,
 	})
 }
 
@@ -413,19 +432,22 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 // Returns the session ID. The session runs asynchronously.
 func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:        BuildResearchFromQuestionsPrompt(f, pr.SkillsDir, questionsPath, kbInfos...),
-		Spec:          ResearcherRoleSpec(),
-		DirName:       "research",
-		SkillName:     "research-codebase",
-		SessionSuffix: "-research",
-		Phase:         feature.PhaseResearch,
-		AgentNames:    researchAgentNames(),
-		KBInfos:       kbInfos,
+		Prompt:          BuildResearchFromQuestionsPrompt(f, pr.SkillsDir, questionsPath, kbInfos...),
+		Spec:            ResearcherRoleSpec(),
+		DirName:         "research",
+		SkillName:       "research-codebase",
+		SessionSuffix:   "-research",
+		Phase:           feature.PhaseResearch,
+		ConfiguredModel: f.Models.Research,
+		ModelRole:       llm.PhaseResearch,
+		AgentNames:      explorationAgentNames(),
+		KBInfos:         kbInfos,
 	})
 }
 
-// researchAgentNames returns the subagents allowed in Research sessions.
-func researchAgentNames() []string {
+// explorationAgentNames returns the codebase- and web-exploration subagents
+// shared by research and the planning, review, and refactor phases.
+func explorationAgentNames() []string {
 	return []string{
 		"codebase-locator",
 		"codebase-analyzer",
@@ -440,15 +462,17 @@ func researchAgentNames() []string {
 // place; the session identity, skill, and prompt template are Design-facing.
 func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:        BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
-		Spec:          DesignerRoleSpec(),
-		DirName:       feature.PhaseDesign.DirName(),
-		SkillName:     "design",
-		SessionSuffix: "-design",
-		Phase:         feature.PhaseDesign,
-		AgentNames:    []string{},
-		GuidelinesDir: pr.GuidelinesDir,
-		KBInfos:       kbInfos,
+		Prompt:          BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
+		Spec:            DesignerRoleSpec(),
+		DirName:         feature.PhaseDesign.DirName(),
+		SkillName:       "design",
+		SessionSuffix:   "-design",
+		Phase:           feature.PhaseDesign,
+		ConfiguredModel: f.Models.Planning,
+		ModelRole:       llm.PhasePlanning,
+		AgentNames:      []string{},
+		GuidelinesDir:   pr.GuidelinesDir,
+		KBInfos:         kbInfos,
 	})
 }
 
@@ -572,10 +596,13 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	pidDir := filepath.Join(pr.StateDir, f.ID)
 	logPath := filepath.Join(kbDir, "output.txt")
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          kbModel,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 []string{pr.StateDir},
+		Model:        kbModel,
+		Prompt:       prompt,
+		SystemPrompt: systemPrompt,
+		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), not a
+		// descendant, so it must be mounted explicitly: this makes it readable and,
+		// via the default writable-root derivation, writable for managed providers.
+		AdditionalDirs:                 []string{pr.StateDir, kbDir},
 		AgentNames:                     knowledgeBaseAgentNames(),
 		PIDDir:                         pidDir,
 		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
@@ -611,6 +638,11 @@ func (pr *PhaseRunner) RunKnowledgeBaseForRepo(f *feature.Feature, repo feature.
 	sessionStart := time.Now()
 	sess.AddCleanupFunc(func() {
 		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, feature.PhaseKnowledgeBase.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseKnowledgeBase.String(),
+			RepoName:      repo.Name,
+		})
 		pr.Observer.SessionEnded(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, repo.Name, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 	})
 
@@ -698,6 +730,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(planningModel),
 		Observer:                   pr.Observer,
 	}
 
@@ -760,6 +793,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 			EffortLevel:                f.EffectivePipeline().EffortLevel(),
 			SkillsDir:                  pr.SkillsDir,
 			GuidelinesDir:              pr.GuidelinesDir,
+			FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(phasePlanModel),
 			Observer:                   pr.Observer,
 		},
 		RoadmapPath:         roadmapPath,
@@ -832,6 +866,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 	}
 
@@ -886,6 +921,7 @@ func (pr *PhaseRunner) RunFeatureCycleFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(implementationModel),
 		Observer:                   pr.Observer,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -946,6 +982,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		RunImplementFn:             pr.RunImplementFn,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
@@ -997,6 +1034,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
+		FinishOrViolateNudge:       pr.finishOrViolateNudgeForModel(reviewModel) && pr.finishOrViolateNudgeForModel(model),
 		Observer:                   pr.Observer,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
@@ -1148,10 +1186,9 @@ type BuildSessionOpts struct {
 	AllowedTools    []string
 	DisallowedTools []string
 	AdditionalDirs  []string
-	// WritableRoots overrides the Codex sandbox writable roots. Nil preserves
-	// the default StateDir + AdditionalDirs behavior; pass an explicit slice
-	// for bounded helpers that must read mounted directories without making
-	// them writable.
+	// WritableRoots overrides the provider write surface. Nil preserves the
+	// default StateDir + AdditionalDirs behavior, except that read-only context
+	// mounts are not passed as command-level writable roots.
 	WritableRoots []string
 	PIDDir        string
 	PermHandler   ports.PermissionHandler
@@ -1174,11 +1211,33 @@ type BuildSessionOpts struct {
 	// Leave empty for paths that don't have a marker contract (e.g. tweak
 	// PTY sessions); the provider falls back to its legacy heuristic.
 	MarkerPath string
+	// ResumeSessionID, when set, asks the provider to resume that prior session
+	// identity rather than start a fresh one. It is forwarded to both command and
+	// protocol setup so each provider resumes via its own supported path.
+	ResumeSessionID string
 }
 
 // BuildSessionFunc is the callback signature for session creation via the registry.
 // Used by TUI components and loop configs that need to create sessions.
 type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
+
+var pendingToolWatchdogConfig = ports.SessionWatchdogConfig{
+	PendingToolIdleTimeout: 5 * time.Minute,
+	PollInterval:           time.Second,
+}
+
+type pendingToolWatchdogProvider interface {
+	EnablesPendingToolWatchdog() bool
+}
+
+func watchdogConfigForProvider(provider llm.LLMProvider) *ports.SessionWatchdogConfig {
+	p, ok := provider.(pendingToolWatchdogProvider)
+	if !ok || !p.EnablesPendingToolWatchdog() {
+		return nil
+	}
+	cfg := pendingToolWatchdogConfig
+	return &cfg
+}
 
 // grillingPhasePermissionMode returns the provider permission mode to pin for
 // phases whose prompts rely on the [grill-me] directive. Returns "default" for
@@ -1191,6 +1250,27 @@ func grillingPhasePermissionMode(phase feature.Phase) string {
 		return "default"
 	}
 	return ""
+}
+
+// subtractRoots returns roots with every entry in remove omitted, preserving
+// order. Used to keep read-only context mounts (skills, guidelines) out of a
+// provider's writable set while leaving them in the read set.
+func subtractRoots(roots, remove []string) []string {
+	if len(remove) == 0 {
+		return roots
+	}
+	skip := make(map[string]struct{}, len(remove))
+	for _, r := range remove {
+		skip[r] = struct{}{}
+	}
+	out := make([]string, 0, len(roots))
+	for _, r := range roots {
+		if _, ok := skip[r]; ok {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // BuildSession creates CLI command args, env vars, and session opts by
@@ -1213,9 +1293,15 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		return nil, nil, nil, fmt.Errorf("resolving provider for model %q: %w", opts.Model, err)
 	}
 
+	// Skills and guidelines are read-only context mounts: agents must be able to
+	// read them, but they are global shared resources that must never become
+	// writable by default.
+	var readOnlyContextDirs []string
+
 	// Skills injection: grant agents filesystem access to reconciled skill files.
 	if pr.SkillsDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.SkillsDir)
+		readOnlyContextDirs = append(readOnlyContextDirs, pr.SkillsDir)
 	}
 
 	// Guidelines injection: append discovery table for code-touching phases.
@@ -1231,12 +1317,28 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	// Guidelines injection: grant agents filesystem access to guideline files.
 	if pr.GuidelinesDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.GuidelinesDir)
+		readOnlyContextDirs = append(readOnlyContextDirs, pr.GuidelinesDir)
 	}
 
 	writableRoots := append([]string(nil), opts.WritableRoots...)
 	if opts.WritableRoots == nil {
 		writableRoots = []string{pr.StateDir}
 		writableRoots = append(writableRoots, opts.AdditionalDirs...)
+	}
+
+	// Read roots are everything a provider may read without per-call mediation:
+	// the feature state, the working directory, and every additional mounted dir
+	// (skills, guidelines, worktrees, knowledge base, images, attachments).
+	readRoots := append([]string{pr.StateDir}, opts.AdditionalDirs...)
+	if opts.WorkDir != "" {
+		readRoots = append(readRoots, opts.WorkDir)
+	}
+
+	// Command-level writable roots omit read-only context mounts unless the
+	// caller supplied an explicit writable-root list.
+	commandWritableRoots := writableRoots
+	if opts.WritableRoots == nil {
+		commandWritableRoots = subtractRoots(writableRoots, readOnlyContextDirs)
 	}
 
 	agentsJSON, err := AgentsJSONForNames(opts.AgentNames)
@@ -1261,6 +1363,10 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		AgentNames:           opts.AgentNames,
 		EffortLevel:          opts.EffortLevel,
 		PermissionMode:       grillingPhasePermissionMode(opts.Phase),
+		ResumeSessionID:      opts.ResumeSessionID,
+		WritableRoots:        commandWritableRoots,
+		ReadRoots:            readRoots,
+		WorkDir:              opts.WorkDir,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)
@@ -1275,27 +1381,36 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
-		Model:         bareModel,
-		ContextWindow: contextWindow,
-		WorkDir:       opts.WorkDir,
-		SystemPrompt:  opts.SystemPrompt,
-		InitialPrompt: opts.Prompt,
-		WritableRoots: writableRoots,
-		DSP:           pr.DangerouslySkipPermissions,
-		StateDir:      pr.StateDir,
-		MarkerPath:    opts.MarkerPath,
+		Model:           bareModel,
+		ContextWindow:   contextWindow,
+		WorkDir:         opts.WorkDir,
+		SystemPrompt:    opts.SystemPrompt,
+		InitialPrompt:   opts.Prompt,
+		WritableRoots:   writableRoots,
+		DSP:             pr.DangerouslySkipPermissions,
+		StateDir:        pr.StateDir,
+		MarkerPath:      opts.MarkerPath,
+		ResumeSessionID: opts.ResumeSessionID,
 	})
 
 	sessOpts = &ports.SessionOpts{
 		PIDDir:            opts.PIDDir,
 		PermHandler:       opts.PermHandler,
 		InitialPrompt:     opts.Prompt,
+		ContextWindow:     contextWindow,
 		RepoName:          opts.RepoName,
 		LogPath:           opts.LogPath,
 		ProviderName:      prov.Name(),
 		Protocol:          protocol,
 		DebugSystemPrompt: opts.SystemPrompt,
 		TurnMode:          opts.TurnMode,
+		Watchdog:          watchdogConfigForProvider(prov),
+	}
+	if c, ok := prov.(finishOrViolateNudgeProvider); ok {
+		sessOpts.SupportsFinishOrViolateNudge = c.SupportsFinishOrViolateNudge()
+	}
+	if c, ok := prov.(boundedHelperSandboxProvider); ok {
+		sessOpts.UsesBoundedHelperSandbox = c.UsesBoundedHelperSandbox()
 	}
 	return cmd, env, sessOpts, nil
 }

@@ -320,6 +320,64 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 	}
 }
 
+// TestRunFeatureFinalReviewLoop_FinishOrViolateNudgeRecoversSameSession proves
+// the FR review leg recovers within one iteration via the finish-or-violate
+// nudge: the reviewer ends its first turn without the FR completion artifacts,
+// the harness nudges the same live session, and the nudged turn writes the
+// APPROVED feedback + phase_complete so the loop ends review_passed.
+func TestRunFeatureFinalReviewLoop_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-nudge", []string{"api", "web"})
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh", fmt.Sprintf(`%s
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+while IFS= read -r _line; do
+  case "$_line" in
+    %s)
+      %s
+      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+      exit 0
+      ;;
+  esac
+done
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteFinalReviewApproved(artDir)))
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := OrchestratorConfig{
+		Feature:              f,
+		FeatureStore:         store,
+		StateDir:             env.stateDir,
+		Model:                "agent",
+		ReviewModel:          "reviewer",
+		MaxIterations:        3,
+		MaxConsecFails:       3,
+		FinishOrViolateNudge: true,
+		BuildSession:         mockBuildSessionByModel(map[string]string{"reviewer": reviewScript}),
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if got, want := result.Iterations, 1; got != want {
+		t.Errorf("Iterations = %d, want %d (recovered within the first iteration)", got, want)
+	}
+}
+
 // TestRunFeatureFinalReviewLoop_ChangesRequestedThenFixApproves drives the
 // inverted iteration order: review FIRST returns CHANGES_REQUESTED, fix runs
 // in the same iteration, iter-2's review APPROVES. End state: every repo
@@ -532,6 +590,9 @@ fi`,
 		if !opts.SystemPromptHasUsefulResources {
 			t.Errorf("reviewer SystemPromptHasUsefulResources = false, want true")
 		}
+		if got, want := strings.Join(opts.AgentNames, ","), strings.Join(explorationAgentNames(), ","); got != want {
+			t.Errorf("reviewer AgentNames = %v, want exploration set %v", opts.AgentNames, explorationAgentNames())
+		}
 	}
 }
 
@@ -662,25 +723,76 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_MissingEvidenceRoutesPlanRevision(t *testing.T) {
+func TestRunFeatureFinalReviewLoop_MissingEvidenceRunsFixAgent(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	result := runFinalReviewWithReviewScript(t, func(artDir string) string {
-		return testutil.WriteFinalReviewChangesRequested(artDir, "- **Critical**: MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.")
-	})
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-missing-evidence-fix", []string{"api", "web"})
 
-	if result.FinalStatus != "plan_revision_required" {
-		t.Fatalf("FinalStatus = %q, want plan_revision_required", result.FinalStatus)
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
 	}
-	for _, want := range []string{
-		"MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey.",
-		"### Behavioral Evidence",
-		"Do not add verification-report.yaml rows directly",
-	} {
-		if !strings.Contains(result.PlanRevisionFeedback, want) {
-			t.Errorf("PlanRevisionFeedback missing %q:\n%s", want, result.PlanRevisionFeedback)
-		}
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
+		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
+%s
+%s
+%s
+else
+%s
+%s
+%s
+fi`,
+			artDir,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewApproved(artDir),
+			testutil.JSONLSuccess,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewChangesRequested(artDir, "- **Critical**: MISSING_EVIDENCE_REQUIREMENT behavioral: Record the create-project CLI journey."),
+			testutil.JSONLSuccess))
+	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  3,
+		MaxConsecFails: 3,
+		BuildSession: mockBuildSessionByModel(map[string]string{
+			"reviewer": reviewScript,
+			"agent":    fixScript,
+		}),
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
+	}
+	if result.PlanRevisionFeedback != "" {
+		t.Fatalf("PlanRevisionFeedback = %q, want empty", result.PlanRevisionFeedback)
+	}
+	if result.Iterations != 2 {
+		t.Fatalf("Iterations = %d, want 2 after fix-agent iteration", result.Iterations)
+	}
+	if _, err := os.Stat(filepath.Join(artDir, "iteration-01", "phase_complete")); err != nil {
+		t.Fatalf("iteration-01 phase_complete missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(artDir, "iteration-02", "phase_complete")); err != nil {
+		t.Fatalf("iteration-02 phase_complete missing: %v", err)
 	}
 }
 

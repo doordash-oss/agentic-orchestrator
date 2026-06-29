@@ -147,6 +147,16 @@ func TestAttachModelViewUsesWatchVocabulary(t *testing.T) {
 	}
 }
 
+func TestAttachHeaderSpellsAgentico(t *testing.T) {
+	header := stripANSI(AttachModel{}.renderAttachHeader(80))
+	if !strings.Contains(header, " ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀▀ █▀█") {
+		t.Errorf("attach header missing AGENTICO top row:\n%s", header)
+	}
+	if !strings.Contains(header, " █▀█ █▄█ ██▄ █░▀█ ░█░ █ █▄▄ █▄█") {
+		t.Errorf("attach header missing AGENTICO bottom row:\n%s", header)
+	}
+}
+
 func TestAttachModelRenderViewportContent_ExcludesSpinnerLine(t *testing.T) {
 	sess := session.NewSession("test-spinner", "feat-1", 0)
 	m := attachModelFromSession(sess, 80, 24)

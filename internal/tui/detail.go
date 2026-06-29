@@ -359,8 +359,7 @@ func (m DetailModel) renderMetadataFull(f *feature.Feature) string {
 		}
 	}
 	b.WriteString(LabelStyle.Render("Models"))
-	b.WriteString("  " + MutedStyle.Render(fmt.Sprintf("R:%s  P:%s  I:%s  Rev:%s  KB:%s",
-		f.Models.Research, f.Models.Planning, f.Models.Implementation, f.Models.Review, f.Models.KBBuild)) + "\n")
+	b.WriteString("  " + MutedStyle.Render(compactModelSummary(f.Models, "  ")) + "\n")
 	b.WriteString(LabelStyle.Render("Input Alerts"))
 	b.WriteString("  " + MutedStyle.Render(inputAlertModeLabel(f)) + "\n")
 	if f.RiskLevel != "" {
@@ -969,8 +968,7 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 		}
 	}
 	b.WriteString(LabelStyle.Render("Models"))
-	b.WriteString("  " + MutedStyle.Render(fmt.Sprintf("R:%s P:%s I:%s Rev:%s KB:%s",
-		f.Models.Research, f.Models.Planning, f.Models.Implementation, f.Models.Review, f.Models.KBBuild)) + "\n")
+	b.WriteString("  " + MutedStyle.Render(compactModelSummary(f.Models, " ")) + "\n")
 	b.WriteString(LabelStyle.Render("Input Alerts"))
 	b.WriteString("  " + MutedStyle.Render(inputAlertModeLabel(f)) + "\n")
 	if f.RiskLevel != "" {

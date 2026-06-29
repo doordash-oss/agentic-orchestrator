@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -509,6 +510,128 @@ fi
 	}
 }
 
+// TestRoadmapPlanningLoop_FinishOrViolateNudgeRecoversSameSession proves the
+// roadmap planner recovers within a single attempt via the finish-or-violate
+// nudge: the planner ends its first turn without roadmap.md, the harness nudges
+// the same live session, and the nudged turn writes roadmap.md + phase_complete
+// so the critic approves and the loop ends with one attempt.
+func TestRoadmapPlanningLoop_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	stateDir := tmpDir
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	planDir := filepath.Join(stateDir, "test-plan-001", "runs", "run-001", "roadmap")
+	for _, d := range []string{workDir, planDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", d, err)
+		}
+	}
+
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh", fmt.Sprintf(`%s
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+while IFS= read -r _line; do
+  case "$_line" in
+    %s)
+      %s
+      %s
+      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+      exit 0
+      ;;
+  esac
+done
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, writeRoadmapArtifactSnippet(planDir), testutil.TouchPhaseCompleteInLatestAttemptDir(planDir)))
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+
+	store := feature.NewStore(stateDir)
+	f := newTestPlanFeature(t, workDir)
+	_ = store.Save(f)
+
+	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
+		Feature:                    f,
+		FeatureStore:               store,
+		StateDir:                   stateDir,
+		WorkDir:                    workDir,
+		MaxAttempts:                1,
+		DangerouslySkipPermissions: true,
+		FinishOrViolateNudge:       true,
+		BuildSession:               mockBuildSession(planScript, criticScript),
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "approved" {
+		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if result.Iterations != 1 {
+		t.Fatalf("Iterations = %d, want 1 (recovered within the first attempt)", result.Iterations)
+	}
+}
+
+// TestRoadmapPlanningLoop_GatesInteractiveTurnMode proves the roadmap planner
+// gates TurnModeInteractive on the finish-or-violate capability: armed only when
+// PlanLoopConfig.FinishOrViolateNudge is set, default one-shot otherwise.
+func TestRoadmapPlanningLoop_GatesInteractiveTurnMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		nudge    bool
+		wantMode ports.SessionTurnMode
+	}{
+		{name: "capability armed uses interactive", nudge: true, wantMode: ports.TurnModeInteractive},
+		{name: "capability off uses one-shot", nudge: false, wantMode: ports.TurnModeOneShot},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			workDir := filepath.Join(tmpDir, "work")
+			if err := os.MkdirAll(workDir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			store := feature.NewStore(tmpDir)
+			f := newTestPlanFeature(t, workDir)
+			_ = store.Save(f)
+
+			// session.SessionOpts is a type alias for ports.SessionOpts
+			// (session/manager.go), so this captures the exact concrete value
+			// production sets TurnMode on.
+			var capturedOpts *ports.SessionOpts
+			_, err := RunRoadmapPlanningLoop(PlanLoopConfig{
+				Feature:              f,
+				FeatureStore:         store,
+				StateDir:             tmpDir,
+				WorkDir:              workDir,
+				MaxAttempts:          1,
+				FinishOrViolateNudge: tc.nudge,
+				BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+					return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
+				},
+				SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+					if len(opts) > 0 {
+						capturedOpts = opts[0]
+					}
+					return nil, session.ErrShuttingDown
+				},
+			}, nil)
+			if err != nil {
+				t.Fatalf("RunRoadmapPlanningLoop() error: %v", err)
+			}
+			if capturedOpts == nil {
+				t.Fatal("expected SessionOpts to be captured")
+			}
+			if capturedOpts.TurnMode != tc.wantMode {
+				t.Errorf("TurnMode = %v, want %v", capturedOpts.TurnMode, tc.wantMode)
+			}
+		})
+	}
+}
+
 func TestRoadmapPlanningLoopUsesAttemptDirCompletionMarker(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -567,6 +690,9 @@ func TestRoadmapPlanningLoopUsesAttemptDirCompletionMarker(t *testing.T) {
 	}
 	if planOpts == nil {
 		t.Fatal("no non-helper planning session found")
+	}
+	if !reflect.DeepEqual(planOpts.AgentNames, explorationAgentNames()) {
+		t.Fatalf("roadmap planner AgentNames = %v, want exploration set %v", planOpts.AgentNames, explorationAgentNames())
 	}
 	wantMarker := filepath.Join(planDir, "attempt-01", "phase_complete")
 	if !strings.Contains(planOpts.SystemPrompt, wantMarker) {
@@ -791,15 +917,23 @@ done
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
+	store := feature.NewStore(filepath.Join(tmpDir, "store"))
+	f := &feature.Feature{
+		ID:              "test-plan-001",
+		Name:            "Test Plan Feature",
+		RiskLevel:       feature.RiskMedium,
+		Status:          feature.StatusPlanning,
+		ActiveTimingKey: "phase-1-plan",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
 	cfg := PlanLoopConfig{
-		Feature: &feature.Feature{
-			ID:            "test-plan-001",
-			Name:          "Test Plan Feature",
-			RiskLevel:     feature.RiskMedium,
-			SchemaVersion: feature.SchemaVersionCurrent,
-		},
-		StateDir: tmpDir,
-		WorkDir:  workDir,
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     tmpDir,
+		WorkDir:      workDir,
 		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			got = opts
 			return []string{"bash", criticScript}, nil, &session.SessionOpts{
@@ -843,6 +977,29 @@ done
 	}
 	if !permissionHandlerIncludesBoundedArtifacts(got.PermHandler) {
 		t.Fatalf("PermHandler = %T, want bounded artifact handler", got.PermHandler)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("phase-1-plan"); got != 0.001 {
+		t.Errorf("PhaseCost(phase-1-plan) = %v, want 0.001", got)
+	}
+	if len(updated.SessionCosts) != 1 {
+		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
+	}
+	cost := updated.SessionCosts[0]
+	if cost.SessionID != "test-plan-001-planreview-scope-01" {
+		t.Errorf("SessionID = %q, want test-plan-001-planreview-scope-01", cost.SessionID)
+	}
+	if cost.PhaseKey != "phase-1-plan" {
+		t.Errorf("PhaseKey = %q, want phase-1-plan", cost.PhaseKey)
+	}
+	if cost.ObserverPhase != "review" {
+		t.Errorf("ObserverPhase = %q, want review", cost.ObserverPhase)
+	}
+	if cost.CostUSD != 0.001 {
+		t.Errorf("CostUSD = %v, want 0.001", cost.CostUSD)
 	}
 }
 
@@ -1017,6 +1174,110 @@ func TestLatestCompletedPlanAttempt(t *testing.T) {
 			t.Errorf("expected 0, got %d", got)
 		}
 	})
+}
+
+func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, dir := range []string{workDir, phasePlanDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+	if err := WritePlanAttemptMeta(phasePlanDir, PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  "SUCCESS",
+		ReviewStatus: "CHANGES_REQUESTED",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(phasePlanDir, "attempt-01", "validation-feedback.md"), []byte("revise this plan"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WritePlanAttemptMeta(phasePlanDir, PlanAttemptMeta{
+		Attempt:     2,
+		AgentStatus: "FAILED",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotSessionID string
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:      f,
+			FeatureStore: store,
+			StateDir:     tmpDir,
+			WorkDir:      workDir,
+			MaxAttempts:  3,
+			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
+			},
+			SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+				gotSessionID = id
+				return nil, session.ErrShuttingDown
+			},
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Restarted plan",
+			Type:   "tdd-fill-in",
+			Goal:   "Retry failed provider sessions without changing the plan attempt",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "interrupted" {
+		t.Fatalf("FinalStatus = %q, want interrupted", result.FinalStatus)
+	}
+	if gotSessionID != "test-plan-001-phase-01-plan-02-retry-02" {
+		t.Fatalf("sessionID = %q, want test-plan-001-phase-01-plan-02-retry-02", gotSessionID)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PlanIteration != 2 {
+		t.Fatalf("PlanIteration = %d, want 2", updated.PlanIteration)
+	}
+}
+
+func TestPlanRetrySessionAttempt(t *testing.T) {
+	dir := t.TempDir()
+	if got := nextPlanSessionAttempt(dir, 2); got != 1 {
+		t.Fatalf("nextPlanSessionAttempt(no meta) = %d, want 1", got)
+	}
+	if got := planAttemptSessionID("feature-phase-01-plan-02", 1); got != "feature-phase-01-plan-02" {
+		t.Fatalf("planAttemptSessionID(first) = %q", got)
+	}
+	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: "FAILED"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextPlanSessionAttempt(dir, 2); got != 2 {
+		t.Fatalf("nextPlanSessionAttempt(legacy failed) = %d, want 2", got)
+	}
+	if got := planAttemptSessionID("feature-phase-01-plan-02", 2); got != "feature-phase-01-plan-02-retry-02" {
+		t.Fatalf("planAttemptSessionID(retry) = %q", got)
+	}
+	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, SessionAttempt: 2, AgentStatus: "FAILED"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextPlanSessionAttempt(dir, 2); got != 3 {
+		t.Fatalf("nextPlanSessionAttempt(recorded failed retry) = %d, want 3", got)
+	}
+	if err := WritePlanAttemptMeta(dir, PlanAttemptMeta{Attempt: 2, AgentStatus: "SUCCESS", ReviewStatus: "CHANGES_REQUESTED"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextPlanSessionAttempt(dir, 2); got != 1 {
+		t.Fatalf("nextPlanSessionAttempt(success) = %d, want 1", got)
+	}
 }
 
 func TestLoadPriorAxisApprovals(t *testing.T) {
@@ -1280,9 +1541,10 @@ func TestFrozenSectionsDigest(t *testing.T) {
 func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	meta := PlanAttemptMeta{
-		Attempt:      2,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
+		Attempt:        2,
+		SessionAttempt: 3,
+		AgentStatus:    "SUCCESS",
+		ReviewStatus:   "CHANGES_REQUESTED",
 	}
 	if err := WritePlanAttemptMeta(dir, meta); err != nil {
 		t.Fatalf("write error: %v", err)
@@ -1292,7 +1554,7 @@ func TestPlanAttemptMetaRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read error: %v", err)
 	}
-	if got.Attempt != 2 || got.AgentStatus != "SUCCESS" || got.ReviewStatus != "CHANGES_REQUESTED" {
+	if got.Attempt != 2 || got.SessionAttempt != 3 || got.AgentStatus != "SUCCESS" || got.ReviewStatus != "CHANGES_REQUESTED" {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }
@@ -1350,7 +1612,7 @@ func TestPlanValidationSurfaces_PassExplicitEmptyAgentNames(t *testing.T) {
 			if len(captured) == 0 {
 				t.Fatal("expected BuildSession capture")
 			}
-			assertExplicitEmptyAgentNames(t, captured[0].AgentNames)
+			assertExplorationAgentNames(t, captured[0].AgentNames)
 		})
 	}
 }
@@ -1547,7 +1809,7 @@ func TestSpecializedValidation_UsesReviewModelInBoundedSessions(t *testing.T) {
 			if capturedOpts.LogPath == "" {
 				t.Errorf("expected LogPath for validator helper, got empty (model=%s)", tt.reviewModel)
 			}
-			assertExplicitEmptyAgentNames(t, capturedOpts.AgentNames)
+			assertExplorationAgentNames(t, capturedOpts.AgentNames)
 		})
 	}
 }
@@ -1708,7 +1970,7 @@ func TestRoadmapSpecializedValidation_UsesRoadmapValidatorSubset(t *testing.T) {
 		if opts.LogPath == "" {
 			t.Errorf("validator %d: expected LogPath for helper output, got empty", i)
 		}
-		assertExplicitEmptyAgentNames(t, opts.AgentNames)
+		assertExplorationAgentNames(t, opts.AgentNames)
 	}
 	var hasArchitecture, hasScope bool
 	for _, v := range expectedValidators {
@@ -1780,7 +2042,7 @@ func TestSpecializedValidation_UsesConfiguredReviewModel(t *testing.T) {
 	if capturedOpts.LogPath == "" {
 		t.Error("expected LogPath for validator helper")
 	}
-	assertExplicitEmptyAgentNames(t, capturedOpts.AgentNames)
+	assertExplorationAgentNames(t, capturedOpts.AgentNames)
 }
 
 func TestPhasePlanLoop_SkillReadInstruction(t *testing.T) {
@@ -1853,6 +2115,9 @@ func TestPhasePlanLoop_SkillReadInstruction(t *testing.T) {
 	}
 	if planOpts == nil {
 		t.Fatal("no non-helper planning session found")
+	}
+	if !reflect.DeepEqual(planOpts.AgentNames, explorationAgentNames()) {
+		t.Fatalf("phase-plan planner AgentNames = %v, want exploration set %v", planOpts.AgentNames, explorationAgentNames())
 	}
 
 	if !strings.Contains(planOpts.SystemPrompt, "## Output Roots") || !strings.Contains(planOpts.SystemPrompt, "## Completion") {

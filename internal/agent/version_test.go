@@ -194,6 +194,43 @@ func TestCheckProviderVersions_PerProviderMinVersions(t *testing.T) {
 	}
 }
 
+func TestBelowMinVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		version    string
+		versionErr error
+		minVer     [3]int
+		wantBelow  bool
+	}{
+		{"below minimum", "1.17.8", nil, [3]int{1, 17, 9}, true},
+		{"exact minimum", "1.17.9", nil, [3]int{1, 17, 9}, false},
+		{"above minimum", "1.18.0", nil, [3]int{1, 17, 9}, false},
+		// VersionInfo errors and unparseable output are warn-only, not hard
+		// failures: BelowMinVersion must not report them as below-minimum.
+		{"version error is not below", "", fmt.Errorf("not installed"), [3]int{1, 17, 9}, false},
+		{"unparseable is not below", "some-weird-string", nil, [3]int{1, 17, 9}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &mockVersionProvider{name: "provider", version: tt.version, versionErr: tt.versionErr, minVer: tt.minVer}
+			below, version, minVer := BelowMinVersion(p)
+			if below != tt.wantBelow {
+				t.Fatalf("BelowMinVersion below = %v, want %v", below, tt.wantBelow)
+			}
+			if minVer != tt.minVer {
+				t.Fatalf("BelowMinVersion minVer = %v, want %v", minVer, tt.minVer)
+			}
+			if tt.versionErr == nil && version != tt.version {
+				t.Fatalf("BelowMinVersion version = %q, want %q", version, tt.version)
+			}
+			if tt.versionErr != nil && version != "" {
+				t.Fatalf("BelowMinVersion version = %q, want empty on VersionInfo error", version)
+			}
+		})
+	}
+}
+
 func TestParseCLIVersion(t *testing.T) {
 	tests := []struct {
 		input               string

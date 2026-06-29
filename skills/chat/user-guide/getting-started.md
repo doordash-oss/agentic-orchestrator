@@ -5,8 +5,10 @@ Agentic Orchestrator is a Go TUI (binary name: `agentico`) that drives the **KB 
 ## Prerequisites
 
 - **Go 1.25+** — for building from source
-- **`claude` CLI >= 2.1.81** — the primary AI agent backend (`npm install -g @anthropic-ai/claude-code`)
-- **`codex` CLI >= 0.116.0** *(optional)* — alternative OpenAI Codex provider (`npm install -g @openai/codex`)
+- **At least one provider CLI** — Claude, Codex, and OpenCode are co-equal backends; install whichever you use (one is enough to run the whole workflow):
+  - **`claude` CLI >= 2.1.81** — Anthropic Claude Code (`npm install -g @anthropic-ai/claude-code`), authenticate with `claude auth login`
+  - **`codex` CLI >= 0.116.0** — OpenAI Codex (`npm install -g @openai/codex`), authenticate with `codex login`
+  - **`opencode` CLI >= 1.17.9** — OpenCode (`curl -fsSL https://opencode.ai/install | bash`), authenticate with `opencode auth login`; selected with the explicit `opencode:<backend/model>` form
 - **`gh` CLI** — used for creating pull requests during the Publish phase
 - **git** — worktree and branch operations
 
@@ -44,7 +46,7 @@ If a legacy `~/.agentic-workflow/` directory already exists from a previous
 install, it is reused in place as the runtime parent so existing data keeps
 working without a manual copy.
 
-When multiple LLM providers are detected (e.g., both Claude and Codex CLIs are installed), Agentic Orchestrator prompts you to choose a preferred provider during initial setup.
+When multiple LLM providers are detected (e.g., Claude, Codex, and OpenCode CLIs are installed), Agentic Orchestrator does not ask you to pick a preferred one. The detected providers are treated as co-equal, and each phase defaults to the best available model for that role across every provider — you can override any phase later. See [Configuration → Provider Selection](configuration.md#provider-selection) for installing, authenticating, and troubleshooting each provider.
 
 ## Creating Your First Feature
 

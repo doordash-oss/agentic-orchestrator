@@ -45,11 +45,12 @@ import (
 // reconstruct its state after a session restart — without them, the
 // on-stack counter resets and a drifting critic can escape the stall cap.
 type PlanAttemptMeta struct {
-	Attempt      int               `yaml:"attempt"`
-	AgentStatus  string            `yaml:"agent_status"`            // SUCCESS or FAILED
-	ReviewStatus string            `yaml:"review_status"`           // APPROVED, CHANGES_REQUESTED, or empty
-	AxisVerdicts map[string]string `yaml:"axis_verdicts,omitempty"` // axis (lowercase) -> "APPROVED"|"CHANGES_REQUESTED"|"ERROR"
-	AxisDigests  map[string]string `yaml:"axis_digests,omitempty"`  // axis (lowercase) -> sha256 of the frozen section at this attempt
+	Attempt        int               `yaml:"attempt"`
+	SessionAttempt int               `yaml:"session_attempt,omitempty"` // provider-session retry within this logical attempt
+	AgentStatus    string            `yaml:"agent_status"`              // SUCCESS or FAILED
+	ReviewStatus   string            `yaml:"review_status"`             // APPROVED, CHANGES_REQUESTED, or empty
+	AxisVerdicts   map[string]string `yaml:"axis_verdicts,omitempty"`   // axis (lowercase) -> "APPROVED"|"CHANGES_REQUESTED"|"ERROR"
+	AxisDigests    map[string]string `yaml:"axis_digests,omitempty"`    // axis (lowercase) -> sha256 of the frozen section at this attempt
 }
 
 // WritePlanAttemptMeta persists a PlanAttemptMeta to the attempt subdirectory.
@@ -185,6 +186,24 @@ func latestPlanRevisionFeedbackAttempt(artifactDir string) (int, string) {
 		bestFeedback = strings.TrimSpace(string(data))
 	}
 	return best, bestFeedback
+}
+
+func nextPlanSessionAttempt(artifactDir string, attempt int) int {
+	meta, err := readPlanAttemptMeta(artifactDir, attempt)
+	if err != nil || meta.AgentStatus != "FAILED" {
+		return 1
+	}
+	if meta.SessionAttempt < 1 {
+		return 2
+	}
+	return meta.SessionAttempt + 1
+}
+
+func planAttemptSessionID(base string, sessionAttempt int) string {
+	if sessionAttempt <= 1 {
+		return base
+	}
+	return fmt.Sprintf("%s-retry-%02d", base, sessionAttempt)
 }
 
 // AxisApproval is a sticky approval recovered from a prior validation attempt.
@@ -421,10 +440,10 @@ type PlanLoopConfig struct {
 	// document, if one was produced. Retained for caller compatibility;
 	// downstream planning prompts no longer re-inject it.
 	DesignArtifactPath string
-	QAFilePaths            []string // paths to Q&A files from inquire/research/design
-	KBInfos                []KBInfo // repo knowledge base info
-	WorkDir                string   // repo working directory
-	AdditionalDirs         []string // additional directories for claude --add-dir
+	QAFilePaths        []string // paths to Q&A files from inquire/research/design
+	KBInfos            []KBInfo // repo knowledge base info
+	WorkDir            string   // repo working directory
+	AdditionalDirs     []string // additional directories for claude --add-dir
 
 	// MaxAttempts overrides the default maxPlanValidationAttempts.
 	// When zero, falls back to the hardcoded constant.
@@ -482,6 +501,13 @@ type PlanLoopConfig struct {
 	// all child spans (sessions, validation, validators) derive from this parent.
 	// Do not set externally — the loop function manages this.
 	PhaseSpanCtx observe.SpanContext
+
+	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
+	// for planner sessions: the session runs in interactive turn mode and, on a
+	// deliberate end_turn without the completion marker, is nudged to finish
+	// before a protocol violation is recorded. Resolved per-model from the
+	// provider capability, so only capability-positive providers opt in.
+	FinishOrViolateNudge bool
 }
 
 // PlanLoopResult represents the outcome of the planning loop.
@@ -630,6 +656,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
 	helper := &PhaseRunner{
 		SessionManager: sm,
+		FeatureStore:   cfg.FeatureStore,
 		StateDir:       cfg.StateDir,
 		SkillsDir:      cfg.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,
@@ -1461,7 +1488,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				Prompt:                         prompt,
 				SystemPrompt:                   systemPrompt,
 				AdditionalDirs:                 addDirs,
-				AgentNames:                     []string{},
+				AgentNames:                     explorationAgentNames(),
 				PIDDir:                         pidDir,
 				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
 				WorkDir:                        cfg.WorkDir,
@@ -1474,10 +1501,14 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				return nil, fmt.Errorf("building roadmap session (attempt %d): %w", attempt, err)
 			}
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			if cfg.FinishOrViolateNudge {
+				sessOpts.TurnMode = ports.TurnModeInteractive
+			}
 			WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 			sessOpts.PermCacheScope = cfg.RepoName
 
-			sessionID := fmt.Sprintf("%s-roadmap-%02d", cfg.Feature.ID, attempt)
+			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
+			sessionID := planAttemptSessionID(fmt.Sprintf("%s-roadmap-%02d", cfg.Feature.ID, attempt), sessionAttempt)
 			planSessionCtx := cfg.PhaseSpanCtx.Child()
 			if attempt == 1 {
 				sessOpts.AskUserAutoPick = askUserAutoPickConfig(
@@ -1522,18 +1553,28 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 				sess.SetLogFile(logFile)
 			}
 
-			agentStatus := waitForStatus(sess, sm, sessionID, func() bool {
-				if HasPhaseComplete(attemptDir) {
-					sess.SetHasUnansweredQuestion(false)
-					return true
-				}
-				return false
-			})
+			agentStatus := waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
+				ReadyCheck: func() bool {
+					if HasPhaseComplete(attemptDir) {
+						sess.SetHasUnansweredQuestion(false)
+						return true
+					}
+					return false
+				},
+				FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+				MissingArtifacts:     []string{"roadmap.md"},
+			}).Status
 
 			cost := ExtractSessionCost(sess)
 			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					f.AddPhaseCost("plan", cost.TotalCostUSD)
+					f.RecordSessionCost(feature.SessionCostRecord{
+						SessionID:     sessionID,
+						PhaseKey:      "plan",
+						ObserverPhase: "plan",
+						RepoName:      cfg.RepoName,
+						CostUSD:       cost.TotalCostUSD,
+					})
 					return nil
 				})
 			}
@@ -1564,7 +1605,11 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 					}
 					continue
 				}
-				_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "FAILED"})
+				_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+					Attempt:        attempt,
+					SessionAttempt: sessionAttempt,
+					AgentStatus:    "FAILED",
+				})
 				return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: "roadmap session did not complete successfully"}, nil
 			}
 			if attempt == 1 {
@@ -1836,7 +1881,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				Prompt:                         prompt,
 				SystemPrompt:                   systemPrompt,
 				AdditionalDirs:                 addDirs,
-				AgentNames:                     []string{},
+				AgentNames:                     explorationAgentNames(),
 				PIDDir:                         pidDir,
 				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
 				WorkDir:                        cfg.WorkDir,
@@ -1849,10 +1894,14 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				return nil, fmt.Errorf("building phase plan session (attempt %d): %w", attempt, err)
 			}
 			sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+			if cfg.FinishOrViolateNudge {
+				sessOpts.TurnMode = ports.TurnModeInteractive
+			}
 			WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 			sessOpts.PermCacheScope = cfg.RepoName
 
-			sessionID := fmt.Sprintf("%s-phase-%02d-plan-%02d", cfg.Feature.ID, cfg.Phase.Number, attempt)
+			sessionAttempt := nextPlanSessionAttempt(artifactDir, attempt)
+			sessionID := planAttemptSessionID(fmt.Sprintf("%s-phase-%02d-plan-%02d", cfg.Feature.ID, cfg.Phase.Number, attempt), sessionAttempt)
 			planSessionCtx := cfg.PlanLoopConfig.PhaseSpanCtx.Child()
 			if attempt == 1 {
 				sessOpts.AskUserAutoPick = askUserAutoPickConfig(
@@ -1897,19 +1946,29 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 				sess.SetLogFile(logFile)
 			}
 
-			agentStatus := waitForStatus(sess, sm, sessionID, func() bool {
-				if HasPhaseComplete(attemptDir) {
-					sess.SetHasUnansweredQuestion(false)
-					return true
-				}
-				return false
-			})
+			agentStatus := waitForStatusDetailed(sess, sm, sessionID, waitForStatusOptions{
+				ReadyCheck: func() bool {
+					if HasPhaseComplete(attemptDir) {
+						sess.SetHasUnansweredQuestion(false)
+						return true
+					}
+					return false
+				},
+				FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+				MissingArtifacts:     []string{"plan.md"},
+			}).Status
 
 			cost := ExtractSessionCost(sess)
 			if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
 				costKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
 				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					f.AddPhaseCost(costKey, cost.TotalCostUSD)
+					f.RecordSessionCost(feature.SessionCostRecord{
+						SessionID:     sessionID,
+						PhaseKey:      costKey,
+						ObserverPhase: "plan",
+						RepoName:      cfg.RepoName,
+						CostUSD:       cost.TotalCostUSD,
+					})
 					return nil
 				})
 			}
@@ -1940,7 +1999,11 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 					}
 					continue
 				}
-				_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: "FAILED"})
+				_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+					Attempt:        attempt,
+					SessionAttempt: sessionAttempt,
+					AgentStatus:    "FAILED",
+				})
 				return &PlanLoopResult{FinalStatus: "failed", Iterations: attempt, LastError: "phase plan session did not complete"}, nil
 			}
 			if attempt == 1 {

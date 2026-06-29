@@ -1528,6 +1528,35 @@ func TestRenderMetadataCompact_WorkDir_ParentDirForMultiRepo(t *testing.T) {
 	}
 }
 
+func TestRenderMetadata_UsesShortModelNames(t *testing.T) {
+	t.Parallel()
+	const routedModel = "gateway:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	f := &feature.Feature{
+		ID:     "feat-1",
+		Slug:   "test",
+		Status: feature.StatusImplementing,
+		Models: config.ModelConfig{
+			Research:       routedModel,
+			Planning:       routedModel,
+			Implementation: routedModel,
+			Review:         routedModel,
+			KBBuild:        routedModel,
+		},
+	}
+	m := NewDetailModel(f, "")
+	for name, got := range map[string]string{
+		"full":    stripANSI(m.renderMetadataFull(f)),
+		"compact": stripANSI(m.renderMetadataCompact(f)),
+	} {
+		if strings.Contains(got, "portkey/@fireworks/accounts/fireworks/models") {
+			t.Fatalf("%s metadata rendered routed model ID, want compact model name:\n%s", name, got)
+		}
+		if !strings.Contains(got, "R:gateway:glm-5p2[1.04M]") {
+			t.Fatalf("%s metadata missing compact model summary:\n%s", name, got)
+		}
+	}
+}
+
 func TestRenderPhaseProgressFull_KBSubRows_HiddenForSingleRepo(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{

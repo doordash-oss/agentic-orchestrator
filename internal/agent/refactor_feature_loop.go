@@ -92,6 +92,12 @@ type RefactorFeatureLoopConfig struct {
 	GuidelinesDir              string
 	Observer                   *observe.Observer
 
+	// FinishOrViolateNudge arms the finish-or-violate auto-continuation retry
+	// for the refactor cycle's sessions (refactor-plan step + the inner
+	// implement loop). Resolved per-model from the provider capability, so only
+	// capability-positive providers opt in.
+	FinishOrViolateNudge bool
+
 	// RunImplementFn is a test seam: when non-nil, RunRefactorFeatureLoop
 	// calls this instead of RunImplementationLoop so unit tests can drive
 	// the outer state-machine without launching a real Claude session.
@@ -254,6 +260,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 				KBInfos:                    cfg.KBInfos,
 				SkillsDir:                  cfg.SkillsDir,
 				GuidelinesDir:              cfg.GuidelinesDir,
+				FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
 			}, sm)
 		}
 	}
@@ -431,7 +438,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		AdditionalDirs:             additionalDirsExcludingStateDir(workspace, stateDir),
 		KBInfos:                    cfg.KBInfos,
 		PhaseType:                  cfg.Feature.RoadmapPhaseType,
-		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:         cfg.Feature.DesignArtifactPath(),
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		BuildSession:               cfg.BuildSession,
@@ -439,6 +446,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		EffortLevel:                cfg.EffortLevel,
 		SkillsDir:                  cfg.SkillsDir,
 		GuidelinesDir:              cfg.GuidelinesDir,
+		FinishOrViolateNudge:       cfg.FinishOrViolateNudge,
 		Observer:                   cfg.Observer,
 		// Refactor cycles run the per-iteration review gate so the
 		// reviewer can attest the cross-repo edits landed cleanly before
@@ -615,6 +623,7 @@ type refactorPlanStepInput struct {
 	KBInfos                    []KBInfo
 	SkillsDir                  string
 	GuidelinesDir              string
+	FinishOrViolateNudge       bool
 }
 
 // runRefactorPlanStep launches a single Claude session to author the
@@ -661,6 +670,7 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		Prompt:                         prompt,
 		SystemPrompt:                   systemPrompt,
 		AdditionalDirs:                 in.Workspace.AdditionalDirs,
+		AgentNames:                     explorationAgentNames(),
 		PIDDir:                         filepath.Join(in.StateDir, in.Feature.ID),
 		PermHandler:                    permHandlerFor(in.DangerouslySkipPermissions, in.PermissionCache, ""),
 		WorkDir:                        in.Workspace.Cwd,
@@ -673,6 +683,9 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		return "", fmt.Errorf("building refactor-plan session: %w", err)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if in.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
 	WriteDebugPrompts(in.ArtifactDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessID := fmt.Sprintf("%s-refactor-plan", in.Feature.ID)
@@ -686,13 +699,17 @@ func runRefactorPlanStep(in refactorPlanStepInput, sm ports.SessionManager) (str
 		sess.SetLogFile(logFile)
 	}
 
-	agentStatus := waitForStatus(sess, sm, sessID, func() bool {
-		if HasPhaseComplete(in.ArtifactDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
+	agentStatus := waitForStatusDetailed(sess, sm, sessID, waitForStatusOptions{
+		ReadyCheck: func() bool {
+			if HasPhaseComplete(in.ArtifactDir) {
+				sess.SetHasUnansweredQuestion(false)
+				return true
+			}
+			return false
+		},
+		FinishOrViolateNudge: in.FinishOrViolateNudge,
+		MissingArtifacts:     []string{"refactor-plan.md"},
+	}).Status
 
 	output := sess.MessageLog().Text()
 	_ = os.WriteFile(logPath, []byte(output), 0o644)

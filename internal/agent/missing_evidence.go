@@ -96,25 +96,6 @@ func parseMissingEvidenceMarkerHead(head string) (int, string, bool) {
 	}
 }
 
-// MissingEvidenceTargetPhase returns the earliest roadmap phase explicitly
-// named by phase-qualified markers, or fallback when the feedback only uses
-// the current-phase marker form.
-func MissingEvidenceTargetPhase(feedback string, fallback int) int {
-	target := 0
-	for _, req := range MissingEvidenceRequirements(feedback) {
-		if req.Phase <= 0 {
-			continue
-		}
-		if target == 0 || req.Phase < target {
-			target = req.Phase
-		}
-	}
-	if target > 0 {
-		return target
-	}
-	return fallback
-}
-
 // MissingEvidencePlanRevisionFeedback renders the phase-plan critic feedback
 // used when review discovers a user-facing surface without contract-backed
 // visual or behavioral evidence coverage.

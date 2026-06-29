@@ -1218,8 +1218,8 @@ func (m ArtifactReviewModel) renderChatContent() string {
 
 func (m ArtifactReviewModel) renderHeader() string {
 	artLines := []string{
-		" \u2584\u2580\u2588 \u2588\u2580\u2580 \u2588\u2580\u2580 \u2588\u2584\u2591\u2588 \u2580\u2588\u2580 \u2588 \u2588\u2580\u2580",
-		" \u2588\u2580\u2588 \u2588\u2584\u2588 \u2588\u2588\u2584 \u2588\u2591\u2580\u2588 \u2591\u2588\u2591 \u2588 \u2588\u2584\u2584",
+		" \u2584\u2580\u2588 \u2588\u2580\u2580 \u2588\u2580\u2580 \u2588\u2584\u2591\u2588 \u2580\u2588\u2580 \u2588 \u2588\u2580\u2580 \u2588\u2580\u2588",
+		" \u2588\u2580\u2588 \u2588\u2584\u2588 \u2588\u2588\u2584 \u2588\u2591\u2580\u2588 \u2591\u2588\u2591 \u2588 \u2588\u2584\u2584 \u2588\u2584\u2588",
 	}
 	brandStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(colorSurface)

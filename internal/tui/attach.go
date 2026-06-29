@@ -82,6 +82,11 @@ const (
 	minInputLines = 1 // textarea starts at 1 line
 	maxInputLines = 6 // textarea grows to at most 6 lines
 
+	questionPromptMaxLines              = 6  // cap long AskUser context so choices stay visible
+	questionPanelBaseMaxLines           = 20 // default AskUser panel cap for normal/small terminals
+	questionPanelTallMaxLines           = 32 // upper bound so the transcript remains visible
+	expandedQuestionPromptReservedLines = 4  // room for scroll indicators and the return hint
+
 	interruptToastDuration = 10 * time.Second
 )
 
@@ -650,6 +655,8 @@ type AttachModel struct {
 	selectedOption         int               // 0-based cursor; len(options) = "Type something" freeform
 	selectedMulti          map[int]bool      // ticked option indices for the current multiSelect question
 	questionScrollOffset   int               // first visible option index in windowed question list
+	questionPromptExpanded bool              // true when the panel shows full question text instead of choices
+	questionPromptScroll   int               // first visible visual line in expanded question view
 	typingCustom           bool              // user selected "Type something" and is typing
 	typingNotes            bool              // user pressed `n` and is typing notes for the current question
 	pendingAskRequestID    string            // control_request ID for AskUserQuestion
@@ -991,6 +998,47 @@ func wrappedLineCount(text string, width int) int {
 	return lipgloss.Height(rendered)
 }
 
+func questionPromptVisualLines(question string, width int) []string {
+	if question == "" {
+		return []string{""}
+	}
+	if width <= 0 {
+		return strings.Split(question, "\n")
+	}
+	rendered := lipgloss.NewStyle().Width(width).Render(question)
+	return strings.Split(rendered, "\n")
+}
+
+func questionPromptIsTruncated(question string, width int) bool {
+	return len(questionPromptVisualLines(question, width)) > questionPromptMaxLines
+}
+
+func questionPromptText(question string, width int) string {
+	if question == "" {
+		return question
+	}
+	lines := questionPromptVisualLines(question, width)
+	if len(lines) <= questionPromptMaxLines {
+		return question
+	}
+	return strings.Join(lines[:questionPromptMaxLines-1], "\n") + "\n..."
+}
+
+func questionPromptLineCount(question string, width int) int {
+	return wrappedLineCount(questionPromptText(question, width), width)
+}
+
+func (m AttachModel) questionPanelMaxHeight() int {
+	if m.height <= 0 {
+		return questionPanelBaseMaxLines
+	}
+	return min(max(questionPanelBaseMaxLines, m.height/2), questionPanelTallMaxLines)
+}
+
+func (m AttachModel) expandedQuestionPromptLineBudget() int {
+	return max(m.questionPanelMaxHeight()-expandedQuestionPromptReservedLines, 1)
+}
+
 // questionOptionLineCount returns the number of wrapped terminal lines
 // a single option occupies at the given content width, including its
 // label and optional description.
@@ -1036,23 +1084,26 @@ func (m AttachModel) chatPanelHeight() int {
 		if h < 5 {
 			h = 5
 		}
-		if h > 20 {
-			h = 20
+		if h > m.questionPanelMaxHeight() {
+			h = m.questionPanelMaxHeight()
 		}
 		return h
 	}
 	if len(m.pendingQuestions) > 0 && m.currentQuestionIdx < len(m.pendingQuestions) {
 		q := m.pendingQuestions[m.currentQuestionIdx]
+		if m.questionPromptExpanded {
+			return m.questionPanelMaxHeight()
+		}
 		if questionUsesDirectFreeform(q) {
 			contentW := m.questionContentWidth()
-			qLines := wrappedLineCount(q.Question, contentW)
+			qLines := questionPromptLineCount(q.Question, contentW)
 			// question text (qLines) + blank (1) + border (2) + hint (1) + blank-after-textarea (1)
 			h := qLines + 5 + m.inputHeight
 			if len(m.pendingQuestions) > 1 {
 				h++ // progress indicator
 			}
-			if h > 20 {
-				h = 20
+			if h > m.questionPanelMaxHeight() {
+				h = m.questionPanelMaxHeight()
 			}
 			return h
 		}
@@ -1060,7 +1111,7 @@ func (m AttachModel) chatPanelHeight() int {
 		// "Type something"(1) + blank(1) + notes line(1) + blank(1) + hint(1).
 		// Option lines use the visible window size (not total count).
 		contentW := m.questionContentWidth()
-		qLines := wrappedLineCount(q.Question, contentW)
+		qLines := questionPromptLineCount(q.Question, contentW)
 		overhead := qLines + 7 // blank(1) + separator(1) + "Type something"(1) + blank(1) + notes(1) + blank(1) + hint(1)
 		if m.typingCustom {
 			overhead += m.inputHeight + 1 // answer textarea + hint (1)
@@ -1075,8 +1126,8 @@ func (m AttachModel) chatPanelHeight() int {
 		if h < 5 {
 			h = 5
 		}
-		if h > 20 {
-			h = 20
+		if h > m.questionPanelMaxHeight() {
+			h = m.questionPanelMaxHeight()
 		}
 		return h
 	}
@@ -1090,7 +1141,7 @@ func (m AttachModel) chatPanelHeight() int {
 // questionVisibleOptions returns the number of option lines (including scroll
 // indicator lines, if overflow occurs) that fit in the chat panel for the
 // current question. This is the total line budget for the option section within
-// the 20-line panel cap. Called by both chatPanelHeight and renderQuestion.
+// the question panel cap. Called by both chatPanelHeight and renderQuestion.
 func (m AttachModel) questionVisibleOptions() int {
 	if len(m.pendingQuestions) == 0 || m.currentQuestionIdx >= len(m.pendingQuestions) {
 		return 0
@@ -1100,7 +1151,7 @@ func (m AttachModel) questionVisibleOptions() int {
 	// Width-aware overhead: question text (wrapped) + blank(1) + separator(1) +
 	// "Type something"(1) + blank(1) + notes line(1) + blank(1) + hint(1).
 	contentW := m.questionContentWidth()
-	qLines := wrappedLineCount(q.Question, contentW)
+	qLines := questionPromptLineCount(q.Question, contentW)
 	overhead := qLines + 7
 	if m.typingCustom {
 		overhead += m.inputHeight + 1
@@ -1112,7 +1163,7 @@ func (m AttachModel) questionVisibleOptions() int {
 		overhead++ // progress indicator
 	}
 
-	maxOptionArea := max(20-overhead, 1)
+	maxOptionArea := max(m.questionPanelMaxHeight()-overhead, 1)
 
 	totalLines := 0
 	for i, o := range q.Options {
@@ -1491,6 +1542,8 @@ func (m *AttachModel) activateAskUserQuestions(questions []askUserQuestion, requ
 	m.selectedOption = 0
 	m.selectedMulti = nil
 	m.questionScrollOffset = 0
+	m.questionPromptExpanded = false
+	m.questionPromptScroll = 0
 	m.typingCustom = questionUsesDirectFreeform(questions[0])
 	m.typingNotes = false
 	m.awaitingInput = true
@@ -1798,6 +1851,8 @@ func (m *AttachModel) advanceQuestionOpts(delta int, snapshot bool) bool {
 		m.selectedOption = 0
 		m.selectedMulti = nil
 		m.questionScrollOffset = 0
+		m.questionPromptExpanded = false
+		m.questionPromptScroll = 0
 		m.typingCustom = false
 		m.typingNotes = false
 		m.input.Reset()
@@ -1806,6 +1861,8 @@ func (m *AttachModel) advanceQuestionOpts(delta int, snapshot bool) bool {
 		return true
 	}
 	m.restoreQuestion(newIdx)
+	m.questionPromptExpanded = false
+	m.questionPromptScroll = 0
 	if !m.questionStates[newIdx].askedEmitted {
 		m.emitQuestionAsked(m.pendingQuestions[newIdx])
 		m.questionStates[newIdx].askedEmitted = true
@@ -2104,8 +2161,42 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 				m.syncInputMode()
 				return m, nil
 			}
+			if m.questionPromptExpanded {
+				contentW := m.questionContentWidth()
+				lineCount := len(questionPromptVisualLines(q.Question, contentW))
+				switch msg.String() {
+				case "?", "shift+/":
+					m.questionPromptExpanded = false
+					m.questionPromptScroll = 0
+					return m, nil
+				case "up", "k":
+					if m.questionPromptScroll > 0 {
+						m.questionPromptScroll--
+					}
+					return m, nil
+				case "down", "j":
+					if m.questionPromptScroll < lineCount-1 {
+						m.questionPromptScroll++
+					}
+					return m, nil
+				case "pgup":
+					m.questionPromptScroll = max(m.questionPromptScroll-m.expandedQuestionPromptLineBudget(), 0)
+					return m, nil
+				case "pgdown":
+					m.questionPromptScroll = min(m.questionPromptScroll+m.expandedQuestionPromptLineBudget(), max(lineCount-1, 0))
+					return m, nil
+				case "ctrl+]", "esc":
+					m.detached = true
+					return m, nil
+				}
+				return m, nil
+			}
 			numOptions := len(q.Options) // extra slot for "Type something"
 			switch msg.String() {
+			case "?", "shift+/":
+				m.questionPromptExpanded = true
+				m.questionPromptScroll = 0
+				return m, nil
 			case "up", "k":
 				if m.selectedOption > 0 {
 					m.selectedOption--
@@ -2461,15 +2552,8 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			if sdkMsg.Assistant != nil {
 				m.turnActive = true
 				for _, block := range sdkMsg.Assistant.Message.Content {
-					if block.IsThinking() && block.Thinking != "" {
-						thinking := block.Thinking
-						if len(thinking) > 120 {
-							thinking = thinking[len(thinking)-120:]
-						}
-						if idx := strings.LastIndex(thinking, "\n"); idx >= 0 {
-							thinking = thinking[idx+1:]
-						}
-						m.thinkingLine = strings.TrimSpace(thinking)
+					if block.IsThinking() {
+						m.thinkingLine = "Thinking..."
 					}
 					if block.IsToolUse() {
 						m.thinkingLine = fmt.Sprintf("Using %s...", block.Name)
@@ -2878,6 +2962,9 @@ func (m AttachModel) renderQuestion() string {
 		return m.renderRecap()
 	}
 	q := m.pendingQuestions[m.currentQuestionIdx]
+	if m.questionPromptExpanded {
+		return m.renderExpandedQuestion(q)
+	}
 
 	questionStyle := lipgloss.NewStyle().Bold(true)
 	selectedLabel := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
@@ -2889,7 +2976,8 @@ func (m AttachModel) renderQuestion() string {
 
 	if questionUsesDirectFreeform(q) {
 		var b strings.Builder
-		b.WriteString(questionStyle.Render(q.Question))
+		contentW := m.questionContentWidth()
+		b.WriteString(questionStyle.Render(questionPromptText(q.Question, contentW)))
 		b.WriteString("\n\n")
 		b.WriteString(m.input.View())
 		b.WriteByte('\n')
@@ -2915,7 +3003,8 @@ func (m AttachModel) renderQuestion() string {
 	// Rendered at its natural width so side-by-side placement with a preview
 	// doesn't force extra padding.
 	var top strings.Builder
-	top.WriteString(questionStyle.Render(q.Question))
+	contentW := m.questionContentWidth()
+	top.WriteString(questionStyle.Render(questionPromptText(q.Question, contentW)))
 	top.WriteString("\n\n")
 
 	start, end, needAbove, needBelow := m.questionVisibleWindow()
@@ -3033,10 +3122,14 @@ func (m AttachModel) renderQuestion() string {
 		bottom.WriteByte('\n')
 		var hint string
 		if q.MultiSelect {
-			hint = "Space to toggle · Enter to submit · ↑/↓ to navigate · n for notes"
+			hint = "Space to toggle · Enter to submit · ↑/↓ to navigate"
 		} else {
-			hint = "Enter to select · ↑/↓ to navigate · n for notes"
+			hint = "Enter to select · ↑/↓ to navigate"
 		}
+		if questionPromptIsTruncated(q.Question, contentW) {
+			hint += " · ? full question"
+		}
+		hint += " · n for notes"
 		// Only surface arrow-key nav when it actually does something. Left
 		// requires a prior question; right requires this question to have a
 		// committed answer (otherwise forward is Enter-only).
@@ -3057,6 +3150,48 @@ func (m AttachModel) renderQuestion() string {
 	}
 
 	return topBlock + "\n" + bottom.String()
+}
+
+func (m AttachModel) renderExpandedQuestion(q askUserQuestion) string {
+	contentW := m.questionContentWidth()
+	lines := questionPromptVisualLines(q.Question, contentW)
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+
+	start := m.questionPromptScroll
+	if start < 0 {
+		start = 0
+	}
+	if start >= len(lines) {
+		start = len(lines) - 1
+	}
+
+	budget := m.expandedQuestionPromptLineBudget()
+	needAbove := start > 0
+	if needAbove {
+		budget--
+	}
+	end := min(start+budget, len(lines))
+	needBelow := end < len(lines)
+	if needBelow && end > start+1 {
+		end--
+	}
+
+	var b strings.Builder
+	if needAbove {
+		b.WriteString(MutedStyle.Render(fmt.Sprintf("↑ %d more above", start)))
+		b.WriteByte('\n')
+	}
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render(strings.Join(lines[start:end], "\n")))
+	b.WriteByte('\n')
+	if needBelow {
+		b.WriteString(MutedStyle.Render(fmt.Sprintf("↓ %d more below", len(lines)-end)))
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	b.WriteString(MutedStyle.Render("↑/↓ to scroll · ? back to choices"))
+	return b.String()
 }
 
 // renderPlanReviewMenu renders the Ctrl+D plan review decision overlay.
@@ -3191,11 +3326,11 @@ func (m AttachModel) renderFinishPromptInline() string {
 	return b.String()
 }
 
-// renderAttachHeader renders the AGENTIC brand header for the attach view.
+// renderAttachHeader renders the AGENTICO brand header for the attach view.
 func (m AttachModel) renderAttachHeader(w int) string {
 	artLines := []string{
-		" \u2584\u2580\u2588 \u2588\u2580\u2580 \u2588\u2580\u2580 \u2588\u2584\u2591\u2588 \u2580\u2588\u2580 \u2588 \u2588\u2580\u2580",
-		" \u2588\u2580\u2588 \u2588\u2584\u2588 \u2588\u2588\u2584 \u2588\u2591\u2580\u2588 \u2591\u2588\u2591 \u2588 \u2588\u2584\u2584",
+		" \u2584\u2580\u2588 \u2588\u2580\u2580 \u2588\u2580\u2580 \u2588\u2584\u2591\u2588 \u2580\u2588\u2580 \u2588 \u2588\u2580\u2580 \u2588\u2580\u2588",
+		" \u2588\u2580\u2588 \u2588\u2584\u2588 \u2588\u2588\u2584 \u2588\u2591\u2580\u2588 \u2591\u2588\u2591 \u2588 \u2588\u2584\u2584 \u2588\u2584\u2588",
 	}
 
 	brandStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
@@ -4007,6 +4142,11 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 					}
 					lastAssistantText = strings.TrimSpace(block.Text)
 				case block.IsToolUse():
+					if filter < filterNoTools {
+						if rendered, ok := renderAttachTaskPromptBox(block, viewportWidth); ok {
+							b.WriteString(rendered)
+						}
+					}
 					// Tool use blocks are shown as a single spinner line
 					// at the bottom of the viewport (like chat model).
 					lastAssistantText = ""
@@ -4062,21 +4202,7 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 						if filter >= filterNoTools {
 							continue
 						}
-						boxWidth := max(viewportWidth-4, 20)
-						wrapped := lipgloss.NewStyle().Width(boxWidth - 4).Render(block.Text)
-						lines := strings.Split(wrapped, "\n")
-						var content string
-						if len(lines) > promptMaxLines {
-							content = strings.Join(lines[:promptMaxLines-1], "\n") + "\n" + MutedStyle.Render("...")
-						} else {
-							content = strings.Join(lines, "\n")
-						}
-						box := panelStyle(false).Width(boxWidth).Render(content)
-						titleStyle := lipgloss.NewStyle().Foreground(compat.AdaptiveColor{Light: lipgloss.Color("#6c6f85"), Dark: lipgloss.Color("#6c7086")}).Bold(true)
-						box = renderBorderTitle(box, "prompt", titleStyle)
-						b.WriteByte('\n')
-						b.WriteString(box)
-						b.WriteString("\n\n")
+						b.WriteString(renderAttachPromptBox("prompt", block.Text, viewportWidth, nil))
 					}
 				}
 			}
@@ -4166,6 +4292,51 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 		}
 	}
 	return b.String()
+}
+
+func renderAttachTaskPromptBox(block llm.ContentBlock, viewportWidth int) (string, bool) {
+	if block.Name != "Task" && block.Name != "Agent" {
+		return "", false
+	}
+	fields := jsonObjectFields(block.Input)
+	prompt := firstNonEmptyString(fields, "prompt")
+	if strings.TrimSpace(prompt) == "" {
+		return "", false
+	}
+	title := block.Name + " prompt"
+	if description := firstNonEmptyString(fields, "description"); description != "" {
+		title = block.Name + ": " + description
+	}
+	var leading []string
+	if agentType := firstNonEmptyString(fields, "subagent_type", "subagentType", "agent_type", "agent"); agentType != "" {
+		leading = append(leading, MutedStyle.Render(agentType))
+	}
+	return renderAttachPromptBox(title, prompt, viewportWidth, leading), true
+}
+
+func renderAttachPromptBox(title, prompt string, viewportWidth int, leading []string) string {
+	prompt = strings.ReplaceAll(prompt, "\r\n", "\n")
+	if strings.TrimSpace(prompt) == "" {
+		return ""
+	}
+	boxWidth := max(viewportWidth-4, 20)
+	contentWidth := max(boxWidth-4, 10)
+	wrapped := lipgloss.NewStyle().Width(contentWidth).Render(prompt)
+	lines := strings.Split(wrapped, "\n")
+	var content string
+	if len(lines) > promptMaxLines {
+		content = strings.Join(lines[:promptMaxLines-1], "\n") + "\n" + MutedStyle.Render("...")
+	} else {
+		content = strings.Join(lines, "\n")
+	}
+	if len(leading) > 0 {
+		content = strings.Join(leading, "\n") + "\n\n" + content
+	}
+	box := panelStyle(false).Width(boxWidth).Render(content)
+	titleStyle := lipgloss.NewStyle().Foreground(compat.AdaptiveColor{Light: lipgloss.Color("#6c6f85"), Dark: lipgloss.Color("#6c7086")}).Bold(true)
+	title = truncateString(title, max(boxWidth-10, 10))
+	box = renderBorderTitle(box, title, titleStyle)
+	return "\n" + box + "\n\n"
 }
 
 func renderFileEvent(change attachFileChange, viewportWidth int) string {
@@ -4429,10 +4600,18 @@ func fileChangesFromToolUse(block llm.ContentBlock) []attachFileChange {
 }
 
 func fileChangesFromToolProgress(progress llm.ToolProgressMessage) []attachFileChange {
-	if progress.ToolName != "Write" && progress.ToolName != "Edit" {
+	if toolProgressFailed(progress.Data) {
 		return nil
 	}
-	path := extractFilePathFromProgress(progress.Data)
+	var path string
+	switch progress.ToolName {
+	case "Write", "Edit":
+		path = extractFilePathFromProgress(progress.Data)
+	case "Bash":
+		path = extractExplicitProgressFile(progress.Data)
+	default:
+		return nil
+	}
 	if path == "" {
 		return nil
 	}
@@ -4442,6 +4621,27 @@ func fileChangesFromToolProgress(progress llm.ToolProgressMessage) []attachFileC
 		Operation: "update",
 		Detail:    detail,
 	}}
+}
+
+var attachExplicitProgressFileRe = regexp.MustCompile(`(?m)^File:\s*(\S+)`)
+
+func extractExplicitProgressFile(data string) string {
+	matches := attachExplicitProgressFileRe.FindStringSubmatch(data)
+	if len(matches) < 2 {
+		return ""
+	}
+	return strings.Trim(matches[1], "\"'.,:;)")
+}
+
+func toolProgressFailed(data string) bool {
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(strings.ToLower(line))
+		if line == "" {
+			continue
+		}
+		return line == "failed" || strings.HasPrefix(line, "status: failed")
+	}
+	return false
 }
 
 func renderFileEventDetail(detail string) string {

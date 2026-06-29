@@ -25,6 +25,7 @@ func NewDefault() *Config {
 	return &Config{
 		Defaults: DefaultsConfig{
 			Models: ModelConfig{
+				Inquiry:        "sonnet[200K]",
 				Research:       "sonnet[200K]",
 				Planning:       "sonnet[200K]",
 				Implementation: "sonnet[200K]",

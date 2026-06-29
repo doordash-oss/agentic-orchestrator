@@ -19,6 +19,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -341,6 +342,68 @@ func TestRunKnowledgeBaseForRepo_SessionID(t *testing.T) {
 	case <-sess.Done():
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for KB session")
+	}
+}
+
+// TestRunKnowledgeBaseForRepo_MountsKBDirWritable guards the regression where the
+// KB output dir (a sibling of StateDir under knowledge-base/<repo>) was not mounted
+// on the session, so managed provider edit permissions denied every KB write and
+// the phase could never produce its index.md. The KB dir must be an AdditionalDir,
+// which makes it both readable and (via the default writable-root derivation) writable.
+func TestRunKnowledgeBaseForRepo_MountsKBDirWritable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	repoPath := testutil.InitGitRepo(t)
+
+	tmpDir := t.TempDir()
+	stateDir := filepath.Join(tmpDir, "state")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	os.MkdirAll(stateDir, 0o755)
+	os.MkdirAll(scriptsDir, 0o755)
+
+	kbScript := testutil.WriteScript(t, scriptsDir, "kb.sh",
+		mockKBSessionScript(testutil.JSONLInit+"\n"+testutil.JSONLAssistant("Building KB...")+"\n"+testutil.JSONLSuccess+"\n"))
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	var captured BuildSessionOpts
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		CommandRunner:  &execCommandRunner{},
+		StateDir:       stateDir,
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			captured = opts
+			sessOpts := &session.SessionOpts{
+				PIDDir:        opts.PIDDir,
+				PermHandler:   opts.PermHandler,
+				InitialPrompt: opts.Prompt,
+				RepoName:      opts.RepoName,
+				LogPath:       opts.LogPath,
+			}
+			return []string{"bash", kbScript}, nil, sessOpts, nil
+		},
+	}
+
+	f := &feature.Feature{
+		ID: "abc123",
+		Repos: []feature.FeatureRepo{
+			{Name: "my-service", Path: repoPath},
+		},
+		Models: config.ModelConfig{Research: "test"},
+	}
+
+	repo := f.Repos[0]
+	if _, err := pr.RunKnowledgeBaseForRepo(f, repo); err != nil {
+		t.Fatalf("RunKnowledgeBaseForRepo error: %v", err)
+	}
+
+	kbDir := KBStateDir(stateDir, repo.Name)
+	if !slices.Contains(captured.AdditionalDirs, kbDir) {
+		t.Errorf("KB session AdditionalDirs = %v, want it to include kbDir %q so KB output writes are permitted", captured.AdditionalDirs, kbDir)
 	}
 }
 

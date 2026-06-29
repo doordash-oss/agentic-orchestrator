@@ -138,6 +138,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 			s.permHandler = opts[0].PermHandler
 		}
 		s.initialPrompt = opts[0].InitialPrompt
+		s.seedInitialPromptContextEstimate(opts[0].InitialPrompt, opts[0].ContextWindow)
 		s.repoName = opts[0].RepoName
 		s.permCacheScope = opts[0].PermCacheScope
 		s.providerName = opts[0].ProviderName
@@ -156,6 +157,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.turnMode = opts[0].TurnMode
 		s.label = opts[0].Label
 		s.askUserAutoPick = opts[0].AskUserAutoPick
+		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
 		// Set log file before Start() so the read goroutine can write from
 		// the first line. This avoids a race with fast sessions (codex)
 		// where readMessages exits before SetLogFile is called.

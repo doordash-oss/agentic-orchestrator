@@ -16,6 +16,7 @@ package session
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -242,6 +243,10 @@ type Session struct {
 	// askUserAutoPick optionally answers confidence-qualified AskUserQuestion
 	// bundles before they enter pending TUI routing.
 	askUserAutoPick *ports.AskUserAutoPickConfig
+
+	// watchdog monitors provider-specific lifecycle stalls that do not surface
+	// as normal Result, Done, or control_request events.
+	watchdog *sessionWatchdog
 }
 
 // AttachDropReporter receives a notification every time a critical SDK
@@ -313,9 +318,48 @@ func (s *Session) AccumulatedUsage() llm.Usage {
 	defer s.mu.Unlock()
 	return s.accumulatedUsage
 }
+
+func (s *Session) seedInitialPromptContextEstimate(prompt string, contextWindow int) {
+	if prompt == "" || contextWindow <= 0 {
+		return
+	}
+	tokens := estimateInitialPromptContextTokens(prompt)
+	if tokens <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.latestUsage = &llm.Usage{
+		ContextTotalTokens: tokens,
+		ContextInputTokens: tokens,
+		ContextWindow:      contextWindow,
+	}
+	s.mu.Unlock()
+}
+
+func estimateInitialPromptContextTokens(prompt string) int {
+	if prompt == "" {
+		return 0
+	}
+	return (len(prompt) + 3) / 4
+}
+
 func (s *Session) MessageLog() ports.MessageLog { return s.messageLog }
 func (s *Session) Cost() *llm.ResultMessage     { return s.cost }
 func (s *Session) StatusCh() <-chan string      { return s.statusCh }
+
+// AdditionalSessionCost returns provider-specific child-session cost that is
+// not included in the primary result cost. Providers without this optional
+// capability return a zero adjustment.
+func (s *Session) AdditionalSessionCost(ctx context.Context) (llm.SessionCostAdjustment, error) {
+	if s == nil || s.protocol == nil {
+		return llm.SessionCostAdjustment{}, nil
+	}
+	augmenter, ok := s.protocol.(llm.SessionCostAugmenter)
+	if !ok {
+		return llm.SessionCostAdjustment{}, nil
+	}
+	return augmenter.AdditionalSessionCost(ctx)
+}
 
 // LastControlRequest returns the most recently arrived pending
 // control_request, or nil if none are outstanding. Preserves the historical
@@ -732,6 +776,9 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 	// Start the stream-ring drainer before any producer goroutines
 	// begin pushing events.
 	s.ensureStreamDrainer()
+	if s.watchdog != nil {
+		s.watchdog.Start()
+	}
 
 	go s.readMessages(onMessage)
 
@@ -834,16 +881,19 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		}
 		s.mu.Unlock()
 
-		// Parse the line via the provider protocol.
-		var msg llm.SDKMessage
+		// Parse the line via the provider protocol. A single line can yield
+		// more than one SDK message, so every parsed message is dispatched, not
+		// just the first. Dropping the rest silently loses usage/context.
+		var parsed []llm.SDKMessage
 		if s.protocol != nil {
 			msgs, _ := s.protocol.ParseLine(line)
 			if len(msgs) == 0 {
 				continue // Unrecognized/internal message — skip
 			}
-			msg = llm.SDKMessage(msgs[0])
+			parsed = msgs
 		} else {
 			// Fallback: direct JSON unmarshal (no protocol set)
+			var msg llm.SDKMessage
 			if err := json.Unmarshal(line, &msg); err != nil {
 				text := string(line)
 				msg = llm.SDKMessage{
@@ -856,280 +906,298 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					},
 				}
 			}
+			parsed = []llm.SDKMessage{msg}
 		}
 
-		// Handle init message to capture model
-		if msg.Init != nil {
-			s.mu.Lock()
-			s.model = msg.Init.Model
-			pidDir := s.pidDir
-			s.mu.Unlock()
+		for _, msg := range parsed {
+			if s.watchdog != nil {
+				s.watchdog.Observe(msg)
+			}
 
-			// Update PID file with session ID for --resume support
-			if pidDir != "" && s.protocol != nil {
-				if err := s.updatePIDFileSessionID(pidDir, s.protocol.SessionID()); err != nil {
-					log.Printf("session %s: update PID file with session ID: %v", s.id, err)
+			// Handle init message to capture model
+			if msg.Init != nil {
+				s.mu.Lock()
+				s.model = msg.Init.Model
+				pidDir := s.pidDir
+				s.mu.Unlock()
+
+				// Update PID file with session ID for --resume support
+				if pidDir != "" && s.protocol != nil {
+					if err := s.updatePIDFileSessionID(pidDir, s.protocol.SessionID()); err != nil {
+						log.Printf("session %s: update PID file with session ID: %v", s.id, err)
+					}
 				}
 			}
-		}
 
-		// Handle control requests: try to auto-handle synchronously.
-		// If handled (hook_callback, auto-approved tool), suppress the message
-		// so the TUI doesn't show a spurious permission prompt.
-		if msg.ControlRequest != nil {
-			if s.tryHandleControlRequest(msg) {
-				// Auto-handled — don't forward to onMessage/attach/log.
-				// Still log the raw JSONL (already done above).
+			// Handle control requests: try to auto-handle synchronously.
+			// If handled (hook_callback, auto-approved tool), suppress the message
+			// so the TUI doesn't show a spurious permission prompt.
+			if msg.ControlRequest != nil {
+				if s.tryHandleControlRequest(msg) {
+					// Auto-handled — don't forward to onMessage/attach/log.
+					// Still log the raw JSONL (already done above).
+					continue
+				}
+				s.mu.Lock()
+				s.recordPendingControlRequestLocked(msg.ControlRequest)
+				s.mu.Unlock()
+			}
+
+			// Handle result message. The statusCh signal is deferred until after
+			// the message is appended to the log below, so receivers woken by
+			// statusCh observe a MessageLog that already contains this result.
+			if msg.Result != nil {
+				s.mu.Lock()
+				s.cost = msg.Result
+				// Extract context window from modelUsage if available (Claude CLI).
+				for _, mu := range msg.Result.ModelUsage {
+					if mu.ContextWindow > 0 && s.latestUsage != nil {
+						s.latestUsage.ContextWindow = mu.ContextWindow
+						break
+					}
+				}
+				// Fallback: if no usage was accumulated from streaming messages,
+				// use the result's usage (covers sessions that only get a final result).
+				if msg.Result.Usage != nil && s.accumulatedUsage == (llm.Usage{}) {
+					s.accumulatedUsage = *msg.Result.Usage
+				}
+				s.mu.Unlock()
+			}
+
+			// Capture usage from any assistant message that carries it.
+			// With --include-partial-messages the final accumulated usage may
+			// arrive on a partial-subtype message, so we do not filter by subtype.
+			if msg.Assistant != nil && msg.Assistant.Message.Usage != nil {
+				s.mu.Lock()
+				s.latestUsage = msg.Assistant.Message.Usage
+				// Accumulate: ADD per-message usage (Claude path — each message is a delta)
+				u := msg.Assistant.Message.Usage
+				s.accumulatedUsage.InputTokens += u.InputTokens
+				s.accumulatedUsage.OutputTokens += u.OutputTokens
+				s.accumulatedUsage.CacheReadInputTokens += u.CacheReadInputTokens
+				s.accumulatedUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
+				s.mu.Unlock()
+			}
+
+			// Accumulate from provider-synthesized usage updates (Codex path).
+			// These carry cumulative totals — use SET semantics.
+			if msg.UsageUpdate != nil {
+				s.mu.Lock()
+				s.accumulatedUsage.InputTokens = msg.UsageUpdate.InputTokens
+				s.accumulatedUsage.OutputTokens = msg.UsageUpdate.OutputTokens
+				if msg.UsageUpdate.CacheReadInputTokens > 0 {
+					s.accumulatedUsage.CacheReadInputTokens = msg.UsageUpdate.CacheReadInputTokens
+				}
+				if msg.UsageUpdate.CacheCreationInputTokens > 0 {
+					s.accumulatedUsage.CacheCreationInputTokens = msg.UsageUpdate.CacheCreationInputTokens
+				}
+				// Track context window for ContextPercentage() (Codex provides this
+				// via token usage update notifications).
+				if msg.UsageUpdate.ContextWindow > 0 {
+					if s.latestUsage == nil {
+						s.latestUsage = &llm.Usage{}
+					}
+					s.latestUsage.ContextWindow = msg.UsageUpdate.ContextWindow
+					s.latestUsage.ContextBaseline = msg.UsageUpdate.ContextBaseline
+					// Only refresh the fill snapshot when the provider sent a
+					// non-zero one. If Last is empty (thread resume before first
+					// turn, Codex's fill_to_context_window corruption — see
+					// openai/codex#16068), keep prior values rather than falling
+					// back to lifetime-cumulative InputTokens, which would pin
+					// the display at 100% for mature sessions.
+					if msg.UsageUpdate.ContextTotalTokens > 0 {
+						s.latestUsage.ContextTotalTokens = msg.UsageUpdate.ContextTotalTokens
+						s.latestUsage.ContextInputTokens = msg.UsageUpdate.ContextInputTokens
+						s.latestUsage.InputTokens = msg.UsageUpdate.ContextInputTokens
+					} else if msg.UsageUpdate.ContextBaseline == 0 && (msg.UsageUpdate.InputTokens > 0 ||
+						msg.UsageUpdate.CacheReadInputTokens > 0 ||
+						msg.UsageUpdate.CacheCreationInputTokens > 0) {
+						// Some providers report usage_update.used=0 for a completed
+						// turn while the prompt result still carries token usage. Keep
+						// the provider-reported window, but fall back to result tokens
+						// for the fill numerator so the context meter does not stay
+						// pinned at 0%.
+						s.latestUsage.InputTokens = msg.UsageUpdate.InputTokens
+						s.latestUsage.CacheReadInputTokens = msg.UsageUpdate.CacheReadInputTokens
+						s.latestUsage.CacheCreationInputTokens = msg.UsageUpdate.CacheCreationInputTokens
+					}
+				}
+				s.mu.Unlock()
+			}
+
+			// Notify tool use callback for non-partial assistant messages containing
+			// tool_use blocks. This catches tool calls that bypass control requests
+			// (e.g., --dangerously-skip-permissions). Partial messages are skipped
+			// because their tool inputs may be incomplete streaming fragments.
+			if msg.Assistant != nil && msg.Subtype != "partial" && s.onToolAllowed != nil {
+				for _, block := range msg.Assistant.Message.Content {
+					if block.IsToolUse() {
+						s.onToolAllowed(block.Name, block.Input)
+					}
+				}
+			}
+
+			if len(msg.FileReads) > 0 && s.onFileRead != nil {
+				for _, read := range msg.FileReads {
+					if read.FilePath != "" {
+						s.onFileRead(read)
+					}
+				}
+			}
+
+			// Notify subagent (Task tool) lifecycle callback. These messages
+			// are the main signal that a Task() call is still alive while the
+			// main agent is blocked waiting for it to return, so we surface
+			// them even though they don't otherwise affect session state.
+			// Codex does not emit these.
+			if (msg.TaskStarted != nil || msg.TaskProgress != nil || msg.TaskNotification != nil) && s.onSubagentEvent != nil {
+				s.onSubagentEvent(msg)
+			}
+
+			// Stream events (from --include-partial-messages) are low-level API
+			// deltas — too numerous for the message log. Forward delta events
+			// (thinking, text, input_json) to the attach channel for the UI
+			// spinner; skip everything else (message_start, content_block_stop, etc.).
+			if msg.Type == "stream_event" {
+				if msg.StreamDeltaType != "" {
+					// Drop-oldest ring: a burst of deltas evicts stale
+					// frames but never blocks readMessages or consumes
+					// attachCh slots that critical messages need.
+					s.streamRing.Push(msg)
+				}
 				continue
 			}
-			s.mu.Lock()
-			s.recordPendingControlRequestLocked(msg.ControlRequest)
-			s.mu.Unlock()
-		}
 
-		// Handle result message. The statusCh signal is deferred until after
-		// the message is appended to the log below, so receivers woken by
-		// statusCh observe a MessageLog that already contains this result.
-		if msg.Result != nil {
-			s.mu.Lock()
-			s.cost = msg.Result
-			// Extract context window from modelUsage if available (Claude CLI).
-			for _, mu := range msg.Result.ModelUsage {
-				if mu.ContextWindow > 0 && s.latestUsage != nil {
-					s.latestUsage.ContextWindow = mu.ContextWindow
-					break
+			// Append to message log. Assistant messages always go through
+			// UpdateLastAssistantPartial so that a final (non-partial) assistant
+			// message replaces the accumulated partial from streaming deltas
+			// instead of being appended alongside it.
+			if msg.Assistant != nil {
+				s.messageLog.UpdateLastAssistantPartial(msg)
+			} else {
+				s.messageLog.Append(msg)
+			}
+
+			notifiedExternal := false
+
+			// Result status is a completion signal for consumers that immediately
+			// inspect both the message log and manager-derived session state.
+			// Notify the external callback after the log append but before statusCh
+			// so receivers woken by statusCh observe a complete result view.
+			if msg.Result != nil {
+				if onMessage != nil {
+					onMessage(msg)
+					notifiedExternal = true
+				}
+
+				status := resultSubtypeToStatus(msg.Result)
+				select {
+				case s.statusCh <- status:
+				default:
 				}
 			}
-			// Fallback: if no usage was accumulated from streaming messages,
-			// use the result's usage (covers sessions that only get a final result).
-			if msg.Result.Usage != nil && s.accumulatedUsage == (llm.Usage{}) {
-				s.accumulatedUsage = *msg.Result.Usage
-			}
-			s.mu.Unlock()
-		}
 
-		// Capture usage from any assistant message that carries it.
-		// With --include-partial-messages the final accumulated usage may
-		// arrive on a partial-subtype message, so we do not filter by subtype.
-		if msg.Assistant != nil && msg.Assistant.Message.Usage != nil {
-			s.mu.Lock()
-			s.latestUsage = msg.Assistant.Message.Usage
-			// Accumulate: ADD per-message usage (Claude path — each message is a delta)
-			u := msg.Assistant.Message.Usage
-			s.accumulatedUsage.InputTokens += u.InputTokens
-			s.accumulatedUsage.OutputTokens += u.OutputTokens
-			s.accumulatedUsage.CacheReadInputTokens += u.CacheReadInputTokens
-			s.accumulatedUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
-			s.mu.Unlock()
-		}
-
-		// Accumulate from provider-synthesized usage updates (Codex path).
-		// These carry cumulative totals — use SET semantics.
-		if msg.UsageUpdate != nil {
-			s.mu.Lock()
-			s.accumulatedUsage.InputTokens = msg.UsageUpdate.InputTokens
-			s.accumulatedUsage.OutputTokens = msg.UsageUpdate.OutputTokens
-			if msg.UsageUpdate.CacheReadInputTokens > 0 {
-				s.accumulatedUsage.CacheReadInputTokens = msg.UsageUpdate.CacheReadInputTokens
-			}
-			if msg.UsageUpdate.CacheCreationInputTokens > 0 {
-				s.accumulatedUsage.CacheCreationInputTokens = msg.UsageUpdate.CacheCreationInputTokens
-			}
-			// Track context window for ContextPercentage() (Codex provides this
-			// via token usage update notifications).
-			if msg.UsageUpdate.ContextWindow > 0 {
-				if s.latestUsage == nil {
-					s.latestUsage = &llm.Usage{}
+			// Result is usually the SDK's terminal signal for a Claude wrapper
+			// turn. The wrapper (cat | shell ... nativeBin) can keep `cat`
+			// blocked on stdin after the native binary exits, which prevents
+			// process.Wait() from returning and leaves s.done unclosed. Close
+			// stdin so cat drains, and start a watchdog that escalates
+			// SIGTERM/SIGKILL if the wrapper isn't gone within the grace
+			// window. PID is captured here so the watchdog never has to
+			// acquire s.mu, which the cleanup defer holds while blocked in
+			// process.Wait().
+			//
+			// The Codex provider (`codex app-server`) is multi-turn: the
+			// process stays alive across turns and a Result on
+			// turn/completed is NOT a process-exit signal. Closing stdin
+			// here would EOF the JSON-RPC channel and kill the app-server,
+			// which breaks the SessionWaitingHelp branch in
+			// agent.waitForStatus that needs the session alive to deliver
+			// a follow-up user message. Skip the wrapper-cleanup logic for
+			// codex; cleanup happens via the explicit Stop() path instead.
+			// Loop-managed Claude sessions also keep stdin open for truncated
+			// turns so waitForStatus can send its auto-resume message on the
+			// same session. Gate on the producer's lifecycle, not just the
+			// message type.
+			if msg.Result != nil && s.shouldShutdownOnResult(msg.Result) && s.resultShutdownStarted.CompareAndSwap(false, true) {
+				s.mu.Lock()
+				stdinW := s.stdin
+				s.stdin = nil
+				var pid int
+				if s.process != nil && s.process.Process != nil {
+					pid = s.process.Process.Pid
 				}
-				s.latestUsage.ContextWindow = msg.UsageUpdate.ContextWindow
-				s.latestUsage.ContextBaseline = msg.UsageUpdate.ContextBaseline
-				// Only refresh the fill snapshot when the provider sent a
-				// non-zero one. If Last is empty (thread resume before first
-				// turn, Codex's fill_to_context_window corruption — see
-				// openai/codex#16068), keep prior values rather than falling
-				// back to lifetime-cumulative InputTokens, which would pin
-				// the display at 100% for mature sessions.
-				if msg.UsageUpdate.ContextTotalTokens > 0 {
-					s.latestUsage.ContextTotalTokens = msg.UsageUpdate.ContextTotalTokens
-					s.latestUsage.ContextInputTokens = msg.UsageUpdate.ContextInputTokens
-					s.latestUsage.InputTokens = msg.UsageUpdate.ContextInputTokens
+				s.mu.Unlock()
+
+				if stdinW != nil {
+					_ = stdinW.Close()
+				}
+				if pid > 0 {
+					go s.escalateAfterResult(pid, s.resultShutdownGraceDuration())
 				}
 			}
-			s.mu.Unlock()
-		}
 
-		// Notify tool use callback for non-partial assistant messages containing
-		// tool_use blocks. This catches tool calls that bypass control requests
-		// (e.g., --dangerously-skip-permissions). Partial messages are skipped
-		// because their tool inputs may be incomplete streaming fragments.
-		if msg.Assistant != nil && msg.Subtype != "partial" && s.onToolAllowed != nil {
-			for _, block := range msg.Assistant.Message.Content {
-				if block.IsToolUse() {
-					s.onToolAllowed(block.Name, block.Input)
+			// Forward to attach channel. Result and unhandled ControlRequest
+			// messages are critical — the TUI relies on them to clear the
+			// "Thinking…" state and to surface permission/question prompts.
+			//
+			// ControlRequest takes the dedicated controlCh path (forwarder
+			// goroutine bridges into attachCh with a much larger timeout)
+			// because dropping one strands the SDK subprocess waiting for a
+			// response, which the LLM eventually surfaces as an opaque
+			// "tool errored" — see forwardControlRequests for the design
+			// rationale.
+			//
+			// Result still uses the bounded-blocking send onto attachCh:
+			// dropping a Result is recoverable (the TUI's spinner state
+			// snaps back on the next assistant message), and routing
+			// Results onto controlCh would couple two different timeouts
+			// onto a shared queue.
+			if msg.ControlRequest != nil {
+				select {
+				case s.controlCh <- msg:
+				case <-s.done:
+					// Session shutting down; drop is fine.
 				}
-			}
-		}
-
-		if len(msg.FileReads) > 0 && s.onFileRead != nil {
-			for _, read := range msg.FileReads {
-				if read.FilePath != "" {
-					s.onFileRead(read)
+			} else if msg.Result != nil {
+				if !s.hasAttachConsumer() {
+					select {
+					case s.attachCh <- msg:
+					default:
+					}
+				} else {
+					attachTimeout := s.criticalAttachTimeout()
+					criticalSendTimer := time.NewTimer(attachTimeout)
+					select {
+					case s.attachCh <- msg:
+					case <-criticalSendTimer.C:
+						log.Printf("session %s: dropped critical SDK message (type=%s) after %s on full attachCh", s.id, msg.Type, attachTimeout)
+						// Additive metric: surface the drop to observability so
+						// dashboards / watchdogs can alert on a stuck consumer
+						// without having to grep agentic.log. The log line above
+						// is intentionally preserved — the reporter is additive.
+						s.mu.Lock()
+						reporter := s.attachDropReporter
+						featureID := s.featureID
+						phaseName := s.phase.String()
+						s.mu.Unlock()
+						if reporter != nil {
+							reporter.ReportAttachDrop(s.id, featureID, phaseName, msg.Type, attachTimeout)
+						}
+					}
+					criticalSendTimer.Stop()
 				}
-			}
-		}
-
-		// Notify subagent (Task tool) lifecycle callback. These messages
-		// are the main signal that a Task() call is still alive while the
-		// main agent is blocked waiting for it to return, so we surface
-		// them even though they don't otherwise affect session state.
-		// Codex does not emit these.
-		if (msg.TaskStarted != nil || msg.TaskProgress != nil || msg.TaskNotification != nil) && s.onSubagentEvent != nil {
-			s.onSubagentEvent(msg)
-		}
-
-		// Stream events (from --include-partial-messages) are low-level API
-		// deltas — too numerous for the message log. Forward delta events
-		// (thinking, text, input_json) to the attach channel for the UI
-		// spinner; skip everything else (message_start, content_block_stop, etc.).
-		if msg.Type == "stream_event" {
-			if msg.StreamDeltaType != "" {
-				// Drop-oldest ring: a burst of deltas evicts stale
-				// frames but never blocks readMessages or consumes
-				// attachCh slots that critical messages need.
-				s.streamRing.Push(msg)
-			}
-			continue
-		}
-
-		// Append to message log. Assistant messages always go through
-		// UpdateLastAssistantPartial so that a final (non-partial) assistant
-		// message replaces the accumulated partial from streaming deltas
-		// instead of being appended alongside it.
-		if msg.Assistant != nil {
-			s.messageLog.UpdateLastAssistantPartial(msg)
-		} else {
-			s.messageLog.Append(msg)
-		}
-
-		notifiedExternal := false
-
-		// Result status is a completion signal for consumers that immediately
-		// inspect both the message log and manager-derived session state.
-		// Notify the external callback after the log append but before statusCh
-		// so receivers woken by statusCh observe a complete result view.
-		if msg.Result != nil {
-			if onMessage != nil {
-				onMessage(msg)
-				notifiedExternal = true
-			}
-
-			status := resultSubtypeToStatus(msg.Result)
-			select {
-			case s.statusCh <- status:
-			default:
-			}
-		}
-
-		// Result is usually the SDK's terminal signal for a Claude wrapper
-		// turn. The wrapper (cat | shell ... nativeBin) can keep `cat`
-		// blocked on stdin after the native binary exits, which prevents
-		// process.Wait() from returning and leaves s.done unclosed. Close
-		// stdin so cat drains, and start a watchdog that escalates
-		// SIGTERM/SIGKILL if the wrapper isn't gone within the grace
-		// window. PID is captured here so the watchdog never has to
-		// acquire s.mu, which the cleanup defer holds while blocked in
-		// process.Wait().
-		//
-		// The Codex provider (`codex app-server`) is multi-turn: the
-		// process stays alive across turns and a Result on
-		// turn/completed is NOT a process-exit signal. Closing stdin
-		// here would EOF the JSON-RPC channel and kill the app-server,
-		// which breaks the SessionWaitingHelp branch in
-		// agent.waitForStatus that needs the session alive to deliver
-		// a follow-up user message. Skip the wrapper-cleanup logic for
-		// codex; cleanup happens via the explicit Stop() path instead.
-		// Loop-managed Claude sessions also keep stdin open for truncated
-		// turns so waitForStatus can send its auto-resume message on the
-		// same session. Gate on the producer's lifecycle, not just the
-		// message type.
-		if msg.Result != nil && s.shouldShutdownOnResult(msg.Result) && s.resultShutdownStarted.CompareAndSwap(false, true) {
-			s.mu.Lock()
-			stdinW := s.stdin
-			s.stdin = nil
-			var pid int
-			if s.process != nil && s.process.Process != nil {
-				pid = s.process.Process.Pid
-			}
-			s.mu.Unlock()
-
-			if stdinW != nil {
-				_ = stdinW.Close()
-			}
-			if pid > 0 {
-				go s.escalateAfterResult(pid, s.resultShutdownGraceDuration())
-			}
-		}
-
-		// Forward to attach channel. Result and unhandled ControlRequest
-		// messages are critical — the TUI relies on them to clear the
-		// "Thinking…" state and to surface permission/question prompts.
-		//
-		// ControlRequest takes the dedicated controlCh path (forwarder
-		// goroutine bridges into attachCh with a much larger timeout)
-		// because dropping one strands the SDK subprocess waiting for a
-		// response, which the LLM eventually surfaces as an opaque
-		// "tool errored" — see forwardControlRequests for the design
-		// rationale.
-		//
-		// Result still uses the bounded-blocking send onto attachCh:
-		// dropping a Result is recoverable (the TUI's spinner state
-		// snaps back on the next assistant message), and routing
-		// Results onto controlCh would couple two different timeouts
-		// onto a shared queue.
-		if msg.ControlRequest != nil {
-			select {
-			case s.controlCh <- msg:
-			case <-s.done:
-				// Session shutting down; drop is fine.
-			}
-		} else if msg.Result != nil {
-			if !s.hasAttachConsumer() {
+			} else {
 				select {
 				case s.attachCh <- msg:
 				default:
 				}
-			} else {
-				attachTimeout := s.criticalAttachTimeout()
-				criticalSendTimer := time.NewTimer(attachTimeout)
-				select {
-				case s.attachCh <- msg:
-				case <-criticalSendTimer.C:
-					log.Printf("session %s: dropped critical SDK message (type=%s) after %s on full attachCh", s.id, msg.Type, attachTimeout)
-					// Additive metric: surface the drop to observability so
-					// dashboards / watchdogs can alert on a stuck consumer
-					// without having to grep agentic.log. The log line above
-					// is intentionally preserved — the reporter is additive.
-					s.mu.Lock()
-					reporter := s.attachDropReporter
-					featureID := s.featureID
-					phaseName := s.phase.String()
-					s.mu.Unlock()
-					if reporter != nil {
-						reporter.ReportAttachDrop(s.id, featureID, phaseName, msg.Type, attachTimeout)
-					}
-				}
-				criticalSendTimer.Stop()
 			}
-		} else {
-			select {
-			case s.attachCh <- msg:
-			default:
-			}
-		}
 
-		// Notify external callback
-		if onMessage != nil && !notifiedExternal {
-			onMessage(msg)
+			// Notify external callback
+			if onMessage != nil && !notifiedExternal {
+				onMessage(msg)
+			}
 		}
 	}
 

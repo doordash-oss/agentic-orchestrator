@@ -300,6 +300,20 @@ func TestModelContextWindowHelpers(t *testing.T) {
 	if got := llm.StripModelContextWindow("gpt-5.4[272K]"); got != "gpt-5.4" {
 		t.Fatalf("StripModelContextWindow() = %q, want gpt-5.4", got)
 	}
+	parseTests := []struct {
+		model string
+		want  int
+	}{
+		{"gpt-5.4[272K]", 272_000},
+		{"portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]", 1_040_000},
+		{"gpt-5.4", 0},
+		{"gpt-5.4[fast]", 0},
+	}
+	for _, tt := range parseTests {
+		if got := llm.ParseModelContextWindow(tt.model); got != tt.want {
+			t.Errorf("ParseModelContextWindow(%q) = %d, want %d", tt.model, got, tt.want)
+		}
+	}
 }
 
 // --- test helpers ---

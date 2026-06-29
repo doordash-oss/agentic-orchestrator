@@ -867,6 +867,42 @@ func TestNewPublishViewport_BuildsViewportTitleBody(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// DraftPublish field tests
+// ---------------------------------------------------------------------------
+
+func TestNewPublishModel_DraftFromFeatureCheckpoints_True(t *testing.T) {
+	f := &feature.Feature{
+		ID:    "feat-draft",
+		Repos: []feature.FeatureRepo{{Name: "r1"}},
+		Checkpoints: feature.Checkpoints{
+			DraftPublish: true,
+		},
+	}
+	repos := []publishRepoEntry{{
+		Name: "r1", Branch: "feature/x", WorktreeDir: "/tmp/wt", RepoPath: "/tmp/repo",
+	}}
+	m := NewPublishModel(f, repos, "", "", 80, 24)
+	if !m.draft {
+		t.Error("m.draft should be true when feature Checkpoints.DraftPublish is true")
+	}
+}
+
+func TestNewPublishModel_DraftFromFeatureCheckpoints_False(t *testing.T) {
+	f := &feature.Feature{
+		ID:    "feat-nodraft",
+		Repos: []feature.FeatureRepo{{Name: "r1"}},
+		// DraftPublish defaults to false
+	}
+	repos := []publishRepoEntry{{
+		Name: "r1", Branch: "feature/x", WorktreeDir: "/tmp/wt", RepoPath: "/tmp/repo",
+	}}
+	m := NewPublishModel(f, repos, "", "", 80, 24)
+	if m.draft {
+		t.Error("m.draft should be false when feature Checkpoints.DraftPublish is false")
+	}
+}
+
 func TestPublishModel_StepCounter_TruthTable(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -897,5 +933,145 @@ func TestPublishModel_StepCounter_TruthTable(t *testing.T) {
 				t.Errorf("view = %q, want it to contain %q", view, tt.wantContains)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Draft toggle tests
+// ---------------------------------------------------------------------------
+
+func TestPublishConfirmStep_DraftIndicator_InitialTrue(t *testing.T) {
+	f := &feature.Feature{
+		ID:    "feat-draft",
+		Repos: []feature.FeatureRepo{{Name: "r1"}},
+		Checkpoints: feature.Checkpoints{
+			DraftPublish: true,
+		},
+	}
+	repos := []publishRepoEntry{{
+		Name: "r1", Branch: "feature/x", WorktreeDir: "/tmp/wt", RepoPath: "/tmp/repo",
+	}}
+	m := NewPublishModel(f, repos, "", "", 80, 24)
+	m.step = publishStepConfirm
+
+	view := m.View()
+	if !strings.Contains(view, "Draft PR") {
+		t.Error("confirm view should contain 'Draft PR' when m.draft is true")
+	}
+	if strings.Contains(view, "Ready for review") {
+		t.Error("confirm view should not contain 'Ready for review' when m.draft is true")
+	}
+}
+
+func TestPublishConfirmStep_DraftIndicator_InitialFalse(t *testing.T) {
+	f := &feature.Feature{
+		ID:    "feat-nodraft",
+		Repos: []feature.FeatureRepo{{Name: "r1"}},
+		// DraftPublish defaults to false
+	}
+	repos := []publishRepoEntry{{
+		Name: "r1", Branch: "feature/x", WorktreeDir: "/tmp/wt", RepoPath: "/tmp/repo",
+	}}
+	m := NewPublishModel(f, repos, "", "", 80, 24)
+	m.step = publishStepConfirm
+
+	view := m.View()
+	if !strings.Contains(view, "Ready for review") {
+		t.Error("confirm view should contain 'Ready for review' when m.draft is false")
+	}
+	if strings.Contains(view, "Draft PR") {
+		t.Error("confirm view should not contain 'Draft PR' when m.draft is false")
+	}
+}
+
+func TestPublishConfirmStep_DraftIndicator_AlwaysPresent(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.step = publishStepConfirm
+
+	m.draft = false
+	viewOff := m.View()
+	m.draft = true
+	viewOn := m.View()
+
+	// Both views must contain an indicator line — no layout shift.
+	if !strings.Contains(viewOff, "Ready for review") {
+		t.Error("draft=false: confirm view missing 'Ready for review' indicator")
+	}
+	if !strings.Contains(viewOn, "Draft PR") {
+		t.Error("draft=true: confirm view missing 'Draft PR' indicator")
+	}
+}
+
+func TestPublishDraftToggle_TurnsOn(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.step = publishStepConfirm
+	m.draft = false
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+
+	if !m.draft {
+		t.Error("pressing 'd' at confirm step should set m.draft to true")
+	}
+	if m.step != publishStepConfirm {
+		t.Errorf("step = %d after 'd' press, want publishStepConfirm (no step advance)", m.step)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Draft PR") {
+		t.Error("view after toggle-on should contain 'Draft PR'")
+	}
+}
+
+func TestPublishDraftToggle_TurnsOff(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.step = publishStepConfirm
+	m.draft = true
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+
+	if m.draft {
+		t.Error("pressing 'd' at confirm step should set m.draft to false")
+	}
+	if m.step != publishStepConfirm {
+		t.Errorf("step = %d after 'd' press, want publishStepConfirm (no step advance)", m.step)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Ready for review") {
+		t.Error("view after toggle-off should contain 'Ready for review'")
+	}
+}
+
+func TestPublishDraftToggle_NoEffectOnOtherSteps(t *testing.T) {
+	otherSteps := []publishStep{publishStepDiff, publishStepCommits, publishStepPRDesc}
+	for _, step := range otherSteps {
+		m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+		m.step = step
+		m.draft = false
+
+		m, _ = m.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+
+		if m.draft {
+			t.Errorf("pressing 'd' at step %d should have no effect on m.draft", step)
+		}
+	}
+}
+
+func TestPublishConfirmStep_KeyFooter_IncludesToggleDraft(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.step = publishStepConfirm
+
+	view := m.View()
+	if !strings.Contains(view, "[d] Toggle draft") {
+		t.Error("confirm step footer should contain '[d] Toggle draft'")
+	}
+}
+
+func TestPublishConfirmStep_EnterStillAdvances(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.step = publishStepConfirm
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.step != publishStepExecute {
+		t.Errorf("step = %d after Enter at confirm step, want publishStepExecute", m.step)
 	}
 }

@@ -119,7 +119,7 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 	if repoPath == "" {
 		repoPath = workDir
 	}
-	prURL, err := o.deps.Publisher.CreatePR(repoPath, branch, title, body, repo.BaseBranch)
+	prURL, err := o.deps.Publisher.CreatePR(repoPath, branch, title, body, repo.BaseBranch, f.Checkpoints.DraftPublish)
 	if err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 		return "", fmt.Errorf("PR creation failed: %w", err)

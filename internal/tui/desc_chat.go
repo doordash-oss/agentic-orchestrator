@@ -50,6 +50,14 @@ func NewDescriptionChatModel(
 	skillsDir string,
 ) DescriptionChatModel {
 	cm := NewChatModel(width, height, sm, workDir, buildDescriptionChatSystemPrompt(ctx), buildSession, chatModel, skillsDir)
+	// Prepend PR context so the user sees the current description and diff
+	// summary immediately when the chat opens.
+	contextBlock := fmt.Sprintf(
+		"Current PR description:\n  Title: %s\n  Body: %s\n\nDiff summary:\n%s\n\n---\n\n",
+		ctx.CurrentTitle, ctx.CurrentBody, ctx.DiffSummary,
+	)
+	cm.history = contextBlock + cm.history
+	cm.rebuildViewport()
 	return DescriptionChatModel{
 		ChatModel:  cm,
 		sessionKey: fmt.Sprintf("%s-desc-chat", ctx.FeatureID),

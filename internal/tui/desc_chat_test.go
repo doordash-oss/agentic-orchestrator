@@ -16,6 +16,7 @@ package tui
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -133,6 +134,27 @@ func TestDescriptionChatModel_ChatSessionKey_Isolated(t *testing.T) {
 	}, nil, "", "")
 	if m.sessionKey != "feat-abc-desc-chat" {
 		t.Errorf("sessionKey = %q, want 'feat-abc-desc-chat'", m.sessionKey)
+	}
+}
+
+func TestDescriptionChatModel_ViewShowsPRContext(t *testing.T) {
+	m := NewDescriptionChatModel(80, 24, nil, "/tmp", DescriptionChatContext{
+		FeatureID:    "feat-ctx",
+		RepoName:     "test-repo",
+		CurrentTitle: "My Title",
+		CurrentBody:  "My Body\nLine 2",
+		DiffSummary:  "diff here",
+	}, nil, "", "")
+
+	view := m.View()
+	if !strings.Contains(view, "My Title") {
+		t.Errorf("expected view to contain title, got: %s", view)
+	}
+	if !strings.Contains(view, "My Body") {
+		t.Errorf("expected view to contain body, got: %s", view)
+	}
+	if !strings.Contains(view, "diff here") {
+		t.Errorf("expected view to contain diff summary, got: %s", view)
 	}
 }
 

@@ -1132,7 +1132,7 @@ func TestPublishPRDescOtherStepsEscUnchanged(t *testing.T) {
 	}
 }
 
-func TestPublishAutoOpenDescriptionChat(t *testing.T) {
+func TestPublishNoAutoOpenDescriptionChat(t *testing.T) {
 	m := newTestPublishModel("feat-1", "diff content", "commit log", "", "", 120, 40)
 	m.step = publishStepPRDesc
 	m.generating = true
@@ -1150,78 +1150,72 @@ func TestPublishAutoOpenDescriptionChat(t *testing.T) {
 		t.Errorf("prBody = %q, want 'Generated Body'", m.prBody)
 	}
 
-	if cmd == nil {
-		t.Fatal("expected a cmd from publishDescGeneratedMsg")
-	}
-	msgs := executeBatchCmd(t, cmd)
-	var openMsg OpenDescriptionChatMsg
-	found := false
-	for _, m := range msgs {
-		if msg, ok := m.(OpenDescriptionChatMsg); ok {
-			openMsg = msg
-			found = true
-			break
+	// The chat should NOT auto-open; the user stays on the PR desc step
+	if cmd != nil {
+		msgs := executeBatchCmd(t, cmd)
+		for _, msg := range msgs {
+			if _, ok := msg.(OpenDescriptionChatMsg); ok {
+				t.Fatal("expected NO OpenDescriptionChatMsg after desc generation")
+			}
 		}
 	}
-	if !found {
-		t.Fatalf("expected OpenDescriptionChatMsg in batch, got %v", msgs)
+	if m.step != publishStepPRDesc {
+		t.Errorf("expected step = publishStepPRDesc, got %d", m.step)
+	}
+}
+
+func TestPublishRefineKeyOpensDescriptionChat(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff content", "commit log", "Title", "Body", 120, 40)
+	m.step = publishStepPRDesc
+
+	m, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
+
+	if cmd == nil {
+		t.Fatal("expected a cmd from pressing 'r' in PR desc step")
+	}
+	msg := cmd()
+	openMsg, ok := msg.(OpenDescriptionChatMsg)
+	if !ok {
+		t.Fatalf("expected OpenDescriptionChatMsg, got %T", msg)
 	}
 	if openMsg.ctx.FeatureID != "feat-1" {
 		t.Errorf("ctx.FeatureID = %q, want 'feat-1'", openMsg.ctx.FeatureID)
 	}
-	if openMsg.ctx.CurrentTitle != "Generated Title" {
-		t.Errorf("ctx.CurrentTitle = %q, want 'Generated Title'", openMsg.ctx.CurrentTitle)
+	if openMsg.ctx.CurrentTitle != "Title" {
+		t.Errorf("ctx.CurrentTitle = %q, want 'Title'", openMsg.ctx.CurrentTitle)
 	}
-	if openMsg.ctx.CurrentBody != "Generated Body" {
-		t.Errorf("ctx.CurrentBody = %q, want 'Generated Body'", openMsg.ctx.CurrentBody)
+	if openMsg.ctx.CurrentBody != "Body" {
+		t.Errorf("ctx.CurrentBody = %q, want 'Body'", openMsg.ctx.CurrentBody)
 	}
 	if openMsg.ctx.DiffSummary != "diff content" {
 		t.Errorf("ctx.DiffSummary = %q, want 'diff content'", openMsg.ctx.DiffSummary)
 	}
 }
 
-func TestPublishAutoOpenDescriptionChat_UsesLatestInputValues(t *testing.T) {
-	m := newTestPublishModel("feat-1", "diff content", "commit log", "Initial Title", "Initial Body", 120, 40)
+func TestPublishRefineKeyIgnoredWhileEditingBody(t *testing.T) {
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
 	m.step = publishStepPRDesc
-	m.generating = true
+	m.editingBody = true
 
-	// User edits title before generation completes
-	m.titleInput.SetValue("Edited Title")
-
-	m, cmd := m.Update(publishDescGeneratedMsg{title: "Generated Title", body: "Generated Body"})
-	if cmd == nil {
-		t.Fatal("expected a cmd from publishDescGeneratedMsg")
-	}
-	msgs := executeBatchCmd(t, cmd)
-	var openMsg OpenDescriptionChatMsg
-	found := false
-	for _, m := range msgs {
-		if msg, ok := m.(OpenDescriptionChatMsg); ok {
-			openMsg = msg
-			found = true
-			break
+	// Pressing 'r' while editing body should be ignored (handled by bodyInput)
+	_, cmd := m.Update(tea.KeyPressMsg{Code: 'r'})
+	if cmd != nil {
+		msg := cmd()
+		if _, ok := msg.(OpenDescriptionChatMsg); ok {
+			t.Fatal("expected NO OpenDescriptionChatMsg while editing body")
 		}
-	}
-	if !found {
-		t.Fatalf("expected OpenDescriptionChatMsg in batch, got %v", msgs)
-	}
-	if openMsg.ctx.CurrentTitle != "Generated Title" {
-		t.Errorf("ctx.CurrentTitle = %q, want 'Generated Title'", openMsg.ctx.CurrentTitle)
-	}
-	if openMsg.ctx.CurrentBody != "Generated Body" {
-		t.Errorf("ctx.CurrentBody = %q, want 'Generated Body'", openMsg.ctx.CurrentBody)
 	}
 }
 
-func TestPublishHelpTextNoRefine(t *testing.T) {
+func TestPublishHelpTextShowsRefine(t *testing.T) {
 	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 120, 40)
 	m.step = publishStepPRDesc
 
 	view := m.View()
-	if strings.Contains(view, "Refine with AI") {
-		t.Errorf("expected help text NOT to contain 'Refine with AI', got: %s", view)
+	if !strings.Contains(view, "Refine with AI") {
+		t.Errorf("expected help text to contain 'Refine with AI', got: %s", view)
 	}
-	if strings.Contains(view, "[r]") {
-		t.Errorf("expected help text NOT to contain '[r]', got: %s", view)
+	if !strings.Contains(view, "[r]") {
+		t.Errorf("expected help text to contain '[r]', got: %s", view)
 	}
 }

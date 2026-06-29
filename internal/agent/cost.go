@@ -15,8 +15,11 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -24,10 +27,23 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+const additionalSessionCostTimeout = 2 * time.Second
+
 // SessionCost holds cost and usage data extracted from a session.
 type SessionCost struct {
 	TotalCostUSD float64
 	Usage        llm.Usage
+}
+
+type additionalSessionCostProvider interface {
+	AdditionalSessionCost(context.Context) (llm.SessionCostAdjustment, error)
+}
+
+// SessionCostMetadata identifies the single session behind an accounted cost.
+type SessionCostMetadata struct {
+	SessionID     string
+	ObserverPhase string
+	RepoName      string
 }
 
 // ExtractSessionCost reads cost and accumulated usage from the session.
@@ -42,7 +58,28 @@ func ExtractSessionCost(sess ports.SessionView) SessionCost {
 	if sess.Cost() != nil {
 		sc.TotalCostUSD = sess.Cost().TotalCostUSD
 	}
+	if provider, ok := sess.(additionalSessionCostProvider); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), additionalSessionCostTimeout)
+		defer cancel()
+		adjustment, err := provider.AdditionalSessionCost(ctx)
+		if err != nil {
+			log.Printf("session cost: additional provider cost unavailable for %s: %v", sess.ID(), err)
+		} else {
+			applySessionCostAdjustment(&sc, adjustment)
+		}
+	}
 	return sc
+}
+
+func applySessionCostAdjustment(cost *SessionCost, adjustment llm.SessionCostAdjustment) {
+	if cost == nil {
+		return
+	}
+	cost.TotalCostUSD += adjustment.TotalCostUSD
+	cost.Usage.InputTokens += adjustment.Usage.InputTokens
+	cost.Usage.OutputTokens += adjustment.Usage.OutputTokens
+	cost.Usage.CacheReadInputTokens += adjustment.Usage.CacheReadInputTokens
+	cost.Usage.CacheCreationInputTokens += adjustment.Usage.CacheCreationInputTokens
 }
 
 // toSessionUsage converts a SessionCost to an observe.SessionUsage.
@@ -59,18 +96,25 @@ func toSessionUsage(cost SessionCost) observe.SessionUsage {
 // accumulateSessionCostToFeature adds a session's cost to the latest active
 // timing key on the feature, falling back to fallbackKey when no active key is
 // recorded.
-func accumulateSessionCostToFeature(store ports.FeatureStore, featureID, fallbackKey string, cost SessionCost) error {
-	return accumulateSessionCost(store, featureID, fallbackKey, cost, true)
+func accumulateSessionCostToFeature(store ports.FeatureStore, featureID, fallbackKey string, cost SessionCost, metadata ...SessionCostMetadata) error {
+	return accumulateSessionCost(store, featureID, fallbackKey, cost, true, firstSessionCostMetadata(metadata))
 }
 
 // accumulateSessionCostToFeatureKey adds a session's cost to key regardless of
 // ActiveTimingKey. Use this for phases such as Final Review where the lifecycle
 // phase can advance while the old timing key remains preserved for resume UI.
-func accumulateSessionCostToFeatureKey(store ports.FeatureStore, featureID, key string, cost SessionCost) error {
-	return accumulateSessionCost(store, featureID, key, cost, false)
+func accumulateSessionCostToFeatureKey(store ports.FeatureStore, featureID, key string, cost SessionCost, metadata ...SessionCostMetadata) error {
+	return accumulateSessionCost(store, featureID, key, cost, false, firstSessionCostMetadata(metadata))
 }
 
-func accumulateSessionCost(store ports.FeatureStore, featureID, fallbackKey string, cost SessionCost, preferActiveKey bool) error {
+func firstSessionCostMetadata(metadata []SessionCostMetadata) SessionCostMetadata {
+	if len(metadata) == 0 {
+		return SessionCostMetadata{}
+	}
+	return metadata[0]
+}
+
+func accumulateSessionCost(store ports.FeatureStore, featureID, fallbackKey string, cost SessionCost, preferActiveKey bool, metadata SessionCostMetadata) error {
 	if store == nil || strings.TrimSpace(featureID) == "" || cost.TotalCostUSD <= 0 {
 		return nil
 	}
@@ -85,7 +129,13 @@ func accumulateSessionCost(store ports.FeatureStore, featureID, fallbackKey stri
 		if costKey == "" {
 			return nil
 		}
-		f.AddPhaseCost(costKey, cost.TotalCostUSD)
+		f.RecordSessionCost(feature.SessionCostRecord{
+			SessionID:     metadata.SessionID,
+			PhaseKey:      costKey,
+			ObserverPhase: metadata.ObserverPhase,
+			RepoName:      metadata.RepoName,
+			CostUSD:       cost.TotalCostUSD,
+		})
 		return nil
 	})
 }

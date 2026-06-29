@@ -1030,7 +1030,7 @@ type captureSink struct {
 }
 
 func newCaptureSink() *captureSink {
-	return &captureSink{done: make(chan struct{})}
+	return &captureSink{done: make(chan struct{}, 1)}
 }
 
 func (c *captureSink) Write(p []byte) (int, error) {
@@ -1054,9 +1054,9 @@ func (c *captureSink) contents() string {
 	return c.buf.String()
 }
 
-// waitForWrite blocks until the sink sees another write or the timeout
-// elapses. Drains any queued notifications up front so callers can issue
-// an action and then wait for the resulting write without racing.
+// waitForWrite blocks until the sink sees a write or the timeout elapses. The
+// sink retains one pending notification so callers do not race when the write
+// lands immediately after the triggering action.
 func (c *captureSink) waitForWrite(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	select {
@@ -1064,6 +1064,15 @@ func (c *captureSink) waitForWrite(t *testing.T, timeout time.Duration) {
 	case <-time.After(timeout):
 		t.Fatalf("timed out waiting for stdin write")
 	}
+}
+
+func TestCaptureSinkWaitForWriteObservesAlreadyCompletedWrite(t *testing.T) {
+	sink := newCaptureSink()
+	if _, err := sink.Write([]byte("already written")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	sink.waitForWrite(t, 10*time.Millisecond)
 }
 
 // attachCaptureSink installs a captureSink as the session's stdin. Returns
@@ -2118,12 +2127,13 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("# Plan\nImplement something"), 0o644)
 
 	f := &feature.Feature{
-		ID:           "test-noskip-001",
-		Name:         "Test No Skip Review",
-		Slug:         "test-no-skip-review",
-		Description:  "No skip iteration review test",
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
+		ID:              "test-noskip-001",
+		Name:            "Test No Skip Review",
+		Slug:            "test-no-skip-review",
+		Description:     "No skip iteration review test",
+		Status:          feature.StatusImplementing,
+		CurrentPhase:    feature.PhaseImplement,
+		ActiveTimingKey: "implement",
 		Repos: []feature.FeatureRepo{
 			{Name: "test-repo", Path: workDir},
 		},
@@ -2167,6 +2177,25 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	}
 	assertExplicitEmptyAgentNames(t, (*captured)[0].AgentNames)
 	assertExplorationAgentNames(t, (*captured)[1].AgentNames)
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("implement"); got != 0.002 {
+		t.Errorf("PhaseCost(implement) = %v, want 0.002", got)
+	}
+	if len(updated.SessionCosts) != 2 {
+		t.Fatalf("len(SessionCosts) = %d, want 2", len(updated.SessionCosts))
+	}
+	implCost := updated.SessionCosts[0]
+	if implCost.SessionID != "test-noskip-001-impl-01" || implCost.PhaseKey != "implement" || implCost.ObserverPhase != "implement" || implCost.CostUSD != 0.001 {
+		t.Errorf("SessionCosts[0] = %+v, want implementation session cost under implement", implCost)
+	}
+	reviewCost := updated.SessionCosts[1]
+	if reviewCost.SessionID != "test-noskip-001-review-01" || reviewCost.PhaseKey != "implement" || reviewCost.ObserverPhase != "review" || reviewCost.CostUSD != 0.001 {
+		t.Errorf("SessionCosts[1] = %+v, want review helper session cost under implement", reviewCost)
+	}
 }
 
 func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {

@@ -66,23 +66,9 @@ Before approving, compare the cumulative diff against prior implementation visua
 
 Existing prior implementation visual or behavioral rows with valid verification evidence files count as coverage. Audit those rows and evidence artifacts before requesting a new row. Do not add visual or behavioral rows to the final-review PlanLess testing contract.
 
-When coverage is missing, add a blocking finding that includes exactly one structured marker per absent requirement:
+Final Review never reopens planning. When coverage is missing during Final Review, write a normal blocking finding that explains the missing visual or behavioral evidence, and route it through `CHANGES_REQUESTED` so the fix agent should capture the missing evidence artifacts.
 
-`MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>`
-
-or
-
-`MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>`
-
-For roadmap features, include the target roadmap phase when the missing evidence belongs to a prior implementation phase:
-
-`MISSING_EVIDENCE_REQUIREMENT phase <number> visual: <reviewer-authored requirement>`
-
-or
-
-`MISSING_EVIDENCE_REQUIREMENT phase <number> behavioral: <reviewer-authored requirement>`
-
-The requirement text must describe the evidence the phase plan should add. Do not tell the fix agent to add rows directly to `verification-report.yaml`, and do not ask for ad hoc `testing-contract.yaml` Changes entries to create new rows. Missing evidence is repaired by phase-plan revision so the next implementation attempt receives normal compiled contract rows.
+Do not emit `MISSING_EVIDENCE_REQUIREMENT` markers in Final Review feedback. Those markers are reserved for implementation review, where the orchestrator may revise the current phase plan.
 
 ## Severity Classification
 

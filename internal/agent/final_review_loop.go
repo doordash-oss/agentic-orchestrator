@@ -52,9 +52,6 @@ import (
 //     repo's RepoState records the failure.
 //   - "protocol_violation": the fix agent ended its turn without satisfying
 //     the completion contract. Every staged repo's RepoState records the failure.
-//   - "plan_revision_required": reviewer found missing visual or behavioral
-//     implementation evidence coverage that must be repaired by revising the
-//     relevant phase plan. No failure stamp is written.
 //   - "interrupted":     graceful shutdown / feature stopped while
 //     running. No atomic stamp written; persisted state preserved.
 //   - "failed":          dispatch error before iteration began.
@@ -183,13 +180,6 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 	case "interrupted":
 		// No atomic stamp on interrupt; persisted state is left
 		// untouched so the next start picks up the loop.
-		result.Repos = stagedRepos
-		return result, nil
-
-	case "plan_revision_required":
-		// Missing evidence is a plan-repair path, not a failed final review.
-		// The orchestrator will invalidate the relevant phase-plan attempt
-		// and dispatch planning again.
 		result.Repos = stagedRepos
 		return result, nil
 
@@ -408,14 +398,6 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{FinalStatus: "review_passed", Iterations: i}, nil
 
 		case ReviewChangesRequested:
-			if reqs := MissingEvidenceRequirements(feedback); len(reqs) > 0 {
-				s.writeIterationMeta(iterDir, i, "changes_requested")
-				return &FeatureFinalReviewResult{
-					FinalStatus:          "plan_revision_required",
-					Iterations:           i,
-					PlanRevisionFeedback: MissingEvidencePlanRevisionFeedback(reqs),
-				}, nil
-			}
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
 
@@ -583,7 +565,10 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.ReviewModel)
 	defer func() {
 		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseFinalReview.String(),
+		})
 		if observed {
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
@@ -709,7 +694,10 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.Model)
 	defer func() {
 		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseFinalReview.String(),
+		})
 		if observed {
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}

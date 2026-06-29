@@ -22,16 +22,18 @@ import (
 
 // tokenRate holds per-million-token pricing for a model.
 type tokenRate struct {
-	inputPerMToken  float64
-	outputPerMToken float64
+	inputPerMToken       float64
+	cachedInputPerMToken float64
+	outputPerMToken      float64
 }
 
 // modelRates maps canonical model names to their token pricing.
-// Source: https://developers.openai.com/api/docs/pricing (March 2026)
+// Source: https://developers.openai.com/api/docs/pricing (June 2026)
 var modelRates = map[string]tokenRate{
-	"gpt-5.4":       {inputPerMToken: 2.50, outputPerMToken: 15.00},
-	"gpt-5.4-mini":  {inputPerMToken: 0.75, outputPerMToken: 4.50},
-	"gpt-5.3-codex": {inputPerMToken: 1.75, outputPerMToken: 14.00},
+	"gpt-5.5":       {inputPerMToken: 5.00, cachedInputPerMToken: 0.50, outputPerMToken: 30.00},
+	"gpt-5.4":       {inputPerMToken: 2.50, cachedInputPerMToken: 0.25, outputPerMToken: 15.00},
+	"gpt-5.4-mini":  {inputPerMToken: 0.75, cachedInputPerMToken: 0.075, outputPerMToken: 4.50},
+	"gpt-5.3-codex": {inputPerMToken: 1.75, cachedInputPerMToken: 0.175, outputPerMToken: 14.00},
 }
 
 // defaultModel is the fallback when a model string doesn't match any rate entry.

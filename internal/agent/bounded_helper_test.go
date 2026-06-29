@@ -83,6 +83,84 @@ func TestRunBoundedHelper_SuccessWithoutPhaseComplete(t *testing.T) {
 	}
 }
 
+func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
+	workDir := t.TempDir()
+	pr, cleanup := newMockBoundedHelperRunner(t, []llm.SDKMessage{
+		mocks.InitMessage(),
+		mocks.AssistantTextMessage("Review complete"),
+		{
+			Type: "result",
+			Result: &llm.ResultMessage{
+				Type:         "result",
+				Subtype:      "success",
+				Result:       "success",
+				StopReason:   "end_turn",
+				TotalCostUSD: 0.12,
+			},
+		},
+	})
+	defer cleanup()
+
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{
+		ID:              "feature-1",
+		Name:            "feature-1",
+		Status:          feature.StatusPlanning,
+		ActiveTimingKey: "phase-1-plan",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	pr.FeatureStore = store
+
+	_, err := pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+		SessionID:     "feature-1-planreview-architecture-01",
+		FeatureID:     "feature-1",
+		Phase:         feature.PhasePlan,
+		Label:         "review helper",
+		ObserverPhase: "review",
+		Model:         "test-model",
+		Prompt:        "Review the plan.",
+		SystemPrompt:  "You are a bounded plan reviewer.",
+		WorkDir:       workDir,
+		RepoName:      "repo-a",
+		Timeout:       2 * time.Second,
+		EffortLevel:   llm.EffortMedium,
+		PermHandler:   &permission.ReadOnlyHandler{},
+	})
+	if err != nil {
+		t.Fatalf("RunBoundedHelper() error = %v", err)
+	}
+
+	updated, err := store.Load("feature-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("phase-1-plan"); got != 0.12 {
+		t.Errorf("PhaseCost(phase-1-plan) = %v, want 0.12", got)
+	}
+	if len(updated.SessionCosts) != 1 {
+		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
+	}
+	got := updated.SessionCosts[0]
+	if got.SessionID != "feature-1-planreview-architecture-01" {
+		t.Errorf("SessionID = %q, want feature-1-planreview-architecture-01", got.SessionID)
+	}
+	if got.PhaseKey != "phase-1-plan" {
+		t.Errorf("PhaseKey = %q, want phase-1-plan", got.PhaseKey)
+	}
+	if got.ObserverPhase != "review" {
+		t.Errorf("ObserverPhase = %q, want review", got.ObserverPhase)
+	}
+	if got.RepoName != "repo-a" {
+		t.Errorf("RepoName = %q, want repo-a", got.RepoName)
+	}
+	if got.CostUSD != 0.12 {
+		t.Errorf("CostUSD = %v, want 0.12", got.CostUSD)
+	}
+}
+
 func TestRunBoundedHelper_FailsOnPendingAskUserQuestion(t *testing.T) {
 	workDir := t.TempDir()
 	pr, cleanup := newMockBoundedHelperRunner(t, []llm.SDKMessage{

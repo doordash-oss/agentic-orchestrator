@@ -56,7 +56,7 @@ var denyListPatterns = []*regexp.Regexp{
 // The function is a pure package-level helper with no dependency on config,
 // sessions, or the handler.
 func DenyListMatch(toolInput string) bool {
-	cmd := extractBashCommand(toolInput)
+	cmd := ExtractBashCommand(toolInput)
 	for _, re := range denyListPatterns {
 		if re.MatchString(cmd) {
 			return true

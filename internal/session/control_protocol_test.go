@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -875,5 +876,222 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 	}
 	if s.qaLog[0].Question != "Which DB?" || s.qaLog[0].Answer != "PostgreSQL" {
 		t.Errorf("qaLog[0] = %+v, want {Which DB? PostgreSQL}", s.qaLog[0])
+	}
+}
+
+// --- AutoReviewed inline status-line tests ---
+
+type autoReviewedAllowHandler struct{}
+
+func (h *autoReviewedAllowHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{Behavior: "allow", AutoReviewed: true}, nil
+}
+
+type normalAllowHandler struct{}
+
+func (h *normalAllowHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{Behavior: "allow"}, nil
+}
+
+type denyHandler struct{}
+
+func (h *denyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{Behavior: "deny", Reason: "denied"}, nil
+}
+
+func TestHandleControlRequest_AutoReviewed_AppendsStatusMessage(t *testing.T) {
+	t.Parallel()
+	s := NewSession("auto-review", "feat-1", feature.PhaseImplement)
+	s.permHandler = &autoReviewedAllowHandler{}
+	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
+		RequestID: "bash_1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"go test ./..."}`),
+		},
+	}}
+
+	if handled := s.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true")
+	}
+
+	msgs := s.messageLog.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("messageLog len = %d, want 1", len(msgs))
+	}
+	m := msgs[0]
+	if m.Type != "status" {
+		t.Errorf("msg.Type = %q, want status", m.Type)
+	}
+	if !m.LocallyAppended {
+		t.Errorf("LocallyAppended = false, want true")
+	}
+	if m.Status == nil {
+		t.Fatal("msg.Status = nil, want non-nil")
+	}
+	want := "Auto-approved: Bash: go test ./..."
+	if m.Status.Message != want {
+		t.Errorf("Status.Message = %q, want %q", m.Status.Message, want)
+	}
+
+	select {
+	case attachMsg := <-s.AttachCh():
+		if attachMsg.Type != "status" {
+			t.Errorf("attach msg.Type = %q, want status", attachMsg.Type)
+		}
+		if attachMsg.Status == nil || attachMsg.Status.Message != want {
+			t.Errorf("attach Status.Message = %q, want %q", attachMsg.Status.Message, want)
+		}
+	default:
+		t.Fatal("expected synthetic status message on attachCh, got none")
+	}
+}
+
+func TestHandleControlRequest_NormalAllow_NoStatusMessage(t *testing.T) {
+	t.Parallel()
+	s := NewSession("normal-allow", "feat-1", feature.PhaseImplement)
+	s.permHandler = &normalAllowHandler{}
+	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
+		RequestID: "bash_1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"go test ./..."}`),
+		},
+	}}
+
+	if handled := s.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true")
+	}
+
+	if len(s.messageLog.Messages()) != 0 {
+		t.Errorf("messageLog len = %d, want 0", len(s.messageLog.Messages()))
+	}
+	select {
+	case <-s.AttachCh():
+		t.Fatal("expected no message on attachCh for normal allow")
+	default:
+	}
+}
+
+func TestHandleControlRequest_Deny_NoStatusMessage(t *testing.T) {
+	t.Parallel()
+	s := NewSession("deny", "feat-1", feature.PhaseImplement)
+	s.permHandler = &denyHandler{}
+	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
+		RequestID: "bash_1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    json.RawMessage(`{"command":"go test ./..."}`),
+		},
+	}}
+
+	if handled := s.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true")
+	}
+
+	if len(s.messageLog.Messages()) != 0 {
+		t.Errorf("messageLog len = %d, want 0", len(s.messageLog.Messages()))
+	}
+	select {
+	case <-s.AttachCh():
+		t.Fatal("expected no message on attachCh for deny")
+	default:
+	}
+}
+
+func TestHandleControlRequest_AutoReviewed_TruncatesLongCommand(t *testing.T) {
+	t.Parallel()
+	s := NewSession("auto-review-trunc", "feat-1", feature.PhaseImplement)
+	s.permHandler = &autoReviewedAllowHandler{}
+	longCmd := "go test ./... " + strings.Repeat("x", 300)
+	input, _ := json.Marshal(map[string]string{"command": longCmd})
+	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
+		RequestID: "bash_1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    input,
+		},
+	}}
+
+	if handled := s.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true")
+	}
+
+	msgs := s.messageLog.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("messageLog len = %d, want 1", len(msgs))
+	}
+	m := msgs[0]
+	if m.Status == nil {
+		t.Fatal("msg.Status = nil")
+	}
+	if len(m.Status.Message) > 230 {
+		t.Errorf("Status.Message length = %d, want <= 230 (200 cmd + ellipsis + prefix)", len(m.Status.Message))
+	}
+	if !strings.Contains(m.Status.Message, "…") {
+		t.Errorf("Status.Message should be truncated with ellipsis, got %q", m.Status.Message)
+	}
+}
+
+func TestHandleControlRequest_AutoReviewed_CollapsesNewlines(t *testing.T) {
+	t.Parallel()
+	s := NewSession("auto-review-nl", "feat-1", feature.PhaseImplement)
+	s.permHandler = &autoReviewedAllowHandler{}
+	input, _ := json.Marshal(map[string]string{"command": "echo hello\nworld\r\nfoo"})
+	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
+		RequestID: "bash_1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Bash",
+			Input:    input,
+		},
+	}}
+
+	if handled := s.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true")
+	}
+
+	msgs := s.messageLog.Messages()
+	if len(msgs) != 1 {
+		t.Fatalf("messageLog len = %d, want 1", len(msgs))
+	}
+	m := msgs[0]
+	if m.Status == nil {
+		t.Fatal("msg.Status = nil")
+	}
+	want := "Auto-approved: Bash: echo hello world foo"
+	if m.Status.Message != want {
+		t.Errorf("Status.Message = %q, want %q", m.Status.Message, want)
+	}
+}
+
+func TestHandleControlRequest_AutoReviewed_NonBashTool_NoStatusMessage(t *testing.T) {
+	t.Parallel()
+	s := NewSession("auto-review-nonbash", "feat-1", feature.PhaseImplement)
+	s.permHandler = &autoReviewedAllowHandler{}
+	msg := llm.SDKMessage{ControlRequest: &llm.ControlRequestMessage{
+		RequestID: "read_1",
+		Request: llm.ControlRequest{
+			Subtype:  "can_use_tool",
+			ToolName: "Read",
+			Input:    json.RawMessage(`{"file_path":"/tmp/foo"}`),
+		},
+	}}
+
+	if handled := s.tryHandleControlRequest(msg); !handled {
+		t.Fatal("tryHandleControlRequest = false, want true")
+	}
+
+	if len(s.messageLog.Messages()) != 0 {
+		t.Errorf("messageLog len = %d, want 0 for non-Bash auto-reviewed allow", len(s.messageLog.Messages()))
+	}
+	select {
+	case <-s.AttachCh():
+		t.Fatal("expected no message on attachCh for non-Bash auto-reviewed allow")
+	default:
 	}
 }

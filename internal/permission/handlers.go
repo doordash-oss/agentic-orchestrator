@@ -303,7 +303,7 @@ func toolInputFilePath(input string) (string, bool) {
 // substitution metacharacters, and every &&/||/| segment is a known read-only
 // program. Sandboxed helpers bypass this via Sandboxed.
 func boundedHelperReadOnlyBashAllowed(input string) bool {
-	command := strings.TrimSpace(extractBashCommand(input))
+	command := strings.TrimSpace(ExtractBashCommand(input))
 	if command == "" {
 		return false
 	}
@@ -518,7 +518,7 @@ func (h *AutoReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.P
 	if h.Cache != nil {
 		h.Cache.RememberAllow(req.ToolName, req.Input, "")
 	}
-	return ports.PermissionDecision{Behavior: "allow", Reason: "auto-reviewed"}, nil
+	return ports.PermissionDecision{Behavior: "allow", Reason: "auto-reviewed", AutoReviewed: true}, nil
 }
 
 // DenyAllHandler denies all tool use requests.

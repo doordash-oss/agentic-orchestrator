@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -32,6 +33,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -1280,6 +1282,9 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		if s.onToolAllowed != nil {
 			s.onToolAllowed(req.Request.ToolName, req.Request.Input)
 		}
+		if decision.AutoReviewed {
+			s.appendAutoApprovedStatus(req.Request.ToolName, string(req.Request.Input))
+		}
 		return true
 	case "deny":
 		s.respondToControlViaProtocol(req.RequestID, false, nil, decision.Reason)
@@ -1292,6 +1297,40 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 			s.onToolAllowed(req.Request.ToolName, req.Request.Input)
 		}
 		return true
+	}
+}
+
+// appendAutoApprovedStatus appends a synthetic locally-appended status message
+// to the message log and the attach channel when a Bash command is
+// auto-approved by the classifier. The command is newline-collapsed and
+// truncated to ~200 characters so the notice stays a clean one-liner.
+func (s *Session) appendAutoApprovedStatus(toolName, toolInput string) {
+	if toolName != "Bash" {
+		return
+	}
+	cmd := permission.ExtractBashCommand(toolInput)
+	cmd = strings.ReplaceAll(cmd, "\r\n", " ")
+	cmd = strings.ReplaceAll(cmd, "\n", " ")
+	cmd = strings.ReplaceAll(cmd, "\r", " ")
+	for strings.Contains(cmd, "  ") {
+		cmd = strings.ReplaceAll(cmd, "  ", " ")
+	}
+	const maxLen = 200
+	if len(cmd) > maxLen {
+		cmd = cmd[:maxLen] + "…"
+	}
+	msg := llm.SDKMessage{
+		Type:            "status",
+		LocallyAppended: true,
+		Status: &llm.StatusMessage{
+			Type:    "status",
+			Message: "Auto-approved: Bash: " + cmd,
+		},
+	}
+	s.messageLog.Append(msg)
+	select {
+	case s.attachCh <- msg:
+	default:
 	}
 }
 

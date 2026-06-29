@@ -181,8 +181,9 @@ type ToolPermissionRequest struct {
 
 // PermissionDecision is the outcome of a permission check.
 type PermissionDecision struct {
-	Behavior string // "allow" | "deny" | "" (defer)
-	Reason   string
+	Behavior     string // "allow" | "deny" | "" (defer)
+	Reason       string
+	AutoReviewed bool // true when a classifier auto-approved this Bash command
 }
 
 // PermissionHandler decides whether a session may invoke a tool. Defined in

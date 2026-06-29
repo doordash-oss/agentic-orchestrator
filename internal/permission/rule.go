@@ -47,7 +47,7 @@ func (r Rule) Match(toolName, toolInput string) bool {
 	// Normalize: extract command from JSON and strip shell chaining
 	input := toolInput
 	if toolName == "Bash" {
-		input = normalizeBashCommand(extractBashCommand(toolInput))
+		input = normalizeBashCommand(ExtractBashCommand(toolInput))
 	}
 
 	// Extract inner pattern (between parens)

@@ -311,9 +311,9 @@ func TestExtractBashCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractBashCommand(tt.input)
+			got := ExtractBashCommand(tt.input)
 			if got != tt.want {
-				t.Errorf("extractBashCommand(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("ExtractBashCommand(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -1162,6 +1162,9 @@ func TestAutoReviewHandler_NonBashDefer(t *testing.T) {
 	if decision.Behavior != "" {
 		t.Errorf("behavior = %q, want empty (defer non-Bash)", decision.Behavior)
 	}
+	if decision.AutoReviewed {
+		t.Errorf("AutoReviewed = true, want false (defer non-Bash)")
+	}
 	if classifyCalls != 0 {
 		t.Errorf("classify called %d times, want 0", classifyCalls)
 	}
@@ -1185,6 +1188,9 @@ func TestAutoReviewHandler_InnerAllowPassthrough(t *testing.T) {
 	}
 	if decision.Behavior != "allow" {
 		t.Errorf("behavior = %q, want allow (inner passthrough)", decision.Behavior)
+	}
+	if decision.AutoReviewed {
+		t.Errorf("AutoReviewed = true, want false (inner allow passthrough)")
 	}
 	if classifyCalls != 0 {
 		t.Errorf("classify called %d times, want 0", classifyCalls)
@@ -1210,6 +1216,9 @@ func TestAutoReviewHandler_InnerDenyPassthrough(t *testing.T) {
 	if decision.Behavior != "deny" {
 		t.Errorf("behavior = %q, want deny (inner passthrough)", decision.Behavior)
 	}
+	if decision.AutoReviewed {
+		t.Errorf("AutoReviewed = true, want false (inner deny passthrough)")
+	}
 	if classifyCalls != 0 {
 		t.Errorf("classify called %d times, want 0", classifyCalls)
 	}
@@ -1234,6 +1243,9 @@ func TestAutoReviewHandler_DenyListMatch(t *testing.T) {
 	if decision.Behavior != "" {
 		t.Errorf("behavior = %q, want empty (deny-list match)", decision.Behavior)
 	}
+	if decision.AutoReviewed {
+		t.Errorf("AutoReviewed = true, want false (deny-list match)")
+	}
 	if classifyCalls != 0 {
 		t.Errorf("classify called %d times, want 0 (deny-list short-circuit)", classifyCalls)
 	}
@@ -1257,6 +1269,9 @@ func TestAutoReviewHandler_ClassifyAllow_CachesRule(t *testing.T) {
 	if decision.Behavior != "allow" {
 		t.Errorf("first call: behavior = %q, want allow", decision.Behavior)
 	}
+	if !decision.AutoReviewed {
+		t.Errorf("first call: AutoReviewed = false, want true (classifier allow)")
+	}
 
 	// Second identical call: should be served from session cache.
 	classifyCalls := 0
@@ -1270,6 +1285,9 @@ func TestAutoReviewHandler_ClassifyAllow_CachesRule(t *testing.T) {
 	}
 	if decision.Behavior != "allow" {
 		t.Errorf("second call: behavior = %q, want allow (cache hit)", decision.Behavior)
+	}
+	if decision.AutoReviewed {
+		t.Errorf("second call: AutoReviewed = true, want false (cache hit)")
 	}
 	if classifyCalls != 0 {
 		t.Errorf("classify called %d times on second call, want 0 (cache hit)", classifyCalls)
@@ -1296,6 +1314,9 @@ func TestAutoReviewHandler_ClassifyDefer(t *testing.T) {
 	if decision.Behavior != "" {
 		t.Errorf("behavior = %q, want empty (classify defer)", decision.Behavior)
 	}
+	if decision.AutoReviewed {
+		t.Errorf("AutoReviewed = true, want false (classify defer)")
+	}
 }
 
 func TestAutoReviewHandler_ClassifyError(t *testing.T) {
@@ -1312,6 +1333,9 @@ func TestAutoReviewHandler_ClassifyError(t *testing.T) {
 	}
 	if decision.Behavior != "" {
 		t.Errorf("behavior = %q, want empty (classify error)", decision.Behavior)
+	}
+	if decision.AutoReviewed {
+		t.Errorf("AutoReviewed = true, want false (classify error)")
 	}
 }
 

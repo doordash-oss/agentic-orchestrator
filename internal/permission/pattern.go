@@ -19,10 +19,10 @@ import (
 	"strings"
 )
 
-// extractBashCommand extracts the command string from a Bash tool input.
+// ExtractBashCommand extracts the command string from a Bash tool input.
 // In production, the input is JSON like {"command":"ls -la"}.
 // For plain strings (e.g. in tests), the input is returned as-is.
-func extractBashCommand(input string) string {
+func ExtractBashCommand(input string) string {
 	trimmed := strings.TrimSpace(input)
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return input
@@ -73,7 +73,7 @@ func InferBashPattern(toolName, toolInput string) string {
 		return toolName + "(" + toolInput + ")"
 	}
 
-	input := normalizeBashCommand(strings.TrimSpace(extractBashCommand(toolInput)))
+	input := normalizeBashCommand(strings.TrimSpace(ExtractBashCommand(toolInput)))
 	if input == "" {
 		return "Bash(*)"
 	}

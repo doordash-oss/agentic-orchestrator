@@ -863,10 +863,9 @@ func TestContractRegistryFinalReviewFixerRejectsNotRunVerificationReport(t *test
 	}
 }
 
-func TestContractRegistryFinalReviewerRejectsApprovedWithIncompleteVerification(t *testing.T) {
+func TestContractRegistryFinalReviewerApprovesWithOnlyReviewFeedback(t *testing.T) {
 	iterDir := t.TempDir()
 	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
-	writeNotRunVerificationReport(t, filepath.Join(iterDir, "verification-report.yaml"))
 
 	contract, ok := Lookup(feature.PhaseReview, RoleFinalReviewer)
 	if !ok {
@@ -880,69 +879,18 @@ func TestContractRegistryFinalReviewerRejectsApprovedWithIncompleteVerification(
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "not_run") {
-		t.Fatalf("Validate() = (%+v, %q), want APPROVED final review blocked by not_run verification", out, got)
+	if !out.OK || len(violations) != 0 {
+		t.Fatalf("Validate() = (%+v, %v), want APPROVED final review accepted with review-feedback.md only", out, violations)
 	}
 	if out.ReviewFeedback.Verdict != ReviewApproved {
 		t.Fatalf("ReviewFeedback.Verdict = %s, want APPROVED", out.ReviewFeedback.Verdict)
 	}
-}
-
-func TestContractRegistryFinalReviewerRejectsApprovedWithoutExpectedContractBinding(t *testing.T) {
-	reviewDir := t.TempDir()
-	iterDir := filepath.Join(reviewDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iteration dir: %v", err)
-	}
-	expectedContractPath := filepath.Join(reviewDir, "testing-contract.yaml")
-	writeTestingContractForFinalReview(t, expectedContractPath, 2, "baseline-tests", "go test ./...")
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
-	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), VerificationReport{Version: 2}); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "contract_path") {
-		t.Fatalf("Validate() = (%+v, %q), want APPROVED final review blocked by missing contract_path", out, got)
+	if out.VerificationReport != nil {
+		t.Fatalf("VerificationReport = %+v, want nil for final reviewer", out.VerificationReport)
 	}
 }
 
-func TestContractRegistryFinalReviewerRejectsApprovedWithMismatchedContractBinding(t *testing.T) {
-	reviewDir := t.TempDir()
-	iterDir := filepath.Join(reviewDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iteration dir: %v", err)
-	}
-	expectedContractPath := filepath.Join(reviewDir, "testing-contract.yaml")
-	staleContractPath := filepath.Join(reviewDir, "old-testing-contract.yaml")
-	writeTestingContractForFinalReview(t, expectedContractPath, 2, "current-tests", "go test ./...")
-	staleContract := writeTestingContractForFinalReview(t, staleContractPath, 2, "old-tests", "go test ./old")
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
-	report := BuildContractVerificationReportStub(staleContract, staleContractPath)
-	for i := range report.Results {
-		report.Results[i].Status = VerificationStatusPassed
-		report.Results[i].Evidence = "old contract passed"
-	}
-	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), report); err != nil {
-		t.Fatalf("WriteVerificationReport() error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, expectedContractPath) {
-		t.Fatalf("Validate() = (%+v, %q), want APPROVED final review blocked by stale contract_path", out, got)
-	}
-}
-
-func TestContractRegistryFinalReviewerRejectsApprovedWithMissingImplementationEvidenceFile(t *testing.T) {
+func TestContractRegistryFinalReviewerDoesNotAuditPriorImplementationEvidenceFiles(t *testing.T) {
 	root := t.TempDir()
 	runDir := filepath.Join(root, "run-001")
 	reviewDir := filepath.Join(runDir, "review")
@@ -951,18 +899,7 @@ func TestContractRegistryFinalReviewerRejectsApprovedWithMissingImplementationEv
 		t.Fatalf("mkdir iteration dir: %v", err)
 	}
 
-	finalReviewContractPath := filepath.Join(reviewDir, "testing-contract.yaml")
-	finalReviewContract := writeTestingContractForFinalReview(t, finalReviewContractPath, 1, "baseline-tests", "go test ./...")
 	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
-	finalReviewReport := BuildContractVerificationReportStub(finalReviewContract, finalReviewContractPath)
-	exitCode := 0
-	for i := range finalReviewReport.Results {
-		finalReviewReport.Results[i].Status = VerificationStatusPassed
-		finalReviewReport.Results[i].EvidenceData = VerificationEvidence{ExitCode: &exitCode, Summary: "passed"}
-	}
-	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), finalReviewReport); err != nil {
-		t.Fatalf("WriteVerificationReport() final review error = %v", err)
-	}
 
 	implRoot := filepath.Join(runDir, "phase-01", "implement")
 	implIterDir := filepath.Join(implRoot, "iteration-01")
@@ -987,80 +924,21 @@ func TestContractRegistryFinalReviewerRejectsApprovedWithMissingImplementationEv
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "screenshots/missing.png") || !strings.Contains(got, "phase-01") {
-		t.Fatalf("Validate() = (%+v, %q), want final review blocked by implementation evidence file", out, got)
-	}
-}
-
-func TestContractRegistryFinalReviewerAuditsLatestCompletedImplementationOnly(t *testing.T) {
-	root := t.TempDir()
-	runDir := filepath.Join(root, "run-001")
-	reviewDir := filepath.Join(runDir, "review")
-	iterDir := filepath.Join(reviewDir, "iteration-01")
-	if err := os.MkdirAll(iterDir, 0o755); err != nil {
-		t.Fatalf("mkdir iteration dir: %v", err)
-	}
-
-	finalReviewContractPath := filepath.Join(reviewDir, "testing-contract.yaml")
-	finalReviewContract := writeTestingContractForFinalReview(t, finalReviewContractPath, 1, "baseline-tests", "go test ./...")
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
-	finalReviewReport := passedArtifactReportForTest(finalReviewContract, finalReviewContractPath)
-	if err := WriteVerificationReport(filepath.Join(iterDir, "verification-report.yaml"), finalReviewReport); err != nil {
-		t.Fatalf("WriteVerificationReport() final review error = %v", err)
-	}
-
-	implRoot := filepath.Join(runDir, "phase-01", "implement")
-	implContractPath := filepath.Join(runDir, "phase-01", "testing-contract.yaml")
-	implContract := CompileTestingContract("## Success Criteria\n### Visual Evidence\n- [ ] Capture the dashboard screenshot.\n", filepath.Join(runDir, "phase-01", "plan.md"), "collapsed")
-	if err := WriteTestingContract(implContractPath, implContract); err != nil {
-		t.Fatalf("WriteTestingContract() impl error = %v", err)
-	}
-
-	approvedIterDir := filepath.Join(implRoot, "iteration-01")
-	mustWriteEvidenceFile(t, approvedIterDir, "screenshots/dashboard.png")
-	if err := NewArtifactManager(implRoot).WriteMeta(approvedIterDir, IterationMeta{Iteration: 1, AgentStatus: "SUCCESS", ReviewStatus: "skipped"}); err != nil {
-		t.Fatalf("WriteMeta() approved error = %v", err)
-	}
-	approvedReport := passedArtifactReportForTest(&implContract, implContractPath)
-	setArtifactEvidenceForTest(&approvedReport, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/dashboard.png"})
-	if err := WriteVerificationReport(filepath.Join(approvedIterDir, "verification-report.yaml"), approvedReport); err != nil {
-		t.Fatalf("WriteVerificationReport() approved impl error = %v", err)
-	}
-
-	retryIterDir := filepath.Join(implRoot, "iteration-02")
-	if err := os.MkdirAll(retryIterDir, 0o755); err != nil {
-		t.Fatalf("mkdir retry iteration dir: %v", err)
-	}
-	if err := NewArtifactManager(implRoot).WriteMeta(retryIterDir, IterationMeta{Iteration: 2, AgentStatus: "RETRY", ReviewStatus: "skipped_retry"}); err != nil {
-		t.Fatalf("WriteMeta() retry error = %v", err)
-	}
-	retryReport := passedArtifactReportForTest(&implContract, implContractPath)
-	setArtifactEvidenceForTest(&retryReport, VerificationModeVisual, VerificationEvidence{Primary: "screenshots/missing-retry.png"})
-	if err := WriteVerificationReport(filepath.Join(retryIterDir, "verification-report.yaml"), retryReport); err != nil {
-		t.Fatalf("WriteVerificationReport() retry impl error = %v", err)
-	}
-
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
 	if !out.OK || len(violations) != 0 {
-		t.Fatalf("Validate() = (%+v, %v), want retry iteration ignored during final review evidence re-audit", out, violations)
+		t.Fatalf("Validate() = (%+v, %v), want prior implementation evidence left to reviewer judgment", out, violations)
 	}
 }
 
-func TestContractRegistryFinalReviewerAllowsChangesRequestedWithIncompleteVerification(t *testing.T) {
+func TestContractRegistryFinalReviewerAllowsChangesRequestedWithOnlyReviewFeedback(t *testing.T) {
 	iterDir := t.TempDir()
 	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("- needs work", "", "CHANGES_REQUESTED"))
-	writeNotRunVerificationReport(t, filepath.Join(iterDir, "verification-report.yaml"))
 
 	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if len(violations) != 0 || !out.OK || out.ReviewFeedback == nil || out.VerificationReport == nil {
-		t.Fatalf("Validate() = (%+v, %v), want parsed CHANGES_REQUESTED feedback and parse-only report", out, violations)
+	if len(violations) != 0 || !out.OK || out.ReviewFeedback == nil || out.VerificationReport != nil {
+		t.Fatalf("Validate() = (%+v, %v), want parsed CHANGES_REQUESTED feedback only", out, violations)
 	}
 	if out.ReviewFeedback.Verdict != ReviewChangesRequested {
 		t.Fatalf("ReviewFeedback.Verdict = %s, want CHANGES_REQUESTED", out.ReviewFeedback.Verdict)
@@ -1069,7 +947,6 @@ func TestContractRegistryFinalReviewerAllowsChangesRequestedWithIncompleteVerifi
 
 func TestContractRegistryFinalReviewerReportsMissingReviewFeedback(t *testing.T) {
 	iterDir := t.TempDir()
-	writePassedVerificationReport(t, filepath.Join(iterDir, "verification-report.yaml"))
 
 	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
 	if err != nil {
@@ -1085,7 +962,6 @@ func TestContractRegistryFinalReviewerReportsMalformedVerdict(t *testing.T) {
 	iterDir := t.TempDir()
 	body := "## Findings\n- malformed verdict\n\n## Suggestions\n- (none)\n\n## Verdict\nLGTM\n"
 	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), body)
-	writePassedVerificationReport(t, filepath.Join(iterDir, "verification-report.yaml"))
 
 	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
 	if err != nil {
@@ -1097,21 +973,7 @@ func TestContractRegistryFinalReviewerReportsMalformedVerdict(t *testing.T) {
 	}
 }
 
-func TestContractRegistryFinalReviewerReportsMissingVerificationReport(t *testing.T) {
-	iterDir := t.TempDir()
-	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
-
-	out, violations, err := Validate(feature.PhaseReview, RoleFinalReviewer, iterDir)
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "verification-report.yaml") || !strings.Contains(got, "missing") {
-		t.Fatalf("Validate() = (%+v, %q), want missing verification-report.yaml", out, got)
-	}
-}
-
-func TestContractRegistryFinalReviewerReportsMalformedVerificationReport(t *testing.T) {
+func TestContractRegistryFinalReviewerIgnoresMalformedVerificationReport(t *testing.T) {
 	iterDir := t.TempDir()
 	writeReviewFeedbackFile(t, filepath.Join(iterDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
 	if err := os.WriteFile(filepath.Join(iterDir, "verification-report.yaml"), []byte(":\n  :"), 0o644); err != nil {
@@ -1122,9 +984,8 @@ func TestContractRegistryFinalReviewerReportsMalformedVerificationReport(t *test
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	got := JoinProtocolViolations(violations)
-	if out.OK || !strings.Contains(got, "verification-report.yaml") || !strings.Contains(got, "unparseable") {
-		t.Fatalf("Validate() = (%+v, %q), want malformed verification-report.yaml", out, got)
+	if !out.OK || len(violations) != 0 {
+		t.Fatalf("Validate() = (%+v, %v), want final reviewer to ignore non-contract verification-report.yaml", out, violations)
 	}
 }
 

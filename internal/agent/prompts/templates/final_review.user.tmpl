@@ -5,35 +5,38 @@
   per-iteration print-mode review gate that audits the verification report.
 */ -}}
 {{- define "final_review.user" -}}
-{{ template "visual_references" .VisualReferences }}# Review Context
+{{ template "visual_references" .VisualReferences }}# Product Acceptance Context
 
 **Review iteration**: {{ .Iteration }}
 **Diff base**: {{ .DiffBase }}
-
-## Feature Intent
-
-{{ if .RoadmapPath }}**Roadmap**: {{ .RoadmapPath }}
+{{ if .FeedbackPath }}**Review feedback output**: {{ .FeedbackPath }}
 {{ end }}
-{{ if .ExitCriteria }}**Exit criteria**:
+
+{{ if or .DesignArtifactPath .FeatureDescription }}## Approved User Intent
+
+{{ if .DesignArtifactPath }}**Approved design**: {{ .DesignArtifactPath }}
+
+{{ end }}
+{{ if .FeatureDescription }}
+{{ .FeatureDescription }}
+
+{{ end }}{{ end }}{{ if .ExitCriteria }}## Exit Criteria
+
 {{ .ExitCriteria }}
+
+{{ end }}{{ if .RoadmapPath }}## Optional Scope Context
+
+**Roadmap**: {{ .RoadmapPath }}
 
 {{ end }}{{ if .CycleFocus }}## Current Cycle Focus
 
 {{ .CycleFocus }}
 
-{{ end }}{{ if .TestingContractPath }}## Verification Context
+{{ end }}{{ if or .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Reusable Last-Phase QA Context
 
-**Testing contract**: {{ .TestingContractPath }}
-**Verification report**: {{ .VerificationPath }}
+The following evidence can help avoid duplicating QA work when it still proves the current behavior under review. Use it as optional context, not as a checklist.
 
-{{ else if .VerificationPath }}**Verification report**: {{ .VerificationPath }}
-{{ end }}{{ if or .PriorImplementationPlanPaths .PriorImplementationContractPaths .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
-
-{{ if .PriorImplementationPlanPaths }}Phase plans:
-{{ range .PriorImplementationPlanPaths }}- {{ . }}
-{{ end }}{{ end }}{{ if .PriorImplementationContractPaths }}Implementation testing contracts:
-{{ range .PriorImplementationContractPaths }}- {{ . }}
-{{ end }}{{ end }}{{ if .PriorImplementationReportPaths }}Latest completed implementation verification reports:
+{{ if .PriorImplementationReportPaths }}Latest completed implementation verification reports:
 {{ range .PriorImplementationReportPaths }}- {{ . }}
 {{ end }}{{ end }}{{ if .PriorImplementationEvidenceRootDirs }}Evidence artifact roots:
 {{ range .PriorImplementationEvidenceRootDirs }}- {{ . }}

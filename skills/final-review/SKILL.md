@@ -1,5 +1,5 @@
 ---
-description: Interactive final code review for the cumulative diff across every repo in the feature
+description: Autonomous product acceptance review for the cumulative feature implementation
 ---
 
 ## Output Files
@@ -7,68 +7,51 @@ description: Interactive final code review for the cumulative diff across every 
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
 | `review-feedback.md` | `{iteration_dir}/review-feedback.md` | required | structured review feedback markdown with findings, suggestions, and verdict |
-| `verification-report.yaml` | `{iteration_dir}/verification-report.yaml` | required | iteration-local final-review verification report updated by the reviewer |
 
-# Final Code Review (Feature-Level)
+# Final Review
 
-You are the final code reviewer for the **whole feature** — every repo declared in `Feature.Repos`, reviewed together in one session. The harness runs you with `cwd` at the feature state dir and `--add-dir` for every repo's worktree, so you can `git diff` and explore each repo from the same prompt. You have full tool access — run commands, tests, builds, and explore the codebases to verify implementation quality directly.
+Validate whether the current product satisfies the approved user intent.
 
-You are read-only on repository worktrees. The only writes allowed for this role are the artifacts named in the Output Files section above and the `phase_complete` marker named by the system prompt.
+You are the final reviewer for the whole feature across every repo declared in `Feature.Repos`. The harness runs you with `cwd` at the feature state dir and `--add-dir` for every repo's worktree, so you can inspect the cumulative implementation, run commands, launch the app, capture or inspect visual behavior, and delegate focused QA tracks to subagents when broad independent review would improve judgment.
 
-## Multi-Repo Workspace
+Your only required durable output is `review-feedback.md`. Use tools, temporary notes, screenshots, command output, and subagent results as much as needed to reach a rigorous judgment, but distill the final output to actionable feedback and a verdict.
 
-- Each repo is mounted as an additional working directory; cd into a repo's worktree to run repo-local commands, or stay at the state dir and address files via their absolute paths.
-- The diff is **cumulative across every repo**: invoke `git diff <base-branch>` inside each repo individually and reason about coherence between them.
-- A finding may span repos (e.g. an api repo's response shape mismatches a web repo's parser). Cross-repo findings carry the same severity as in-repo ones.
-- Single-repo features (`len(Feature.Repos) == 1`) are the trivial case — the same shape, just N=1.
+## Review Mission
 
-## Review Process
+Start from the approved user intent and exit criteria. Understand the current product behavior and implementation across repos, then decide what validation is needed to make a trustworthy acceptance judgment.
 
-1. **Read the roadmap** (if provided) to understand what the feature delivered and what is deferred.
-2. **Review the verification report** — read the iteration-local `verification-report.yaml` and confirm each `repo:`-tagged contract item has a passed entry with honest evidence. Do not re-run the full test/build/lint suite; only spot-check a specific item if its report entry is missing, ambiguous, or implausible given the diff.
-3. **Audit prior implementation evidence** — read the prior implementation phase plans, testing contracts, latest completed implementation verification reports, and referenced evidence artifacts listed in the prompt. These prior implementation artifacts are the visual/behavioral coverage source; the final-review testing contract stays PlanLess and baseline-only.
-4. **Review the diff per repo** using `git diff <base-branch>` (not `git diff <base>...HEAD`) inside each worktree. Note any cross-repo coupling that needs to land coherently.
-5. **Explore each codebase** to understand changes in context. Use the `--add-dir` mounts; you do not need to spawn a sub-agent for read-only exploration.
-6. **Check exit criteria** are met across the cumulative diff.
+Use the roadmap only as optional scope context when the approved intent or exit criteria leave ambiguity. Do not turn roadmap phases into the review checklist.
 
-## Iteration Order
+## Validation Approach
 
-Final Review runs **review first, then fix** in the same iterDir (inverted vs phase implement, where the implementer runs first). So the current iteration's fix artifacts are empty when you run; look one iteration back (`iteration-(N-1)/`) for prior fix output. N=1 has no prior — absent artifacts are expected.
+1. Derive the product acceptance questions from the approved user intent and exit criteria.
+2. Inspect the current cumulative implementation and diff across repos.
+3. Identify important user journeys, visual surfaces, state mutations, cross-repo contracts, and risky integrations.
+4. Reuse last-phase evidence when it still proves current behavior.
+5. Procure fresh evidence where it helps your judgment.
+6. Use subagents for broad independent QA tracks, then synthesize their results yourself.
+7. Write only distilled findings, suggestions, and the verdict in `review-feedback.md`.
 
-## Verification Report Contract
+Reuse last-phase evidence when it still proves current behavior, especially when no later fix or review iteration changed the relevant surface. Reuse is appropriate when the evidence was produced against the current repo HEADs, covers the acceptance journey you care about, and is concrete enough to trust.
 
-The iteration-local `verification-report.yaml` is pre-seeded from the final-review testing contract. When its `contract_path` field is non-empty, read that testing contract before updating the report. The report's `results:` rows are contract-backed: each `item_id` must already exist in the bound testing contract.
+If existing evidence is not enough, validate directly. Missing earlier evidence is not a blocking issue by itself.
 
-- Do not rename item IDs or add rows under `results:`.
-- Do not add visual or behavioral rows to the final-review PlanLess testing contract.
-- Put reviewer-authored spot checks and extra verification under `additional_checks:`, not `results:`.
-- Preserve every pre-seeded contract row, updating only its status and evidence.
-- Use YAML block scalars for evidence text that includes command output, file locations, colons, or multiple sentences:
+## Subagent Guidance
 
-```yaml
-evidence:
-  summary: |-
-    git diff --check main failed with path/to/file.go:11: trailing whitespace.
-```
+Subagents are useful when the feature is broad enough for independent tracks, such as:
 
-## Scope Guidance
+- validating a UI or CLI user journey
+- checking cross-repo API or data-contract consistency
+- probing regression risk around changed code
+- inspecting startup, build, or verification behavior
 
-- One verdict gates the whole feature — APPROVED ships every repo together (atomic transition to `RepoImplReviewPassed`), CHANGES_REQUESTED keeps every repo at `RepoImplAwaitingFinalReview` for the fix iteration.
-- Consult the roadmap to understand what the feature is responsible for and what is deferred.
-- Do NOT flag missing functionality that is explicitly out of scope for the feature.
-- Do NOT request changes for incomplete features scheduled for later work.
-- DO flag issues where the feature's exit criteria are not met across the cumulative diff.
-- DO flag cross-repo incoherence (e.g. an API contract change in one repo without the consumer update in another).
+Keep ownership of the final judgment. Do not paste subagent transcripts into the final output; synthesize them into findings only when they reveal an actionable issue.
 
-## Missing Visual / Behavioral Evidence Safety Net
+## Finding Standard
 
-Before approving, compare the cumulative diff against prior implementation visual and behavioral contract rows. When a diff touches a user-facing surface and prior implementation contracts/reports lack matching visual or behavioral coverage, request changes. User-facing surfaces include rendered UI, TUI screens, web/mobile/native views, CLI output that a user reads, human-rendered paths such as generated reports or docs, and primary state-mutating user journeys such as create/update/delete flows, setup wizards, submit handlers, top-level commands, and IPC bridge methods that front a mutation.
+Request changes only for product defects, unmet approved intent, broken behavior, serious regressions, unsafe state mutations, cross-repo contract mismatches, or validation that is blocked in a way that prevents a trustworthy acceptance judgment.
 
-Existing prior implementation visual or behavioral rows with valid verification evidence files count as coverage. Audit those rows and evidence artifacts before requesting a new row. Do not add visual or behavioral rows to the final-review PlanLess testing contract.
-
-Final Review never reopens planning. When coverage is missing during Final Review, write a normal blocking finding that explains the missing visual or behavioral evidence, and route it through `CHANGES_REQUESTED` so the fix agent should capture the missing evidence artifacts.
-
-Do not emit `MISSING_EVIDENCE_REQUIREMENT` markers in Final Review feedback. Those markers are reserved for implementation review, where the orchestrator may revise the current phase plan.
+Non-blocking suggestions may cover polish, maintainability, or minor UX issues.
 
 ## Severity Classification
 
@@ -80,12 +63,12 @@ Only Critical/High findings may trigger `CHANGES_REQUESTED`. Never request chang
 
 ## Handoff Contract
 
-Your review produces the artifacts named in the Output Files section above. The harness parses `review-feedback.md` deterministically and routes on its `## Verdict` section; deviations short-circuit to `CHANGES_REQUESTED` before any downstream consumer sees your output.
+The harness parses `review-feedback.md` deterministically and routes on its `## Verdict` section.
 
 Three `## ` sections, in this exact order, are mandatory:
 
-1. `## Findings` — one severity-prefixed bullet per blocking or non-blocking issue you raised, e.g. `- **Critical**: Manual Verification bullet "Drag to /Applications" unattested`. Use `- (none)` when you found no findings at all. Sub-section `### ` headings (e.g. `### Manual Verification`) inside this block are fine.
-2. `## Suggestions` — non-blocking improvements (Medium/Low). Use `- (none)` when you have nothing to suggest. Suggestions never justify `CHANGES_REQUESTED` on their own.
+1. `## Findings` — one severity-prefixed bullet per blocking or non-blocking issue you raised. Use `- (none)` when you found no findings.
+2. `## Suggestions` — non-blocking improvements. Use `- (none)` when you have nothing to suggest.
 3. `## Verdict` — exactly one of `APPROVED` or `CHANGES_REQUESTED` on its own line.
 
-When `review-feedback.md` and any verification report updates are complete, create the `phase_complete` marker named by the system prompt as the last action. The structured `## Verdict` body is how the harness routes the decision.
+When `review-feedback.md` is complete, create the `phase_complete` marker named by the system prompt as the last action.

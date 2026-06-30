@@ -425,6 +425,33 @@ func TestCodexProtocol_StartTurnNetworkAccess(t *testing.T) {
 	}
 }
 
+func TestCodexProtocol_ErrorResponseSurfacesAsResultError(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex", DSP: true})
+
+	// A JSON-RPC error response to one of our requests (id, no method). Codex
+	// returns this for turn/start when an MDM policy forbids approval_policy.
+	// It must be surfaced to the user, not silently swallowed.
+	line := []byte("{\"id\":3,\"error\":{\"code\":-32600,\"message\":\"invalid thread settings override: `Never` is not in the allowed set [OnRequest, OnFailure] (set by MDM com.openai.codex:requirements_toml_base64)\"}}")
+
+	msgs, err := p.ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1 (error must be surfaced, not swallowed)", len(msgs))
+	}
+	msg := msgs[0]
+	if msg.Type != "result" || msg.Subtype != "error" {
+		t.Fatalf("got type=%q subtype=%q, want result/error", msg.Type, msg.Subtype)
+	}
+	if msg.Result == nil || !msg.Result.IsError {
+		t.Fatalf("expected Result with IsError=true, got %+v", msg.Result)
+	}
+	if !strings.Contains(msg.Result.Result, "not in the allowed set") {
+		t.Fatalf("surfaced error should include codex's reason; got %q", msg.Result.Result)
+	}
+}
+
 func TestParseNumberedOptions(t *testing.T) {
 	tests := []struct {
 		name       string

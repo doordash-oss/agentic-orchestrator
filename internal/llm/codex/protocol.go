@@ -154,7 +154,9 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 	// Response to our request (has id but no method)
 	if env.ID != nil && env.Method == "" {
-		p.handleResponse(*env.ID, env.Result, env.Error)
+		if msg, ok := p.handleResponse(*env.ID, env.Result, env.Error); ok {
+			return []llm.SDKMessage{msg}, nil
+		}
 		return nil, nil
 	}
 
@@ -485,10 +487,10 @@ func (p *Protocol) writeJSON(v interface{}) error {
 
 // --- Read methods ---
 
-func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
+func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.SDKMessage, bool) {
 	if len(errData) > 0 && string(errData) != "null" {
 		p.logDebug("[codex] error response for request %d: %s", id, string(errData))
-		return
+		return p.errorResultMessage(errData), true
 	}
 
 	var initResult InitializeResult
@@ -503,7 +505,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
 			}
 		}
 		p.mu.Unlock()
-		return
+		return llm.SDKMessage{}, false
 	}
 
 	var threadResult ThreadStartResult
@@ -519,7 +521,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
 		}
 		p.mu.Unlock()
 		p.logDebug("[codex] thread started: %s", threadResult.Thread.ID)
-		return
+		return llm.SDKMessage{}, false
 	}
 
 	var turnResult TurnStartResult
@@ -528,10 +530,36 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
 		p.turnID = turnResult.Turn.ID
 		p.mu.Unlock()
 		p.logDebug("[codex] turn started: %s (status=%s)", turnResult.Turn.ID, turnResult.Turn.Status)
-		return
+		return llm.SDKMessage{}, false
 	}
 
 	p.logDebug("[codex] unhandled response for request %d", id)
+	return llm.SDKMessage{}, false
+}
+
+// errorResultMessage converts a JSON-RPC error response into a user-visible
+// result/error so a rejected request fails the session loudly instead of
+// leaving it to hang waiting for output that will never arrive.
+func (p *Protocol) errorResultMessage(errData json.RawMessage) llm.SDKMessage {
+	var rpcErr struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(errData, &rpcErr)
+	detail := rpcErr.Message
+	if detail == "" {
+		detail = string(errData)
+	}
+	return llm.SDKMessage{
+		Type:    "result",
+		Subtype: "error",
+		Result: &llm.ResultMessage{
+			Type:    "result",
+			Subtype: "error",
+			Result:  fmt.Sprintf("codex rejected the request (code %d): %s", rpcErr.Code, detail),
+			IsError: true,
+		},
+	}
 }
 
 func (p *Protocol) parseServerRequest(method string, id int, params json.RawMessage) (llm.SDKMessage, bool) {

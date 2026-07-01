@@ -570,19 +570,6 @@ func (o *Orchestrator) CommitUncommittedForPublish(featureID string) error {
 	return nil
 }
 
-// ApplyRefactorPipeline sets the feature's pipeline profile and resets its
-// checkpoints to the profile's defaults. Unlike UpgradePipeline, this allows
-// any profile (including downgrade) because the refactor flow resets the
-// cycle. Used by applyRefactorPipelineAndStart so the TUI never calls
-// Store.Modify directly to mutate feature Pipeline / Checkpoints.
-func (o *Orchestrator) ApplyRefactorPipeline(featureID string, profile feature.PipelineProfile) error {
-	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		f.Pipeline = profile
-		f.Checkpoints = feature.DefaultCheckpointsForProfile(profile)
-		return nil
-	})
-}
-
 // UpdateFeatureConfigInput carries the three editable per-feature config
 // axes for Orchestrator.UpdateFeatureConfig. All three fields are always
 // populated — callers build the input from the current feature snapshot

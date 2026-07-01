@@ -37,6 +37,7 @@ import (
 type RefactorEvidence struct {
 	Images      []string
 	Attachments []string
+	Pipeline    feature.PipelineProfile
 }
 
 // startFeatureRefactor launches the unified refactor cycle. The repoName
@@ -136,6 +137,10 @@ func (o *Orchestrator) startFeatureRefactor(
 		_ = o.deps.Lifecycle.SetRepoCyclePlanPath(featureID, f.Repos[i].Name, promptPath)
 	}
 
+	refactorPipeline := f.EffectivePipeline()
+	if evidence.Pipeline.IsValid() {
+		refactorPipeline = evidence.Pipeline
+	}
 	cfg := agent.RefactorFeatureLoopConfig{
 		Feature:                    f,
 		FeatureStore:               o.deps.Store,
@@ -153,7 +158,7 @@ func (o *Orchestrator) startFeatureRefactor(
 		BuildSession:               pr.BuildSession,
 		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
 		AskingClauseForModel:       pr.AskingClauseForModel,
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
+		EffortLevel:                refactorPipeline.EffortLevel(),
 		SkillsDir:                  pr.SkillsDir,
 		GuidelinesDir:              pr.GuidelinesDir,
 		FinishOrViolateNudge: pr.FinishOrViolateNudgeForModel(f.Models.Implementation) &&
@@ -182,6 +187,9 @@ func mergeRefactorEvidence(items ...RefactorEvidence) RefactorEvidence {
 	for _, item := range items {
 		merged.Images = append(merged.Images, item.Images...)
 		merged.Attachments = append(merged.Attachments, item.Attachments...)
+		if item.Pipeline.IsValid() {
+			merged.Pipeline = item.Pipeline
+		}
 	}
 	return merged
 }

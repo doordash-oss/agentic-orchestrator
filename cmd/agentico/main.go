@@ -1705,12 +1705,6 @@ func (t *serverMutationTarget) startRefactorAction(featureID string, req serverr
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
-	if req.Pipeline != "" {
-		if err := t.orch.ApplyRefactorPipeline(featureID, req.Pipeline); err != nil {
-			resp.Result = "failed"
-			return resp, err
-		}
-	}
 	var (
 		sessionID string
 		err       error
@@ -1719,11 +1713,13 @@ func (t *serverMutationTarget) startRefactorAction(featureID string, req serverr
 		sessionID, err = t.orch.RestartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
 			Images:      append([]string(nil), req.Images...),
 			Attachments: append([]string(nil), req.Attachments...),
+			Pipeline:    req.Pipeline,
 		})
 	} else {
 		sessionID, err = t.orch.StartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
 			Images:      append([]string(nil), req.Images...),
 			Attachments: append([]string(nil), req.Attachments...),
+			Pipeline:    req.Pipeline,
 		})
 	}
 	if sessionID != "" {

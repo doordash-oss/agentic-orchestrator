@@ -1293,6 +1293,117 @@ func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testin
 	}
 }
 
+func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("moonshot refactor", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		Pipeline:    feature.PipelineMoonshot,
+		Checkpoints: feature.DefaultCheckpointsForProfile(feature.PipelineMoonshot),
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	originalCheckpoints := f.Checkpoints
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle: manager,
+		Store:     store,
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir: store.BaseDir,
+			BuildSessionFn: func(agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				return nil, nil, nil, errors.New("stop after synchronous refactor setup")
+			},
+		},
+	}, orchestrator.Hooks{})
+	t.Cleanup(orch.WaitForCycles)
+	target := serverMutationTarget{orch: orch, store: store}
+
+	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
+		Repo:     "repo-a",
+		Prompt:   "make the small follow-up change",
+		Pipeline: feature.PipelineMedium,
+	}); err != nil {
+		t.Fatalf("StartRefactor() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if updated.Pipeline != feature.PipelineMoonshot {
+		t.Fatalf("Pipeline = %s, want original moonshot after medium refactor request", updated.Pipeline)
+	}
+	if updated.Checkpoints != originalCheckpoints {
+		t.Fatalf("Checkpoints = %+v, want original %+v after medium refactor request", updated.Checkpoints, originalCheckpoints)
+	}
+}
+
+func TestServerMutationTargetStartRefactorUsesRequestedPipelineEffort(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("moonshot feature", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		Pipeline: feature.PipelineMoonshot,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+
+	effortCh := make(chan llm.EffortLevel, 1)
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle: manager,
+		Store:     store,
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir: store.BaseDir,
+			BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				select {
+				case effortCh <- opts.EffortLevel:
+				default:
+				}
+				return nil, nil, nil, errors.New("stop after capturing refactor effort")
+			},
+		},
+	}, orchestrator.Hooks{})
+	t.Cleanup(orch.WaitForCycles)
+	target := serverMutationTarget{orch: orch, store: store}
+
+	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
+		Repo:     "repo-a",
+		Prompt:   "make the small follow-up change",
+		Pipeline: feature.PipelineMedium,
+	}); err != nil {
+		t.Fatalf("StartRefactor() error = %v", err)
+	}
+
+	select {
+	case got := <-effortCh:
+		if got != llm.EffortMedium {
+			t.Fatalf("refactor effort = %s, want medium from request pipeline", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for refactor session build")
+	}
+}
+
 func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
 	target, store, f := newReviewCommentsActionTarget(t)
 	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, "repo-a", []int{100}); err != nil {

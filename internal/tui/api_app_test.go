@@ -663,12 +663,14 @@ func TestAPIAppModelDashboardFeatureUsesDetailModels(t *testing.T) {
 func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 	t.Parallel()
 
+	cycle := &server.CycleDTO{Type: "refactor", Status: "running", Count: 1, Iteration: 1}
 	summary := server.FeatureSummary{
 		ID:           "active",
 		Name:         "Sicilian README",
 		Slug:         "translate-in-sicilian",
 		Status:       "CodeReady",
 		CurrentPhase: "publish",
+		Cycle:        cycle,
 		Repos:        []string{"agentic-orchestrator"},
 		CreatedAt:    time.Now(),
 	}
@@ -682,7 +684,7 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 		featureDetails: map[string]server.FeatureDetailResponse{
 			summary.ID: {Feature: server.FeatureDetailDTO{
 				FeatureSummary: summary,
-				Cycle:          &server.CycleDTO{Type: "refactor", Status: "running", Count: 1, Iteration: 1},
+				Cycle:          cycle,
 				Timing:         server.TimingDTO{ByPhase: map[string]int64{"implement": 300}},
 				RepoStatus: []server.RepoStatusDTO{
 					{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "refactor", CycleStatus: "running"},
@@ -722,12 +724,14 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
 	t.Parallel()
 
+	cycle := &server.CycleDTO{Type: "rebase", Status: "running", Count: 1, Iteration: 1}
 	summary := server.FeatureSummary{
 		ID:           "active",
 		Name:         "Multi Repo Rebase",
 		Slug:         "multi-repo-rebase",
 		Status:       "CodeReady",
 		CurrentPhase: "publish",
+		Cycle:        cycle,
 		Repos:        []string{"api", "web"},
 		CreatedAt:    time.Now(),
 	}
@@ -741,7 +745,7 @@ func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
 		featureDetails: map[string]server.FeatureDetailResponse{
 			summary.ID: {Feature: server.FeatureDetailDTO{
 				FeatureSummary: summary,
-				Cycle:          &server.CycleDTO{Type: "rebase", Status: "running", Count: 1, Iteration: 1},
+				Cycle:          cycle,
 				RepoStatus: []server.RepoStatusDTO{
 					{Name: "api", Touched: true, Publishable: true, Freshness: "local changes", RebaseStatus: "conflict", ConflictFiles: []string{"service.go"}},
 					{Name: "web", Touched: true, Publishable: true, Freshness: "in sync", RebaseStatus: "up_to_date"},
@@ -3406,8 +3410,10 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 				if cmd == nil {
 					t.Fatalf("%s mutation result returned nil command, want immediate feature detail refresh", tt.name)
 				}
+				cycle := &server.CycleDTO{Type: tt.refresh.cycleType, Status: "running"}
 				client.detail = server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-					FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "CodeReady", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+					FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "CodeReady", CurrentPhase: "publish", Cycle: cycle, CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+					Cycle:          cycle,
 					RepoStatus: []server.RepoStatusDTO{
 						{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: tt.refresh.cycleType, CycleStatus: "running"},
 					},
@@ -3471,13 +3477,14 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			cycle := &server.CycleDTO{Type: "tweak", Status: "running"}
 			client := &fakeTUIAPIClient{
 				features: server.FeatureListResponse{Features: []server.FeatureSummary{
-					{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", Repos: []string{"agentic-orchestrator"}, CreatedAt: time.Now()},
+					{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", Cycle: cycle, Repos: []string{"agentic-orchestrator"}, CreatedAt: time.Now()},
 				}},
 				detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-					FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"},
-					Cycle:          &server.CycleDTO{Type: "tweak", Status: "running"},
+					FeatureSummary: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", Cycle: cycle},
+					Cycle:          cycle,
 					RepoStatus: []server.RepoStatusDTO{
 						{Name: "agentic-orchestrator", CycleType: "tweak", CycleStatus: "running"},
 					},
@@ -5452,8 +5459,10 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 		t.Fatal("review-comments mutation result returned nil command, want immediate feature detail refresh")
 	}
 
+	cycle := &server.CycleDTO{Type: "review-comments", Status: "running"}
 	client.detail = server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-		FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", Cycle: cycle, CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		Cycle:          cycle,
 		RepoStatus: []server.RepoStatusDTO{
 			{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "review-comments", CycleStatus: "running"},
 		},
@@ -5548,8 +5557,10 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 		t.Fatal("refactor mutation result returned nil command, want immediate feature detail refresh")
 	}
 
+	cycle := &server.CycleDTO{Type: "refactor", Status: "running"}
 	client.detail = server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-		FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", Cycle: cycle, CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		Cycle:          cycle,
 		RepoStatus: []server.RepoStatusDTO{
 			{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "refactor", CycleStatus: "running"},
 		},
@@ -5766,12 +5777,14 @@ func TestAPIAppModelDestructiveActionsGuardActiveRepoCycles(t *testing.T) {
 
 	makeApp := func(t *testing.T) (APIAppModel, *fakeTUIAPIClient) {
 		t.Helper()
+		cycle := &server.CycleDTO{Type: "rebase", Status: "running"}
 		summary := server.FeatureSummary{
 			ID:           "active",
 			Name:         "Published work",
 			Slug:         "published-work",
 			Status:       "Published",
 			CurrentPhase: "publish",
+			Cycle:        cycle,
 			CreatedAt:    time.Now(),
 			Repos:        []string{"api"},
 		}
@@ -5779,6 +5792,7 @@ func TestAPIAppModelDestructiveActionsGuardActiveRepoCycles(t *testing.T) {
 			features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
 			detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
 				FeatureSummary: summary,
+				Cycle:          cycle,
 				RepoStatus: []server.RepoStatusDTO{
 					{Name: "api", Publishable: true, CycleType: "rebase", CycleStatus: "running"},
 				},
@@ -5962,6 +5976,51 @@ func TestAPIAppModelIgnoresStaleDetailErrorForRemovedFeature(t *testing.T) {
 	}
 	if got := updated.SelectedFeatureID(); got != "next" {
 		t.Fatalf("SelectedFeatureID() = %q, want next after stale detail error", got)
+	}
+}
+
+func TestAPIAppModelListRefreshClearsStalePublishedCycleDetail(t *testing.T) {
+	t.Parallel()
+
+	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
+	published := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Active work",
+		Slug:         "active-work",
+		Status:       "Published",
+		CurrentPhase: "publish",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    created,
+		Progress:     server.FeatureProgress{CurrentIteration: 2},
+	}
+	staleDetail := server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+		FeatureSummary: published,
+		Cycle:          &server.CycleDTO{Type: "refactor", Status: "running", Count: 1},
+		RepoStatus: []server.RepoStatusDTO{{
+			Name:        "agentic-orchestrator",
+			CycleType:   "refactor",
+			CycleStatus: "running",
+			Touched:     true,
+		}},
+	}}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{published}},
+		detail:   staleDetail,
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
+		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{published}},
+	})
+	view := stripANSI(app.View().Content)
+	if strings.Contains(view, "IN PROGRESS") || strings.Contains(view, "Refactoring") {
+		t.Fatalf("list-only refresh kept stale refactor cycle in dashboard:\n%s", view)
+	}
+	if !strings.Contains(view, "PUBLISHED") || !strings.Contains(view, "active-work") {
+		t.Fatalf("list-only refresh did not render feature as published:\n%s", view)
 	}
 }
 

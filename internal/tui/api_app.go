@@ -781,7 +781,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.storeFeatureDetail(msg.detail)
-		m.upsertFeatureSummary(msg.detail.Feature.FeatureSummary)
+		m.upsertFeatureSummary(apiFeatureSummaryFromDetail(msg.detail.Feature))
 		if msg.livePreview != nil {
 			m.storeLivePreview(msg.featureID, *msg.livePreview)
 			m.upsertFeatureSummary(msg.livePreview.Feature)
@@ -806,8 +806,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.storeFeatureDetail(msg.detail)
-		m.upsertFeatureSummary(msg.detail.Feature.FeatureSummary)
-		f := m.apiDashboardFeature(msg.detail.Feature.FeatureSummary, msg.detail.Feature, true)
+		summary := apiFeatureSummaryFromDetail(msg.detail.Feature)
+		m.upsertFeatureSummary(summary)
+		f := m.apiDashboardFeature(summary, msg.detail.Feature, true)
 		m.rebuildPresentation(msg.featureID)
 		return m.openAPIReviewModel(f, msg.artifact)
 	case apiFeatureConfigMsg:
@@ -1625,8 +1626,10 @@ func (m APIAppModel) selectedAPIDashboardFeature() *feature.Feature {
 
 func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail server.FeatureDetailDTO, hasDetail bool) *feature.Feature {
 	models := m.runtimeConfig.Defaults
+	summaryCycle := summary.Cycle
 	if hasDetail {
 		summary = mergeAPIFeatureSummary(summary, detail.FeatureSummary)
+		summary.Cycle = summaryCycle
 		if detail.Models != (config.ModelConfig{}) {
 			models = detail.Models
 		}
@@ -1706,17 +1709,17 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	tweakCount := 0
 	refactorCount := 0
 	reviewCommentsCount := 0
-	if hasDetail && detail.Cycle != nil && (detail.Cycle.Type != "" || detail.Cycle.Status != "") {
-		cycleType := feature.RepoCycleType(detail.Cycle.Type)
-		cycleCount := detail.Cycle.Count
+	if summary.Cycle != nil && (summary.Cycle.Type != "" || summary.Cycle.Status != "") {
+		cycleType := feature.RepoCycleType(summary.Cycle.Type)
+		cycleCount := summary.Cycle.Count
 		if cycleCount <= 0 && cycleType != "" {
 			cycleCount = 1
 		}
 		f.ActiveCycle = &feature.CycleState{
 			Type:      cycleType,
-			Status:    detail.Cycle.Status,
+			Status:    summary.Cycle.Status,
 			Count:     cycleCount,
-			Iteration: detail.Cycle.Iteration,
+			Iteration: summary.Cycle.Iteration,
 		}
 		activeCycleType = cycleType
 		switch cycleType {
@@ -1753,7 +1756,7 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 			LastError: dto.LastError,
 			Freshness: dto.Freshness,
 		}
-		if dto.CycleType != "" || dto.CycleStatus != "" {
+		if summary.Cycle != nil && (dto.CycleType != "" || dto.CycleStatus != "") {
 			cycleType := feature.RepoCycleType(dto.CycleType)
 			cycle := &feature.RepoCycleState{
 				Type:   cycleType,
@@ -1831,6 +1834,12 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	return f
 }
 
+func apiFeatureSummaryFromDetail(detail server.FeatureDetailDTO) server.FeatureSummary {
+	summary := detail.FeatureSummary
+	summary.Cycle = detail.Cycle
+	return summary
+}
+
 func apiSetupState(dto *server.SetupDTO) *feature.SetupState {
 	if dto == nil {
 		return nil
@@ -1885,6 +1894,9 @@ func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureS
 	}
 	if overlay.CurrentPhase != "" {
 		base.CurrentPhase = overlay.CurrentPhase
+	}
+	if overlay.Cycle != nil {
+		base.Cycle = overlay.Cycle
 	}
 	if overlay.ActiveRun != 0 {
 		base.ActiveRun = overlay.ActiveRun
@@ -3201,7 +3213,7 @@ func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	}
 	if snapshot.Feature != nil {
 		m.storeFeatureDetail(*snapshot.Feature)
-		m.upsertFeatureSummary(snapshot.Feature.Feature.FeatureSummary)
+		m.upsertFeatureSummary(apiFeatureSummaryFromDetail(snapshot.Feature.Feature))
 	}
 	if snapshot.Session != nil {
 		m.storeSessionDetail(*snapshot.Session)

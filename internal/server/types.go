@@ -146,6 +146,7 @@ type FeatureSummary struct {
 	Slug         string          `json:"slug"`
 	Status       string          `json:"status"`
 	CurrentPhase string          `json:"current_phase"`
+	Cycle        *CycleDTO       `json:"cycle,omitempty"`
 	ActiveRun    int             `json:"active_run"`
 	RunCount     int             `json:"run_count"`
 	Repos        []string        `json:"repos"`

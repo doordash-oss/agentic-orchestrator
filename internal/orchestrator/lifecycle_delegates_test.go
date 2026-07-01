@@ -28,42 +28,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-// TestOrchestrator_ApplyRefactorPipeline_SetsProfileAndCheckpoints
-// ---------------------------------------------------------------------------
-// ApplyRefactorPipeline replaces the TUI's Store.Modify for
-// applyRefactorPipelineAndStart. Unlike UpgradePipeline it permits any
-// profile (including downgrade) because refactor resets the cycle.
-// ---------------------------------------------------------------------------
-
-func TestOrchestrator_ApplyRefactorPipeline_SetsProfileAndCheckpoints(t *testing.T) {
-	f := &feature.Feature{
-		ID:       "feat-1",
-		Status:   feature.StatusPublished,
-		Pipeline: feature.PipelineLarge,
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	if err := o.ApplyRefactorPipeline("feat-1", feature.PipelineMedium); err != nil {
-		t.Fatalf("ApplyRefactorPipeline: %v", err)
-	}
-
-	if f.Pipeline != feature.PipelineMedium {
-		t.Errorf("Pipeline = %v, want PipelineMedium", f.Pipeline)
-	}
-	// Medium disables auto-publish by default; Checkpoints should reflect the
-	// profile-specific defaults.
-	defaults := feature.DefaultCheckpointsForProfile(feature.PipelineMedium)
-	if f.Checkpoints != defaults {
-		t.Errorf("Checkpoints = %+v, want %+v", f.Checkpoints, defaults)
-	}
-}
-
 // TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase
 // ---------------------------------------------------------------------------
 // EnterReviewGate replaces triggerReviewGateCmd's Store.Modify. It flips the

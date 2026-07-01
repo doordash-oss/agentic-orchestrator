@@ -162,6 +162,20 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 		Features: store,
 	})
 
+	list := getJSONMap(t, handler, "/api/v1/features")
+	summaries := list["features"].([]any)
+	if len(summaries) != 1 {
+		t.Fatalf("list features len = %d, want 1", len(summaries))
+	}
+	summaryDTO := summaries[0].(map[string]any)
+	summaryCycle, ok := summaryDTO["cycle"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary feature cycle missing in %+v", summaryDTO)
+	}
+	if summaryCycle["type"] != "refactor" || summaryCycle["status"] != "running" || summaryCycle["count"].(float64) != 1 {
+		t.Fatalf("summary feature cycle = %+v, want running refactor #1", summaryCycle)
+	}
+
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureDTO := detail["feature"].(map[string]any)
 	cycle, ok := featureDTO["cycle"].(map[string]any)

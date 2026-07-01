@@ -1013,6 +1013,58 @@ func TestManagerPhaseProgression(t *testing.T) {
 	}
 }
 
+func TestMarkFinalReviewReadyTracksReviewRuntime(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Final Review Timing", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusReviewPassed
+		ff.CurrentPhase = feature.PhaseImplement
+		return nil
+	}); err != nil {
+		t.Fatalf("seed review passed: %v", err)
+	}
+
+	if err := mgr.MarkFinalReviewReady(f.ID); err != nil {
+		t.Fatalf("MarkFinalReviewReady: %v", err)
+	}
+	got, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ActiveTimingKey != "review" {
+		t.Fatalf("ActiveTimingKey = %q, want review", got.ActiveTimingKey)
+	}
+	if got.ActivePhaseStart == nil {
+		t.Fatal("ActivePhaseStart = nil, want final review timer started")
+	}
+
+	past := time.Now().Add(-4 * time.Minute)
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.ActivePhaseStart = &past
+		return nil
+	}); err != nil {
+		t.Fatalf("backdate ActivePhaseStart: %v", err)
+	}
+	if err := mgr.Transition(f.ID, feature.StatusReviewPassed); err != nil {
+		t.Fatalf("finish final review: %v", err)
+	}
+	got, err = mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get after finish: %v", err)
+	}
+	if got.ActivePhaseStart != nil {
+		t.Fatal("ActivePhaseStart should be nil after leaving final review")
+	}
+	if d := got.PhaseRuntime("review"); d < 4*time.Minute {
+		t.Fatalf("PhaseRuntime(review) = %v, want at least 4m", d)
+	}
+}
+
 func TestManagerMarkPublished(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

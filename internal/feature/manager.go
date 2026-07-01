@@ -653,6 +653,13 @@ func (m *Manager) MarkFinalReviewReady(featureID string) error {
 			return err
 		}
 		f.CurrentPhase = PhaseFinalReview
+		f.accumulateActiveTime()
+		f.ActiveTimingKey = PhaseFinalReview.DirName()
+		now := time.Now()
+		f.ActivePhaseStart = &now
+		if f.StartedAt == nil {
+			f.StartedAt = &now
+		}
 		return nil
 	})
 }

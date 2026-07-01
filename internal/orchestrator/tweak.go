@@ -14,10 +14,11 @@
 
 // Package orchestrator wires the feature-level interactive tweak cycle. One
 // Claude session is opened with --add-dir for every Feature.Repos worktree,
-// the agent does not commit, and the orchestrator commits and pushes every
-// modified repo at session end. Pull-rebase conflicts on any repo surface a
-// structured PublishConflictError so the TUI can route the affected repo into
-// a rebase cycle.
+// the agent does not commit, and the orchestrator commits every modified repo
+// at session end. Auto-publish publishable features also pull-rebase and push;
+// manual-publish or local-only features stop after local commits. Pull-rebase
+// conflicts on any repo surface a structured PublishConflictError so the TUI
+// can route the affected repo into a rebase cycle.
 //
 // Lifecycle:
 //
@@ -26,10 +27,11 @@
 //     via PhaseRunner.RunTweakSession with the feature-level workspace.
 //   - CompleteTweakCommit(featureID) — iterates every Feature.Repos and
 //     commits any worktree with uncommitted changes.
-//   - CompleteTweakFinish(featureID, hadChanges) — iterates every
-//     Feature.Repos, pull-rebases each modified branch, pushes. A
-//     PullRebaseConflict in any repo surfaces a *PublishConflictError
-//     for that repo and routes to a rebase cycle.
+//   - CompleteTweakFinish(featureID, hadChanges) — commits any review-fix
+//     leftovers, then either completes locally (manual/local-only) or
+//     pull-rebases and pushes each modified branch (auto-publish). A
+//     PullRebaseConflict in any repo surfaces a *PublishConflictError for
+//     that repo and routes to a rebase cycle.
 //   - FailTweakSession(featureID) — marks the cycle failed (session-die
 //     mid-tweak path).
 //   - RestoreTweakFromReview(featureID) — Esc on the post-commit Final
@@ -179,8 +181,9 @@ func (o *Orchestrator) CompleteTweakCommit(featureID string) (bool, error) {
 
 // CompleteTweakFinish finalizes a feature-level tweak. When hadChanges
 // is true (CompleteTweakCommit recorded at least one modified repo),
-// iterates every Feature.Repos that has uncommitted-or-just-committed
-// work and runs the pull-rebase + push chain.
+// commits any review-fix leftovers. Manual-publish or local-only features
+// then complete locally; auto-publish publishable features continue through
+// the pull-rebase + push chain.
 //
 // A PullRebase conflict in any repo surfaces a *PublishConflictError for
 // the FIRST conflicted repo (in alphabetical order), so the TUI's
@@ -237,6 +240,10 @@ func (o *Orchestrator) CompleteTweakFinish(featureID string, hadChanges bool) er
 		}
 	}
 
+	if !f.Checkpoints.AutoPublish() || !f.IsPublishable() {
+		return o.completeTweakCycle(featureID, f, ts)
+	}
+
 	// Step 2: pull-rebase + push every modified repo. A pull-rebase
 	// conflict on any repo surfaces a *PublishConflictError so the TUI
 	// can route that repo into a fresh CycleRebase. Non-conflict failures
@@ -282,6 +289,10 @@ func (o *Orchestrator) CompleteTweakFinish(featureID string, hadChanges bool) er
 
 	// Step 3: every modified repo pushed cleanly. Clear ActiveCycle and
 	// per-repo cycle entries so the feature returns to its steady state.
+	return o.completeTweakCycle(featureID, f, ts)
+}
+
+func (o *Orchestrator) completeTweakCycle(featureID string, f *feature.Feature, ts *agent.TweakSession) error {
 	for i := range f.Repos {
 		if err := o.deps.Lifecycle.CompleteRepoCycle(featureID, f.Repos[i].Name); err != nil {
 			_ = ts.MarkFailed(featureID, "tweak complete repo cycle: "+err.Error())

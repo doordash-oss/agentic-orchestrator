@@ -1482,9 +1482,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Tweak Final Review modal intercept. The modal is feature-level:
 		// "y" runs Final Review across every Feature.Repos cumulative diff,
-		// "n" skips review and pushes, and "Esc" abandons. The repoName modal
-		// field is preserved on the model for compatibility but ignored by
-		// every dispatch.
+		// "n" skips review and completes the tweak, and "Esc" abandons. The
+		// repoName modal field is preserved on the model for compatibility but
+		// ignored by every dispatch.
 		if m.tweakReviewModalActive {
 			fid := m.tweakReviewModalFeatureID
 			switch msg.String() {
@@ -4987,7 +4987,8 @@ func (m AppModel) renderTweakReviewModal() string {
 	normalStyle := lipgloss.NewStyle()
 
 	skipLabel := "skip review and complete"
-	if f, err := m.featureManager.Get(m.tweakReviewModalFeatureID); err == nil && len(f.PRURLs()) > 0 {
+	if f, err := m.featureManager.Get(m.tweakReviewModalFeatureID); err == nil &&
+		len(f.PRURLs()) > 0 && f.Checkpoints.AutoPublish() && f.IsPublishable() {
 		skipLabel = "skip review, push changes"
 	}
 

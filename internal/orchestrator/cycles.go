@@ -377,7 +377,7 @@ func (o *Orchestrator) restartRefactorRepoCycle(featureID, repoName string, rc *
 		return fmt.Errorf("no refactor prompt available for paused cycle on repo %q", repoName)
 	}
 
-	_, err = o.startFeatureRefactor(featureID, repoName, f.RefactorPrompt)
+	_, err = o.startFeatureRefactor(featureID, repoName, f.RefactorPrompt, RefactorEvidence{})
 	return err
 }
 
@@ -798,8 +798,9 @@ func (o *Orchestrator) DispatchRepoCycle(
 // Ports startRefactorCmd (app.go).
 func (o *Orchestrator) StartRefactorCycle(
 	featureID, repoName, prompt string,
+	evidence ...RefactorEvidence,
 ) (string, error) {
-	return o.startFeatureRefactor(featureID, repoName, prompt)
+	return o.startFeatureRefactor(featureID, repoName, prompt, mergeRefactorEvidence(evidence...))
 }
 
 // RestartRefactorCycle re-launches a refactor loop for a stale cycle. Unlike
@@ -809,13 +810,14 @@ func (o *Orchestrator) StartRefactorCycle(
 // Ports restartRepoCycleRefactorCmd (app.go:7092-7184).
 func (o *Orchestrator) RestartRefactorCycle(
 	featureID, repoName, prompt string,
+	evidence ...RefactorEvidence,
 ) (string, error) {
 	// Refactor is feature-level, so "restart" semantics collapse with "start":
 	// the loop increments and stages a new dir per invocation. The legacy
 	// "reuse refactor-N count" behavior is unnecessary because the flat artifact
 	// layout (no per-repo subdir) and AtomicPhaseStamp staged-subset semantics
 	// make a fresh dir on every retry the simpler invariant.
-	return o.startFeatureRefactor(featureID, repoName, prompt)
+	return o.startFeatureRefactor(featureID, repoName, prompt, mergeRefactorEvidence(evidence...))
 }
 
 // CompleteRefactorRepoCycle finalizes a per-repo refactor cycle: commits

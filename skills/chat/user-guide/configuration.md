@@ -217,7 +217,7 @@ observability:
 
 ## Launch Flags
 
-Launch flags configure how the terminal UI or foreground server starts. `agentico [flags]` starts a local loopback REST/MCP runtime and connects the terminal UI through the API-backed client. `agentico server [flags]` starts the foreground loopback HTTP server. Feature name, description, repos, checkpoint selection, and publish gating are selected inside the feature creation wizard.
+Launch flags configure how the terminal UI or foreground server starts. `agentico [flags]` starts a local loopback REST runtime and connects the terminal UI through the API-backed client. `agentico server [flags]` starts the foreground loopback HTTP server. Feature name, description, repos, checkpoint selection, and publish gating are selected inside the feature creation wizard.
 
 | Flag | Description | Default |
 |------|-------------|---------|

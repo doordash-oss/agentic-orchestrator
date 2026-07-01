@@ -507,13 +507,20 @@ type apiRoadmapRewindRow struct {
 }
 
 type apiRefactorPrompt struct {
-	featureID   string
-	featureName string
-	repo        string
-	draft       string
-	input       textarea.Model
-	pipelines   []feature.PipelineProfile
-	restart     bool
+	featureID     string
+	featureName   string
+	repo          string
+	draft         string
+	input         SimpleTextarea
+	pipelines     []feature.PipelineProfile
+	restart       bool
+	canPaste      bool
+	imageTempDir  string
+	attachTempDir string
+	imageCounter  int
+	images        []string
+	attachments   []string
+	attachNames   []string
 }
 
 type apiRefactorPipelinePanel struct {
@@ -521,6 +528,8 @@ type apiRefactorPipelinePanel struct {
 	featureName string
 	repo        string
 	prompt      string
+	images      []string
+	attachments []string
 	pipelines   []feature.PipelineProfile
 	cursor      int
 	restart     bool
@@ -977,6 +986,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	default:
 		if m.workspaceManager != nil {
 			return m.updateAPIWorkspaceManager(msg)
+		}
+		if m.refactorPrompt != nil {
+			return m.handleAPIRefactorPromptMsg(msg)
 		}
 		if m.wizard != nil {
 			return m.handleAPIWizardMsg(msg)
@@ -5139,21 +5151,32 @@ func (m APIAppModel) openRefactorPromptForRepo(kind, repo string, restart bool) 
 		m.statusMessage = "refactor action is unavailable"
 		return m
 	}
-	ta := newStyledTextarea()
+	ta := NewSimpleTextarea()
 	ta.Placeholder = "Describe the refactoring for " + repo + "..."
+	ta.ShowFocusedHint = true
 	ta.SetWidth(max(m.width-12, 20))
 	if m.width >= 100 {
 		ta.SetWidth(max((m.width/2)-10, 20))
 	}
 	ta.SetHeight(5)
-	ta.Focus()
+	_ = ta.Focus()
+	canPaste := canPasteClipboardImage()
+	var imageTempDir string
+	var attachTempDir string
+	if canPaste {
+		imageTempDir, _ = os.MkdirTemp("", "agentic-refactor-images-*")
+		attachTempDir, _ = os.MkdirTemp("", "agentic-refactor-attach-*")
+	}
 	m.refactorPrompt = &apiRefactorPrompt{
-		featureID:   m.selectedFeature,
-		featureName: m.selectedFeatureName(),
-		repo:        repo,
-		input:       ta,
-		pipelines:   pipelines,
-		restart:     restart,
+		featureID:     m.selectedFeature,
+		featureName:   m.selectedFeatureName(),
+		repo:          repo,
+		input:         ta,
+		pipelines:     pipelines,
+		restart:       restart,
+		canPaste:      canPaste,
+		imageTempDir:  imageTempDir,
+		attachTempDir: attachTempDir,
 	}
 	m.refactorPipeline = nil
 	m.statusMessage = ""
@@ -7212,6 +7235,8 @@ func (m APIAppModel) handleAPIRefactorPromptKey(msg tea.KeyPressMsg) (tea.Model,
 			featureName: prompt.featureName,
 			repo:        prompt.repo,
 			prompt:      value,
+			images:      append([]string(nil), prompt.images...),
+			attachments: append([]string(nil), prompt.attachments...),
 			pipelines:   append([]feature.PipelineProfile(nil), prompt.pipelines...),
 			cursor:      apiDefaultRefactorPipelineCursor(prompt.pipelines),
 			restart:     prompt.restart,
@@ -7226,11 +7251,64 @@ func (m APIAppModel) handleAPIRefactorPromptKey(msg tea.KeyPressMsg) (tea.Model,
 		m.statusMessage = ""
 		return m, nil
 	}
+	if msg.Code == 'v' && msg.Mod.Contains(tea.ModCtrl) && prompt.canPaste {
+		imgDir := prompt.imageTempDir
+		attachDir := prompt.attachTempDir
+		nextIdx := prompt.imageCounter + 1
+		return m, func() tea.Msg {
+			path, err := saveClipboardImage(imgDir, nextIdx)
+			if err == nil {
+				return ImagePastedMsg{Path: path}
+			}
+			paths, names, ferr := saveClipboardFiles(attachDir)
+			if ferr == nil && len(paths) > 0 {
+				return FilesPastedMsg{Paths: paths, Names: names}
+			}
+			text, terr := getClipboardText()
+			if terr == nil && text != "" {
+				return TextPastedMsg{Text: text}
+			}
+			return ImagePasteFailedMsg{}
+		}
+	}
 	var cmd tea.Cmd
 	prompt.input, cmd = prompt.input.Update(msg)
 	prompt.draft = prompt.input.Value()
 	m.statusMessage = ""
 	return m, cmd
+}
+
+func (m APIAppModel) handleAPIRefactorPromptMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prompt := m.refactorPrompt
+	if prompt == nil {
+		return m, nil
+	}
+	switch msg := msg.(type) {
+	case ImagePastedMsg:
+		prompt.imageCounter++
+		prompt.images = append(prompt.images, msg.Path)
+		prompt.input.InsertString(fmt.Sprintf("[Image #%d]", len(prompt.images)))
+	case ImagePasteFailedMsg:
+	case TextPastedMsg:
+		prompt.input.InsertString(msg.Text)
+	case FilesPastedMsg:
+		prompt.attachments = append(prompt.attachments, msg.Paths...)
+		prompt.attachNames = append(prompt.attachNames, msg.Names...)
+		for _, name := range msg.Names {
+			prompt.input.InsertString(fmt.Sprintf("[%s]", name))
+		}
+	case tea.PasteMsg:
+		var cmd tea.Cmd
+		prompt.input, cmd = prompt.input.Update(msg)
+		prompt.draft = prompt.input.Value()
+		m.statusMessage = ""
+		return m, cmd
+	default:
+		return m, nil
+	}
+	prompt.draft = prompt.input.Value()
+	m.statusMessage = ""
+	return m, nil
 }
 
 func (m APIAppModel) handleAPIRefactorPipelineKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -7498,9 +7576,11 @@ func (m APIAppModel) startRefactorCmd(panel apiRefactorPipelinePanel) tea.Cmd {
 			pipeline = panel.pipelines[panel.cursor]
 		}
 		req := server.RefactorActionRequest{
-			Repo:     panel.repo,
-			Prompt:   panel.prompt,
-			Pipeline: pipeline,
+			Repo:        panel.repo,
+			Prompt:      panel.prompt,
+			Images:      append([]string(nil), panel.images...),
+			Attachments: append([]string(nil), panel.attachments...),
+			Pipeline:    pipeline,
 		}
 		kind := "feature.refactor.start"
 		var err error

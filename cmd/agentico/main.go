@@ -146,6 +146,15 @@ func run() {
 }
 
 func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, launchServer serverLauncher, update updater) int {
+	if isJSONAutomationCommand(args) {
+		opts, jsonArgs, err := parseJSONLaunchArgs(args)
+		if err != nil {
+			return writeCLIJSONError(stdout, "invalid_input", err.Error(), nil)
+		}
+		ctx, cancel := jsonCommandContext()
+		defer cancel()
+		return runJSONCommand(ctx, defaultJSONCommandOptions(jsonArgs, stdout, stderr, opts))
+	}
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -1707,9 +1716,15 @@ func (t *serverMutationTarget) startRefactorAction(featureID string, req serverr
 		err       error
 	)
 	if restart {
-		sessionID, err = t.orch.RestartRefactorCycle(featureID, req.Repo, req.Prompt)
+		sessionID, err = t.orch.RestartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
+			Images:      append([]string(nil), req.Images...),
+			Attachments: append([]string(nil), req.Attachments...),
+		})
 	} else {
-		sessionID, err = t.orch.StartRefactorCycle(featureID, req.Repo, req.Prompt)
+		sessionID, err = t.orch.StartRefactorCycle(featureID, req.Repo, req.Prompt, orchestrator.RefactorEvidence{
+			Images:      append([]string(nil), req.Images...),
+			Attachments: append([]string(nil), req.Attachments...),
+		})
 	}
 	if sessionID != "" {
 		resp.SessionID = sessionID

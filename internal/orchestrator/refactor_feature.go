@@ -32,6 +32,13 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// RefactorEvidence carries user-provided visual and file references captured
+// with the refactor request.
+type RefactorEvidence struct {
+	Images      []string
+	Attachments []string
+}
+
 // startFeatureRefactor launches the unified refactor cycle. The repoName
 // argument from the legacy per-repo TUI dispatch is treated as a hint
 // only — the loop mounts every Feature.Repos worktree and stages the
@@ -45,6 +52,7 @@ import (
 // the agent loop in a background goroutine tracked by cycleWG.
 func (o *Orchestrator) startFeatureRefactor(
 	featureID, hintRepoName, prompt string,
+	evidence RefactorEvidence,
 ) (string, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -82,6 +90,9 @@ func (o *Orchestrator) startFeatureRefactor(
 	// double-bump is avoided by pre-incrementing here and having the
 	// loop adopt the on-disk value as its working count.
 	if err := o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		if err := o.copyRefactorEvidence(ff, evidence); err != nil {
+			return err
+		}
 		ff.SetRefactorCount(ff.RefactorCount() + 1)
 		ff.RefactorPrompt = prompt
 		if ff.Artifacts != nil {
@@ -164,6 +175,79 @@ func (o *Orchestrator) startFeatureRefactor(
 	})
 
 	return "", nil
+}
+
+func mergeRefactorEvidence(items ...RefactorEvidence) RefactorEvidence {
+	var merged RefactorEvidence
+	for _, item := range items {
+		merged.Images = append(merged.Images, item.Images...)
+		merged.Attachments = append(merged.Attachments, item.Attachments...)
+	}
+	return merged
+}
+
+func (o *Orchestrator) copyRefactorEvidence(f *feature.Feature, evidence RefactorEvidence) error {
+	if f == nil || (len(evidence.Images) == 0 && len(evidence.Attachments) == 0) {
+		return nil
+	}
+	baseDir := o.stateDir()
+	if baseDir == "" {
+		return errors.New("state dir is not configured")
+	}
+	if len(evidence.Images) > 0 {
+		imagesDir := filepath.Join(baseDir, f.ID, "images")
+		next := len(f.Images) + 1
+		for _, src := range evidence.Images {
+			ext := filepath.Ext(src)
+			if ext == "" {
+				ext = ".png"
+			}
+			dst := uniqueRefactorEvidencePath(imagesDir, fmt.Sprintf("image-%d%s", next, ext))
+			if err := copyRefactorFile(src, dst); err != nil {
+				return fmt.Errorf("copying refactor image %s: %w", src, err)
+			}
+			f.Images = append(f.Images, dst)
+			next++
+		}
+	}
+	if len(evidence.Attachments) > 0 {
+		attachDir := filepath.Join(baseDir, f.ID, "attachments")
+		for _, src := range evidence.Attachments {
+			name := filepath.Base(src)
+			dst := uniqueRefactorEvidencePath(attachDir, name)
+			if err := copyRefactorFile(src, dst); err != nil {
+				return fmt.Errorf("copying refactor attachment %s: %w", name, err)
+			}
+			f.Attachments = append(f.Attachments, dst)
+		}
+	}
+	return nil
+}
+
+func copyRefactorFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("creating %s: %w", filepath.Dir(dst), err)
+	}
+	return os.WriteFile(dst, data, 0o644)
+}
+
+func uniqueRefactorEvidencePath(dir, name string) string {
+	dst := filepath.Join(dir, name)
+	if _, err := os.Stat(dst); errors.Is(err, os.ErrNotExist) {
+		return dst
+	}
+	ext := filepath.Ext(name)
+	stem := name[:len(name)-len(ext)]
+	for i := 2; ; i++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", stem, i, ext))
+		if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate
+		}
+	}
 }
 
 // handleFeatureRefactorDone routes the unified refactor loop's result

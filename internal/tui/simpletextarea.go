@@ -38,6 +38,7 @@ type SimpleTextarea struct {
 	cursor       cursor.Model
 
 	Placeholder     string
+	ShowFocusedHint bool
 	MaxHeight       int         // max number of lines (0 = unlimited)
 	CharLimit       int         // max total characters (0 = unlimited)
 	BackgroundColor color.Color // optional background applied to text and padding (not cursor)
@@ -490,7 +491,7 @@ type vLine struct {
 
 // View renders the textarea with soft-wrapping.
 func (t SimpleTextarea) View() string {
-	if !t.focused && t.Value() == "" && t.Placeholder != "" {
+	if (!t.focused || t.ShowFocusedHint) && t.Value() == "" && t.Placeholder != "" {
 		return t.renderPlaceholder()
 	}
 
@@ -596,20 +597,71 @@ func (t SimpleTextarea) View() string {
 func (t SimpleTextarea) renderPlaceholder() string {
 	style := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	visibleWidth := max(t.width, 1)
-
-	pRunes := []rune(t.Placeholder)
-	if len(pRunes) > visibleWidth {
-		pRunes = pRunes[:visibleWidth]
-	}
+	lines := wrapPlaceholderText(t.Placeholder, visibleWidth, t.height)
 
 	var sb strings.Builder
-	sb.WriteString(style.Render(string(pRunes)))
-	if pad := visibleWidth - len(pRunes); pad > 0 {
-		sb.WriteString(strings.Repeat(" ", pad))
-	}
-	for i := 1; i < t.height; i++ {
-		sb.WriteString("\n")
-		sb.WriteString(strings.Repeat(" ", visibleWidth))
+	for line := 0; line < t.height; line++ {
+		if line > 0 {
+			sb.WriteString("\n")
+		}
+		if line >= len(lines) {
+			sb.WriteString(strings.Repeat(" ", visibleWidth))
+			continue
+		}
+		sb.WriteString(style.Render(lines[line]))
+		if pad := visibleWidth - len([]rune(lines[line])); pad > 0 {
+			sb.WriteString(strings.Repeat(" ", pad))
+		}
 	}
 	return sb.String()
+}
+
+func wrapPlaceholderText(text string, width, height int) []string {
+	if text == "" || width <= 0 || height <= 0 {
+		return nil
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, height)
+	current := ""
+	for _, word := range words {
+		wordLen := len([]rune(word))
+		if wordLen > width {
+			if current != "" {
+				lines = append(lines, current)
+				current = ""
+				if len(lines) >= height {
+					return lines
+				}
+			}
+			runes := []rune(word)
+			for start := 0; start < len(runes); start += width {
+				end := min(start+width, len(runes))
+				lines = append(lines, string(runes[start:end]))
+				if len(lines) >= height {
+					return lines
+				}
+			}
+			continue
+		}
+		if current == "" {
+			current = word
+			continue
+		}
+		if len([]rune(current))+1+wordLen <= width {
+			current += " " + word
+			continue
+		}
+		lines = append(lines, current)
+		if len(lines) >= height {
+			return lines
+		}
+		current = word
+	}
+	if current != "" && len(lines) < height {
+		lines = append(lines, current)
+	}
+	return lines
 }

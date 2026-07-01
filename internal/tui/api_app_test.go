@@ -5566,6 +5566,119 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	}
 }
 
+func TestAPIAppModelRefactorPromptShiftEnterAndTerminalPaste(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish"},
+			RepoStatus: []server.RepoStatusDTO{
+				{Name: "agentic-orchestrator", Publishable: true},
+			},
+			Actions: []server.ActionDTO{
+				{
+					ID:      "refactor",
+					Enabled: true,
+					Scope:   server.ActionScopeDTO{Type: "feature"},
+					RequiredInputs: []server.ActionInputDTO{
+						{Name: "repo", Kind: "string", Required: false},
+						{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
+						{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
+					},
+				},
+			},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
+	refactor := model.(APIAppModel)
+	model, _ = refactor.Update(tea.KeyPressMsg{Text: "line1"})
+	refactor = model.(APIAppModel)
+	model, _ = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	refactor = model.(APIAppModel)
+	model, _ = refactor.Update(tea.PasteMsg{Content: "line2\nline3"})
+	refactor = model.(APIAppModel)
+
+	if refactor.refactorPrompt == nil {
+		t.Fatal("refactor prompt closed unexpectedly")
+	}
+	if got := refactor.refactorPrompt.input.Value(); got != "line1\nline2\nline3" {
+		t.Fatalf("refactor prompt value = %q, want %q", got, "line1\nline2\nline3")
+	}
+}
+
+func TestAPIAppModelRefactorPromptTracksPastedImagesAndFiles(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish"},
+			RepoStatus: []server.RepoStatusDTO{
+				{Name: "agentic-orchestrator", Publishable: true},
+			},
+			Actions: []server.ActionDTO{
+				{
+					ID:      "refactor",
+					Enabled: true,
+					Scope:   server.ActionScopeDTO{Type: "feature"},
+					RequiredInputs: []server.ActionInputDTO{
+						{Name: "repo", Kind: "string", Required: false},
+						{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
+						{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
+					},
+				},
+			},
+		}},
+		startRefactorAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
+	refactor := model.(APIAppModel)
+	model, _ = refactor.Update(ImagePastedMsg{Path: "/tmp/refactor-image.png"})
+	refactor = model.(APIAppModel)
+	model, _ = refactor.Update(FilesPastedMsg{Paths: []string{"/tmp/spec.pdf"}, Names: []string{"spec.pdf"}})
+	refactor = model.(APIAppModel)
+	model, _ = refactor.Update(TextPastedMsg{Text: " tighten the layout"})
+	refactor = model.(APIAppModel)
+
+	if refactor.refactorPrompt == nil {
+		t.Fatal("refactor prompt closed unexpectedly")
+	}
+	if got := refactor.refactorPrompt.input.Value(); got != "[Image #1][spec.pdf] tighten the layout" {
+		t.Fatalf("refactor prompt value = %q, want pasted placeholders and text", got)
+	}
+
+	model, cmd := refactor.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Update(ctrl+s) returned command before pipeline selection")
+	}
+	refactor = model.(APIAppModel)
+	model, cmd = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want refactor start mutation")
+	}
+	_ = cmd()
+	if got := client.startRefactorRequests; len(got) != 1 ||
+		!slices.Equal(got[0].Images, []string{"/tmp/refactor-image.png"}) ||
+		!slices.Equal(got[0].Attachments, []string{"/tmp/spec.pdf"}) {
+		t.Fatalf("StartRefactor requests = %+v, want image and attachment paths", got)
+	}
+}
+
 func TestAPIAppModelRefactorRestartShortcutIsNotExposed(t *testing.T) {
 	t.Parallel()
 

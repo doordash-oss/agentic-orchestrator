@@ -213,9 +213,11 @@ type TweakFinishRequest struct {
 }
 
 type RefactorActionRequest struct {
-	Repo     string                  `json:"repo,omitempty"`
-	Prompt   string                  `json:"prompt"`
-	Pipeline feature.PipelineProfile `json:"pipeline,omitempty"`
+	Repo        string                  `json:"repo,omitempty"`
+	Prompt      string                  `json:"prompt"`
+	Images      []string                `json:"images,omitempty"`
+	Attachments []string                `json:"attachments,omitempty"`
+	Pipeline    feature.PipelineProfile `json:"pipeline,omitempty"`
 }
 
 type CleanupActionRequest struct {

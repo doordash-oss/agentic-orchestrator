@@ -1220,6 +1220,79 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	assertJSONDoesNotContain(t, result, "do-not-leak", planPath)
 }
 
+func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("refactor with evidence", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusPublished
+		ff.CurrentPhase = feature.PhasePublish
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+
+	img := filepath.Join(runtimeDir, "clip.png")
+	doc := filepath.Join(runtimeDir, "spec.pdf")
+	if err := os.WriteFile(img, []byte("image bytes"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	if err := os.WriteFile(doc, []byte("spec bytes"), 0o644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+
+	orch := orchestrator.New(orchestrator.Deps{
+		Lifecycle: manager,
+		Store:     store,
+		PhaseRunner: &agent.PhaseRunner{
+			StateDir: store.BaseDir,
+			BuildSessionFn: func(agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				return nil, nil, nil, errors.New("stop after synchronous refactor setup")
+			},
+		},
+	}, orchestrator.Hooks{})
+	t.Cleanup(orch.WaitForCycles)
+	target := serverMutationTarget{orch: orch, store: store}
+
+	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
+		Repo:        "repo-a",
+		Prompt:      "use the attached evidence",
+		Images:      []string{img},
+		Attachments: []string{doc},
+	}); err != nil {
+		t.Fatalf("StartRefactor() error = %v", err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load feature: %v", err)
+	}
+	if len(updated.Images) != 1 {
+		t.Fatalf("Images = %v, want one copied refactor image", updated.Images)
+	}
+	if data, err := os.ReadFile(updated.Images[0]); err != nil || string(data) != "image bytes" {
+		t.Fatalf("copied image data = %q, err=%v; want image bytes", string(data), err)
+	}
+	if len(updated.Attachments) != 1 {
+		t.Fatalf("Attachments = %v, want one copied refactor attachment", updated.Attachments)
+	}
+	if data, err := os.ReadFile(updated.Attachments[0]); err != nil || string(data) != "spec bytes" {
+		t.Fatalf("copied attachment data = %q, err=%v; want spec bytes", string(data), err)
+	}
+	if !strings.Contains(updated.Images[0], filepath.Join(f.ID, "images")) {
+		t.Fatalf("image path = %q, want copied under feature images directory", updated.Images[0])
+	}
+	if !strings.Contains(updated.Attachments[0], filepath.Join(f.ID, "attachments")) {
+		t.Fatalf("attachment path = %q, want copied under feature attachments directory", updated.Attachments[0])
+	}
+}
+
 func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
 	target, store, f := newReviewCommentsActionTarget(t)
 	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, "repo-a", []int{100}); err != nil {

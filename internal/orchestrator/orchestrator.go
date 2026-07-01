@@ -1992,8 +1992,10 @@ func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions)
 	prURLs := make(map[string]string)
 	var firstErr error
 	var conflictErr *PublishConflictError
+	hasRepoSelection := len(requestedRepos) > 0
+	republishExistingPRs := publishRequiresLeasePush(f)
 	for _, repo := range f.Repos {
-		if len(requestedRepos) > 0 && !requestedRepos[repo.Name] {
+		if hasRepoSelection && !requestedRepos[repo.Name] {
 			continue
 		}
 		// Skip repos already published (sibling goroutines may have updated)
@@ -2003,7 +2005,9 @@ func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions)
 			if st, ok := freshF.RepoStates[repo.Name]; ok && st != nil {
 				if st.PRURL != "" {
 					prURLs[repo.Name] = st.PRURL
-					continue
+					if !hasRepoSelection && !republishExistingPRs {
+						continue
+					}
 				}
 				if !st.Touched {
 					continue

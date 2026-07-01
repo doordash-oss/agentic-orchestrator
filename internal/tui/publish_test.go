@@ -16,6 +16,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
 // newTestPublishModel wraps the canonical NewPublishModel with a stub
@@ -685,6 +687,44 @@ func TestPublishExecuteGuardPublishable(t *testing.T) {
 	}
 	if strings.Contains(msg.err.Error(), "not publishable") {
 		t.Error("publishable feature should not be blocked by publishability guard")
+	}
+}
+
+func TestPublishExecuteUsesForcePushWithLease(t *testing.T) {
+	oldPush := git.PushFunc
+	oldForcePush := git.ForcePushFunc
+	t.Cleanup(func() {
+		git.PushFunc = oldPush
+		git.ForcePushFunc = oldForcePush
+	})
+
+	wantErr := errors.New("lease push attempted")
+	git.PushFunc = func(worktreePath, branch string) error {
+		t.Fatalf("executePublish must not plain-push %s from %s", branch, worktreePath)
+		return nil
+	}
+	git.ForcePushFunc = func(worktreePath, branch string) error {
+		if worktreePath != "/tmp/nonexistent-wt" || branch != "feature/test" {
+			t.Fatalf("ForcePush(%q, %q), want /tmp/nonexistent-wt feature/test", worktreePath, branch)
+		}
+		return wantErr
+	}
+
+	m := newTestPublishModel("feat-1", "diff", "log", "title", "body", 80, 24)
+	m.worktreeDir = "/tmp/nonexistent-wt"
+	m.branch = "feature/test"
+	m.leasePush = true
+
+	result := m.executePublish()()
+	msg, ok := result.(publishExecuteResultMsg)
+	if !ok {
+		t.Fatalf("expected publishExecuteResultMsg, got %T", result)
+	}
+	if msg.err == nil {
+		t.Fatal("expected force push error")
+	}
+	if !strings.Contains(msg.err.Error(), wantErr.Error()) {
+		t.Fatalf("error = %q, want force push sentinel", msg.err.Error())
 	}
 }
 

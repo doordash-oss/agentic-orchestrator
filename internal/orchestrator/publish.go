@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -99,9 +100,13 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 		}
 	}
 
-	// Pull-rebase before push. A conflict surfaces as *PublishConflictError
-	// so callers can route to conflict-resolution flows with errors.Is.
-	if o.deps.Rebaser != nil {
+	leasePush := publishRequiresLeasePush(f)
+
+	// Pull-rebase before a regular push. Manual publish from CodeReady is the
+	// explicit post-review path and may follow a rebase cycle that rewrote the
+	// feature branch; rebasing that branch back onto origin/<branch> would undo
+	// the intended direction of sync.
+	if !leasePush && o.deps.Rebaser != nil {
 		res := o.deps.Rebaser.PullRebase(workDir, branch)
 		switch res.Outcome {
 		case ports.PullRebaseConflict:
@@ -123,7 +128,17 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	}
 
 	// Push branch.
-	if err := o.deps.Publisher.Push(workDir, branch); err != nil {
+	if leasePush {
+		if o.deps.Rebaser == nil {
+			err := errors.New("rebase operator not configured for lease push")
+			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
+			return "", err
+		}
+		if err := o.deps.Rebaser.ForcePush(workDir, branch); err != nil {
+			_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
+			return "", fmt.Errorf("force push failed: %w", err)
+		}
+	} else if err := o.deps.Publisher.Push(workDir, branch); err != nil {
 		_ = o.deps.Lifecycle.SetRepoPublishError(featureID, repoName, err.Error())
 		return "", fmt.Errorf("push failed: %w", err)
 	}
@@ -150,6 +165,10 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	}
 
 	return prURL, nil
+}
+
+func publishRequiresLeasePush(f *feature.Feature) bool {
+	return f != nil && f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()
 }
 
 // generatePRDescription produces a PR title/body from a structured PRContext

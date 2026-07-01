@@ -114,6 +114,7 @@ type PublishModel struct {
 	existingPRURL   string              // set when re-publishing an already-published repo
 	publishable     bool                // true if all feature repos have origin remote
 	draft           bool                // true when the feature's checkpoints request a draft PR
+	leasePush       bool                // true when manual CodeReady publish should update origin with --force-with-lease
 }
 
 // newPublishViewport builds the shared viewport, title input, and body
@@ -158,8 +159,10 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 	}
 
 	var draft bool
+	var leasePush bool
 	if f != nil {
 		draft = f.Checkpoints.DraftPublish
+		leasePush = f.Status == feature.StatusCodeReady && !f.Checkpoints.AutoPublish()
 	}
 
 	m := PublishModel{
@@ -176,6 +179,7 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 		height:      height,
 		publishable: true,
 		draft:       draft,
+		leasePush:   leasePush,
 	}
 
 	if f != nil && len(f.Repos) > 1 {
@@ -441,6 +445,7 @@ func (m PublishModel) executePublish() tea.Cmd {
 	existingPRURL := m.existingPRURL
 	publishable := m.publishable
 	draft := m.draft
+	leasePush := m.leasePush
 
 	if worktreeDir == "" || branch == "" {
 		return func() tea.Msg {
@@ -474,37 +479,45 @@ func (m PublishModel) executePublish() tea.Cmd {
 			}
 		}
 
-		// Pull-rebase before push to sync with any remote changes
-		prResult := git.PullRebase(worktreeDir, branch)
-		switch prResult.Outcome {
-		case git.PullRebaseConflict:
-			rebaseTarget := baseBranch
-			if rebaseTarget == "" {
-				defaultRepoPath := repoPath
-				if defaultRepoPath == "" {
-					defaultRepoPath = worktreeDir
+		if leasePush {
+			// Manual publish is an explicit post-review update. Use a lease push so
+			// rebased feature branches update origin/<branch> instead of rebasing
+			// local history back onto the pre-rebase remote branch.
+			if err := git.ForcePush(worktreeDir, branch); err != nil {
+				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("force push failed: %w", err)}
+			}
+		} else {
+			// Pull-rebase before regular push to sync with any remote changes.
+			prResult := git.PullRebase(worktreeDir, branch)
+			switch prResult.Outcome {
+			case git.PullRebaseConflict:
+				rebaseTarget := baseBranch
+				if rebaseTarget == "" {
+					defaultRepoPath := repoPath
+					if defaultRepoPath == "" {
+						defaultRepoPath = worktreeDir
+					}
+					rebaseTarget = git.DefaultBranch(defaultRepoPath)
 				}
-				rebaseTarget = git.DefaultBranch(defaultRepoPath)
+				return publishExecuteResultMsg{
+					featureID:        featureID,
+					repoName:         repoName,
+					err:              fmt.Errorf("pull-rebase conflict: %w", prResult.Err),
+					conflictDetected: true,
+					branch:           branch,
+					rebaseTarget:     rebaseTarget,
+				}
+			case git.PullRebaseFailure:
+				return publishExecuteResultMsg{
+					featureID: featureID,
+					repoName:  repoName,
+					err:       fmt.Errorf("pull-rebase failed: %w", prResult.Err),
+				}
 			}
-			return publishExecuteResultMsg{
-				featureID:        featureID,
-				repoName:         repoName,
-				err:              fmt.Errorf("pull-rebase conflict: %w", prResult.Err),
-				conflictDetected: true,
-				branch:           branch,
-				rebaseTarget:     rebaseTarget,
-			}
-		case git.PullRebaseFailure:
-			return publishExecuteResultMsg{
-				featureID: featureID,
-				repoName:  repoName,
-				err:       fmt.Errorf("pull-rebase failed: %w", prResult.Err),
-			}
-		}
 
-		// Push branch
-		if err := git.Push(worktreeDir, branch); err != nil {
-			return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("push failed: %w", err)}
+			if err := git.Push(worktreeDir, branch); err != nil {
+				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("push failed: %w", err)}
+			}
 		}
 
 		// Create or update PR

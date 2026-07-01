@@ -168,6 +168,81 @@ func TestOrchestrator_Publish_SkipsAlreadyPublished(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_Publish_SelectedAlreadyPublishedRepoRepublishes(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-republish-selected",
+		Name:         "republish selected",
+		Slug:         "republish-selected",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", Branch: "feature/republish-selected", BaseBranch: "main"},
+			{Name: "r2", Path: "/tmp/r2", WorktreePath: "/tmp/wt-r2", Branch: "feature/republish-selected", BaseBranch: "main"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/42"},
+			"r2": {Touched: true},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	calls := make(map[string]int)
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetPublishRepoFn(func(id, repo string) (string, error) {
+		calls[repo]++
+		return "https://github.com/org/" + repo + "/pull/99", nil
+	})
+
+	if err := o.PublishWithOptions("feat-republish-selected", orchestrator.PublishOptions{Repos: []string{"r1"}}); err != nil {
+		t.Fatalf("PublishWithOptions: %v", err)
+	}
+
+	if calls["r1"] != 1 {
+		t.Fatalf("selected already-published repo calls = %d, want 1", calls["r1"])
+	}
+	if calls["r2"] != 0 {
+		t.Fatalf("unselected repo calls = %d, want 0", calls["r2"])
+	}
+}
+
+func TestOrchestrator_Publish_ManualCodeReadyRepublishesExistingPR(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-republish-existing",
+		Name:         "republish existing",
+		Slug:         "republish-existing",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos: []feature.FeatureRepo{
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", Branch: "feature/republish-existing", BaseBranch: "main"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/42"},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
+	fs := newFeatureStore(f)
+
+	var calls int
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetPublishRepoFn(func(id, repo string) (string, error) {
+		calls++
+		return "https://github.com/org/r1/pull/42", nil
+	})
+
+	if err := o.Publish("feat-republish-existing"); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	if calls != 1 {
+		t.Fatalf("already-published manual CodeReady repo calls = %d, want 1", calls)
+	}
+}
+
 // Publish surfaces *PublishConflictError on conflict; final error satisfies
 // errors.Is(err, ErrPublishConflict) and errors.As extracts repo info.
 func TestOrchestrator_Publish_ConflictError_SurfacedAsSentinel(t *testing.T) {
@@ -368,6 +443,71 @@ func TestOrchestrator_PublishRepo_PullRebaseConflict_Sentinel(t *testing.T) {
 			t.Errorf("%s should not have been called after rebase conflict", c.Method)
 		}
 	}
+}
+
+func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testing.T) {
+	f := &feature.Feature{
+		ID:           "feat-manual-publish-rebased",
+		Name:         "manual publish rebased",
+		Slug:         "manual-publish-rebased",
+		Status:       feature.StatusCodeReady,
+		CurrentPhase: feature.PhasePublish,
+		Checkpoints:  feature.Checkpoints{ManualPublish: true},
+		Repos: []feature.FeatureRepo{
+			{
+				Name:         "r1",
+				Path:         "/tmp/r1",
+				WorktreePath: "/tmp/wt-r1",
+				Branch:       "feature/manual-publish-rebased",
+				BaseBranch:   "main",
+			},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"r1": {Touched: true},
+		},
+	}
+	lc := lifecycleForFeature(f)
+	lc.SetRepoPublishedFn = func(id, repo, url string) error { return nil }
+	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
+	fs := newFeatureStore(f)
+
+	pub := mocks.NewMockPublisher()
+	pub.HasUncommittedChangesFn = func(path string) (bool, error) { return false, nil }
+	pub.CommitBodiesFn = func(path, base string) (string, error) { return "", nil }
+	pub.DiffStatFn = func(path, base string) (string, error) { return "", nil }
+	pub.PushFn = func(path, branch string) error {
+		t.Fatalf("manual publish after a rebase must not plain-push %s from %s", branch, path)
+		return nil
+	}
+	pub.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+		return "https://github.com/org/r1/pull/1", nil
+	}
+
+	reb := mocks.NewMockRebaseOperator()
+	reb.PullRebaseFn = func(worktreePath, branch string) git.PullRebaseResult {
+		t.Fatalf("manual publish after a rebase must not pull-rebase onto %s from %s", branch, worktreePath)
+		return git.PullRebaseResult{}
+	}
+	reb.ForcePushFn = func(worktreePath, branch string) error { return nil }
+
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle: lc,
+		Store:     fs,
+		Publisher: pub,
+		Rebaser:   reb,
+	}, orchestrator.Hooks{})
+
+	if err := o.Publish("feat-manual-publish-rebased"); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	if got := countRebaseCalls(reb, "ForcePush"); got != 1 {
+		t.Fatalf("Rebaser.ForcePush calls = %d, want 1", got)
+	}
+	if got := countPublisherCalls(pub, "CreatePR"); got != 1 {
+		t.Fatalf("Publisher.CreatePR calls = %d, want 1", got)
+	}
+	assertLifecycleCall(t, lc, "SetRepoPublished")
 }
 
 func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testing.T) {

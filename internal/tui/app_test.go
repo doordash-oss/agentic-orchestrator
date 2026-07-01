@@ -779,6 +779,188 @@ func TestViewLogsCmdRoadmapPhase(t *testing.T) {
 	}
 }
 
+func TestResolveDefaultLogPath(t *testing.T) {
+	// Build an isolated phase dir per case so the helper can stat real files.
+	// A case describes which files to create relative to the phase dir; the
+	// setup log lives outside it. "want" is expressed as one of the created
+	// relative keys, or the literal "setup"/"".
+	type file struct {
+		rel string        // path relative to phaseDir; "output.txt" or "iter/foo.txt"
+		age time.Duration // how long ago it was modified (larger = older)
+	}
+	tests := []struct {
+		name        string
+		files       []file
+		hasSetupLog bool
+		emptyPhase  bool // pass "" as phaseDir to model a feature with no active run
+		wantRel     string
+		wantIsSetup bool
+	}{
+		{
+			name:        "prefers phase output over setup log",
+			files:       []file{{rel: "output.txt"}},
+			hasSetupLog: true,
+			wantRel:     "output.txt",
+			wantIsSetup: false,
+		},
+		{
+			name:        "prefers phase output when no setup log",
+			files:       []file{{rel: "output.txt"}},
+			hasSetupLog: false,
+			wantRel:     "output.txt",
+			wantIsSetup: false,
+		},
+		{
+			name:        "falls back to latest iteration log over setup",
+			files:       []file{{rel: "iteration-01/fix-output.txt", age: time.Hour}, {rel: "iteration-02/fix-output.txt"}},
+			hasSetupLog: true,
+			wantRel:     "iteration-02/fix-output.txt",
+			wantIsSetup: false,
+		},
+		{
+			name:        "falls back to setup when phase has no logs",
+			files:       nil,
+			hasSetupLog: true,
+			wantRel:     "setup",
+			wantIsSetup: true,
+		},
+		{
+			name:        "returns empty when nothing exists",
+			files:       nil,
+			hasSetupLog: false,
+			wantRel:     "",
+			wantIsSetup: false,
+		},
+		{
+			name:        "empty phase dir falls back to setup",
+			emptyPhase:  true,
+			hasSetupLog: true,
+			wantRel:     "setup",
+			wantIsSetup: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := t.TempDir()
+			phaseDir := filepath.Join(base, "phase")
+			if !tt.emptyPhase {
+				if err := os.MkdirAll(phaseDir, 0o755); err != nil {
+					t.Fatalf("mkdir phase: %v", err)
+				}
+			}
+
+			for _, fl := range tt.files {
+				p := filepath.Join(phaseDir, fl.rel)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", fl.rel, err)
+				}
+				if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+					t.Fatalf("write %s: %v", fl.rel, err)
+				}
+				if fl.age > 0 {
+					mod := time.Now().Add(-fl.age)
+					if err := os.Chtimes(p, mod, mod); err != nil {
+						t.Fatalf("chtimes %s: %v", fl.rel, err)
+					}
+				}
+			}
+
+			setupLogPath := ""
+			if tt.hasSetupLog {
+				setupLogPath = filepath.Join(base, "setup", "attempt-01-output.txt")
+			}
+
+			passPhaseDir := phaseDir
+			if tt.emptyPhase {
+				passPhaseDir = ""
+			}
+
+			gotPath, gotIsSetup := resolveDefaultLogPath(passPhaseDir, setupLogPath)
+
+			var wantPath string
+			switch tt.wantRel {
+			case "":
+				wantPath = ""
+			case "setup":
+				wantPath = setupLogPath
+			default:
+				wantPath = filepath.Join(phaseDir, tt.wantRel)
+			}
+
+			if gotPath != wantPath {
+				t.Errorf("path = %q, want %q", gotPath, wantPath)
+			}
+			if gotIsSetup != tt.wantIsSetup {
+				t.Errorf("isSetup = %v, want %v", gotIsSetup, tt.wantIsSetup)
+			}
+		})
+	}
+}
+
+// TestViewLogsCmdPrefersActivePhaseOverSetup guards the UX fix: with a setup
+// log present, pressing "l" while a phase is active must show that phase's
+// session output, not the worktree-creation noise in the setup log.
+func TestViewLogsCmdPrefersActivePhaseOverSetup(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	fm := feature.NewManager(store, cfg)
+
+	// Setup log exists (as it always does once worktrees are created).
+	setupLog := filepath.Join(dir, "feat-active", "runs", "run-001", "setup", "attempt-01-output.txt")
+	if err := os.MkdirAll(filepath.Dir(setupLog), 0o755); err != nil {
+		t.Fatalf("mkdir setup dir: %v", err)
+	}
+	if err := os.WriteFile(setupLog, []byte("creating worktree\ncreated worktree\n"), 0o644); err != nil {
+		t.Fatalf("write setup log: %v", err)
+	}
+
+	// The active phase (Implement) has real session output.
+	implDir := filepath.Join(dir, "feat-active", "runs", "run-001", "implement")
+	if err := os.MkdirAll(implDir, 0o755); err != nil {
+		t.Fatalf("mkdir implement dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(implDir, "output.txt"), []byte("real agent work here\n"), 0o644); err != nil {
+		t.Fatalf("write implement log: %v", err)
+	}
+
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-active",
+		Name:          "active",
+		Slug:          "active",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.LatestLogPath = setupLog
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	app := AppModel{featureManager: fm}
+	msg := app.viewLogsCmd("feat-active", feature.PhaseImplement, 0)()
+
+	logsMsg, ok := msg.(LogsContentMsg)
+	if !ok {
+		t.Fatalf("expected LogsContentMsg, got %T", msg)
+	}
+	if !strings.Contains(logsMsg.Content, "real agent work here") {
+		t.Fatalf("content = %q, want active phase output", logsMsg.Content)
+	}
+	if strings.Contains(logsMsg.Content, "creating worktree") {
+		t.Fatalf("content = %q, must not show setup log", logsMsg.Content)
+	}
+	if strings.Contains(logsMsg.Title, "setup") {
+		t.Fatalf("title = %q, must not be titled setup", logsMsg.Title)
+	}
+}
+
 func TestHelpInputActivation(t *testing.T) {
 	app, fm := newTestAppModel(t)
 

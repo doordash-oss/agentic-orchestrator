@@ -5196,22 +5196,7 @@ func (m AppModel) viewLogsCmd(featureID string, phase feature.Phase, roadmapPhas
 		if loadErr != nil {
 			return RefreshFeaturesMsg{}
 		}
-		if setup := setupState(f); setup != nil && setup.LatestLogPath != "" {
-			data, err := os.ReadFile(setup.LatestLogPath)
-			if err != nil {
-				return LogsContentMsg{
-					FeatureID: featureID,
-					Title:     fmt.Sprintf("Logs: %s (setup)", featureID),
-					Content:   fmt.Sprintf("Setup log not found: %s", setup.LatestLogPath),
-				}
-			}
-			lines := splitLastN(string(data), 100)
-			return LogsContentMsg{
-				FeatureID: featureID,
-				Title:     fmt.Sprintf("Logs: %s (setup \u2014 %s)", featureID, filepath.Base(setup.LatestLogPath)),
-				Content:   strings.Join(lines, "\n"),
-			}
-		}
+
 		var phaseDir string
 		if roadmapPhase > 0 {
 			// Roadmap features store logs under phase-NN/<phase>/
@@ -5219,18 +5204,42 @@ func (m AppModel) viewLogsCmd(featureID string, phase feature.Phase, roadmapPhas
 		} else {
 			phaseDir = filepath.Join(agent.ActiveRunDir(m.featureManager.Store.BaseDir, f), phase.DirName())
 		}
-		logPath := filepath.Join(phaseDir, "output.txt")
-		data, err := os.ReadFile(logPath)
-		if err != nil {
-			// Fallback: find the most recently modified .txt file in
-			// iteration subdirectories (e.g. review/iteration-02/fix-output.txt).
-			data, logPath = findLatestLogFile(phaseDir)
+
+		var setupLogPath string
+		if setup := setupState(f); setup != nil {
+			setupLogPath = setup.LatestLogPath
 		}
-		if data == nil {
+
+		// Prefer the current phase's session output (the active or
+		// most-recently-active phase) over the setup log, which only records
+		// worktree-creation noise. The setup log is used only when the phase
+		// has not produced any output yet.
+		logPath, isSetup := resolveDefaultLogPath(phaseDir, setupLogPath)
+		if logPath == "" {
 			return RefreshFeaturesMsg{}
 		}
+
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			if isSetup {
+				return LogsContentMsg{
+					FeatureID: featureID,
+					Title:     fmt.Sprintf("Logs: %s (setup)", featureID),
+					Content:   fmt.Sprintf("Setup log not found: %s", logPath),
+				}
+			}
+			return RefreshFeaturesMsg{}
+		}
+
 		// With JSON protocol, output is already clean text
 		lines := splitLastN(string(data), 100)
+		if isSetup {
+			return LogsContentMsg{
+				FeatureID: featureID,
+				Title:     fmt.Sprintf("Logs: %s (setup \u2014 %s)", featureID, filepath.Base(logPath)),
+				Content:   strings.Join(lines, "\n"),
+			}
+		}
 		title := fmt.Sprintf("Logs: %s (%s)", featureID, phase)
 		if base := filepath.Base(logPath); base != "output.txt" {
 			title = fmt.Sprintf("Logs: %s (%s — %s)", featureID, phase, base)
@@ -5242,12 +5251,43 @@ func (m AppModel) viewLogsCmd(featureID string, phase feature.Phase, roadmapPhas
 	}
 }
 
-// findLatestLogFile searches phaseDir for the most recently modified .txt
-// log file inside iteration subdirectories. Returns nil data if nothing found.
-func findLatestLogFile(phaseDir string) ([]byte, string) {
+// resolveDefaultLogPath chooses the most useful log to show by default when the
+// user opens the logs viewer. It prefers the current phase's session output
+// (phaseDir/output.txt), then the most recently modified log inside the phase's
+// iteration subdirectories, and only falls back to the setup log when no phase
+// log exists. isSetup reports whether the returned path is the setup log so the
+// caller can title it and handle a missing file appropriately. An empty path
+// means no log is available.
+func resolveDefaultLogPath(phaseDir, setupLogPath string) (path string, isSetup bool) {
+	if phaseDir != "" {
+		primary := filepath.Join(phaseDir, "output.txt")
+		if fileExists(primary) {
+			return primary, false
+		}
+		// Fallback: the most recently modified .txt file in iteration
+		// subdirectories (e.g. review/iteration-02/fix-output.txt).
+		if latest := latestLogFilePath(phaseDir); latest != "" {
+			return latest, false
+		}
+	}
+	if setupLogPath != "" {
+		return setupLogPath, true
+	}
+	return "", false
+}
+
+// fileExists reports whether path names an existing regular file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// latestLogFilePath returns the path of the most recently modified .txt log
+// file inside phaseDir's iteration subdirectories, or "" if none exist.
+func latestLogFilePath(phaseDir string) string {
 	entries, err := os.ReadDir(phaseDir)
 	if err != nil {
-		return nil, ""
+		return ""
 	}
 
 	var bestPath string
@@ -5277,14 +5317,7 @@ func findLatestLogFile(phaseDir string) ([]byte, string) {
 		}
 	}
 
-	if bestPath == "" {
-		return nil, ""
-	}
-	data, err := os.ReadFile(bestPath)
-	if err != nil {
-		return nil, ""
-	}
-	return data, bestPath
+	return bestPath
 }
 
 func (m AppModel) updateLogs(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

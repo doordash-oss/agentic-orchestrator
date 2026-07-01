@@ -66,6 +66,9 @@ func PublishDiscovery(runtimeDir string, rec DiscoveryRecord) error {
 	if rec.PublishedAt.IsZero() {
 		rec.PublishedAt = time.Now().UTC()
 	}
+	if rec.MCP == (MCPMetadata{}) {
+		rec.MCP = mcpMetadataForBaseURL(rec.BaseURL)
+	}
 	var body bytes.Buffer
 	enc := json.NewEncoder(&body)
 	enc.SetIndent("", "  ")
@@ -99,6 +102,16 @@ func PublishDiscovery(runtimeDir string, rec DiscoveryRecord) error {
 		return fmt.Errorf("chmod discovery: %w", err)
 	}
 	return nil
+}
+
+func mcpMetadataForBaseURL(baseURL string) MCPMetadata {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	return MCPMetadata{
+		Transport:      "streamable_http",
+		Path:           MCPEndpointPath,
+		Endpoint:       baseURL + MCPEndpointPath,
+		RESTAPIVersion: APIVersion,
+	}
 }
 
 func NewLaunchPolicy(enabledProviders []string, dangerouslySkipPerms bool) LaunchPolicy {

@@ -16,17 +16,26 @@ package server
 
 import (
 	"context"
+	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-type fakeMutationTarget struct{}
+type fakeMutationTarget struct {
+	mu            sync.Mutex
+	startCalls    []string
+	recoveryItems []ports.RecoveryItem
+	publishErr    error
+}
 
 func (f *fakeMutationTarget) CreateFeature(CreateFeatureRequest) (CreateFeatureResponse, error) {
 	return CreateFeatureResponse{FeatureID: "created-feature", Result: "created"}, nil
 }
 
 func (f *fakeMutationTarget) StartFeature(featureID string) (FeatureStartResponse, error) {
+	f.mu.Lock()
+	f.startCalls = append(f.startCalls, featureID)
+	f.mu.Unlock()
 	return FeatureStartResponse{FeatureID: featureID, Result: "started"}, nil
 }
 
@@ -83,6 +92,9 @@ func (f *fakeMutationTarget) GeneratePublishDescription(featureID string, req Pu
 }
 
 func (f *fakeMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+	if f.publishErr != nil {
+		return PublishFeatureResponse{}, f.publishErr
+	}
 	return PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
@@ -139,7 +151,7 @@ func (f *fakeMutationTarget) DeleteFeature(featureID string) (DeleteFeatureRespo
 }
 
 func (f *fakeMutationTarget) ScanRecovery(context.Context) ([]ports.RecoveryItem, error) {
-	return nil, nil
+	return f.recoveryItems, nil
 }
 
 func (f *fakeMutationTarget) ExecuteRecovery(context.Context, []ports.RecoveryItem, map[string]ports.RecoveryAction) (RecoveryActionResponse, error) {

@@ -264,6 +264,78 @@ func TestAPIAppModelDashboardRestoresMainBranchSpinnerVisuals(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelDashboardRendersPhaseCostsFromRESTDetail(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "published",
+		Name:         "Published feature",
+		Slug:         "published-feature",
+		Status:       "Published",
+		CurrentPhase: "Publish",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    time.Now(),
+		Progress: server.FeatureProgress{
+			CurrentRoadmapPhase: 2,
+			TotalRoadmapPhases:  2,
+		},
+	}
+	app := APIAppModel{
+		width:          160,
+		height:         40,
+		focusPanel:     1,
+		rightPanelMode: dashboardRightPanelOverview,
+		featureList:    server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: {Feature: server.FeatureDetailDTO{
+				FeatureSummary: summary,
+				Timing: server.TimingDTO{ByPhase: map[string]int64{
+					"research":     60,
+					"phase-1-plan": 120,
+					"phase-1-impl": 180,
+					"review":       240,
+				}},
+				Cost: server.CostDTO{
+					TotalUSD: 7.25,
+					ByPhase: map[string]float64{
+						"research":     1.25,
+						"phase-1-plan": 2.50,
+						"phase-1-impl": 3.00,
+						"review":       0.50,
+					},
+				},
+			}},
+		},
+		runtimeConfig: server.RuntimeConfigResponse{
+			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+		},
+		livePreviews: map[string]server.LivePreviewResponse{
+			summary.ID: {
+				Feature: summary,
+				Cost:    server.CostDTO{TotalUSD: 7.25},
+			},
+		},
+	}
+	app.rebuildPresentation(summary.ID)
+
+	if app.snapshot.LivePreview == nil {
+		t.Fatal("test setup did not produce a live-preview snapshot")
+	}
+	dashboard := app.apiDashboardModel()
+	if dashboard.preview.feature == nil {
+		t.Fatal("dashboard preview feature is nil")
+	}
+	if got := dashboard.preview.feature.PhaseCost("research"); got != 1.25 {
+		t.Fatalf("dashboard preview research cost = %v, want 1.25; costs=%v", got, dashboard.preview.feature.PhaseCosts)
+	}
+	view := stripANSI(dashboard.View())
+	for _, want := range []string{"Cost", "$7.25", "Research", "$1.25", "Phase 1 Plan", "$2.50", "Phase 1", "$3.00", "Final Review", "$0.50"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("API dashboard View() missing phase cost %q in:\n%s", want, view)
+		}
+	}
+}
+
 func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 	t.Parallel()
 
@@ -2061,6 +2133,40 @@ func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSessionChanges(t *testi
 	}
 	if strings.Contains(view, "Old session tail") {
 		t.Fatalf("refreshed API app View() kept old session tail after session change:\n%s", view)
+	}
+}
+
+func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSameSessionIDRestarts(t *testing.T) {
+	t.Parallel()
+
+	oldStartedAt := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
+	newStartedAt := oldStartedAt.Add(time.Minute)
+
+	app := APIAppModel{}
+	app.storeLivePreview("active", server.LivePreviewResponse{
+		Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Interrupted"},
+		Activity: "Stopped",
+		Session:  &server.SessionSummaryDTO{ID: "active-impl", FeatureID: "active", Phase: "implement", Status: "done", StartedAt: oldStartedAt},
+		Transcript: []server.TranscriptMessageDTO{
+			{Index: 1, Role: "assistant", Type: "text", Text: "Old session first row"},
+			{Index: 2, Role: "assistant", Type: "text", Text: "Old session tail"},
+		},
+	})
+	app.storeLivePreview("active", server.LivePreviewResponse{
+		Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
+		Activity: "Using Bash...",
+		Session:  &server.SessionSummaryDTO{ID: "active-impl", FeatureID: "active", Phase: "implement", Status: "running", StartedAt: newStartedAt},
+		Transcript: []server.TranscriptMessageDTO{
+			{Index: 1, Role: "assistant", Type: "text", Text: "New restarted session tail"},
+		},
+	})
+
+	got := app.livePreviews["active"].Transcript
+	if len(got) != 1 {
+		t.Fatalf("cached live preview transcript len = %d, want 1 after same-ID restart: %+v", len(got), got)
+	}
+	if got[0].Text != "New restarted session tail" {
+		t.Fatalf("cached live preview transcript = %+v, want restarted session tail only", got)
 	}
 }
 
@@ -6124,6 +6230,78 @@ func TestAPIAppModelPublishOpensReviewFlowBeforeRESTMutation(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelPublishCommitsSingleRepoBeforeCommitLogPreview(t *testing.T) {
+	t.Parallel()
+
+	repo := testutil.InitGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/ready-to-publish")
+	if err := os.WriteFile(filepath.Join(repo, "implementation.txt"), []byte("ship it\n"), 0o644); err != nil {
+		t.Fatalf("write implementation change: %v", err)
+	}
+	stateDir := filepath.Join(t.TempDir(), "features")
+	store := feature.NewStore(stateDir)
+	if err := store.Save(&feature.Feature{
+		ID:            "ready",
+		Name:          "Ready to publish",
+		Slug:          "ready-to-publish",
+		Status:        feature.StatusCodeReady,
+		CurrentPhase:  feature.PhasePublish,
+		Created:       time.Now(),
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{{
+			Name:         "api",
+			Path:         repo,
+			WorktreePath: repo,
+			Branch:       "feature/ready-to-publish",
+			BaseBranch:   "main",
+		}},
+	}); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
+			RepoStatus: []server.RepoStatusDTO{
+				{Name: "api", Publishable: true, Touched: true},
+			},
+			Actions: []server.ActionDTO{
+				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+			},
+		}},
+		runtime: server.RuntimeConfigResponse{
+			Runtime: server.RuntimeIdentity{StateDir: stateDir},
+			Repos:   []server.ConfigRepoDTO{{Name: "api", Path: repo}},
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	if cmd != nil {
+		t.Fatal("Update(p) returned command before publish review")
+	}
+	reviewing := model.(APIAppModel)
+
+	model, cmd = reviewing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter on diff) returned command before commit review")
+	}
+	commits := model.(APIAppModel)
+	view := stripANSI(commits.View().Content)
+	if !strings.Contains(view, "Commit Log") {
+		t.Fatalf("publish review did not advance to commit log:\n%s", view)
+	}
+	if !strings.Contains(view, "Ready to publish") {
+		t.Fatalf("publish commit log page is empty or missing the pre-publish commit:\n%s", view)
+	}
+}
+
 func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 	t.Parallel()
 
@@ -6891,6 +7069,23 @@ func TestAPIAppModelQuitPromptsOnlyForOwnedServer(t *testing.T) {
 	}
 	if got := model.(APIAppModel).ShowingOwnedServerQuitPrompt(); !got {
 		t.Fatal("owned TUI did not show owned-server quit prompt")
+	}
+	view := stripANSI(model.(APIAppModel).View().Content)
+	for _, want := range []string{
+		"Session Exit",
+		"The server belongs to this window.",
+		"[ y ] Stop server + quit",
+		"clean shutdown",
+		"[ n ] Keep server running",
+		"detach this TUI only",
+		"esc cancel",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("owned quit prompt missing %q in:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Stop the server started for this TUI session?") {
+		t.Fatalf("owned quit prompt still uses old dense copy:\n%s", view)
 	}
 
 	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'y', Text: "y"})

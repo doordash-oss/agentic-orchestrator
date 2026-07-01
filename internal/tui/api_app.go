@@ -1495,10 +1495,7 @@ func (m APIAppModel) View() tea.View {
 		view = overlayModal(view, m.helpOverlay.View(), w, h)
 	}
 	if m.quitOwnedServerPrompt {
-		view = overlayModal(view, panelStyle(true).
-			Width(58).
-			BorderForeground(colorWarning).
-			Render("Stop the server started for this TUI session?\n\n[y] Stop server and quit   [n] Leave running   [esc] Cancel"), w, h)
+		view = overlayModal(view, m.renderOwnedServerQuitPrompt(), w, h)
 	}
 	if m.actionConfirmActive {
 		view = overlayModal(view, m.renderFeatureActionConfirm(), w, h)
@@ -1565,7 +1562,9 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 	dashboard.livePreview.spinnerView = spinnerView
 	if preview := m.snapshot.LivePreview; preview != nil {
 		if dashboard.livePreview.feature != nil && preview.CostUSD > 0 {
-			dashboard.livePreview.feature.PhaseCosts = apiPhaseCosts(nil, preview.CostUSD, dashboard.livePreview.feature.CurrentPhase)
+			liveFeature := *dashboard.livePreview.feature
+			liveFeature.PhaseCosts = apiPhaseCosts(nil, preview.CostUSD, liveFeature.CurrentPhase)
+			dashboard.livePreview.feature = &liveFeature
 		}
 		dashboard.preview.contextPct = preview.ContextPct
 		dashboard.livePreview.contextPct = preview.ContextPct
@@ -3269,7 +3268,7 @@ func (m *APIAppModel) storeLivePreview(featureID string, preview server.LivePrev
 	if m.livePreviews == nil {
 		m.livePreviews = map[string]server.LivePreviewResponse{}
 	}
-	if existing, ok := m.livePreviews[featureID]; ok && livePreviewResponseSessionID(existing) != "" && livePreviewResponseSessionID(existing) == livePreviewResponseSessionID(preview) {
+	if existing, ok := m.livePreviews[featureID]; ok && sameLivePreviewSessionInstance(existing, preview) {
 		preview.Transcript = mergeLivePreviewTranscript(existing.Transcript, preview.Transcript)
 	}
 	m.livePreviews[featureID] = preview
@@ -3280,6 +3279,18 @@ func livePreviewResponseSessionID(preview server.LivePreviewResponse) string {
 		return ""
 	}
 	return strings.TrimSpace(preview.Session.ID)
+}
+
+func sameLivePreviewSessionInstance(existing, incoming server.LivePreviewResponse) bool {
+	existingID := livePreviewResponseSessionID(existing)
+	if existingID == "" || existingID != livePreviewResponseSessionID(incoming) {
+		return false
+	}
+	if existing.Session != nil && incoming.Session != nil &&
+		!existing.Session.StartedAt.IsZero() && !incoming.Session.StartedAt.IsZero() {
+		return existing.Session.StartedAt.Equal(incoming.Session.StartedAt)
+	}
+	return true
 }
 
 func mergeLivePreviewTranscript(existing, incoming []server.TranscriptMessageDTO) []server.TranscriptMessageDTO {
@@ -4287,6 +4298,7 @@ func (m APIAppModel) openPublishAction() APIAppModel {
 	if saved, ok := m.loadSavedFeatureForDiff(f.ID); ok {
 		f = apiMergeSavedPublishFeature(f, saved)
 	}
+	apiCommitSingleRepoForPublishPreview(f)
 	repos := apiPublishRepoEntries(f)
 	if len(repos) == 0 {
 		m.statusMessage = "Publish is unavailable: no repos configured"
@@ -4695,6 +4707,23 @@ func apiPublishRepoEntries(f *feature.Feature) []publishRepoEntry {
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+func apiCommitSingleRepoForPublishPreview(f *feature.Feature) {
+	if f == nil || len(f.Repos) != 1 {
+		return
+	}
+	// Match the legacy single-repo publish flow: commit dirty work before
+	// building the review model so Diff Review and Commit Log preview the PR.
+	repo := f.Repos[0]
+	workDir := repo.WorktreePath
+	if workDir == "" {
+		workDir = repo.Path
+	}
+	if workDir == "" || !git.HasUncommittedChanges(workDir) {
+		return
+	}
+	_ = git.CommitAll(workDir, f.Name)
 }
 
 func apiPublishPlanText(f *feature.Feature) string {
@@ -5852,6 +5881,27 @@ func appendIndentedText(b *strings.Builder, text string) {
 		}
 		b.WriteString("    " + line + "\n")
 	}
+}
+
+func (m APIAppModel) renderOwnedServerQuitPrompt() string {
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(colorWarning)
+	actionStyle := lipgloss.NewStyle().Bold(true).Foreground(colorText)
+	footerStyle := lipgloss.NewStyle().Foreground(colorOverlay)
+
+	var b strings.Builder
+	b.WriteString("The server belongs to this window.")
+	b.WriteString("\n\n")
+	b.WriteString("  " + keyStyle.Render("[ y ]") + " " + actionStyle.Render("Stop server + quit") + "\n")
+	b.WriteString("        " + MutedStyle.Render("clean shutdown") + "\n\n")
+	b.WriteString("  " + keyStyle.Render("[ n ]") + " " + actionStyle.Render("Keep server running") + "\n")
+	b.WriteString("        " + MutedStyle.Render("detach this TUI only") + "\n\n")
+	b.WriteString("        " + footerStyle.Render("esc cancel"))
+
+	box := panelStyle(true).
+		Width(58).
+		BorderForeground(colorWarning).
+		Render(b.String())
+	return renderBorderTitle(box, "Session Exit", WarningStyle)
 }
 
 func (m APIAppModel) renderFeatureActionConfirm() string {

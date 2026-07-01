@@ -15,10 +15,12 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -525,6 +527,88 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 
 	if sess.Status() != SessionRunning {
 		t.Errorf("expected SessionRunning after clearing control request, got %v", sess.Status())
+	}
+}
+
+// blockingHandshakeProtocol blocks in Handshake until released, so a test can
+// observe manager behavior while a session is mid-handshake.
+type blockingHandshakeProtocol struct {
+	stubProtocol
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingHandshakeProtocol) Handshake(ctx context.Context) error {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-p.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestStartSessionDoesNotBlockReadersDuringHandshake guards against StartSession
+// holding the manager lock across the (potentially multi-second) protocol
+// handshake. When it did, ActiveSessions() — which feeds live-preview/prompts/
+// sessions — blocked for the whole handshake, timing out the TUI during a
+// resume.
+func TestStartSessionDoesNotBlockReadersDuringHandshake(t *testing.T) {
+	eventCh := make(chan interface{}, 64)
+	sm := NewManager(eventCh)
+	defer sm.Shutdown()
+
+	// Drain events so the session's read loop never blocks on eventCh.
+	go func() {
+		for range eventCh {
+		}
+	}()
+
+	proto := &blockingHandshakeProtocol{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	startErr := make(chan error, 1)
+	go func() {
+		_, err := sm.StartSession(
+			"handshake-test", "feat-1", feature.PhaseDesign,
+			[]string{"cat"}, t.TempDir(), nil,
+			&SessionOpts{Protocol: proto},
+		)
+		startErr <- err
+	}()
+
+	select {
+	case <-proto.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handshake never started")
+	}
+
+	// ActiveSessions must return promptly while the handshake is in progress.
+	done := make(chan []SessionView, 1)
+	go func() { done <- sm.ActiveSessions() }()
+	select {
+	case sessions := <-done:
+		if len(sessions) != 0 {
+			t.Fatalf("ActiveSessions() mid-handshake = %d sessions, want 0 (not registered until ready)", len(sessions))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ActiveSessions() blocked while a session was mid-handshake")
+	}
+
+	close(proto.release)
+	select {
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("StartSession() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartSession() did not return after handshake released")
+	}
+
+	if got := len(sm.ActiveSessions()); got != 1 {
+		t.Fatalf("ActiveSessions() after start = %d, want 1", got)
 	}
 }
 

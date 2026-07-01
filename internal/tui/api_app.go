@@ -721,8 +721,13 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
+			// Surface the error but still apply whatever was fetched before it.
+			// FetchRefreshSnapshot fills the snapshot incrementally and returns
+			// the partial result alongside the error, so discarding it would drop
+			// good data — e.g. a prompt snapshot fetched just before a slow
+			// live-preview call timed out, which would otherwise leave the help
+			// badge stale until the next successful refresh.
 			m.statusMessage = "Refresh failed: " + firstLine(msg.err.Error())
-			return m, nil
 		}
 		m.ApplyRefreshSnapshot(msg.snapshot)
 		if msg.content != nil {

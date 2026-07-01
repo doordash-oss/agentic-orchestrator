@@ -800,6 +800,187 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *tes
 	}
 }
 
+func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForFeatureScopedSessionUpdate(t *testing.T) {
+	var sawSessions bool
+	var sawPrompts bool
+	var sawLivePreview bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/sessions":
+			sawSessions = true
+			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
+				{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+			}})
+		case "GET /api/v1/prompts":
+			sawPrompts = true
+			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion, HelpQueue: []HelpQueueDTO{
+				{FeatureID: "feat-1", Question: "Agent has a question", Pending: true},
+			}})
+		case "GET /api/v1/features/feat-1/live-preview":
+			sawLivePreview = true
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}, Activity: "Waiting"})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event:    SSEEventDTO{Kind: "session.updated"},
+		Resource: ResourceDTO{Type: "session", FeatureID: "feat-1"},
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if !sawSessions || snapshot.Sessions == nil || len(snapshot.Sessions.Sessions) != 1 {
+		t.Fatalf("FetchRefreshSnapshot() sessions = %+v, sawSessions=%v; want session list", snapshot.Sessions, sawSessions)
+	}
+	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.HelpQueue) != 1 {
+		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want prompt snapshot for feature-scoped session update", snapshot.Prompts, sawPrompts)
+	}
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" {
+		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want feat-1 preview", snapshot.LivePreview, sawLivePreview)
+	}
+}
+
+func TestClientFetchRefreshSnapshotHydratesLivePreviewSessionForFeatureScopedSessionUpdate(t *testing.T) {
+	var sawSessions bool
+	var sawPrompts bool
+	var sawLivePreview bool
+	var sawSessionDetail bool
+	var sawTranscript bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/sessions":
+			sawSessions = true
+			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
+				{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+			}})
+		case "GET /api/v1/prompts":
+			sawPrompts = true
+			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
+		case "GET /api/v1/features/feat-1/live-preview":
+			sawLivePreview = true
+			writeJSON(w, http.StatusOK, LivePreviewResponse{
+				APIVersion: APIVersion,
+				Feature:    FeatureSummary{ID: "feat-1"},
+				Session:    &SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+				Activity:   "Waiting",
+			})
+		case "GET /api/v1/sessions/sess-1":
+			sawSessionDetail = true
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
+				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+				TranscriptCursor:  CursorDTO{Total: 7, Start: 0, End: 7},
+			}})
+		case "GET /api/v1/sessions/sess-1/transcript":
+			sawTranscript = true
+			writeJSON(w, http.StatusOK, TranscriptResponse{
+				APIVersion: APIVersion,
+				Cursor:     CursorDTO{Total: 7, Start: 0, End: 7},
+				Messages:   []TranscriptMessageDTO{{Index: 6, Role: "assistant", Type: "text", Text: "Choose?"}},
+			})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event:    SSEEventDTO{Kind: "session.updated"},
+		Resource: ResourceDTO{Type: "session", FeatureID: "feat-1"},
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if !sawSessions || snapshot.Sessions == nil {
+		t.Fatalf("FetchRefreshSnapshot() sessions = %+v, sawSessions=%v; want session list", snapshot.Sessions, sawSessions)
+	}
+	if !sawPrompts || snapshot.Prompts == nil {
+		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want prompt snapshot", snapshot.Prompts, sawPrompts)
+	}
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Session == nil || snapshot.LivePreview.Session.ID != "sess-1" {
+		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want sess-1 preview", snapshot.LivePreview, sawLivePreview)
+	}
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "sess-1" {
+		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want live preview session detail", snapshot.Session, sawSessionDetail)
+	}
+	if !sawTranscript || snapshot.Transcript == nil || len(snapshot.Transcript.Messages) != 1 || snapshot.Transcript.Messages[0].Text != "Choose?" {
+		t.Fatalf("FetchRefreshSnapshot() transcript = %+v, sawTranscript=%v; want live preview session transcript", snapshot.Transcript, sawTranscript)
+	}
+}
+
+func TestClientFetchRefreshSnapshotResnapshotsPromptsOnConnected(t *testing.T) {
+	var sawFeatures, sawPrompts, sawPermissions, sawSessions bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/features":
+			sawFeatures = true
+			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion, Features: []FeatureSummary{
+				{ID: "feat-1", Status: "Designing"},
+			}})
+		case "GET /api/v1/prompts":
+			sawPrompts = true
+			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion, AskUserQuestions: []ControlRequestDTO{
+				{RequestID: "req-1", FeatureID: "feat-1", ToolName: "AskUserQuestion", Status: "pending"},
+			}})
+		case "GET /api/v1/permissions":
+			sawPermissions = true
+			writeJSON(w, http.StatusOK, PermissionSnapshotResponse{APIVersion: APIVersion})
+		case "GET /api/v1/sessions":
+			sawSessions = true
+			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
+				{ID: "feat-1-design", FeatureID: "feat-1", Status: "WaitingHelp"},
+			}})
+		case "GET /api/v1/health":
+			writeJSON(w, http.StatusOK, HealthResponse{APIVersion: APIVersion})
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	// The `connected` event (and snapshot_required heartbeats) signal the client
+	// to re-snapshot. A session sitting idle in WaitingHelp emits no further
+	// events, so this (re)connect is the only chance to pull the pending
+	// question into the prompt snapshot that drives the dashboard help badge.
+	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
+		Event:            SSEEventDTO{Kind: "connected", Resource: ResourceDTO{Type: "runtime"}, SnapshotRequired: true},
+		Resource:         ResourceDTO{Type: "runtime"},
+		SnapshotRequired: true,
+	})
+	if err != nil {
+		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
+	}
+	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.AskUserQuestions) != 1 {
+		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want re-snapshotted prompts on snapshot_required", snapshot.Prompts, sawPrompts)
+	}
+	if !sawFeatures || snapshot.Features == nil || len(snapshot.Features.Features) != 1 {
+		t.Fatalf("FetchRefreshSnapshot() features = %+v, sawFeatures=%v; want re-snapshotted features", snapshot.Features, sawFeatures)
+	}
+	if !sawPermissions || snapshot.Permissions == nil {
+		t.Fatalf("FetchRefreshSnapshot() permissions = %+v, sawPermissions=%v; want re-snapshotted permissions", snapshot.Permissions, sawPermissions)
+	}
+	if !sawSessions || snapshot.Sessions == nil || len(snapshot.Sessions.Sessions) != 1 {
+		t.Fatalf("FetchRefreshSnapshot() sessions = %+v, sawSessions=%v; want re-snapshotted sessions", snapshot.Sessions, sawSessions)
+	}
+}
+
 func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.T) {
 	var sawSessionDetail bool
 	var sawLivePreview bool

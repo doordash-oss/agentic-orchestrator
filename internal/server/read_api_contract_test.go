@@ -958,6 +958,33 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	}
 }
 
+func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id:        "sess-waiting-help",
+			featureID: f.ID,
+			phase:     feature.PhaseDesign,
+			status:    ports.SessionWaitingHelp,
+			startedAt: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	if got, want := questionsFromJSON(t, prompts["help_queue"]), []string{"Agent has a question"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("prompt help_queue = %v; want %v for WaitingHelp session without control request", got, want)
+	}
+	if got := requestIDsFromJSON(t, prompts["ask_user_questions"]); len(got) != 0 {
+		t.Fatalf("prompt ask_user_questions = %v; want empty without control request", got)
+	}
+}
+
 func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

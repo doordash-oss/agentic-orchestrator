@@ -767,9 +767,38 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 			})
 		}
 	}
+	if h.sessions != nil {
+		for _, sess := range h.sessions.ActiveSessions() {
+			if sess == nil || sess.Status() != ports.SessionWaitingHelp || sessionHasPendingAskUserControl(sess) {
+				continue
+			}
+			help = append(help, orderedHelpQueue{
+				dto: HelpQueueDTO{
+					FeatureID: sess.FeatureID(),
+					Question:  "Agent has a question",
+					Pending:   true,
+					Time:      sess.StartedAt(),
+				},
+				featureID: sess.FeatureID(),
+				index:     len(help),
+			})
+		}
+	}
 	sortOrderedHelpQueue(help)
 	sortOrderedNeedInputGates(gates)
 	return helpQueueDTOs(help), needInputGateDTOs(gates)
+}
+
+func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
+	if sess == nil {
+		return false
+	}
+	for _, req := range sess.PendingControlRequests() {
+		if req != nil && req.Request.ToolName == "AskUserQuestion" {
+			return true
+		}
+	}
+	return false
 }
 
 type orderedControlRequest struct {

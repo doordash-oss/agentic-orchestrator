@@ -176,6 +176,50 @@ func TestAPIAppModelDashboardKeepsManualPublishCodeReady(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelRefreshErrorStillAppliesPartialSnapshot(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "feat-1",
+		Name:         "Translate README",
+		Slug:         "translate-readme",
+		Status:       "Designing",
+		CurrentPhase: "design",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    time.Now(),
+	}
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		detail:   server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{FeatureSummary: summary}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	if got := app.Snapshot().Features[0].AttentionCount; got != 0 {
+		t.Fatalf("initial AttentionCount = %d, want 0", got)
+	}
+
+	// A refresh that fetched the prompt snapshot but then errored on a later
+	// call (e.g. live-preview blocked by a resume handshake until the client
+	// timed out) must still surface the pending question, not discard it.
+	model, _ := app.Update(apiRefreshSnapshotMsg{
+		snapshot: server.RefreshSnapshot{Prompts: &server.PromptSnapshotResponse{
+			AskUserQuestions: []server.ControlRequestDTO{
+				{RequestID: "req-1", FeatureID: "feat-1", ToolName: "AskUserQuestion", Status: "pending"},
+			},
+		}},
+		err: errors.New(`send request: Get ".../features/feat-1/live-preview": context deadline exceeded`),
+	})
+	updated := model.(APIAppModel)
+	if !strings.Contains(updated.statusMessage, "Refresh failed") {
+		t.Fatalf("statusMessage = %q, want it to surface the refresh error", updated.statusMessage)
+	}
+	if got := updated.Snapshot().Features[0].AttentionCount; got != 1 {
+		t.Fatalf("AttentionCount after partial refresh = %d, want 1 (prompt snapshot applied despite error)", got)
+	}
+}
+
 func TestAPIAppModelDashboardRestoresMainBranchSpinnerVisuals(t *testing.T) {
 	t.Parallel()
 

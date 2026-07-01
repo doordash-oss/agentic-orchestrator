@@ -203,6 +203,18 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	if resource.Type == "" {
 		resource = evt.Resource
 	}
+	// `connected` (and any forced-resync heartbeat) is a pure resync signal: it
+	// carries no resource of its own, so the client must re-pull read-model
+	// state because it may have missed events while disconnected. (Re)connect
+	// is the only refresh trigger for a session sitting idle in WaitingHelp —
+	// it emits no further events — so without a full re-snapshot here the
+	// pending question never reaches the prompt snapshot that drives the
+	// dashboard help badge and the attach question panel. Note: ordinary events
+	// also set snapshot_required, but they carry a specific kind/resource that
+	// the switch below uses to fetch only what changed.
+	if evt.Kind == "connected" || (evt.Kind == "heartbeat" && signal.SnapshotRequired) {
+		return c.fetchFullSnapshot(ctx)
+	}
 	switch {
 	case evt.Kind == "config.updated":
 		if resource.FeatureID != "" {
@@ -225,34 +237,11 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		featureID := resource.FeatureID
 		refreshFeatureDetail := false
 		if resource.ID != "" {
-			session, err := c.SessionDetail(ctx, resource.ID)
+			terminal, err := c.hydrateSessionRefreshSnapshot(ctx, &snapshot, resource.ID, &featureID)
 			if err != nil {
 				return snapshot, err
 			}
-			snapshot.Session = &session
-			if featureID == "" {
-				featureID = session.Session.FeatureID
-			}
-			refreshFeatureDetail = isTerminalSessionStatus(session.Session.Status)
-			if featureID != "" && !isUtilityFeatureID(featureID) {
-				prompts, err := c.Prompts(ctx)
-				if err != nil {
-					return snapshot, err
-				}
-				snapshot.Prompts = &prompts
-			}
-			end := session.Session.TranscriptCursor.End
-			if end == 0 {
-				end = session.Session.TranscriptCursor.Total
-			}
-			if end > 0 {
-				start := max(0, end-refreshTranscriptLimit)
-				transcript, err := c.Transcript(ctx, resource.ID, CursorQuery{Cursor: start, Limit: refreshTranscriptLimit})
-				if err != nil {
-					return snapshot, err
-				}
-				snapshot.Transcript = &transcript
-			}
+			refreshFeatureDetail = terminal
 		} else {
 			sessions, err := c.Sessions(ctx)
 			if err != nil {
@@ -261,11 +250,23 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 			snapshot.Sessions = &sessions
 		}
 		if featureID != "" && !isUtilityFeatureID(featureID) {
+			prompts, err := c.Prompts(ctx)
+			if err != nil {
+				return snapshot, err
+			}
+			snapshot.Prompts = &prompts
 			preview, err := c.LivePreview(ctx, featureID)
 			if err != nil {
 				return snapshot, err
 			}
 			snapshot.LivePreview = &preview
+			if resource.ID == "" && preview.Session != nil && preview.Session.ID != "" {
+				terminal, err := c.hydrateSessionRefreshSnapshot(ctx, &snapshot, preview.Session.ID, &featureID)
+				if err != nil {
+					return snapshot, err
+				}
+				refreshFeatureDetail = terminal
+			}
 			if refreshFeatureDetail {
 				feature, err := c.FeatureDetail(ctx, featureID)
 				if err != nil {
@@ -292,13 +293,72 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		}
 		recovery, err := c.Recovery(ctx)
 		return RefreshSnapshot{Health: &health, Recovery: &recovery}, err
-	case resource.Type == "runtime" || evt.Kind == "connected" || evt.Kind == "shutdown.updated":
+	case resource.Type == "runtime" || evt.Kind == "shutdown.updated":
 		health, err := c.Health(ctx)
 		return RefreshSnapshot{Health: &health}, err
 	default:
 		features, err := c.Features(ctx)
 		return RefreshSnapshot{Features: &features}, err
 	}
+}
+
+// fetchFullSnapshot re-pulls the read-model state the dashboard depends on
+// for its feature list and attention badges. Used when snapshot_required is
+// set, e.g. on (re)connect, so a TUI catches state that changed while it was
+// not subscribed — most notably a session resumed into WaitingHelp whose
+// pending question is otherwise never announced via an event.
+func (c *Client) fetchFullSnapshot(ctx context.Context) (RefreshSnapshot, error) {
+	health, err := c.Health(ctx)
+	if err != nil {
+		return RefreshSnapshot{}, err
+	}
+	features, err := c.Features(ctx)
+	if err != nil {
+		return RefreshSnapshot{Health: &health}, err
+	}
+	prompts, err := c.Prompts(ctx)
+	if err != nil {
+		return RefreshSnapshot{Health: &health, Features: &features}, err
+	}
+	permissions, err := c.Permissions(ctx)
+	if err != nil {
+		return RefreshSnapshot{Health: &health, Features: &features, Prompts: &prompts}, err
+	}
+	sessions, err := c.Sessions(ctx)
+	if err != nil {
+		return RefreshSnapshot{Health: &health, Features: &features, Prompts: &prompts, Permissions: &permissions}, err
+	}
+	return RefreshSnapshot{
+		Health:      &health,
+		Features:    &features,
+		Prompts:     &prompts,
+		Permissions: &permissions,
+		Sessions:    &sessions,
+	}, nil
+}
+
+func (c *Client) hydrateSessionRefreshSnapshot(ctx context.Context, snapshot *RefreshSnapshot, sessionID string, featureID *string) (bool, error) {
+	session, err := c.SessionDetail(ctx, sessionID)
+	if err != nil {
+		return false, err
+	}
+	snapshot.Session = &session
+	if featureID != nil && *featureID == "" {
+		*featureID = session.Session.FeatureID
+	}
+	end := session.Session.TranscriptCursor.End
+	if end == 0 {
+		end = session.Session.TranscriptCursor.Total
+	}
+	if end > 0 {
+		start := max(0, end-refreshTranscriptLimit)
+		transcript, err := c.Transcript(ctx, sessionID, CursorQuery{Cursor: start, Limit: refreshTranscriptLimit})
+		if err != nil {
+			return false, err
+		}
+		snapshot.Transcript = &transcript
+	}
+	return isTerminalSessionStatus(session.Session.Status), nil
 }
 
 func isTerminalSessionStatus(status string) bool {

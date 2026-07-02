@@ -431,7 +431,7 @@ type AppModel struct {
 	tweakReviewModalFeatureID string
 	tweakReviewModalRepoName  string
 
-	// Edit config overlay state (feature-config editing on quiescent features).
+	// Edit config overlay state (feature-level model, behavior, and gate edits).
 	editConfigActive bool
 	editConfig       EditConfigModel
 
@@ -3608,15 +3608,10 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 		}
 
 	case key.Matches(msg, keys.EditConfig):
-		if f != nil && isFeatureQuiescent(f) {
+		if canEditFeatureConfig(f) {
 			cat := BuildPhaseModelCatalog(m.registry, m.featureManager.Config.Defaults)
 			m.editConfig = NewEditConfigModel(f, cat, f.IsPublishable())
 			m.editConfigActive = true
-			return m, nil
-		}
-		if f != nil {
-			m.statusMessage = "Config can only be edited when the feature is idle"
-			m.statusTime = time.Now()
 			return m, nil
 		}
 
@@ -3921,15 +3916,10 @@ func (m AppModel) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.EditConfig):
 		f := m.detail.feature
-		if f != nil && isFeatureQuiescent(f) {
+		if canEditFeatureConfig(f) {
 			cat := BuildPhaseModelCatalog(m.registry, m.featureManager.Config.Defaults)
 			m.editConfig = NewEditConfigModel(f, cat, f.IsPublishable())
 			m.editConfigActive = true
-			return m, nil
-		}
-		if f != nil {
-			m.statusMessage = "Config can only be edited when the feature is idle"
-			m.statusTime = time.Now()
 			return m, nil
 		}
 		return m, nil
@@ -7449,14 +7439,20 @@ func hasInterruptibleRepoCycles(f *feature.Feature) bool {
 	return false
 }
 
-// isFeatureQuiescent reports whether the `e` key should offer the edit-
-// config overlay for this feature. Mirrors the quiescence predicate used
-// inside Orchestrator.UpdateFeatureConfig's Store.Modify closure.
-func isFeatureQuiescent(f *feature.Feature) bool {
+// canEditFeatureConfig reports whether the `e` key should offer the
+// feature-level config overlay.
+func canEditFeatureConfig(f *feature.Feature) bool {
+	return f != nil
+}
+
+// featureConfigChangesDeferred reports whether a saved config change is
+// persisted immediately but cannot affect currently active work until the
+// next phase boundary or restart.
+func featureConfigChangesDeferred(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
-	return !f.Status.IsRunning() && !f.HasActiveRepoCycles() && !f.Status.IsNeedsReview()
+	return f.Status.IsRunning() || f.HasActiveRepoCycles()
 }
 
 // editConfigResultMsg signals completion of a UpdateFeatureConfig call from

@@ -312,7 +312,7 @@ func (m DetailModel) View() string {
 		if (f.Status == feature.StatusPublished || f.Status == feature.StatusDone) && len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
 			actionParts = append(actionParts, "[c] Clean worktree")
 		}
-		if isFeatureQuiescent(f) {
+		if canEditFeatureConfig(f) {
 			actionParts = append(actionParts, "[e] Edit config")
 		}
 		actionParts = append(actionParts, "[Shift+N] Input alerts", "[d] Delete", "[esc] Back")

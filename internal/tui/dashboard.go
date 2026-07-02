@@ -578,7 +578,7 @@ func (m DashboardModel) renderFooter() string {
 				len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
 				hints = append(hints, "[c] Clean worktree")
 			}
-			if isFeatureQuiescent(f) {
+			if canEditFeatureConfig(f) {
 				hints = append(hints, "[e] Edit config")
 			}
 			hints = append(hints, "[Shift+N] Input alerts")

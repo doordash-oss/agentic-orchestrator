@@ -641,6 +641,131 @@ func TestOrchestrator_StartPhase_PhaseRunnerDispatch_Async(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_StartPlanIncludesResearchDocumentInRoadmapPrompt(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase,
+		command []string, workdir string, env []string,
+		opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return nil, session.ErrShuttingDown
+	}
+
+	featureID := "feat-plan-research"
+	designDir := filepath.Join(cpr.stateDir, featureID, "design")
+	researchDir := filepath.Join(cpr.stateDir, featureID, "research")
+	if err := os.MkdirAll(designDir, 0o755); err != nil {
+		t.Fatalf("mkdir design dir: %v", err)
+	}
+	if err := os.MkdirAll(researchDir, 0o755); err != nil {
+		t.Fatalf("mkdir research dir: %v", err)
+	}
+	designPath := filepath.Join(designDir, "design.md")
+	researchPath := filepath.Join(researchDir, "research.md")
+	if err := os.WriteFile(designPath, []byte("# Design\n"), 0o644); err != nil {
+		t.Fatalf("write design: %v", err)
+	}
+	if err := os.WriteFile(researchPath, []byte("# Research\n"), 0o644); err != nil {
+		t.Fatalf("write research: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:           featureID,
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhasePlan,
+		Pipeline:     feature.PipelineLarge,
+		Artifacts:    map[string]string{"design": designPath, "research": researchPath},
+		Repos:        []feature.FeatureRepo{{Name: "repo1", Path: cpr.stateDir}},
+	}
+
+	lc := withStatusTransitions(lifecycleForFeature(f), f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	if err := o.StartFeature(featureID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+
+	captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second)
+	if len(captured) == 0 {
+		t.Fatalf("no BuildSession captured for PhasePlan; captures: %v", cpr.capturedOpts)
+	}
+	prompt := captured[0].Prompt
+	if !strings.Contains(prompt, "Design Document: "+designPath) {
+		t.Fatalf("roadmap prompt missing design document path:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Research Document: "+researchPath) {
+		t.Fatalf("roadmap prompt missing research document path:\n%s", prompt)
+	}
+}
+
+func TestOrchestrator_StartRoadmapPhasePlanIncludesResearchDocument(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+	cpr.sm.StartSessionFn = func(id, featureID string, phase feature.Phase,
+		command []string, workdir string, env []string,
+		opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return nil, session.ErrShuttingDown
+	}
+
+	featureID := "feat-phase-plan-research"
+	roadmapDir := filepath.Join(cpr.stateDir, featureID, "roadmap")
+	researchDir := filepath.Join(cpr.stateDir, featureID, "research")
+	if err := os.MkdirAll(roadmapDir, 0o755); err != nil {
+		t.Fatalf("mkdir roadmap dir: %v", err)
+	}
+	if err := os.MkdirAll(researchDir, 0o755); err != nil {
+		t.Fatalf("mkdir research dir: %v", err)
+	}
+	roadmapPath := filepath.Join(roadmapDir, "roadmap.md")
+	researchPath := filepath.Join(researchDir, "research.md")
+	writeRoadmap(t, roadmapPath)
+	if err := os.WriteFile(researchPath, []byte("# Research\n"), 0o644); err != nil {
+		t.Fatalf("write research: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:                  featureID,
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		CurrentRoadmapPhase: 2,
+		Pipeline:            feature.PipelineMoonshot,
+		Artifacts:           map[string]string{"roadmap": roadmapPath, "research": researchPath},
+		Repos:               []feature.FeatureRepo{{Name: "repo1", Path: cpr.stateDir}},
+	}
+
+	lc := withStatusTransitions(lifecycleForFeature(f), f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{})
+
+	if err := o.StartFeature(featureID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+
+	captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second)
+	if len(captured) == 0 {
+		t.Fatalf("no BuildSession captured for PhasePlan; captures: %v", cpr.capturedOpts)
+	}
+	prompt := captured[0].Prompt
+	if !strings.Contains(prompt, "Roadmap: "+roadmapPath) {
+		t.Fatalf("phase-plan prompt missing roadmap path:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Research Document: "+researchPath) {
+		t.Fatalf("phase-plan prompt missing research document path:\n%s", prompt)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Item 6: Implement dispatch — verify StartImplementation lifecycle and that
 // PhaseRunner was engaged (via captured BuildSession). RunMultiRepoOrchestrator

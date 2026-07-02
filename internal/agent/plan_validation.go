@@ -435,7 +435,10 @@ type PlanLoopConfig struct {
 	FeatureStore ports.FeatureStore
 	StateDir     string // feature state directory
 
-	ResearchArtifactPath string // path to research output (also used as the design path at roadmap-creation time; historical name)
+	ResearchArtifactPath string // historical primary planning artifact path also used by validators
+	// PlanningResearchArtifactPath is the standalone research report path
+	// injected only into initial roadmap and phase-plan prompts.
+	PlanningResearchArtifactPath string
 	// DesignArtifactPath is the absolute path to the design design
 	// document, if one was produced. Retained for caller compatibility;
 	// downstream planning prompts no longer re-inject it.
@@ -508,6 +511,16 @@ type PlanLoopConfig struct {
 	// before a protocol violation is recorded. Resolved per-model from the
 	// provider capability, so only capability-positive providers opt in.
 	FinishOrViolateNudge bool
+}
+
+func (cfg PlanLoopConfig) initialPlanningResearchArtifactPath() string {
+	if cfg.PlanningResearchArtifactPath != "" {
+		return cfg.PlanningResearchArtifactPath
+	}
+	if cfg.DesignArtifactPath == "" {
+		return cfg.ResearchArtifactPath
+	}
+	return ""
 }
 
 // PlanLoopResult represents the outcome of the planning loop.
@@ -1456,7 +1469,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 			var prompt string
 			var plannerSpec RoleSpec
 			if attempt == 1 {
-				prompt = BuildRoadmapPrompt(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.ResearchArtifactPath, cfg.QAFilePaths, cfg.KBInfos...)
+				prompt = BuildRoadmapPromptWithResearch(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.DesignArtifactPath, cfg.initialPlanningResearchArtifactPath(), cfg.QAFilePaths, cfg.KBInfos...)
 				plannerSpec = RoadmapCreatorRoleSpec()
 			} else {
 				prevRoadmapPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
@@ -1849,7 +1862,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 			var prompt string
 			var plannerSpec RoleSpec
 			if attempt == 1 {
-				prompt = BuildPhasePlanPrompt(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.RoadmapPath, cfg.Phase, cfg.QAFilePaths, cfg.KBInfos...)
+				prompt = BuildPhasePlanPromptWithResearch(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.RoadmapPath, cfg.initialPlanningResearchArtifactPath(), cfg.Phase, cfg.QAFilePaths, cfg.KBInfos...)
 				plannerSpec = PhasePlanCreatorRoleSpec()
 			} else {
 				prevPlanPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)

@@ -46,12 +46,23 @@ const (
 // DesignArtifactKey is the artifact-map key for the Design phase output.
 const DesignArtifactKey = "design"
 
+// ResearchArtifactKey is the artifact-map key for the Research phase output.
+const ResearchArtifactKey = "research"
+
 // DesignArtifactPath returns the recorded path of the Design artifact for a feature.
 func (f *Feature) DesignArtifactPath() string {
 	if f == nil || f.Artifacts == nil {
 		return ""
 	}
 	return f.Artifacts[DesignArtifactKey]
+}
+
+// ResearchArtifactPath returns the recorded path of the Research artifact for a feature.
+func (f *Feature) ResearchArtifactPath() string {
+	if f == nil || f.Artifacts == nil {
+		return ""
+	}
+	return f.Artifacts[ResearchArtifactKey]
 }
 
 // LogicalOrder returns the execution/display sequence order for the phase.

@@ -55,8 +55,9 @@ type PhasePlanView struct {
 
 // PhasePlanUserInput is the data passed to phase_plan.user.tmpl.
 type PhasePlanUserInput struct {
-	Phase       PhasePlanView
-	RoadmapPath string
+	Phase                PhasePlanView
+	RoadmapPath          string
+	ResearchArtifactPath string
 
 	QAFiles prompts.QAFilesInput
 

@@ -20,6 +20,8 @@ You are taking one approved roadmap phase — a single vertical slice — and tu
 
 Read the approved roadmap end-to-end. Focus on **Phase N** (the phase number named in the prompt).
 
+If the prompt includes a Research Document, use it opportunistically after the roadmap: skim for sections relevant to Phase N, read those end-to-end before relying on them, and read the whole document if its structure is unclear, Phase N depends broadly on it, or a skim surfaces a conflict. The approved roadmap remains the source of phase scope and desired behavior — don't expand the phase just because research mentions adjacent possibilities.
+
 ### 2. Explore the Codebase Tactically (optional)
 
 Use sub-agents (`codebase-locator`, `codebase-analyzer`, `codebase-pattern-finder`) for **targeted** lookups only. You are not re-discovering the architecture. You are confirming:

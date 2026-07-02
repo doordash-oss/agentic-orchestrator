@@ -54,6 +54,38 @@ func TestBuildRoadmapPrompt(t *testing.T) {
 	// Roadmap decomposition methodology is in SKILL.md, not in the prompt.
 }
 
+func TestBuildRoadmapPromptIncludesResearchDocument(t *testing.T) {
+	f := &feature.Feature{
+		Name:        "Test Feature",
+		Description: "A test feature",
+	}
+
+	prompt := BuildRoadmapPromptWithResearch(f, "", "", "/path/to/design.md", "/path/to/research.md", nil)
+
+	if !strings.Contains(prompt, "Design Document: /path/to/design.md") {
+		t.Fatalf("prompt missing design document path:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Research Document: /path/to/research.md") {
+		t.Fatalf("prompt missing research document path:\n%s", prompt)
+	}
+}
+
+func TestBuildRoadmapPromptUsesResearchAsPrimaryWhenDesignMissing(t *testing.T) {
+	f := &feature.Feature{
+		Name:        "Test Feature",
+		Description: "A test feature",
+	}
+
+	prompt := BuildRoadmapPromptWithResearch(f, "", "", "", "/path/to/research.md", nil)
+
+	if strings.Contains(prompt, "Design Document") {
+		t.Fatalf("prompt should not label a research-only artifact as design:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Research Document: /path/to/research.md") {
+		t.Fatalf("prompt missing research document path:\n%s", prompt)
+	}
+}
+
 func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T) {
 	f := &feature.Feature{
 		Name:        "Dark Mode",
@@ -84,7 +116,7 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 func TestBuildPhasePlanPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T) {
 	f := &feature.Feature{Name: "Dark Mode", Description: "Add dark theme support"}
 	phase := RoadmapPhase{Number: 2, Name: "Preference persistence", Goal: "Persist selected theme"}
-	prompt := BuildPhasePlanPrompt(f, "/skills", "/guidelines", "/roadmap.md", phase, []string{"/answers.md"}, KBInfo{
+	prompt := BuildPhasePlanPromptWithResearch(f, "/skills", "/guidelines", "/roadmap.md", "/research.md", phase, []string{"/answers.md"}, KBInfo{
 		Name:      "agentic",
 		IndexPath: "/kb/agentic/index.md",
 		RootDir:   "/kb/agentic",
@@ -101,7 +133,7 @@ func TestBuildPhasePlanPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing
 			t.Fatalf("BuildPhasePlanPrompt() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
 		}
 	}
-	for _, want := range []string{"/roadmap.md", "/answers.md", "Persist selected theme"} {
+	for _, want := range []string{"/roadmap.md", "/research.md", "/answers.md", "Persist selected theme"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("BuildPhasePlanPrompt() missing per-call content %q:\n%s", want, prompt)
 		}

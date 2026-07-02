@@ -51,7 +51,8 @@ type RoadmapUserInput struct {
 	Description string
 	Repos       []prompts.RepoView
 
-	DesignArtifactPath string
+	DesignArtifactPath   string
+	ResearchArtifactPath string
 
 	VisualReferences prompts.VisualReferencesInput
 	QAFiles          prompts.QAFilesInput

@@ -18,6 +18,10 @@
 
 Roadmap: {{ .RoadmapPath }} (focus on Phase {{ .Phase.Number }})
 
+{{ end }}{{ if .ResearchArtifactPath }}## Research Context
+
+Research Document: {{ .ResearchArtifactPath }}
+
 {{ end }}{{ if .Phase.Goal }}## Phase Goal (from roadmap)
 
 {{ .Phase.Goal }}

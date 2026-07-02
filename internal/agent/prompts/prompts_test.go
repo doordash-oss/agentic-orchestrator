@@ -145,7 +145,8 @@ type RoadmapUserInput struct {
 	Description string
 	Repos       []RepoView
 
-	DesignArtifactPath string
+	DesignArtifactPath   string
+	ResearchArtifactPath string
 
 	VisualReferences VisualReferencesInput
 	QAFiles          QAFilesInput
@@ -176,8 +177,9 @@ type PhasePlanView struct {
 }
 
 type PhasePlanUserInput struct {
-	Phase       PhasePlanView
-	RoadmapPath string
+	Phase                PhasePlanView
+	RoadmapPath          string
+	ResearchArtifactPath string
 
 	QAFiles QAFilesInput
 

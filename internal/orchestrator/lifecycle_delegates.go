@@ -574,29 +574,22 @@ type UpdateFeatureConfigInput struct {
 	Checkpoints feature.Checkpoints
 }
 
-// ErrFeatureNotQuiescent is returned by UpdateFeatureConfig when the
-// feature's status does not satisfy the idle-state predicate at write
-// time. The check runs inside the Store.Modify closure so it shares the
-// store mutex with the write and closes any TOCTOU window.
+// ErrFeatureNotQuiescent is kept for compatibility with older callers that
+// matched the former idle-only edit rejection. UpdateFeatureConfig no longer
+// returns it: feature-level config edits are persisted for any feature state,
+// and active sessions pick them up on the next phase or restart.
 var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 
-// UpdateFeatureConfig atomically validates quiescence and writes the
-// three editable config axes. Same idiom as ApplyRefactorPipeline —
-// Store.Modify handles locking + atomic write. On success, emits
-// ports.Event{Type: FeatureConfigChanged} (non-blocking) and fires
-// hooks.OnFeatureConfigChanged(before, after) so the observer writes a
-// feature.config_changed audit entry.
-//
-// Quiescence predicate: !f.Status.IsRunning() && !f.HasActiveRepoCycles()
-// && !f.Status.IsNeedsReview(). Mirrors the predicate used by the TUI
-// key handler; re-checking inside the closure under Store.mu closes any
-// TOCTOU window.
+// UpdateFeatureConfig atomically writes the three editable config axes. Same
+// idiom as ApplyRefactorPipeline — Store.Modify handles locking + atomic
+// write. On success, emits ports.Event{Type: FeatureConfigChanged}
+// (non-blocking) and fires hooks.OnFeatureConfigChanged(before, after) so the
+// observer writes a feature.config_changed audit entry.
 //
 // Re-entrancy: A second call with identical inputs against an already-
-// updated (and still quiescent) feature re-writes the same three fields
-// to the same values, emits a second audit + event, and returns nil.
-// This is acceptable — the audit trail explicitly records "no semantic
-// change" via before == after.
+// updated feature re-writes the same three fields to the same values, emits a
+// second audit + event, and returns nil. This is acceptable — the audit trail
+// explicitly records "no semantic change" via before == after.
 // Crash recovery: Store.Modify performs an atomic unique-temp + rename,
 // so a crash before rename leaves feature.yaml untouched; a crash after
 // rename leaves the new values on disk and the hook+event are simply not
@@ -604,9 +597,6 @@ var ErrFeatureNotQuiescent = errors.New("feature is not in a quiescent state")
 func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeatureConfigInput) error {
 	var before, after feature.ConfigSnapshot
 	err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-		if f.Status.IsRunning() || f.HasActiveRepoCycles() || f.Status.IsNeedsReview() {
-			return fmt.Errorf("update feature %s config: %w", featureID, ErrFeatureNotQuiescent)
-		}
 		before = feature.ConfigSnapshot{Models: f.Models, Inquireness: f.Inquireness, Checkpoints: f.Checkpoints}
 		f.Models = input.Models
 		f.Inquireness = input.Inquireness

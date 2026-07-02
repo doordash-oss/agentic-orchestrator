@@ -60,16 +60,17 @@ const (
 // save error for the banner, and the one-shot discard-confirm prompt
 // state.
 type EditConfigModel struct {
-	featureID   string
-	featureName string
-	repos       []string
-	pipeline    feature.PipelineProfile
-	publishable bool
-	editor      ConfigEditorModel
-	activeTab   configTab
-	focus       configFocusZone
-	saving      bool
-	saveErr     string
+	featureID             string
+	featureName           string
+	repos                 []string
+	pipeline              feature.PipelineProfile
+	publishable           bool
+	deferredEffectWarning bool
+	editor                ConfigEditorModel
+	activeTab             configTab
+	focus                 configFocusZone
+	saving                bool
+	saveErr               string
 	// discardConfirm is true after esc-with-changes and before y/n resolution.
 	discardConfirm bool
 }
@@ -87,14 +88,15 @@ func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPu
 		repos = append(repos, repo.Name)
 	}
 	return EditConfigModel{
-		featureID:   f.ID,
-		featureName: f.Name,
-		repos:       repos,
-		pipeline:    f.Pipeline,
-		publishable: provisionalPublishable,
-		editor:      NewConfigEditorModel(f, cat, provisionalPublishable),
-		activeTab:   tabModels,
-		focus:       configFocusTabs,
+		featureID:             f.ID,
+		featureName:           f.Name,
+		repos:                 repos,
+		pipeline:              f.Pipeline,
+		publishable:           provisionalPublishable,
+		deferredEffectWarning: featureConfigChangesDeferred(f),
+		editor:                NewConfigEditorModel(f, cat, provisionalPublishable),
+		activeTab:             tabModels,
+		focus:                 configFocusTabs,
 	}
 }
 
@@ -197,7 +199,14 @@ func (m EditConfigModel) View() string {
 	b.WriteString(titleStyle.Render(fmt.Sprintf(" Edit Config · %s ", m.featureName)))
 	b.WriteString("\n")
 	b.WriteString(diffStyle.Render(m.diffSummary()))
-	b.WriteString("\n\n")
+	b.WriteString("\n")
+	if m.deferredEffectWarning {
+		warningStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
+		b.WriteString("\n")
+		b.WriteString(warningStyle.Render("Running feature: new config will be picked up on the next restart or next phase."))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 
 	b.WriteString(m.renderTabStrip())
 	b.WriteString("\n\n")

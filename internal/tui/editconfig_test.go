@@ -19,12 +19,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 // ptrFalse returns a pointer to false for seeding FeatureRepo.Publishable.
@@ -105,7 +103,7 @@ func TestAppModel_EditConfigResultMsg_OnErrorKeepsOverlayOpen(t *testing.T) {
 	app.editConfigActive = true
 	app.editConfig = EditConfigModel{featureID: "f1", saving: true}
 
-	errIn := errors.New("update feature f1 config: " + orchestrator.ErrFeatureNotQuiescent.Error())
+	errIn := errors.New("write feature config: disk full")
 	updated, _ := app.Update(editConfigResultMsg{featureID: "f1", err: errIn})
 	got := updated.(AppModel)
 	if !got.editConfigActive {
@@ -119,19 +117,19 @@ func TestAppModel_EditConfigResultMsg_OnErrorKeepsOverlayOpen(t *testing.T) {
 	}
 }
 
-// TestIsFeatureQuiescent covers the predicate that gates the `e` key.
-func TestIsFeatureQuiescent(t *testing.T) {
+// TestCanEditFeatureConfig covers the predicate that gates the `e` key.
+func TestCanEditFeatureConfig(t *testing.T) {
 	tests := []struct {
 		name string
 		f    *feature.Feature
 		want bool
 	}{
 		{"nil", nil, false},
-		{"failed (quiescent)", &feature.Feature{Status: feature.StatusFailed}, true},
-		{"created (quiescent)", &feature.Feature{Status: feature.StatusCreated}, true},
-		{"code-ready (quiescent)", &feature.Feature{Status: feature.StatusCodeReady}, true},
-		{"implementing (running)", &feature.Feature{Status: feature.StatusImplementing}, false},
-		{"plan-needs-review", &feature.Feature{Status: feature.StatusPlanNeedsReview}, false},
+		{"failed", &feature.Feature{Status: feature.StatusFailed}, true},
+		{"created", &feature.Feature{Status: feature.StatusCreated}, true},
+		{"code-ready", &feature.Feature{Status: feature.StatusCodeReady}, true},
+		{"implementing (running)", &feature.Feature{Status: feature.StatusImplementing}, true},
+		{"plan-needs-review", &feature.Feature{Status: feature.StatusPlanNeedsReview}, true},
 		{
 			"active repo cycle",
 			&feature.Feature{
@@ -140,15 +138,56 @@ func TestIsFeatureQuiescent(t *testing.T) {
 					"a": {Status: "running"},
 				},
 			},
-			false,
+			true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isFeatureQuiescent(tt.f); got != tt.want {
-				t.Errorf("isFeatureQuiescent = %v, want %v", got, tt.want)
+			if got := canEditFeatureConfig(tt.f); got != tt.want {
+				t.Errorf("canEditFeatureConfig = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFeatureConfigChangesDeferred(t *testing.T) {
+	tests := []struct {
+		name string
+		f    *feature.Feature
+		want bool
+	}{
+		{"nil", nil, false},
+		{"created", &feature.Feature{Status: feature.StatusCreated}, false},
+		{"plan-needs-review", &feature.Feature{Status: feature.StatusPlanNeedsReview}, false},
+		{"implementing", &feature.Feature{Status: feature.StatusImplementing}, true},
+		{
+			"active repo cycle",
+			&feature.Feature{
+				Status: feature.StatusPublished,
+				RepoCycles: map[string]*feature.RepoCycleState{
+					"a": {Status: "running"},
+				},
+			},
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := featureConfigChangesDeferred(tt.f); got != tt.want {
+				t.Errorf("featureConfigChangesDeferred = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEditConfigOverlay_RunningFeatureShowsDeferredEffectWarning(t *testing.T) {
+	f := &feature.Feature{ID: "f1", Name: "running", Status: feature.StatusImplementing}
+	cat := BuildPhaseModelCatalog(nil, config.DefaultsConfig{})
+	m := NewEditConfigModel(f, cat, true)
+
+	view := m.View()
+	if !strings.Contains(view, "next restart or next phase") {
+		t.Fatalf("running feature edit overlay missing deferred-effect warning:\n%s", view)
 	}
 }
 
@@ -862,7 +901,7 @@ func TestEditConfig_CatalogBuiltAtModalOpen(t *testing.T) {
 	updated, _ := app.updateDashboardRightPanel(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	got := updated.(AppModel)
 	if !got.editConfigActive {
-		t.Fatal("right-panel `e` should open the overlay for a quiescent feature")
+		t.Fatal("right-panel `e` should open the overlay for a feature")
 	}
 	if n := len(got.editConfig.editor.catalog.Fields); n != 6 {
 		t.Errorf("catalog.Fields = %d entries, want 6", n)
@@ -879,9 +918,49 @@ func TestEditConfig_CatalogBuiltAtModalOpen(t *testing.T) {
 	updated2, _ := app2.updateDetail(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	got2 := updated2.(AppModel)
 	if !got2.editConfigActive {
-		t.Fatal("detail-view `e` should open the overlay for a quiescent feature")
+		t.Fatal("detail-view `e` should open the overlay for a feature")
 	}
 	if n := len(got2.editConfig.editor.catalog.Fields); n != 6 {
 		t.Errorf("catalog.Fields = %d entries, want 6", n)
+	}
+}
+
+func TestEditConfig_RunningFeatureCanOpenFromDashboardAndDetail(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	f, err := fm.Create("running-dashboard", "desc", nil, config.ModelConfig{}, "", "medium", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	f.Status = feature.StatusImplementing
+	app.currentView = ViewDashboard
+	app.dashboard.SetFeatures([]*feature.Feature{f})
+	app.dashboard.MoveToAdjacentFeature(1)
+	if app.dashboard.SelectedFeature() == nil {
+		app.dashboard.MoveToAdjacentFeature(-1)
+	}
+	if app.dashboard.SelectedFeature() == nil {
+		t.Skip("dashboard selection did not resolve to a feature — layout dependent")
+	}
+	app.dashboard.focusPanel = 1
+
+	updated, _ := app.updateDashboardRightPanel(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	got := updated.(AppModel)
+	if !got.editConfigActive {
+		t.Fatal("right-panel `e` should open the overlay for a running feature")
+	}
+
+	app2, fm2 := newTestAppModel(t)
+	f2, err := fm2.Create("running-detail", "desc", nil, config.ModelConfig{}, "", "medium", nil)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	f2.Status = feature.StatusImplementing
+	app2.currentView = ViewDetail
+	app2.detail = NewDetailModel(f2, fm2.Store.BaseDir)
+
+	updated2, _ := app2.updateDetail(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	got2 := updated2.(AppModel)
+	if !got2.editConfigActive {
+		t.Fatal("detail-view `e` should open the overlay for a running feature")
 	}
 }

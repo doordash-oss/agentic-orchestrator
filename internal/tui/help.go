@@ -102,6 +102,7 @@ func dashboardLeftHelp() ViewHelpContext {
 				Title: "TOOLS",
 				Bindings: []HelpBinding{
 					{"Shift+W", "Manage workspaces"},
+					{"Shift+E", "Edit workspace config"},
 					{ChatKeyHint(), "Ask AI"},
 					{"?", "Help"},
 					{"q", "Quit"},
@@ -154,6 +155,7 @@ func dashboardRightHelp() ViewHelpContext {
 			{
 				Title: "TOOLS",
 				Bindings: []HelpBinding{
+					{"Shift+E", "Edit workspace config"},
 					{ChatKeyHint(), "Ask AI"},
 					{"?", "Help"},
 				},
@@ -180,6 +182,7 @@ func detailHelp() ViewHelpContext {
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
 					{"Shift+N", "Toggle input notifications"},
+					{"Shift+E", "Edit workspace config"},
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},
 					{"ctrl+r", "Rewind"},

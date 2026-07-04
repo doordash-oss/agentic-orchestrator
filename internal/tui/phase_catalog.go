@@ -36,6 +36,27 @@ var phaseCatalogRoleToField = map[llm.PhaseRole]string{
 	llm.PhaseKBBuild:        "KB Build",
 }
 
+// globalModelFields is phaseCatalogFields plus Utilities: the model used for
+// AMA chat and other workspace-wide utility calls. No single feature owns
+// that role, so it is intentionally absent from phaseCatalogFields and only
+// surfaced by BuildWorkspaceModelCatalog.
+var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
+
+// globalCatalogRoleToField is phaseCatalogRoleToField plus the Utilities
+// role. BuildPhaseModelCatalog loops over this expanded map so the catalog
+// always carries eligible-model data for Utilities; a caller's Fields list
+// (phaseCatalogFields vs globalModelFields) is what actually decides whether
+// its UI shows that row.
+var globalCatalogRoleToField = map[llm.PhaseRole]string{
+	llm.PhaseInquiry:        "Clarify",
+	llm.PhaseResearch:       "Research",
+	llm.PhasePlanning:       "Planning",
+	llm.PhaseImplementation: "Implementation",
+	llm.PhaseReview:         "Review",
+	llm.PhaseChat:           "Utilities",
+	llm.PhaseKBBuild:        "KB Build",
+}
+
 type PhaseModelEntry struct {
 	Agent         string
 	ModelID       string
@@ -58,8 +79,9 @@ type PhaseModelCatalog struct {
 	ProviderModelInfos map[string][]llm.ModelInfo
 	// ProviderOrder is the display order of provider names.
 	ProviderOrder []string
-	// PhaseDefaults maps field name ("Clarify", "Research", "Planning",
-	// "Implementation", "Review", "KB Build") → recommended model ID.
+	// PhaseDefaults maps field name → recommended model ID. For
+	// BuildPhaseModelCatalog, includes all 7 roles (including Utilities); for
+	// BuildWorkspaceModelCatalog, the Fields list is what decides visibility.
 	PhaseDefaults map[string]string
 	// PhaseProviderModels maps field name → provider → eligible model IDs
 	// filtered by role category.
@@ -126,8 +148,9 @@ func BuildPhaseModelCatalog(reg *llm.Registry, _ config.DefaultsConfig) PhaseMod
 	cat.PhaseDefaults["Planning"] = catalogDefaults.Planning
 	cat.PhaseDefaults["Implementation"] = catalogDefaults.Implementation
 	cat.PhaseDefaults["Review"] = catalogDefaults.Review
+	cat.PhaseDefaults["Utilities"] = catalogDefaults.Utilities
 	cat.PhaseDefaults["KB Build"] = catalogDefaults.KBBuild
-	for role, field := range phaseCatalogRoleToField {
+	for role, field := range globalCatalogRoleToField {
 		phaseEligible := reg.EligibleModelsForPhase(role)
 		if len(phaseEligible) > 0 {
 			cat.PhaseProviderModels[field] = phaseEligible
@@ -142,6 +165,16 @@ func BuildPhaseModelCatalog(reg *llm.Registry, _ config.DefaultsConfig) PhaseMod
 			}
 		}
 	}
+	return cat
+}
+
+// BuildWorkspaceModelCatalog builds a PhaseModelCatalog scoped to the
+// workspace defaults editor: identical provider/model data to
+// BuildPhaseModelCatalog, but Fields includes "Utilities" since the
+// workspace editor (unlike the per-feature editor) owns that model role.
+func BuildWorkspaceModelCatalog(reg *llm.Registry, defaults config.DefaultsConfig) PhaseModelCatalog {
+	cat := BuildPhaseModelCatalog(reg, defaults)
+	cat.Fields = append([]string(nil), globalModelFields...)
 	return cat
 }
 

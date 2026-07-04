@@ -125,7 +125,7 @@ func NewWorkspaceEditConfigModel(cfg *config.Config, cat PhaseModelCatalog) Edit
 // cfg.Defaults.Models/Inquireness/Checkpoints, plus cfg.Defaults.Pipeline
 // (parsed, falling back to PipelineLarge) so the Gates tab can determine
 // which checkpoints are visible for the profile new features start with.
-// Its zero-value Status and nil Repos mean featureConfigChangesDeferred is
+// Its zero-value Status and nil RepoCycles mean featureConfigChangesDeferred is
 // always false for this feature, so the "running feature" warning never
 // shows in the workspace overlay.
 func workspaceDefaultsFeature(cfg *config.Config) *feature.Feature {

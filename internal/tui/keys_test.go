@@ -559,6 +559,47 @@ func TestRecoveryModelKeyS_TriggersSkip(t *testing.T) {
 	}
 }
 
+func TestKeyEditWorkspaceConfigBinding(t *testing.T) {
+	boundKeys := keys.EditWorkspaceConfig.Keys()
+	found := false
+	for _, k := range boundKeys {
+		if k == "E" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("keys.EditWorkspaceConfig should be bound to 'E', got %v", boundKeys)
+	}
+	if got := keys.EditWorkspaceConfig.Help().Desc; got != "edit workspace config" {
+		t.Errorf("EditWorkspaceConfig help desc = %q, want %q", got, "edit workspace config")
+	}
+}
+
+func TestAllHelpContexts_EditWorkspaceConfig(t *testing.T) {
+	contexts := AllHelpContexts()
+
+	for _, ctxName := range []string{"Dashboard", "Detail Panel", "Detail"} {
+		t.Run(ctxName, func(t *testing.T) {
+			ctx, ok := contexts[ctxName]
+			if !ok {
+				t.Fatalf("AllHelpContexts() missing %q context", ctxName)
+			}
+			found := false
+			for _, section := range ctx.Sections {
+				for _, b := range section.Bindings {
+					if b.Key == "Shift+E" && b.Desc == "Edit workspace config" {
+						found = true
+					}
+				}
+			}
+			if !found {
+				t.Errorf("AllHelpContexts()[%q] should include a 'Shift+E' / 'Edit workspace config' binding", ctxName)
+			}
+		})
+	}
+}
+
 func TestApproveAndRememberBinding(t *testing.T) {
 	boundKeys := keys.ApproveAndRemember.Keys()
 	found := false

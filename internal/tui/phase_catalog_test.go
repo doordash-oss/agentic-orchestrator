@@ -96,6 +96,48 @@ func TestBuildPhaseModelCatalog_SurfacesProviderGroup(t *testing.T) {
 	}
 }
 
+// TestBuildPhaseModelCatalog_FieldsExcludeUtilities proves the feature-scoped
+// catalog builder is unaffected by the new global role mapping: Fields must
+// stay at the original 6 entries (no Utilities row in the per-feature Edit
+// Config overlay), even though the catalog now always computes Utilities
+// eligibility data internally for BuildWorkspaceModelCatalog to reuse.
+func TestBuildPhaseModelCatalog_FieldsExcludeUtilities(t *testing.T) {
+	t.Parallel()
+	cat := BuildPhaseModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+
+	for _, f := range cat.Fields {
+		if f == "Utilities" {
+			t.Fatalf("Fields = %v, feature-scoped catalog must not include Utilities", cat.Fields)
+		}
+	}
+	if _, ok := cat.PhaseDefaults["Utilities"]; !ok {
+		t.Error("PhaseDefaults should still carry a Utilities entry for BuildWorkspaceModelCatalog to reuse")
+	}
+	if _, ok := cat.PhaseProviderModels["Utilities"]; !ok {
+		t.Error("PhaseProviderModels should still carry a Utilities entry for BuildWorkspaceModelCatalog to reuse")
+	}
+}
+
+// TestBuildWorkspaceModelCatalog_IncludesUtilitiesInFields proves the
+// workspace-scoped wrapper exposes the 7th field and reuses the same
+// provider-neutral ranking as the other roles (gateway's larger-context
+// balanced model wins, same as TestBuildPhaseModelCatalog_SurfacesProviderGroup).
+func TestBuildWorkspaceModelCatalog_IncludesUtilitiesInFields(t *testing.T) {
+	t.Parallel()
+	cat := BuildWorkspaceModelCatalog(gatewayWinningRegistry(), config.DefaultsConfig{})
+
+	wantFields := []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
+	if !reflect.DeepEqual(cat.Fields, wantFields) {
+		t.Errorf("Fields = %v, want %v", cat.Fields, wantFields)
+	}
+	if got := cat.PhaseDefaults["Utilities"]; got != "gateway:vendor/sonnet[200K]" {
+		t.Errorf("PhaseDefaults[Utilities] = %q, want gateway:vendor/sonnet[200K]", got)
+	}
+	if got := cat.PhaseProviderModels["Utilities"]["gateway"]; !slices.Contains(got, "vendor/sonnet[200K]") {
+		t.Errorf("PhaseProviderModels[Utilities][gateway] = %v, want it to include vendor/sonnet[200K]", got)
+	}
+}
+
 // TestBuildPhaseModelCatalog_Shape builds a catalog from a real *llm.Registry
 // and verifies the Fields list, PhaseDefaults, and PhaseProviderModels have
 // the expected shape.

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 
@@ -73,6 +74,12 @@ type EditConfigModel struct {
 	saveErr               string
 	// discardConfirm is true after esc-with-changes and before y/n resolution.
 	discardConfirm bool
+	// isWorkspace is true when this overlay edits config.Defaults (built via
+	// NewWorkspaceEditConfigModel) rather than a specific feature's config.
+	// Consulted in exactly one place: AppModel.Update's edit-config save
+	// dispatch, which branches to saveWorkspaceConfigCmd instead of
+	// saveConfigCmd.
+	isWorkspace bool
 }
 
 // NewEditConfigModel constructs the overlay for the given feature. The
@@ -97,6 +104,49 @@ func NewEditConfigModel(f *feature.Feature, cat PhaseModelCatalog, provisionalPu
 		editor:                NewConfigEditorModel(f, cat, provisionalPublishable),
 		activeTab:             tabModels,
 		focus:                 configFocusTabs,
+	}
+}
+
+// NewWorkspaceEditConfigModel constructs the overlay for the workspace-level
+// defaults in cfg.Defaults. It builds a throwaway *feature.Feature carrying
+// those defaults and feeds it through NewEditConfigModel — the same
+// technique WizardModel.virtualConfigFeature uses — so the title, tab strip,
+// and three-panel cascade are identical to the feature-scoped overlay.
+// provisionalPublishable is always true here: the workspace editor has no
+// per-repo publishability to reflect, and true keeps the ManualPublish gate
+// row visible/editable as a default for new features.
+func NewWorkspaceEditConfigModel(cfg *config.Config, cat PhaseModelCatalog) EditConfigModel {
+	model := NewEditConfigModel(workspaceDefaultsFeature(cfg), cat, true)
+	model.isWorkspace = true
+	return model
+}
+
+// workspaceDefaultsFeature builds a throwaway *feature.Feature carrying
+// cfg.Defaults.Models/Inquireness/Checkpoints, plus cfg.Defaults.Pipeline
+// (parsed, falling back to PipelineLarge) so the Gates tab can determine
+// which checkpoints are visible for the profile new features start with.
+// Its zero-value Status and nil RepoCycles mean featureConfigChangesDeferred is
+// always false for this feature, so the "running feature" warning never
+// shows in the workspace overlay.
+func workspaceDefaultsFeature(cfg *config.Config) *feature.Feature {
+	pipeline := feature.PipelineLarge
+	var models config.ModelConfig
+	var inquireness feature.Inquireness
+	var checkpoints feature.Checkpoints
+	if cfg != nil {
+		if parsed, err := feature.ParsePipelineProfile(cfg.Defaults.Pipeline); err == nil {
+			pipeline = parsed
+		}
+		models = cfg.Defaults.Models
+		inquireness = feature.Inquireness(cfg.Defaults.Inquireness)
+		checkpoints = feature.ConfigCheckpointsToFeature(cfg.Defaults.Checkpoints)
+	}
+	return &feature.Feature{
+		Name:        "Workspace Defaults",
+		Models:      models,
+		Inquireness: inquireness,
+		Checkpoints: checkpoints,
+		Pipeline:    pipeline,
 	}
 }
 

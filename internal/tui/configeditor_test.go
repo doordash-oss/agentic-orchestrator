@@ -65,6 +65,20 @@ func newEditor(f *feature.Feature, provisionalPublishable bool) ConfigEditorMode
 	return NewConfigEditorModel(f, testCatalog(), provisionalPublishable)
 }
 
+// testWorkspaceCatalog extends testCatalog() with a Utilities field, mirroring
+// the shape BuildWorkspaceModelCatalog produces, for tests that need the
+// workspace-only model row.
+func testWorkspaceCatalog() PhaseModelCatalog {
+	cat := testCatalog()
+	cat.Fields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
+	cat.PhaseDefaults["Utilities"] = "claude/sonnet-4-6"
+	cat.PhaseProviderModels["Utilities"] = map[string][]string{
+		"claude": {"claude/sonnet-4-6", "claude/opus-4-7"},
+		"codex":  {"codex/gpt-5-codex"},
+	}
+	return cat
+}
+
 func checkpointRowForGate(t *testing.T, e ConfigEditorModel, gate feature.GateIndex) int {
 	t.Helper()
 	fields := e.visibleCheckpointFields()
@@ -95,6 +109,32 @@ func checkpointViewContainsLabel(view, label string) bool {
 		}
 	}
 	return false
+}
+
+func TestConfigEditorModel_UtilitiesFieldGetSet(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{ID: "f1", Name: "workspace", Models: config.ModelConfig{Utilities: "claude/sonnet-4-6"}}
+	editor := NewConfigEditorModel(f, testWorkspaceCatalog(), true)
+
+	if got := editor.modelValueForField("Utilities"); got != "claude/sonnet-4-6" {
+		t.Fatalf("modelValueForField(Utilities) = %q, want claude/sonnet-4-6", got)
+	}
+
+	editor.setModelValueForField("Utilities", "claude/opus-4-7")
+	if got := editor.models.Utilities; got != "claude/opus-4-7" {
+		t.Errorf("after setModelValueForField, models.Utilities = %q, want claude/opus-4-7", got)
+	}
+}
+
+func TestConfigEditorModel_UtilitiesChangeCounted(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{ID: "f1", Name: "workspace", Models: config.ModelConfig{Utilities: "claude/sonnet-4-6"}}
+	editor := NewConfigEditorModel(f, testWorkspaceCatalog(), true)
+	editor.setModelValueForField("Utilities", "claude/opus-4-7")
+
+	if got := editor.ModelsChangeCount(); got != 1 {
+		t.Errorf("ModelsChangeCount() = %d, want 1 after changing Utilities", got)
+	}
 }
 
 func TestConfigEditor_RowCursor_FlatWalk(t *testing.T) {

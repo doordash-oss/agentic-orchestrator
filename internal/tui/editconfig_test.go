@@ -28,6 +28,68 @@ import (
 // ptrFalse returns a pointer to false for seeding FeatureRepo.Publishable.
 func ptrFalse() *bool { f := false; return &f }
 
+func TestWorkspaceDefaultsFeature_SeedsFromConfigDefaults(t *testing.T) {
+	cfg := config.NewDefault()
+	cfg.Defaults.Models.Utilities = "claude/opus-4-7"
+	cfg.Defaults.Inquireness = "medium"
+	cfg.Defaults.Checkpoints.ManualPublish = false
+
+	f := workspaceDefaultsFeature(cfg)
+
+	if f.Name != "Workspace Defaults" {
+		t.Errorf("Name = %q, want %q", f.Name, "Workspace Defaults")
+	}
+	if f.Models.Utilities != "claude/opus-4-7" {
+		t.Errorf("Models.Utilities = %q, want claude/opus-4-7", f.Models.Utilities)
+	}
+	if f.Inquireness != feature.InquirenessMedium {
+		t.Errorf("Inquireness = %q, want medium", f.Inquireness)
+	}
+	if f.Checkpoints.ManualPublish {
+		t.Error("Checkpoints.ManualPublish should be false, matching cfg.Defaults.Checkpoints")
+	}
+	if f.Pipeline != feature.PipelineLarge {
+		t.Errorf("Pipeline = %q, want large (cfg.Defaults.Pipeline)", f.Pipeline)
+	}
+}
+
+func TestWorkspaceDefaultsFeature_FallsBackToPipelineLargeWhenUnset(t *testing.T) {
+	cfg := config.NewDefault()
+	cfg.Defaults.Pipeline = ""
+
+	f := workspaceDefaultsFeature(cfg)
+	if f.Pipeline != feature.PipelineLarge {
+		t.Errorf("Pipeline = %q, want %q", f.Pipeline, feature.PipelineLarge)
+	}
+}
+
+func TestNewWorkspaceEditConfigModel_IsWorkspaceAndTitled(t *testing.T) {
+	cfg := config.NewDefault()
+	model := NewWorkspaceEditConfigModel(cfg, testWorkspaceCatalog())
+
+	if !model.isWorkspace {
+		t.Error("isWorkspace should be true")
+	}
+	if model.deferredEffectWarning {
+		t.Error("deferredEffectWarning should be false for a virtual workspace feature")
+	}
+	view := model.View()
+	if !strings.Contains(view, "Workspace Defaults") {
+		t.Errorf("View() missing title, got:\n%s", view)
+	}
+}
+
+func TestNewWorkspaceEditConfigModel_SnapshotMatchesConfigDefaults(t *testing.T) {
+	cfg := config.NewDefault()
+	cfg.Defaults.Models.Utilities = "claude/opus-4-7"
+	model := NewWorkspaceEditConfigModel(cfg, testWorkspaceCatalog())
+
+	snap := model.editor.Snapshot()
+	if snap.Models.Utilities != "claude/opus-4-7" {
+		t.Errorf("snapshot Models.Utilities = %q, want claude/opus-4-7", snap.Models.Utilities)
+	}
+}
+
 // TestEditConfigOverlay_InquirenessCycle verifies the Inquireness axis
 // cycles through none/medium/high on right/left and wraps at both ends.
 func TestEditConfigOverlay_InquirenessCycle(t *testing.T) {

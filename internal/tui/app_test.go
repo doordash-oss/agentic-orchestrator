@@ -7765,6 +7765,98 @@ func TestHasActiveTextInputWelcomeConfirm(t *testing.T) {
 	}
 }
 
+// --- Workspace Config Editor (Shift+E) tests ---
+
+func TestOpenWorkspaceConfigEditor_FromDashboardLeftPanel(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	app.currentView = ViewDashboard
+	app.dashboard.focusPanel = 0
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	got := updated.(AppModel)
+	if !got.editConfigActive || !got.editConfig.isWorkspace {
+		t.Fatalf("Shift+E from dashboard left panel should open the workspace overlay, got editConfigActive=%v isWorkspace=%v",
+			got.editConfigActive, got.editConfig.isWorkspace)
+	}
+}
+
+func TestOpenWorkspaceConfigEditor_FromDashboardRightPanel(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	app.currentView = ViewDashboard
+	app.dashboard.focusPanel = 1
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	got := updated.(AppModel)
+	if !got.editConfigActive || !got.editConfig.isWorkspace {
+		t.Fatalf("Shift+E from dashboard right panel should open the workspace overlay, got editConfigActive=%v isWorkspace=%v",
+			got.editConfigActive, got.editConfig.isWorkspace)
+	}
+}
+
+func TestOpenWorkspaceConfigEditor_FromDetailView(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	app.currentView = ViewDetail
+	app.detail.feature = &feature.Feature{ID: "f1", Name: "test"}
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	got := updated.(AppModel)
+	if !got.editConfigActive || !got.editConfig.isWorkspace {
+		t.Fatalf("Shift+E from detail view should open the workspace overlay, got editConfigActive=%v isWorkspace=%v",
+			got.editConfigActive, got.editConfig.isWorkspace)
+	}
+}
+
+func TestSaveWorkspaceConfigCmd_PersistsDefaultsAndClosesOverlay(t *testing.T) {
+	cfg := config.NewDefault()
+	app, _ := newTestAppModelWithConfig(t, cfg)
+	app.currentView = ViewDashboard
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	app = updated.(AppModel)
+	if !app.editConfigActive || !app.editConfig.isWorkspace {
+		t.Fatalf("precondition: workspace overlay should be open")
+	}
+
+	// Simulate an edit directly on the embedded editor — UI navigation for
+	// the Models cascade is covered by editconfig_test.go / configeditor_test.go.
+	app.editConfig.editor.models.Utilities = "claude/opus-4-7"
+
+	updated, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	app = updated.(AppModel)
+	if !app.editConfig.saving {
+		t.Fatalf("expected saving=true immediately after pressing enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected a save command")
+	}
+
+	msg := cmd()
+	result, ok := msg.(editConfigResultMsg)
+	if !ok {
+		t.Fatalf("expected editConfigResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("saveWorkspaceConfigCmd returned error: %v", result.err)
+	}
+
+	updated, _ = app.Update(result)
+	app = updated.(AppModel)
+	if app.editConfigActive {
+		t.Error("overlay should close after a successful workspace save")
+	}
+	if cfg.Defaults.Models.Utilities != "claude/opus-4-7" {
+		t.Errorf("cfg.Defaults.Models.Utilities = %q, want claude/opus-4-7", cfg.Defaults.Models.Utilities)
+	}
+
+	reloaded, err := config.Load(app.configPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if reloaded.Defaults.Models.Utilities != "claude/opus-4-7" {
+		t.Errorf("reloaded config Utilities = %q, want claude/opus-4-7", reloaded.Defaults.Models.Utilities)
+	}
+}
+
 // --- Workspace Manager Overlay tests ---
 
 func TestWorkspaceManagerWKeyOpensOverlay(t *testing.T) {

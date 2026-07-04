@@ -25,6 +25,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator/eventbus"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -208,6 +209,7 @@ type Orchestrator struct {
 	deps    Deps
 	hooks   Hooks
 	eventCh chan ports.Event
+	bus     *eventbus.Bus
 	mu      sync.RWMutex
 
 	// doneCh is closed by Shutdown to signal all emitters and consumers to
@@ -293,6 +295,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		deps:    deps,
 		hooks:   hooks,
 		eventCh: make(chan ports.Event, eventChBuffer),
+		bus:     eventbus.New(),
 		doneCh:  make(chan struct{}),
 	}
 	o.runMultiRepoImplFn = func(
@@ -322,6 +325,9 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 
 // Events returns a read-only channel of domain events.
 func (o *Orchestrator) Events() <-chan ports.Event { return o.eventCh }
+
+// Bus returns the multi-subscriber event bus used by secondary surfaces such as the Web UI.
+func (o *Orchestrator) Bus() *eventbus.Bus { return o.bus }
 
 // Done returns a channel that is closed when Shutdown has been invoked.
 // Consumers should select on Done alongside Events() to terminate receive
@@ -398,6 +404,9 @@ func (o *Orchestrator) CreateFeature(
 // Also drops events when shutdown has been signalled, so late emitters do not
 // enqueue work consumers will never read.
 func (o *Orchestrator) emitEvent(ev ports.Event) {
+	if o.bus != nil {
+		o.bus.Publish(ev)
+	}
 	select {
 	case <-o.doneCh:
 		return
@@ -417,6 +426,9 @@ func (o *Orchestrator) emitEvent(ev ports.Event) {
 // TUI / downstream consumers must not miss. Selects on doneCh so a full
 // buffer at shutdown does not deadlock the emitter goroutine.
 func (o *Orchestrator) emitEventBlocking(ev ports.Event) {
+	if o.bus != nil {
+		o.bus.Publish(ev)
+	}
 	select {
 	case o.eventCh <- ev:
 	case <-o.doneCh:

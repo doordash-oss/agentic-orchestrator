@@ -25,28 +25,17 @@ import (
 // consumed by both the wizard's inline catalog block and BuildPhaseModelCatalog.
 var phaseCatalogFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"}
 
-// phaseCatalogRoleToField maps llm.PhaseRole to catalog field name. The wizard
-// and edit-config overlay both consume this shared catalog mapping.
-var phaseCatalogRoleToField = map[llm.PhaseRole]string{
-	llm.PhaseInquiry:        "Clarify",
-	llm.PhaseResearch:       "Research",
-	llm.PhasePlanning:       "Planning",
-	llm.PhaseImplementation: "Implementation",
-	llm.PhaseReview:         "Review",
-	llm.PhaseKBBuild:        "KB Build",
-}
-
 // globalModelFields is phaseCatalogFields plus Utilities: the model used for
 // AMA chat and other workspace-wide utility calls. No single feature owns
 // that role, so it is intentionally absent from phaseCatalogFields and only
 // surfaced by BuildWorkspaceModelCatalog.
 var globalModelFields = []string{"Clarify", "Research", "Planning", "Implementation", "Review", "Utilities", "KB Build"}
 
-// globalCatalogRoleToField is phaseCatalogRoleToField plus the Utilities
-// role. BuildPhaseModelCatalog loops over this expanded map so the catalog
-// always carries eligible-model data for Utilities; a caller's Fields list
-// (phaseCatalogFields vs globalModelFields) is what actually decides whether
-// its UI shows that row.
+// globalCatalogRoleToField maps llm.PhaseRole to catalog field name,
+// including the Utilities role. BuildPhaseModelCatalog loops over this
+// expanded map so the catalog always carries eligible-model data for
+// Utilities; a caller's Fields list (phaseCatalogFields vs
+// globalModelFields) is what actually decides whether its UI shows that row.
 var globalCatalogRoleToField = map[llm.PhaseRole]string{
 	llm.PhaseInquiry:        "Clarify",
 	llm.PhaseResearch:       "Research",
@@ -89,8 +78,10 @@ type PhaseModelCatalog struct {
 	// PhaseProviderModelInfos maps field name → provider → eligible model
 	// metadata entries filtered by role category.
 	PhaseProviderModelInfos map[string]map[string][]llm.ModelInfo
-	// Fields is the canonical ordered list of phase-role field names. Always
-	// {"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"}.
+	// Fields is the canonical ordered list of phase-role field names.
+	// BuildPhaseModelCatalog sets phaseCatalogFields (6 entries, no
+	// Utilities); BuildWorkspaceModelCatalog overrides it to
+	// globalModelFields (7 entries, includes Utilities).
 	Fields []string
 }
 

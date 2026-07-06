@@ -172,10 +172,24 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 	if label == "" {
 		label = "bounded helper"
 	}
+	baseSessionID := cfg.sessionID
+	for sessionAttempt := 1; ; sessionAttempt++ {
+		cfg.sessionID = retrySessionID(baseSessionID, sessionAttempt)
+		if sessionAttempt > 1 && cfg.phaseCompleteDir != "" {
+			RemovePhaseComplete(cfg.phaseCompleteDir)
+		}
+		result, err, retryable := pr.runBoundedHelperSessionOnce(ctx, cfg, label)
+		if retryable && sessionAttempt < retryableInfrastructureSessionMaxAttempts {
+			continue
+		}
+		return result, err
+	}
+}
 
+func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boundedHelperRunConfig, label string) (*BoundedHelperResult, error, bool) {
 	sess, err := pr.SessionManager.StartSession(cfg.sessionID, cfg.featureID, cfg.phase, cfg.command, cfg.workDir, cfg.env, cfg.sessOpts)
 	if err != nil {
-		return nil, fmt.Errorf("running %s: starting session: %w", label, err)
+		return nil, fmt.Errorf("running %s: starting session: %w", label, err), false
 	}
 
 	sessionCtx := observe.SpanContext{}
@@ -225,12 +239,19 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 	// maxFinishOrViolateNudges and armed only when cfg.finishOrViolateNudge is
 	// set (capability-positive providers).
 	finishOrViolateNudges := 0
+	finish := func(result *BoundedHelperResult, err error) (*BoundedHelperResult, error, bool) {
+		retryable := err != nil &&
+			result != nil &&
+			result.Status == BoundedHelperStatusFailed &&
+			isRetryableInfrastructureSessionFailure(sess, ExtractSessionCost(sess), time.Since(sessionStart))
+		return result, err, retryable
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusTimedOut)
-			return result, fmt.Errorf("running %s: %w", label, ctx.Err())
+			return finish(result, fmt.Errorf("running %s: %w", label, ctx.Err()))
 
 		case msg, ok := <-attachCh:
 			if !ok {
@@ -242,10 +263,10 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 			}
 			if msg.ControlRequest.Request.ToolName == "AskUserQuestion" {
 				result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusAskedUser)
-				return result, fmt.Errorf("running %s: helper asked for user input", label)
+				return finish(result, fmt.Errorf("running %s: helper asked for user input", label))
 			}
 			result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusPermissionRequired)
-			return result, fmt.Errorf("running %s: helper requested tool permission for %s", label, msg.ControlRequest.Request.ToolName)
+			return finish(result, fmt.Errorf("running %s: helper requested tool permission for %s", label, msg.ControlRequest.Request.ToolName))
 
 		case <-statusCh:
 			// Peek at why the turn ended (mirroring finalizeBoundedHelperResult's
@@ -257,12 +278,14 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 					continue
 				}
 			}
-			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			return finish(result, err)
 
 		case <-sess.Done():
 			// The process already exited; there is nothing to nudge. Never unify
 			// this arm with the statusCh arm above.
-			return finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			result, err := finalizeBoundedHelperResult(cfg.responsePath, sess, label, cfg.requireOutput, cfg.phaseCompleteDir, cfg.contractPhase, cfg.contractRole)
+			return finish(result, err)
 		}
 	}
 }

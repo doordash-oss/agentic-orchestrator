@@ -5599,22 +5599,44 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 		t.Fatalf("StartReviewComments calls = %v before preview confirmation, want none", client.startReviewCommentsFeatureIDs)
 	}
 	view := stripANSI(previewing.View().Content)
-	for _, want := range []string{"Review Comments: Active work (1)", "agentic-orchestrator", "Shift+A", "@reviewer", "internal/tui/api_app.go:42", "use REST DTOs here", "@@ -1 +1 @@", "-old", "+new"} {
+	for _, want := range []string{
+		"Review Comments",
+		"Active work",
+		"agentic-orchestrator",
+		"1 pending",
+		"1 included",
+		"Queue",
+		"Detail",
+		"@reviewer",
+		"internal/tui/api_app.go:42",
+		"use REST DTOs here",
+		"@@ -1 +1 @@",
+		"-old",
+		"+new",
+		"[Shift+A] Address all 1",
+		"[enter] Address included 1",
+	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
 
-	model, cmd = previewing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatal("Update(enter) started review-comments; want Shift+A only")
-	}
-	previewing = model.(APIAppModel)
 	model, cmd = previewing.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd != nil {
 		t.Fatal("Update(a) started review-comments; want Shift+A only")
 	}
 	previewing = model.(APIAppModel)
+
+	_, cmd = previewing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want included review-comments start mutation")
+	}
+	_ = cmd()
+	if got := client.startReviewCommentsRequests; len(got) != 1 || len(got[0].Comments) != 1 || got[0].Comments[0].ID != 101 {
+		t.Fatalf("StartReviewComments via enter = %+v, want one included comment 101", got)
+	}
+	client.startReviewCommentsFeatureIDs = nil
+	client.startReviewCommentsRequests = nil
 
 	model, cmd = previewing.Update(tea.KeyPressMsg{Code: 'A', Text: "A"})
 	if cmd == nil {

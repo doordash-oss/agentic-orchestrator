@@ -444,6 +444,7 @@ type apiReviewCommentsPanel struct {
 	mode        string
 	modes       []string
 	comments    []server.ReviewCommentDTO
+	browser     reviewCommentsBrowserModel
 }
 
 type apiFeatureActionArgs struct {
@@ -845,13 +846,15 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !stringSliceContains(modes, mode) {
 			mode = modes[0]
 		}
+		comments := append([]server.ReviewCommentDTO(nil), msg.response.Comments...)
 		m.reviewComments = &apiReviewCommentsPanel{
 			featureID:   msg.featureID,
 			featureName: msg.featureName,
 			repo:        repo,
 			mode:        mode,
 			modes:       modes,
-			comments:    append([]server.ReviewCommentDTO(nil), msg.response.Comments...),
+			comments:    comments,
+			browser:     newReviewCommentsBrowserModel(msg.featureName, repo, reviewCommentItemsFromDTO(comments), m.width, m.height),
 		}
 		m.statusMessage = fmt.Sprintf("Fetched %d review comments from %s", len(msg.response.Comments), repo)
 		return m, nil
@@ -6108,57 +6111,8 @@ func (m APIAppModel) renderAPIReviewCommentsPanel(width int) string {
 	if panel == nil {
 		return ""
 	}
-	if width < 48 {
-		width = 48
-	}
-	name := panel.featureName
-	if name == "" {
-		name = panel.featureID
-	}
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Review Comments: %s (%d)\n\n", name, len(panel.comments)))
-	b.WriteString("  Repo: " + panel.repo + "\n")
-	b.WriteString("\n\n")
-	if len(panel.comments) == 0 {
-		b.WriteString("  No pending review comments on this PR.\n")
-	} else {
-		for i, comment := range panel.comments {
-			b.WriteString(fmt.Sprintf("  Comment %d/%d", i+1, len(panel.comments)))
-			b.WriteByte('\n')
-			location := apiReviewCommentLocation(comment)
-			if location != "" {
-				if comment.Path != "" {
-					b.WriteString("  Location: " + location + "\n")
-				} else {
-					b.WriteString("  File: " + location + "\n")
-				}
-			}
-			if comment.UserLogin != "" {
-				b.WriteString("  Author: @" + comment.UserLogin + "\n")
-			}
-			for _, line := range strings.Split(comment.Body, "\n") {
-				if strings.TrimSpace(line) == "" {
-					continue
-				}
-				b.WriteString("  " + line + "\n")
-			}
-			if strings.TrimSpace(comment.DiffHunk) != "" {
-				b.WriteString("  Context:\n")
-				for _, line := range strings.Split(strings.TrimSpace(comment.DiffHunk), "\n") {
-					b.WriteString("    " + line + "\n")
-				}
-			}
-			if i < len(panel.comments)-1 {
-				b.WriteByte('\n')
-			}
-		}
-	}
-	b.WriteByte('\n')
-	b.WriteString(KeyHelpStyle.Render(" [Shift+A] Auto-address   [esc] Back   [q] Quit   [\u2191/\u2193] Scroll"))
-	return panelStyle(true).
-		Width(width).
-		BorderForeground(colorBrand).
-		Render(b.String())
+	panel.browser.resize(width, max(m.height-6, 18))
+	return panel.browser.View()
 }
 
 func (m APIAppModel) renderAPIRepoActionPanel(width int) string {
@@ -7266,9 +7220,23 @@ func (m APIAppModel) handleAPIReviewCommentsKey(msg tea.KeyPressMsg) (tea.Model,
 	}
 	switch msg.Code {
 	case tea.KeyEscape:
+		if panel.browser.filtering || panel.browser.filter != "" {
+			panel.browser, _ = panel.browser.Update(msg)
+			m.reviewComments = panel
+			return m, nil
+		}
 		m.reviewComments = nil
 		m.statusMessage = ""
 		return m, nil
+	case tea.KeyEnter:
+		included := panel.includedComments()
+		if len(included) == 0 {
+			panel.browser.status = "No comments included. Press space to include one, or Shift+A to address all."
+			m.reviewComments = panel
+			return m, nil
+		}
+		m.statusMessage = "Addressing included review comments for " + panel.repo + "..."
+		return m, m.startReviewCommentsCmd(panel.withComments(included))
 	case 'A':
 		if msg.Text == "A" && len(panel.comments) > 0 {
 			m.statusMessage = "Auto-addressing review comments for " + panel.repo + "..."
@@ -7281,7 +7249,29 @@ func (m APIAppModel) handleAPIReviewCommentsKey(msg tea.KeyPressMsg) (tea.Model,
 		m.statusMessage = ""
 		return m, nil
 	}
+	updated, cmd := panel.browser.Update(msg)
+	panel.browser = updated
+	m.reviewComments = panel
+	if cmd != nil {
+		return m, cmd
+	}
 	return m, nil
+}
+
+func (p apiReviewCommentsPanel) includedComments() []server.ReviewCommentDTO {
+	out := make([]server.ReviewCommentDTO, 0, len(p.comments))
+	for _, comment := range p.comments {
+		if p.browser.included[comment.ID] {
+			out = append(out, comment)
+		}
+	}
+	return out
+}
+
+func (p apiReviewCommentsPanel) withComments(comments []server.ReviewCommentDTO) apiReviewCommentsPanel {
+	p.comments = append([]server.ReviewCommentDTO(nil), comments...)
+	p.browser = newReviewCommentsBrowserModel(p.featureName, p.repo, reviewCommentItemsFromDTO(p.comments), p.browser.width, p.browser.height)
+	return p
 }
 
 func (m APIAppModel) handleAPIRefactorPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

@@ -22,6 +22,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
 type reviewCommentItem struct {
@@ -157,6 +158,24 @@ func reviewCommentItemsFromGit(comments []git.ReviewComment) []reviewCommentItem
 			Path:      c.Path,
 			Line:      c.Line,
 			Author:    c.User.Login,
+			Body:      c.Body,
+			DiffHunk:  c.DiffHunk,
+			CreatedAt: c.CreatedAt,
+		})
+	}
+	return items
+}
+
+func reviewCommentItemsFromDTO(comments []server.ReviewCommentDTO) []reviewCommentItem {
+	items := make([]reviewCommentItem, 0, len(comments))
+	for _, c := range comments {
+		items = append(items, reviewCommentItem{
+			ID:        c.ID,
+			Type:      c.Type,
+			RepoName:  c.RepoName,
+			Path:      c.Path,
+			Line:      c.Line,
+			Author:    c.UserLogin,
 			Body:      c.Body,
 			DiffHunk:  c.DiffHunk,
 			CreatedAt: c.CreatedAt,

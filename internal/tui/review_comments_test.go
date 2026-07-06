@@ -192,3 +192,45 @@ func TestReviewCommentsModelFilterAndEscape(t *testing.T) {
 		t.Fatalf("escape did not clear filter:\n%s", view)
 	}
 }
+
+func TestReviewCommentsModelAllExcludedDisablesEnter(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 120, 36)
+	for range testReviewComments() {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "j"})
+	}
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "0 included") {
+		t.Fatalf("expected all comments excluded:\n%s", view)
+	}
+	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("enter with all comments excluded returned command, want nil")
+	}
+	view = stripANSI(updated.View())
+	if !strings.Contains(view, "No comments included") {
+		t.Fatalf("missing all-excluded warning:\n%s", view)
+	}
+}
+
+func TestReviewCommentsModelMissingDiffAndNarrowWidth(t *testing.T) {
+	t.Parallel()
+
+	comment := git.ReviewComment{ID: 301, Type: git.CommentTypeReviewBody, Body: "Top-level review body without a diff."}
+	comment.User.Login = "reviewer"
+	m := NewReviewCommentsModel("feat-1", "narrow-feature", []git.ReviewComment{comment}, 72, 20)
+	view := stripANSI(m.View())
+
+	for _, want := range []string{
+		"Top-level review body without a diff.",
+		"No diff context available",
+		"[Shift+A] Address all 1",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("narrow/missing-diff view missing %q:\n%s", want, view)
+		}
+	}
+}

@@ -253,9 +253,13 @@ func TestReviewCommentsContextBindings(t *testing.T) {
 	if actions == nil {
 		t.Fatal("missing ACTIONS section")
 	}
-	for _, k := range []string{"Shift+A", "esc"} {
-		if !sectionContainsKey(actions, k) {
-			t.Errorf("ACTIONS missing key %q", k)
+	navigation := findSectionByTitle(&ctx, "NAVIGATION")
+	if navigation == nil {
+		t.Fatal("missing NAVIGATION section")
+	}
+	for _, k := range []string{"Shift+A", "enter", "space", "/", "↑/k", "↓/j", "PgUp/PgDn", "esc"} {
+		if !sectionContainsKey(actions, k) && !sectionContainsKey(navigation, k) {
+			t.Errorf("Review Comments help missing key %q", k)
 		}
 	}
 }

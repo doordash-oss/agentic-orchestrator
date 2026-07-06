@@ -358,10 +358,21 @@ func reviewCommentsHelp() ViewHelpContext {
 		Name: "Review Comments",
 		Sections: []HelpSection{
 			{
+				Title: "NAVIGATION",
+				Bindings: []HelpBinding{
+					{"↑/k", "Previous comment"},
+					{"↓/j", "Next comment"},
+					{"PgUp/PgDn", "Scroll selected comment detail"},
+					{"/", "Filter comments"},
+					{"esc", "Clear filter / Back"},
+				},
+			},
+			{
 				Title: "ACTIONS",
 				Bindings: []HelpBinding{
-					{"Shift+A", "Auto mode"},
-					{"esc", "Back"},
+					{"Shift+A", "Address all comments"},
+					{"enter", "Address included comments"},
+					{"space", "Include / exclude selected comment"},
 				},
 			},
 		},

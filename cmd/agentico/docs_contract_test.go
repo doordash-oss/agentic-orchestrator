@@ -46,7 +46,6 @@ func TestUserFacingDocsDescribeTUIOnlyLaunchSurface(t *testing.T) {
 		"feature create     Create a new feature",
 		"agentico feature create",
 		"`agentico feature create`",
-		"--refresh-models",
 		"--name <name>",
 		"--repo <path>",
 		"--jira <ticket>",
@@ -81,9 +80,14 @@ func TestUserFacingDocsDescribeTUIOnlyLaunchSurface(t *testing.T) {
 			"--config <path>",
 			"--state-dir <path>",
 			"--providers <list>",
+			"--refresh-models",
 			"--dangerously-skip-permissions",
 			"--help",
 			"--version",
+			// Phase 1 update surface: docs must advertise the new subcommand
+			// and its check-only flag alongside the retained launch flags.
+			"agentico update",
+			"--check",
 		} {
 			if !strings.Contains(text, want) {
 				t.Fatalf("%s missing retained launch guidance %q", rel, want)
@@ -155,6 +159,146 @@ func TestUserFacingDocsAdvertiseRenamedProduct(t *testing.T) {
 		for _, want := range wants {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s missing required renamed-product token %q", rel, want)
+			}
+		}
+	}
+}
+
+// TestUserFacingDocsDescribeOpenCodeProviderPath guards the live docs contract
+// that OpenCode is documented as a co-equal, supported provider path — install,
+// authenticate, minimum version, model-ID semantics, permission mediation,
+// managed-session isolation, zero-cost pricing fallback, and troubleshooting —
+// and that the README and chat user guide no longer present Claude or Codex as
+// the only supported provider path.
+func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
+	repoRoot := filepath.Join("..", "..")
+
+	requiredByDoc := map[string][]string{
+		"README.md": {
+			"OpenCode CLI >= 1.17.9",
+			"opencode.ai/install",
+			"opencode auth login",
+			"opencode models",
+			"opencode:anthropic/claude-sonnet-4-5",
+			"--providers opencode",
+			"global OpenCode configuration",
+		},
+		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+			"Provider Selection",
+			"opencode:anthropic/claude-sonnet-4-5",
+			"opencode models --verbose",
+			"Managed-session isolation",
+			"opencode auth login",
+			"--providers opencode",
+			"1.17.9",
+			"zero cost",
+		},
+		filepath.Join("skills", "chat", "user-guide", "permissions.md"): {
+			"OpenCode tool mediation",
+			"session/request_permission",
+			"--dangerously-skip-permissions",
+			"still pauses for you",
+			"managed per-session config",
+		},
+		filepath.Join("skills", "chat", "user-guide", "getting-started.md"): {
+			"co-equal",
+			"opencode` CLI >= 1.17.9",
+			"opencode auth login",
+		},
+	}
+
+	for rel, wants := range requiredByDoc {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing required OpenCode provider-path token %q", rel, want)
+			}
+		}
+	}
+
+	// The README chat description and getting-started prerequisites must not
+	// frame a single provider as the sole/primary supported backend.
+	bannedSoleProviderFraming := map[string][]string{
+		"README.md": {
+			"read-only Claude session",
+		},
+		filepath.Join("skills", "chat", "user-guide", "getting-started.md"): {
+			"the primary AI agent backend",
+		},
+	}
+	for rel, banned := range bannedSoleProviderFraming {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
+		for _, token := range banned {
+			if strings.Contains(text, token) {
+				t.Errorf("%s still frames a single provider as the only supported path: %q", rel, token)
+			}
+		}
+	}
+
+	// Model-ID semantics must distinguish the three selection forms a user can
+	// type: a plain alias (resolves to a native provider, never OpenCode), the
+	// explicit opencode: prefix, and a bare slash-form backend id (resolves to
+	// OpenCode and is what provider-neutral defaults persist when OpenCode is the
+	// only ready provider). See main_test.go
+	// (TestApplyCatalogModelDefaultsToConfig_OpenCodeOnlyPersistsBareBackendIDs)
+	// and provider_test.go (TestFallbackRouting_RegistryLevel) for the behavior.
+	requiredModelIDSemantics := map[string][]string{
+		"README.md": {
+			"plain alias",
+			"bare slash-form",
+			"provider-neutral per-phase defaults",
+		},
+		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+			"plain alias",
+			"bare slash-form",
+			"provider-neutral per-phase defaults",
+		},
+	}
+	for rel, wants := range requiredModelIDSemantics {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
+		for _, want := range wants {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s missing required OpenCode model-ID semantics token %q (must distinguish plain aliases from bare OpenCode backend ids and provider-neutral defaults)", rel, want)
+			}
+		}
+	}
+
+	// The docs must not reassert the inaccurate model-ID claims that OpenCode is
+	// reachable only via the explicit prefix or that a bare id can never be an
+	// OpenCode default — both contradict single-provider OpenCode configs and
+	// bare slash-form resolution.
+	bannedModelIDClaims := map[string][]string{
+		"README.md": {
+			"selected only through the explicit",
+			"never silently routes to OpenCode",
+		},
+		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+			"selected only through the explicit",
+			"never routes to OpenCode",
+			"can never be picked silently",
+		},
+	}
+	for rel, banned := range bannedModelIDClaims {
+		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", rel, err)
+		}
+		text := string(body)
+		for _, token := range banned {
+			if strings.Contains(text, token) {
+				t.Errorf("%s still contains inaccurate OpenCode model-ID claim %q", rel, token)
 			}
 		}
 	}

@@ -622,6 +622,8 @@ func (m ArtifactReviewModel) handleSessionStarted(sess session.SessionView) (Art
 
 func pollArtifactReviewChCmd(sess session.SessionView) tea.Cmd {
 	return func() tea.Msg {
+		unregister := registerAttachConsumer(sess)
+		defer unregister()
 		ch := sess.AttachCh()
 		msg, ok := <-ch
 		if !ok {

@@ -17,6 +17,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -317,6 +318,108 @@ func TestHelpOverlayOpensInAllViews(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHelpOverlayUsesSetupContextForSetupLifecycle(t *testing.T) {
+	tests := []struct {
+		name       string
+		view       View
+		focusPanel bool
+		feature    *feature.Feature
+		wantCtx    string
+		want       []string
+		absent     []string
+	}{
+		{
+			name:       "dashboard right active setup",
+			view:       ViewDashboard,
+			focusPanel: true,
+			feature:    newSetupHelpFeature("feat-setup-active", feature.StatusSettingUpWorktrees, feature.SetupStatusRunning, "", "/tmp/setup.log"),
+			wantCtx:    "Setup Detail Panel",
+			want:       []string{"View setup logs", "Delete feature"},
+			absent:     []string{"Stop running feature", "Restart phase", "Retry setup", "Rewind"},
+		},
+		{
+			name:    "detail active setup",
+			view:    ViewDetail,
+			feature: newSetupHelpFeature("feat-setup-active", feature.StatusSettingUpWorktrees, feature.SetupStatusRunning, "", "/tmp/setup.log"),
+			wantCtx: "Setup Detail",
+			want:    []string{"View setup logs", "Delete feature"},
+			absent:  []string{"Stop running feature", "Restart phase", "Retry setup", "Rewind"},
+		},
+		{
+			name:    "detail failed worktree setup",
+			view:    ViewDetail,
+			feature: newSetupHelpFeature("feat-setup-failed", feature.StatusFailed, feature.SetupStatusFailed, feature.FailureWorktreeSetup, "/tmp/setup.log"),
+			wantCtx: "Setup Detail",
+			want:    []string{"View setup logs", "Retry setup", "Delete feature"},
+			absent:  []string{"Stop running feature", "Restart phase", "Rewind"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := newHelpTestApp(t)
+			app.currentView = tt.view
+			switch tt.view {
+			case ViewDashboard:
+				app.dashboard = NewDashboardModel([]*feature.Feature{tt.feature}, "")
+				app.dashboard.width = 80
+				app.dashboard.height = 24
+				app.dashboard.focusPanel = 1
+				if !app.dashboard.SelectFeatureID(tt.feature.ID) {
+					t.Fatalf("setup feature %q was not selectable", tt.feature.ID)
+				}
+			case ViewDetail:
+				app.detail = NewDetailModel(tt.feature, t.TempDir())
+				app.detail.width = 80
+				app.detail.height = 24
+			}
+			if tt.focusPanel {
+				app.dashboard.focusPanel = 1
+			}
+
+			result, _ := app.Update(questionMarkKey())
+			got := result.(AppModel)
+			if !got.helpOverlayActive {
+				t.Fatal("helpOverlayActive = false, want true")
+			}
+			if got.helpOverlay.context.Name != tt.wantCtx {
+				t.Fatalf("help context = %q, want %q", got.helpOverlay.context.Name, tt.wantCtx)
+			}
+			view := got.helpOverlay.View()
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Fatalf("setup help missing %q:\n%s", want, view)
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(view, absent) {
+					t.Fatalf("setup help contained %q:\n%s", absent, view)
+				}
+			}
+		})
+	}
+}
+
+func newSetupHelpFeature(id string, status feature.Status, setupStatus feature.SetupStatus, failureType, logPath string) *feature.Feature {
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	f := &feature.Feature{
+		ID:            id,
+		Name:          id,
+		Slug:          id,
+		Status:        status,
+		FailureType:   failureType,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.Status = setupStatus
+	setup.LatestLogPath = logPath
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, FailureType: failureType})
+	return f
 }
 
 // TestHelpOverlayCloseRestoresView verifies that closing the help overlay

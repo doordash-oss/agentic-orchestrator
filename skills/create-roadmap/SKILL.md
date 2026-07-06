@@ -27,12 +27,14 @@ A roadmap phase is a thin vertical slice through every layer the feature touches
 
 ## Process
 
-### 1. Read the Design Document
+### 1. Read the Design and Use Research Context
 
 Read the design document end-to-end **yourself** in main context — no sub-agents, no `limit`/`offset`. The design doc is the authoritative source of decisions. As you read, mark:
 
 - **Explicit out-of-scope decisions** ("out of scope", "deferred", "future work") — these MUST appear verbatim in *What We're NOT Doing*. Do not use that section to defer feature work that belongs in a phase.
 - **Specific mechanisms** (data types, migration strategies, concurrency patterns) — transfer these faithfully, not summarized. If the design says "use a pointer field so nil is distinguishable from explicit false", the roadmap repeats that mechanism, not just the outcome.
+
+If the prompt includes a Research Document, use it opportunistically after the design doc: skim for sections relevant to the phases you're defining, read those end-to-end before relying on them, and read the whole document if its structure is unclear, the roadmap depends broadly on it, or a skim surfaces a conflict. If research and design conflict, don't silently choose — preserve the design's desired behavior, but verify the fact or flag the conflict in the roadmap's current-state or risk notes.
 
 ### 2. Decompose Into Phases
 

@@ -51,6 +51,17 @@ func GetVersion() string {
 	return "dev"
 }
 
+// InjectedVersion returns the raw build-time ldflags version exactly as
+// injected ("" when unset), without the build-info/"dev" fallbacks GetVersion
+// layers on. The update command's install-method classifier needs this raw
+// signal kept separate from the collapsed GetVersion accessor: a clean injected
+// version implies a release tarball, whereas a build-info module version
+// implies a `go install`. Collapsing the two (as GetVersion does) loses that
+// distinction.
+func InjectedVersion() string {
+	return version
+}
+
 // listItemKind distinguishes section headers from feature rows in the virtual list.
 type listItemKind int
 
@@ -567,12 +578,13 @@ func (m DashboardModel) renderFooter() string {
 				len(f.Repos) > 0 && f.Repos[0].WorktreePath != "" {
 				hints = append(hints, "[c] Clean worktree")
 			}
-			if isFeatureQuiescent(f) {
+			if canEditFeatureConfig(f) {
 				hints = append(hints, "[e] Edit config")
 			}
 			hints = append(hints, "[Shift+N] Input alerts")
 			hints = append(hints, "[d] Delete")
 		}
+		hints = append(hints, "[Shift+E] Workspace Config")
 		hints = append(hints, "[←/esc] Back")
 	} else {
 		// Left panel focused — show list actions
@@ -580,7 +592,7 @@ func (m DashboardModel) renderFooter() string {
 		if m.SelectedFeature() != nil {
 			hints = append(hints, "[→/enter] Focus")
 		}
-		hints = append(hints, "[Shift+W] Workspaces", "[Shift+R] Resume All", "[tab] Panel", "[q] Quit")
+		hints = append(hints, "[Shift+W] Workspaces", "[Shift+E] Workspace Config", "[Shift+R] Resume All", "[tab] Panel", "[q] Quit")
 	}
 
 	leftPart := KeyHelpStyle.Render(" " + strings.Join(hints, "   "))
@@ -1046,6 +1058,19 @@ func (m DashboardModel) SelectedFeatureID() string {
 	return ""
 }
 
+func (m *DashboardModel) SelectFeatureID(featureID string) bool {
+	for i, item := range m.visibleItems {
+		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
+			m.cursor = i
+			m.computeCursorLine()
+			m.updateScrollState(0)
+			m.syncPreview()
+			return true
+		}
+	}
+	return false
+}
+
 func (m *DashboardModel) SetFeatures(features []*feature.Feature) {
 	sortFeatures(features)
 	m.features = features
@@ -1328,6 +1353,8 @@ func formatStatus(f *feature.Feature) string {
 	elapsed := formatElapsed(f)
 
 	switch f.Status {
+	case feature.StatusSettingUpWorktrees:
+		return lipgloss.NewStyle().Foreground(colorInfo).Render("Setting up worktrees") + elapsed
 	case feature.StatusImplementing:
 		planPath := ""
 		if f.Artifacts != nil {
@@ -1515,6 +1542,8 @@ func formatFailureType(ft string) string {
 		return "protocol violation"
 	case feature.FailureInfrastructure:
 		return "error"
+	case feature.FailureWorktreeSetup:
+		return "worktree setup"
 	default:
 		return ft
 	}

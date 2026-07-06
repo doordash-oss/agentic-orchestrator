@@ -120,6 +120,16 @@ func TestAttachModelView(t *testing.T) {
 	}
 }
 
+func TestAttachModelViewDoesNotUseDarkTextareaCursorLine(t *testing.T) {
+	sess := session.NewSession("test-view-light-bg", "feat-1", 0)
+	m := attachModelFromSession(sess, 80, 24)
+
+	view := m.View()
+	if strings.Contains(view, "\x1b[40m") || strings.Contains(view, "\x1b[48;5;0m") {
+		t.Fatalf("attach view rendered Bubble textarea's dark cursor-line background: %q", view)
+	}
+}
+
 func TestAttachModelViewUsesWatchVocabulary(t *testing.T) {
 	sess := session.NewSession("test-view-watch", "feat-1", feature.PhaseImplement)
 	m := attachModelFromSession(sess, 80, 24)
@@ -134,6 +144,16 @@ func TestAttachModelViewUsesWatchVocabulary(t *testing.T) {
 		if strings.Contains(view, retired) {
 			t.Errorf("AttachModel.View() contains retired copy %q in:\n%s", retired, view)
 		}
+	}
+}
+
+func TestAttachHeaderSpellsAgentico(t *testing.T) {
+	header := stripANSI(AttachModel{}.renderAttachHeader(80))
+	if !strings.Contains(header, " ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀▀ █▀█") {
+		t.Errorf("attach header missing AGENTICO top row:\n%s", header)
+	}
+	if !strings.Contains(header, " █▀█ █▄█ ██▄ █░▀█ ░█░ █ █▄▄ █▄█") {
+		t.Errorf("attach header missing AGENTICO bottom row:\n%s", header)
 	}
 }
 
@@ -1108,6 +1128,27 @@ func TestTabSwitchKeepsInteractiveControls(t *testing.T) {
 			t.Error("expected readOnly=false after switching to interactive impl session")
 		}
 	})
+}
+
+func TestRebuildTabsReportsSessionSwapWhenActiveTabLosesSession(t *testing.T) {
+	apiSess := session.NewSession("f1-kb-api", "f1", feature.PhaseKnowledgeBase)
+	workerSess := session.NewSession("f1-kb-worker", "f1", feature.PhaseKnowledgeBase)
+	m := testAttachModel(apiSess, 80, 24, []repoTab{
+		{repoName: "api", sess: apiSess, status: statusImplementing},
+		{repoName: "worker", sess: workerSess, status: statusImplementing},
+	}, 0)
+
+	swapped := m.rebuildTabs([]repoTab{
+		{repoName: "api", status: statusReviewPassed},
+		{repoName: "worker", sess: workerSess, status: statusImplementing},
+	})
+
+	if !swapped {
+		t.Fatal("rebuildTabs should report a session swap when the active tab's session disappears")
+	}
+	if m.activeTabIdx != 1 {
+		t.Fatalf("activeTabIdx = %d, want 1 for remaining live session", m.activeTabIdx)
+	}
 }
 
 func TestActiveRepoName(t *testing.T) {

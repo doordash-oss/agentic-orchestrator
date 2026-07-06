@@ -33,3 +33,18 @@ release:
   github:
     owner: doordash-oss
     name: agentic-orchestrator
+
+brews:
+  - name: agentico
+    repository:
+      owner: doordash-oss
+      name: homebrew-agentic-orchestrator
+      branch: main
+    directory: Formula
+    homepage: "https://github.com/doordash-oss/agentic-orchestrator"
+    description: "Parallel agentic coding orchestrator TUI"
+    license: "Apache-2.0"
+    install: |
+      bin.install "agentico"
+    test: |
+      system "#{bin}/agentico", "--version"

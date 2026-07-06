@@ -102,6 +102,7 @@ func dashboardLeftHelp() ViewHelpContext {
 				Title: "TOOLS",
 				Bindings: []HelpBinding{
 					{"Shift+W", "Manage workspaces"},
+					{"Shift+E", "Edit workspace config"},
 					{ChatKeyHint(), "Ask AI"},
 					{"?", "Help"},
 					{"q", "Quit"},
@@ -154,6 +155,7 @@ func dashboardRightHelp() ViewHelpContext {
 			{
 				Title: "TOOLS",
 				Bindings: []HelpBinding{
+					{"Shift+E", "Edit workspace config"},
 					{ChatKeyHint(), "Ask AI"},
 					{"?", "Help"},
 				},
@@ -180,6 +182,7 @@ func detailHelp() ViewHelpContext {
 					{"Shift+A", "Approve & remember permissions"},
 					{"h", "Answer help question"},
 					{"Shift+N", "Toggle input notifications"},
+					{"Shift+E", "Edit workspace config"},
 					{"s", "Stop running feature"},
 					{"r", "Restart phase"},
 					{"ctrl+r", "Rewind"},
@@ -199,6 +202,70 @@ func detailHelp() ViewHelpContext {
 					{"g", "Review comments"},
 					{"c", "Clean worktree"},
 				},
+			},
+		},
+	}
+}
+
+func setupDetailPanelHelp(logsAvailable, retryAvailable bool) ViewHelpContext {
+	actions := []HelpBinding{
+		{"o", "Show overview"},
+	}
+	if logsAvailable {
+		actions = append(actions, HelpBinding{"l", "View setup logs"})
+	}
+	if retryAvailable {
+		actions = append(actions, HelpBinding{"r", "Retry setup"})
+	}
+	actions = append(actions, HelpBinding{"d", "Delete feature"})
+
+	return ViewHelpContext{
+		Name: "Setup Detail Panel",
+		Sections: []HelpSection{
+			{
+				Title: "NAVIGATION",
+				Bindings: []HelpBinding{
+					{"←/esc", "Back to list"},
+					{"tab", "Switch panel"},
+				},
+			},
+			{
+				Title:    "ACTIONS",
+				Bindings: actions,
+			},
+			{
+				Title: "TOOLS",
+				Bindings: []HelpBinding{
+					{ChatKeyHint(), "Ask AI"},
+					{"?", "Help"},
+				},
+			},
+		},
+	}
+}
+
+func setupDetailHelp(logsAvailable, retryAvailable bool) ViewHelpContext {
+	var actions []HelpBinding
+	if logsAvailable {
+		actions = append(actions, HelpBinding{"l", "View setup logs"})
+	}
+	if retryAvailable {
+		actions = append(actions, HelpBinding{"r", "Retry setup"})
+	}
+	actions = append(actions, HelpBinding{"d", "Delete feature"})
+
+	return ViewHelpContext{
+		Name: "Setup Detail",
+		Sections: []HelpSection{
+			{
+				Title: "NAVIGATION",
+				Bindings: []HelpBinding{
+					{"esc", "Back to dashboard"},
+				},
+			},
+			{
+				Title:    "ACTIONS",
+				Bindings: actions,
 			},
 		},
 	}

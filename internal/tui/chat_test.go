@@ -77,6 +77,14 @@ func TestChatModelViewEmptyState(t *testing.T) {
 	}
 }
 
+func TestChatModelViewDoesNotUseDarkTextareaCursorLine(t *testing.T) {
+	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
+	view := m.View()
+	if strings.Contains(view, "\x1b[40m") || strings.Contains(view, "\x1b[48;5;0m") {
+		t.Fatalf("chat view rendered Bubble textarea's dark cursor-line background: %q", view)
+	}
+}
+
 func TestChatModelEscWhileRespondingMinimizes(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
 	m.responding = true
@@ -344,6 +352,34 @@ func TestChatUsesConfiguredModel(t *testing.T) {
 
 	if capturedOpts.Model != "opus" {
 		t.Errorf("expected model 'opus', got %q", capturedOpts.Model)
+	}
+}
+
+// TestChatUsesConfiguredProviderModel proves chat hands an explicit provider
+// model selection to the normal provider-neutral session builder unchanged, and
+// stays intentionally markerless — chat is a conversational surface with no
+// phase_complete contract, so it must never thread a marker path.
+func TestChatUsesConfiguredProviderModel(t *testing.T) {
+	var capturedOpts agent.BuildSessionOpts
+	mockBuildSession := func(opts agent.BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		capturedOpts = opts
+		return nil, nil, nil, fmt.Errorf("test: stop here")
+	}
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	const routedModel = "gateway:vendor/model"
+	m := NewChatModel(80, 24, sm, "/tmp", "test", mockBuildSession, routedModel, "")
+	cmd := m.startSessionCmd("test question")
+	cmd()
+
+	if capturedOpts.Model != routedModel {
+		t.Errorf("expected model %q, got %q", routedModel, capturedOpts.Model)
+	}
+	if capturedOpts.MarkerPath != "" {
+		t.Errorf("chat threaded a marker path %q; want markerless", capturedOpts.MarkerPath)
 	}
 }
 

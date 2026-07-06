@@ -72,8 +72,14 @@ type RoleSystemInput struct {
 	OutputRoots          []OutputRootView
 	MarkerPath           string
 	SkillPath            string
+	ArtifactPreflight    string
 	Preflight            PreflightInput
 	ReadOnlyOutsideRoots bool
+	// SubagentsAvailable gates the sub-agent calling-convention clause. Leave
+	// false for bounded helpers (validators, reviewers) that run with no
+	// configured sub-agents: advertising them makes a model that aborts on a
+	// permission denial attempt a task spawn the handler rejects.
+	SubagentsAvailable bool
 
 	AskingClause string
 }

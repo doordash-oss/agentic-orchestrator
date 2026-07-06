@@ -10,6 +10,34 @@ with the common fields defined by `internal/observe.Event`, including
 `event_type`, `feature_id`, optional `phase`, optional `data`, and optional
 `run_number`.
 
+### Setup Lifecycle Events
+
+Worktree setup, retry, and reconciliation diagnostics emit setup lifecycle
+events before any agent phase starts:
+
+- `setup.started`
+- `setup.progress`
+- `setup.completed`
+- `setup.failed`
+
+These are pre-phase events and do not carry a phase name. Do not confuse them
+with agent phase telemetry, which is emitted after setup and uses the pipeline
+phase context.
+
+Common event fields and `data` keys:
+
+- `feature_id`: feature identifier associated with the setup work.
+- `run_number`: active run number for the setup work.
+- `attempt`: setup attempt number.
+- `setup_log`: setup log path or message.
+- `setup_task`: setup task name.
+- `setup_kind`: setup operation kind.
+- `setup_status`: setup status value.
+- `repo_name`: repository name being prepared.
+- `path`: worktree or repository path.
+- `branch`: branch used for the setup operation.
+- `error`: failure details when setup fails.
+
 ### `feature.rewound`
 
 Successful rewinds emit a dedicated `feature.rewound` event after the sealed

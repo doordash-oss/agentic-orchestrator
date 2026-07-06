@@ -114,6 +114,7 @@ type PublishModel struct {
 	crossRefEntries []git.CrossRefEntry // built from repos + RepoStates
 	existingPRURL   string              // set when re-publishing an already-published repo
 	publishable     bool                // true if all feature repos have origin remote
+	draft           bool                // true when the feature's checkpoints request a draft PR
 }
 
 // newPublishViewport builds the shared viewport, title input, and body
@@ -134,7 +135,7 @@ func newPublishViewport(width, height int, prTitle, prBody, diff string) (viewpo
 		ti.SetValue(prTitle)
 	}
 
-	ta := textarea.New()
+	ta := newStyledTextarea()
 	ta.Placeholder = "PR body (markdown)"
 	ta.SetWidth(max(width-8, 40))
 	ta.SetHeight(max(height-14, 8))
@@ -162,6 +163,11 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 		featureName = f.Name
 	}
 
+	var draft bool
+	if f != nil {
+		draft = f.Checkpoints.DraftPublish
+	}
+
 	m := PublishModel{
 		step:        publishStepDiff,
 		featureID:   featureID,
@@ -175,6 +181,7 @@ func NewPublishModel(f *feature.Feature, repos []publishRepoEntry, planText, des
 		width:       width,
 		height:      height,
 		publishable: true,
+		draft:       draft,
 	}
 
 	if f != nil && len(f.Repos) > 1 {
@@ -281,6 +288,11 @@ func (m PublishModel) Update(msg tea.Msg) (PublishModel, tea.Cmd) {
 			case key.Matches(msg, keys.Enter):
 				return m.advanceStep()
 			}
+			return m, nil
+		}
+
+		if m.step == publishStepConfirm && key.Matches(msg, key.NewBinding(key.WithKeys("d"))) {
+			m.draft = !m.draft
 			return m, nil
 		}
 
@@ -435,6 +447,7 @@ func (m PublishModel) executePublish() tea.Cmd {
 	crossRefEntries := m.crossRefEntries
 	existingPRURL := m.existingPRURL
 	publishable := m.publishable
+	draft := m.draft
 
 	if worktreeDir == "" || branch == "" {
 		return func() tea.Msg {
@@ -524,7 +537,7 @@ func (m PublishModel) executePublish() tea.Cmd {
 			}
 		} else {
 			var err error
-			prURL, err = git.CreatePR(effectiveRepoPath, branch, prTitle, prBody, baseBranch)
+			prURL, err = git.CreatePR(effectiveRepoPath, branch, prTitle, prBody, draft, baseBranch)
 			if err != nil {
 				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("PR creation failed: %w", err)}
 			}
@@ -629,6 +642,13 @@ func (m PublishModel) View() string {
 		if m.branch != "" {
 			confirmContent += fmt.Sprintf("  Branch: %s\n", m.branch)
 		}
+		var draftIndicator string
+		if m.draft {
+			draftIndicator = BadgeStyle.Render("[Draft PR]")
+		} else {
+			draftIndicator = SuccessStyle.Render("[Ready for review]")
+		}
+		confirmContent += fmt.Sprintf("  %s\n", draftIndicator)
 		confirmContent += "\n  Press Enter to confirm, Esc to cancel"
 		content = confirmContent
 
@@ -669,6 +689,8 @@ func (m PublishModel) View() string {
 		b.WriteString(MutedStyle.Render(" Publishing in progress..."))
 	} else if m.step == publishStepRepoSelect {
 		b.WriteString(KeyHelpStyle.Render(" [↑/↓] Select   [enter] Confirm   [esc] Cancel"))
+	} else if m.step == publishStepConfirm {
+		b.WriteString(KeyHelpStyle.Render(" [enter] Next   [esc] Cancel   [d] Toggle draft"))
 	} else {
 		b.WriteString(KeyHelpStyle.Render(" [enter] Next   [esc] Cancel   [↑/↓] Scroll"))
 	}

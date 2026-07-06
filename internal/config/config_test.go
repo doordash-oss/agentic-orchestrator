@@ -25,8 +25,17 @@ import (
 
 func TestNewDefault(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.Research != "opus[1m]" {
-		t.Errorf("expected research model opus[1m], got %s", cfg.Defaults.Models.Research)
+	wantModels := ModelConfig{
+		Inquiry:        "sonnet[200K]",
+		Research:       "sonnet[200K]",
+		Planning:       "sonnet[200K]",
+		Implementation: "sonnet[200K]",
+		Review:         "gpt-5.4[272K]",
+		Utilities:      "sonnet[200K]",
+		KBBuild:        "sonnet[200K]",
+	}
+	if cfg.Defaults.Models != wantModels {
+		t.Errorf("default models = %+v, want %+v", cfg.Defaults.Models, wantModels)
 	}
 	if cfg.Defaults.MaxIterations != 10 {
 		t.Errorf("expected max iterations 10, got %d", cfg.Defaults.MaxIterations)
@@ -49,6 +58,52 @@ func TestNewDefaultManualPublish(t *testing.T) {
 	}
 }
 
+func TestCheckpoints_DraftPublish_DefaultsFalse(t *testing.T) {
+	// A config YAML with no draft_publish key must unmarshal with DraftPublish==false.
+	input := `
+defaults:
+  checkpoints:
+    manual_publish: false
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if cfg.Defaults.Checkpoints.DraftPublish {
+		t.Error("DraftPublish should default to false when key is absent")
+	}
+}
+
+func TestCheckpoints_DraftPublish_TrueWhenSet(t *testing.T) {
+	input := `
+defaults:
+  checkpoints:
+    draft_publish: true
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !cfg.Defaults.Checkpoints.DraftPublish {
+		t.Error("DraftPublish should be true when set to true")
+	}
+}
+
+func TestCheckpoints_DraftPublish_FalseWhenExplicitFalse(t *testing.T) {
+	input := `
+defaults:
+  checkpoints:
+    draft_publish: false
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(input), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if cfg.Defaults.Checkpoints.DraftPublish {
+		t.Error("DraftPublish should be false when explicitly set to false")
+	}
+}
+
 func TestSaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -57,6 +112,7 @@ func TestSaveAndLoad(t *testing.T) {
 	original.Defaults.PipelinePreferences = map[string]PipelinePreference{
 		"medium": {
 			Models: ModelConfig{
+				Inquiry:        "claude:haiku",
 				Research:       "claude:haiku",
 				Planning:       "claude:haiku",
 				Implementation: "claude:sonnet",
@@ -81,6 +137,9 @@ func TestSaveAndLoad(t *testing.T) {
 
 	if loaded.Defaults.Models.Research != original.Defaults.Models.Research {
 		t.Errorf("models mismatch: got %s, want %s", loaded.Defaults.Models.Research, original.Defaults.Models.Research)
+	}
+	if loaded.Defaults.Models.Inquiry != original.Defaults.Models.Inquiry {
+		t.Errorf("inquiry model mismatch: got %s, want %s", loaded.Defaults.Models.Inquiry, original.Defaults.Models.Inquiry)
 	}
 	if loaded.Defaults.MaxIterations != original.Defaults.MaxIterations {
 		t.Errorf("max iterations mismatch: got %d, want %d", loaded.Defaults.MaxIterations, original.Defaults.MaxIterations)
@@ -114,8 +173,8 @@ func TestLoadOrCreate(t *testing.T) {
 		t.Fatalf("load or create: %v", err)
 	}
 
-	if cfg.Defaults.Models.Research != "opus[1m]" {
-		t.Errorf("expected default research model opus[1m], got %s", cfg.Defaults.Models.Research)
+	if cfg.Defaults.Models.Research != "sonnet[200K]" {
+		t.Errorf("expected default research model sonnet[200K], got %s", cfg.Defaults.Models.Research)
 	}
 
 	// File should exist now
@@ -151,6 +210,7 @@ func TestDefaultsConfigPreferenceForPipelineOverlaysRememberedValues(t *testing.
 	defaults.PipelinePreferences = map[string]PipelinePreference{
 		"moonshot": {
 			Models: ModelConfig{
+				Inquiry:        "claude:haiku",
 				Implementation: "claude:sonnet",
 				Review:         "codex:gpt-5.4-mini",
 			},
@@ -163,6 +223,9 @@ func TestDefaultsConfigPreferenceForPipelineOverlaysRememberedValues(t *testing.
 	if pref.Models.Research != defaults.Models.Research {
 		t.Errorf("research = %q, want fallback %q", pref.Models.Research, defaults.Models.Research)
 	}
+	if pref.Models.Inquiry != "claude:haiku" {
+		t.Errorf("inquiry = %q, want %q", pref.Models.Inquiry, "claude:haiku")
+	}
 	if pref.Models.Implementation != "claude:sonnet" {
 		t.Errorf("implementation = %q, want %q", pref.Models.Implementation, "claude:sonnet")
 	}
@@ -171,6 +234,27 @@ func TestDefaultsConfigPreferenceForPipelineOverlaysRememberedValues(t *testing.
 	}
 	if pref.Inquireness != "high" {
 		t.Errorf("inquireness = %q, want %q", pref.Inquireness, "high")
+	}
+}
+
+func TestLoadModelConfigMigratesMissingInquiryFromResearch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := []byte("defaults:\n  models:\n    research: claude:custom-research\n")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.Defaults.Models.Inquiry != "claude:custom-research" {
+		t.Errorf("inquiry = %q, want migrated research model", cfg.Defaults.Models.Inquiry)
+	}
+	if cfg.Defaults.Models.Research != "claude:custom-research" {
+		t.Errorf("research = %q, want configured research model", cfg.Defaults.Models.Research)
 	}
 }
 
@@ -246,6 +330,136 @@ func TestYAMLIgnoresUnknownAutoPublish(t *testing.T) {
 	}
 }
 
+func TestLoadConfigCheckpointFieldsDefaultOnAndPlanReviewIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`defaults:
+  checkpoints:
+    plan_review: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := cfg.Defaults.Checkpoints
+	if !got.InquiryReview ||
+		!got.ResearchReview ||
+		!got.DesignReview ||
+		!got.RoadmapReview ||
+		!got.PhasePlanReview ||
+		!got.ManualPublish {
+		t.Fatalf("omitted checkpoints should default on and plan_review should be ignored, got %+v", got)
+	}
+}
+
+func TestLoadConfigMalformedLegacyPlanReviewIgnored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`defaults:
+  checkpoints:
+    plan_review:
+      - not-a-bool
+    manual_publish: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load should ignore malformed legacy plan_review: %v", err)
+	}
+	got := cfg.Defaults.Checkpoints
+	if !got.InquiryReview || !got.ResearchReview || !got.DesignReview || !got.RoadmapReview || !got.PhasePlanReview {
+		t.Fatalf("non-legacy omitted checkpoints should default on, got %+v", got)
+	}
+	if got.ManualPublish {
+		t.Fatalf("explicit manual_publish=false should still win, got %+v", got)
+	}
+}
+
+func TestLoadConfigCheckpointExplicitFalseWins(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`defaults:
+  checkpoints:
+    inquiry_review: false
+    research_review: false
+    design_review: false
+    roadmap_review: false
+    phase_plan_review: true
+    manual_publish: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := cfg.Defaults.Checkpoints
+	if got.InquiryReview ||
+		got.ResearchReview ||
+		got.DesignReview ||
+		got.RoadmapReview ||
+		!got.PhasePlanReview ||
+		got.ManualPublish {
+		t.Fatalf("loaded checkpoints did not preserve explicit values: %+v", got)
+	}
+}
+
+func TestSaveWritesCheckpointFieldsExplicitly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	cfg := NewDefault()
+	cfg.Defaults.Checkpoints = Checkpoints{
+		InquiryReview:   false,
+		ResearchReview:  true,
+		DesignReview:    false,
+		RoadmapReview:   true,
+		PhasePlanReview: false,
+		ManualPublish:   false,
+	}
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	yamlStr := string(data)
+	for _, needle := range []string{
+		"inquiry_review: false",
+		"research_review: true",
+		"design_review: false",
+		"roadmap_review: true",
+		"phase_plan_review: false",
+		"manual_publish: false",
+	} {
+		if !strings.Contains(yamlStr, needle) {
+			t.Fatalf("saved YAML missing %q:\n%s", needle, yamlStr)
+		}
+	}
+	for _, line := range strings.Split(yamlStr, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "plan_review:") {
+			t.Fatalf("saved YAML should not contain legacy plan_review:\n%s", yamlStr)
+		}
+	}
+}
+
 func TestLoadConfigWithoutManualPublishDefaultsToTrue(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -263,8 +477,11 @@ func TestLoadConfigWithoutManualPublishDefaultsToTrue(t *testing.T) {
 	if !cfg.Defaults.Checkpoints.ManualPublish {
 		t.Error("expected ManualPublish to default to true when omitted from loaded config")
 	}
-	if !cfg.Defaults.Checkpoints.PlanReview {
-		t.Error("expected PlanReview to be parsed as true")
+	if !cfg.Defaults.Checkpoints.RoadmapReview {
+		t.Error("expected RoadmapReview to default to true")
+	}
+	if !cfg.Defaults.Checkpoints.PhasePlanReview {
+		t.Error("expected PhasePlanReview to default to true")
 	}
 }
 
@@ -367,11 +584,11 @@ func TestApplyDefaults(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
 
-	if cfg.Defaults.Models.Research != "opus[1m]" {
+	if cfg.Defaults.Models.Research != "sonnet[200K]" {
 		t.Errorf("expected default research model, got %s", cfg.Defaults.Models.Research)
 	}
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected default utilities model sonnet, got %s", cfg.Defaults.Models.Utilities)
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected default utilities model sonnet[200K], got %s", cfg.Defaults.Models.Utilities)
 	}
 	if cfg.Defaults.MaxIterations != 10 {
 		t.Errorf("expected default max iterations, got %d", cfg.Defaults.MaxIterations)
@@ -384,10 +601,34 @@ func TestApplyDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsPreservesExplicitFalseCheckpointsOnSecondCall(t *testing.T) {
+	cfg := &Config{
+		Defaults: DefaultsConfig{
+			Checkpoints: Checkpoints{
+				InquiryReview:   false,
+				ResearchReview:  false,
+				DesignReview:    false,
+				RoadmapReview:   false,
+				PhasePlanReview: true,
+				ManualPublish:   false,
+				parsed:          true,
+			},
+		},
+	}
+
+	applyDefaults(cfg)
+	applyDefaults(cfg)
+
+	got := cfg.Defaults.Checkpoints
+	if got.InquiryReview || got.ResearchReview || got.DesignReview || got.RoadmapReview || !got.PhasePlanReview || got.ManualPublish {
+		t.Fatalf("explicit checkpoint values were not preserved after repeated applyDefaults: %+v", got)
+	}
+}
+
 func TestUtilitiesModelDefault(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected utilities model sonnet, got %s", cfg.Defaults.Models.Utilities)
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected utilities model sonnet[200K], got %s", cfg.Defaults.Models.Utilities)
 	}
 }
 
@@ -473,16 +714,16 @@ ui:
 
 func TestNewDefaultKBBuild(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.KBBuild != "opus[1m]" {
-		t.Errorf("expected KBBuild default opus[1m], got %s", cfg.Defaults.Models.KBBuild)
+	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
+		t.Errorf("expected KBBuild default sonnet[200K], got %s", cfg.Defaults.Models.KBBuild)
 	}
 }
 
 func TestApplyDefaultsFillsKBBuild(t *testing.T) {
 	cfg := &Config{}
 	applyDefaults(cfg)
-	if cfg.Defaults.Models.KBBuild != "opus[1m]" {
-		t.Errorf("expected KBBuild opus[1m] after applyDefaults, got %s", cfg.Defaults.Models.KBBuild)
+	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
+		t.Errorf("expected KBBuild sonnet[200K] after applyDefaults, got %s", cfg.Defaults.Models.KBBuild)
 	}
 }
 
@@ -528,8 +769,8 @@ func TestLoadConfigWithoutKBBuildGetsDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Defaults.Models.KBBuild != "opus[1m]" {
-		t.Errorf("expected KBBuild opus[1m] for config without kb_build, got %s", cfg.Defaults.Models.KBBuild)
+	if cfg.Defaults.Models.KBBuild != "sonnet[200K]" {
+		t.Errorf("expected KBBuild sonnet[200K] for config without kb_build, got %s", cfg.Defaults.Models.KBBuild)
 	}
 }
 
@@ -1292,6 +1533,32 @@ func TestRepoConfigPipelineGatesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRepoPipelineGatesSparseCheckpointDefaultsOn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := []byte(`repos:
+  my-repo:
+    path: /tmp/my-repo
+    pipeline_gates:
+      medium:
+        manual_publish: false
+`)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := cfg.Repos["my-repo"].PipelineGates["medium"]
+	if !got.InquiryReview || !got.ResearchReview || !got.DesignReview || !got.RoadmapReview || !got.PhasePlanReview || got.ManualPublish {
+		t.Fatalf("sparse repo pipeline gate should default omitted checkpoints on and preserve manual_publish=false, got %+v", got)
+	}
+}
+
 func TestRepoConfigPipelineGatesEmpty(t *testing.T) {
 	cfg := &Config{
 		Repos: map[string]RepoConfig{
@@ -1363,8 +1630,8 @@ func TestDefaultsPipelinePreservesExisting(t *testing.T) {
 
 func TestNewDefault_Utilities(t *testing.T) {
 	cfg := NewDefault()
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected Utilities default sonnet, got %s", cfg.Defaults.Models.Utilities)
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected Utilities default sonnet[200K], got %s", cfg.Defaults.Models.Utilities)
 	}
 }
 
@@ -1420,9 +1687,9 @@ func TestMigrateModelConfig_NeitherSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// applyDefaults should fill it with "sonnet"
-	if cfg.Defaults.Models.Utilities != "sonnet" {
-		t.Errorf("expected Utilities=sonnet (from defaults), got %q", cfg.Defaults.Models.Utilities)
+	// applyDefaults should fill it with "sonnet[200K]"
+	if cfg.Defaults.Models.Utilities != "sonnet[200K]" {
+		t.Errorf("expected Utilities=sonnet[200K] (from defaults), got %q", cfg.Defaults.Models.Utilities)
 	}
 }
 

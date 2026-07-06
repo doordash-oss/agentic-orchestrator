@@ -487,6 +487,151 @@ func TestCodexProvider_EnvVarsToExclude(t *testing.T) {
 	}
 }
 
+func TestParseCodexModelCatalog_FiltersAndMapsVisibleAPIModels(t *testing.T) {
+	catalogJSON := []byte(`{"models":[
+		{"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":272000},
+		{"slug":"codex-auto-review","display_name":"Codex Auto Review","visibility":"hide","supported_in_api":true,"context_window":272000},
+		{"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":1000000},
+		{"slug":"gpt-5.4-mini","display_name":"GPT-5.4-Mini","visibility":"list","supported_in_api":true,"context_window":272000},
+		{"slug":"gpt-5.3-codex","display_name":"","visibility":"list","supported_in_api":true,"context_window":400000},
+		{"slug":"private-model","display_name":"Private","visibility":"list","supported_in_api":false,"context_window":123000}
+	]}`)
+
+	models, err := parseCodexModelCatalog(catalogJSON)
+	if err != nil {
+		t.Fatalf("parseCodexModelCatalog() error: %v", err)
+	}
+	gotIDs := make([]string, 0, len(models))
+	byID := make(map[string]llm.ModelInfo, len(models))
+	for _, model := range models {
+		gotIDs = append(gotIDs, model.ID)
+		byID[model.ID] = model
+	}
+	wantIDs := []string{"gpt-5.5[272K]", "gpt-5.4[272K]", "gpt-5.4[1M]", "gpt-5.4-mini[272K]", "gpt-5.3-codex[400K]"}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("model IDs = %v, want %v", gotIDs, wantIDs)
+	}
+	if got := byID["gpt-5.5[272K]"].Category; got != "capable" {
+		t.Errorf("gpt-5.5 category = %q, want capable", got)
+	}
+	if got := byID["gpt-5.4[272K]"].Category; got != "balanced" {
+		t.Errorf("gpt-5.4 category = %q, want balanced", got)
+	}
+	if got := byID["gpt-5.4-mini[272K]"].Category; got != "balanced" {
+		t.Errorf("gpt-5.4-mini category = %q, want balanced", got)
+	}
+	if !slices.Equal(byID["gpt-5.5[272K]"].Aliases, []string{"gpt-5.5"}) {
+		t.Errorf("gpt-5.5[272K] aliases = %v, want [gpt-5.5]", byID["gpt-5.5[272K]"].Aliases)
+	}
+	if got := byID["gpt-5.4[272K]"].ContextWindow; got != 272_000 {
+		t.Errorf("gpt-5.4[272K] context window = %d, want 272000", got)
+	}
+	if got := byID["gpt-5.4[1M]"].ContextWindow; got != 1_000_000 {
+		t.Errorf("gpt-5.4[1M] context window = %d, want 1000000", got)
+	}
+	if !slices.Equal(byID["gpt-5.4[272K]"].Aliases, []string{"gpt-5.4"}) {
+		t.Errorf("gpt-5.4[272K] aliases = %v, want [gpt-5.4]", byID["gpt-5.4[272K]"].Aliases)
+	}
+	codexModel := byID["gpt-5.3-codex[400K]"]
+	if got := codexModel.DisplayName; got != "GPT-5.3 Codex (400K)" {
+		t.Errorf("gpt-5.3-codex display name = %q, want generated display name", got)
+	}
+	if !slices.Equal(codexModel.Aliases, []string{"gpt-5.3-codex"}) {
+		t.Errorf("gpt-5.3-codex aliases = %v, want [gpt-5.3-codex]", codexModel.Aliases)
+	}
+	if got := codexModel.ContextWindow; got != 400_000 {
+		t.Errorf("gpt-5.3-codex context window = %d, want 400000", got)
+	}
+}
+
+func TestParseCodexModelCatalogWithProgress_ReportsVisibleAPIModels(t *testing.T) {
+	catalogJSON := []byte(`{"models":[
+		{"slug":"gpt-5.5","display_name":"GPT-5.5","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":272000},
+		{"slug":"hidden-model","display_name":"Hidden","visibility":"hide","supported_in_api":true,"context_window":272000},
+		{"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":1000000}
+	]}`)
+	var reported []string
+
+	models, err := parseCodexModelCatalogWithProgress(catalogJSON, func(model llm.ModelInfo) {
+		reported = append(reported, model.ID)
+	})
+	if err != nil {
+		t.Fatalf("parseCodexModelCatalogWithProgress() error: %v", err)
+	}
+	gotIDs := make([]string, 0, len(models))
+	for _, model := range models {
+		gotIDs = append(gotIDs, model.ID)
+	}
+	wantIDs := []string{"gpt-5.5[272K]", "gpt-5.4[272K]", "gpt-5.4[1M]"}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("model IDs = %v, want %v", gotIDs, wantIDs)
+	}
+	if !slices.Equal(reported, wantIDs) {
+		t.Fatalf("reported = %v, want %v", reported, wantIDs)
+	}
+}
+
+func TestProviderDiscoverModelCatalog_FallsBackToBundledCatalog(t *testing.T) {
+	var calls [][]string
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			if name != "codex" {
+				t.Fatalf("command name = %q, want codex", name)
+			}
+			calls = append(calls, slices.Clone(args))
+			switch len(calls) {
+			case 1:
+				return []byte("{not-json"), nil
+			case 2:
+				return []byte(`{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"list","supported_in_api":true,"context_window":272000}]}`), nil
+			default:
+				t.Fatalf("unexpected runner call %d: %v", len(calls), args)
+				return nil, nil
+			}
+		},
+	}
+
+	models, err := p.DiscoverModelCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("DiscoverModelCatalog() error: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "gpt-5.4[272K]" {
+		t.Fatalf("DiscoverModelCatalog() = %+v, want gpt-5.4[272K]", models)
+	}
+	wantCalls := [][]string{
+		{"debug", "models"},
+		{"debug", "models", "--bundled"},
+	}
+	if len(calls) != len(wantCalls) {
+		t.Fatalf("runner calls = %v, want %v", calls, wantCalls)
+	}
+	for i := range calls {
+		if !slices.Equal(calls[i], wantCalls[i]) {
+			t.Fatalf("runner call %d = %v, want %v", i, calls[i], wantCalls[i])
+		}
+	}
+}
+
+func TestProviderBuildCommand_AddsSelectedContextWindowOverride(t *testing.T) {
+	p := &Provider{}
+	homeDir := t.TempDir()
+	stateDir := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	t.Setenv("HOME", homeDir)
+
+	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:    "gpt-5.4[1M]",
+		StateDir: stateDir,
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	if env != nil {
+		t.Fatalf("BuildCommand() env = %v, want nil", env)
+	}
+	assertConfigOverride(t, cmd, "model_context_window=1000000")
+}
+
 // TestCodexProvider_DefaultCatalog_Invariants locks in the hardcoded
 // Codex catalog that replaced the former discovery pipeline.
 func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
@@ -499,10 +644,12 @@ func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
 	}
 
 	wantWindows := map[string]int{
-		"gpt-5.4":       1_050_000,
-		"gpt-5.4-mini":  400_000,
-		"gpt-5.3-codex": 400_000,
-		"gpt-5.2":       400_000,
+		"gpt-5.5[272K]":       272_000,
+		"gpt-5.4[272K]":       272_000,
+		"gpt-5.4[1M]":         1_000_000,
+		"gpt-5.4-mini[400K]":  400_000,
+		"gpt-5.3-codex[400K]": 400_000,
+		"gpt-5.2[400K]":       400_000,
 	}
 	for id, want := range wantWindows {
 		m, ok := byID[id]
@@ -514,6 +661,9 @@ func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
 			t.Errorf("%s.ContextWindow = %d, want %d", id, m.ContextWindow, want)
 		}
 	}
+	if got := byID["gpt-5.4[272K]"].Category; got != "balanced" {
+		t.Errorf("gpt-5.4[272K].Category = %q, want balanced", got)
+	}
 }
 
 // TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed
@@ -522,11 +672,17 @@ func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
 func TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *testing.T) {
 	p := &Provider{}
 	tests := map[string]int{
-		"gpt-5.4":       1_050_000,
-		"gpt-5.4-mini":  400_000,
-		"gpt-5.3-codex": 400_000,
-		"codex":         400_000, // alias of gpt-5.3-codex
-		"gpt-5.2":       400_000,
+		"gpt-5.5":             272_000,
+		"gpt-5.5[272K]":       272_000,
+		"gpt-5.4":             272_000,
+		"gpt-5.4[272K]":       272_000,
+		"gpt-5.4[1M]":         1_000_000,
+		"gpt-5.4-mini":        400_000,
+		"gpt-5.4-mini[400K]":  400_000,
+		"gpt-5.3-codex":       400_000,
+		"gpt-5.3-codex[400K]": 400_000,
+		"gpt-5.2":             400_000,
+		"gpt-5.2[400K]":       400_000,
 	}
 	for model, want := range tests {
 		t.Run(model, func(t *testing.T) {

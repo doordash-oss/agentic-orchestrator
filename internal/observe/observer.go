@@ -478,6 +478,61 @@ func (o *Observer) FeatureFailed(sc SpanContext, failureType, errorMsg string) {
 	})
 }
 
+// SetupLifecycle emits a pre-phase setup lifecycle event.
+func (o *Observer) SetupLifecycle(sc SpanContext, ev feature.SetupEvent) {
+	if o == nil || !o.enabled {
+		return
+	}
+	eventType := "setup.progress"
+	switch ev.Kind {
+	case feature.SetupEventStarted:
+		eventType = "setup.started"
+	case feature.SetupEventCompleted:
+		eventType = "setup.completed"
+	case feature.SetupEventFailed:
+		eventType = "setup.failed"
+	}
+	data := map[string]any{
+		"attempt": ev.Attempt,
+	}
+	if ev.TaskKey != "" {
+		data["setup_task"] = ev.TaskKey
+	}
+	if ev.TaskKind != "" {
+		data["setup_kind"] = string(ev.TaskKind)
+	}
+	if ev.TaskStatus != "" {
+		data["setup_status"] = string(ev.TaskStatus)
+	}
+	if ev.LogPath != "" {
+		data["setup_log"] = ev.LogPath
+	}
+	if ev.Repo != "" {
+		data["repo_name"] = ev.Repo
+	}
+	if ev.Path != "" {
+		data["path"] = ev.Path
+	}
+	if ev.Branch != "" {
+		data["branch"] = ev.Branch
+	}
+	if ev.Error != "" {
+		data["error"] = ev.Error
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    eventType,
+		FeatureID:    sc.FeatureID,
+		RepoName:     ev.Repo,
+		Status:       string(ev.TaskStatus),
+		Error:        ev.Error,
+		Data:         data,
+	})
+}
+
 // FeatureInterrupted emits a feature.interrupted event.
 func (o *Observer) FeatureInterrupted(sc SpanContext, phase string) {
 	if o == nil || !o.enabled {
@@ -1045,6 +1100,7 @@ func (o *Observer) ConfigChanged(sc SpanContext, before, after feature.ConfigSna
 func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 	return map[string]any{
 		"models": map[string]any{
+			"inquiry":        s.Models.Inquiry,
 			"research":       s.Models.Research,
 			"planning":       s.Models.Planning,
 			"implementation": s.Models.Implementation,
@@ -1054,11 +1110,12 @@ func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 		},
 		"inquireness": string(s.Inquireness),
 		"checkpoints": map[string]any{
-			"inquiry_review":  s.Checkpoints.InquiryReview,
-			"research_review": s.Checkpoints.ResearchReview,
-			"design_review":   s.Checkpoints.DesignReview,
-			"plan_review":     s.Checkpoints.PlanReview,
-			"manual_publish":  s.Checkpoints.ManualPublish,
+			"inquiry_review":    s.Checkpoints.InquiryReview,
+			"research_review":   s.Checkpoints.ResearchReview,
+			"design_review":     s.Checkpoints.DesignReview,
+			"roadmap_review":    s.Checkpoints.RoadmapReview,
+			"phase_plan_review": s.Checkpoints.PhasePlanReview,
+			"manual_publish":    s.Checkpoints.ManualPublish,
 		},
 	}
 }

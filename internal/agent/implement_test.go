@@ -16,6 +16,8 @@ package agent
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"gopkg.in/yaml.v3"
@@ -857,6 +860,166 @@ func TestImplementLoopCodexRoutingUnit(t *testing.T) {
 	}
 }
 
+// TestImplementLoop_SessionUsesInteractiveTurnMode proves the implement loop
+// gates TurnModeInteractive on the finish-or-violate capability: it is armed
+// only when ImplementConfig.FinishOrViolateNudge is set and stays at the default
+// one-shot mode otherwise (the Claude/Codex path).
+func TestImplementLoop_SessionUsesInteractiveTurnMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		nudge    bool
+		wantMode ports.SessionTurnMode
+	}{
+		{name: "capability armed uses interactive", nudge: true, wantMode: ports.TurnModeInteractive},
+		{name: "capability off uses one-shot", nudge: false, wantMode: ports.TurnModeOneShot},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			workDir := filepath.Join(tmpDir, "work")
+			artifactDir := filepath.Join(tmpDir, "artifacts")
+			stateDir := filepath.Join(tmpDir, "state", "test-impl-tm")
+			for _, d := range []string{workDir, artifactDir, stateDir} {
+				os.MkdirAll(d, 0o755)
+			}
+			planPath := filepath.Join(artifactDir, "plan.md")
+			_ = os.WriteFile(planPath, []byte("# Plan\nDo something"), 0o644)
+
+			store := feature.NewStore(filepath.Join(tmpDir, "state"))
+			f := &feature.Feature{
+				ID:           "test-impl-tm",
+				Name:         "Test",
+				Slug:         "test",
+				Status:       feature.StatusImplementing,
+				CurrentPhase: feature.PhaseImplement,
+				Repos:        []feature.FeatureRepo{{Name: "r", Path: workDir}},
+			}
+			_ = store.Save(f)
+
+			var capturedOpts *session.SessionOpts
+			cfg := ImplementConfig{
+				Feature:              f,
+				FeatureStore:         store,
+				WorkDir:              workDir,
+				PlanPath:             planPath,
+				MaxIterations:        1,
+				MaxConsecFails:       3,
+				MaxConsecNoProgress:  3,
+				ExitCriteria:         "Relevant tests pass",
+				Model:                "model-a",
+				ReviewModel:          "reviewer",
+				ArtifactDir:          artifactDir,
+				StateDir:             stateDir,
+				FinishOrViolateNudge: tc.nudge,
+				BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+					return []string{"echo", "unused"}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+				},
+				SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (session.SessionHandle, error) {
+					if len(opts) > 0 {
+						capturedOpts = opts[0]
+					}
+					return nil, session.ErrShuttingDown
+				},
+			}
+
+			if _, err := RunImplementationLoop(cfg, nil); err != nil {
+				t.Fatalf("RunImplementationLoop() error: %v", err)
+			}
+			if capturedOpts == nil {
+				t.Fatal("expected SessionOpts to be captured")
+			}
+			if capturedOpts.TurnMode != tc.wantMode {
+				t.Errorf("TurnMode = %v, want %v", capturedOpts.TurnMode, tc.wantMode)
+			}
+		})
+	}
+}
+
+// TestImplementLoop_FinishOrViolateNudgeRecoversSameSession proves the
+// end-to-end finish-or-violate flow: a single interactive session ends its
+// first turn without the completion artifacts, the harness nudges the SAME live
+// session, and the nudged turn writes the artifacts + phase_complete so the
+// iteration succeeds without a protocol violation.
+func TestImplementLoop_FinishOrViolateNudgeRecoversSameSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-fov-001")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	planPath := filepath.Join(artifactDir, "plan.md")
+	_ = os.WriteFile(planPath, []byte("# Plan\nDo something"), 0o644)
+
+	// Turn 1 emits a deliberate end_turn result with NO artifacts. The script
+	// then blocks reading stdin; the finish-or-violate nudge arrives as the
+	// next stdin line, after which turn 2 writes the artifacts + phase_complete
+	// and emits a second success result.
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh", fmt.Sprintf(`%s
+echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+while IFS= read -r _line; do
+  case "$_line" in
+    %s)
+      %s
+      echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":0.001,"stop_reason":"end_turn"}'
+      exit 0
+      ;;
+  esac
+done
+`, testutil.JSONLInit, finishOrViolateNudgeCasePattern, testutil.WriteImplementSuccessArtifacts(artifactDir)))
+
+	f := &feature.Feature{
+		ID:            "test-fov-001",
+		Name:          "Test",
+		Slug:          "test",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos:         []feature.FeatureRepo{{Name: "test-repo", Path: workDir}},
+	}
+	store := feature.NewStore(filepath.Join(tmpDir, "state"))
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+
+	result, err := RunImplementationLoop(ImplementConfig{
+		Feature:                    f,
+		FeatureStore:               store,
+		WorkDir:                    workDir,
+		PlanPath:                   planPath,
+		MaxIterations:              1,
+		MaxConsecFails:             3,
+		MaxConsecNoProgress:        3,
+		ExitCriteria:               "Relevant tests pass",
+		Model:                      "implementer",
+		ReviewModel:                "reviewer",
+		ArtifactDir:                artifactDir,
+		StateDir:                   stateDir,
+		DangerouslySkipPermissions: true,
+		SkipIterationReview:        true,
+		FinishOrViolateNudge:       true,
+		BuildSession:               mockBuildSession(agentScript, ""),
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop() error: %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+}
+
 // captureSink is an io.WriteCloser that accumulates writes under a mutex,
 // suitable for use as the session's fake stdin in tests exercising
 // SendUserMessage paths.
@@ -867,7 +1030,7 @@ type captureSink struct {
 }
 
 func newCaptureSink() *captureSink {
-	return &captureSink{done: make(chan struct{})}
+	return &captureSink{done: make(chan struct{}, 1)}
 }
 
 func (c *captureSink) Write(p []byte) (int, error) {
@@ -891,9 +1054,9 @@ func (c *captureSink) contents() string {
 	return c.buf.String()
 }
 
-// waitForWrite blocks until the sink sees another write or the timeout
-// elapses. Drains any queued notifications up front so callers can issue
-// an action and then wait for the resulting write without racing.
+// waitForWrite blocks until the sink sees a write or the timeout elapses. The
+// sink retains one pending notification so callers do not race when the write
+// lands immediately after the triggering action.
 func (c *captureSink) waitForWrite(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	select {
@@ -901,6 +1064,15 @@ func (c *captureSink) waitForWrite(t *testing.T, timeout time.Duration) {
 	case <-time.After(timeout):
 		t.Fatalf("timed out waiting for stdin write")
 	}
+}
+
+func TestCaptureSinkWaitForWriteObservesAlreadyCompletedWrite(t *testing.T) {
+	sink := newCaptureSink()
+	if _, err := sink.Write([]byte("already written")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	sink.waitForWrite(t, 10*time.Millisecond)
 }
 
 // attachCaptureSink installs a captureSink as the session's stdin. Returns
@@ -921,6 +1093,90 @@ func newTruncatedResult() *llm.ResultMessage {
 // treat as TermEndedAfterText (deliberate stop).
 func newEndedAfterTextResult() *llm.ResultMessage {
 	return &llm.ResultMessage{Subtype: "success", StopReason: "end_turn"}
+}
+
+// nudgeRecorderSession is a SessionHandle test double that records the messages
+// sent via SendUserMessage and can be configured to return a send error.
+type nudgeRecorderSession struct {
+	*utilityTestSession
+	sendErr  error
+	messages []string
+}
+
+func newNudgeRecorderSession(sendErr error) *nudgeRecorderSession {
+	return &nudgeRecorderSession{utilityTestSession: newUtilityTestSession(), sendErr: sendErr}
+}
+
+func (s *nudgeRecorderSession) SendUserMessage(text string) error {
+	if s.sendErr != nil {
+		return s.sendErr
+	}
+	s.messages = append(s.messages, text)
+	return nil
+}
+
+func TestDecideFinishOrViolate(t *testing.T) {
+	cases := []struct {
+		name        string
+		class       llm.TerminationClass
+		startNudges int
+		sendErr     error
+		wantNudged  bool
+		wantNudges  int
+		wantSends   int
+	}{
+		{name: "ended after text sends nudge", class: llm.TermEndedAfterText, wantNudged: true, wantNudges: 1, wantSends: 1},
+		{name: "second ended after text sends nudge", class: llm.TermEndedAfterText, startNudges: 1, wantNudged: true, wantNudges: 2, wantSends: 1},
+		{name: "at cap returns false without send", class: llm.TermEndedAfterText, startNudges: maxFinishOrViolateNudges, wantNudged: false, wantNudges: maxFinishOrViolateNudges, wantSends: 0},
+		{name: "truncated not nudged", class: llm.TermTurnTruncated, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "asked formal not nudged", class: llm.TermAskedFormal, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "errored not nudged", class: llm.TermErrored, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "refused not nudged", class: llm.TermRefused, wantNudged: false, wantNudges: 0, wantSends: 0},
+		{name: "send error returns false", class: llm.TermEndedAfterText, sendErr: errSendFailed, wantNudged: false, wantNudges: 1, wantSends: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := newNudgeRecorderSession(tc.sendErr)
+			nudges := tc.startNudges
+			got := decideFinishOrViolate(sess, tc.class, &nudges, []string{"plan.md"})
+			if got != tc.wantNudged {
+				t.Errorf("decideFinishOrViolate() = %v, want %v", got, tc.wantNudged)
+			}
+			if nudges != tc.wantNudges {
+				t.Errorf("nudges = %d, want %d", nudges, tc.wantNudges)
+			}
+			if len(sess.messages) != tc.wantSends {
+				t.Errorf("sends = %d, want %d", len(sess.messages), tc.wantSends)
+			}
+		})
+	}
+}
+
+var errSendFailed = errors.New("stdin closed")
+
+func TestFormatFinishOrViolateNudge_MentionsMissingArtifacts(t *testing.T) {
+	msg := formatFinishOrViolateNudge([]string{"plan.md", "verification-report.yaml"})
+	if !strings.Contains(msg, "plan.md") || !strings.Contains(msg, "verification-report.yaml") {
+		t.Errorf("nudge should name missing artifacts, got: %s", msg)
+	}
+	if !strings.Contains(msg, "phase_complete") {
+		t.Errorf("nudge should reference phase_complete marker, got: %s", msg)
+	}
+
+	empty := formatFinishOrViolateNudge(nil)
+	if !strings.Contains(empty, "phase_complete") {
+		t.Errorf("empty nudge should reference phase_complete marker, got: %s", empty)
+	}
+
+	// Both branches must carry the shared fragment that countNudgeMessages and
+	// the integration-script case patterns match on; if the prompt wording
+	// drifts away from it, those detectors silently stop firing.
+	if !strings.Contains(msg, finishOrViolateNudgeFragment) {
+		t.Errorf("nudge should contain %q, got: %s", finishOrViolateNudgeFragment, msg)
+	}
+	if !strings.Contains(empty, finishOrViolateNudgeFragment) {
+		t.Errorf("empty nudge should contain %q, got: %s", finishOrViolateNudgeFragment, empty)
+	}
 }
 
 // countContinuationMessages reports how many times the auto-resume
@@ -1196,22 +1452,166 @@ func TestWaitForStatus_TurnTruncated_RetryCapEscalates(t *testing.T) {
 	}
 }
 
+// TestWaitForStatus_EndedAfterText_ReturnsMissingMarker proves that, with the
+// finish-or-violate capability armed (the canonical capability-positive path),
+// a deliberate end_turn without the completion marker sends exactly one nudge
+// on the first turn and keeps waiting on the same live session rather than
+// escalating immediately. (No truncation auto-resume fires either.)
 func TestWaitForStatus_EndedAfterText_ReturnsMissingMarker(t *testing.T) {
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sink := attachCaptureSink(sess)
 
 	done := make(chan string, 1)
 	go func() {
-		done <- waitForStatus(sess, nil, "", func() bool { return false })
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:           func() bool { return false },
+			FinishOrViolateNudge: true,
+		}).Status
 	}()
 
-	// A deliberate end_turn SUCCESS — no auto-resume should fire.
+	// A deliberate end_turn SUCCESS — no truncation auto-resume should fire,
+	// but the capability is armed so exactly one nudge is sent.
 	sess.SetCost(newEndedAfterTextResult())
 	sess.SendStatus("SUCCESS")
+	sink.waitForWrite(t, 2*time.Second)
 
 	if got := countContinuationMessages(sink.contents()); got != 0 {
 		t.Errorf("unexpected continuation messages on end_turn: %d, want 0", got)
 	}
+	if got := countNudgeMessages(sink.contents()); got != 1 {
+		t.Errorf("nudge messages on first end_turn = %d, want 1", got)
+	}
+
+	// The nudge keeps the session alive; the function must not have returned.
+	select {
+	case got := <-done:
+		t.Fatalf("waitForStatus returned %q; expected it to keep waiting after the nudge", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestWaitForStatus_EndedAfterText_RetryStateNotNudged locks the
+// RETRY/NEED_USER_INPUT structural guard: when the capability is armed but the
+// readiness check passes (the agent wrote phase_complete + valid progress.md
+// before ending its turn, as a legitimate RETRY does), the nudge block is never
+// entered — the function returns SUCCESS and sends zero nudges.
+func TestWaitForStatus_EndedAfterText_RetryStateNotNudged(t *testing.T) {
+	sess := session.NewSession("test", "feat", feature.PhaseImplement)
+	sink := attachCaptureSink(sess)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:           func() bool { return true },
+			FinishOrViolateNudge: true,
+		}).Status
+	}()
+
+	// A deliberate end_turn SUCCESS with the readiness check satisfied — the
+	// RETRY path. !isReady() is false, so the nudge block is unreachable.
+	sess.SetCost(newEndedAfterTextResult())
+	sess.SendStatus("SUCCESS")
+
+	select {
+	case got := <-done:
+		if got != agentStatusSuccess {
+			t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusSuccess)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for waitForStatus to return")
+	}
+	if got := countNudgeMessages(sink.contents()); got != 0 {
+		t.Errorf("nudge messages = %d, want 0 (RETRY path must bypass the nudge)", got)
+	}
+}
+
+// countNudgeMessages reports how many finish-or-violate nudges appear in the
+// captured stdin, via the shared finishOrViolateNudgeFragment so this stays in
+// sync with the prompt wording and the integration-script case patterns.
+func countNudgeMessages(body string) int {
+	return strings.Count(body, finishOrViolateNudgeFragment)
+}
+
+// finishOrViolateNudgeCasePattern is the shell `case` glob the integration
+// scripts use to detect the nudge on stdin. Derived from the production
+// fragment (spaces escaped for the shell) so a prompt-wording change keeps the
+// scripts in sync automatically.
+var finishOrViolateNudgeCasePattern = "*" + strings.ReplaceAll(finishOrViolateNudgeFragment, " ", `\ `) + "*"
+
+// TestWaitForStatus_EndedAfterText_NudgesThenSucceeds proves that, with the
+// finish-or-violate capability armed, a deliberate end_turn without the
+// completion marker sends one nudge to the same live session and then returns
+// SUCCESS cleanly once the agent finishes.
+func TestWaitForStatus_EndedAfterText_NudgesThenSucceeds(t *testing.T) {
+	sess := session.NewSession("test", "feat", feature.PhaseImplement)
+	sink := attachCaptureSink(sess)
+
+	var ready atomic.Bool
+
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:           func() bool { return ready.Load() },
+			FinishOrViolateNudge: true,
+			MissingArtifacts:     []string{"plan.md"},
+		}).Status
+	}()
+
+	// First end_turn without the marker — should nudge, not escalate.
+	sess.SetCost(newEndedAfterTextResult())
+	sess.SendStatus("SUCCESS")
+	sink.waitForWrite(t, 2*time.Second)
+
+	if got := countNudgeMessages(sink.contents()); got != 1 {
+		t.Errorf("nudge messages = %d, want 1", got)
+	}
+	select {
+	case <-done:
+		t.Fatal("waitForStatus returned; expected it to keep waiting after the nudge")
+	default:
+	}
+
+	// Now the agent finishes — readyCheck becomes true.
+	ready.Store(true)
+	sess.SendStatus("SUCCESS")
+
+	select {
+	case got := <-done:
+		if got != "SUCCESS" {
+			t.Errorf("waitForStatus() = %q, want SUCCESS", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for final SUCCESS")
+	}
+}
+
+// TestWaitForStatus_EndedAfterText_NudgeCapEscalates proves the nudge budget is
+// bounded: after maxFinishOrViolateNudges nudges, a further end_turn without the
+// marker returns the missing-marker status instead of nudging again.
+func TestWaitForStatus_EndedAfterText_NudgeCapEscalates(t *testing.T) {
+	sess := session.NewSession("test", "feat", feature.PhaseImplement)
+	sink := attachCaptureSink(sess)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:           func() bool { return false },
+			FinishOrViolateNudge: true,
+		}).Status
+	}()
+
+	for i := 0; i < maxFinishOrViolateNudges; i++ {
+		sess.SetCost(newEndedAfterTextResult())
+		sess.SendStatus("SUCCESS")
+		sink.waitForWrite(t, 2*time.Second)
+	}
+	if got := countNudgeMessages(sink.contents()); got != maxFinishOrViolateNudges {
+		t.Errorf("nudge messages = %d, want %d", got, maxFinishOrViolateNudges)
+	}
+
+	// One more end_turn beyond the cap — must escalate, no extra nudge.
+	sess.SetCost(newEndedAfterTextResult())
+	sess.SendStatus("SUCCESS")
 
 	select {
 	case got := <-done:
@@ -1220,6 +1620,39 @@ func TestWaitForStatus_EndedAfterText_ReturnsMissingMarker(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for waitForStatus to return")
+	}
+	if got := countNudgeMessages(sink.contents()); got != maxFinishOrViolateNudges {
+		t.Errorf("nudge messages after cap = %d, want %d (no extra send)", got, maxFinishOrViolateNudges)
+	}
+}
+
+// TestWaitForStatus_EndedAfterText_DisabledNotNudged proves the nudge is gated:
+// when the capability is not armed, a deliberate end_turn returns the
+// missing-marker status with no nudge (the Claude/Codex path).
+func TestWaitForStatus_EndedAfterText_DisabledNotNudged(t *testing.T) {
+	sess := session.NewSession("test", "feat", feature.PhaseImplement)
+	sink := attachCaptureSink(sess)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck: func() bool { return false },
+		}).Status
+	}()
+
+	sess.SetCost(newEndedAfterTextResult())
+	sess.SendStatus("SUCCESS")
+
+	select {
+	case got := <-done:
+		if got != agentStatusMissingMarker {
+			t.Fatalf("waitForStatus() = %q, want %q", got, agentStatusMissingMarker)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for waitForStatus to return")
+	}
+	if got := countNudgeMessages(sink.contents()); got != 0 {
+		t.Errorf("nudge messages = %d, want 0 when capability disabled", got)
 	}
 }
 
@@ -1266,8 +1699,8 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sink := attachCaptureSink(sess)
 
-	// Seed usage at exactly the threshold — 60%, on a 200K window.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 120_000, ContextWindow: 200_000})
+	// Seed usage at exactly the threshold — 60%, on a 1M window.
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 600_000, ContextWindow: 1_000_000})
 
 	var ready atomic.Bool // stays false until the test flips it.
 	polls := make(chan struct{}, 8)
@@ -1315,40 +1748,31 @@ func TestWaitForStatus_ContextHandoff_SendsOnceAtThreshold(t *testing.T) {
 	}
 }
 
-func TestWaitForStatus_ContextHandoff_CodexUses80PercentThreshold(t *testing.T) {
+func TestWaitForStatus_ContextHandoff_CodexUsesDefaultThreshold(t *testing.T) {
 	withHandoffPollInterval(t, 2*time.Millisecond)
 
 	sess := session.NewSession("test", "feat", feature.PhaseImplement)
 	sess.SetProviderName("codex")
 	sink := attachCaptureSink(sess)
 
-	// 60% would trigger the default provider policy, but Codex should wait
-	// for its provider-specific 80% threshold.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 120_000, ContextWindow: 200_000})
-	polls := make(chan struct{}, 8)
+	// Codex follows the shared 60% threshold once the window is at least 1M.
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 600_000, ContextWindow: 1_000_000})
 
 	done := make(chan string, 1)
 	go func() {
 		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
-			ReadyCheck:             func() bool { return true },
-			EnableContextHandoff:   true,
-			ContextHandoffPollHook: handoffPollHook(polls),
+			ReadyCheck:           func() bool { return true },
+			EnableContextHandoff: true,
 		}).Status
 	}()
 
-	waitForHandoffPolls(t, polls, 3, 2*time.Second)
-	if got := countHandoffMessages(sink.contents()); got != 0 {
-		t.Errorf("handoff messages at 60%% for codex = %d, want 0", got)
-	}
-
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 160_000, ContextWindow: 200_000})
 	sink.waitForWrite(t, 2*time.Second)
 
 	if got := countHandoffMessages(sink.contents()); got != 1 {
-		t.Errorf("handoff messages at 80%% for codex = %d, want 1", got)
+		t.Errorf("handoff messages at 60%% for codex = %d, want 1", got)
 	}
-	if !strings.Contains(sink.contents(), "above Agentic's 80% handoff threshold") {
-		t.Errorf("codex handoff message should include 80%% threshold, got: %s", sink.contents())
+	if !strings.Contains(sink.contents(), "above Agentic's 60% handoff threshold") {
+		t.Errorf("codex handoff message should include 60%% threshold, got: %s", sink.contents())
 	}
 
 	sess.SendStatus("SUCCESS")
@@ -1366,8 +1790,8 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 	sess.SetProviderName("codex")
 	sink := attachCaptureSink(sess)
 	sess.SetLatestUsage(&llm.Usage{
-		ContextTotalTokens: 211_000,
-		ContextWindow:      258_400,
+		ContextTotalTokens: 604_800,
+		ContextWindow:      1_000_000,
 		ContextBaseline:    12_000,
 	})
 
@@ -1384,14 +1808,14 @@ func TestWaitForStatus_ContextHandoffReturnsSnapshot(t *testing.T) {
 
 	select {
 	case got := <-done:
-		if got.Handoff.Pct != 80 {
-			t.Errorf("Handoff.Pct = %d, want 80", got.Handoff.Pct)
+		if got.Handoff.Pct != 60 {
+			t.Errorf("Handoff.Pct = %d, want 60", got.Handoff.Pct)
 		}
-		if got.Handoff.TotalTokens != 211_000 {
-			t.Errorf("Handoff.TotalTokens = %d, want 211000", got.Handoff.TotalTokens)
+		if got.Handoff.TotalTokens != 604_800 {
+			t.Errorf("Handoff.TotalTokens = %d, want 604800", got.Handoff.TotalTokens)
 		}
-		if got.Handoff.WindowTokens != 258_400 {
-			t.Errorf("Handoff.WindowTokens = %d, want 258400", got.Handoff.WindowTokens)
+		if got.Handoff.WindowTokens != 1_000_000 {
+			t.Errorf("Handoff.WindowTokens = %d, want 1000000", got.Handoff.WindowTokens)
 		}
 		if got.Handoff.BaselineTokens != 12_000 {
 			t.Errorf("Handoff.BaselineTokens = %d, want 12000", got.Handoff.BaselineTokens)
@@ -1408,7 +1832,7 @@ func TestWaitForStatus_ContextHandoff_BelowThreshold_NoSend(t *testing.T) {
 	sink := attachCaptureSink(sess)
 
 	// 40% usage — comfortably below the 60% threshold.
-	sess.SetLatestUsage(&llm.Usage{InputTokens: 80_000, ContextWindow: 200_000})
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 400_000, ContextWindow: 1_000_000})
 	polls := make(chan struct{}, 8)
 
 	done := make(chan string, 1)
@@ -1428,6 +1852,40 @@ func TestWaitForStatus_ContextHandoff_BelowThreshold_NoSend(t *testing.T) {
 	}
 
 	// Clean up.
+	sess.SendStatus("SUCCESS")
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for waitForStatus to return")
+	}
+}
+
+func TestWaitForStatus_ContextHandoff_DisabledBelowOneMillionWindow(t *testing.T) {
+	withHandoffPollInterval(t, 2*time.Millisecond)
+
+	sess := session.NewSession("test", "feat", feature.PhaseImplement)
+	sink := attachCaptureSink(sess)
+
+	// 90% usage would otherwise cross the default threshold, but the
+	// implementation nudge is disabled for context windows below 1M tokens.
+	sess.SetLatestUsage(&llm.Usage{InputTokens: 180_000, ContextWindow: 200_000})
+	polls := make(chan struct{}, 8)
+
+	done := make(chan string, 1)
+	go func() {
+		done <- waitForStatusDetailed(sess, nil, "", waitForStatusOptions{
+			ReadyCheck:             func() bool { return true },
+			EnableContextHandoff:   true,
+			ContextHandoffPollHook: handoffPollHook(polls),
+		}).Status
+	}()
+
+	waitForHandoffPolls(t, polls, 3, 2*time.Second)
+
+	if got := countHandoffMessages(sink.contents()); got != 0 {
+		t.Errorf("handoff messages below 1M window = %d, want 0", got)
+	}
+
 	sess.SendStatus("SUCCESS")
 	select {
 	case <-done:
@@ -1669,12 +2127,13 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("# Plan\nImplement something"), 0o644)
 
 	f := &feature.Feature{
-		ID:           "test-noskip-001",
-		Name:         "Test No Skip Review",
-		Slug:         "test-no-skip-review",
-		Description:  "No skip iteration review test",
-		Status:       feature.StatusImplementing,
-		CurrentPhase: feature.PhaseImplement,
+		ID:              "test-noskip-001",
+		Name:            "Test No Skip Review",
+		Slug:            "test-no-skip-review",
+		Description:     "No skip iteration review test",
+		Status:          feature.StatusImplementing,
+		CurrentPhase:    feature.PhaseImplement,
+		ActiveTimingKey: "implement",
 		Repos: []feature.FeatureRepo{
 			{Name: "test-repo", Path: workDir},
 		},
@@ -1717,7 +2176,26 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 		t.Errorf("expected BuildSession called at least 2 times (impl + review), got %d", len(*captured))
 	}
 	assertExplicitEmptyAgentNames(t, (*captured)[0].AgentNames)
-	assertExplicitEmptyAgentNames(t, (*captured)[1].AgentNames)
+	assertExplorationAgentNames(t, (*captured)[1].AgentNames)
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("implement"); got != 0.002 {
+		t.Errorf("PhaseCost(implement) = %v, want 0.002", got)
+	}
+	if len(updated.SessionCosts) != 2 {
+		t.Fatalf("len(SessionCosts) = %d, want 2", len(updated.SessionCosts))
+	}
+	implCost := updated.SessionCosts[0]
+	if implCost.SessionID != "test-noskip-001-impl-01" || implCost.PhaseKey != "implement" || implCost.ObserverPhase != "implement" || implCost.CostUSD != 0.001 {
+		t.Errorf("SessionCosts[0] = %+v, want implementation session cost under implement", implCost)
+	}
+	reviewCost := updated.SessionCosts[1]
+	if reviewCost.SessionID != "test-noskip-001-review-01" || reviewCost.PhaseKey != "implement" || reviewCost.ObserverPhase != "review" || reviewCost.CostUSD != 0.001 {
+		t.Errorf("SessionCosts[1] = %+v, want review helper session cost under implement", reviewCost)
+	}
 }
 
 func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {

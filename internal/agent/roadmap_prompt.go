@@ -108,15 +108,22 @@ func deferralsDueViews(f *feature.Feature, phase int) []prompts.DeferralView {
 // stability. RoleSpec-backed system prompts now own the primary skill
 // directive and useful-resource catalog.
 func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, designArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
+	return BuildRoadmapPromptWithResearch(f, skillsDir, guidelinesDir, designArtifactPath, "", qaFilePaths, kbInfos...)
+}
+
+// BuildRoadmapPromptWithResearch constructs the initial roadmap prompt with
+// the approved design artifact plus the research artifact as grounding context.
+func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir, designArtifactPath, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
 	_ = skillsDir
 	_ = guidelinesDir
 	_ = kbInfos
 	repos := roadmapFeatureViews(f)
 	return roles.BuildRoadmapPrompt(roles.RoadmapUserInput{
-		Name:                   f.Name,
-		Description:            f.EffectiveDescription(),
-		Repos:                  repos,
-		DesignArtifactPath: designArtifactPath,
+		Name:                 f.Name,
+		Description:          f.EffectiveDescription(),
+		Repos:                repos,
+		DesignArtifactPath:   designArtifactPath,
+		ResearchArtifactPath: researchArtifactPath,
 		VisualReferences: prompts.VisualReferencesInput{
 			Images: append([]string(nil), f.Images...),
 			Label:  "producing the roadmap",
@@ -180,6 +187,12 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 // caller stability. RoleSpec-backed system prompts now own the primary skill
 // directive and useful-resource catalog.
 func BuildPhasePlanPrompt(f *feature.Feature, skillsDir, guidelinesDir, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, kbInfos ...KBInfo) string {
+	return BuildPhasePlanPromptWithResearch(f, skillsDir, guidelinesDir, roadmapPath, "", phase, qaFilePaths, kbInfos...)
+}
+
+// BuildPhasePlanPromptWithResearch constructs the initial per-phase plan prompt
+// with the approved roadmap plus the research artifact as grounding context.
+func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir, roadmapPath, researchArtifactPath string, phase RoadmapPhase, qaFilePaths []string, kbInfos ...KBInfo) string {
 	_ = skillsDir
 	_ = guidelinesDir
 	_ = kbInfos
@@ -191,7 +204,8 @@ func BuildPhasePlanPrompt(f *feature.Feature, skillsDir, guidelinesDir, roadmapP
 			Goal:          phase.Goal,
 			StubsToRetire: append([]string(nil), phase.StubsToRetire...),
 		},
-		RoadmapPath: roadmapPath,
+		RoadmapPath:          roadmapPath,
+		ResearchArtifactPath: researchArtifactPath,
 		QAFiles: prompts.QAFilesInput{
 			Paths:         append([]string(nil), qaFilePaths...),
 			Lead:          "Read these Q&A files for important context about their intent and preferences — do not re-ask questions that have already been answered:",

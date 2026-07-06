@@ -52,6 +52,15 @@ type OrchFeatureInterruptedMsg struct {
 	FeatureID string
 }
 
+type OrchSetupLifecycleMsg struct {
+	FeatureID string
+	RunNumber int
+	Attempt   int
+	TaskKey   string
+	RepoName  string
+	Error     error
+}
+
 // OrchPhaseStartedMsg is emitted when a phase begins.
 type OrchPhaseStartedMsg struct {
 	FeatureID string

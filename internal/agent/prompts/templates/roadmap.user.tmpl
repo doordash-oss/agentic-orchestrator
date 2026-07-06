@@ -17,7 +17,9 @@
 
 {{ if .DesignArtifactPath }}Design Document: {{ .DesignArtifactPath }}
 
-{{ else }}## Feature
+{{ end }}{{ if .ResearchArtifactPath }}Research Document: {{ .ResearchArtifactPath }}
+
+{{ end }}{{ if not .DesignArtifactPath }}## Feature
 
 **Name**: {{ .Name }}
 

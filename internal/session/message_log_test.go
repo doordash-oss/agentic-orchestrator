@@ -431,6 +431,33 @@ func TestMessageLog_UpdateLastAssistantPartial(t *testing.T) {
 		}
 	})
 
+	t.Run("does not replace thinking partial with later text", func(t *testing.T) {
+		log := NewMessageLog()
+		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "thinking", Thinking: "checking"}}},
+		}})
+		log.Append(llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Read", Data: "running"}})
+		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{
+			Message: llm.ConversationMsg{Content: []llm.ContentBlock{{Type: "text", Text: "visible text"}}},
+		}})
+
+		msgs := log.Messages()
+		hasThinking := false
+		hasText := false
+		for _, m := range msgs {
+			if m.Assistant == nil {
+				continue
+			}
+			for _, block := range m.Assistant.Message.Content {
+				hasThinking = hasThinking || block.IsThinking()
+				hasText = hasText || (block.IsText() && block.Text == "visible text")
+			}
+		}
+		if !hasThinking || !hasText {
+			t.Fatalf("messages lost distinct thinking/text partials: %+v", msgs)
+		}
+	})
+
 	t.Run("final assistant replaces coalesced partial across tool_progress", func(t *testing.T) {
 		log := NewMessageLog()
 		log.UpdateLastAssistantPartial(llm.SDKMessage{Type: "assistant", Subtype: "partial", Assistant: &llm.AssistantMessage{

@@ -62,6 +62,7 @@ You are tasked with conducting comprehensive research across the codebase to ans
    - Each agent knows its job - just tell it what you're looking for
    - Don't write detailed prompts about HOW to search - the agents already know
    - Remind agents they are documenting, not evaluating or improving
+   - **Text-only output**: every sub-agent prompt MUST instruct the agent to return its findings as its text response and to NOT write or edit any file — sub-agents have no output artifact of their own. You are the sole writer; only you create the research document (step 5).
 
 4. **Checkpoint each sub-agent's findings as it returns:**
    - Write each completed sub-agent's findings to `{phase_dir}/findings/<slug>.md` before synthesizing. These survive an interrupted session and are never re-run. (The `findings/` subdir is scratch, not the artifact.)

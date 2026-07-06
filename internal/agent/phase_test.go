@@ -15,8 +15,10 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -110,6 +112,57 @@ func TestPhaseRunnerRunResearchBuildPrompt(t *testing.T) {
 	}
 	if !phaseContains(prompt, "/state/feat-1/inquire/questions.md") {
 		t.Error("expected questions path in prompt")
+	}
+}
+
+func TestRunInteractivePhase_UsesPhaseSpecificModel(t *testing.T) {
+	dir := t.TempDir()
+	eventCh := make(chan any, 10)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	store := feature.NewStore(filepath.Join(dir, "state"))
+	pr := NewPhaseRunner(sm, store, filepath.Join(dir, "state"))
+
+	captured := map[feature.Phase]string{}
+	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		captured[opts.Phase] = opts.Model
+		return nil, nil, nil, fmt.Errorf("stop after capturing model")
+	}
+
+	f := &feature.Feature{
+		ID:          "feat-model-routing",
+		Name:        "Model Routing",
+		Description: "Verify phase-specific model routing",
+		Repos: []feature.FeatureRepo{
+			{Name: "repo", Path: dir},
+		},
+		Models: config.ModelConfig{
+			Inquiry:  "inquiry-model",
+			Research: "research-model",
+			Planning: "planning-model",
+		},
+	}
+
+	if _, err := pr.RunInquire(f); err == nil {
+		t.Fatal("RunInquire error = nil, want injected BuildSession error")
+	}
+	if got := captured[feature.PhaseInquire]; got != "inquiry-model" {
+		t.Errorf("RunInquire model = %q, want inquiry-model", got)
+	}
+
+	if _, err := pr.RunResearchFromQuestions(f, filepath.Join(dir, "questions.md")); err == nil {
+		t.Fatal("RunResearchFromQuestions error = nil, want injected BuildSession error")
+	}
+	if got := captured[feature.PhaseResearch]; got != "research-model" {
+		t.Errorf("RunResearchFromQuestions model = %q, want research-model", got)
+	}
+
+	if _, err := pr.RunDesign(f, "", nil); err == nil {
+		t.Fatal("RunDesign error = nil, want injected BuildSession error")
+	}
+	if got := captured[feature.PhaseDesign]; got != "planning-model" {
+		t.Errorf("RunDesign model = %q, want planning-model", got)
 	}
 }
 
@@ -620,6 +673,7 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 				},
 				Models: config.ModelConfig{
 					Research: "test-model",
+					Planning: "test-model",
 				},
 			}
 
@@ -1102,23 +1156,248 @@ func TestRunKnowledgeBaseForRepo_RemovesStalePhaseCompleteBeforeSession(t *testi
 	}
 }
 
+func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
+	tmpDir := t.TempDir()
+	stateDir := filepath.Join(tmpDir, "state")
+	repoDir := filepath.Join(tmpDir, "repo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+
+	sm := mocks.NewMockSessionManager()
+	cmd := mocks.NewMockCommandRunner()
+	cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
+		return []byte("deadbeef\n"), nil
+	}
+
+	var capturedLogPath string
+	var startSessionLogPath string
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		if len(opts) > 0 && opts[0] != nil {
+			startSessionLogPath = opts[0].LogPath
+		}
+		return session.NewSession(id, featureID, phase), nil
+	}
+	pr := &PhaseRunner{
+		SessionManager: sm,
+		StateDir:       stateDir,
+		CommandRunner:  cmd,
+		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			capturedLogPath = opts.LogPath
+			return []string{"true"}, nil, &session.SessionOpts{}, nil
+		},
+	}
+
+	f := &feature.Feature{
+		ID:     "feat-kb-log",
+		Repos:  []feature.FeatureRepo{{Name: "repo-a", Path: repoDir}},
+		Models: config.ModelConfig{},
+	}
+
+	if _, err := pr.RunKnowledgeBaseForRepo(f, f.Repos[0]); err != nil {
+		t.Fatalf("RunKnowledgeBaseForRepo: %v", err)
+	}
+
+	want := filepath.Join(KBStateDir(stateDir, "repo-a"), "output.txt")
+	if capturedLogPath != want {
+		t.Fatalf("BuildSession LogPath = %q, want %q", capturedLogPath, want)
+	}
+	if len(sm.StartSessionCalls) != 1 {
+		t.Fatalf("StartSession calls = %d, want 1", len(sm.StartSessionCalls))
+	}
+	if got := startSessionLogPath; got != want {
+		t.Fatalf("StartSession SessionOpts.LogPath = %q, want %q", got, want)
+	}
+}
+
 func newRegistryWithProviders() *llm.Registry {
 	reg := llm.NewRegistry()
 	claudeProvider := &claude.Provider{}
 	claudeProvider.SetModelCatalog([]llm.ModelInfo{
-		{ID: "opus", Category: "capable"},
-		{ID: "sonnet", Category: "balanced"},
-		{ID: "haiku", Category: "cheap"},
+		{ID: "opus[1M]", Category: "capable", Aliases: []string{"opus"}},
+		{ID: "sonnet[200K]", Category: "balanced", Aliases: []string{"sonnet"}},
+		{ID: "haiku[200K]", Category: "cheap", Aliases: []string{"haiku"}},
 	})
 	codexProvider := &codex.Provider{}
 	codexProvider.SetModelCatalog([]llm.ModelInfo{
-		{ID: "gpt-5.4", Category: "capable"},
-		{ID: "gpt-5.4-mini", Category: "balanced"},
-		{ID: "codex", Category: "capable"},
+		{ID: "gpt-5.4[272K]", Category: "capable", Aliases: []string{"gpt-5.4"}},
+		{ID: "gpt-5.4-mini[400K]", Category: "balanced", Aliases: []string{"gpt-5.4-mini"}},
+		{ID: "codex[272K]", Category: "capable", Aliases: []string{"codex"}},
 	})
 	reg.Register(claudeProvider)
 	reg.Register(codexProvider)
 	return reg
+}
+
+type captureProvider struct {
+	name            string
+	model           string
+	contextWindow   int
+	watchdog        bool
+	finishOrViolate bool
+	boundedSandbox  bool
+	buildOpts       llm.CommandBuildOpts
+	protocolOpts    llm.ProtocolOpts
+}
+
+func (p *captureProvider) Name() string                 { return p.name }
+func (p *captureProvider) VersionInfo() (string, error) { return "1.0.0", nil }
+func (p *captureProvider) InstallHint() string          { return "" }
+func (p *captureProvider) MatchesModel(model string) bool {
+	return model == p.model
+}
+func (p *captureProvider) DetectCLI() bool           { return true }
+func (p *captureProvider) AvailableModels() []string { return []string{p.model} }
+func (p *captureProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	p.buildOpts = opts
+	return []string{p.name}, nil, nil
+}
+func (p *captureProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
+	p.protocolOpts = opts
+	return captureProtocol{}
+}
+func (p *captureProvider) MinVersion() [3]int { return [3]int{} }
+func (p *captureProvider) EnvVarsToExclude() []string {
+	return nil
+}
+func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
+func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
+func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
+func (p *captureProvider) SupportsFinishOrViolateNudge() bool       { return p.finishOrViolate }
+func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
+
+type captureProtocol struct{}
+
+func (captureProtocol) SetStdin(io.Writer) {}
+func (captureProtocol) Handshake(context.Context) error {
+	return nil
+}
+func (captureProtocol) ParseLine([]byte) ([]llm.SDKMessage, error) { return nil, nil }
+func (captureProtocol) SendUserMessage(string) error               { return nil }
+func (captureProtocol) RespondToControl(string, bool, json.RawMessage, string) error {
+	return nil
+}
+func (captureProtocol) RespondToHook(string) error { return nil }
+func (captureProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+	return nil
+}
+func (captureProtocol) Interrupt() error       { return llm.ErrNotSupported }
+func (captureProtocol) SessionID() string      { return "" }
+func (captureProtocol) TranscriptPath() string { return "" }
+func (captureProtocol) Close() error           { return nil }
+
+func newRegistryWithCaptureProvider(p *captureProvider) *llm.Registry {
+	reg := llm.NewRegistry()
+	reg.Register(p)
+	return reg
+}
+
+func TestBuildSessionForwardsProviderBoundaries(t *testing.T) {
+	dir := t.TempDir()
+	workDir := filepath.Join(dir, "repo")
+	skillsDir := filepath.Join(dir, "skills")
+	guidelinesDir := filepath.Join(dir, "guidelines")
+	kbDir := filepath.Join(dir, "knowledge-base", "repo")
+	for _, d := range []string{workDir, skillsDir, guidelinesDir, kbDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, watchdog: true}
+	pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
+	pr.Registry = newRegistryWithCaptureProvider(provider)
+	pr.SkillsDir = skillsDir
+	pr.GuidelinesDir = guidelinesDir
+	markerPath := filepath.Join(dir, "phase_complete")
+
+	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+		Model:           "model-a[1M]",
+		Prompt:          "rendered prompt",
+		SystemPrompt:    "system prompt",
+		AdditionalDirs:  []string{kbDir},
+		WorkDir:         workDir,
+		MarkerPath:      markerPath,
+		ResumeSessionID: "session-prior",
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+
+	for _, want := range []string{dir, kbDir, skillsDir, guidelinesDir, workDir} {
+		if !slices.Contains(provider.buildOpts.ReadRoots, want) {
+			t.Fatalf("ReadRoots = %v, missing %q", provider.buildOpts.ReadRoots, want)
+		}
+	}
+	for _, want := range []string{dir, kbDir} {
+		if !slices.Contains(provider.buildOpts.WritableRoots, want) {
+			t.Fatalf("WritableRoots = %v, missing %q", provider.buildOpts.WritableRoots, want)
+		}
+	}
+	for _, forbidden := range []string{skillsDir, guidelinesDir} {
+		if slices.Contains(provider.buildOpts.WritableRoots, forbidden) {
+			t.Fatalf("WritableRoots = %v, should omit read-only context dir %q", provider.buildOpts.WritableRoots, forbidden)
+		}
+	}
+
+	if got := provider.protocolOpts.InitialPrompt; got != "rendered prompt" {
+		t.Fatalf("Protocol InitialPrompt = %q, want rendered prompt", got)
+	}
+	if got := provider.protocolOpts.MarkerPath; got != markerPath {
+		t.Fatalf("Protocol MarkerPath = %q, want %q", got, markerPath)
+	}
+	if got := provider.protocolOpts.ResumeSessionID; got != "session-prior" {
+		t.Fatalf("Protocol ResumeSessionID = %q, want session-prior", got)
+	}
+	if sessOpts == nil || sessOpts.ContextWindow != 1_000_000 {
+		t.Fatalf("SessionOpts.ContextWindow = %v, want 1000000", sessOpts)
+	}
+	if sessOpts.Watchdog == nil {
+		t.Fatalf("SessionOpts.Watchdog = nil, want provider-enabled config")
+	}
+}
+
+func TestWatchdogConfigForProviderCapability(t *testing.T) {
+	if got := watchdogConfigForProvider(&mockStartupProvider{name: "plain"}); got != nil {
+		t.Fatalf("watchdogConfigForProvider(plain) = %#v, want nil", got)
+	}
+	if got := watchdogConfigForProvider(&captureProvider{name: "watchdog", watchdog: true}); got == nil {
+		t.Fatal("watchdogConfigForProvider(enabled) = nil, want config")
+	}
+}
+
+func TestBuildSession_SurfacesBoundedHelperCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name    string
+		nudge   bool
+		sandbox bool
+	}{
+		{name: "capable provider", nudge: true, sandbox: true},
+		{name: "incapable provider", nudge: false, sandbox: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, finishOrViolate: tc.nudge, boundedSandbox: tc.sandbox}
+			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
+			pr.Registry = newRegistryWithCaptureProvider(provider)
+			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
+				Model:        "model-a[1M]",
+				Prompt:       "p",
+				SystemPrompt: "s",
+				WorkDir:      dir,
+				MarkerPath:   filepath.Join(dir, "phase_complete"),
+			})
+			if err != nil {
+				t.Fatalf("BuildSession() error: %v", err)
+			}
+			if sessOpts.SupportsFinishOrViolateNudge != tc.nudge {
+				t.Errorf("SupportsFinishOrViolateNudge = %v, want %v", sessOpts.SupportsFinishOrViolateNudge, tc.nudge)
+			}
+			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
+				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
+			}
+		})
+	}
 }
 
 func TestBuildSession_Claude(t *testing.T) {
@@ -1146,10 +1425,7 @@ func TestBuildSession_Claude(t *testing.T) {
 		t.Errorf("expected claude command, got %v", cmd)
 	}
 
-	// Claude provider returns nil env
-	if env != nil {
-		t.Errorf("expected nil env for claude, got %v", env)
-	}
+	requireOnlyAgenticoBinEnv(t, env)
 
 	// Session opts should have protocol set (registry path)
 	if sessOpts.Protocol == nil {
@@ -1161,6 +1437,29 @@ func TestBuildSession_Claude(t *testing.T) {
 	if sessOpts.InitialPrompt != "research this" {
 		t.Errorf("expected InitialPrompt 'research this', got %q", sessOpts.InitialPrompt)
 	}
+}
+
+func TestBuildSessionInjectsAgenticoBinEnv(t *testing.T) {
+	dir := t.TempDir()
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	store := feature.NewStore(dir)
+	pr := NewPhaseRunner(sm, store, dir)
+	pr.Registry = newRegistryWithProviders()
+
+	_, env, _, err := pr.BuildSession(BuildSessionOpts{
+		Model:        "opus",
+		Prompt:       "research this",
+		SystemPrompt: "you are a researcher",
+		PIDDir:       filepath.Join(dir, "pid"),
+		PermHandler:  permHandlerFor(false, nil, ""),
+		WorkDir:      dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildSession() error: %v", err)
+	}
+
+	requireOnlyAgenticoBinEnv(t, env)
 }
 
 // TestBuildSession_PinsPermissionModeForGrillingPhases verifies that
@@ -1578,10 +1877,7 @@ func TestBuildSession_Codex_UsesProviderNilEnv(t *testing.T) {
 		t.Errorf("expected [codex app-server], got %v", cmd)
 	}
 
-	// Codex provider should use the nil-env contract.
-	if env != nil {
-		t.Errorf("expected nil env, got %v", env)
-	}
+	requireOnlyAgenticoBinEnv(t, env)
 
 	// Session opts should have protocol set (registry path).
 	if sessOpts.Protocol == nil {
@@ -1619,9 +1915,7 @@ func TestBuildSession_Codex_IgnoresAgentNamesSelection(t *testing.T) {
 	if got := findArgValue(cmd, "--agents"); got != "" {
 		t.Fatalf("BuildSession() emitted --agents=%q for codex command %v", got, cmd)
 	}
-	if env != nil {
-		t.Fatalf("BuildSession() env = %v, want nil", env)
-	}
+	requireOnlyAgenticoBinEnv(t, env)
 	if sessOpts.ProviderName != "codex" {
 		t.Fatalf("BuildSession() ProviderName = %q, want codex", sessOpts.ProviderName)
 	}
@@ -1815,8 +2109,8 @@ func TestRunResearchFromQuestions_PassesResearchTracerAgentNames(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from mock BuildSession")
 	}
-	if !reflect.DeepEqual(captured.AgentNames, researchAgentNames()) {
-		t.Fatalf("captured AgentNames = %v, want %v", captured.AgentNames, researchAgentNames())
+	if !reflect.DeepEqual(captured.AgentNames, explorationAgentNames()) {
+		t.Fatalf("captured AgentNames = %v, want %v", captured.AgentNames, explorationAgentNames())
 	}
 }
 
@@ -2066,7 +2360,20 @@ func TestBuildSession_WebSearchAlwaysAllowed(t *testing.T) {
 	}
 }
 
-func TestKBBuild_FallsBackToOpus(t *testing.T) {
+func stubProviderCLIs(t *testing.T, names ...string) {
+	t.Helper()
+	binDir := t.TempDir()
+	for _, name := range names {
+		p := filepath.Join(binDir, name)
+		if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("writing stub %s: %v", name, err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestKBBuild_FallsBackToCostEfficientDefault(t *testing.T) {
+	stubProviderCLIs(t, "claude", "codex")
 	dir := t.TempDir()
 	eventCh := make(chan any, 10)
 	sm := session.NewManager(eventCh)
@@ -2092,8 +2399,8 @@ func TestKBBuild_FallsBackToOpus(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from mock BuildSession")
 	}
-	if capturedModel != "claude:opus" {
-		t.Errorf("expected fallback model 'claude:opus', got %q", capturedModel)
+	if capturedModel != "claude:sonnet[200K]" {
+		t.Errorf("expected fallback model 'claude:sonnet[200K]', got %q", capturedModel)
 	}
 }
 

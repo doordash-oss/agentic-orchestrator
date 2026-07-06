@@ -17,40 +17,41 @@ That is the real "oneshot" value: an engineer can describe a large feature once,
 - **Context is built, not hoped for** — Large and Moonshot features start by building a per-repo knowledge base, then run inquiry, research, and design phases before planning. The implementation agent reads structured artifacts instead of relying on a single overloaded chat history.
 - **Complexity is phased** — Planning produces a roadmap, then each roadmap phase gets its own detailed phase plan. A tracer-bullet phase establishes the path; later TDD fill-in phases retire stubs and expand coverage.
 - **Quality gates happen before the diff gets expensive** — Plan validators review architecture, scope, structure, and, for high-risk work, security, performance, and testing. Implementation and Final Review loops use explicit verification evidence before the feature becomes publishable.
-- **Human attention is reserved for decisions** — Optional gates pause on inquiry, research, design, plan, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
+- **Human attention is reserved for decisions** — Optional gates pause on inquiry review, research review, design review, roadmap review, phase plan review, user-input, and publish decisions. You approve direction, request iteration, or answer targeted questions; the orchestrator keeps the workflow state.
 - **Parallelism is the multiplier, not the premise** — Because every feature gets isolated worktrees, branches, sessions, and artifacts, you can run several complex workflows at once without mixing state or blocking your main checkout.
-- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add a second to split the work. By default Claude handles context gathering, planning, and implementation while Codex handles independent review, but models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
+- **Provider orchestration is explicit** — One provider is enough to run the whole workflow; add more to split the work. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and models can be overridden per phase and swapped at runtime. Use `--providers` to restrict the orchestrator to the CLIs you actually have installed.
 
 The design follows patterns described in Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents) article: prompt chaining, parallelization, orchestrator-workers, and evaluator-optimizer loops. It also codifies Claude Code's [explore → plan → code](https://code.claude.com/docs/en/best-practices) workflow and OpenAI's guidance on agent [orchestration and guardrails](https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/).
 
 ## Quick Start
 
-The fastest way to install is to download a prebuilt binary from the [latest release](https://github.com/doordash-oss/agentic-orchestrator/releases/latest) — no Go toolchain required. Prebuilt binaries are published for macOS and Linux on both amd64 and arm64.
+Use Homebrew if you have it; otherwise grab the prebuilt binary. Build from source only if you're working on agentico itself.
+
+**Homebrew** (recommended — macOS/Linux):
 
 ```bash
-# Install the latest prebuilt binary into ~/.local/bin (no sudo, macOS/Linux, amd64/arm64)
+brew install doordash-oss/agentic-orchestrator/agentico
+```
+
+**Prebuilt binary** — no Homebrew or Go (macOS/Linux, amd64/arm64):
+
+```bash
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/doordash-oss/agentic-orchestrator/releases/latest | sed 's@.*/@@')
 mkdir -p ~/.local/bin
 curl -fsSL "https://github.com/doordash-oss/agentic-orchestrator/releases/download/${TAG}/agentic-orchestrator_${TAG#v}_${OS}_${ARCH}.tar.gz" | tar -xz -C ~/.local/bin agentico
-
-# Launch (add ~/.local/bin to your PATH first if it isn't already)
-~/.local/bin/agentico
+# ensure ~/.local/bin is on your PATH
 ```
 
-<details>
-<summary>Build from source (requires Go 1.25+)</summary>
+**From source** — for contributing to agentico (Go 1.25+):
 
 ```bash
 go install github.com/doordash-oss/agentic-orchestrator/cmd/agentico@latest
-
-# Or clone and build
-git clone https://github.com/doordash-oss/agentic-orchestrator.git
-cd agentic-orchestrator && make install
+# or: git clone https://github.com/doordash-oss/agentic-orchestrator.git && cd agentic-orchestrator && make install
 ```
 
-</details>
+Then run `agentico`. Update any time with `agentico update` — it uses the right method for how you installed.
 
 On first launch, Agentic Orchestrator walks you through a welcome flow to select your workspace directories. After that, you're on the dashboard.
 
@@ -71,8 +72,11 @@ Agentic Orchestrator needs **at least one** AI provider CLI.
 
 | Tool | Role | Install |
 |------|------|---------|
-| **Claude Code CLI >= 2.1.81** (`claude`) | Default backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
-| **Codex CLI >= 0.116.0** (`codex`) | Default backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **Claude Code CLI >= 2.1.81** (`claude`) | Backend for KB, inquiry, research, design, planning, implementation, and chat | [Claude Code setup](https://code.claude.com/docs/en/getting-started) or `npm install -g @anthropic-ai/claude-code@latest` |
+| **Codex CLI >= 0.116.0** (`codex`) | Backend for Final Review and Codex-backed review models | [Codex CLI setup](https://developers.openai.com/codex/cli) or `npm i -g @openai/codex@latest` |
+| **OpenCode CLI >= 1.17.9** (`opencode`) | Co-equal backend for every phase and chat; selected with `opencode:<backend/model>` (e.g. `opencode:anthropic/claude-sonnet-4-5`) | [opencode.ai](https://opencode.ai) or `curl -fsSL https://opencode.ai/install \| bash` |
+
+OpenCode routes a configured backend provider (Anthropic, OpenAI, Google, a local Ollama model, and so on) through one CLI. Authenticate it with `opencode auth login`, and confirm it is ready with `opencode models`. Agentico runs every OpenCode session against a managed, per-session config and never edits your global OpenCode configuration. Opt into it explicitly with `--providers opencode`, or let it join automatically when its CLI is installed and authenticated.
 
 ### Optional
 
@@ -81,7 +85,7 @@ Agentic Orchestrator needs **at least one** AI provider CLI.
 | **Go 1.25+** | Only needed to build `agentico` from source — not required when using a [prebuilt release binary](#quick-start) | [go.dev](https://go.dev/dl/) |
 | **Node.js 18+ and npm** | Only needed when installing Claude Code or Codex through npm | [nodejs.org](https://nodejs.org/) |
 
-After installing your provider CLI(s), run `claude auth status` and/or `codex login status`, plus `gh auth status`, before launching `agentico`.
+After installing your provider CLI(s), confirm each is authenticated — `claude auth status`, `codex login status`, and/or `opencode models` (it lists models only once a backend provider is configured) — plus `gh auth status`, before launching `agentico`. A provider whose CLI is missing, too old, or not yet authenticated is filtered out at startup with a one-line notice, and the orchestrator continues on whatever providers are ready.
 
 ## How It Works
 
@@ -111,7 +115,7 @@ When creating a feature, choose a pipeline depth:
 |---------|--------|----------|
 | **Medium** | Roadmap plan → per-phase plan/implement loop → Final Review → Publish | Small, well-understood changes where you already know the approach |
 | **Large** | KB → Inquire → Research → Design → roadmap loop → Final Review → Publish | Most complex features (default) |
-| **Moonshot** | Same phase sequence as Large, with max effort, plan-review defaults, and per-iteration implementation review | High-risk or highly ambiguous changes |
+| **Moonshot** | Same phase sequence as Large, with max effort and per-iteration implementation review | High-risk or highly ambiguous changes |
 
 ### Worktree Isolation
 
@@ -168,8 +172,8 @@ Press `n` from the dashboard to open the wizard:
 
 1. **What** — Name and describe the feature. Supports pasting images (`Ctrl+V`) and attaching files (`@`).
 2. **Where** — Select target repo(s). Browse for new directories or create repos on the fly.
-3. **Pipeline** — Choose Medium, Large, or Moonshot. Toggle individual checkpoints (inquiry review, research review, design review, plan review, manual publish).
-4. **Review** — Adjust risk level, models per phase, exit criteria. Submit to start.
+3. **Pipeline** — Choose Medium, Large, or Moonshot and see the available gate options.
+4. **Review** — Adjust risk level, models per phase, checkpoints (inquiry review, research review, design review, roadmap review, phase plan review, manual publish), exit criteria. Submit to start.
 
 ### Interacting with Agents
 
@@ -194,7 +198,7 @@ Once a feature reaches code-ready or published state:
 
 ### Ask Me Anything
 
-Press `/` anywhere to open the built-in AI chat. It's a read-only Claude session that can explain how Agentic Orchestrator works, debug issues by reading feature logs and artifacts, search the codebase, and answer questions — without modifying any files.
+Press `/` anywhere to open the built-in AI chat. It's a read-only session — backed by whichever provider your `utilities` model selects (Claude, Codex, or OpenCode) — that can explain how Agentic Orchestrator works, debug issues by reading feature logs and artifacts, search the codebase, and answer questions, without modifying any files.
 
 ### Keybindings
 
@@ -207,12 +211,13 @@ Config lives at `~/.agentic-orchestrator/config.yaml` (auto-created on first lau
 ```yaml
 defaults:
   models:
-    research: "opus[1m]"     # Model for research phase
-    planning: "opus[1m]"     # Model for planning phase
-    implementation: "opus[1m]" # Model for implementation phase
-    review: gpt-5.4          # Model for review phase (Codex)
-    utilities: sonnet        # Model for chat and utility tasks
-    kb_build: "opus[1m]"     # Model for knowledge base builds
+    inquiry: "sonnet[200K]"      # Model for Clarify/Inquire phase
+    research: "sonnet[200K]"     # Model for research phase
+    planning: "opus[1M]"         # Model for planning phase
+    implementation: "opus[1M]"   # Model for implementation phase
+    review: "gpt-5.4[272K]"      # Model for review phase (Codex)
+    utilities: "sonnet[200K]"    # Model for chat and utility tasks
+    kb_build: "sonnet[200K]"     # Model for knowledge base builds
   exit_criteria: |
     - Feature fully implemented per plan
     - Unit tests added/updated as needed
@@ -237,7 +242,13 @@ workspace_roots:
 
 ### Model Overrides
 
-Each feature can override default models during creation via the wizard (step 4). Models can be specified with explicit provider prefixes (e.g., `claude:opus`, `codex:gpt-5.4`) or as bare names that are automatically routed to the best-matching provider.
+Each feature can override default models during creation via the wizard (step 4). The model editor shows the Inquire phase as **Clarify**, separately from **Research**, so requirement clarification and codebase research can use different models. Models can be specified with explicit provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`) or as bare ids resolved against the provider registry. There are three ways a selection reaches OpenCode, and they are distinct:
+
+- A **plain alias** such as `opus`, `sonnet`, or `gpt-5.4` (no slash) resolves to its owning native provider (Claude or Codex) and **never** to OpenCode — OpenCode contributes only slash-form backend ids.
+- The explicit **`opencode:<provider>/<model>` prefix** always routes to OpenCode, passing the backend id straight through (it works even for a backend OpenCode discovers but Agentico does not pre-list).
+- A **bare slash-form backend id** such as `anthropic/claude-sonnet-4-5` (no prefix) resolves to OpenCode when it matches OpenCode's catalog. This is the form Agentico persists for the provider-neutral per-phase defaults when OpenCode is the only ready provider, so an OpenCode model **can** be a default without any `opencode:` prefix in the config.
+
+Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
 
 ### Launch Flags
 
@@ -248,10 +259,22 @@ Flags:
   --config <path>                  Config file (default: ~/.agentic-orchestrator/config.yaml)
   --state-dir <path>               State directory (default: ~/.agentic-orchestrator/features)
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
-  --providers <list>               Restrict to specific providers (claude,codex)
+  --providers <list>               Restrict to specific providers (claude,codex,opencode)
+  --refresh-models                 Refresh provider model catalogs before opening the TUI
   --help, -h                       Show help
   --version, -v                    Show version
 ```
+
+### Updating
+
+```text
+agentico update [--check|-n]
+```
+
+Run `agentico update` to upgrade to the latest stable release. Use
+`agentico update --check` (alias `-n`) to report the current and latest
+available versions without installing anything; it exits `0` and prints an
+already-up-to-date message when you are on the newest release.
 
 ## Development
 

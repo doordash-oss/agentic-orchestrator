@@ -566,6 +566,89 @@ func TestViewLogsCmdReturnsContent(t *testing.T) {
 	}
 }
 
+func TestViewLogsCmdUsesLatestSetupLog(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	fm := feature.NewManager(store, cfg)
+
+	logPath := filepath.Join(dir, "feat-setup", "runs", "run-001", "setup", "attempt-01-output.txt")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir setup log dir: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("setup started\ncreated worktree\n"), 0o644); err != nil {
+		t.Fatalf("write setup log: %v", err)
+	}
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "setup",
+		Slug:          "setup",
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.LatestLogPath = logPath
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	app := AppModel{featureManager: fm}
+	msg := app.viewLogsCmd("feat-setup", feature.PhaseKnowledgeBase, 0)()
+
+	logsMsg, ok := msg.(LogsContentMsg)
+	if !ok {
+		t.Fatalf("expected LogsContentMsg, got %T", msg)
+	}
+	if !strings.Contains(logsMsg.Content, "created worktree") {
+		t.Fatalf("setup log content = %q, want setup output", logsMsg.Content)
+	}
+	if !strings.Contains(logsMsg.Title, "setup") {
+		t.Fatalf("setup log title = %q, want setup", logsMsg.Title)
+	}
+}
+
+func TestViewLogsCmdMissingSetupLogReturnsDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	fm := feature.NewManager(store, cfg)
+
+	missingLog := filepath.Join(dir, "feat-setup", "runs", "run-001", "setup", "missing.txt")
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "setup",
+		Slug:          "setup",
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.LatestLogPath = missingLog
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	app := AppModel{featureManager: fm}
+	msg := app.viewLogsCmd("feat-setup", feature.PhaseKnowledgeBase, 0)()
+
+	logsMsg, ok := msg.(LogsContentMsg)
+	if !ok {
+		t.Fatalf("expected LogsContentMsg, got %T", msg)
+	}
+	if !strings.Contains(logsMsg.Content, "Setup log not found") || !strings.Contains(logsMsg.Content, missingLog) {
+		t.Fatalf("missing setup log content = %q, want diagnostic with path", logsMsg.Content)
+	}
+}
+
 func TestViewLogsCmdMissingFile(t *testing.T) {
 	dir := t.TempDir()
 	store := feature.NewStore(dir)
@@ -693,6 +776,188 @@ func TestViewLogsCmdRoadmapPhase(t *testing.T) {
 	}
 	if !strings.Contains(logsMsg.Content, "roadmap plan output") {
 		t.Errorf("expected roadmap log content, got %q", logsMsg.Content)
+	}
+}
+
+func TestResolveDefaultLogPath(t *testing.T) {
+	// Build an isolated phase dir per case so the helper can stat real files.
+	// A case describes which files to create relative to the phase dir; the
+	// setup log lives outside it. "want" is expressed as one of the created
+	// relative keys, or the literal "setup"/"".
+	type file struct {
+		rel string        // path relative to phaseDir; "output.txt" or "iter/foo.txt"
+		age time.Duration // how long ago it was modified (larger = older)
+	}
+	tests := []struct {
+		name        string
+		files       []file
+		hasSetupLog bool
+		emptyPhase  bool // pass "" as phaseDir to model a feature with no active run
+		wantRel     string
+		wantIsSetup bool
+	}{
+		{
+			name:        "prefers phase output over setup log",
+			files:       []file{{rel: "output.txt"}},
+			hasSetupLog: true,
+			wantRel:     "output.txt",
+			wantIsSetup: false,
+		},
+		{
+			name:        "prefers phase output when no setup log",
+			files:       []file{{rel: "output.txt"}},
+			hasSetupLog: false,
+			wantRel:     "output.txt",
+			wantIsSetup: false,
+		},
+		{
+			name:        "falls back to latest iteration log over setup",
+			files:       []file{{rel: "iteration-01/fix-output.txt", age: time.Hour}, {rel: "iteration-02/fix-output.txt"}},
+			hasSetupLog: true,
+			wantRel:     "iteration-02/fix-output.txt",
+			wantIsSetup: false,
+		},
+		{
+			name:        "falls back to setup when phase has no logs",
+			files:       nil,
+			hasSetupLog: true,
+			wantRel:     "setup",
+			wantIsSetup: true,
+		},
+		{
+			name:        "returns empty when nothing exists",
+			files:       nil,
+			hasSetupLog: false,
+			wantRel:     "",
+			wantIsSetup: false,
+		},
+		{
+			name:        "empty phase dir falls back to setup",
+			emptyPhase:  true,
+			hasSetupLog: true,
+			wantRel:     "setup",
+			wantIsSetup: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base := t.TempDir()
+			phaseDir := filepath.Join(base, "phase")
+			if !tt.emptyPhase {
+				if err := os.MkdirAll(phaseDir, 0o755); err != nil {
+					t.Fatalf("mkdir phase: %v", err)
+				}
+			}
+
+			for _, fl := range tt.files {
+				p := filepath.Join(phaseDir, fl.rel)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", fl.rel, err)
+				}
+				if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+					t.Fatalf("write %s: %v", fl.rel, err)
+				}
+				if fl.age > 0 {
+					mod := time.Now().Add(-fl.age)
+					if err := os.Chtimes(p, mod, mod); err != nil {
+						t.Fatalf("chtimes %s: %v", fl.rel, err)
+					}
+				}
+			}
+
+			setupLogPath := ""
+			if tt.hasSetupLog {
+				setupLogPath = filepath.Join(base, "setup", "attempt-01-output.txt")
+			}
+
+			passPhaseDir := phaseDir
+			if tt.emptyPhase {
+				passPhaseDir = ""
+			}
+
+			gotPath, gotIsSetup := resolveDefaultLogPath(passPhaseDir, setupLogPath)
+
+			var wantPath string
+			switch tt.wantRel {
+			case "":
+				wantPath = ""
+			case "setup":
+				wantPath = setupLogPath
+			default:
+				wantPath = filepath.Join(phaseDir, tt.wantRel)
+			}
+
+			if gotPath != wantPath {
+				t.Errorf("path = %q, want %q", gotPath, wantPath)
+			}
+			if gotIsSetup != tt.wantIsSetup {
+				t.Errorf("isSetup = %v, want %v", gotIsSetup, tt.wantIsSetup)
+			}
+		})
+	}
+}
+
+// TestViewLogsCmdPrefersActivePhaseOverSetup guards the UX fix: with a setup
+// log present, pressing "l" while a phase is active must show that phase's
+// session output, not the worktree-creation noise in the setup log.
+func TestViewLogsCmdPrefersActivePhaseOverSetup(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	fm := feature.NewManager(store, cfg)
+
+	// Setup log exists (as it always does once worktrees are created).
+	setupLog := filepath.Join(dir, "feat-active", "runs", "run-001", "setup", "attempt-01-output.txt")
+	if err := os.MkdirAll(filepath.Dir(setupLog), 0o755); err != nil {
+		t.Fatalf("mkdir setup dir: %v", err)
+	}
+	if err := os.WriteFile(setupLog, []byte("creating worktree\ncreated worktree\n"), 0o644); err != nil {
+		t.Fatalf("write setup log: %v", err)
+	}
+
+	// The active phase (Implement) has real session output.
+	implDir := filepath.Join(dir, "feat-active", "runs", "run-001", "implement")
+	if err := os.MkdirAll(implDir, 0o755); err != nil {
+		t.Fatalf("mkdir implement dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(implDir, "output.txt"), []byte("real agent work here\n"), 0o644); err != nil {
+		t.Fatalf("write implement log: %v", err)
+	}
+
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-active",
+		Name:          "active",
+		Slug:          "active",
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.LatestLogPath = setupLog
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	app := AppModel{featureManager: fm}
+	msg := app.viewLogsCmd("feat-active", feature.PhaseImplement, 0)()
+
+	logsMsg, ok := msg.(LogsContentMsg)
+	if !ok {
+		t.Fatalf("expected LogsContentMsg, got %T", msg)
+	}
+	if !strings.Contains(logsMsg.Content, "real agent work here") {
+		t.Fatalf("content = %q, want active phase output", logsMsg.Content)
+	}
+	if strings.Contains(logsMsg.Content, "creating worktree") {
+		t.Fatalf("content = %q, must not show setup log", logsMsg.Content)
+	}
+	if strings.Contains(logsMsg.Title, "setup") {
+		t.Fatalf("title = %q, must not be titled setup", logsMsg.Title)
 	}
 }
 
@@ -1009,6 +1274,49 @@ func TestDashboardWatchAttachPreservesMultiRepoTabs(t *testing.T) {
 	}
 	if updated.attach.repoTabs[0].repoName != "api" || updated.attach.repoTabs[1].repoName != "web" {
 		t.Fatalf("repo tab order = [%s %s], want [api web]", updated.attach.repoTabs[0].repoName, updated.attach.repoTabs[1].repoName)
+	}
+}
+
+func TestUpdateAttach_TabbedDoneSessionDoesNotDetachOnOrdinaryKey(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	fm.Config.Repos["api"] = config.RepoConfig{Path: "/tmp/api"}
+	fm.Config.Repos["web"] = config.RepoConfig{Path: "/tmp/web"}
+	fm.Config.Repos["worker"] = config.RepoConfig{Path: "/tmp/worker"}
+
+	f, err := fm.Create("KB Watch", "desc", []string{"api", "web", "worker"}, fm.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := fm.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusBuildingKB
+		ff.CurrentPhase = feature.PhaseKnowledgeBase
+		ff.KBStatus = map[string]string{
+			"api":    "completed",
+			"web":    "completed",
+			"worker": "pending",
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+
+	workerSess := session.NewSession(f.ID+"-kb-worker", f.ID, feature.PhaseKnowledgeBase)
+	workerSess.SetKind(ports.KindPhase)
+	workerSess.SetRepoName("worker")
+
+	tabs := []repoTab{
+		{repoName: "api", kind: ports.KindRepoImpl, status: statusReviewPassed},
+		{repoName: "web", kind: ports.KindRepoImpl, status: statusReviewPassed},
+		{repoName: "worker", kind: ports.KindRepoImpl, sess: workerSess, status: statusImplementing},
+	}
+	app.currentView = ViewAttach
+	app.attach = NewAttachModel(tabs, 2, f.ID, app.width, app.height)
+	app.attach.done = true
+
+	result, _ := app.updateAttach(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	updated := result.(AppModel)
+	if updated.currentView != ViewAttach {
+		t.Fatalf("currentView = %v, want ViewAttach; ordinary keys must not detach a tabbed KB view just because the active tab is done", updated.currentView)
 	}
 }
 
@@ -3806,9 +4114,9 @@ func TestPlanLoopDone_NeedsHumanReview_RoadmapCase(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Enable PlanReview checkpoint so needs_human_review triggers review (not failure)
+	// Enable the roadmap checkpoint so needs_human_review triggers review (not failure).
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		feat.Checkpoints.PlanReview = true
+		feat.Checkpoints.RoadmapReview = true
 		return nil
 	})
 
@@ -3971,7 +4279,7 @@ func TestPlanReviewArtifactResolution_RoadmapWithoutTotalPhases(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	// Enable PlanReview checkpoint so needs_human_review triggers review (not failure).
+	// Enable the roadmap checkpoint so needs_human_review triggers review (not failure).
 	// Advance to Planning — do NOT set TotalRoadmapPhases (leave at 0).
 	// Only set Artifacts["roadmap"] to simulate the roadmap artifact being
 	// emitted before TotalRoadmapPhases is populated.
@@ -3979,7 +4287,7 @@ func TestPlanReviewArtifactResolution_RoadmapWithoutTotalPhases(t *testing.T) {
 	_ = fm.Transition(f.ID, feature.StatusPlanReady)
 	_ = fm.Transition(f.ID, feature.StatusPlanning)
 	_ = fm.Store.Modify(f.ID, func(feat *feature.Feature) error {
-		feat.Checkpoints.PlanReview = true
+		feat.Checkpoints.RoadmapReview = true
 		feat.TotalRoadmapPhases = 0
 		feat.CurrentRoadmapPhase = 0
 		if feat.Artifacts == nil {
@@ -7457,6 +7765,98 @@ func TestHasActiveTextInputWelcomeConfirm(t *testing.T) {
 	}
 }
 
+// --- Workspace Config Editor (Shift+E) tests ---
+
+func TestOpenWorkspaceConfigEditor_FromDashboardLeftPanel(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	app.currentView = ViewDashboard
+	app.dashboard.focusPanel = 0
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	got := updated.(AppModel)
+	if !got.editConfigActive || !got.editConfig.isWorkspace {
+		t.Fatalf("Shift+E from dashboard left panel should open the workspace overlay, got editConfigActive=%v isWorkspace=%v",
+			got.editConfigActive, got.editConfig.isWorkspace)
+	}
+}
+
+func TestOpenWorkspaceConfigEditor_FromDashboardRightPanel(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	app.currentView = ViewDashboard
+	app.dashboard.focusPanel = 1
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	got := updated.(AppModel)
+	if !got.editConfigActive || !got.editConfig.isWorkspace {
+		t.Fatalf("Shift+E from dashboard right panel should open the workspace overlay, got editConfigActive=%v isWorkspace=%v",
+			got.editConfigActive, got.editConfig.isWorkspace)
+	}
+}
+
+func TestOpenWorkspaceConfigEditor_FromDetailView(t *testing.T) {
+	app, _ := newTestAppModel(t)
+	app.currentView = ViewDetail
+	app.detail.feature = &feature.Feature{ID: "f1", Name: "test"}
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	got := updated.(AppModel)
+	if !got.editConfigActive || !got.editConfig.isWorkspace {
+		t.Fatalf("Shift+E from detail view should open the workspace overlay, got editConfigActive=%v isWorkspace=%v",
+			got.editConfigActive, got.editConfig.isWorkspace)
+	}
+}
+
+func TestSaveWorkspaceConfigCmd_PersistsDefaultsAndClosesOverlay(t *testing.T) {
+	cfg := config.NewDefault()
+	app, _ := newTestAppModelWithConfig(t, cfg)
+	app.currentView = ViewDashboard
+
+	updated, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
+	app = updated.(AppModel)
+	if !app.editConfigActive || !app.editConfig.isWorkspace {
+		t.Fatalf("precondition: workspace overlay should be open")
+	}
+
+	// Simulate an edit directly on the embedded editor — UI navigation for
+	// the Models cascade is covered by editconfig_test.go / configeditor_test.go.
+	app.editConfig.editor.models.Utilities = "claude/opus-4-7"
+
+	updated, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	app = updated.(AppModel)
+	if !app.editConfig.saving {
+		t.Fatalf("expected saving=true immediately after pressing enter")
+	}
+	if cmd == nil {
+		t.Fatal("expected a save command")
+	}
+
+	msg := cmd()
+	result, ok := msg.(editConfigResultMsg)
+	if !ok {
+		t.Fatalf("expected editConfigResultMsg, got %T", msg)
+	}
+	if result.err != nil {
+		t.Fatalf("saveWorkspaceConfigCmd returned error: %v", result.err)
+	}
+
+	updated, _ = app.Update(result)
+	app = updated.(AppModel)
+	if app.editConfigActive {
+		t.Error("overlay should close after a successful workspace save")
+	}
+	if cfg.Defaults.Models.Utilities != "claude/opus-4-7" {
+		t.Errorf("cfg.Defaults.Models.Utilities = %q, want claude/opus-4-7", cfg.Defaults.Models.Utilities)
+	}
+
+	reloaded, err := config.Load(app.configPath)
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if reloaded.Defaults.Models.Utilities != "claude/opus-4-7" {
+		t.Errorf("reloaded config Utilities = %q, want claude/opus-4-7", reloaded.Defaults.Models.Utilities)
+	}
+}
+
 // --- Workspace Manager Overlay tests ---
 
 func TestWorkspaceManagerWKeyOpensOverlay(t *testing.T) {
@@ -8377,6 +8777,154 @@ func TestCreateFeatureCmdSavesGatesToConfig(t *testing.T) {
 	}
 }
 
+func TestFeatureCreatedMsgSelectsPersistedSetupWithoutStartingPhase(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	orch := newFakeOrch()
+	app.orchestrator = orch
+	app.currentView = ViewDashboard
+	app.wizardCreating = true
+	app.wizardCreatingName = "setup-feature"
+	app.dashboard.creatingName = "setup-feature"
+	app.kbStaleWarnings = make(map[string]string)
+
+	now := time.Now()
+	setupFeature := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "Setup Feature",
+		Slug:          "setup-feature",
+		Description:   "persisted setup",
+		Created:       now,
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		Repos:         []feature.FeatureRepo{{Name: "test-repo", Path: "/tmp/test-repo", Branch: "feature/setup-feature"}},
+		Models:        fm.Config.Defaults.Models,
+		ExitCriteria:  fm.Config.Defaults.ExitCriteria,
+		Inquireness:   feature.Inquireness(fm.Config.Defaults.Inquireness),
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setupFeature.SetRun(&feature.Run{
+		RunNumber: 1,
+		Setup:     feature.NewActiveSetupState(setupFeature.Repos, nil, nil, now),
+	})
+	if err := fm.Store.Save(setupFeature); err != nil {
+		t.Fatalf("save setup feature: %v", err)
+	}
+
+	model, cmd := app.Update(FeatureCreatedMsg{FeatureIDs: []string{setupFeature.ID}})
+	app = model.(AppModel)
+	msgs := executeBatchCmd(t, cmd)
+
+	if len(orch.startFeatureIDs) != 0 {
+		t.Fatalf("StartFeature calls = %v, want none while setup is active", orch.startFeatureIDs)
+	}
+	foundRunSetup := false
+	for _, call := range orch.lifecycleCalls {
+		if call == "RunSetup:"+setupFeature.ID {
+			foundRunSetup = true
+			break
+		}
+	}
+	if !foundRunSetup {
+		t.Fatalf("lifecycle calls = %v, want RunSetup:%s", orch.lifecycleCalls, setupFeature.ID)
+	}
+	if app.wizardCreating || app.wizardCreatingName != "" || app.dashboard.creatingName != "" {
+		t.Fatalf("creation placeholders not cleared: wizardCreating=%v wizardName=%q dashboardName=%q", app.wizardCreating, app.wizardCreatingName, app.dashboard.creatingName)
+	}
+	for _, msg := range msgs {
+		if _, ok := msg.(RefreshFeaturesMsg); ok {
+			model, _ = app.Update(msg)
+			app = model.(AppModel)
+		}
+	}
+	if got := app.dashboard.SelectedFeatureID(); got != setupFeature.ID {
+		t.Fatalf("selected feature = %q, want %q", got, setupFeature.ID)
+	}
+}
+
+func TestActiveSetupDetailIgnoresPhaseStopAndRestartKeys(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	orch := newFakeOrch()
+	app.orchestrator = orch
+	app.currentView = ViewDetail
+
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup",
+		Name:          "Setup Feature",
+		Slug:          "setup-feature",
+		Status:        feature.StatusSettingUpWorktrees,
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: feature.NewActiveSetupState(nil, nil, nil, now)})
+	if err := fm.Store.Save(f); err != nil {
+		t.Fatalf("save setup feature: %v", err)
+	}
+	app.detail = NewDetailModel(f, fm.Store.BaseDir)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 's', Text: "s"})
+	app = model.(AppModel)
+	if cmd != nil {
+		t.Fatalf("stop key returned cmd during active setup")
+	}
+	if app.stopConfirmActive {
+		t.Fatalf("stop confirmation opened during active setup")
+	}
+
+	model, cmd = app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	app = model.(AppModel)
+	if cmd != nil {
+		msgs := executeBatchCmd(t, cmd)
+		t.Fatalf("restart key returned command during active setup: %T %v", cmd, msgs)
+	}
+	if len(orch.lifecycleCalls) != 0 {
+		t.Fatalf("orchestrator lifecycle calls = %v, want none", orch.lifecycleCalls)
+	}
+}
+
+func TestFailedSetupDetailRestartKeyRetriesSetup(t *testing.T) {
+	app, fm := newTestAppModel(t)
+	orch := newFakeOrch()
+	app.orchestrator = orch
+	app.currentView = ViewDetail
+
+	now := time.Now()
+	f := &feature.Feature{
+		ID:            "feat-setup-failed",
+		Name:          "Setup Failed",
+		Slug:          "setup-failed",
+		Status:        feature.StatusFailed,
+		FailureType:   feature.FailureWorktreeSetup,
+		LastError:     "worktree path already exists",
+		CurrentPhase:  feature.PhaseKnowledgeBase,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	setup := feature.NewActiveSetupState(nil, nil, nil, now)
+	setup.Status = feature.SetupStatusFailed
+	setup.LastError = f.LastError
+	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, FailureType: feature.FailureWorktreeSetup})
+	if err := fm.Store.Save(f); err != nil {
+		t.Fatalf("save setup feature: %v", err)
+	}
+	app.detail = NewDetailModel(f, fm.Store.BaseDir)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	app = model.(AppModel)
+	msgs := executeBatchCmd(t, cmd)
+	if got, want := orch.lifecycleCalls, []string{"RetrySetup:" + f.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("lifecycle calls = %v, want %v; msgs=%v", got, want, msgs)
+	}
+	if len(orch.startFeatureIDs) != 0 || len(orch.restartPhaseArgs) != 0 {
+		t.Fatalf("phase restart was invoked: start=%v restart=%v", orch.startFeatureIDs, orch.restartPhaseArgs)
+	}
+}
+
 func TestCreateFeatureCmdNormalizesExpressGatesBeforeSave(t *testing.T) {
 	app, fm := newTestAppModel(t)
 
@@ -8389,10 +8937,11 @@ func TestCreateFeatureCmdNormalizesExpressGatesBeforeSave(t *testing.T) {
 		Repos:       []string{"test-repo"},
 		Pipeline:    feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview: true,
-			DesignReview:  true,
-			PlanReview:    true,
-			ManualPublish: true,
+			InquiryReview:   true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 
@@ -8412,14 +8961,14 @@ func TestCreateFeatureCmdNormalizesExpressGatesBeforeSave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loading created feature: %v", err)
 	}
-	want := feature.Checkpoints{PlanReview: true, ManualPublish: true}
+	want := feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
 	if feat.Checkpoints != want {
 		t.Fatalf("created feature checkpoints = %+v, want %+v", feat.Checkpoints, want)
 	}
 
 	saved := fm.Config.Repos["test-repo"].PipelineGates["medium"]
-	if saved != (config.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("saved medium gates = %+v, want PlanReview+ManualPublish", saved)
+	if saved != (config.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("saved medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", saved)
 	}
 
 	loaded, err := config.Load(configPath)
@@ -8427,8 +8976,8 @@ func TestCreateFeatureCmdNormalizesExpressGatesBeforeSave(t *testing.T) {
 		t.Fatalf("loading saved config: %v", err)
 	}
 	loadedGates := loaded.Repos["test-repo"].PipelineGates["medium"]
-	if loadedGates.InquiryReview || loadedGates.ResearchReview || loadedGates.DesignReview || !loadedGates.PlanReview || !loadedGates.ManualPublish {
-		t.Fatalf("loaded medium gates = %+v, want PlanReview+ManualPublish", loadedGates)
+	if loadedGates.InquiryReview || loadedGates.ResearchReview || loadedGates.DesignReview || !loadedGates.RoadmapReview || !loadedGates.PhasePlanReview || !loadedGates.ManualPublish {
+		t.Fatalf("loaded medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", loadedGates)
 	}
 }
 
@@ -8466,7 +9015,7 @@ func TestCreateFeatureCmdSavesGatesToAllRepos(t *testing.T) {
 		Description: "test multi-repo gate save",
 		Repos:       []string{"repo-a", "repo-b"},
 		Pipeline:    feature.PipelineLarge,
-		Checkpoints: feature.Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: true},
+		Checkpoints: feature.Checkpoints{DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 	}
 
 	cmd := app.createFeatureCmd(result)
@@ -8492,8 +9041,8 @@ func TestCreateFeatureCmdSavesGatesToAllRepos(t *testing.T) {
 			t.Errorf("%s: PipelineGates should have 'large' key", repoName)
 			continue
 		}
-		if !gates.DesignReview || !gates.PlanReview || !gates.ManualPublish {
-			t.Errorf("%s: gates should have DesignReview+PlanReview+ManualPublish, got %+v", repoName, gates)
+		if !gates.DesignReview || !gates.RoadmapReview || !gates.PhasePlanReview || !gates.ManualPublish {
+			t.Errorf("%s: gates should have DesignReview+RoadmapReview+PhasePlanReview+ManualPublish, got %+v", repoName, gates)
 		}
 	}
 }
@@ -8516,10 +9065,11 @@ func TestSaveConfigCmdPersistsNormalizedExpressGatesAfterEdit(t *testing.T) {
 		Models:      config.ModelConfig{Implementation: "claude:sonnet"},
 		Inquireness: feature.InquirenessNone,
 		Checkpoints: feature.Checkpoints{
-			InquiryReview: true,
-			DesignReview:  true,
-			PlanReview:    true,
-			ManualPublish: true,
+			InquiryReview:   true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}, []string{"test-repo"}, feature.PipelineMedium, true)()
 	result, ok := msg.(editConfigResultMsg)
@@ -8534,13 +9084,13 @@ func TestSaveConfigCmdPersistsNormalizedExpressGatesAfterEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reloading feature: %v", err)
 	}
-	if got := savedFeature.Checkpoints; got != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("feature checkpoints = %+v, want PlanReview+ManualPublish", got)
+	if got := savedFeature.Checkpoints; got != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("feature checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", got)
 	}
 
 	gates := fm.Config.Repos["test-repo"].PipelineGates["medium"]
-	if gates != (config.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("saved medium gates = %+v, want PlanReview+ManualPublish", gates)
+	if gates != (config.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("saved medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", gates)
 	}
 
 	loaded, err := config.Load(configPath)
@@ -8548,8 +9098,8 @@ func TestSaveConfigCmdPersistsNormalizedExpressGatesAfterEdit(t *testing.T) {
 		t.Fatalf("loading saved config: %v", err)
 	}
 	got := loaded.Repos["test-repo"].PipelineGates["medium"]
-	if got.InquiryReview || got.ResearchReview || got.DesignReview || !got.PlanReview || !got.ManualPublish {
-		t.Fatalf("loaded medium gates = %+v, want PlanReview+ManualPublish", got)
+	if got.InquiryReview || got.ResearchReview || got.DesignReview || !got.RoadmapReview || !got.PhasePlanReview || !got.ManualPublish {
+		t.Fatalf("loaded medium gates = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", got)
 	}
 }
 

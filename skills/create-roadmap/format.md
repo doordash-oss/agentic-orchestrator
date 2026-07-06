@@ -64,7 +64,7 @@ Start from this skeleton when emitting a roadmap. Section headings must match ex
 
 ## Current State Analysis
 
-[What exists now that this feature touches; key constraints from the design doc.]
+[What exists now that this feature touches; key constraints from the design doc and research grounding.]
 
 ## Human Decisions
 

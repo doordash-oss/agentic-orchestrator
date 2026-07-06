@@ -112,7 +112,7 @@ type ChatModel struct {
 }
 
 func NewChatModel(width, height int, sm *session.Manager, workDir string, systemPrompt string, buildSession agent.BuildSessionFunc, chatModel string, skillsDir string) ChatModel {
-	ta := textarea.New()
+	ta := newStyledTextarea()
 	ta.Placeholder = "Ask me anything about Agentic Orchestrator..."
 	ta.CharLimit = 4096
 	ta.ShowLineNumbers = false
@@ -482,6 +482,8 @@ func chatRecoveryTickCmd(sess session.SessionView, baseline *llm.ResultMessage) 
 // pollChatChCmd reads messages from the session's AttachCh in batches.
 func pollChatChCmd(sess session.SessionView) tea.Cmd {
 	return func() tea.Msg {
+		unregister := registerAttachConsumer(sess)
+		defer unregister()
 		ch := sess.AttachCh()
 		msg, ok := <-ch
 		if !ok {

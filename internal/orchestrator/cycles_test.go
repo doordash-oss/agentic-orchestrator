@@ -709,6 +709,95 @@ func TestCompleteTweakFinish_PullRebaseConflict_SurfacesPublishConflictError(t *
 	}
 }
 
+func TestCompleteTweakCommitFinish_AutoPublishOff_CommitsWithoutPush(t *testing.T) {
+	const featureID = "feat-tweak-manual"
+	const repoName = "repo-a"
+	const branch = "feature/tweak-manual"
+
+	for _, tc := range []struct {
+		name        string
+		publishable bool
+	}{
+		{name: "publishable manual feature", publishable: true},
+		{name: "local only manual feature", publishable: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			publishable := tc.publishable
+			f := &feature.Feature{
+				ID:          featureID,
+				Slug:        "tweak-manual",
+				Status:      feature.StatusCodeReady,
+				ActiveRun:   1,
+				RunCount:    1,
+				Checkpoints: feature.Checkpoints{ManualPublish: true},
+				Repos: []feature.FeatureRepo{{
+					Name:         repoName,
+					Path:         "/tmp/repo-a",
+					WorktreePath: "/tmp/worktrees/repo-a",
+					Branch:       branch,
+					Publishable:  &publishable,
+				}},
+				RepoCycles: map[string]*feature.RepoCycleState{
+					repoName: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1},
+				},
+				ActiveCycle: &feature.CycleState{
+					Type:   feature.CycleTweak,
+					Status: feature.RepoCycleRunning,
+					Count:  1,
+				},
+			}
+			lc := lifecycleForFeature(f)
+			fs := newFeatureStore(f)
+
+			dirtyChecks := 0
+			pub := mocks.NewMockPublisher()
+			pub.HasUncommittedChangesFn = func(string) (bool, error) {
+				dirtyChecks++
+				return dirtyChecks == 1, nil
+			}
+			reb := mocks.NewMockRebaseOperator()
+			reb.PullRebaseFn = func(string, string) git.PullRebaseResult {
+				return git.PullRebaseResult{Outcome: git.PullRebaseSuccess}
+			}
+
+			o := orchestrator.New(orchestrator.Deps{
+				Lifecycle: lc,
+				Store:     fs,
+				Publisher: pub,
+				Rebaser:   reb,
+			}, orchestrator.Hooks{})
+
+			hadChanges, err := o.CompleteTweakCommit(featureID)
+			if err != nil {
+				t.Fatalf("CompleteTweakCommit: %v", err)
+			}
+			if !hadChanges {
+				t.Fatal("CompleteTweakCommit hadChanges = false, want true")
+			}
+
+			if err := o.CompleteTweakFinish(featureID, hadChanges); err != nil {
+				t.Fatalf("CompleteTweakFinish: %v", err)
+			}
+
+			if got := countPublisherCalls(pub, "CommitAll"); got != 1 {
+				t.Errorf("Publisher.CommitAll calls = %d, want 1 (post-tweak flow must still commit local changes)", got)
+			}
+			if got := countRebaseCalls(reb, "PullRebase"); got != 0 {
+				t.Errorf("Rebaser.PullRebase calls = %d, want 0 when auto-publish is off", got)
+			}
+			if got := countPublisherCalls(pub, "Push"); got != 0 {
+				t.Errorf("Publisher.Push calls = %d, want 0 when auto-publish is off", got)
+			}
+			if got := countLifecycleCalls(lc, "CompleteRepoCycle"); got != 1 {
+				t.Errorf("Lifecycle.CompleteRepoCycle calls = %d, want 1", got)
+			}
+			if f.ActiveCycle != nil {
+				t.Errorf("ActiveCycle = %+v, want cleared", f.ActiveCycle)
+			}
+		})
+	}
+}
+
 // TestCompleteTweakFinish_CompleteRepoCycleError_PropagatesAndFails asserts
 // that a post-push CompleteRepoCycle store-write failure surfaces an error
 // (so the user does not see a successful tweak completion) and marks the

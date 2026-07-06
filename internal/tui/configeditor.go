@@ -42,8 +42,13 @@ type ConfigEditorModel struct {
 	// rowCursor indexes into a flat logical row list:
 	//   0 .. len(catalog.Fields)-1     : Models rows
 	//   modelsCount                    : Inquireness
-	//   modelsCount+1 .. lastRow()     : Checkpoints (4 base + 1 when publishable)
+	//   modelsCount+1 .. lastRow()     : Checkpoints visible for the active pipeline
 	rowCursor int
+
+	activeModelCell   modelCell
+	modelFilterActive bool
+	modelFilter       string
+	modelFilterCursor int
 }
 
 // rowCategory identifies which sub-editor the row cursor currently sits in.
@@ -53,6 +58,14 @@ const (
 	rowCatModels rowCategory = iota
 	rowCatInquireness
 	rowCatCheckpoints
+)
+
+type modelCell int
+
+const (
+	modelCellAgent modelCell = iota
+	modelCellModel
+	modelCellPhase
 )
 
 // Row-layout constants. Callers use methods (modelsCount, inquirenessRow,
@@ -72,7 +85,8 @@ var checkpointFields = []checkpointField{
 	{Gate: feature.GateInquiryReview, Label: "Inquiry Review", Desc: "Pause after inquiry before research"},
 	{Gate: feature.GateResearchReview, Label: "Research Review", Desc: "Pause after research before design"},
 	{Gate: feature.GateDesignReview, Label: "Design Review", Desc: "Pause after design before planning"},
-	{Gate: feature.GatePlanReview, Label: "Plan Review", Desc: "Pause after planning before implementation"},
+	{Gate: feature.GateRoadmapReview, Label: "Roadmap Review", Desc: "Pause after roadmap before phase planning"},
+	{Gate: feature.GatePhasePlanReview, Label: "Phase Plan Review", Desc: "Pause after each phase plan before implementation"},
 	{Gate: feature.GateManualPublish, Label: "Manual Publish", Desc: "Review diff and PR before publishing"},
 }
 
@@ -109,14 +123,40 @@ func NewConfigEditorModel(f *feature.Feature, cat PhaseModelCatalog, provisional
 
 // Update handles inner keys. The flat row cursor walks all three sub-editors
 // with wrap at both ends; per-row value cycling dispatches by row category.
-// tab/shift+tab is context-sensitive: Models rows cycle the model value,
-// non-Models rows jump to the next/previous sub-editor (also wrapping).
+// tab/shift+tab is context-sensitive: Models rows switch between Agent and
+// Model cells; non-Models rows jump to the next/previous sub-editor.
 func (m ConfigEditorModel) Update(msg tea.Msg) (ConfigEditorModel, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
 	key := keyMsg.String()
+	if m.modelFilterActive {
+		switch key {
+		case "esc":
+			m.clearModelFilter()
+			return m, nil
+		case "enter":
+			m.acceptFilteredModel()
+			return m, nil
+		case "up", "k":
+			m.moveModelFilterCursor(-1)
+			return m, nil
+		case "down", "j":
+			m.moveModelFilterCursor(+1)
+			return m, nil
+		case "backspace":
+			m.modelFilter = trimLastRune(m.modelFilter)
+			m.modelFilterCursor = 0
+			return m, nil
+		}
+		if len([]rune(keyMsg.Text)) == 1 {
+			m.modelFilter += keyMsg.Text
+			m.modelFilterCursor = 0
+			return m, nil
+		}
+		return m, nil
+	}
 	// Row-cursor walk wraps at both ends.
 	switch key {
 	case "up", "k":
@@ -130,10 +170,26 @@ func (m ConfigEditorModel) Update(msg tea.Msg) (ConfigEditorModel, tea.Cmd) {
 	switch m.rowCategory() {
 	case rowCatModels:
 		switch key {
-		case "right", "l", "tab":
-			m.cycleModelForward()
-		case "left", "h", "shift+tab":
-			m.cycleModelBackward()
+		case "tab":
+			m.activeModelCell = modelCellModel
+		case "shift+tab":
+			m.activeModelCell = modelCellAgent
+		case "/":
+			if m.activeModelCell == modelCellModel {
+				m.startModelFilter()
+			}
+		case "right", "l":
+			if m.activeModelCell == modelCellAgent {
+				m.cycleAgent(+1)
+			} else {
+				m.cycleModelForward()
+			}
+		case "left", "h":
+			if m.activeModelCell == modelCellAgent {
+				m.cycleAgent(-1)
+			} else {
+				m.cycleModelBackward()
+			}
 		}
 	case rowCatInquireness:
 		switch key {
@@ -206,6 +262,9 @@ func (m ConfigEditorModel) ModelsChangeCount() int {
 	orig := m.original.Models
 	cur := m.models
 	count := 0
+	if cur.Inquiry != orig.Inquiry {
+		count++
+	}
 	if cur.Research != orig.Research {
 		count++
 	}
@@ -243,7 +302,10 @@ func (m ConfigEditorModel) CheckpointsChangeCount() int {
 	if cp.DesignReview != orig.DesignReview {
 		count++
 	}
-	if cp.PlanReview != orig.PlanReview {
+	if cp.RoadmapReview != orig.RoadmapReview {
+		count++
+	}
+	if cp.PhasePlanReview != orig.PhasePlanReview {
 		count++
 	}
 	if cp.ManualPublish != orig.ManualPublish {
@@ -345,6 +407,8 @@ func (m ConfigEditorModel) currentModelField() string {
 
 func (m ConfigEditorModel) modelValueForField(field string) string {
 	switch field {
+	case "Clarify":
+		return m.models.Inquiry
 	case "Research":
 		return m.models.Research
 	case "Planning":
@@ -353,6 +417,8 @@ func (m ConfigEditorModel) modelValueForField(field string) string {
 		return m.models.Implementation
 	case "Review":
 		return m.models.Review
+	case "Utilities":
+		return m.models.Utilities
 	case "KB Build":
 		return m.models.KBBuild
 	}
@@ -361,6 +427,8 @@ func (m ConfigEditorModel) modelValueForField(field string) string {
 
 func (m *ConfigEditorModel) setModelValueForField(field, value string) {
 	switch field {
+	case "Clarify":
+		m.models.Inquiry = value
 	case "Research":
 		m.models.Research = value
 	case "Planning":
@@ -369,9 +437,84 @@ func (m *ConfigEditorModel) setModelValueForField(field, value string) {
 		m.models.Implementation = value
 	case "Review":
 		m.models.Review = value
+	case "Utilities":
+		m.models.Utilities = value
 	case "KB Build":
 		m.models.KBBuild = value
 	}
+}
+
+func (m ConfigEditorModel) currentModelEntries() []PhaseModelEntry {
+	field := m.currentModelField()
+	if field == "" {
+		return nil
+	}
+	return m.catalog.ModelEntriesForField(field)
+}
+
+func (m ConfigEditorModel) agentOptionsForField(field string) []string {
+	var agents []string
+	for _, group := range m.catalog.ProviderEntryGroupsForField(field) {
+		if len(group.Models) > 0 {
+			agents = append(agents, group.Name)
+		}
+	}
+	return agents
+}
+
+func (m ConfigEditorModel) agentValueForField(field string) string {
+	agents := m.agentOptionsForField(field)
+	if len(agents) == 0 {
+		return ""
+	}
+	for _, value := range []string{m.modelValueForField(field), m.catalog.PhaseDefaults[field]} {
+		if entry, ok := m.entryForFieldValue(field, value); ok {
+			return entry.Agent
+		}
+		if provider, _ := splitProviderModel(value); provider != "" {
+			for _, agent := range agents {
+				if agent == provider {
+					return agent
+				}
+			}
+		}
+	}
+	return agents[0]
+}
+
+func (m *ConfigEditorModel) cycleAgent(delta int) {
+	field := m.currentModelField()
+	if field == "" {
+		return
+	}
+	agents := m.agentOptionsForField(field)
+	if len(agents) == 0 {
+		return
+	}
+	current := m.agentValueForField(field)
+	idx := 0
+	for i, agent := range agents {
+		if agent == current {
+			idx = i
+			break
+		}
+	}
+	next := (idx + delta%len(agents) + len(agents)) % len(agents)
+	targetAgent := agents[next]
+	if targetAgent == current {
+		value := m.modelValueForField(field)
+		if value == "" {
+			return
+		}
+		if entry, ok := m.entryForFieldValue(field, value); ok && entry.Agent == targetAgent {
+			return
+		}
+	}
+	entry, ok := m.catalog.RecommendedEntryForAgent(field, targetAgent)
+	if !ok {
+		return
+	}
+	m.setModelValueForField(field, m.catalog.SelectionValue(entry))
 }
 
 func (m *ConfigEditorModel) cycleModelForward() {
@@ -379,19 +522,23 @@ func (m *ConfigEditorModel) cycleModelForward() {
 	if field == "" {
 		return
 	}
-	opts := m.catalog.ModelOptionsForField(field)
-	if len(opts) == 0 {
+	agent := m.agentValueForField(field)
+	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
+	if len(entries) == 0 {
+		entries = m.currentModelEntries()
+	}
+	if len(entries) == 0 {
 		return
 	}
 	current := m.modelValueForField(field)
 	nextIdx := 0 // stale-model preservation: unknown value advances to first eligible
-	for i, opt := range opts {
-		if opt == current {
-			nextIdx = (i + 1) % len(opts)
+	for i, entry := range entries {
+		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current) {
+			nextIdx = (i + 1) % len(entries)
 			break
 		}
 	}
-	m.setModelValueForField(field, opts[nextIdx])
+	m.setModelValueForField(field, m.catalog.SelectionValue(entries[nextIdx]))
 }
 
 func (m *ConfigEditorModel) cycleModelBackward() {
@@ -399,19 +546,169 @@ func (m *ConfigEditorModel) cycleModelBackward() {
 	if field == "" {
 		return
 	}
-	opts := m.catalog.ModelOptionsForField(field)
-	if len(opts) == 0 {
+	agent := m.agentValueForField(field)
+	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
+	if len(entries) == 0 {
+		entries = m.currentModelEntries()
+	}
+	if len(entries) == 0 {
 		return
 	}
 	current := m.modelValueForField(field)
-	nextIdx := len(opts) - 1 // stale-model preservation: unknown value goes to last eligible
-	for i, opt := range opts {
-		if opt == current {
-			nextIdx = (i - 1 + len(opts)) % len(opts)
+	nextIdx := len(entries) - 1 // stale-model preservation: unknown value goes to last eligible
+	for i, entry := range entries {
+		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current) {
+			nextIdx = (i - 1 + len(entries)) % len(entries)
 			break
 		}
 	}
-	m.setModelValueForField(field, opts[nextIdx])
+	m.setModelValueForField(field, m.catalog.SelectionValue(entries[nextIdx]))
+}
+
+func (m ConfigEditorModel) filteredModelEntriesForCurrentRow() []PhaseModelEntry {
+	field := m.currentModelField()
+	if field == "" {
+		return nil
+	}
+	agent := m.agentValueForField(field)
+	entries := m.catalog.EntriesForFieldAndAgent(field, agent)
+	if len(entries) == 0 {
+		entries = m.currentModelEntries()
+	}
+	filter := strings.ToLower(strings.TrimSpace(m.modelFilter))
+	if filter == "" {
+		return entries
+	}
+	var filtered []PhaseModelEntry
+	for _, entry := range entries {
+		if modelEntryMatchesFilter(entry, filter) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func (m *ConfigEditorModel) startModelFilter() {
+	m.modelFilterActive = true
+	m.modelFilter = ""
+	m.modelFilterCursor = 0
+	field := m.currentModelField()
+	value := m.modelValueForField(field)
+	for i, entry := range m.filteredModelEntriesForCurrentRow() {
+		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, value) {
+			m.modelFilterCursor = i
+			return
+		}
+	}
+}
+
+func (m *ConfigEditorModel) clearModelFilter() {
+	m.modelFilterActive = false
+	m.modelFilter = ""
+	m.modelFilterCursor = 0
+}
+
+func (m *ConfigEditorModel) acceptFilteredModel() {
+	if strings.TrimSpace(m.modelFilter) == "" {
+		m.clearModelFilter()
+		return
+	}
+	entries := m.filteredModelEntriesForCurrentRow()
+	if len(entries) > 0 {
+		idx := m.modelFilterCursor
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(entries) {
+			idx = len(entries) - 1
+		}
+		m.setModelValueForField(m.currentModelField(), m.catalog.SelectionValue(entries[idx]))
+	}
+	m.clearModelFilter()
+}
+
+func (m ConfigEditorModel) ModelFilteringActive() bool { return m.modelFilterActive }
+
+func (m ConfigEditorModel) entryForFieldValue(field, value string) (PhaseModelEntry, bool) {
+	for _, entry := range m.catalog.ModelEntriesForField(field) {
+		if m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, value) {
+			return entry, true
+		}
+	}
+	return PhaseModelEntry{}, false
+}
+
+func (m *ConfigEditorModel) moveModelFilterCursor(delta int) {
+	entries := m.filteredModelEntriesForCurrentRow()
+	if len(entries) == 0 {
+		m.modelFilterCursor = 0
+		return
+	}
+	m.modelFilterCursor = (m.modelFilterCursor + delta%len(entries) + len(entries)) % len(entries)
+}
+
+func modelEntryMatchesFilter(entry PhaseModelEntry, filter string) bool {
+	values := []string{
+		entry.Agent,
+		entry.ModelID,
+		entry.DisplayName,
+		entry.FullID,
+		entry.Category,
+	}
+	values = append(values, entry.Aliases...)
+	for _, value := range values {
+		if strings.Contains(strings.ToLower(value), filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func trimLastRune(s string) string {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return s
+	}
+	return string(runes[:len(runes)-1])
+}
+
+func displayModelLabel(entry PhaseModelEntry, fallback string) string {
+	if entry.DisplayName != "" && entry.DisplayName != entry.ModelID && entry.DisplayName != entry.FullID {
+		return entry.DisplayName
+	}
+	if fallback != "" {
+		return compactModelValueLabel(fallback)
+	}
+	return compactModelIDLabel(entry.ModelID)
+}
+
+func compactModelValueLabel(value string) string {
+	provider, model := splitProviderModel(value)
+	if provider != "" {
+		return provider + ":" + compactModelIDLabel(model)
+	}
+	return compactModelIDLabel(value)
+}
+
+func compactModelIDLabel(id string) string {
+	const modelsSegment = "/models/"
+	if idx := strings.LastIndex(id, modelsSegment); idx >= 0 {
+		tail := strings.TrimSpace(id[idx+len(modelsSegment):])
+		if tail != "" {
+			return tail
+		}
+	}
+	return id
+}
+
+func compactModelSummary(models config.ModelConfig, separator string) string {
+	return fmt.Sprintf("C:%s%sR:%s%sP:%s%sI:%s%sRev:%s%sKB:%s",
+		compactModelValueLabel(models.Inquiry), separator,
+		compactModelValueLabel(models.Research), separator,
+		compactModelValueLabel(models.Planning), separator,
+		compactModelValueLabel(models.Implementation), separator,
+		compactModelValueLabel(models.Review), separator,
+		compactModelValueLabel(models.KBBuild))
 }
 
 // --- Checkpoint helpers ---
@@ -427,6 +724,9 @@ func (m *ConfigEditorModel) toggleCurrentCheckpoint() {
 		return
 	}
 	m.setCheckpointValue(fields[idx].Gate, !m.checkpointValue(fields[idx].Gate))
+	if last := m.lastRow(); m.rowCursor > last {
+		m.rowCursor = last
+	}
 }
 
 func (m ConfigEditorModel) checkpointValue(gate feature.GateIndex) bool {
@@ -437,8 +737,10 @@ func (m ConfigEditorModel) checkpointValue(gate feature.GateIndex) bool {
 		return m.checkpoints.ResearchReview
 	case feature.GateDesignReview:
 		return m.checkpoints.DesignReview
-	case feature.GatePlanReview:
-		return m.checkpoints.PlanReview
+	case feature.GateRoadmapReview:
+		return m.checkpoints.RoadmapReview
+	case feature.GatePhasePlanReview:
+		return m.checkpoints.PhasePlanReview
 	case feature.GateManualPublish:
 		return m.checkpoints.ManualPublish
 	}
@@ -453,8 +755,11 @@ func (m *ConfigEditorModel) setCheckpointValue(gate feature.GateIndex, value boo
 		m.checkpoints.ResearchReview = value
 	case feature.GateDesignReview:
 		m.checkpoints.DesignReview = value
-	case feature.GatePlanReview:
-		m.checkpoints.PlanReview = value
+	case feature.GateRoadmapReview:
+		m.checkpoints.RoadmapReview = value
+		m.checkpoints.PhasePlanReview = value
+	case feature.GatePhasePlanReview:
+		m.checkpoints.PhasePlanReview = value
 	case feature.GateManualPublish:
 		m.checkpoints.ManualPublish = value
 	}
@@ -464,6 +769,9 @@ func (m ConfigEditorModel) visibleCheckpointFields() []checkpointField {
 	projection := m.pipeline.ProjectGates(m.checkpoints, m.provisionalPublishable)
 	fields := make([]checkpointField, 0, len(projection.Visible))
 	for _, gate := range projection.Visible {
+		if gate == feature.GatePhasePlanReview && !m.checkpoints.RoadmapReview && !m.checkpoints.PhasePlanReview {
+			continue
+		}
 		for _, field := range checkpointFields {
 			if field.Gate == gate {
 				fields = append(fields, field)
@@ -507,13 +815,242 @@ func inquirenessDescription(v feature.Inquireness) string {
 	}
 }
 
-// renderModelsBox renders the Models sub-editor: a header row, 5 phase-role
-// rows with the focused row highlighted, and — when the cursor is on a
-// Models row — a provider-grouped picker beneath the row list. Mirrors
-// WizardModel.renderModelEditor's visual grammar.
+func (m ConfigEditorModel) renderModelsWorkspaceWithFocus(focus configFocusZone) string {
+	return m.renderModelsWorkspaceWithFocusWidth(focus, 0)
+}
+
+func (m ConfigEditorModel) renderModelsWorkspaceWithFocusWidth(focus configFocusZone, width int) string {
+	title := lipgloss.NewStyle().Bold(true).Render("Model Selection")
+	phaseWidth, agentWidth, modelWidth := modelWorkspacePanelWidths(width)
+	phasePane := m.renderModelPhaseList(focus, phaseWidth)
+	inspector := m.renderModelInspector(focus, agentWidth, modelWidth)
+	return strings.Join([]string{
+		title,
+		"",
+		lipgloss.JoinHorizontal(lipgloss.Top, phasePane, "  ", inspector),
+	}, "\n")
+}
+
+func modelWorkspacePanelWidths(width int) (int, int, int) {
+	phaseWidth, agentWidth, modelWidth := modelPhasePanelWidth, modelAgentPanelWidth, modelListPanelWidth
+	if width <= 0 {
+		return phaseWidth, agentWidth, modelWidth
+	}
+	available := width - 4 // two 2-space gutters between the three panels
+	if available <= 0 {
+		return phaseWidth, agentWidth, modelWidth
+	}
+	overflow := phaseWidth + agentWidth + modelWidth - available
+	if overflow <= 0 {
+		return phaseWidth, agentWidth, modelWidth
+	}
+	shrink := func(current, minWidth int) int {
+		if overflow <= 0 {
+			return current
+		}
+		delta := current - minWidth
+		if delta > overflow {
+			delta = overflow
+		}
+		if delta < 0 {
+			delta = 0
+		}
+		overflow -= delta
+		return current - delta
+	}
+	modelWidth = shrink(modelWidth, 44)
+	phaseWidth = shrink(phaseWidth, 34)
+	agentWidth = shrink(agentWidth, 16)
+	return phaseWidth, agentWidth, modelWidth
+}
+
+func (m ConfigEditorModel) renderModelPhaseList(focus configFocusZone, width int) string {
+	fields := m.catalog.Fields
+	if len(fields) == 0 {
+		fields = phaseCatalogFields
+	}
+	lines := []string{}
+	for i, field := range fields {
+		label := truncatePhaseLabelForWidth(m.phaseAssignmentLabel(field), width)
+		prefix := "  "
+		selected := i == m.rowCursor
+		focused := selected && focus == configFocusPhaseList
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Phases", strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusPhaseList)
+}
+
+func (m ConfigEditorModel) renderModelInspector(focus configFocusZone, agentWidth, modelWidth int) string {
+	field := m.currentModelField()
+	if field == "" {
+		emptyAgents := titledConfigBox("Agents", MutedStyle.Render("No phase"), agentWidth, modelPanelHeight, focus == configFocusAgentList)
+		emptyModels := titledConfigBox("Models", MutedStyle.Render("No phase"), modelWidth, modelPanelHeight, focus == configFocusModelList)
+		return lipgloss.JoinHorizontal(lipgloss.Top, emptyAgents, "  ", emptyModels)
+	}
+	agent := m.agentValueForField(field)
+	agents := m.renderAgentPicker(field, agent, focus, agentWidth)
+	models := m.renderModelPicker(field, agent, focus, modelWidth)
+	return lipgloss.JoinHorizontal(lipgloss.Top, agents, "  ", models)
+}
+
+func (m ConfigEditorModel) renderAgentPicker(field string, currentAgent string, focus configFocusZone, width int) string {
+	agents := m.agentOptionsForField(field)
+	if len(agents) == 0 {
+		return titledConfigBox("Agents", MutedStyle.Render("No agents"), width, modelPanelHeight, focus == configFocusAgentList)
+	}
+	var lines []string
+	for _, agent := range agents {
+		prefix := "  "
+		label := truncateString(agent, maxInt(width-6, 8))
+		selected := agent == currentAgent
+		focused := selected && focus == configFocusAgentList
+		switch {
+		case focused:
+			prefix = SelectedRowStyle.Render("▸ ")
+			label = SelectedRowStyle.Render(label)
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			label = SummarySelectedValueStyle.Render(label)
+		}
+		lines = append(lines, prefix+label)
+	}
+	return titledConfigBox("Agents", strings.Join(lines, "\n"), width, modelPanelHeight, focus == configFocusAgentList)
+}
+
+func (m ConfigEditorModel) renderModelPicker(field, agent string, focus configFocusZone, width int) string {
+	entries := m.filteredModelEntriesForCurrentRow()
+	panelFocused := focus == configFocusModelList || m.ModelFilteringActive()
+	title := truncateString("Models for "+agent, maxInt(width-4, 8))
+	if len(entries) == 0 {
+		return titledConfigBox(title, MutedStyle.Render("No models"), width, modelPanelHeight, panelFocused)
+	}
+	current := m.modelValueForField(field)
+	focusIdx := m.modelPickerFocusIndex(entries, current)
+	start, end := visibleWindow(len(entries), focusIdx, 9)
+	labelWidth := modelEntryLabelWidth(width)
+
+	var lines []string
+	if m.ModelFilteringActive() {
+		filter := m.modelFilter
+		if filter == "" {
+			filter = " "
+		}
+		lines = append(lines, MutedStyle.Render("Search  ")+SummarySelectedValueStyle.Render(filter), "")
+	} else {
+		lines = append(lines, MutedStyle.Render("/ search"), "")
+	}
+	if start > 0 {
+		lines = append(lines, MutedStyle.Render("  ..."))
+	}
+	for i := start; i < end; i++ {
+		entry := entries[i]
+		selected := m.catalogEntrySelected(entry, current)
+		highlighted := selected
+		if m.ModelFilteringActive() {
+			highlighted = i == m.modelFilterCursor
+		}
+		prefix := "  "
+		label := compactModelEntryLabel(entry, entry.ModelID)
+		meta := compactModelEntryMeta(entry)
+		line := fmt.Sprintf("%-*s %s", labelWidth, truncateString(label, labelWidth), meta)
+		focused := highlighted && panelFocused
+		switch {
+		case focused:
+			line = SelectedRowStyle.Render(line)
+			prefix = SelectedRowStyle.Render("▸ ")
+		case selected && focus != configFocusTabs:
+			prefix = MutedStyle.Render("✓ ")
+			line = SummarySelectedValueStyle.Render(line)
+		}
+		lines = append(lines, prefix+line)
+	}
+	if end < len(entries) {
+		lines = append(lines, MutedStyle.Render("  ..."))
+	}
+	return titledConfigBox(title, strings.Join(lines, "\n"), width, modelPanelHeight, panelFocused)
+}
+
+func modelEntryLabelWidth(panelWidth int) int {
+	width := panelWidth - 30
+	if width < 18 {
+		return 18
+	}
+	if width > 44 {
+		return 44
+	}
+	return width
+}
+
+func (m ConfigEditorModel) modelPickerFocusIndex(entries []PhaseModelEntry, current string) int {
+	if len(entries) == 0 {
+		return 0
+	}
+	if m.ModelFilteringActive() {
+		if m.modelFilterCursor < 0 {
+			return 0
+		}
+		if m.modelFilterCursor >= len(entries) {
+			return len(entries) - 1
+		}
+		return m.modelFilterCursor
+	}
+	for i, entry := range entries {
+		if m.catalogEntrySelected(entry, current) {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m ConfigEditorModel) catalogEntrySelected(entry PhaseModelEntry, current string) bool {
+	return m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current)
+}
+
+func (m ConfigEditorModel) phaseAssignmentLabel(field string) string {
+	agent := m.agentValueForField(field)
+	value := m.modelValueForField(field)
+	if value == "" {
+		if agent == "" {
+			return field + " (default)"
+		}
+		return fmt.Sprintf("%s (%s/default)", field, agent)
+	}
+	model := value
+	unavailable := ""
+	if entry, ok := m.entryForFieldValue(field, value); ok {
+		model = compactModelEntryLabel(entry, value)
+	} else if value != "" {
+		if provider, modelID := splitProviderModel(value); provider != "" {
+			agent = provider
+			model = modelID
+		} else {
+			model = value
+		}
+		unavailable = " (unavailable)"
+	}
+	if agent == "" {
+		return field + " (" + model + unavailable + ")"
+	}
+	return fmt.Sprintf("%s (%s/%s%s)", field, agent, model, unavailable)
+}
+
+// renderModelsBox renders the Models sub-editor as a Phase | Agent | Model
+// cascade. The focused row expands into agent choices and model choices scoped
+// to the selected agent.
 func (m ConfigEditorModel) renderModelsBox(width int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Models")
-	lines := []string{title, MutedStyle.Render("Assignments")}
+	lines := []string{
+		title,
+		MutedStyle.Render(fmt.Sprintf("%-14s %-12s %s", "Phase", "Agent", "Model")),
+	}
 	onModelsRow := m.rowCategory() == rowCatModels
 
 	fields := m.catalog.Fields
@@ -521,13 +1058,22 @@ func (m ConfigEditorModel) renderModelsBox(width int) string {
 		fields = phaseCatalogFields
 	}
 	for i, field := range fields {
-		label := field
 		value := m.modelValueForField(field)
-		summary := m.modelAssignmentSummary(field, value)
+		agent := m.agentValueForField(field)
+		model := m.modelAssignmentSummary(field, value)
 		prefix := "  "
-		rendered := fmt.Sprintf("%-14s %s", label, summary)
+		renderedAgent := fmt.Sprintf("%-12s", agent)
+		renderedModel := model
 		if onModelsRow && i == m.rowCursor {
 			prefix = SelectedRowStyle.Render("▸ ")
+			if m.activeModelCell == modelCellAgent {
+				renderedAgent = SummarySelectedValueStyle.Render(fmt.Sprintf("%-12s", agent))
+			} else {
+				renderedModel = SummarySelectedValueStyle.Render(model)
+			}
+		}
+		rendered := fmt.Sprintf("%-14s %s %s", field, renderedAgent, renderedModel)
+		if onModelsRow && i == m.rowCursor {
 			rendered = SelectedRowStyle.Render(rendered)
 		}
 		lines = append(lines, prefix+rendered)
@@ -535,8 +1081,8 @@ func (m ConfigEditorModel) renderModelsBox(width int) string {
 
 	if onModelsRow {
 		field := m.currentModelField()
-		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Choices for "+field))
-		lines = append(lines, m.renderModelChoiceLines(field, width)...)
+		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(colorBrand).Render("Selection for "+field))
+		lines = append(lines, m.renderModelCascadeDetails(field, width)...)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -548,10 +1094,11 @@ func (m ConfigEditorModel) modelAssignmentSummary(field, value string) string {
 	if value == "" {
 		return "(default)"
 	}
-	provider, model := splitProviderModel(value)
 	label := value
-	if provider != "" {
-		label = provider + " / " + model
+	if entry, ok := m.entryForFieldValue(field, value); ok {
+		label = displayModelLabel(entry, value)
+	} else if provider, model := splitProviderModel(value); provider != "" {
+		label = provider + " / " + compactModelIDLabel(model)
 	}
 	if !m.modelValueEligible(field, value) {
 		label += " (unavailable)"
@@ -563,18 +1110,14 @@ func (m ConfigEditorModel) modelValueEligible(field, value string) bool {
 	if value == "" {
 		return true
 	}
-	for _, opt := range m.catalog.ModelOptionsForField(field) {
-		if opt == value {
-			return true
-		}
-	}
-	return false
+	_, ok := m.entryForFieldValue(field, value)
+	return ok
 }
 
-func (m ConfigEditorModel) renderModelChoiceLines(field string, width int) []string {
+func (m ConfigEditorModel) renderModelCascadeDetails(field string, width int) []string {
 	current := m.modelValueForField(field)
-	groups := m.catalog.ProviderGroupsForField(field)
-	if len(groups) == 0 {
+	agents := m.agentOptionsForField(field)
+	if len(agents) == 0 {
 		return []string{MutedStyle.Render("No eligible models available.")}
 	}
 
@@ -583,32 +1126,81 @@ func (m ConfigEditorModel) renderModelChoiceLines(field string, width int) []str
 	recommendedStyle := lipgloss.NewStyle().Bold(true).Foreground(colorInfo)
 
 	var lines []string
-	for _, group := range groups {
-		providerLabel := group.Name
-		if providerLabel == "Available" {
-			providerLabel = "models"
+	currentAgent := m.agentValueForField(field)
+	var agentTokens []string
+	for _, agent := range agents {
+		label := agent
+		if entry, ok := m.catalog.RecommendedEntryForAgent(field, agent); ok && entry.Recommended {
+			label += "★"
 		}
-		prefix := MutedStyle.Render(fmt.Sprintf("%-8s ", providerLabel))
-		var tokens []string
-		for _, opt := range group.Models {
-			_, label := splitProviderModel(opt)
-			if opt == m.catalog.PhaseDefaults[field] {
-				label += "★"
-			}
-			switch {
-			case opt == current:
-				tokens = append(tokens, selectedPillStyle.Render(label))
-			case opt == m.catalog.PhaseDefaults[field]:
-				tokens = append(tokens, recommendedStyle.Render(label))
-			default:
-				tokens = append(tokens, optionStyle.Render(label))
-			}
-		}
-		if width > 0 {
-			lines = append(lines, wrapRenderedTokensWithPrefix(prefix, tokens, width)...)
+		if agent == currentAgent {
+			agentTokens = append(agentTokens, selectedPillStyle.Render(label))
 		} else {
-			lines = append(lines, prefix+strings.Join(tokens, " "))
+			agentTokens = append(agentTokens, optionStyle.Render(label))
 		}
+	}
+	agentPrefix := MutedStyle.Render("Agents  ")
+	if width > 0 {
+		lines = append(lines, wrapRenderedTokensWithPrefix(agentPrefix, agentTokens, width)...)
+	} else {
+		lines = append(lines, agentPrefix+strings.Join(agentTokens, " "))
+	}
+
+	if m.modelFilterActive {
+		lines = append(lines, MutedStyle.Render("Filter  ")+SummarySelectedValueStyle.Render(m.modelFilter))
+	}
+
+	entries := m.filteredModelEntriesForCurrentRow()
+	if len(entries) == 0 {
+		lines = append(lines, MutedStyle.Render("Models  No matches."))
+		return lines
+	}
+
+	var modelTokens []string
+	highlightIdx := -1
+	for i, entry := range entries {
+		label := displayModelLabel(entry, entry.ModelID)
+		if entry.Recommended {
+			label += "★"
+		}
+		selected := m.catalog.MatchesModelValue(entry.Agent, entry.ModelID, current)
+		highlighted := selected
+		if m.modelFilterActive {
+			highlighted = i == m.modelFilterCursor
+		}
+		switch {
+		case highlighted:
+			modelTokens = append(modelTokens, selectedPillStyle.Render(label))
+			highlightIdx = i
+		case entry.Recommended:
+			modelTokens = append(modelTokens, recommendedStyle.Render(label))
+		default:
+			modelTokens = append(modelTokens, optionStyle.Render(label))
+		}
+	}
+	modelPrefix := MutedStyle.Render("Models  ")
+	if width > 0 {
+		lines = append(lines, wrapRenderedTokensWithPrefix(modelPrefix, modelTokens, width)...)
+	} else {
+		lines = append(lines, modelPrefix+strings.Join(modelTokens, " "))
+	}
+	if highlightIdx < 0 {
+		highlightIdx = 0
+	}
+	entry := entries[highlightIdx]
+	var parts []string
+	parts = append(parts, "agent "+entry.Agent)
+	if entry.Category != "" {
+		parts = append(parts, "category "+entry.Category)
+	}
+	if entry.ContextWindow > 0 {
+		parts = append(parts, "context "+compactContextWindow(entry.ContextWindow))
+	}
+	if entry.Recommended {
+		parts = append(parts, "recommended")
+	}
+	if len(parts) > 0 {
+		lines = append(lines, MutedStyle.Render("Details ")+strings.Join(parts, ", "))
 	}
 	return lines
 }
@@ -660,15 +1252,18 @@ func (m ConfigEditorModel) renderCheckpointsBox(_ int) string {
 	title := lipgloss.NewStyle().Bold(true).Render("Gates")
 	lines := []string{title}
 	fields := m.visibleCheckpointFields()
-	for i, cp := range fields {
+	for i, field := range fields {
 		box := "[ ]"
-		if m.checkpointValue(cp.Gate) {
+		if m.checkpointValue(field.Gate) {
 			box = SuccessStyle.Render("[x]")
 		} else {
 			box = MutedStyle.Render("[ ]")
 		}
-		label := cp.Label
-		desc := MutedStyle.Render(cp.Desc)
+		label := field.Label
+		if field.Gate == feature.GatePhasePlanReview {
+			label = "  " + label
+		}
+		desc := MutedStyle.Render(field.Desc)
 		prefix := "  "
 		rendered := fmt.Sprintf("%s %-18s %s", box, label, desc)
 		if m.rowCategory() == rowCatCheckpoints && m.checkpointIndexForRow(m.rowCursor) == i {

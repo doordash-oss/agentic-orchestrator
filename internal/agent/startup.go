@@ -15,9 +15,7 @@
 package agent
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 
@@ -36,49 +34,6 @@ func FormatNoCLIMessage(providers []llm.LLMProvider) string {
 	}
 	b.WriteString("\nInstall one and run 'agentico' again.")
 	return b.String()
-}
-
-// ShouldRunFirstSetup returns true when conditions require a first-run
-// provider selection prompt: config is newly created AND at least 2
-// provider CLIs are detected (giving the user a choice to make).
-func ShouldRunFirstSetup(configIsNew bool, detectedCount int) bool {
-	return configIsNew && detectedCount >= 2
-}
-
-// RunFirstSetup prints a welcome message and prompts the user to choose
-// a preferred provider when multiple CLIs are detected on first run.
-// It reads from the provided io.Reader (stdin) and writes to io.Writer (stderr).
-// Returns the user's choice as a provider name string, or the first provider
-// name if input is invalid or user presses Enter.
-func RunFirstSetup(detected []llm.LLMProvider, in io.Reader, out io.Writer) string {
-	if len(detected) == 0 {
-		return ""
-	}
-
-	fmt.Fprintln(out, "Welcome to Agentic Orchestrator!")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Multiple AI coding assistants detected:")
-	for i, p := range detected {
-		fmt.Fprintf(out, "  [%d] %s\n", i+1, p.Name())
-	}
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "Which should be the default for most tasks? [1]: ")
-
-	scanner := bufio.NewScanner(in)
-	if scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			return detected[0].Name()
-		}
-		// Parse the number
-		var choice int
-		if _, err := fmt.Sscanf(line, "%d", &choice); err == nil {
-			if choice >= 1 && choice <= len(detected) {
-				return detected[choice-1].Name()
-			}
-		}
-	}
-	return detected[0].Name()
 }
 
 // CheckRequiredTools verifies that external CLI tools needed by agentic are

@@ -159,8 +159,9 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 		KBStatus: map[string]string{"r": "completed"},
 	}
 	done := &feature.Feature{ID: "done-1", Status: feature.StatusDone}
+	setup := &feature.Feature{ID: "setup-1", Status: feature.StatusSettingUpWorktrees}
 
-	fs := newFeatureStore(running1, running2, published, done)
+	fs := newFeatureStore(running1, running2, published, done, setup)
 	lc := mocks.NewMockFeatureLifecycle()
 	lc.GetFn = func(id string) (*feature.Feature, error) {
 		switch id {
@@ -172,6 +173,8 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 			return published, nil
 		case "done-1":
 			return done, nil
+		case "setup-1":
+			return setup, nil
 		}
 		return nil, nil
 	}
@@ -221,6 +224,9 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 	// Done feature untouched.
 	if done.Status != feature.StatusDone {
 		t.Error("done feature status changed unexpectedly")
+	}
+	if setup.Status != feature.StatusSettingUpWorktrees {
+		t.Errorf("setup feature status = %s, want SettingUpWorktrees", setup.Status)
 	}
 
 	events := drainEvents(o)

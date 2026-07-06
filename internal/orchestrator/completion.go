@@ -670,7 +670,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		if getErr != nil {
 			return fmt.Errorf("reload feature: %w", getErr)
 		}
-		if ff.Checkpoints.PlanReview {
+		if ff.Checkpoints.RoadmapReview {
 			// Route through review gate.
 			if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
 				return fmt.Errorf("mark needs plan review: %w", err)
@@ -710,11 +710,10 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		return nil
 	}
 
-	// Per-phase plan approval (CurrentRoadmapPhase > 0). If plan review is
-	// enabled, we surface it as a review gate; otherwise we run
-	// StartRoadmapPhaseImplementation → populate execution plan → start
-	// implementation.
-	if f.Checkpoints.PlanReview {
+	// Per-phase plan approval (CurrentRoadmapPhase > 0). If phase-plan review
+	// is enabled, we surface it as a review gate; otherwise we run
+	// StartRoadmapPhaseImplementation and start implementation.
+	if f.Checkpoints.PhasePlanReview {
 		if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
 			return fmt.Errorf("mark needs plan review: %w", err)
 		}
@@ -752,8 +751,8 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 // This is the validator's escalation path — it fires when the
 // planner ↔ critic loop cannot converge autonomously (max attempts
 // exhausted, or an axis stalled with the planner no longer changing the
-// frozen section). Always raise a review gate regardless of
-// Checkpoints.PlanReview: that checkpoint controls whether to pause for
+// frozen section). Always raise a review gate regardless of configured
+// planning review gates: those checkpoints control whether to pause for
 // routine review after auto-approval, not whether the validator's
 // explicit "I need a human" escalation should be honored. Failing the
 // feature here would discard a working plan over an exception path the
@@ -921,7 +920,7 @@ func (o *Orchestrator) routeMissingEvidencePlanRevision(featureID string, f *fea
 	if strings.TrimSpace(feedback) == "" {
 		feedback = agent.MissingEvidencePlanRevisionFeedback(nil)
 	}
-	targetRoadmapPhase := agent.MissingEvidenceTargetPhase(feedback, f.CurrentRoadmapPhase)
+	targetRoadmapPhase := f.CurrentRoadmapPhase
 	if f.TotalRoadmapPhases > 0 && targetRoadmapPhase > f.TotalRoadmapPhases {
 		targetRoadmapPhase = f.CurrentRoadmapPhase
 	}
@@ -1381,11 +1380,9 @@ func (o *Orchestrator) runDeferredFinalReview(featureID string) error {
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
 	case "plan_revision_required":
-		if err := o.routeMissingEvidencePlanRevision(featureID, f, res.PlanRevisionFeedback); err != nil {
-			return err
-		}
-		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New("missing evidence requires phase-plan revision"))
-		return errPlanRevisionDispatched
+		errMsg := "final review requested unsupported phase-plan revision"
+		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
+		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	case "failed":
 		errMsg := res.LastError
 		if errMsg == "" {

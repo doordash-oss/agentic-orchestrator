@@ -52,9 +52,6 @@ import (
 //     repo's RepoState records the failure.
 //   - "protocol_violation": the fix agent ended its turn without satisfying
 //     the completion contract. Every staged repo's RepoState records the failure.
-//   - "plan_revision_required": reviewer found missing visual or behavioral
-//     implementation evidence coverage that must be repaired by revising the
-//     relevant phase plan. No failure stamp is written.
 //   - "interrupted":     graceful shutdown / feature stopped while
 //     running. No atomic stamp written; persisted state preserved.
 //   - "failed":          dispatch error before iteration began.
@@ -123,28 +120,18 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 	runDir := ActiveRunDir(cfg.StateDir, cfg.Feature)
 	artifactDir := filepath.Join(runDir, feature.PhaseReview.DirName())
 
-	// Compile and persist the feature-level FR testing contract once at
-	// loop entry. The compiler emits per-repo baseline rows tagged with
-	// `repo: <name>` plus any cross-repo verification items declared on
-	// the feature. Plan-less mode: FR has no phase plan to inherit from.
-	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
-	if err := writeFeatureFinalReviewContract(contractPath, stagedRepos, cfg.Feature); err != nil {
-		return nil, fmt.Errorf("feature final review loop: testing contract: %w", err)
-	}
-
 	// Mark mid-flight phase status at the feature level so observers can
 	// surface "final reviewing" without per-repo lying.
 	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "final_reviewing")
 	defer setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "")
 
 	loopState := &featureFinalReviewLoopState{
-		cfg:          cfg,
-		sm:           sm,
-		workspace:    workspace,
-		stateDir:     stateDir,
-		artifactDir:  artifactDir,
-		contractPath: contractPath,
-		stagedRepos:  stagedRepos,
+		cfg:         cfg,
+		sm:          sm,
+		workspace:   workspace,
+		stateDir:    stateDir,
+		artifactDir: artifactDir,
+		stagedRepos: stagedRepos,
 	}
 
 	result, runErr := loopState.run()
@@ -183,13 +170,6 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 	case "interrupted":
 		// No atomic stamp on interrupt; persisted state is left
 		// untouched so the next start picks up the loop.
-		result.Repos = stagedRepos
-		return result, nil
-
-	case "plan_revision_required":
-		// Missing evidence is a plan-repair path, not a failed final review.
-		// The orchestrator will invalidate the relevant phase-plan attempt
-		// and dispatch planning again.
 		result.Repos = stagedRepos
 		return result, nil
 
@@ -265,27 +245,18 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 		artifactDir = filepath.Join(runDir, prefix, feature.PhaseReview.DirName())
 	}
 
-	// Compile and persist a fresh feature-level FR testing contract at
-	// loop entry. Plan-less mode emits per-repo baseline rows tagged
-	// `repo: <name>` for every Feature.Repos.
-	contractPath := filepath.Join(artifactDir, "testing-contract.yaml")
-	if err := writeFeatureFinalReviewContract(contractPath, repos, cfg.Feature); err != nil {
-		return nil, fmt.Errorf("feature cycle final review loop: testing contract: %w", err)
-	}
-
 	// Mark mid-flight phase status at the feature level so observers can
 	// surface "final reviewing" without per-repo lying.
 	setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "final_reviewing")
 	defer setCurrentPhaseStatus(cfg.FeatureStore, cfg.Feature.ID, "")
 
 	loopState := &featureFinalReviewLoopState{
-		cfg:          cfg,
-		sm:           sm,
-		workspace:    workspace,
-		stateDir:     stateDir,
-		artifactDir:  artifactDir,
-		contractPath: contractPath,
-		stagedRepos:  repos,
+		cfg:         cfg,
+		sm:          sm,
+		workspace:   workspace,
+		stateDir:    stateDir,
+		artifactDir: artifactDir,
+		stagedRepos: repos,
 	}
 
 	result, runErr := loopState.run()
@@ -313,13 +284,12 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 // once (workspace, contract path, staged repos); the run() method drives
 // the iteration cursor.
 type featureFinalReviewLoopState struct {
-	cfg          OrchestratorConfig
-	sm           ports.SessionManager
-	workspace    WorkspaceSetup
-	stateDir     string
-	artifactDir  string
-	contractPath string
-	stagedRepos  []string
+	cfg         OrchestratorConfig
+	sm          ports.SessionManager
+	workspace   WorkspaceSetup
+	stateDir    string
+	artifactDir string
+	stagedRepos []string
 }
 
 // run executes the FR iteration loop. Returns a result with FinalStatus
@@ -370,13 +340,6 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: mkdirErr.Error()}, nil
 		}
 
-		// Seed the iteration's verification report. On iter-1 we synthesize
-		// a contract-shaped stub; on iter-N>1 we copy the prior iteration's
-		// report so manual-verification attestation accumulates.
-		if err := s.seedVerificationReport(iterDir); err != nil {
-			return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
-		}
-
 		// Inverted iteration order: review FIRST, fix SECOND.
 		s.setReviewFixing(false)
 		reviewStatus, feedback, reviewErr := s.runReview(i, iterDir)
@@ -408,13 +371,8 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{FinalStatus: "review_passed", Iterations: i}, nil
 
 		case ReviewChangesRequested:
-			if reqs := MissingEvidenceRequirements(feedback); len(reqs) > 0 {
-				s.writeIterationMeta(iterDir, i, "changes_requested")
-				return &FeatureFinalReviewResult{
-					FinalStatus:          "plan_revision_required",
-					Iterations:           i,
-					PlanRevisionFeedback: MissingEvidencePlanRevisionFeedback(reqs),
-				}, nil
+			if err := s.seedFixVerificationReport(iterDir); err != nil {
+				return &FeatureFinalReviewResult{FinalStatus: "failed", Iterations: i, LastError: err.Error()}, nil
 			}
 			s.setReviewFixing(true)
 			fixStatus, fixErr := s.runFix(i, iterDir, feedback)
@@ -495,8 +453,6 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	_ = os.Remove(feedbackPath)
 	RemovePhaseComplete(iterDir)
 
-	verificationPath := filepath.Join(iterDir, "verification-report.yaml")
-
 	// Use the configured diff-base from the FR-driver feature; the
 	// feature-level FR uses the first repo's BaseBranch as a reasonable
 	// default, since per-repo BaseBranch is normally identical
@@ -511,18 +467,14 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		ExitCriteria:                         cfg.Feature.ExitCriteria,
 		DiffBase:                             diffBase,
 		WorkDir:                              s.workspace.Cwd,
-		VerificationPath:                     verificationPath,
-		TestingContractPath:                  s.contractPath,
 		PreviousFeedback:                     previousFeedback,
 		Iteration:                            iteration,
 		RoadmapPath:                          cfg.Feature.Artifacts["roadmap"],
-		DesignArtifactPath:               cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
 		Images:                               cfg.Feature.Images,
 		PhaseType:                            cfg.Feature.RoadmapPhaseType,
 		FeedbackPath:                         feedbackPath,
 		Publishable:                          cfg.Feature.IsPublishable(),
-		PriorImplementationPlanPaths:         priorEvidence.PlanPaths,
-		PriorImplementationContractPaths:     priorEvidence.ContractPaths,
 		PriorImplementationReportPaths:       priorEvidence.ReportPaths,
 		PriorImplementationEvidenceRootDirs:  priorEvidence.EvidenceRootDirs,
 		PriorImplementationEvidenceArtifacts: priorEvidence.EvidenceArtifactPaths,
@@ -549,7 +501,7 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		Prompt:                         prompt,
 		SystemPrompt:                   systemPrompt,
 		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     []string{},
+		AgentNames:                     explorationAgentNames(),
 		PIDDir:                         s.stateDir,
 		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
 		WorkDir:                        s.workspace.Cwd,
@@ -562,6 +514,9 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 		return ReviewFailed, "", fmt.Errorf("building feature final review session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessionID := s.featureFinalReviewSessionID("final-review", iteration)
@@ -579,8 +534,12 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.ReviewModel)
 	defer func() {
+		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseFinalReview.String(),
+		})
 		if observed {
-			cost := ExtractSessionCost(sess)
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 	}()
@@ -591,13 +550,17 @@ func (s *featureFinalReviewLoopState) runReview(iteration int, iterDir string) (
 	}
 	sess.SetLogFile(logFile)
 
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
+	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
+		ReadyCheck: func() bool {
+			if HasPhaseComplete(iterDir) {
+				sess.SetHasUnansweredQuestion(false)
+				return true
+			}
+			return false
+		},
+		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+		MissingArtifacts:     []string{"review-feedback.md"},
+	}).Status
 
 	if agentStatus == agentStatusMissingMarker {
 		return ReviewFailed, "", newProtocolViolationError(RoleFinalReviewer, iterDir, []ProtocolViolation{{
@@ -642,7 +605,7 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		VerificationReportPath: verificationReportPath,
 		Iteration:              iteration,
 		Publishable:            cfg.Feature.IsPublishable(),
-		DesignArtifactPath: cfg.Feature.DesignArtifactPath(),
+		DesignArtifactPath:     cfg.Feature.DesignArtifactPath(),
 		Images:                 cfg.Feature.Images,
 	})
 
@@ -680,6 +643,9 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)
 	}
 	sessOpts = enableTruncatedTurnAutoResume(sessOpts)
+	if cfg.FinishOrViolateNudge {
+		sessOpts.TurnMode = ports.TurnModeInteractive
+	}
 	WriteDebugPrompts(iterDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sessionID := s.featureFinalReviewSessionID("fix", iteration)
@@ -697,8 +663,12 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	}
 	sessionCtx, sessionStart, observed := s.observeFinalReviewSession(sess, sessionID, providerName, cfg.Model)
 	defer func() {
+		cost := ExtractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(cfg.FeatureStore, cfg.Feature.ID, feature.PhaseFinalReview.DirName(), cost, SessionCostMetadata{
+			SessionID:     sessionID,
+			ObserverPhase: feature.PhaseFinalReview.String(),
+		})
 		if observed {
-			cost := ExtractSessionCost(sess)
 			cfg.Observer.SessionEnded(sessionCtx, feature.PhaseFinalReview.String(), sessionID, "", toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
 		}
 	}()
@@ -709,13 +679,17 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	}
 	sess.SetLogFile(logFile)
 
-	agentStatus := waitForStatus(sess, s.sm, sessionID, func() bool {
-		if HasPhaseComplete(iterDir) {
-			sess.SetHasUnansweredQuestion(false)
-			return true
-		}
-		return false
-	})
+	agentStatus := waitForStatusDetailed(sess, s.sm, sessionID, waitForStatusOptions{
+		ReadyCheck: func() bool {
+			if HasPhaseComplete(iterDir) {
+				sess.SetHasUnansweredQuestion(false)
+				return true
+			}
+			return false
+		},
+		FinishOrViolateNudge: cfg.FinishOrViolateNudge,
+		MissingArtifacts:     []string{"verification-report.yaml"},
+	}).Status
 	return agentStatus, nil
 }
 
@@ -747,23 +721,28 @@ func (s *featureFinalReviewLoopState) featureFinalReviewSessionID(role string, i
 	return fmt.Sprintf("%s-%s-%02d", s.cfg.Feature.ID, role, iteration)
 }
 
-// seedVerificationReport pre-populates iterDir/verification-report.yaml
-// from the prior iteration when present, otherwise from the contract.
-// Mirrors writeFinalReviewArtifacts but keyed off the feature-level
-// contract path rather than the per-repo cycle resolver.
-func (s *featureFinalReviewLoopState) seedVerificationReport(iterDir string) error {
+// seedFixVerificationReport pre-populates the fix leg's verification report.
+// Final Review itself only emits review-feedback.md; this report exists for
+// the final-review fix role after a CHANGES_REQUESTED verdict.
+func (s *featureFinalReviewLoopState) seedFixVerificationReport(iterDir string) error {
 	target := filepath.Join(iterDir, "verification-report.yaml")
 	if seed := priorIterationFinalReviewReportPath(s.artifactDir, iterDir); seed != "" {
 		if err := copyFile(seed, target); err == nil {
 			return nil
 		}
 	}
-	contract, err := ReadTestingContract(s.contractPath)
-	if err != nil {
-		return fmt.Errorf("reading feature FR testing contract: %w", err)
+	report := VerificationReport{
+		Version: 1,
+		RequiredChecks: []VerificationCheckResult{{
+			Name:        "Final Review fix validation",
+			Requirement: "Address the current Final Review findings and run targeted verification for the changed behavior.",
+			Command:     "targeted verification for the Final Review fix",
+			Mode:        VerificationModeCommand,
+			Status:      VerificationStatusNotRun,
+		}},
 	}
-	if err := WriteVerificationReport(target, BuildContractVerificationReportStub(contract, s.contractPath)); err != nil {
-		return fmt.Errorf("writing feature FR verification report stub: %w", err)
+	if err := WriteVerificationReport(target, report); err != nil {
+		return fmt.Errorf("writing final-review fix verification report stub: %w", err)
 	}
 	return nil
 }
@@ -845,21 +824,4 @@ func touchedReposFresh(store ports.FeatureStore, f *feature.Feature) []string {
 		}
 	}
 	return fresh.TouchedRepos()
-}
-
-// writeFeatureFinalReviewContract compiles and persists the feature-level
-// FR testing contract: per-repo baseline rows tagged `repo: <name>` plus
-// any cross-repo verification items declared on the feature. Plan-less
-// because FR has no phase plan to inherit from — implementation-phase
-// plans already gated their own per-iteration reviews.
-func writeFeatureFinalReviewContract(path string, repos []string, f *feature.Feature) error {
-	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{
-		Repos:    repos,
-		PlanLess: true,
-		PlanPath: path,
-	})
-	if err := WriteTestingContract(path, contract); err != nil {
-		return fmt.Errorf("writing feature FR testing contract: %w", err)
-	}
-	return nil
 }

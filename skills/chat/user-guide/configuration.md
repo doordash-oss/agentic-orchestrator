@@ -21,24 +21,68 @@ The `defaults.models` section assigns a model to each phase role:
 ```yaml
 defaults:
   models:
-    research: opus
-    planning: opus
-    implementation: opus
-    review: gpt-5.4
-    utilities: sonnet
-    kb_build: opus
+    research: "sonnet[200K]"
+    planning: "opus[1M]"
+    implementation: "opus[1M]"
+    review: "gpt-5.4[272K]"
+    utilities: "sonnet[200K]"
+    kb_build: "sonnet[200K]"
 ```
 
 | Role | Default | Used For |
 |------|---------|----------|
-| `research` | `opus` | Research, inquiry, design phases |
-| `planning` | `opus` | Plan creation and roadmap generation |
-| `implementation` | `opus` | Code implementation |
-| `review` | `gpt-5.4` | Final Review loop |
-| `utilities` | `sonnet` | Chat (AMA), utility skills |
-| `kb_build` | `opus` | Knowledge base construction |
+| `research` | `sonnet[200K]` | Research, inquiry, design phases |
+| `planning` | `opus[1M]` | Plan creation and roadmap generation |
+| `implementation` | `opus[1M]` | Code implementation |
+| `review` | `gpt-5.4[272K]` | Final Review loop |
+| `utilities` | `sonnet[200K]` | Chat (AMA), utility skills |
+| `kb_build` | `sonnet[200K]` | Knowledge base construction |
 
-Model names can be bare (e.g., `opus`) or prefixed with a provider (e.g., `claude:opus`, `codex:gpt-5.4`). Bare names are resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude` and `internal/llm/codex`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
+Model names can use canonical context-window IDs (e.g., `opus[1M]`) or provider prefixes (e.g., `claude:opus[1M]`, `codex:gpt-5.4[272K]`, `opencode:anthropic/claude-sonnet-4-5`). Bare aliases such as `opus` are still accepted and resolved against the registry, which merges each provider's hardcoded catalog (see `internal/llm/claude`, `internal/llm/codex`, and `internal/llm/opencode`). Configured model names are canonicalized at startup so the on-disk config reflects the registry's canonical spelling.
+
+### OpenCode model IDs
+
+An OpenCode selection can take three forms, and they resolve differently:
+
+- **`opencode:<provider>/<model>` prefix** — always routes to OpenCode. The value after the prefix is OpenCode's own backend id in `<provider>/<model>` form, for example `opencode:anthropic/claude-sonnet-4-5`, `opencode:openai/gpt-5`, or `opencode:ollama/llama3.1` for a local model. The prefix works even for a backend id Agentico does not pre-list, passing it straight through to OpenCode.
+- **bare slash-form backend id** — a value such as `anthropic/claude-sonnet-4-5` with no `opencode:` prefix resolves to OpenCode when it matches OpenCode's catalog, because OpenCode's ids are the only slash-form ids in the registry. This is the form Agentico persists for the provider-neutral per-phase defaults when OpenCode is the only ready provider, so an OpenCode model **can** become a default without an explicit prefix.
+- **plain alias** — a bare alias such as `opus`, `sonnet`, or `gpt-5.4` (no slash) resolves to its owning native provider (Claude or Codex) and never to OpenCode; OpenCode contributes only slash-form ids to the registry.
+
+When a ready OpenCode CLI is detected, Agentico discovers its live model catalog with `opencode models --verbose` and contributes those entries to the per-phase pickers; if discovery fails it falls back to a small built-in OpenCode catalog. Context-window suffixes such as `[200K]` are Agentico selection metadata and are stripped before the native backend id is handed to OpenCode. When OpenCode does not report pricing for a model (for example a local Ollama model), Agentico records that session at zero cost rather than guessing — the run still completes; only the cost roll-up shows `$0.00`.
+
+Use `agentico --refresh-models` when a provider CLI shows new models but Agentico still shows an older catalog. Refresh runs live discovery for all ready providers, updates the version-keyed cache on success, and falls back to the previous cache with a warning if discovery fails.
+
+See [Provider Selection](#provider-selection) for installing, authenticating, and troubleshooting OpenCode.
+
+## Provider Selection
+
+Agentic Orchestrator needs at least one authenticated provider CLI. Claude, Codex, and OpenCode are co-equal: each phase's default is the best available model for that role across every detected provider, and you can override any phase per the table above.
+
+| Provider | CLI | Minimum version | Authenticate | Readiness check |
+|----------|-----|-----------------|--------------|-----------------|
+| Claude | `claude` | 2.1.81 | `claude auth login` or `ANTHROPIC_API_KEY` | `claude auth status` |
+| Codex | `codex` | 0.116.0 | `codex login` | `codex login status` |
+| OpenCode | `opencode` | 1.17.9 | `opencode auth login` | `opencode models` |
+
+Restrict the orchestrator to the CLIs you actually have with `--providers <list>` (e.g. `--providers claude,codex,opencode` or `--providers opencode`). With no flag, every installed and ready provider is registered.
+
+### OpenCode
+
+Install OpenCode from [opencode.ai](https://opencode.ai) (`curl -fsSL https://opencode.ai/install | bash`) and authenticate a backend provider with `opencode auth login`. OpenCode is a router in front of a backend model (Anthropic, OpenAI, Google, a local Ollama model, and so on); Agentico selects it with the explicit `opencode:<backend/model>` prefix or a bare slash-form backend id, as documented under [Model Configuration](#opencode-model-ids).
+
+Startup gates OpenCode on three checks before it can route a session: the `opencode` CLI is on `PATH`, its version is at least `1.17.9` (the minimum Agentico enforces for the ACP surface it uses), and `opencode models` reports at least one model (which only happens once a backend provider is authenticated). A provider that fails any check is filtered out with a one-line startup notice and the run continues on whatever else is ready; if OpenCode is the only selected provider and it fails, startup stops with that provider-specific remedy.
+
+**Managed-session isolation.** Every OpenCode session runs against an Agentico-owned config generated under the state directory, passed via `OPENCODE_CONFIG`/`OPENCODE_CONFIG_CONTENT`. Agentico never writes into your global OpenCode configuration: the managed config pins the backend model, the role instructions, the permission map, and noninteractive runtime settings (no transcript sharing, no auto-update), while still merging your global provider credentials so authentication keeps working.
+
+### Troubleshooting providers
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Provider opencode CLI was not found` | OpenCode is not installed | `curl -fsSL https://opencode.ai/install \| bash`, then relaunch |
+| `opencode … below the minimum supported version` | Installed OpenCode is older than `1.17.9` | Upgrade OpenCode, then relaunch |
+| `Provider opencode is not configured` | No backend provider authenticated | `opencode auth login`, confirm with `opencode models` |
+| OpenCode models missing from the picker | Live catalog discovery failed | Agentico falls back to a small built-in OpenCode catalog; rerun `opencode models --verbose` to debug, or select with the explicit `opencode:<backend/model>` form |
+| OpenCode session cost shows `$0.00` | OpenCode reported no pricing for that model (e.g. a local model) | Expected — the run still completes; only the cost roll-up is zero |
 
 ## Pipeline Configuration
 
@@ -51,22 +95,28 @@ Checkpoints are review gates that pause the pipeline between phases for human re
 ```yaml
 defaults:
   checkpoints:
-    inquiry_review: false
-    research_review: false
-    design_review: false
-    plan_review: false
+    inquiry_review: true
+    research_review: true
+    design_review: true
+    roadmap_review: true
+    phase_plan_review: true
     manual_publish: true
 ```
 
 | Checkpoint | Gates Before | Default |
 |------------|-------------|---------|
-| `inquiry_review` | Research phase | `false` |
-| `research_review` | Design phase | `false` |
-| `design_review` | Plan phase | `false` |
-| `plan_review` | Implementation phase | `false` |
+| `inquiry_review` | Research phase | `true` |
+| `research_review` | Design phase | `true` |
+| `design_review` | Plan phase | `true` |
+| `roadmap_review` | Phase planning | `true` |
+| `phase_plan_review` | Implementation phase | `true` |
 | `manual_publish` | Publish step | `true` |
 
-When a feature is created, these defaults are combined with the pipeline profile's defaults (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints-review-gates)). Individual checkpoints can be toggled per-feature in the creation wizard.
+When a feature is created, these defaults are projected through the selected pipeline profile (see [Feature Lifecycle — Checkpoints](feature-lifecycle.md#checkpoints-review-gates)). Individual checkpoints can be toggled per-feature in the creation wizard.
+
+Omitted checkpoint fields in `defaults.checkpoints` or repo `pipeline_gates` default to `true` when the checkpoint is compatible with the selected pipeline. Config saves write all checkpoint fields explicitly. The legacy `plan_review` key is ignored by new config handling; replace it with `roadmap_review` and `phase_plan_review`.
+
+In the TUI, Roadmap Review controls the planning review group and Phase Plan Review appears beneath it. Turning Roadmap Review off also turns Phase Plan Review off; turning it back on enables Phase Plan Review by default. Advanced YAML can still set `phase_plan_review: true` with `roadmap_review: false`, and that runtime combination is honored.
 
 ## Iteration Limits
 
@@ -116,8 +166,11 @@ repos:
     path: /Users/you/Projects/my-project
     pipeline_gates:
       moonshot:
+        inquiry_review: true
+        research_review: true
         design_review: true
-        plan_review: true
+        roadmap_review: true
+        phase_plan_review: true
         manual_publish: true
 ```
 
@@ -170,10 +223,20 @@ Launch flags configure how the TUI starts. Start Agentic Orchestrator with `agen
 |------|-------------|---------|
 | `--config <path>` | Config file path | `~/.agentic-orchestrator/config.yaml` |
 | `--state-dir <path>` | State directory path | `~/.agentic-orchestrator/features` |
-| `--providers <list>` | Comma-separated provider list (e.g., `claude,codex`) | all detected |
+| `--providers <list>` | Comma-separated provider list (e.g., `claude,codex,opencode`) | all detected |
+| `--refresh-models` | Refresh provider model catalogs before opening the TUI | `false` |
 | `--dangerously-skip-permissions` | Skip all permission prompts | `false` |
 | `--help`, `-h` | Print usage | - |
 | `--version`, `-v` | Print version | - |
+
+## Updating
+
+Run `agentico update` to upgrade to the latest stable release, or `agentico update [--check|-n]` to report the current and latest available versions without installing. The `--check` form (alias `-n`) exits `0` and prints an already-up-to-date message when you are already on the newest release.
+
+| Invocation | Description |
+|------------|-------------|
+| `agentico update` | Upgrade to the latest stable release |
+| `agentico update --check` / `agentico update -n` | Check for a newer release without installing |
 
 ## State Directory Layout
 

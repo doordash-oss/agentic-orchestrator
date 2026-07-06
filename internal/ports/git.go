@@ -17,7 +17,7 @@ package ports
 // Publisher abstracts git push and PR creation.
 type Publisher interface {
 	Push(worktreePath, branch string) error
-	CreatePR(repoPath, branch, title, body, baseBranch string) (prURL string, err error)
+	CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (prURL string, err error)
 	ClosePR(prURL string) error
 	HasUncommittedChanges(worktreePath string) (bool, error)
 	HasLocalCommits(worktreePath string) (bool, error)

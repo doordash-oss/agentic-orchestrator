@@ -15,7 +15,6 @@
 package orchestrator_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -53,7 +52,7 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 					Research: "old-research",
 				},
 				Inquireness: feature.InquirenessMedium,
-				Checkpoints: feature.Checkpoints{PlanReview: true},
+				Checkpoints: feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true},
 			}
 			lc := lifecycleForFeature(f)
 			fs := newFeatureStore(f)
@@ -87,8 +86,8 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 			if !f.Checkpoints.InquiryReview || !f.Checkpoints.ManualPublish {
 				t.Errorf("Checkpoints not updated: %+v", f.Checkpoints)
 			}
-			if f.Checkpoints.PlanReview {
-				t.Errorf("Checkpoints overwritten to zero-valued fields — PlanReview should now be false, got true")
+			if f.Checkpoints.RoadmapReview || f.Checkpoints.PhasePlanReview {
+				t.Errorf("Checkpoints overwritten to zero-valued planning gates — RoadmapReview/PhasePlanReview should now be false, got %+v", f.Checkpoints)
 			}
 
 			if hookCount != 1 {
@@ -136,11 +135,11 @@ func TestUpdateFeatureConfig_QuiescentWritesAllThreeAxes(t *testing.T) {
 	}
 }
 
-// TestUpdateFeatureConfig_RejectedOnNonQuiescent verifies that non-quiescent
-// features (running, needs-review, or with an active repo cycle) return an
-// error wrapping ErrFeatureNotQuiescent, leave feature state untouched, do
-// not fire the hook, and do not emit an event.
-func TestUpdateFeatureConfig_RejectedOnNonQuiescent(t *testing.T) {
+// TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes verifies that
+// running, needs-review, and active repo-cycle features can still update the
+// persisted config. The active session keeps its current snapshot; the new
+// values are picked up by the next phase or restart.
+func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 	cases := []struct {
 		name  string
 		setup func(f *feature.Feature)
@@ -166,15 +165,13 @@ func TestUpdateFeatureConfig_RejectedOnNonQuiescent(t *testing.T) {
 		}},
 	}
 
-	originalInquireness := feature.InquirenessMedium
-	originalModels := config.ModelConfig{Research: "untouched"}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &feature.Feature{
 				ID:          "feat-1",
-				Models:      originalModels,
-				Inquireness: originalInquireness,
+				Models:      config.ModelConfig{Research: "old-research"},
+				Inquireness: feature.InquirenessMedium,
+				Checkpoints: feature.Checkpoints{RoadmapReview: true},
 			}
 			tc.setup(f)
 
@@ -190,30 +187,35 @@ func TestUpdateFeatureConfig_RejectedOnNonQuiescent(t *testing.T) {
 			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, hooks)
 
 			err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
-				Models:      config.ModelConfig{Research: "should-not-land"},
+				Models:      config.ModelConfig{Research: "new-research"},
 				Inquireness: feature.InquirenessHigh,
+				Checkpoints: feature.Checkpoints{ManualPublish: true},
 			})
-			if err == nil {
-				t.Fatal("expected error for non-quiescent feature, got nil")
-			}
-			if !errors.Is(err, orchestrator.ErrFeatureNotQuiescent) {
-				t.Errorf("error does not wrap ErrFeatureNotQuiescent: %v", err)
+			if err != nil {
+				t.Fatalf("UpdateFeatureConfig: %v", err)
 			}
 
-			if f.Models.Research != "untouched" {
-				t.Errorf("Models.Research = %q, want untouched", f.Models.Research)
+			if f.Models.Research != "new-research" {
+				t.Errorf("Models.Research = %q, want new-research", f.Models.Research)
 			}
-			if f.Inquireness != originalInquireness {
-				t.Errorf("Inquireness = %q, want unchanged %q", f.Inquireness, originalInquireness)
+			if f.Inquireness != feature.InquirenessHigh {
+				t.Errorf("Inquireness = %q, want high", f.Inquireness)
 			}
-			if hookCount != 0 {
-				t.Errorf("hook fired %d times, want 0", hookCount)
+			if !f.Checkpoints.ManualPublish || f.Checkpoints.RoadmapReview {
+				t.Errorf("Checkpoints not overwritten to edited values: %+v", f.Checkpoints)
+			}
+			if hookCount != 1 {
+				t.Errorf("hook fired %d times, want 1", hookCount)
 			}
 			events := drainEvents(o)
+			var found bool
 			for _, ev := range events {
-				if ev.Type == ports.FeatureConfigChanged {
-					t.Errorf("unexpected FeatureConfigChanged event emitted on rejected update: %+v", ev)
+				if ev.Type == ports.FeatureConfigChanged && ev.FeatureID == "feat-1" {
+					found = true
 				}
+			}
+			if !found {
+				t.Errorf("expected FeatureConfigChanged event for non-quiescent update; got %+v", events)
 			}
 		})
 	}
@@ -258,17 +260,18 @@ func TestUpdateFeatureConfig_NormalizesCheckpointsForPipeline(t *testing.T) {
 
 	input := orchestrator.UpdateFeatureConfigInput{
 		Checkpoints: feature.Checkpoints{
-			InquiryReview: true,
-			DesignReview:  true,
-			PlanReview:    true,
-			ManualPublish: true,
+			InquiryReview:   true,
+			DesignReview:    true,
+			RoadmapReview:   true,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 	if err := o.UpdateFeatureConfig("feat-1", input); err != nil {
 		t.Fatalf("UpdateFeatureConfig: %v", err)
 	}
-	if got := f.Checkpoints; got != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("normalized checkpoints = %+v, want PlanReview+ManualPublish", got)
+	if got := f.Checkpoints; got != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("normalized checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", got)
 	}
 }
 

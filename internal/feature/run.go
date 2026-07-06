@@ -46,6 +46,9 @@ type Run struct {
 	RunNumber int        `yaml:"run_number"`
 	StartedAt *time.Time `yaml:"started_at,omitempty"`
 
+	// Setup tracks first-run preparation before any phase session starts.
+	Setup *SetupState `yaml:"setup,omitempty"`
+
 	// Sealing (set only by rewind; absent/zero on active runs).
 	SealedAt     *time.Time `yaml:"sealed_at,omitempty"`
 	SealReason   SealReason `yaml:"seal_reason,omitempty"`
@@ -73,6 +76,7 @@ type Run struct {
 	// Timings/costs (moved from Feature).
 	PhaseTimings     map[string]time.Duration `yaml:"phase_timings,omitempty"`
 	PhaseCosts       map[string]float64       `yaml:"phase_costs,omitempty"`
+	SessionCosts     []SessionCostRecord      `yaml:"session_costs,omitempty"`
 	ActivePhaseStart *time.Time               `yaml:"active_phase_start,omitempty"`
 	ActiveTimingKey  string                   `yaml:"active_timing_key,omitempty"`
 
@@ -171,6 +175,17 @@ type Run struct {
 	// single-repo NEED_USER_INPUT gate. Empty when no gate is open. Multi-repo
 	// runs persist the per-repo gate path on RepoImplState instead.
 	PendingNeedUserInputPath string `yaml:"pending_need_user_input_path,omitempty"`
+}
+
+// SessionCostRecord is one accounted LLM session within a run. PhaseCosts is
+// the phase-level aggregate used by dashboards; this slice preserves the
+// session-level ledger behind that aggregate.
+type SessionCostRecord struct {
+	SessionID     string  `yaml:"session_id"`
+	PhaseKey      string  `yaml:"phase_key"`
+	ObserverPhase string  `yaml:"observer_phase,omitempty"`
+	RepoName      string  `yaml:"repo_name,omitempty"`
+	CostUSD       float64 `yaml:"cost_usd"`
 }
 
 // IsSealed reports whether this run has been sealed (rewound past).

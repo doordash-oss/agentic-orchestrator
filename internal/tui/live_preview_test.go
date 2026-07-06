@@ -458,11 +458,11 @@ func TestLivePreviewTranscriptSummaries(t *testing.T) {
 	}
 }
 
-func TestLivePreviewCodexToolProgressRendersCompactToolRows(t *testing.T) {
+func TestLivePreviewToolProgressRendersCompactToolRows(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
-	longResult := strings.Repeat("codex-output-", 20)
-	sess := codexLivePreviewSession("codex-tools", feature.PhaseImplement,
+	longResult := strings.Repeat("tool-output-", 20)
+	sess := streamingLivePreviewSession("streaming-tools", feature.PhaseImplement,
 		assistantMessage(llm.ContentBlock{Type: "text", Text: "checking files"}),
 		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: "PASS\nok ./..."}},
 		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: "Bash", Data: longResult}},
@@ -470,13 +470,13 @@ func TestLivePreviewCodexToolProgressRendersCompactToolRows(t *testing.T) {
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
 
-	for _, want := range []string{"$ Bash", "Bash result: PASS ok ./...", "Bash result: codex-output-", "[...]", "$ Write", "Write result: A README.scn.md"} {
+	for _, want := range []string{"$ Bash", "Bash result: PASS ok ./...", "Bash result: tool-output-", "[...]", "$ Write", "Write result: A README.scn.md"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("codex live preview missing %q in:\n%s", want, view)
+			t.Fatalf("live preview missing %q in:\n%s", want, view)
 		}
 	}
 	if strings.Count(view, "$ Bash") != 1 {
-		t.Fatalf("codex live preview should render one Bash tool-use row, got:\n%s", view)
+		t.Fatalf("live preview should render one Bash tool-use row, got:\n%s", view)
 	}
 }
 
@@ -718,6 +718,87 @@ func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 	}
 }
 
+func TestLivePreviewUpperMetadataUsesShortPhaseModelName(t *testing.T) {
+	t.Parallel()
+	const routedModel = "gateway:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	f := &feature.Feature{
+		ID:           "feat-short-model",
+		Status:       feature.StatusBuildingKB,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Models:       config.ModelConfig{KBBuild: routedModel},
+	}
+
+	view := stripANSI(newLivePreviewModel(f).withHeight(24).ViewCompact(120))
+	if strings.Contains(view, "portkey/@fireworks/accounts/fireworks/models") {
+		t.Fatalf("live preview rendered routed model ID, want compact model name:\n%s", view)
+	}
+	if strings.Contains(view, "gateway:glm-5p2[1.04M]") {
+		t.Fatalf("live preview phase model should omit context window suffix:\n%s", view)
+	}
+	if !strings.Contains(view, "Phase Model") || !strings.Contains(view, "gateway:glm-5p2") {
+		t.Fatalf("live preview missing compact phase model:\n%s", view)
+	}
+
+	sess := session.NewSession("feat-short-model-kb", f.ID, feature.PhaseKnowledgeBase)
+	sess.SetModel(routedModel)
+	withSession := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	if strings.Contains(withSession, "portkey/@fireworks/accounts/fireworks/models") {
+		t.Fatalf("live preview session model rendered routed model ID, want compact model name:\n%s", withSession)
+	}
+	if strings.Contains(withSession, "gateway:glm-5p2[1.04M]") {
+		t.Fatalf("live preview session phase model should omit context window suffix:\n%s", withSession)
+	}
+	if !strings.Contains(withSession, "gateway:glm-5p2") {
+		t.Fatalf("live preview session model missing compact phase model:\n%s", withSession)
+	}
+}
+
+func TestLivePreviewConfiguredPhaseModelUsesInquiryForInquire(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Models: config.ModelConfig{
+			Inquiry:  "claude:clarify-model",
+			Research: "claude:research-model",
+			Planning: "claude:planning-model",
+		},
+	}
+
+	if got := livePreviewConfiguredPhaseModel(f, feature.PhaseInquire); got != "claude:clarify-model" {
+		t.Errorf("PhaseInquire model = %q, want inquiry model", got)
+	}
+	if got := livePreviewConfiguredPhaseModel(f, feature.PhaseResearch); got != "claude:research-model" {
+		t.Errorf("PhaseResearch model = %q, want research model", got)
+	}
+	if got := livePreviewConfiguredPhaseModel(f, feature.PhaseDesign); got != "claude:planning-model" {
+		t.Errorf("PhaseDesign model = %q, want planning model", got)
+	}
+}
+
+func TestLivePreviewUpperMetadataKeepsConfiguredProviderForBackendSessionModel(t *testing.T) {
+	t.Parallel()
+	const routedModel = "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	const backendModel = "portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"
+	f := &feature.Feature{
+		ID:           "feat-opencode-model",
+		Status:       feature.StatusResearching,
+		CurrentPhase: feature.PhaseResearch,
+		Models:       config.ModelConfig{Research: routedModel},
+	}
+
+	sess := session.NewSession("feat-opencode-model-research", f.ID, feature.PhaseResearch)
+	sess.SetModel(backendModel)
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	if strings.Contains(view, "portkey/@fireworks/accounts/fireworks/models") {
+		t.Fatalf("live preview session model rendered routed model ID, want compact model name:\n%s", view)
+	}
+	if strings.Contains(view, "opencode:glm-5p2[1.04M]") {
+		t.Fatalf("live preview session phase model should omit context window suffix:\n%s", view)
+	}
+	if !strings.Contains(view, "Phase Model") || !strings.Contains(view, "opencode:glm-5p2") {
+		t.Fatalf("live preview session model missing configured provider prefix:\n%s", view)
+	}
+}
+
 func TestLivePreviewTranscriptRowsWrapToContentWidth(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
@@ -834,7 +915,7 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 	m.livePreview.session = sess
 
 	view := m.View()
-	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Context", "42%", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
+	for _, want := range []string{"Live Preview", "Feature ID", "feat-live", "Repos", "api", "Phase", "Implement", "Status", "Implementing", "Context", "42% used", "Elapsed", "12m", "Cost", "$0.42", "Using Bash...", "Current: Implement", "Ready to patch live preview", "AskUser: Proceed with patch?", "[a] Watch"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("dashboard live preview missing %q in:\n%s", want, view)
 		}
@@ -852,18 +933,35 @@ func TestDashboardRendersLivePreviewForEligibleFeature(t *testing.T) {
 func TestLivePreviewContextMetadata(t *testing.T) {
 	t.Parallel()
 
+	sessionWithUsage := session.NewSession("feat-context-impl", "feat-context", feature.PhaseImplement)
+	sessionWithUsage.SetLatestUsage(&llm.Usage{InputTokens: 20_000, ContextWindow: 200_000})
+
 	tests := []struct {
 		name       string
 		f          *feature.Feature
+		sess       session.SessionView
 		contextPct int
 		want       string
 		notWant    string
 	}{
 		{
-			name:       "active session shows percentage",
+			name:       "active session shows context window and used percentage",
 			f:          &feature.Feature{ID: "feat-context", Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement},
-			contextPct: 73,
-			want:       "73%",
+			sess:       sessionWithUsage,
+			contextPct: 10,
+			want:       "200K (10% used)",
+			notWant:    "Calculating",
+		},
+		{
+			name: "configured model suffix supplies context window",
+			f: &feature.Feature{
+				ID:           "feat-context",
+				Status:       feature.StatusImplementing,
+				CurrentPhase: feature.PhaseImplement,
+				Models:       config.ModelConfig{Implementation: "opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]"},
+			},
+			contextPct: 2,
+			want:       "1.04M (2% used)",
 			notWant:    "Calculating",
 		},
 		{
@@ -882,7 +980,7 @@ func TestLivePreviewContextMetadata(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			view := stripANSI(newLivePreviewModel(tt.f).withContextPct(tt.contextPct).withHeight(24).ViewCompact(100))
+			view := stripANSI(newLivePreviewModel(tt.f).withSession(tt.sess).withContextPct(tt.contextPct).withHeight(24).ViewCompact(100))
 			if tt.want != "" && !strings.Contains(view, tt.want) {
 				t.Fatalf("live preview context metadata missing %q in:\n%s", tt.want, view)
 			}
@@ -1072,9 +1170,9 @@ func newLivePreviewSessionWithIteration(id string, phase feature.Phase, iteratio
 	return sess
 }
 
-func codexLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
+func streamingLivePreviewSession(id string, phase feature.Phase, messages ...llm.SDKMessage) session.SessionView {
 	sess := session.NewSession(id, "feat-live", phase)
-	sess.SetProviderName("codex")
+	sess.SetProviderName("streaming")
 	sess.SetStatus(session.SessionRunning)
 	for _, msg := range messages {
 		sess.MessageLog().Append(msg)

@@ -177,8 +177,8 @@ func (m WelcomeModel) View() string {
 
 func (m WelcomeModel) viewIntro() string {
 	artLines := []string{
-		" ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀▀",
-		" █▀█ █▄█ ██▄ █░▀█ ░█░ █ █▄▄",
+		" ▄▀█ █▀▀ █▀▀ █▄░█ ▀█▀ █ █▀▀ █▀█",
+		" █▀█ █▄█ ██▄ █░▀█ ░█░ █ █▄▄ █▄█",
 	}
 
 	brandStyle := lipgloss.NewStyle().

@@ -46,12 +46,23 @@ const (
 // DesignArtifactKey is the artifact-map key for the Design phase output.
 const DesignArtifactKey = "design"
 
+// ResearchArtifactKey is the artifact-map key for the Research phase output.
+const ResearchArtifactKey = "research"
+
 // DesignArtifactPath returns the recorded path of the Design artifact for a feature.
 func (f *Feature) DesignArtifactPath() string {
 	if f == nil || f.Artifacts == nil {
 		return ""
 	}
 	return f.Artifacts[DesignArtifactKey]
+}
+
+// ResearchArtifactPath returns the recorded path of the Research artifact for a feature.
+func (f *Feature) ResearchArtifactPath() string {
+	if f == nil || f.Artifacts == nil {
+		return ""
+	}
+	return f.Artifacts[ResearchArtifactKey]
 }
 
 // LogicalOrder returns the execution/display sequence order for the phase.
@@ -262,6 +273,7 @@ const (
 	FailureMissingArtifact   = "missing_artifact"
 	FailureProtocolViolation = "protocol_violation"
 	FailureInfrastructure    = "infrastructure"
+	FailureWorktreeSetup     = "worktree_setup"
 	// FailureNeedUserInput marks a feature failure caused by an
 	// implement iteration emitting `## Iteration State: NEED_USER_INPUT`
 	// in progress.md. The harness treats this as a terminal state today;
@@ -307,6 +319,9 @@ const (
 	// StatusReviewPassed → StatusFinalReviewing on entry and
 	// StatusFinalReviewing → StatusCodeReady on success.
 	StatusFinalReviewing
+	// StatusSettingUpWorktrees marks durable first-run setup before any phase
+	// session starts. It is active work, but not a formal pipeline phase.
+	StatusSettingUpWorktrees
 )
 
 func (s Status) String() string {
@@ -361,6 +376,8 @@ func (s Status) String() string {
 		return "NeedUserInput"
 	case StatusFinalReviewing:
 		return "FinalReviewing"
+	case StatusSettingUpWorktrees:
+		return "SettingUpWorktrees"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -368,7 +385,7 @@ func (s Status) String() string {
 
 // IsRunning returns true if this status represents an actively executing phase.
 func (s Status) IsRunning() bool {
-	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing
+	return s == StatusResearching || s == StatusPlanning || s == StatusImplementing || s == StatusBuildingKB || s == StatusInquiring || s == StatusDesigning || s == StatusFinalReviewing || s == StatusSettingUpWorktrees
 }
 
 // IsNeedsReview returns true if this status represents a pending artifact review.
@@ -436,6 +453,7 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		"Reviewing":           StatusReviewing,
 		"NeedUserInput":       StatusNeedUserInput,
 		"FinalReviewing":      StatusFinalReviewing,
+		"SettingUpWorktrees":  StatusSettingUpWorktrees,
 	}
 
 	// Legacy integer mapping. Values 0-11 are unchanged from the original iota.
@@ -472,11 +490,13 @@ func (s *Status) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 // Checkpoints controls which phase transitions pause for human review.
 type Checkpoints struct {
-	InquiryReview  bool `yaml:"inquiry_review,omitempty"`
-	ResearchReview bool `yaml:"research_review,omitempty"`
-	DesignReview   bool `yaml:"design_review,omitempty"`
-	PlanReview     bool `yaml:"plan_review,omitempty"`
-	ManualPublish  bool `yaml:"manual_publish,omitempty"`
+	InquiryReview   bool `yaml:"inquiry_review,omitempty"`
+	ResearchReview  bool `yaml:"research_review,omitempty"`
+	DesignReview    bool `yaml:"design_review,omitempty"`
+	RoadmapReview   bool `yaml:"roadmap_review,omitempty"`
+	PhasePlanReview bool `yaml:"phase_plan_review,omitempty"`
+	ManualPublish   bool `yaml:"manual_publish,omitempty"`
+	DraftPublish    bool `yaml:"draft_publish,omitempty"`
 }
 
 // HasGateForPhase returns true if a review gate is enabled for the given target phase.
@@ -489,7 +509,7 @@ func (c Checkpoints) HasGateForPhase(phase Phase) bool {
 	case PhasePlan:
 		return c.DesignReview
 	case PhaseImplement:
-		return c.PlanReview
+		return c.PhasePlanReview
 	default:
 		return false
 	}
@@ -626,6 +646,7 @@ type Feature struct {
 	ActivePhaseStart                *time.Time                 `yaml:"-"`
 	ActiveTimingKey                 string                     `yaml:"-"`
 	PhaseCosts                      map[string]float64         `yaml:"-"`
+	SessionCosts                    []SessionCostRecord        `yaml:"-"`
 	PendingReviewPhase              *Phase                     `yaml:"-"`
 	PendingRewindReviewRoadmapPhase *int                       `yaml:"-"`
 	IsRewind                        bool                       `yaml:"-"`
@@ -702,6 +723,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.ActivePhaseStart = f.ActivePhaseStart
 	r.ActiveTimingKey = f.ActiveTimingKey
 	r.PhaseCosts = f.PhaseCosts
+	r.SessionCosts = f.SessionCosts
 	r.ActiveCycle = f.ActiveCycle
 	r.PendingReviewPhase = f.PendingReviewPhase
 	r.PendingRewindReviewRoadmapPhase = f.PendingRewindReviewRoadmapPhase
@@ -743,6 +765,7 @@ func (f *Feature) syncRunToShadows() {
 	f.ActivePhaseStart = r.ActivePhaseStart
 	f.ActiveTimingKey = r.ActiveTimingKey
 	f.PhaseCosts = r.PhaseCosts
+	f.SessionCosts = r.SessionCosts
 	f.ActiveCycle = r.ActiveCycle
 	f.PendingReviewPhase = r.PendingReviewPhase
 	f.PendingRewindReviewRoadmapPhase = r.PendingRewindReviewRoadmapPhase
@@ -832,6 +855,7 @@ var validTransitions = map[Status][]Status{
 	StatusInquiryNeedsReview:  {StatusResearching, StatusFailed},
 	StatusResearchNeedsReview: {StatusDesigning, StatusFailed},
 	StatusDesignNeedsReview:   {StatusPlanning, StatusFailed},
+	StatusSettingUpWorktrees:  {StatusCreated, StatusFailed},
 }
 
 // accumulateActiveTime moves elapsed time from ActivePhaseStart into
@@ -1115,6 +1139,20 @@ func (f *Feature) AddPhaseCost(key string, cost float64) {
 		f.PhaseCosts = make(map[string]float64)
 	}
 	f.PhaseCosts[key] += cost
+}
+
+// RecordSessionCost appends one session-level ledger row and updates the
+// phase-level aggregate used by existing dashboard and summary readers.
+func (f *Feature) RecordSessionCost(record SessionCostRecord) {
+	record.PhaseKey = strings.TrimSpace(record.PhaseKey)
+	if record.CostUSD <= 0 || record.PhaseKey == "" {
+		return
+	}
+	record.SessionID = strings.TrimSpace(record.SessionID)
+	record.ObserverPhase = strings.TrimSpace(record.ObserverPhase)
+	record.RepoName = strings.TrimSpace(record.RepoName)
+	f.AddPhaseCost(record.PhaseKey, record.CostUSD)
+	f.SessionCosts = append(f.SessionCosts, record)
 }
 
 func (f *Feature) Transition(to Status) error {

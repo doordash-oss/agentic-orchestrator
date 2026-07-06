@@ -58,14 +58,16 @@ func TestCodexProtocol_TokenUsageUpdated(t *testing.T) {
 			"turnId":   "turn1",
 			"tokenUsage": map[string]interface{}{
 				"total": map[string]interface{}{
-					"inputTokens":  150000,
-					"outputTokens": 5000,
-					"totalTokens":  155000,
+					"inputTokens":       150000,
+					"cachedInputTokens": 20000,
+					"outputTokens":      5000,
+					"totalTokens":       155000,
 				},
 				"last": map[string]interface{}{
-					"inputTokens":  80000,
-					"outputTokens": 2000,
-					"totalTokens":  82000,
+					"inputTokens":       80000,
+					"cachedInputTokens": 10000,
+					"outputTokens":      2000,
+					"totalTokens":       82000,
 				},
 				"modelContextWindow": ctxWindow,
 			},
@@ -96,6 +98,12 @@ func TestCodexProtocol_TokenUsageUpdated(t *testing.T) {
 	if u.OutputTokens != 5000 {
 		t.Errorf("OutputTokens = %d, want 5000 (Total.OutputTokens)", u.OutputTokens)
 	}
+	if u.CacheReadInputTokens != 20000 {
+		t.Errorf("CacheReadInputTokens = %d, want 20000 (Total.CachedInputTokens)", u.CacheReadInputTokens)
+	}
+	if u.CacheCreationInputTokens != 0 {
+		t.Errorf("CacheCreationInputTokens = %d, want 0", u.CacheCreationInputTokens)
+	}
 	// ContextInputTokens carries Last.InputTokens (informational)
 	if u.ContextInputTokens != 80000 {
 		t.Errorf("ContextInputTokens = %d, want 80000 (Last.InputTokens)", u.ContextInputTokens)
@@ -119,6 +127,9 @@ func TestCodexProtocol_TokenUsageUpdated(t *testing.T) {
 	}
 	if p.outputTokens != 5000 {
 		t.Errorf("p.outputTokens = %d, want 5000 (Total.OutputTokens)", p.outputTokens)
+	}
+	if p.cachedInputTokens != 20000 {
+		t.Errorf("p.cachedInputTokens = %d, want 20000 (Total.CachedInputTokens)", p.cachedInputTokens)
 	}
 	if p.modelContextWindow != ctxWindow {
 		t.Errorf("p.modelContextWindow = %d, want %d", p.modelContextWindow, ctxWindow)
@@ -272,6 +283,28 @@ func TestCodexProtocolStartTurn_DeveloperInstructionsEncoding(t *testing.T) {
 	}
 }
 
+func TestCodexProtocol_StripsContextWindowFromModel(t *testing.T) {
+	var buf bytes.Buffer
+
+	p := NewProtocol(llm.ProtocolOpts{
+		Model:   "gpt-5.4[1M]",
+		WorkDir: "/tmp/test",
+	})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-123")
+
+	if err := p.startTurn("do something"); err != nil {
+		t.Fatalf("startTurn() error: %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, `"model":"gpt-5.4"`) {
+		t.Fatalf("startTurn payload = %s, want base model gpt-5.4", got)
+	}
+	if strings.Contains(got, "gpt-5.4[1M]") {
+		t.Fatalf("startTurn payload leaked context-window model ID: %s", got)
+	}
+}
+
 func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 	p.SetThreadIDForTest("thread-abc")
@@ -389,6 +422,33 @@ func TestCodexProtocol_StartTurnNetworkAccess(t *testing.T) {
 	}
 	if !strings.Contains(got, `"type":"workspaceWrite"`) {
 		t.Fatalf("startTurn payload missing workspaceWrite type; payload=%s", got)
+	}
+}
+
+func TestCodexProtocol_ErrorResponseSurfacesAsResultError(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex", DSP: true})
+
+	// A JSON-RPC error response to one of our requests (id, no method). Codex
+	// returns this for turn/start when an MDM policy forbids approval_policy.
+	// It must be surfaced to the user, not silently swallowed.
+	line := []byte("{\"id\":3,\"error\":{\"code\":-32600,\"message\":\"invalid thread settings override: `Never` is not in the allowed set [OnRequest, OnFailure] (set by MDM com.openai.codex:requirements_toml_base64)\"}}")
+
+	msgs, err := p.ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine error: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d messages, want 1 (error must be surfaced, not swallowed)", len(msgs))
+	}
+	msg := msgs[0]
+	if msg.Type != "result" || msg.Subtype != "error" {
+		t.Fatalf("got type=%q subtype=%q, want result/error", msg.Type, msg.Subtype)
+	}
+	if msg.Result == nil || !msg.Result.IsError {
+		t.Fatalf("expected Result with IsError=true, got %+v", msg.Result)
+	}
+	if !strings.Contains(msg.Result.Result, "not in the allowed set") {
+		t.Fatalf("surfaced error should include codex's reason; got %q", msg.Result.Result)
 	}
 }
 
@@ -687,6 +747,54 @@ func completedTurnParams(t *testing.T, threadID string) json.RawMessage {
 		t.Fatalf("marshal turn/completed: %v", err)
 	}
 	return raw
+}
+
+func TestTurnCompletedComputesCostWithCachedInputTokens(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "gpt-5.5"})
+
+	usage := map[string]interface{}{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"tokenUsage": map[string]interface{}{
+			"total": map[string]interface{}{
+				"inputTokens":       1_000_000,
+				"cachedInputTokens": 400_000,
+				"outputTokens":      100_000,
+				"totalTokens":       1_100_000,
+			},
+			"last": map[string]interface{}{
+				"inputTokens":       1_000_000,
+				"cachedInputTokens": 400_000,
+				"outputTokens":      100_000,
+				"totalTokens":       1_100_000,
+			},
+		},
+	}
+	params, err := json.Marshal(usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.parseNotification("thread/tokenUsage/updated", params); !ok {
+		t.Fatal("token usage notification ok = false, want true")
+	}
+
+	msg, ok := p.parseNotification("turn/completed", completedTurnParams(t, "thread-1"))
+	if !ok {
+		t.Fatal("turn completed ok = false, want true")
+	}
+	if msg.Result == nil {
+		t.Fatal("Result = nil")
+	}
+	const want = 6.20 // 600K full input at $5/M + 400K cached at $0.50/M + 100K output at $30/M
+	if diff := msg.Result.TotalCostUSD - want; diff < -0.001 || diff > 0.001 {
+		t.Fatalf("TotalCostUSD = %.6f, want %.2f", msg.Result.TotalCostUSD, want)
+	}
+	if msg.Result.Usage == nil {
+		t.Fatal("Result.Usage = nil")
+	}
+	if msg.Result.Usage.CacheReadInputTokens != 400_000 {
+		t.Fatalf("Result.Usage.CacheReadInputTokens = %d, want 400000", msg.Result.Usage.CacheReadInputTokens)
+	}
 }
 
 func TestTurnCompleted_WellFormedQuestionSurfacesOptions(t *testing.T) {

@@ -52,9 +52,7 @@ func TestCodexBuildSessionEnvContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSession() error: %v", err)
 	}
-	if env != nil {
-		t.Fatalf("BuildSession() env = %v, want nil", env)
-	}
+	requireOnlyAgenticoBinEnv(t, env)
 	wantCmdPrefix := []string{"codex", "app-server"}
 	if len(cmd) < len(wantCmdPrefix) {
 		t.Fatalf("BuildSession() cmd = %v, want prefix %v", cmd, wantCmdPrefix)
@@ -130,9 +128,8 @@ func TestCodexBuildSessionAgentNamesDoNotChangeReconciliation(t *testing.T) {
 	}
 	snapshotNamed := snapshotCodexAgentHome(t, codexHome)
 
-	if envEmpty != nil || envNamed != nil {
-		t.Fatalf("BuildSession() env = %v / %v, want nil / nil", envEmpty, envNamed)
-	}
+	requireOnlyAgenticoBinEnv(t, envEmpty)
+	requireOnlyAgenticoBinEnv(t, envNamed)
 	if !reflect.DeepEqual(cmdEmpty, cmdNamed) {
 		t.Fatalf("BuildSession() command changed with AgentNames: empty=%v named=%v", cmdEmpty, cmdNamed)
 	}

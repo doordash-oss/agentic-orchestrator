@@ -25,15 +25,21 @@ func NewDefault() *Config {
 	return &Config{
 		Defaults: DefaultsConfig{
 			Models: ModelConfig{
-				Research:       "opus[1m]",
-				Planning:       "opus[1m]",
-				Implementation: "opus[1m]",
-				Review:         "gpt-5.4",
-				Utilities:      "sonnet",
-				KBBuild:        "opus[1m]",
+				Inquiry:        "sonnet[200K]",
+				Research:       "sonnet[200K]",
+				Planning:       "sonnet[200K]",
+				Implementation: "sonnet[200K]",
+				Review:         "gpt-5.4[272K]",
+				Utilities:      "sonnet[200K]",
+				KBBuild:        "sonnet[200K]",
 			},
 			Checkpoints: Checkpoints{
-				ManualPublish: true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 			ExitCriteria:             defaultExitCriteria,
 			Inquireness:              "high",

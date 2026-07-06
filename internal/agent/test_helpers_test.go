@@ -17,7 +17,9 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -42,6 +44,21 @@ func isReviewHelper(h interface{}) bool {
 		return true
 	}
 	return false
+}
+
+func requireOnlyAgenticoBinEnv(t *testing.T, env []string) string {
+	t.Helper()
+	if len(env) != 1 {
+		t.Fatalf("env = %v, want only AGENTICO_BIN", env)
+	}
+	value, ok := strings.CutPrefix(env[0], "AGENTICO_BIN=")
+	if !ok || value == "" {
+		t.Fatalf("env = %v, want AGENTICO_BIN entry", env)
+	}
+	if !filepath.IsAbs(value) {
+		t.Fatalf("AGENTICO_BIN = %q, want absolute path", value)
+	}
+	return value
 }
 
 // mockBuildSession returns a BuildSession function that returns mock bash
@@ -147,6 +164,16 @@ func assertExplicitEmptyAgentNames(t *testing.T, got []string) {
 	t.Helper()
 	if !reflect.DeepEqual(got, []string{}) {
 		t.Fatalf("AgentNames = %#v, want explicit empty []string{}", got)
+	}
+}
+
+// assertExplorationAgentNames asserts a bounded helper (validator/reviewer) was
+// given the shared exploration sub-agent set, matching the research-phase
+// treatment.
+func assertExplorationAgentNames(t *testing.T, got []string) {
+	t.Helper()
+	if !reflect.DeepEqual(got, explorationAgentNames()) {
+		t.Fatalf("AgentNames = %#v, want exploration set %#v", got, explorationAgentNames())
 	}
 }
 

@@ -36,10 +36,24 @@ func advanceWizardToWhereViaUI(m WizardModel, name string) WizardModel {
 	return m
 }
 
+func normalizedWizardViewText(view string) string {
+	return strings.Join(strings.Fields(ansiRegex.ReplaceAllString(view, "")), " ")
+}
+
+func requireWizardViewContainsAll(t *testing.T, view string, needles ...string) {
+	t.Helper()
+	for _, needle := range needles {
+		if !strings.Contains(view, needle) {
+			t.Fatalf("wizard view missing %q:\n%s", needle, view)
+		}
+	}
+}
+
 func TestWizardSteps(t *testing.T) {
 	repos := []string{"repo-a", "repo-b"}
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -126,11 +140,8 @@ func TestWizardZeroConfigDefaultsToManualPublish(t *testing.T) {
 
 func TestWizardPipelineDefaultsApplyCheckpoints(t *testing.T) {
 	// Config with explicit checkpoints that disable ManualPublish.
-	defaults := config.DefaultsConfig{
-		Checkpoints: config.Checkpoints{
-			ManualPublish: false,
-		},
-	}
+	defaults := config.NewDefault().Defaults
+	defaults.Checkpoints.ManualPublish = false
 	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
 
 	m.nameInput.SetValue("test")
@@ -144,12 +155,12 @@ func TestWizardPipelineDefaultsApplyCheckpoints(t *testing.T) {
 		t.Fatal("expected wizard to be done")
 	}
 	result := m.Result()
-	// Large pipeline defaults: DesignReview=true, ManualPublish=true
+	// Large applies compatible configured defaults and preserves explicit false.
 	if !result.Checkpoints.DesignReview {
-		t.Error("expected DesignReview to be true (large pipeline default)")
+		t.Error("expected DesignReview to be true (configured default)")
 	}
-	if !result.Checkpoints.ManualPublish {
-		t.Error("expected ManualPublish to be true (large pipeline default)")
+	if result.Checkpoints.ManualPublish {
+		t.Error("expected ManualPublish to remain false from configured default")
 	}
 }
 
@@ -542,6 +553,79 @@ func TestWizardWhatStepShiftTabFromDesc(t *testing.T) {
 	}
 }
 
+func TestWizardWhatStepShiftEnterInDescriptionInsertsNewline(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m, _ = m.Update(tea.KeyPressMsg{Text: "name"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "line1"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "line2"})
+
+	if got := m.descInput.Value(); got != "line1\nline2" {
+		t.Fatalf("description = %q, want %q", got, "line1\nline2")
+	}
+	if m.step != wizardStepWhat {
+		t.Fatalf("step = %d, want What after Shift+Enter newline", m.step)
+	}
+}
+
+func TestWizardWhatStepDownFromNameFocusesDescription(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m, _ = m.Update(tea.KeyPressMsg{Text: "name"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+
+	if m.whatFocus != 1 {
+		t.Fatalf("whatFocus = %d, want description focus", m.whatFocus)
+	}
+	if m.nameInput.Focused() {
+		t.Fatal("name input should be blurred after Down")
+	}
+	if !m.descInput.Focused() {
+		t.Fatal("description input should be focused after Down")
+	}
+}
+
+func TestWizardWhatStepUpFromDescriptionFirstLineFocusesName(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m.nameInput.SetValue("name")
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "description"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+
+	if m.whatFocus != 0 {
+		t.Fatalf("whatFocus = %d, want name focus", m.whatFocus)
+	}
+	if !m.nameInput.Focused() {
+		t.Fatal("name input should be focused after Up from first description line")
+	}
+	if m.descInput.Focused() {
+		t.Fatal("description input should be blurred after Up from first description line")
+	}
+}
+
+func TestWizardWhatStepUpInsideWrappedDescriptionStaysInDescription(t *testing.T) {
+	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+
+	m.nameInput.SetValue("name")
+	m.descInput.SetWidth(4)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m, _ = m.Update(tea.KeyPressMsg{Text: "abcdef"})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+
+	if m.whatFocus != 1 {
+		t.Fatalf("whatFocus = %d, want description focus", m.whatFocus)
+	}
+	if !m.descInput.Focused() {
+		t.Fatal("description input should remain focused when moving within wrapped text")
+	}
+	if got := m.descInput.col; got != 2 {
+		t.Fatalf("description cursor col = %d, want 2 after moving up one visual line", got)
+	}
+}
+
 // --- Review step only responds to G ---
 
 func TestWizardReviewEnterIsNoOp(t *testing.T) {
@@ -703,6 +787,7 @@ func TestWizardRepoFilter(t *testing.T) {
 	repos := []string{"alpha", "beta", "gamma", "geo-intel", "geo-proxy"}
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -2577,8 +2662,10 @@ func TestWizardSummaryEditingFooter(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view = m.View()
-	if !containsString(view, "Cycle") {
-		t.Error("expected 'Cycle' in footer during Models editing")
+	for _, needle := range []string{"Panel", "Filter"} {
+		if !containsString(view, needle) {
+			t.Errorf("expected %q in footer during Models editing", needle)
+		}
 	}
 
 	// Exit editing
@@ -2647,10 +2734,18 @@ func TestWizardSummaryModelsUpDownNavigation(t *testing.T) {
 		t.Errorf("expected modelCursor=4 after Down, got %d", m.modelCursor)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 4 {
-		t.Errorf("expected modelCursor=4 (clamped) after Down, got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor=5 after Down, got %d", m.modelCursor)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor=5 (clamped) after Down, got %d", m.modelCursor)
 	}
 
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.modelCursor != 4 {
+		t.Errorf("expected modelCursor=4 after Up, got %d", m.modelCursor)
+	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.modelCursor != 3 {
 		t.Errorf("expected modelCursor=3 after Up, got %d", m.modelCursor)
@@ -2684,19 +2779,28 @@ func TestWizardSummaryModelsTabCycles(t *testing.T) {
 
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
 
 	origModel := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 
-	if m.models.Research == origModel {
-		t.Error("expected Research model to change after Tab")
+	if got := m.configEditor.activeModelCell; got != modelCellAgent {
+		t.Errorf("after Tab activeModelCell = %v, want modelCellAgent", got)
 	}
-	if !m.modelsManuallySet {
-		t.Error("expected modelsManuallySet=true after Tab")
+	if m.models.Research != origModel {
+		t.Errorf("Tab changed Research model: got %q, want %q", m.models.Research, origModel)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Errorf("after second Tab activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if got := m.configEditor.activeModelCell; got != modelCellAgent {
+		t.Errorf("after Shift+Tab activeModelCell = %v, want modelCellAgent", got)
 	}
 }
 
-func TestWizardSummaryModelsRightLeftCycles(t *testing.T) {
+func TestWizardSummaryModelsVerticalSelectionCycles(t *testing.T) {
 	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"}}
 	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
@@ -2707,17 +2811,26 @@ func TestWizardSummaryModelsRightLeftCycles(t *testing.T) {
 
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // Clarify -> Research
 
 	origModel := m.models.Research
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("second Right activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.models.Research == origModel {
-		t.Error("expected Research model to change after Right")
+		t.Error("expected Research model to change after Down on Model panel")
 	}
 
-	afterRight := m.models.Research
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
-	if m.models.Research == afterRight {
-		t.Error("expected Research model to change after Left (cycle back)")
+	afterDown := m.models.Research
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.models.Research == afterDown {
+		t.Error("expected Research model to change after Up on Model panel")
+	}
+	if m.models.Research != origModel {
+		t.Errorf("expected Research model to cycle back to %q, got %q", origModel, m.models.Research)
 	}
 }
 
@@ -2755,16 +2868,17 @@ func TestWizardSummaryModelsEscCollapses(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	// Cycle a model
+	// Change a model.
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	cycledModel := m.models.Research
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	changedModel := m.models.Research
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.summaryEditing {
 		t.Error("expected summaryEditing=false after Esc")
 	}
-	if m.models.Research != cycledModel {
-		t.Error("expected cycled model to be preserved after Esc")
+	if m.models.Research != changedModel {
+		t.Error("expected changed model to be preserved after Esc")
 	}
 }
 
@@ -2780,17 +2894,23 @@ func TestWizardSummaryModelsSubRowNavAndCycle(t *testing.T) {
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	// Navigate down to Implementation (index 2)
+	// Navigate down to Implementation (index 3)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 2 {
-		t.Fatalf("expected modelCursor=2, got %d", m.modelCursor)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.modelCursor != 3 {
+		t.Fatalf("expected modelCursor=3, got %d", m.modelCursor)
 	}
 
 	origImpl := m.models.Implementation
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("second Right activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.models.Implementation == origImpl {
-		t.Error("expected Implementation model to change after Tab")
+		t.Error("expected Implementation model to change after Down on Model panel")
 	}
 	if !m.modelsManuallySet {
 		t.Error("expected modelsManuallySet=true")
@@ -2820,7 +2940,7 @@ func TestWizardSummaryCheckpointsEnterExpands(t *testing.T) {
 }
 
 func TestWizardSummaryCheckpointsUpDownNavigation(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.NewDefault().Defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -2852,10 +2972,18 @@ func TestWizardSummaryCheckpointsUpDownNavigation(t *testing.T) {
 		t.Errorf("expected 4, got %d", m.checkpointsCursor)
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.checkpointsCursor != 4 {
-		t.Errorf("expected 4 (clamped), got %d", m.checkpointsCursor)
+	if m.checkpointsCursor != 5 {
+		t.Errorf("expected 5, got %d", m.checkpointsCursor)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.checkpointsCursor != 5 {
+		t.Errorf("expected 5 (clamped), got %d", m.checkpointsCursor)
 	}
 
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.checkpointsCursor != 4 {
+		t.Errorf("expected 4, got %d", m.checkpointsCursor)
+	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.checkpointsCursor != 3 {
 		t.Errorf("expected 3, got %d", m.checkpointsCursor)
@@ -2891,10 +3019,10 @@ func TestWizardSummaryCheckpointsSpaceToggles(t *testing.T) {
 	m.summaryCursor = summaryFieldCheckpoints
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	if m.checkpoints[0] == orig {
-		t.Error("expected checkpoint[0] to toggle after Space")
+	if m.checkpoints[checkpointInquiryReview] == orig {
+		t.Error("expected InquiryReview checkpoint to toggle after Space")
 	}
 	if !m.checkpointsManuallySet {
 		t.Error("expected checkpointsManuallySet=true after Space")
@@ -2902,8 +3030,8 @@ func TestWizardSummaryCheckpointsSpaceToggles(t *testing.T) {
 
 	// Toggle back
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	if m.checkpoints[0] != orig {
-		t.Error("expected checkpoint[0] to toggle back after second Space")
+	if m.checkpoints[checkpointInquiryReview] != orig {
+		t.Error("expected InquiryReview checkpoint to toggle back after second Space")
 	}
 }
 
@@ -2920,10 +3048,10 @@ func TestWizardSummaryCheckpointsTabToggles(t *testing.T) {
 	m.summaryCursor = summaryFieldCheckpoints
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if m.checkpoints[0] == orig {
-		t.Error("expected checkpoint[0] to toggle after Tab")
+	if m.checkpoints[checkpointInquiryReview] == orig {
+		t.Error("expected InquiryReview checkpoint to toggle after Tab")
 	}
 	if !m.checkpointsManuallySet {
 		t.Error("expected checkpointsManuallySet=true after Tab")
@@ -2944,7 +3072,7 @@ func TestWizardSummaryCheckpointsEnterCollapses(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	// Toggle
-	orig := m.checkpoints[0]
+	orig := m.checkpoints[checkpointInquiryReview]
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
 
 	// Collapse
@@ -2952,7 +3080,7 @@ func TestWizardSummaryCheckpointsEnterCollapses(t *testing.T) {
 	if m.summaryEditing {
 		t.Error("expected summaryEditing=false after Enter (collapse)")
 	}
-	if m.checkpoints[0] == orig {
+	if m.checkpoints[checkpointInquiryReview] == orig {
 		t.Error("expected toggled value to be preserved after collapse")
 	}
 }
@@ -2970,13 +3098,13 @@ func TestWizardSummaryCheckpointsEscCollapses(t *testing.T) {
 
 	// Toggle
 	m, _ = m.Update(tea.KeyPressMsg{Code: ' ', Text: " "})
-	toggled := m.checkpoints[0]
+	toggled := m.checkpoints[checkpointInquiryReview]
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.summaryEditing {
 		t.Error("expected summaryEditing=false after Esc")
 	}
-	if m.checkpoints[0] != toggled {
+	if m.checkpoints[checkpointInquiryReview] != toggled {
 		t.Error("expected toggled value to be preserved after Esc")
 	}
 }
@@ -3109,7 +3237,8 @@ func TestWizardSummaryModelsEditingBlocksG(t *testing.T) {
 }
 
 func TestWizardSummaryModelsProvenanceClearedAfterEdit(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus"}}
+	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3122,7 +3251,9 @@ func TestWizardSummaryModelsProvenanceClearedAfterEdit(t *testing.T) {
 
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	if !m.modelsManuallySet {
@@ -3206,8 +3337,8 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 		},
 	}
 	providerModels := map[string][]string{
-		"claude": {"claude:opus", "claude:sonnet"},
-		"codex":  {"codex:gpt-5.4"},
+		"claude": {"opus", "sonnet"},
+		"codex":  {"gpt-5.4"},
 	}
 	providerOrder := []string{"claude", "codex"}
 
@@ -3216,17 +3347,15 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	if !containsString(view, "Assignments") {
-		t.Error("expected expanded Models view to contain 'Assignments'")
+	for _, needle := range []string{"Model Selection", "Phases", "Agents", "Models for", "Research", "opus", "codex"} {
+		if !containsString(view, needle) {
+			t.Errorf("expected expanded Models view to contain %q", needle)
+		}
 	}
-	if !containsString(view, "Choices for Research") {
-		t.Error("expected expanded Models view to contain 'Choices for Research'")
-	}
-	if !containsString(view, "claude / opus") {
-		t.Error("expected assignment summary to show provider and model")
-	}
-	if !containsString(view, "codex") {
-		t.Error("expected provider-grouped choices to contain 'codex'")
+	for _, forbidden := range []string{"Selection for Research", "Choices for Research", "Details agent"} {
+		if containsString(view, forbidden) {
+			t.Errorf("expected expanded Models view to omit old model cascade copy %q", forbidden)
+		}
 	}
 }
 
@@ -3311,10 +3440,15 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 	m, _ = m.advance()
 	m, _ = m.advance()
 
-	// Research starts at "opus" (first option). Cycle it to "sonnet".
+	// Research starts at "opus" (first option). Move to the Model panel and
+	// cycle it to "sonnet".
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // cycle Research: opus -> sonnet
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // Clarify -> Research
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // cycle Research: opus -> sonnet
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // return to Phases panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"})
@@ -3343,7 +3477,7 @@ func TestWizardSummaryEditedModelsInResult(t *testing.T) {
 
 func TestWizardSummaryEditedCheckpointsInResult(t *testing.T) {
 	// applyPipelineDefaults seeds the selected moonshot profile before review.
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.NewDefault().Defaults, "", nil, nil, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3366,14 +3500,17 @@ func TestWizardSummaryEditedCheckpointsInResult(t *testing.T) {
 	if r == nil {
 		t.Fatal("expected non-nil Result")
 	}
-	if !r.Checkpoints.InquiryReview {
-		t.Error("expected InquiryReview to be true after toggling the first visible moonshot gate")
+	if r.Checkpoints.InquiryReview {
+		t.Error("expected InquiryReview to be false after toggling the first visible moonshot gate")
 	}
-	if r.Checkpoints.ResearchReview {
-		t.Error("expected ResearchReview to be false (unchanged)")
+	if !r.Checkpoints.ResearchReview {
+		t.Error("expected ResearchReview to remain true (moonshot pipeline default)")
 	}
-	if !r.Checkpoints.PlanReview {
-		t.Error("expected PlanReview to remain true (moonshot pipeline default)")
+	if !r.Checkpoints.RoadmapReview {
+		t.Error("expected RoadmapReview to remain true (moonshot pipeline default)")
+	}
+	if !r.Checkpoints.PhasePlanReview {
+		t.Error("expected PhasePlanReview to remain true (moonshot pipeline default)")
 	}
 	if !r.Checkpoints.DesignReview {
 		t.Error("expected DesignReview to remain true (moonshot pipeline default)")
@@ -3412,7 +3549,8 @@ func TestWizardSummaryEditedExitCriteriaInResult(t *testing.T) {
 }
 
 func TestWizardSummaryFullIntegration(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	defaults := config.DefaultsConfig{Models: config.ModelConfig{Research: "opus"}}
+	m := NewWizardModel(nil, nil, nil, defaults, "", map[string][]string{"test": {"opus", "sonnet"}}, []string{"test"}, nil, nil, nil, nil)
 	m.nameInput.SetValue("test")
 	m, _ = m.advance()
 	m.selectedRepos["test-repo"] = true
@@ -3428,7 +3566,10 @@ func TestWizardSummaryFullIntegration(t *testing.T) {
 	// 2. Edit Models
 	m.summaryCursor = summaryFieldModels
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})   // cycle
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // change model
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // return to Phases panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}) // collapse
 
 	// 3. Edit Checkpoints
@@ -3469,8 +3610,10 @@ func TestWizardSummaryModelsFooterShowsHint(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "Cycle model") {
-		t.Error("expected footer to contain 'Cycle model' hint when editing Models")
+	for _, needle := range []string{"Panel", "Select", "Filter"} {
+		if !containsString(view, needle) {
+			t.Errorf("expected footer to contain %q hint when editing Models", needle)
+		}
 	}
 }
 
@@ -3896,11 +4039,14 @@ func TestWizardSummaryModelsIncludesKBBuild(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	if len(m.modelFields) != 5 {
-		t.Errorf("expected 5 model fields, got %d", len(m.modelFields))
+	if len(m.modelFields) != 6 {
+		t.Errorf("expected 6 model fields, got %d", len(m.modelFields))
 	}
-	if m.modelFields[4] != "KB Build" {
-		t.Errorf("expected modelFields[4] = %q, got %q", "KB Build", m.modelFields[4])
+	if m.modelFields[0] != "Clarify" {
+		t.Errorf("expected modelFields[0] = %q, got %q", "Clarify", m.modelFields[0])
+	}
+	if m.modelFields[5] != "KB Build" {
+		t.Errorf("expected modelFields[5] = %q, got %q", "KB Build", m.modelFields[5])
 	}
 }
 
@@ -3918,21 +4064,27 @@ func TestWizardSummaryModelsKBBuildCycles(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	// Navigate down to KB Build row (index 4)
+	// Navigate down to KB Build row (index 5)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 0 -> 1
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 4 -> 5
 
-	if m.modelCursor != 4 {
-		t.Fatalf("expected modelCursor = 4, got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Fatalf("expected modelCursor = 5, got %d", m.modelCursor)
 	}
 
-	// Cycle KB Build model
+	// Cycle KB Build model from the Model panel.
 	if m.models.KBBuild != "opus[1m]" {
 		t.Fatalf("expected initial KBBuild = opus[1m], got %q", m.models.KBBuild)
 	}
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if got := m.configEditor.activeModelCell; got != modelCellModel {
+		t.Fatalf("second Right activeModelCell = %v, want modelCellModel", got)
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.models.KBBuild != "opus" {
 		t.Errorf("expected KBBuild = opus after cycle, got %q", m.models.KBBuild)
 	}
@@ -3941,6 +4093,7 @@ func TestWizardSummaryModelsKBBuildCycles(t *testing.T) {
 func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -3952,14 +4105,18 @@ func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	// Navigate to KB Build and cycle
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 0 -> 1
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab})  // cycle KB Build
+	// Navigate to KB Build and cycle its Model panel.
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 0 -> 1
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 1 -> 2
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 2 -> 3
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // 4 -> 5
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // cycle KB Build
 
-	// Close model editing (Enter), then create feature (G)
+	// Close model editing from the phase panel, then create feature (G)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // return to Phases panel
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})   // close model editing
 	m, _ = m.Update(tea.KeyPressMsg{Code: 'G', Text: "G"}) // create -> done
 
@@ -3972,9 +4129,10 @@ func TestWizardSummaryEditedKBBuildInResult(t *testing.T) {
 	}
 }
 
-func TestWizardSummaryModelsUpDownNavigation_FiveRows(t *testing.T) {
+func TestWizardSummaryModelsUpDownNavigation_SixRows(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -3986,26 +4144,28 @@ func TestWizardSummaryModelsUpDownNavigation_FiveRows(t *testing.T) {
 	providerOrder := []string{"test"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
 
-	// Navigate down to index 4 (KB Build)
+	// Navigate down to index 5 (KB Build)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 0 -> 1
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 4 -> 5
 
-	if m.modelCursor != 4 {
-		t.Errorf("expected modelCursor = 4, got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor = 5, got %d", m.modelCursor)
 	}
 
-	// Down again: should stay at 4 (clamped)
+	// Down again: should stay at 5 (clamped)
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.modelCursor != 4 {
-		t.Errorf("expected modelCursor to stay at 4 (clamped), got %d", m.modelCursor)
+	if m.modelCursor != 5 {
+		t.Errorf("expected modelCursor to stay at 5 (clamped), got %d", m.modelCursor)
 	}
 }
 
 func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "claude:opus",
 			Research:       "claude:opus",
 			Planning:       "claude:opus",
 			Implementation: "claude:opus",
@@ -4014,8 +4174,8 @@ func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 		},
 	}
 	providerModels := map[string][]string{
-		"claude": {"claude:opus", "claude:sonnet"},
-		"codex":  {"codex:gpt-5.4"},
+		"claude": {"opus", "sonnet"},
+		"codex":  {"gpt-5.4"},
 	}
 	providerOrder := []string{"claude", "codex"}
 	m := navigateToModelEditing(t, defaults, providerModels, providerOrder, nil)
@@ -4025,31 +4185,41 @@ func TestWizardSummaryModelsPrefixedModelsCycle(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 1 -> 2
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 2 -> 3
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 3 -> 4
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // 4 -> 5
 
-	// Cycle through prefixed KB Build models
+	// Cycle through prefixed KB Build models scoped to the selected agent.
 	if m.models.KBBuild != "claude:opus" {
 		t.Fatalf("expected initial KBBuild = claude:opus, got %q", m.models.KBBuild)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // cycle forward
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Agent panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyRight}) // focus Model panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})  // cycle within claude
 	if m.models.KBBuild != "claude:sonnet" {
 		t.Errorf("expected KBBuild = claude:sonnet after first cycle, got %q", m.models.KBBuild)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // cycle forward
-	if m.models.KBBuild != "codex:gpt-5.4" {
-		t.Errorf("expected KBBuild = codex:gpt-5.4 after second cycle, got %q", m.models.KBBuild)
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // wrap within claude
+	if m.models.KBBuild != "claude:opus" {
+		t.Errorf("expected KBBuild = claude:opus after scoped wrap, got %q", m.models.KBBuild)
 	}
 
-	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab}) // cycle wraps
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}) // focus Agent panel
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})                   // switch provider
+	if m.models.KBBuild != "codex:gpt-5.4" {
+		t.Errorf("expected KBBuild = codex:gpt-5.4 after provider cycle, got %q", m.models.KBBuild)
+	}
+
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // provider wraps
 	if m.models.KBBuild != "claude:opus" {
-		t.Errorf("expected KBBuild = claude:opus after wrap, got %q", m.models.KBBuild)
+		t.Errorf("expected KBBuild = claude:opus after provider wrap, got %q", m.models.KBBuild)
 	}
 }
 
 func TestWizardSummaryModelsReviewShowsKBBuild(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{
+			Inquiry:        "opus",
 			Research:       "opus",
 			Planning:       "opus",
 			Implementation: "opus",
@@ -4125,7 +4295,7 @@ func TestWizardModelPickerEmptyProviders(t *testing.T) {
 		t.Errorf("expected empty allModels, got %v", m.allModels)
 	}
 	// cycleModel should be a no-op
-	m.modelCursor = 0
+	m.modelCursor = 1
 	m.cycleModel()
 	// Should not panic
 }
@@ -4175,6 +4345,51 @@ func TestWizardPhaseDefaultsClamping(t *testing.T) {
 	}
 }
 
+// TestWizardClampKeepsPrefixedProviderDefault proves the wizard's default
+// clamp keeps a valid multi-provider default persisted in "<provider>:<id>"
+// routing form rather than discarding it for the first bare option. The
+// per-provider option lists carry bare backend ids while the default is
+// prefixed, exactly the Phase 6 multi-provider shape.
+func TestWizardClampKeepsPrefixedProviderDefault(t *testing.T) {
+	const prefixed = "gateway:vendor/sonnet[200K]"
+	defaults := config.DefaultsConfig{
+		Models: config.ModelConfig{
+			Research:       prefixed,
+			Planning:       prefixed,
+			Implementation: prefixed,
+			Review:         prefixed,
+			KBBuild:        prefixed,
+		},
+	}
+	providerModels := map[string][]string{
+		"claude":  {"sonnet[200K]", "opus[200K]"},
+		"gateway": {"vendor/sonnet[200K]", "vendor/gpt-5"},
+	}
+	providerOrder := []string{"claude", "gateway"}
+	phaseModels := map[string]map[string][]string{}
+	for _, f := range []string{"Clarify", "Research", "Planning", "Implementation", "Review", "KB Build"} {
+		phaseModels[f] = map[string][]string{
+			"claude":  {"sonnet[200K]", "opus[200K]"},
+			"gateway": {"vendor/sonnet[200K]", "vendor/gpt-5"},
+		}
+	}
+
+	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, phaseModels, nil, nil)
+
+	if len(m.pipelinePreferences) == 0 {
+		t.Fatal("no pipeline preferences built")
+	}
+	for profile, pref := range m.pipelinePreferences {
+		if pref.Models.Implementation != prefixed {
+			t.Errorf("pipeline %q Implementation clamped to %q, want kept %q (first bare option would be sonnet[200K])",
+				profile, pref.Models.Implementation, prefixed)
+		}
+		if pref.Models.Review != prefixed {
+			t.Errorf("pipeline %q Review clamped to %q, want kept %q", profile, pref.Models.Review, prefixed)
+		}
+	}
+}
+
 func TestWizardModelCyclingForwardAndWrap(t *testing.T) {
 	defaults := config.DefaultsConfig{
 		Models: config.ModelConfig{Research: "opus"},
@@ -4184,7 +4399,7 @@ func TestWizardModelCyclingForwardAndWrap(t *testing.T) {
 	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	// Forward: opus → sonnet
-	m.modelCursor = 0
+	m.modelCursor = 1
 	m.cycleModel()
 	if m.models.Research != "sonnet" {
 		t.Errorf("after cycle forward: Research = %q, want sonnet", m.models.Research)
@@ -4210,7 +4425,7 @@ func TestWizardModelCyclingReverseAndWrap(t *testing.T) {
 	m := NewWizardModel(nil, nil, nil, defaults, "", providerModels, providerOrder, nil, nil, nil, nil)
 
 	// Reverse from opus → wraps to gpt-5.4
-	m.modelCursor = 0
+	m.modelCursor = 1
 	m.cycleModelReverse()
 	if m.models.Research != "gpt-5.4" {
 		t.Errorf("after reverse wrap: Research = %q, want gpt-5.4", m.models.Research)
@@ -4645,25 +4860,50 @@ func TestWizardCheckpointHidingManualPublishForcedTrue(t *testing.T) {
 
 	m.applyPipelineDefaults()
 
-	if !m.checkpoints[4] {
+	if !m.checkpoints[checkpointManualPublish] {
 		t.Error("ManualPublish should be forced true when provisionalPublishable=false")
 	}
 }
 
 func TestWizardCheckpointHidingCursorBound(t *testing.T) {
-	m := NewWizardModel(nil, nil, nil, config.DefaultsConfig{}, "", nil, nil, nil, nil, nil, nil)
+	m := NewWizardModel(nil, nil, nil, config.NewDefault().Defaults, "", nil, nil, nil, nil, nil, nil)
 	m.provisionalPublishable = false
 	m.pipelineCursor = 2
 	m.applyPipelineDefaults()
 	m.step = wizardStepReview
 	m.summaryEditing = true
 	m.summaryCursor = summaryFieldCheckpoints
-	m.checkpointsCursor = 3 // at the max for unpublished
+	m.checkpointsCursor = checkpointPhasePlanReview // at the max for unpublished
 
-	// Try to go down — should not go to 4
+	// Try to go down — should not move to the hidden Manual Publish row.
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.checkpointsCursor != 3 {
-		t.Errorf("checkpointsCursor = %d, want 3 (max for unpublished)", m.checkpointsCursor)
+	if m.checkpointsCursor != checkpointPhasePlanReview {
+		t.Errorf("checkpointsCursor = %d, want %d (max for unpublished)", m.checkpointsCursor, checkpointPhasePlanReview)
+	}
+}
+
+func TestWizardApplyPipelineDefaultsUsesConfiguredCheckpointDefaults(t *testing.T) {
+	defaults := config.NewDefault().Defaults
+	defaults.Checkpoints.RoadmapReview = false
+	defaults.Checkpoints.PhasePlanReview = false
+
+	m := NewWizardModel(nil, nil, nil, defaults, "", nil, nil, nil, nil, nil, nil)
+	m.pipelineCursor = 0 // medium
+	m.provisionalPublishable = true
+
+	projection := m.projectedPipelineCheckpoints(feature.PipelineMedium.ConfigKey())
+	if projection.Checkpoints.RoadmapReview || projection.Checkpoints.PhasePlanReview {
+		t.Fatalf("projected medium checkpoints = %+v, want planning reviews disabled by configured defaults", projection.Checkpoints)
+	}
+
+	m.applyPipelineDefaults()
+
+	got := m.checkpointState()
+	if got.RoadmapReview || got.PhasePlanReview {
+		t.Fatalf("applied medium checkpoints = %+v, want planning reviews disabled by configured defaults", got)
+	}
+	if !got.ManualPublish {
+		t.Fatalf("applied medium checkpoints = %+v, want ManualPublish preserved from configured defaults", got)
 	}
 }
 
@@ -4699,16 +4939,16 @@ func TestWizardMergedPipelineCheckpointsNormalizeToSelectedProfile(t *testing.T)
 		want        feature.Checkpoints
 	}{
 		{
-			name:    "medium keeps plan and manual publish",
+			name:    "medium keeps roadmap, phase plan, and manual publish",
 			profile: "medium",
 			repoConfigs: map[string]config.RepoConfig{
 				"alpha": {
 					PipelineGates: map[string]config.Checkpoints{
-						"medium": {InquiryReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
+						"medium": {InquiryReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 					},
 				},
 			},
-			want: feature.Checkpoints{PlanReview: true, ManualPublish: true},
+			want: feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 		},
 		{
 			name:    "large keeps only supported merged gates",
@@ -4721,16 +4961,17 @@ func TestWizardMergedPipelineCheckpointsNormalizeToSelectedProfile(t *testing.T)
 				},
 				"bravo": {
 					PipelineGates: map[string]config.Checkpoints{
-						"large": {ResearchReview: true, DesignReview: true, PlanReview: true},
+						"large": {ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true},
 					},
 				},
 			},
 			want: feature.Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 		},
 		{
@@ -4744,16 +4985,17 @@ func TestWizardMergedPipelineCheckpointsNormalizeToSelectedProfile(t *testing.T)
 				},
 				"bravo": {
 					PipelineGates: map[string]config.Checkpoints{
-						"moonshot": {ResearchReview: true, PlanReview: true, ManualPublish: true},
+						"moonshot": {ResearchReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 					},
 				},
 			},
 			want: feature.Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 		},
 	}
@@ -4787,8 +5029,8 @@ func TestWizardPipelineCardAndReviewGatesTrackSelectedProfile(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium":   {InquiryReview: true, ManualPublish: true},
-				"large":    {InquiryReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
-				"moonshot": {InquiryReview: true, ResearchReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
+				"large":    {InquiryReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+				"moonshot": {InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 			},
 		},
 	}
@@ -4802,28 +5044,25 @@ func TestWizardPipelineCardAndReviewGatesTrackSelectedProfile(t *testing.T) {
 	m.height = 40
 
 	largeView := m.View()
-	if !strings.Contains(largeView, "Gate options: Inquiry review, Research review, Design review, Plan") ||
-		!strings.Contains(largeView, "review, Publish review") {
-		t.Fatalf("large card lost its profile-specific gates:\n%s", m.View())
-	}
+	requireWizardViewContainsAll(t, largeView,
+		"Gate options:", "Inquiry review", "Research review", "Design review",
+		"Roadmap review", "Phase plan review", "Publish review")
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if !strings.Contains(m.View(), "Gate options: Plan review, Publish review") {
-		t.Fatalf("medium card lost its profile-specific gates:\n%s", m.View())
-	}
+	requireWizardViewContainsAll(t, m.View(),
+		"Gate options:", "Roadmap review", "Phase plan review", "Publish review")
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	moonshotView := m.View()
-	if !strings.Contains(moonshotView, "Gate options: Inquiry review, Research review, Design review, Plan") ||
-		!strings.Contains(moonshotView, "review, Publish review") {
-		t.Fatalf("moonshot card lost its profile-specific gates:\n%s", m.View())
-	}
+	requireWizardViewContainsAll(t, moonshotView,
+		"Gate options:", "Inquiry review", "Research review", "Design review",
+		"Roadmap review", "Phase plan review", "Publish review")
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	review := m.View()
-	if !strings.Contains(review, "Inquiry review, Research review, Design review, Plan review,") ||
-		!strings.Contains(review, "Publish review") {
+	if !strings.Contains(review, "Inquiry review, Research review, Design review, Roadmap review,") ||
+		!strings.Contains(review, "Phase plan review, Publish review") {
 		t.Fatalf("review summary leaked the wrong gate set after profile switching:\n%s", review)
 	}
 }
@@ -4833,10 +5072,11 @@ func TestWizardExpressProjectionFiltersNonApplicableConfigGates(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium": {
-					InquiryReview: true,
-					DesignReview:  true,
-					PlanReview:    true,
-					ManualPublish: true,
+					InquiryReview:   true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   true,
 				},
 			},
 		},
@@ -4847,14 +5087,14 @@ func TestWizardExpressProjectionFiltersNonApplicableConfigGates(t *testing.T) {
 	m.provisionalPublishable = true
 
 	projection := m.projectedPipelineCheckpoints("medium")
-	if projection.Checkpoints != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("projectedPipelineCheckpoints(medium).Checkpoints = %+v, want PlanReview+ManualPublish", projection.Checkpoints)
+	if projection.Checkpoints != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("projectedPipelineCheckpoints(medium).Checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", projection.Checkpoints)
 	}
 	if !projection.FromConfig {
 		t.Fatal("expected medium repo override to be detected")
 	}
-	if !slices.Equal(projection.Visible, []feature.GateIndex{feature.GatePlanReview, feature.GateManualPublish}) {
-		t.Fatalf("projectedPipelineCheckpoints(medium).Visible = %v, want PlanReview+ManualPublish", projection.Visible)
+	if !slices.Equal(projection.Visible, []feature.GateIndex{feature.GateRoadmapReview, feature.GatePhasePlanReview, feature.GateManualPublish}) {
+		t.Fatalf("projectedPipelineCheckpoints(medium).Visible = %v, want RoadmapReview+PhasePlanReview+ManualPublish", projection.Visible)
 	}
 }
 
@@ -4863,10 +5103,11 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium": {
-					InquiryReview: true,
-					DesignReview:  true,
-					PlanReview:    true,
-					ManualPublish: true,
+					InquiryReview:   true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   true,
 				},
 			},
 		},
@@ -4877,6 +5118,8 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 	m.descInput.SetValue("projection smoke")
 	m.selectedRepos = map[string]bool{"alpha": true}
 	m.provisionalPublishable = true
+	m.width = 200
+	m.height = 40
 
 	m, _ = m.advance()
 	m, _ = m.advance()
@@ -4889,8 +5132,8 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 	}
 
 	view := m.View()
-	if !strings.Contains(view, "Gate options: Plan review, Publish review") {
-		t.Fatalf("expected medium pipeline card to contain plan and publish options; got:\n%s", view)
+	if !strings.Contains(normalizedWizardViewText(view), "Gate options: Roadmap review, Phase plan review, Publish review") {
+		t.Fatalf("expected medium pipeline card to contain roadmap, phase plan, and publish options; got:\n%s", view)
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -4906,8 +5149,8 @@ func TestWizardExpressPipelineCardAndResultUseProjectedGates(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected result to be populated")
 	}
-	if result.Checkpoints != (feature.Checkpoints{PlanReview: true, ManualPublish: true}) {
-		t.Fatalf("WizardResult.Checkpoints = %+v, want PlanReview+ManualPublish", result.Checkpoints)
+	if result.Checkpoints != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
+		t.Fatalf("WizardResult.Checkpoints = %+v, want RoadmapReview+PhasePlanReview+ManualPublish", result.Checkpoints)
 	}
 }
 
@@ -4916,10 +5159,11 @@ func TestWizardReviewCheckpointEditorUsesProjectedGateRows(t *testing.T) {
 		"alpha": {
 			PipelineGates: map[string]config.Checkpoints{
 				"medium": {
-					InquiryReview: true,
-					DesignReview:  true,
-					PlanReview:    true,
-					ManualPublish: true,
+					InquiryReview:   true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
+					ManualPublish:   true,
 				},
 			},
 		},
@@ -4947,8 +5191,11 @@ func TestWizardReviewCheckpointEditorUsesProjectedGateRows(t *testing.T) {
 	if !strings.Contains(view, "Manual Publish") {
 		t.Fatalf("review checkpoint editor missing Manual Publish:\n%s", view)
 	}
-	if !strings.Contains(view, "Plan Review") {
-		t.Fatalf("review checkpoint editor missing Plan Review:\n%s", view)
+	if !strings.Contains(view, "Roadmap Review") {
+		t.Fatalf("review checkpoint editor missing Roadmap Review:\n%s", view)
+	}
+	if !strings.Contains(view, "Phase Plan Review") {
+		t.Fatalf("review checkpoint editor missing Phase Plan Review:\n%s", view)
 	}
 	for _, hidden := range []string{"Inquiry Review", "Research Review", "Design Review"} {
 		if strings.Contains(view, hidden) {

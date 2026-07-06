@@ -53,8 +53,35 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
 	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(filepath.Dir(helperDir), "review-feedback.md")+`"}`)
 	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(helperDir, "..", "review-feedback.md")+`"}`)
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"ls `+helperDir+` 2>/dev/null || echo \"DIR_NOT_FOUND\""}`)
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"test -f `+feedbackPath+` && echo \"FEEDBACK_EXISTS\" || echo \"FEEDBACK_NOT_FOUND\""}`)
 	requirePermissionDenied(t, handler, "Bash", `{"command":"touch phase_complete"}`)
-	requirePermissionDenied(t, handler, "Agent", `{"prompt":"write the file for me"}`)
+	requirePermissionDenied(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
+	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
+	requirePermissionAllowed(t, handler, "Agent", `{"prompt":"explore the implementation"}`)
+}
+
+// TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell confirms that when the
+// helper process runs under an OS read-only-worktree sandbox (Sandboxed=true),
+// shell is unrestricted — the read-only-analysis constructs the allowlist rejects
+// (command substitution, loops) are permitted, since the kernel, not the
+// allowlist, prevents worktree mutation. Non-sandboxed helpers keep the
+// restrictive allowlist, and edits stay gated to declared artifacts either way.
+func TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell(t *testing.T) {
+	helperDir := t.TempDir()
+	allowed := []string{filepath.Join(helperDir, "review-feedback.md"), filepath.Join(helperDir, "phase_complete")}
+	// The real read-only analysis (loop + command substitution) that aborts a
+	// non-sandboxed glm helper.
+	analysis := `{"command":"for s in a b; do c=$(grep -c \"$s\" README.md); echo \"$s: $c\"; done"}`
+
+	sandboxed := &BoundedHelperArtifactHandler{AllowedPaths: allowed, Sandboxed: true}
+	requirePermissionAllowed(t, sandboxed, "Bash", analysis)
+	requirePermissionAllowed(t, sandboxed, "Bash", `{"command":"\"$AGENTICO_BIN\" validate-artifacts --dir x"}`)
+	requirePermissionAllowed(t, sandboxed, "Write", `{"file_path":"`+allowed[0]+`"}`)
+	requirePermissionDenied(t, sandboxed, "Write", `{"file_path":"`+filepath.Join(helperDir, "other.md")+`"}`)
+
+	strict := &BoundedHelperArtifactHandler{AllowedPaths: allowed}
+	requirePermissionDenied(t, strict, "Bash", analysis)
 }
 
 func requirePermissionAllowed(t *testing.T, handler ports.PermissionHandler, toolName, input string) {
@@ -215,6 +242,10 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 		{name: "cd then git log piped", command: `{"command":"cd /repo && git log --oneline | head -30"}`},
 		{name: "ls piped", command: `{"command":"ls -la | head -20"}`},
 		{name: "find", command: `{"command":"find src -type f"}`},
+		// agentico's own artifact-validation preflight, run by every agent
+		// session before phase_complete (see rolespec_prompt.go).
+		{name: "validate-artifacts", command: `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_reviewer --dir \"/state/feat-x/runs/run-001/review/iteration-03\""}`},
+		{name: "cd then validate-artifacts", command: `{"command":"cd /repo && \"$AGENTICO_BIN\" validate-artifacts --phase plan --role designer --dir \"/state/feat-x/plan\""}`},
 	}
 
 	for _, tt := range tests {

@@ -132,7 +132,7 @@ func (r *Registry) DetectedProviders() []LLMProvider {
 // PromptAdapterForModel returns the PromptAdapter for the given model.
 // Returns an error if no provider matches or the provider doesn't implement PromptAdapter.
 func (r *Registry) PromptAdapterForModel(model string) (PromptAdapter, error) {
-	p, err := r.ForModel(model)
+	p, _, err := r.ResolveModel(model)
 	if err != nil {
 		return nil, err
 	}
@@ -186,22 +186,42 @@ func (r *Registry) ResolveModel(model string) (LLMProvider, string, error) {
 				return p, bareModel, nil
 			}
 		}
+		// The prefix is not a registered provider, so this colon may instead be
+		// part of a bare catalog id whose model segment carries a colon-form tag
+		// (e.g. a backend id like "ollama/llama3.1:8b"). Try resolving
+		// the whole string as a bare catalog id before rejecting it; only fall
+		// back to the unknown-provider error when no catalog matches.
+		if p, canonical, ok := r.resolveBareLocked(model); ok {
+			return p, canonical, nil
+		}
 		return nil, "", fmt.Errorf("unknown provider %q in model %q", providerName, model)
 	}
 
-	// Bare model name — search providers in registration order via MatchesModel
+	// Bare model name — search providers in registration order via MatchesModel.
+	if p, canonical, ok := r.resolveBareLocked(model); ok {
+		return p, canonical, nil
+	}
+	return nil, "", fmt.Errorf("no provider found for model %q", model)
+}
+
+// resolveBareLocked resolves a model string with no explicit provider prefix
+// against the active providers' catalogs (canonicalizing ids/aliases) and
+// MatchesModel checks, in registration order. It returns the matching provider
+// and the canonical model name, or ok=false when nothing matches. The caller
+// must hold r.mu.
+func (r *Registry) resolveBareLocked(model string) (LLMProvider, string, bool) {
 	for _, p := range r.providers {
 		if !r.providerActiveLocked(p) {
 			continue
 		}
 		if canonical, ok := canonicalModelForProvider(p, model); ok {
-			return p, canonical, nil
+			return p, canonical, true
 		}
 		if p.MatchesModel(model) {
-			return p, model, nil
+			return p, model, true
 		}
 	}
-	return nil, "", fmt.Errorf("no provider found for model %q", model)
+	return nil, "", false
 }
 
 func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
@@ -237,7 +257,10 @@ func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
 // bare names are used.
 func (r *Registry) DefaultModels() map[PhaseRole]string {
 	mc := r.CatalogDefaultModels()
-	result := make(map[PhaseRole]string, 6)
+	result := make(map[PhaseRole]string, 7)
+	if mc.Inquiry != "" {
+		result[PhaseInquiry] = mc.Inquiry
+	}
 	if mc.Research != "" {
 		result[PhaseResearch] = mc.Research
 	}
@@ -359,28 +382,58 @@ func (r *Registry) LargestContextModel() string {
 	return ""
 }
 
-// providerPreference maps phase roles to preferred provider names.
-// Research/Planning/Implementation/Chat prefer "claude"; Review prefers "codex".
-var providerPreference = map[PhaseRole]string{
-	PhaseResearch:       "claude",
-	PhasePlanning:       "claude",
-	PhaseImplementation: "claude",
-	PhaseReview:         "codex",
-	PhaseChat:           "claude",
-	PhaseKBBuild:        "claude",
-}
-
-// categoryForRole maps phase roles to the desired model category.
+// categoryForRole maps phase roles to the default model-selection category.
+// Feature phases intentionally default to balanced models. Capable models
+// remain selectable for phases that benefit from them, but balanced defaults
+// are the cost/performance starting point for new features.
 var categoryForRole = map[PhaseRole]string{
-	PhaseResearch:       "capable",
-	PhasePlanning:       "capable",
-	PhaseImplementation: "capable",
-	PhaseReview:         "capable",
+	PhaseInquiry:        "balanced",
+	PhaseResearch:       "balanced",
+	PhasePlanning:       "balanced",
+	PhaseImplementation: "balanced",
+	PhaseReview:         "balanced",
 	PhaseChat:           "balanced",
-	PhaseKBBuild:        "capable",
+	PhaseKBBuild:        "balanced",
 }
 
-func selectRoleModel(models []ModelInfo, category string) (ModelInfo, bool) {
+var preferredModelHintsByRoleProvider = map[PhaseRole]map[string][]string{
+	PhaseInquiry: {
+		"claude": {"sonnet[200K]", "sonnet"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
+	},
+	PhaseResearch: {
+		"claude": {"sonnet[200K]", "sonnet"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
+	},
+	PhaseKBBuild: {
+		"claude": {"sonnet[200K]", "sonnet"},
+		"codex":  {"gpt-5.4[272K]", "gpt-5.4"},
+	},
+}
+
+func selectHintedModel(models []ModelInfo, hints []string) (ModelInfo, bool) {
+	for _, hint := range hints {
+		for _, model := range models {
+			if strings.EqualFold(model.ID, hint) {
+				return model, true
+			}
+			for _, alias := range model.Aliases {
+				if strings.EqualFold(alias, hint) {
+					return model, true
+				}
+			}
+		}
+	}
+	return ModelInfo{}, false
+}
+
+func selectRoleModel(models []ModelInfo, role PhaseRole, provider string) (ModelInfo, bool) {
+	if providerHints, ok := preferredModelHintsByRoleProvider[role]; ok {
+		if m, ok := selectHintedModel(models, providerHints[provider]); ok {
+			return m, true
+		}
+	}
+	category := categoryForRole[role]
 	if category == "balanced" {
 		return BalancedFrom(models)
 	}
@@ -394,7 +447,53 @@ func formatCatalogDefault(provider string, model ModelInfo, multi bool) string {
 	return model.ID
 }
 
-func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride string) config.ModelConfig {
+// roleCandidate is one provider's best model for a phase role, carried through
+// the provider-neutral cross-provider ranking in catalogDefaultModels.
+type roleCandidate struct {
+	provider string
+	model    ModelInfo
+}
+
+// roleCategoryDistance scores how well a model category fits a role: the
+// absolute distance between the category's rank and the role's target-category
+// rank. 0 is an exact fit; larger is worse. Unknown categories (rank 0) score
+// worst, but eligible candidates always carry a known, ranked category.
+func roleCategoryDistance(category string, role PhaseRole) int {
+	d := categoryRank[category] - categoryRank[categoryForRole[role]]
+	if d < 0 {
+		d = -d
+	}
+	return d
+}
+
+// betterRoleCandidate reports whether a should be preferred over b as the
+// default for role. The comparison is provider-neutral: closest category fit
+// wins first, then the larger context window, and only genuine ties resolve by
+// a stable provider+model-ID order. No provider is favored by name, hardcoded
+// preference, or registration order — the final tie-break is the sole source of
+// determinism, so equal candidates always resolve to the same winner.
+func betterRoleCandidate(a, b roleCandidate, role PhaseRole) bool {
+	if da, db := roleCategoryDistance(a.model.Category, role), roleCategoryDistance(b.model.Category, role); da != db {
+		return da < db
+	}
+	if a.model.ContextWindow != b.model.ContextWindow {
+		return a.model.ContextWindow > b.model.ContextWindow
+	}
+	if a.provider != b.provider {
+		return a.provider < b.provider
+	}
+	return a.model.ID < b.model.ID
+}
+
+// CatalogDefaultModels returns a ModelConfig with catalog-driven defaults per
+// phase role. All detected providers compete as peers: each detected
+// provider contributes its best model for the role (by role category, honoring
+// per-provider model hints), and the cross-provider winner is chosen by
+// betterRoleCandidate — category fit, then model metadata, then a deterministic
+// provider+model-ID tie-break. With multiple providers detected the winner is
+// returned in "provider:model" form; with a single detected provider the bare
+// model ID is used.
+func (r *Registry) CatalogDefaultModels() config.ModelConfig {
 	detected := r.DetectedProviders()
 	if len(detected) == 0 {
 		return config.ModelConfig{}
@@ -416,34 +515,26 @@ func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride str
 	multi := len(detected) > 1
 
 	selectModel := func(role PhaseRole) string {
-		preferred := providerPreference[role]
-		if providerOverride != "" {
-			preferred = providerOverride
-		}
-		category := categoryForRole[role]
-
-		if preferred != "" {
-			if models := r.ModelsForProvider(preferred); len(models) > 0 {
-				if m, ok := selectRoleModel(models, category); ok {
-					return formatCatalogDefault(preferred, m, multi)
-				}
-			}
-			if providerOverride != "" {
-				return ""
-			}
-		}
-
+		var best *roleCandidate
 		for _, p := range detected {
-			cat := catalogForProvider(p)
-			if m, ok := selectRoleModel(cat, category); ok {
-				return formatCatalogDefault(p.Name(), m, multi)
+			m, ok := selectRoleModel(catalogForProvider(p), role, p.Name())
+			if !ok {
+				continue
+			}
+			cand := roleCandidate{provider: p.Name(), model: m}
+			if best == nil || betterRoleCandidate(cand, *best, role) {
+				winner := cand
+				best = &winner
 			}
 		}
-
-		return ""
+		if best == nil {
+			return ""
+		}
+		return formatCatalogDefault(best.provider, best.model, multi)
 	}
 
 	return config.ModelConfig{
+		Inquiry:        selectModel(PhaseInquiry),
 		Research:       selectModel(PhaseResearch),
 		Planning:       selectModel(PhasePlanning),
 		Implementation: selectModel(PhaseImplementation),
@@ -453,32 +544,16 @@ func (r *Registry) catalogDefaultModelsWithProviderOverride(providerOverride str
 	}
 }
 
-// CatalogDefaultModelsForProvider returns catalog-driven defaults for a single
-// preferred provider only. Roles the provider cannot satisfy are left empty so
-// callers can fill them from the general catalog defaults.
-func (r *Registry) CatalogDefaultModelsForProvider(name string) config.ModelConfig {
-	return r.catalogDefaultModelsWithProviderOverride(name)
-}
-
-// CatalogDefaultModels returns a ModelConfig with catalog-driven defaults per phase role.
-// Provider preferences: Research/Planning/Implementation/Chat/KBBuild → "claude",
-// Review → "codex". Falls back to any detected provider when the preferred
-// provider has no eligible model for a role.
-func (r *Registry) CatalogDefaultModels() config.ModelConfig {
-	return r.catalogDefaultModelsWithProviderOverride("")
-}
-
 // eligibleCategoriesForRole maps phase roles to the set of model categories
-// that are appropriate for that phase. Phases requiring deep reasoning only
-// show "capable" models; phases that can use lighter models also include
-// "balanced" or "cheap".
+// that are appropriate for that phase.
 var eligibleCategoriesForRole = map[PhaseRole]map[string]bool{
-	PhaseResearch:       {"capable": true},
-	PhasePlanning:       {"capable": true},
+	PhaseInquiry:        {"capable": true, "balanced": true},
+	PhaseResearch:       {"capable": true, "balanced": true},
+	PhasePlanning:       {"capable": true, "balanced": true},
 	PhaseImplementation: {"capable": true, "balanced": true},
 	PhaseReview:         {"capable": true, "balanced": true},
 	PhaseChat:           {"balanced": true, "cheap": true},
-	PhaseKBBuild:        {"capable": true},
+	PhaseKBBuild:        {"capable": true, "balanced": true},
 }
 
 // maxModelsPerProvider is the maximum number of models shown per provider
@@ -506,11 +581,43 @@ func (r *Registry) EligibleModelsForPhase(role PhaseRole) map[string][]string {
 			}
 		}
 
-		// Limit to top N by capability rank.
+		// Limit to top N by capability rank, while preserving the role's
+		// default recommendation even when that recommendation is balanced and
+		// would otherwise be crowded out by capable variants.
 		ids := TopModelIDs(filtered, maxModelsPerProvider)
+		if recommended, ok := selectRoleModel(catalog, role, name); ok {
+			ids = includeRecommendedModelID(ids, recommended.ID)
+		}
 		if len(ids) > 0 {
 			result[name] = ids
 		}
 	}
 	return result
+}
+
+func includeRecommendedModelID(ids []string, recommended string) []string {
+	if recommended == "" {
+		return ids
+	}
+	for i, id := range ids {
+		if id != recommended {
+			continue
+		}
+		if i == 0 {
+			return ids
+		}
+		out := make([]string, 0, len(ids))
+		out = append(out, recommended)
+		out = append(out, ids[:i]...)
+		out = append(out, ids[i+1:]...)
+		return out
+	}
+
+	out := make([]string, 0, len(ids)+1)
+	out = append(out, recommended)
+	out = append(out, ids...)
+	if len(out) > maxModelsPerProvider {
+		return out[:maxModelsPerProvider]
+	}
+	return out
 }

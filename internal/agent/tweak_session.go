@@ -25,10 +25,10 @@
 //  2. CommitAll — after the user ends the session, iterate every
 //     Feature.Repos and commit any worktree with uncommitted changes (the
 //     skill prompt forbids the agent from committing).
-//  3. PushAll — pull-rebase + push every modified repo's branch. A
-//     PullRebaseConflict surfaces a structured FeatureTweakPushError carrying
-//     the per-repo conflict so the orchestrator can route the affected repo
-//     into a rebase cycle.
+//  3. PushAll — when the orchestrator elects to publish, pull-rebase + push
+//     every modified repo's branch. A PullRebaseConflict surfaces a structured
+//     FeatureTweakPushError carrying the per-repo conflict so the orchestrator
+//     can route the affected repo into a rebase cycle.
 //  4. Mark transitions on Feature.ActiveCycle: Status: running while the
 //     session is alive; cleared on success; transitioned to Status: interrupted
 //     on session-die-mid-tweak (crash recovery).

@@ -59,6 +59,7 @@ type Protocol struct {
 	model              string
 	approvalPolicy     string
 	inputTokens        int
+	cachedInputTokens  int
 	outputTokens       int
 	modelContextWindow int
 	deltaBuf           map[string]string
@@ -84,7 +85,7 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	}
 	return &Protocol{
 		opts:           opts,
-		model:          opts.Model,
+		model:          llm.StripModelContextWindow(opts.Model),
 		approvalPolicy: policy,
 	}
 }
@@ -153,7 +154,9 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 	// Response to our request (has id but no method)
 	if env.ID != nil && env.Method == "" {
-		p.handleResponse(*env.ID, env.Result, env.Error)
+		if msg, ok := p.handleResponse(*env.ID, env.Result, env.Error); ok {
+			return []llm.SDKMessage{msg}, nil
+		}
 		return nil, nil
 	}
 
@@ -484,10 +487,10 @@ func (p *Protocol) writeJSON(v interface{}) error {
 
 // --- Read methods ---
 
-func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
+func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (llm.SDKMessage, bool) {
 	if len(errData) > 0 && string(errData) != "null" {
 		p.logDebug("[codex] error response for request %d: %s", id, string(errData))
-		return
+		return p.errorResultMessage(errData), true
 	}
 
 	var initResult InitializeResult
@@ -502,7 +505,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
 			}
 		}
 		p.mu.Unlock()
-		return
+		return llm.SDKMessage{}, false
 	}
 
 	var threadResult ThreadStartResult
@@ -518,7 +521,7 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
 		}
 		p.mu.Unlock()
 		p.logDebug("[codex] thread started: %s", threadResult.Thread.ID)
-		return
+		return llm.SDKMessage{}, false
 	}
 
 	var turnResult TurnStartResult
@@ -527,10 +530,36 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) {
 		p.turnID = turnResult.Turn.ID
 		p.mu.Unlock()
 		p.logDebug("[codex] turn started: %s (status=%s)", turnResult.Turn.ID, turnResult.Turn.Status)
-		return
+		return llm.SDKMessage{}, false
 	}
 
 	p.logDebug("[codex] unhandled response for request %d", id)
+	return llm.SDKMessage{}, false
+}
+
+// errorResultMessage converts a JSON-RPC error response into a user-visible
+// result/error so a rejected request fails the session loudly instead of
+// leaving it to hang waiting for output that will never arrive.
+func (p *Protocol) errorResultMessage(errData json.RawMessage) llm.SDKMessage {
+	var rpcErr struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(errData, &rpcErr)
+	detail := rpcErr.Message
+	if detail == "" {
+		detail = string(errData)
+	}
+	return llm.SDKMessage{
+		Type:    "result",
+		Subtype: "error",
+		Result: &llm.ResultMessage{
+			Type:    "result",
+			Subtype: "error",
+			Result:  fmt.Sprintf("codex rejected the request (code %d): %s", rpcErr.Code, detail),
+			IsError: true,
+		},
+	}
 }
 
 func (p *Protocol) parseServerRequest(method string, id int, params json.RawMessage) (llm.SDKMessage, bool) {
@@ -732,6 +761,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.mu.Lock()
 			model := p.model
 			inTok := p.inputTokens
+			cachedInTok := p.cachedInputTokens
 			outTok := p.outputTokens
 			hadToolUse := p.turnHadToolUse
 			lastText := p.lastAssistantText
@@ -782,7 +812,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.formatRetryCount = 0
 			p.mu.Unlock()
 
-			costUSD := computeCost(model, inTok, outTok)
+			costUSD := computeCost(model, inTok, cachedInTok, outTok)
 			msg := llm.SDKMessage{
 				Type:    "result",
 				Subtype: "success",
@@ -793,7 +823,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 			}
 			if inTok > 0 || outTok > 0 {
-				msg.Result.Usage = &llm.Usage{InputTokens: inTok, OutputTokens: outTok}
+				msg.Result.Usage = &llm.Usage{
+					InputTokens:          inTok,
+					CacheReadInputTokens: cachedInTok,
+					OutputTokens:         outTok,
+				}
 			}
 			return msg, true
 
@@ -801,10 +835,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.mu.Lock()
 			model := p.model
 			inTok := p.inputTokens
+			cachedInTok := p.cachedInputTokens
 			outTok := p.outputTokens
 			p.mu.Unlock()
 
-			costUSD := computeCost(model, inTok, outTok)
+			costUSD := computeCost(model, inTok, cachedInTok, outTok)
 			errMsg := fmt.Sprintf("codex turn failed: %s", completed.Turn.ID)
 			if completed.Turn.Error != nil {
 				errMsg = completed.Turn.Error.Message
@@ -832,7 +867,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 			}
 			if inTok > 0 || outTok > 0 {
-				msg.Result.Usage = &llm.Usage{InputTokens: inTok, OutputTokens: outTok}
+				msg.Result.Usage = &llm.Usage{
+					InputTokens:          inTok,
+					CacheReadInputTokens: cachedInTok,
+					OutputTokens:         outTok,
+				}
 			}
 			return msg, true
 
@@ -840,10 +879,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.mu.Lock()
 			model := p.model
 			inTok := p.inputTokens
+			cachedInTok := p.cachedInputTokens
 			outTok := p.outputTokens
 			p.mu.Unlock()
 
-			costUSD := computeCost(model, inTok, outTok)
+			costUSD := computeCost(model, inTok, cachedInTok, outTok)
 			msg := llm.SDKMessage{
 				Type:    "result",
 				Subtype: "error",
@@ -856,7 +896,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 			}
 			if inTok > 0 || outTok > 0 {
-				msg.Result.Usage = &llm.Usage{InputTokens: inTok, OutputTokens: outTok}
+				msg.Result.Usage = &llm.Usage{
+					InputTokens:          inTok,
+					CacheReadInputTokens: cachedInTok,
+					OutputTokens:         outTok,
+				}
 			}
 			return msg, true
 
@@ -874,6 +918,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		// Last = current context fill (resets on compaction; use for context %).
 		p.mu.Lock()
 		p.inputTokens = usage.TokenUsage.Total.InputTokens
+		p.cachedInputTokens = usage.TokenUsage.Total.CachedInputTokens
 		p.outputTokens = usage.TokenUsage.Total.OutputTokens
 		if usage.TokenUsage.ModelContextWindow != nil {
 			p.modelContextWindow = *usage.TokenUsage.ModelContextWindow
@@ -891,12 +936,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		return llm.SDKMessage{
 			Type: "usage_update",
 			UsageUpdate: &llm.Usage{
-				InputTokens:        usage.TokenUsage.Total.InputTokens,
-				OutputTokens:       usage.TokenUsage.Total.OutputTokens,
-				ContextInputTokens: usage.TokenUsage.Last.InputTokens,
-				ContextTotalTokens: usage.TokenUsage.Last.TotalTokens,
-				ContextBaseline:    codexContextBaselineTokens,
-				ContextWindow:      ctxWindow,
+				InputTokens:          usage.TokenUsage.Total.InputTokens,
+				CacheReadInputTokens: usage.TokenUsage.Total.CachedInputTokens,
+				OutputTokens:         usage.TokenUsage.Total.OutputTokens,
+				ContextInputTokens:   usage.TokenUsage.Last.InputTokens,
+				ContextTotalTokens:   usage.TokenUsage.Last.TotalTokens,
+				ContextBaseline:      codexContextBaselineTokens,
+				ContextWindow:        ctxWindow,
 			},
 		}, true
 
@@ -1500,11 +1546,19 @@ func (p *Protocol) SystemPromptForTest() string {
 	return p.opts.SystemPrompt
 }
 
-func computeCost(model string, inputTokens, outputTokens int) float64 {
+func computeCost(model string, inputTokens, cachedInputTokens, outputTokens int) float64 {
 	r, ok := lookupRate(model)
 	if !ok {
 		return 0
 	}
-	return (float64(inputTokens)/1_000_000)*r.inputPerMToken +
+	if cachedInputTokens < 0 {
+		cachedInputTokens = 0
+	}
+	if cachedInputTokens > inputTokens {
+		cachedInputTokens = inputTokens
+	}
+	uncachedInputTokens := inputTokens - cachedInputTokens
+	return (float64(uncachedInputTokens)/1_000_000)*r.inputPerMToken +
+		(float64(cachedInputTokens)/1_000_000)*r.cachedInputPerMToken +
 		(float64(outputTokens)/1_000_000)*r.outputPerMToken
 }

@@ -21,8 +21,8 @@ func (a *PublishAdapter) Push(worktreePath, branch string) error {
 	return Push(worktreePath, branch)
 }
 
-func (a *PublishAdapter) CreatePR(repoPath, branch, title, body, baseBranch string) (string, error) {
-	return CreatePR(repoPath, branch, title, body, baseBranch)
+func (a *PublishAdapter) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+	return CreatePR(repoPath, branch, title, body, draft, baseBranch)
 }
 
 func (a *PublishAdapter) ClosePR(prURL string) error {

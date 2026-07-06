@@ -30,6 +30,7 @@ var DashboardLeftSection = HelpSection{
 		{"y", "Approve pending permissions"},
 		{"Shift+A", "Approve & remember permissions"},
 		{"Shift+N", "Toggle input notifications"},
+		{"Shift+E", "Edit workspace config"},
 		{"d", "Delete feature"},
 	},
 }
@@ -53,7 +54,8 @@ var DetailSection = HelpSection{
 		{"m", "Manual publish"},
 		{"t", "Tweak implementation (code ready or published)"},
 		{"b", "Rebase on main (code ready or published)"},
-		{"e", "Edit config (when feature is idle)"},
+		{"e", "Edit config"},
+		{"Shift+E", "Edit workspace config"},
 		{"Shift+M", "Merge to base branch (local repos)"},
 		{"Shift+D", "Mark as done"},
 		{"g", "Review comments (published)"},

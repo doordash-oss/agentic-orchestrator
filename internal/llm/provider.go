@@ -78,6 +78,18 @@ type ReadinessChecker interface {
 	CheckReadiness(ctx context.Context) ProviderReadiness
 }
 
+// VersionEnforcer is implemented by providers whose installed CLI must meet
+// MinVersion() to be usable at startup. When EnforcesMinVersion reports true and
+// the installed CLI is older than MinVersion(), the provider is excluded from
+// the ready set just like a failed readiness probe.
+//
+// Providers that do not implement this interface (or that return false) keep the
+// warn-only version policy: a below-minimum CLI logs a startup warning but the
+// provider stays selectable.
+type VersionEnforcer interface {
+	EnforcesMinVersion() bool
+}
+
 // PromptAdapter provides provider-specific prompt content.
 type PromptAdapter interface {
 	AskingQuestionsClause() string
@@ -99,11 +111,45 @@ type CostCalculator interface {
 	ContextWindowForModel(model string) int
 }
 
+// SessionCostAdjustment is provider-specific cost and usage that is not carried
+// by the primary session result. For example, OpenCode stores Task subagents as
+// child sessions outside the parent ACP usage_update total.
+type SessionCostAdjustment struct {
+	TotalCostUSD float64
+	Usage        Usage
+	SessionIDs   []string
+}
+
+// SessionCostAugmenter is an optional Protocol capability for providers that
+// need to account for provider-managed child sessions in addition to the parent
+// session's terminal result.
+type SessionCostAugmenter interface {
+	AdditionalSessionCost(ctx context.Context) (SessionCostAdjustment, error)
+}
+
 // CatalogProvider exposes the model catalog populated by discovery.
 // Providers implementing this interface allow the Registry to perform
 // category-based model selection from the live catalog.
 type CatalogProvider interface {
 	ModelCatalog() []ModelInfo
+}
+
+// CatalogDiscoverer is implemented by providers that can refresh their model
+// catalog from the local provider CLI. Discovery is best-effort: callers should
+// fall back to CatalogProvider/default catalogs when it fails.
+type CatalogDiscoverer interface {
+	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
+}
+
+// ModelDiscoveryReporter receives models as soon as a provider discovers them.
+// It is best-effort and should be safe to call from provider discovery
+// goroutines.
+type ModelDiscoveryReporter func(ModelInfo)
+
+// CatalogProgressDiscoverer is implemented by providers that can stream
+// model discovery progress before returning the final catalog.
+type CatalogProgressDiscoverer interface {
+	DiscoverModelCatalogWithProgress(ctx context.Context, report ModelDiscoveryReporter) ([]ModelInfo, error)
 }
 
 // Protocol handles the wire-level communication with a provider's CLI process.
@@ -172,6 +218,21 @@ type CommandBuildOpts struct {
 	StateDir             string
 	PermissionPromptTool string
 	EffortLevel          EffortLevel // pipeline-driven effort level; each provider maps to its own naming
+	// WritableRoots lists the only locations a provider may edit/patch in normal
+	// operation, mirroring ProtocolOpts.WritableRoots. Empty means the provider
+	// applies its default writable scope; providers that do not consume it leave
+	// their behavior unchanged.
+	WritableRoots []string
+	// ReadRoots lists the directories a provider may read without per-call
+	// mediation, mirroring the read mounts Agentico granted (feature state, work
+	// dir, and additional read roots such as skills, guidelines, worktrees,
+	// knowledge base, images, and attachments). Empty means the provider applies
+	// its default read scope; providers that do not consume it leave their
+	// behavior unchanged.
+	ReadRoots []string
+	// WorkDir is the session's working directory (cwd). Empty leaves a provider's
+	// path matching unchanged.
+	WorkDir string
 	// PermissionMode pins the provider's session-level permission mode. Empty
 	// means inherit the user's default (e.g. ~/.claude/settings.json). Set this
 	// for phases whose prompts require behavior that the user's defaults could
@@ -193,6 +254,11 @@ type ProtocolOpts struct {
 	DSP            bool
 	StateDir       string
 	MarkerPath     string
+	// ResumeSessionID, when non-empty, asks the protocol to resume a prior
+	// provider session identity rather than start a fresh one. Empty means a
+	// normal new session, so providers that do not resume leave their behavior
+	// unchanged.
+	ResumeSessionID string
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider
@@ -213,6 +279,7 @@ var ErrNotSupported = fmt.Errorf("operation not supported by this provider")
 type PhaseRole string
 
 const (
+	PhaseInquiry        PhaseRole = "inquiry"
 	PhaseResearch       PhaseRole = "research"
 	PhasePlanning       PhaseRole = "planning"
 	PhaseImplementation PhaseRole = "implementation"

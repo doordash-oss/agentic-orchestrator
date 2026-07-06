@@ -97,6 +97,7 @@ type PipelinePreference struct {
 }
 
 type ModelConfig struct {
+	Inquiry        string `yaml:"inquiry"`
 	Research       string `yaml:"research"`
 	Planning       string `yaml:"planning"`
 	Implementation string `yaml:"implementation"`
@@ -109,6 +110,7 @@ type ModelConfig struct {
 // If both keys are present, "utilities" takes precedence.
 func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	type aux struct {
+		Inquiry        string `yaml:"inquiry"`
 		Research       string `yaml:"research"`
 		Planning       string `yaml:"planning"`
 		Implementation string `yaml:"implementation"`
@@ -121,6 +123,7 @@ func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	if err := value.Decode(&a); err != nil {
 		return err
 	}
+	m.Inquiry = a.Inquiry
 	m.Research = a.Research
 	m.Planning = a.Planning
 	m.Implementation = a.Implementation
@@ -130,29 +133,60 @@ func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	if m.Utilities == "" && a.Chat != "" {
 		m.Utilities = a.Chat
 	}
+	if m.Inquiry == "" {
+		m.Inquiry = m.Research
+	}
 	return nil
 }
 
 // Checkpoints controls which phase transitions pause for human review in the config defaults.
 type Checkpoints struct {
-	InquiryReview  bool `yaml:"inquiry_review,omitempty"`
-	ResearchReview bool `yaml:"research_review,omitempty"`
-	DesignReview   bool `yaml:"design_review,omitempty"`
-	PlanReview     bool `yaml:"plan_review,omitempty"`
-	ManualPublish  bool `yaml:"manual_publish"`
+	InquiryReview   bool `yaml:"inquiry_review"`
+	ResearchReview  bool `yaml:"research_review"`
+	DesignReview    bool `yaml:"design_review"`
+	RoadmapReview   bool `yaml:"roadmap_review"`
+	PhasePlanReview bool `yaml:"phase_plan_review"`
+	ManualPublish   bool `yaml:"manual_publish"`
+	DraftPublish    bool `yaml:"draft_publish"`
 
 	parsed bool // set by UnmarshalYAML; not serialized
 }
 
-// UnmarshalYAML defaults ManualPublish to true so that configs which include
-// a checkpoints section but omit manual_publish still get manual-publish
-// behaviour (the safe default). An explicit `manual_publish: false` in YAML
-// overrides this during Decode.
+// UnmarshalYAML defaults omitted checkpoint fields to true, except DraftPublish
+// which defaults to false (opting into draft is the exception, not the rule).
+// The legacy plan_review key is accepted by the decoder but intentionally ignored.
 func (c *Checkpoints) UnmarshalYAML(value *yaml.Node) error {
-	c.ManualPublish = true
+	type checkpointFields struct {
+		InquiryReview   *bool `yaml:"inquiry_review"`
+		ResearchReview  *bool `yaml:"research_review"`
+		DesignReview    *bool `yaml:"design_review"`
+		RoadmapReview   *bool `yaml:"roadmap_review"`
+		PhasePlanReview *bool `yaml:"phase_plan_review"`
+		ManualPublish   *bool `yaml:"manual_publish"`
+		DraftPublish    *bool `yaml:"draft_publish"`
+	}
+
+	var fields checkpointFields
+	if err := value.Decode(&fields); err != nil {
+		return err
+	}
+
+	c.InquiryReview = boolValueOrDefault(fields.InquiryReview, true)
+	c.ResearchReview = boolValueOrDefault(fields.ResearchReview, true)
+	c.DesignReview = boolValueOrDefault(fields.DesignReview, true)
+	c.RoadmapReview = boolValueOrDefault(fields.RoadmapReview, true)
+	c.PhasePlanReview = boolValueOrDefault(fields.PhasePlanReview, true)
+	c.ManualPublish = boolValueOrDefault(fields.ManualPublish, true)
+	c.DraftPublish = boolValueOrDefault(fields.DraftPublish, false)
 	c.parsed = true
-	type plain Checkpoints // avoid infinite recursion
-	return value.Decode((*plain)(c))
+	return nil
+}
+
+func boolValueOrDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 type RepoConfig struct {
@@ -235,6 +269,13 @@ func DiscoverRepos(cfg *Config, baseDir string) int {
 
 func applyDefaults(cfg *Config) {
 	d := NewDefault()
+	if cfg.Defaults.Models.Inquiry == "" {
+		if cfg.Defaults.Models.Research != "" {
+			cfg.Defaults.Models.Inquiry = cfg.Defaults.Models.Research
+		} else {
+			cfg.Defaults.Models.Inquiry = d.Defaults.Models.Inquiry
+		}
+	}
 	if cfg.Defaults.Models.Research == "" {
 		cfg.Defaults.Models.Research = d.Defaults.Models.Research
 	}
@@ -272,10 +313,10 @@ func applyDefaults(cfg *Config) {
 		cfg.Defaults.Inquireness = d.Defaults.Inquireness
 	}
 	// If the YAML had no checkpoints section at all, UnmarshalYAML was never
-	// called, so parsed is false and ManualPublish is the zero value (false).
-	// Apply the default so zero-config and legacy configs get manual-publish.
+	// called, so parsed is false and the fields are zero values. Apply the
+	// complete default checkpoint set.
 	if !cfg.Defaults.Checkpoints.parsed {
-		cfg.Defaults.Checkpoints.ManualPublish = d.Defaults.Checkpoints.ManualPublish
+		cfg.Defaults.Checkpoints = d.Defaults.Checkpoints
 	}
 
 	if cfg.Defaults.Pipeline == "" {
@@ -522,6 +563,12 @@ func ApplyProviderDefaults(cfg *Config, defaults map[string]string) {
 		return
 	}
 	m := &cfg.Defaults.Models
+	if m.Inquiry == "" {
+		m.Inquiry = defaults["inquiry"]
+		if m.Inquiry == "" {
+			m.Inquiry = defaults["research"]
+		}
+	}
 	if m.Research == "" {
 		m.Research = defaults["research"]
 	}
@@ -564,6 +611,9 @@ func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference
 }
 
 func overlayModelConfig(base, override ModelConfig) ModelConfig {
+	if override.Inquiry != "" {
+		base.Inquiry = override.Inquiry
+	}
 	if override.Research != "" {
 		base.Research = override.Research
 	}

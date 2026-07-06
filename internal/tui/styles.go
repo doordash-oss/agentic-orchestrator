@@ -118,6 +118,8 @@ func statusIcon(status string) string {
 	switch status {
 	case "Created":
 		return MutedStyle.Render(icons.Created)
+	case "SettingUpWorktrees":
+		return lipgloss.NewStyle().Foreground(colorInfo).Render(icons.Created)
 	case "Researching":
 		return lipgloss.NewStyle().Foreground(colorInfo).Render(icons.Researching)
 	case "Planning":

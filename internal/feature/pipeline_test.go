@@ -203,9 +203,9 @@ func TestDefaultCheckpointsForProfile(t *testing.T) {
 		profile PipelineProfile
 		want    Checkpoints
 	}{
-		{"medium: ManualPublish only", PipelineMedium, Checkpoints{ManualPublish: true}},
-		{"large: Design + ManualPublish", PipelineLarge, Checkpoints{DesignReview: true, ManualPublish: true}},
-		{"moonshot: Design + Plan + ManualPublish", PipelineMoonshot, Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: true}},
+		{"medium: roadmap + phase-plan + manual publish", PipelineMedium, Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}},
+		{"large: every applicable checkpoint", PipelineLarge, Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}},
+		{"moonshot: every applicable checkpoint", PipelineMoonshot, Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -237,9 +237,9 @@ func TestPipelineProfileApplicableGates(t *testing.T) {
 		profile PipelineProfile
 		want    []GateIndex
 	}{
-		{"medium", PipelineMedium, []GateIndex{GatePlanReview, GateManualPublish}},
-		{"large", PipelineLarge, []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GatePlanReview, GateManualPublish}},
-		{"moonshot", PipelineMoonshot, []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GatePlanReview, GateManualPublish}},
+		{"medium", PipelineMedium, []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish}},
+		{"large", PipelineLarge, []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}},
+		{"moonshot", PipelineMoonshot, []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -260,20 +260,20 @@ func TestProjectGatesNormalizeCheckpointsForPersistence(t *testing.T) {
 		wantVisible []GateIndex
 	}{
 		{
-			name:        "medium keeps plan and publish gates",
+			name:        "medium keeps planning and publish gates",
 			profile:     PipelineMedium,
-			input:       Checkpoints{InquiryReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
+			input:       Checkpoints{InquiryReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
 			publishable: true,
-			want:        Checkpoints{PlanReview: true, ManualPublish: true},
-			wantVisible: []GateIndex{GatePlanReview, GateManualPublish},
+			want:        Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+			wantVisible: []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish},
 		},
 		{
 			name:        "unpublished large forces manual publish while hiding the row",
 			profile:     PipelineLarge,
-			input:       Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: false},
+			input:       Checkpoints{DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: false},
 			publishable: false,
-			want:        Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: true},
-			wantVisible: []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GatePlanReview},
+			want:        Checkpoints{DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+			wantVisible: []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview},
 		},
 	}
 
@@ -292,25 +292,27 @@ func TestPipelineProfileFilterCheckpoints(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	allTrue := Checkpoints{
-		InquiryReview:  true,
-		ResearchReview: true,
-		DesignReview:   true,
-		PlanReview:     true,
-		ManualPublish:  true,
+		InquiryReview:   true,
+		ResearchReview:  true,
+		DesignReview:    true,
+		RoadmapReview:   true,
+		PhasePlanReview: true,
+		ManualPublish:   true,
 	}
 	allGates := Checkpoints{
-		InquiryReview:  true,
-		ResearchReview: true,
-		DesignReview:   true,
-		PlanReview:     true,
-		ManualPublish:  true,
+		InquiryReview:   true,
+		ResearchReview:  true,
+		DesignReview:    true,
+		RoadmapReview:   true,
+		PhasePlanReview: true,
+		ManualPublish:   true,
 	}
 	tests := []struct {
 		name    string
 		profile PipelineProfile
 		want    Checkpoints
 	}{
-		{"medium", PipelineMedium, Checkpoints{PlanReview: true, ManualPublish: true}},
+		{"medium", PipelineMedium, Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}},
 		{"large", PipelineLarge, allGates},
 		{"moonshot", PipelineMoonshot, allGates},
 	}
@@ -338,18 +340,19 @@ func TestProjectMergedGates(t *testing.T) {
 		wantFromConfig bool
 	}{
 		{
-			name:    "medium keeps plan review overrides",
+			name:    "medium keeps planning gate overrides",
 			profile: PipelineMedium,
 			base:    DefaultCheckpointsForProfile(PipelineMedium),
 			overrides: []Checkpoints{{
-				InquiryReview: true,
-				DesignReview:  true,
-				PlanReview:    true,
-				ManualPublish: true,
+				InquiryReview:   true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			}},
 			publishable:    true,
-			wantCheckpoint: Checkpoints{PlanReview: true, ManualPublish: true},
-			wantVisible:    []GateIndex{GatePlanReview, GateManualPublish},
+			wantCheckpoint: Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+			wantVisible:    []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish},
 			wantFromConfig: true,
 		},
 		{
@@ -358,11 +361,11 @@ func TestProjectMergedGates(t *testing.T) {
 			base:    DefaultCheckpointsForProfile(PipelineLarge),
 			overrides: []Checkpoints{
 				{InquiryReview: true, ManualPublish: true},
-				{ResearchReview: true, DesignReview: true, PlanReview: true},
+				{ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true},
 			},
 			publishable:    true,
-			wantCheckpoint: Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, PlanReview: true, ManualPublish: true},
-			wantVisible:    []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GatePlanReview, GateManualPublish},
+			wantCheckpoint: Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+			wantVisible:    []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish},
 			wantFromConfig: true,
 		},
 		{
@@ -370,8 +373,8 @@ func TestProjectMergedGates(t *testing.T) {
 			profile:        PipelineMedium,
 			base:           DefaultCheckpointsForProfile(PipelineMedium),
 			publishable:    false,
-			wantCheckpoint: Checkpoints{ManualPublish: true},
-			wantVisible:    []GateIndex{GatePlanReview},
+			wantCheckpoint: Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
+			wantVisible:    []GateIndex{GateRoadmapReview, GatePhasePlanReview},
 			wantFromConfig: false,
 		},
 	}
@@ -472,19 +475,26 @@ func TestConfigCheckpointsToFeatureCheckpoints(t *testing.T) {
 		{
 			"all true",
 			config.Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 			Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
+		},
+		{
+			"planning gates",
+			config.Checkpoints{RoadmapReview: true, PhasePlanReview: true},
+			Checkpoints{RoadmapReview: true, PhasePlanReview: true},
 		},
 		{
 			"mixed",
@@ -526,29 +536,36 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 		{
 			"all true",
 			Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
 			config.Checkpoints{
-				InquiryReview:  true,
-				ResearchReview: true,
-				DesignReview:   true,
-				PlanReview:     true,
-				ManualPublish:  true,
+				InquiryReview:   true,
+				ResearchReview:  true,
+				DesignReview:    true,
+				RoadmapReview:   true,
+				PhasePlanReview: true,
+				ManualPublish:   true,
 			},
+		},
+		{
+			"planning gates",
+			Checkpoints{RoadmapReview: true, PhasePlanReview: true},
+			config.Checkpoints{RoadmapReview: true, PhasePlanReview: true},
 		},
 		{
 			"mixed",
 			Checkpoints{
-				ResearchReview: true,
-				PlanReview:     true,
+				ResearchReview:  true,
+				PhasePlanReview: true,
 			},
 			config.Checkpoints{
-				ResearchReview: true,
-				PlanReview:     true,
+				ResearchReview:  true,
+				PhasePlanReview: true,
 			},
 		},
 	}
@@ -558,7 +575,8 @@ func TestFeatureCheckpointsToConfigCheckpoints(t *testing.T) {
 			if got.InquiryReview != tt.want.InquiryReview ||
 				got.ResearchReview != tt.want.ResearchReview ||
 				got.DesignReview != tt.want.DesignReview ||
-				got.PlanReview != tt.want.PlanReview ||
+				got.RoadmapReview != tt.want.RoadmapReview ||
+				got.PhasePlanReview != tt.want.PhasePlanReview ||
 				got.ManualPublish != tt.want.ManualPublish {
 				t.Errorf("FeatureCheckpointsToConfig(%+v) = %+v, want %+v", tt.input, got, tt.want)
 			}

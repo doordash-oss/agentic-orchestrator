@@ -28,6 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 func TestRunReadOnlyReviewHelper_UsesBoundedHelperArtifactHandler(t *testing.T) {
@@ -89,6 +90,94 @@ touch "`+filepath.Join(helperDir, "phase_complete")+`"
 	}
 	if !strings.Contains(got.SystemPrompt, filepath.Join(helperDir, "phase_complete")) {
 		t.Fatalf("SystemPrompt missing helper phase_complete path:\n%s", got.SystemPrompt)
+	}
+}
+
+// TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode proves the bounded
+// review helper gates TurnModeInteractive on the finish-or-violate capability of
+// the helper model's provider: interactive when the provider opts in, default
+// one-shot otherwise.
+func TestRunReadOnlyReviewHelper_GatesInteractiveTurnMode(t *testing.T) {
+	cases := []struct {
+		name     string
+		nudge    bool
+		wantMode ports.SessionTurnMode
+	}{
+		{name: "capability armed uses interactive", nudge: true, wantMode: ports.TurnModeInteractive},
+		{name: "capability off uses one-shot", nudge: false, wantMode: ports.TurnModeOneShot},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			helperDir := filepath.Join(root, "review")
+			workDir := filepath.Join(root, "work")
+			for _, d := range []string{helperDir, workDir} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", d, err)
+				}
+			}
+
+			provider := &captureProvider{name: "mock", model: "test-model", finishOrViolate: tc.nudge}
+			reg := llm.NewRegistry()
+			reg.Register(provider)
+
+			sess := newUtilityTestSession()
+			sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+
+			var capturedOpts *ports.SessionOpts
+			sm := mocks.NewMockSessionManager()
+			sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+				if len(opts) > 0 {
+					capturedOpts = opts[0]
+				}
+				// Write phase_complete so the helper finalizes on the first
+				// status without entering the finish-or-violate nudge path
+				// (which would otherwise wait for a second turn).
+				if err := os.WriteFile(filepath.Join(helperDir, PhaseCompleteFile), nil, 0o644); err != nil {
+					t.Errorf("write marker: %v", err)
+				}
+				sess.statusCh <- "SUCCESS"
+				return sess, nil
+			}
+
+			pr := &PhaseRunner{
+				StateDir:       root,
+				SessionManager: sm,
+				Registry:       reg,
+				BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+					// Mirror production BuildSession: surface the provider's
+					// bounded-helper capability on sessOpts.
+					return []string{"bash", "true"}, nil, &ports.SessionOpts{
+						PermHandler:                  opts.PermHandler,
+						ProviderName:                 "mock",
+						SupportsFinishOrViolateNudge: provider.SupportsFinishOrViolateNudge(),
+					}, nil
+				},
+			}
+
+			_, _ = pr.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+				SessionID:     "review-helper-tm",
+				FeatureID:     "feature-1",
+				Phase:         feature.PhaseReview,
+				Model:         "test-model",
+				Prompt:        "review the diff",
+				PromptPath:    filepath.Join(helperDir, "review-prompt.md"),
+				ResponsePath:  filepath.Join(helperDir, "review-output.txt"),
+				FeedbackPath:  filepath.Join(helperDir, "review-feedback.md"),
+				HelperIterDir: helperDir,
+				Role:          RoleIterationReviewer,
+				WorkDir:       workDir,
+				LogPath:       filepath.Join(helperDir, "review-output.txt"),
+				EffortLevel:   llm.EffortMedium,
+			})
+
+			if capturedOpts == nil {
+				t.Fatal("expected SessionOpts to be captured")
+			}
+			if capturedOpts.TurnMode != tc.wantMode {
+				t.Errorf("TurnMode = %v, want %v", capturedOpts.TurnMode, tc.wantMode)
+			}
+		})
 	}
 }
 

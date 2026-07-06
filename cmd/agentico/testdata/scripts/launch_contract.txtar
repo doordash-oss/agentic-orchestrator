@@ -8,20 +8,41 @@ stdout 'Launches the Bubble Tea TUI dashboard'
 stdout '--config <path>'
 stdout '--state-dir <path>'
 stdout '--providers <list>'
+stdout '--refresh-models'
 stdout '--dangerously-skip-permissions'
 stdout '--version, -v'
 stdout '~/.agentic-orchestrator/config.yaml'
 stdout '~/.agentic-orchestrator/features'
+stdout 'agentico update \[--check\|-n\]'
+stdout '--check'
 ! stdout 'Commands:'
 ! stdout 'feature list'
 ! stdout 'feature create'
 ! stdout 'run             Launch'
-! stdout 'refresh-models'
 ! stderr .
 
 exec agentico --version
 stdout 'agentico v'
 ! stderr .
+
+# Malformed `update` invocations reject at parse time (no network seam runs).
+! exec agentico update --bogus
+stderr 'unknown flag: --bogus'
+! stdout .
+
+! exec agentico update extra
+stderr 'unexpected argument: extra'
+! stdout .
+
+# --check is recognized only after `update`; bare it is an unknown flag.
+! exec agentico --check
+stderr 'unknown flag: --check'
+! stdout .
+
+# Every other bare word still rejects as an unknown command.
+! exec agentico feature
+stderr 'unknown command: feature'
+! stdout .
 
 ! exec agentico --config $WORK/config.yaml --state-dir $WORK/features --dangerously-skip-permissions --providers not-a-provider
 stderr 'unknown provider "not-a-provider"'

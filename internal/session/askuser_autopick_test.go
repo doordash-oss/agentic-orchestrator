@@ -192,6 +192,15 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 			wantAnswer:  "Repository-first (Recommended)",
 			wantConf:    0.81,
 		},
+		{
+			name:        "numbered options tolerate trailing stem and recommended after confidence",
+			purpose:     ports.AskUserAutoPickPurposeInquire,
+			inquireness: feature.InquirenessNone,
+			input:       askInput(`{"question":"I read the research.\n\n1. Italian tech terms where established: Follow normal Italian developer-doc practice. [confidence: 0.85] (Recommended)\n2. Keep all English tech terms untranslated: Simpler for developers. [confidence: 0.45]\n3. Fully Italianize everything possible: Risks awkward calques. [confidence: 0.25]\n\nWhich technical-term strategy should the translation use?","options":[]}`),
+			wantPick:    true,
+			wantAnswer:  "Italian tech terms where established (Recommended)",
+			wantConf:    0.85,
+		},
 	}
 
 	for _, tt := range tests {

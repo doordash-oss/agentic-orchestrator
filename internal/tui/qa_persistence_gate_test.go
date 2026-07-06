@@ -112,10 +112,11 @@ func TestTUI_HandleSessionDone_QAWritesForInteractivePlanningPhases(t *testing.T
 				ff.Status = statusForPhase(tc.phase)
 				ff.CurrentPhase = tc.phase
 				ff.Checkpoints = feature.Checkpoints{
-					InquiryReview:  true,
-					ResearchReview: true,
-					DesignReview:   true,
-					PlanReview:     true,
+					InquiryReview:   true,
+					ResearchReview:  true,
+					DesignReview:    true,
+					RoadmapReview:   true,
+					PhasePlanReview: true,
 				}
 				return nil
 			})

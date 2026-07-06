@@ -26,7 +26,7 @@ import (
 // and call tracking.
 type MockPublisher struct {
 	PushFn                  func(worktreePath, branch string) error
-	CreatePRFn              func(repoPath, branch, title, body, baseBranch string) (string, error)
+	CreatePRFn              func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
 	ClosePRFn               func(prURL string) error
 	HasUncommittedChangesFn func(worktreePath string) (bool, error)
 	HasLocalCommitsFn       func(worktreePath string) (bool, error)
@@ -52,10 +52,10 @@ func (m *MockPublisher) Push(worktreePath, branch string) error {
 	return m.DefaultError
 }
 
-func (m *MockPublisher) CreatePR(repoPath, branch, title, body, baseBranch string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreatePR", Args: []any{repoPath, branch, title, body, baseBranch}})
+func (m *MockPublisher) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CreatePR", Args: []any{repoPath, branch, title, body, baseBranch, draft}})
 	if m.CreatePRFn != nil {
-		return m.CreatePRFn(repoPath, branch, title, body, baseBranch)
+		return m.CreatePRFn(repoPath, branch, title, body, baseBranch, draft)
 	}
 	return "", m.DefaultError
 }
@@ -417,6 +417,7 @@ func (m *MockReviewCommentOperator) LatestCommitSHA(worktreePath string) (string
 // function overrides and call tracking.
 type MockWorktreeOperator struct {
 	CreateFn                func(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	ExpectedPathFn          func(featureSlug, repoName string) string
 	RemoveFn                func(worktreePath string, deleteBranch bool) error
 	ListFn                  func() ([]git.WorktreeInfo, error)
 	DetectStaleFn           func(activeFeatureIDs []string) ([]git.WorktreeInfo, error)
@@ -438,6 +439,14 @@ func (m *MockWorktreeOperator) Create(repoPath, featureSlug, repoName, startPoin
 		return m.CreateFn(repoPath, featureSlug, repoName, startPoint)
 	}
 	return "", m.DefaultError
+}
+
+func (m *MockWorktreeOperator) ExpectedPath(featureSlug, repoName string) string {
+	m.Calls = append(m.Calls, MockCall{Method: "ExpectedPath", Args: []any{featureSlug, repoName}})
+	if m.ExpectedPathFn != nil {
+		return m.ExpectedPathFn(featureSlug, repoName)
+	}
+	return ""
 }
 
 func (m *MockWorktreeOperator) Remove(worktreePath string, deleteBranch bool) error {

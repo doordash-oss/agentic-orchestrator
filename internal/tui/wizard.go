@@ -84,6 +84,16 @@ const (
 	summaryFieldExitCriteria
 )
 
+const (
+	checkpointInquiryReview = iota
+	checkpointResearchReview
+	checkpointDesignReview
+	checkpointRoadmapReview
+	checkpointPhasePlanReview
+	checkpointManualPublish
+	checkpointCount
+)
+
 type modelProviderGroup struct {
 	Name   string
 	Models []string
@@ -159,8 +169,9 @@ type WizardModel struct {
 	branchOptionCursor      int              // 0 = start from default branch (recommended), 1 = start from current branch
 	branchChoices           map[string]bool  // repo name -> useCurrentBranch (true = start from current HEAD)
 	showBranchWarning       bool             // true when the dedicated branch-selection screen replaces the Where panel
-	checkpointsCursor       int              // which row is focused (0-4)
-	checkpoints             [5]bool          // toggle state for each checkpoint item
+	checkpointsCursor       int              // which checkpoint row is focused
+	checkpoints             [checkpointCount]bool
+	checkpointDefaults      feature.Checkpoints
 	result                  *WizardResult
 	cancelled               bool
 	width, height           int
@@ -253,33 +264,20 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		workspaceDir, _ = os.Getwd()
 	}
 
-	clampTo := func(val string, opts []string) string {
-		if len(opts) == 0 {
-			return val
-		}
-		for _, opt := range opts {
-			if opt == val {
-				return val
-			}
-		}
-		return opts[0]
-	}
 	var allModels []string
 	for _, prov := range providerOrder {
 		allModels = append(allModels, providerModels[prov]...)
 	}
-	// Build per-phase flat options for clamping
-	phaseOpts := func(field string) []string {
-		if pm, ok := phaseModels[field]; ok {
-			var opts []string
-			for _, prov := range providerOrder {
-				opts = append(opts, pm[prov]...)
-			}
-			if len(opts) > 0 {
-				return opts
-			}
-		}
-		return allModels
+	// Shared phase-model catalog. Built before clamping so the same
+	// provider-aware matching used by the picker also guards default clamping:
+	// a multi-provider default persisted in "<provider>:<id>" routing form is
+	// kept rather than discarded when option lists carry bare backend ids.
+	configCatalog := PhaseModelCatalog{
+		ProviderModels:      providerModels,
+		ProviderOrder:       providerOrder,
+		PhaseDefaults:       phaseDefaults,
+		PhaseProviderModels: phaseModels,
+		Fields:              append([]string(nil), phaseCatalogFields...),
 	}
 
 	canPaste := canPasteClipboardImage()
@@ -307,12 +305,14 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	crni.CharLimit = 100
 
 	// Initialize checkpoint toggles from config defaults.
-	var initCheckpoints [5]bool
-	initCheckpoints[0] = defaults.Checkpoints.InquiryReview
-	initCheckpoints[1] = defaults.Checkpoints.ResearchReview
-	initCheckpoints[2] = defaults.Checkpoints.DesignReview
-	initCheckpoints[3] = defaults.Checkpoints.PlanReview
-	initCheckpoints[4] = defaults.Checkpoints.ManualPublish
+	checkpointDefaults := feature.ConfigCheckpointsToFeature(defaults.Checkpoints)
+	var initCheckpoints [checkpointCount]bool
+	initCheckpoints[checkpointInquiryReview] = checkpointDefaults.InquiryReview
+	initCheckpoints[checkpointResearchReview] = checkpointDefaults.ResearchReview
+	initCheckpoints[checkpointDesignReview] = checkpointDefaults.DesignReview
+	initCheckpoints[checkpointRoadmapReview] = checkpointDefaults.RoadmapReview
+	initCheckpoints[checkpointPhasePlanReview] = checkpointDefaults.PhasePlanReview
+	initCheckpoints[checkpointManualPublish] = checkpointDefaults.ManualPublish
 
 	pipelineOptions := []string{
 		feature.PipelineMedium.ConfigKey(),
@@ -322,11 +322,12 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 	pipelinePrefs := make(map[string]config.PipelinePreference, len(pipelineOptions))
 	for _, profile := range pipelineOptions {
 		pref := defaults.PreferenceForPipeline(profile)
-		pref.Models.Research = clampTo(pref.Models.Research, phaseOpts("Research"))
-		pref.Models.Planning = clampTo(pref.Models.Planning, phaseOpts("Planning"))
-		pref.Models.Implementation = clampTo(pref.Models.Implementation, phaseOpts("Implementation"))
-		pref.Models.Review = clampTo(pref.Models.Review, phaseOpts("Review"))
-		pref.Models.KBBuild = clampTo(pref.Models.KBBuild, phaseOpts("KB Build"))
+		pref.Models.Inquiry = configCatalog.ClampModelValue("Clarify", pref.Models.Inquiry)
+		pref.Models.Research = configCatalog.ClampModelValue("Research", pref.Models.Research)
+		pref.Models.Planning = configCatalog.ClampModelValue("Planning", pref.Models.Planning)
+		pref.Models.Implementation = configCatalog.ClampModelValue("Implementation", pref.Models.Implementation)
+		pref.Models.Review = configCatalog.ClampModelValue("Review", pref.Models.Review)
+		pref.Models.KBBuild = configCatalog.ClampModelValue("KB Build", pref.Models.KBBuild)
 		if pref.Inquireness == "" {
 			pref.Inquireness = defaults.Inquireness
 		}
@@ -344,14 +345,6 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		}
 	}
 
-	configCatalog := PhaseModelCatalog{
-		ProviderModels:      providerModels,
-		ProviderOrder:       providerOrder,
-		PhaseDefaults:       phaseDefaults,
-		PhaseProviderModels: phaseModels,
-		Fields:              append([]string(nil), phaseCatalogFields...),
-	}
-
 	return WizardModel{
 		step:                   wizardStepWhat,
 		whatFocus:              0,
@@ -366,7 +359,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		selectedRepos:          make(map[string]bool),
 		repos:                  repoConfigs,
 		models:                 models,
-		modelFields:            []string{"Research", "Planning", "Implementation", "Review", "KB Build"},
+		modelFields:            append([]string(nil), phaseCatalogFields...),
 		providerModels:         providerModels,
 		providerOrder:          providerOrder,
 		phaseDefaults:          phaseDefaults,
@@ -377,6 +370,7 @@ func NewWizardModel(availRepos []string, repoPaths map[string]string, repoConfig
 		inquirenessOptions:     []string{"none", "medium", "high"},
 		inquirenessCursor:      inquirenessCursor,
 		checkpoints:            initCheckpoints,
+		checkpointDefaults:     checkpointDefaults,
 		riskOptions:            []string{"low", "medium", "high"},
 		riskCursor:             1, // default to medium
 		pipelineOptions:        pipelineOptions,
@@ -418,6 +412,31 @@ func createGitRepo(parentPath, name string) error {
 
 func (m WizardModel) Init() tea.Cmd {
 	return textinput.Blink
+}
+
+func wizardDescriptionNewlineKey(msg tea.KeyPressMsg) bool {
+	if key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+j", "alt+enter", "shift+enter"))) {
+		return true
+	}
+	return msg.Code == tea.KeyEnter && msg.Mod.Contains(tea.ModShift)
+}
+
+func (m *WizardModel) focusWhatName() tea.Cmd {
+	m.descInput.Blur()
+	m.whatFocus = 0
+	return m.nameInput.Focus()
+}
+
+func (m *WizardModel) focusWhatDescription() tea.Cmd {
+	m.nameInput.Blur()
+	m.whatFocus = 1
+	return m.descInput.Focus()
+}
+
+func (m WizardModel) insertDescriptionNewline() (WizardModel, tea.Cmd) {
+	var cmd tea.Cmd
+	m.descInput, cmd = m.descInput.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	return m, cmd
 }
 
 // isTextInputStep returns true if the current step has an active text input.
@@ -515,7 +534,7 @@ func (m *WizardModel) pipelineCheckpointOverrides(opt string) []feature.Checkpoi
 func (m *WizardModel) mergedPipelineCheckpoints(opt string) (feature.Checkpoints, bool) {
 	profile := pipelineProfileFromKey(opt)
 	projection := profile.ProjectMergedGates(
-		feature.DefaultCheckpointsForProfile(profile),
+		m.checkpointDefaults,
 		m.pipelineCheckpointOverrides(opt),
 		m.provisionalPublishable,
 	)
@@ -524,26 +543,28 @@ func (m *WizardModel) mergedPipelineCheckpoints(opt string) (feature.Checkpoints
 
 func (m *WizardModel) checkpointState() feature.Checkpoints {
 	return feature.Checkpoints{
-		InquiryReview:  m.checkpoints[0],
-		ResearchReview: m.checkpoints[1],
-		DesignReview:   m.checkpoints[2],
-		PlanReview:     m.checkpoints[3],
-		ManualPublish:  m.checkpoints[4],
+		InquiryReview:   m.checkpoints[checkpointInquiryReview],
+		ResearchReview:  m.checkpoints[checkpointResearchReview],
+		DesignReview:    m.checkpoints[checkpointDesignReview],
+		RoadmapReview:   m.checkpoints[checkpointRoadmapReview],
+		PhasePlanReview: m.checkpoints[checkpointPhasePlanReview],
+		ManualPublish:   m.checkpoints[checkpointManualPublish],
 	}
 }
 
 func (m *WizardModel) setCheckpointState(cp feature.Checkpoints) {
-	m.checkpoints[0] = cp.InquiryReview
-	m.checkpoints[1] = cp.ResearchReview
-	m.checkpoints[2] = cp.DesignReview
-	m.checkpoints[3] = cp.PlanReview
-	m.checkpoints[4] = cp.ManualPublish
+	m.checkpoints[checkpointInquiryReview] = cp.InquiryReview
+	m.checkpoints[checkpointResearchReview] = cp.ResearchReview
+	m.checkpoints[checkpointDesignReview] = cp.DesignReview
+	m.checkpoints[checkpointRoadmapReview] = cp.RoadmapReview
+	m.checkpoints[checkpointPhasePlanReview] = cp.PhasePlanReview
+	m.checkpoints[checkpointManualPublish] = cp.ManualPublish
 }
 
 func (m *WizardModel) projectedPipelineCheckpoints(opt string) feature.GateProjection {
 	profile := pipelineProfileFromKey(opt)
 	return profile.ProjectMergedGates(
-		feature.DefaultCheckpointsForProfile(profile),
+		m.checkpointDefaults,
 		m.pipelineCheckpointOverrides(opt),
 		m.provisionalPublishable,
 	)
@@ -572,9 +593,13 @@ func gateLabels(projection feature.GateProjection) []string {
 			if projection.Checkpoints.DesignReview {
 				gates = append(gates, "Design review")
 			}
-		case feature.GatePlanReview:
-			if projection.Checkpoints.PlanReview {
-				gates = append(gates, "Plan review")
+		case feature.GateRoadmapReview:
+			if projection.Checkpoints.RoadmapReview {
+				gates = append(gates, "Roadmap review")
+			}
+		case feature.GatePhasePlanReview:
+			if projection.Checkpoints.PhasePlanReview {
+				gates = append(gates, "Phase plan review")
 			}
 		case feature.GateManualPublish:
 			if projection.Checkpoints.ManualPublish {
@@ -595,8 +620,10 @@ func availableGateLabels(projection feature.GateProjection) []string {
 			gates = append(gates, "Research review")
 		case feature.GateDesignReview:
 			gates = append(gates, "Design review")
-		case feature.GatePlanReview:
-			gates = append(gates, "Plan review")
+		case feature.GateRoadmapReview:
+			gates = append(gates, "Roadmap review")
+		case feature.GatePhasePlanReview:
+			gates = append(gates, "Phase plan review")
 		case feature.GateManualPublish:
 			gates = append(gates, "Publish review")
 		}
@@ -605,14 +632,14 @@ func availableGateLabels(projection feature.GateProjection) []string {
 }
 
 // applyPipelineDefaults updates checkpoints to match the selected pipeline profile.
-// It first applies the profile defaults, then checks for per-repo pipeline_gates
+// It first applies the configured defaults, then checks for per-repo pipeline_gates
 // config overrides (matching the logic used for card rendering in step 3).
 func (m *WizardModel) applyPipelineDefaults() {
 	opt := m.pipelineOptions[m.pipelineCursor]
 	projection := m.projectedPipelineCheckpoints(opt)
 	m.setCheckpointState(projection.Checkpoints)
 	if !m.provisionalPublishable {
-		m.checkpoints[4] = true // force ManualPublish when unpublished
+		m.checkpoints[checkpointManualPublish] = true // force ManualPublish when unpublished
 	}
 }
 
@@ -641,35 +668,12 @@ func (m *WizardModel) applyPipelinePreference(profile string) {
 	if !ok {
 		return
 	}
-	clampTo := func(val string, opts []string) string {
-		if len(opts) == 0 {
-			return val
-		}
-		for _, opt := range opts {
-			if opt == val {
-				return val
-			}
-		}
-		return opts[0]
-	}
-	phaseOpts := func(field string) []string {
-		if pm, ok := m.phaseProviderModels[field]; ok {
-			var opts []string
-			for _, prov := range m.providerOrder {
-				opts = append(opts, pm[prov]...)
-			}
-			if len(opts) > 0 {
-				return opts
-			}
-		}
-		return m.allModels
-	}
-
-	pref.Models.Research = clampTo(pref.Models.Research, phaseOpts("Research"))
-	pref.Models.Planning = clampTo(pref.Models.Planning, phaseOpts("Planning"))
-	pref.Models.Implementation = clampTo(pref.Models.Implementation, phaseOpts("Implementation"))
-	pref.Models.Review = clampTo(pref.Models.Review, phaseOpts("Review"))
-	pref.Models.KBBuild = clampTo(pref.Models.KBBuild, phaseOpts("KB Build"))
+	pref.Models.Inquiry = m.configCatalog.ClampModelValue("Clarify", pref.Models.Inquiry)
+	pref.Models.Research = m.configCatalog.ClampModelValue("Research", pref.Models.Research)
+	pref.Models.Planning = m.configCatalog.ClampModelValue("Planning", pref.Models.Planning)
+	pref.Models.Implementation = m.configCatalog.ClampModelValue("Implementation", pref.Models.Implementation)
+	pref.Models.Review = m.configCatalog.ClampModelValue("Review", pref.Models.Review)
+	pref.Models.KBBuild = m.configCatalog.ClampModelValue("KB Build", pref.Models.KBBuild)
 	m.models = pref.Models
 
 	for i, opt := range m.inquirenessOptions {
@@ -697,13 +701,7 @@ func (m *WizardModel) virtualConfigFeature() *feature.Feature {
 		Pipeline:    pipelineProfileFromKey(m.currentPipelineKey()),
 		Models:      m.models,
 		Inquireness: inq,
-		Checkpoints: feature.Checkpoints{
-			InquiryReview:  m.checkpoints[0],
-			ResearchReview: m.checkpoints[1],
-			DesignReview:   m.checkpoints[2],
-			PlanReview:     m.checkpoints[3],
-			ManualPublish:  m.checkpoints[4],
-		},
+		Checkpoints: m.checkpointState(),
 	}
 }
 
@@ -756,11 +754,21 @@ func (m *WizardModel) syncConfigEditorFromWizard() {
 	m.configEditor.rowCursor = start + m.wizardSubCursor()
 }
 
+func (m WizardModel) wizardModelFocus() configFocusZone {
+	if m.configEditor.ModelFilteringActive() || m.configEditor.activeModelCell == modelCellModel {
+		return configFocusModelList
+	}
+	if m.configEditor.activeModelCell == modelCellPhase {
+		return configFocusPhaseList
+	}
+	return configFocusAgentList
+}
+
 // syncWizardFromConfigEditor copies the editor's post-Update internal state
 // back into wizard fields. Uses the editor's raw internal `checkpoints`
 // field — NOT `Snapshot()` — so the wizard's pre-Phase-3 semantics where
-// m.checkpoints[4] retains its init value when !provisionalPublishable are
-// preserved (Snapshot() forces ManualPublish=true).
+// m.checkpoints[checkpointManualPublish] retains its init value when
+// !provisionalPublishable are preserved (Snapshot() forces ManualPublish=true).
 func (m *WizardModel) syncWizardFromConfigEditor() {
 	m.models = m.configEditor.models
 	m.inquirenessCursor = indexOfInquireness(m.configEditor.inquireness, m.inquirenessOptions)
@@ -840,10 +848,27 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 		return m, nil
 
 	case summaryFieldInquireness, summaryFieldModels, summaryFieldCheckpoints:
-		// Lifecycle keys owned by the wizard: enter collapses (always); esc
-		// on Inquireness reverts the cursor + manually-set flag, esc on
-		// Models/Checkpoints collapses preserving cycled/toggled values.
+		if m.summaryCursor == summaryFieldModels && m.configEditor.ModelFilteringActive() {
+			m.syncConfigEditorFromWizard()
+			before := m.configEditor.Snapshot()
+			m.configEditor, _ = m.configEditor.Update(msg)
+			after := m.configEditor.Snapshot()
+			m.syncWizardFromConfigEditor()
+			if before.Models != after.Models {
+				m.modelsManuallySet = true
+			}
+			return m, nil
+		}
+		// Lifecycle keys owned by the wizard: enter closes scalar axes. In the
+		// three-panel model picker, nested panels first return to Phases; enter
+		// from Phases closes the picker. Esc on Inquireness reverts the cursor
+		// + manually-set flag, while Esc on Models/Checkpoints collapses
+		// preserving cycled/toggled values.
 		if key.Matches(msg, key.NewBinding(key.WithKeys("enter"))) {
+			if m.summaryCursor == summaryFieldModels && m.configEditor.activeModelCell != modelCellPhase {
+				m.configEditor.activeModelCell = modelCellPhase
+				return m, nil
+			}
 			m.summaryEditing = false
 			return m, nil
 		}
@@ -855,6 +880,9 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 			m.summaryEditing = false
 			return m, nil
 		}
+		if m.summaryCursor == summaryFieldModels {
+			return m.handleSummaryModelEditingKey(msg)
+		}
 		// Checkpoints: reshape tab/shift+tab -> space so the editor's space
 		// toggle fires instead of the editor's cross-axis Tab jump. Preserves
 		// the wizard's Tab-toggles contract.
@@ -865,19 +893,9 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 				outMsg = tea.KeyPressMsg{Code: ' ', Text: " "}
 			}
 		}
-		// Pre-Phase-3 Models-axis contract: modelsManuallySet flipped
-		// unconditionally on any cycling key (tab/right/left/shift+tab),
-		// even when the cycle is a no-op because opts is empty. Matched
-		// here so existing tests pass without modification.
-		forceModelsManuallySet := m.summaryCursor == summaryFieldModels &&
-			(key.Matches(msg, key.NewBinding(key.WithKeys("tab"))) ||
-				key.Matches(msg, key.NewBinding(key.WithKeys("shift+tab"))) ||
-				key.Matches(msg, key.NewBinding(key.WithKeys("right"))) ||
-				key.Matches(msg, key.NewBinding(key.WithKeys("left"))))
 		// Sync editor from wizard, capture before-snapshot, delegate Update,
 		// axis-clamp the editor's rowCursor, sync wizard back. Manually-set
-		// flag is flipped when the resulting snapshot differs (or always
-		// for the Models cycle-key case above).
+		// flag is flipped when the resulting snapshot differs.
 		prevSub := m.wizardSubCursor()
 		m.syncConfigEditorFromWizard()
 		before := m.configEditor.Snapshot()
@@ -888,7 +906,7 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 		changed := before != after
 		switch m.summaryCursor {
 		case summaryFieldModels:
-			if changed || forceModelsManuallySet {
+			if changed {
 				m.modelsManuallySet = true
 			}
 		case summaryFieldInquireness:
@@ -928,6 +946,75 @@ func (m WizardModel) handleSummaryEditing(msg tea.KeyMsg) (WizardModel, tea.Cmd)
 			m.exitInput, cmd = m.exitInput.Update(msg)
 			return m, cmd
 		}
+	}
+	return m, nil
+}
+
+func (m WizardModel) handleSummaryModelEditingKey(msg tea.KeyMsg) (WizardModel, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return m, nil
+	}
+
+	prevSub := m.wizardSubCursor()
+	m.syncConfigEditorFromWizard()
+	before := m.configEditor.Snapshot()
+	handled := true
+
+	switch m.configEditor.activeModelCell {
+	case modelCellPhase:
+		switch keyMsg.String() {
+		case "up", "k":
+			m.configEditor.rowCursor = clampInRange(m.configEditor.rowCursor-1, 0, m.configEditor.modelsCount()-1)
+		case "down", "j":
+			m.configEditor.rowCursor = clampInRange(m.configEditor.rowCursor+1, 0, m.configEditor.modelsCount()-1)
+		case "right", "l", "tab":
+			m.configEditor.activeModelCell = modelCellAgent
+		case "left", "h", "shift+tab":
+			m.configEditor.activeModelCell = modelCellModel
+		default:
+			handled = false
+		}
+	case modelCellAgent:
+		switch keyMsg.String() {
+		case "up", "k":
+			m.configEditor.cycleAgent(-1)
+		case "down", "j":
+			m.configEditor.cycleAgent(+1)
+		case "right", "l", "tab":
+			m.configEditor.activeModelCell = modelCellModel
+		case "left", "h", "shift+tab":
+			m.configEditor.activeModelCell = modelCellPhase
+		default:
+			handled = false
+		}
+	case modelCellModel:
+		switch keyMsg.String() {
+		case "up", "k":
+			m.configEditor.cycleModelBackward()
+		case "down", "j":
+			m.configEditor.cycleModelForward()
+		case "right", "l", "tab":
+			m.configEditor.activeModelCell = modelCellPhase
+		case "left", "h", "shift+tab":
+			m.configEditor.activeModelCell = modelCellAgent
+		case "/":
+			m.configEditor.startModelFilter()
+		default:
+			handled = false
+		}
+	default:
+		m.configEditor.activeModelCell = modelCellPhase
+	}
+	if !handled {
+		return m, nil
+	}
+
+	m.clampConfigEditorToActiveAxis(prevSub)
+	after := m.configEditor.Snapshot()
+	m.syncWizardFromConfigEditor()
+	if before.Models != after.Models {
+		m.modelsManuallySet = true
 	}
 	return m, nil
 }
@@ -1187,12 +1274,14 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			// Esc goes back; on first step goBack() cancels the wizard
 			return m.goBack()
 
-		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+j", "alt+enter"))):
+		case wizardDescriptionNewlineKey(msg):
 			// On wizardStepWhat when description is focused, insert newline
 			if m.step == wizardStepWhat && m.whatFocus == 1 {
-				var cmd tea.Cmd
-				m.descInput, cmd = m.descInput.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-				return m, cmd
+				return m.insertDescriptionNewline()
+			}
+			if key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))) ||
+				msg.Mod.Contains(tea.ModShift) {
+				return m, nil
 			}
 			// On other steps/cases, treat as advance — respect picker guards
 			if m.filePicker.IsActive() {
@@ -1250,6 +1339,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 					m.summaryEditing = true
 					m.modelCursor = 0
 					m.configEditor = NewConfigEditorModel(m.virtualConfigFeature(), m.configCatalog, m.provisionalPublishable)
+					m.configEditor.activeModelCell = modelCellPhase
 					return m, nil
 				case summaryFieldCheckpoints:
 					m.summaryEditing = true
@@ -1270,10 +1360,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			}
 			// On wizardStepWhat with name focused, move to description first
 			if m.step == wizardStepWhat && m.whatFocus == 0 {
-				m.nameInput.Blur()
-				m.whatFocus = 1
-				cmd := m.descInput.Focus()
-				return m, cmd
+				return m, m.focusWhatDescription()
 			}
 			// Where step: Enter is contextual based on the focus axis.
 			if m.step == wizardStepWhere {
@@ -1298,10 +1385,7 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.step == wizardStepWhat {
 				// If description focused, switch to name
 				if m.whatFocus == 1 {
-					m.descInput.Blur()
-					m.whatFocus = 0
-					m.nameInput.Focus()
-					return m, textinput.Blink
+					return m, m.focusWhatName()
 				}
 				// Already on name (first step) — no-op
 				return m, nil
@@ -1315,15 +1399,9 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.step == wizardStepWhat {
 				// Toggle whatFocus between 0 (name) and 1 (description)
 				if m.whatFocus == 0 {
-					m.nameInput.Blur()
-					m.whatFocus = 1
-					cmd := m.descInput.Focus()
-					return m, cmd
+					return m, m.focusWhatDescription()
 				}
-				m.descInput.Blur()
-				m.whatFocus = 0
-				m.nameInput.Focus()
-				return m, textinput.Blink
+				return m, m.focusWhatName()
 			}
 			if m.step == wizardStepWhere {
 				// Tab cycles list -> Browse -> Create (if visible) -> Continue -> list.
@@ -1343,8 +1421,12 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			if m.filePicker.IsActive() {
 				return m, nil
 			}
-			// On wizardStepWhat with description focused, let textarea handle cursor
+			// On wizardStepWhat with description focused, leave the field only
+			// from its top visual line; otherwise let textarea move the cursor.
 			if m.step == wizardStepWhat && m.whatFocus == 1 {
+				if m.descInput.atFirstVisualLine() {
+					return m, m.focusWhatName()
+				}
 				break
 			}
 			if m.step == wizardStepWhere {
@@ -1396,6 +1478,9 @@ func (m WizardModel) Update(msg tea.Msg) (WizardModel, tea.Cmd) {
 			(!m.isTextInputStep() && key.Matches(msg, key.NewBinding(key.WithKeys("j")))):
 			if m.filePicker.IsActive() {
 				return m, nil
+			}
+			if m.step == wizardStepWhat && m.whatFocus == 0 {
+				return m, m.focusWhatDescription()
 			}
 			// On wizardStepWhat with description focused, let textarea handle cursor
 			if m.step == wizardStepWhat && m.whatFocus == 1 {
@@ -2406,14 +2491,14 @@ func (m *WizardModel) providerModelsForField(field string) map[string][]string {
 
 func (m *WizardModel) cycleModel() {
 	field := m.modelFields[m.modelCursor]
-	opts := m.modelOptionsForField(field)
+	opts, providers := m.configCatalog.FlatOptionsForField(field)
 	if len(opts) == 0 {
 		return
 	}
 	current := m.getModelField(field)
 	nextIdx := 0
-	for i, opt := range opts {
-		if opt == current {
+	for i := range opts {
+		if m.configCatalog.MatchesModelValue(providers[i], opts[i], current) {
 			nextIdx = (i + 1) % len(opts)
 			break
 		}
@@ -2423,14 +2508,14 @@ func (m *WizardModel) cycleModel() {
 
 func (m *WizardModel) cycleModelReverse() {
 	field := m.modelFields[m.modelCursor]
-	opts := m.modelOptionsForField(field)
+	opts, providers := m.configCatalog.FlatOptionsForField(field)
 	if len(opts) == 0 {
 		return
 	}
 	current := m.getModelField(field)
 	nextIdx := len(opts) - 1
-	for i, opt := range opts {
-		if opt == current {
+	for i := range opts {
+		if m.configCatalog.MatchesModelValue(providers[i], opts[i], current) {
 			nextIdx = (i - 1 + len(opts)) % len(opts)
 			break
 		}
@@ -2440,6 +2525,8 @@ func (m *WizardModel) cycleModelReverse() {
 
 func (m *WizardModel) getModelField(field string) string {
 	switch field {
+	case "Clarify":
+		return m.models.Inquiry
 	case "Research":
 		return m.models.Research
 	case "Planning":
@@ -2456,6 +2543,8 @@ func (m *WizardModel) getModelField(field string) string {
 
 func (m *WizardModel) setModelField(field, value string) {
 	switch field {
+	case "Clarify":
+		m.models.Inquiry = value
 	case "Research":
 		m.models.Research = value
 	case "Planning":
@@ -2502,7 +2591,7 @@ func (m *WizardModel) modelAssignmentSummary(field string) string {
 
 	provider, model := splitProviderModel(value)
 	if provider != "" {
-		return provider + " / " + model
+		return provider + " / " + compactModelIDLabel(model)
 	}
 
 	groups := m.modelProviderGroups(field)
@@ -3075,13 +3164,11 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 		if m.summaryEditing && m.summaryCursor == summaryFieldModels {
 			renderRow(summaryFieldModels, "Models", "", "")
 			m.syncConfigEditorFromWizard()
-			content := m.configEditor.renderModelsBox(reviewEditorContentWidth(inputBoxWidth - 4))
-			rendered := renderReviewEditorBox("Model Selection", inputBoxWidth-4, content)
-			card.WriteString("    " + strings.ReplaceAll(rendered, "\n", "\n    ") + "\n")
+			content := m.configEditor.renderModelsWorkspaceWithFocusWidth(m.wizardModelFocus(), reviewEditorContentWidth(inputBoxWidth-4))
+			card.WriteString("    " + strings.ReplaceAll(content, "\n", "\n    ") + "\n")
 		} else {
 			renderRow(summaryFieldModels, "Models",
-				MutedStyle.Render(fmt.Sprintf("R:%s P:%s I:%s Rev:%s KB:%s",
-					m.models.Research, m.models.Planning, m.models.Implementation, m.models.Review, m.models.KBBuild)),
+				MutedStyle.Render(compactModelSummary(m.models, " ")),
 				"")
 		}
 
@@ -3172,7 +3259,7 @@ func (m WizardModel) wizardContent() (contentBox, footer string) {
 			case summaryFieldRisk, summaryFieldInquireness:
 				footer = KeyHelpStyle.Render(" [←/→] Change   [enter/esc] Done")
 			case summaryFieldModels:
-				footer = KeyHelpStyle.Render(" [←/→/tab] Cycle model   [↑/↓] Navigate   [enter/esc] Done")
+				footer = KeyHelpStyle.Render(" [←/→/tab] Panel   [↑/↓] Select   [/] Filter   [enter/esc] Done")
 			case summaryFieldCheckpoints:
 				footer = KeyHelpStyle.Render(" [space/tab] Toggle   [↑/↓] Navigate   [enter/esc] Done")
 			case summaryFieldExitCriteria:

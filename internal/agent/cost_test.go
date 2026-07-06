@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -45,6 +46,57 @@ func TestExtractSessionCostFromResult(t *testing.T) {
 	if cost.TotalCostUSD != 2.75 {
 		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
 	}
+}
+
+func TestExtractSessionCostIncludesProviderAdditionalSessionCost(t *testing.T) {
+	base := mocks.NewMockSessionView("sess-parent", "feat-1")
+	base.CostVal = &llm.ResultMessage{TotalCostUSD: 2.00}
+	base.AccumulatedUsageVal = llm.Usage{
+		InputTokens:              100,
+		OutputTokens:             20,
+		CacheReadInputTokens:     300,
+		CacheCreationInputTokens: 4,
+	}
+	sess := &additionalCostSession{
+		MockSessionView: base,
+		adjustment: llm.SessionCostAdjustment{
+			TotalCostUSD: 0.75,
+			Usage: llm.Usage{
+				InputTokens:              10,
+				OutputTokens:             2,
+				CacheReadInputTokens:     30,
+				CacheCreationInputTokens: 1,
+			},
+		},
+	}
+
+	cost := ExtractSessionCost(sess)
+
+	if cost.TotalCostUSD != 2.75 {
+		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
+	}
+	if cost.Usage.InputTokens != 110 {
+		t.Errorf("Usage.InputTokens = %d, want 110", cost.Usage.InputTokens)
+	}
+	if cost.Usage.OutputTokens != 22 {
+		t.Errorf("Usage.OutputTokens = %d, want 22", cost.Usage.OutputTokens)
+	}
+	if cost.Usage.CacheReadInputTokens != 330 {
+		t.Errorf("Usage.CacheReadInputTokens = %d, want 330", cost.Usage.CacheReadInputTokens)
+	}
+	if cost.Usage.CacheCreationInputTokens != 5 {
+		t.Errorf("Usage.CacheCreationInputTokens = %d, want 5", cost.Usage.CacheCreationInputTokens)
+	}
+}
+
+type additionalCostSession struct {
+	*mocks.MockSessionView
+	adjustment llm.SessionCostAdjustment
+	err        error
+}
+
+func (s *additionalCostSession) AdditionalSessionCost(context.Context) (llm.SessionCostAdjustment, error) {
+	return s.adjustment, s.err
 }
 
 func TestImplementCostAttributionUsesStoreKey(t *testing.T) {
@@ -92,6 +144,179 @@ func TestImplementCostAttributionUsesStoreKey(t *testing.T) {
 	}
 	if got := updated.PhaseCost("plan"); got != 0 {
 		t.Errorf("PhaseCost(plan) = %v, want 0", got)
+	}
+}
+
+func TestAccumulateSessionCostToFeatureUsesActiveTimingKey(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+
+	f := &feature.Feature{
+		ID:              "test-helper-cost-active-key",
+		Name:            "test-helper-cost-active-key",
+		Status:          feature.StatusImplementing,
+		ActiveTimingKey: "phase-2-impl",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.42})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("phase-2-impl"); got != 0.42 {
+		t.Errorf("PhaseCost(phase-2-impl) = %v, want 0.42", got)
+	}
+	if got := updated.PhaseCost("review"); got != 0 {
+		t.Errorf("PhaseCost(review) = %v, want 0", got)
+	}
+}
+
+func TestAccumulateSessionCostToFeatureRecordsIndividualSession(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+
+	f := &feature.Feature{
+		ID:              "test-helper-session-cost",
+		Name:            "test-helper-session-cost",
+		Status:          feature.StatusImplementing,
+		ActiveTimingKey: "phase-2-impl",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.42}, SessionCostMetadata{
+		SessionID:     "feat-phase-02-review-01",
+		ObserverPhase: "review",
+		RepoName:      "repo-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("phase-2-impl"); got != 0.42 {
+		t.Errorf("PhaseCost(phase-2-impl) = %v, want 0.42", got)
+	}
+	if len(updated.SessionCosts) != 1 {
+		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
+	}
+	got := updated.SessionCosts[0]
+	if got.SessionID != "feat-phase-02-review-01" {
+		t.Errorf("SessionID = %q, want feat-phase-02-review-01", got.SessionID)
+	}
+	if got.PhaseKey != "phase-2-impl" {
+		t.Errorf("PhaseKey = %q, want phase-2-impl", got.PhaseKey)
+	}
+	if got.ObserverPhase != "review" {
+		t.Errorf("ObserverPhase = %q, want review", got.ObserverPhase)
+	}
+	if got.RepoName != "repo-a" {
+		t.Errorf("RepoName = %q, want repo-a", got.RepoName)
+	}
+	if got.CostUSD != 0.42 {
+		t.Errorf("CostUSD = %v, want 0.42", got.CostUSD)
+	}
+}
+
+func TestAccumulateSessionCostToFeatureUsesFallbackKey(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+
+	f := &feature.Feature{
+		ID:            "test-helper-cost-fallback-key",
+		Name:          "test-helper-cost-fallback-key",
+		Status:        feature.StatusFinalReviewing,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.31})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("review"); got != 0.31 {
+		t.Errorf("PhaseCost(review) = %v, want 0.31", got)
+	}
+}
+
+func TestAccumulateSessionCostToFeatureKeyIgnoresStaleActiveTimingKey(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+
+	f := &feature.Feature{
+		ID:              "test-helper-cost-forced-key",
+		Name:            "test-helper-cost-forced-key",
+		Status:          feature.StatusFinalReviewing,
+		ActiveTimingKey: "phase-3-impl",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	err := accumulateSessionCostToFeatureKey(store, f.ID, "review", SessionCost{TotalCostUSD: 0.29})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.PhaseCost("review"); got != 0.29 {
+		t.Errorf("PhaseCost(review) = %v, want 0.29", got)
+	}
+	if got := updated.PhaseCost("phase-3-impl"); got != 0 {
+		t.Errorf("PhaseCost(phase-3-impl) = %v, want 0", got)
+	}
+}
+
+func TestAccumulateSessionCostToFeatureSkipsZeroCost(t *testing.T) {
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+
+	f := &feature.Feature{
+		ID:              "test-helper-cost-zero",
+		Name:            "test-helper-cost-zero",
+		Status:          feature.StatusImplementing,
+		ActiveTimingKey: "phase-1-impl",
+		SchemaVersion:   feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.PhaseCosts) != 0 {
+		t.Errorf("PhaseCosts = %v, want empty", updated.PhaseCosts)
 	}
 }
 

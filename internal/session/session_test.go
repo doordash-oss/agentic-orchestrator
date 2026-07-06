@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -101,6 +102,174 @@ func TestSessionStartAndCapture(t *testing.T) {
 	}
 	if age := time.Since(stdoutAt); age > 10*time.Second {
 		t.Errorf("LastStdoutAt age = %s, want < 10s", age)
+	}
+}
+
+func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
+	dir := t.TempDir()
+
+	s := NewSession("test-session", "feat-1", feature.PhaseImplement)
+	s.pidDir = dir
+	s.repoName = "repo"
+	s.process = exec.Command("true")
+	if err := s.process.Start(); err != nil {
+		t.Fatalf("start process: %v", err)
+	}
+	s.protocol = newScriptedProtocol(llm.SDKMessage{
+		Type:    "system",
+		Subtype: "init",
+		Init: &llm.SystemInitMessage{
+			SessionID: "provider-session",
+			Model:     "test",
+		},
+	})
+
+	if err := WritePIDFile(dir, PIDFile{
+		PID: s.process.Process.Pid, RepoName: "repo", FeatureID: "feat-1", Phase: feature.PhaseImplement.String(),
+	}); err != nil {
+		t.Fatalf("write initial PID file: %v", err)
+	}
+
+	var captured string
+	runSessionWithStdoutLines(t, s, []string{"MOCK_MSG"}, func(msg llm.SDKMessage) {
+		if msg.Init == nil {
+			return
+		}
+		if pf, err := ReadPIDFile(filepath.Join(dir, PIDFileName("repo"))); err == nil {
+			captured = pf.SessionID
+		}
+	})
+
+	if captured != "provider-session" {
+		t.Fatalf("PID file SessionID after init = %q, want provider-session", captured)
+	}
+	if got := s.SessionID(); got != "provider-session" {
+		t.Fatalf("session.SessionID() = %q, want provider-session", got)
+	}
+}
+
+func TestPendingToolWatchdogFailsIdlePendingTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "pending-tool-stall.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-empty-write","tool_name":"Write","data":"pending"}'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"pending-tool-watchdog-stall",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout: 25 * time.Millisecond,
+				PollInterval:           5 * time.Millisecond,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "FAILED" {
+			t.Fatalf("StatusCh = %q, want FAILED", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for watchdog failure status")
+	}
+
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for watchdog to stop session")
+	}
+
+	if got := sess.ErrorDetail(); !strings.Contains(got, "provider watchdog stalled with pending tool Write") {
+		t.Fatalf("ErrorDetail() = %q, want pending Write watchdog detail", got)
+	}
+}
+
+func TestPendingToolWatchdogIgnoresCompletedPendingTool(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "pending-tool-completed.sh")
+	script := `#!/usr/bin/env bash
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"pending"}'
+sleep 0.01
+printf '%s\n' '{"type":"tool_progress","tool_use_id":"chatcmpl-tool-write","tool_name":"Write","data":"completed"}'
+sleep 0.06
+printf '%s\n' '{"type":"result","subtype":"success","result":"ok"}'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	mgr := NewManager(nil)
+	defer mgr.Shutdown()
+
+	sess, err := mgr.StartSession(
+		"pending-tool-watchdog-completed",
+		"feat-1",
+		feature.PhasePlan,
+		[]string{"bash", scriptPath},
+		tmpDir,
+		nil,
+		&SessionOpts{
+			ProviderName: "test-provider",
+			Watchdog: &ports.SessionWatchdogConfig{
+				PendingToolIdleTimeout: 25 * time.Millisecond,
+				PollInterval:           5 * time.Millisecond,
+			},
+			ResultShutdownGrace: 20 * time.Millisecond,
+		},
+	)
+	if err != nil {
+		t.Fatalf("StartSession() error: %v", err)
+	}
+
+	select {
+	case status := <-sess.StatusCh():
+		if status != "SUCCESS" {
+			t.Fatalf("StatusCh = %q, want SUCCESS", status)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for success status")
+	}
+}
+
+func TestWatchdogPendingToolDataMatchesStatusLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "bare pending status", data: "pending", want: true},
+		{name: "multi-line pending status", data: "File: report.md\nStatus: pending", want: true},
+		{name: "completed command mentions pending", data: "grep pending report.md\nStatus: completed", want: false},
+		{name: "path mentions pending", data: "File: pending-report.md\nStatus: completed", want: false},
+		{name: "running is not pending", data: "Status: running", want: false},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isWatchdogPendingToolData(tt.data); got != tt.want {
+				t.Fatalf("isWatchdogPendingToolData(%q) = %v, want %v", tt.data, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -701,6 +870,8 @@ func TestSessionResultDeliveredUnderBackpressure(t *testing.T) {
 	// parallel-candidate: in-process protocol replay with per-test attach buffer.
 	s := NewSession("bp-test", "feat-1", feature.PhaseImplement)
 	s.setCriticalAttachSendTimeoutForTest(time.Second)
+	unregister := registerAttachConsumerForTest(t, s)
+	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}
@@ -740,6 +911,17 @@ func TestSessionResultDeliveredUnderBackpressure(t *testing.T) {
 			t.Fatal("Result SDKMessage was not delivered via AttachCh under backpressure")
 		}
 	}
+}
+
+func registerAttachConsumerForTest(t *testing.T, s *Session) func() {
+	t.Helper()
+	registrar, ok := any(s).(interface {
+		RegisterAttachConsumer() func()
+	})
+	if !ok {
+		t.Fatal("Session does not expose RegisterAttachConsumer")
+	}
+	return registrar.RegisterAttachConsumer()
 }
 
 func TestSession_OnSubagentEventFires(t *testing.T) {
@@ -1729,6 +1911,35 @@ func (r *recordingAttachDropReporter) snapshot() []attachDropCall {
 	return out
 }
 
+func TestSession_NoAttachConsumerSuppressesCriticalDropReport(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: in-process protocol replay with per-test attach buffer.
+	wantTimeout := 200 * time.Millisecond
+
+	s := NewSession("headless-drop-test", "feat-headless", feature.PhaseImplement)
+	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	for i := 0; i < cap(s.attachCh); i++ {
+		s.attachCh <- llm.SDKMessage{Type: "assistant"}
+	}
+
+	reporter := &recordingAttachDropReporter{}
+	s.SetAttachDropReporter(reporter)
+
+	started := time.Now()
+	runMockSession(t, s, []llm.SDKMessage{
+		{Type: "system", Subtype: "init", Init: &llm.SystemInitMessage{SessionID: "s1", Model: "m"}},
+		{Type: "result", Result: &llm.ResultMessage{Type: "result", Subtype: "success", SessionID: "s1", TotalCostUSD: 0.01}},
+	}, func(llm.SDKMessage) {})
+	elapsed := time.Since(started)
+
+	if calls := reporter.snapshot(); len(calls) != 0 {
+		t.Fatalf("expected no AttachDrop reports without an attach consumer; got %d", len(calls))
+	}
+	if elapsed >= wantTimeout/2 {
+		t.Fatalf("headless critical drop waited %s; want it to skip the %s timeout", elapsed, wantTimeout)
+	}
+}
+
 // TestSession_AttachDropReporterFiresOnCriticalDrop simulates a stuck
 // attachCh consumer. The CLI emits a Result message while the attachCh
 // is full — the bounded blocking send at the drop site must time out,
@@ -1741,6 +1952,8 @@ func TestSession_AttachDropReporterFiresOnCriticalDrop(t *testing.T) {
 
 	s := NewSession("drop-test", "feat-9", feature.PhaseImplement)
 	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	unregister := registerAttachConsumerForTest(t, s)
+	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}
@@ -1791,6 +2004,8 @@ func TestSession_AttachDropReporterSilentWithoutReporter(t *testing.T) {
 
 	s := NewSession("quiet-test", "feat-9", feature.PhaseImplement)
 	s.setCriticalAttachSendTimeoutForTest(timeout)
+	unregister := registerAttachConsumerForTest(t, s)
+	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}

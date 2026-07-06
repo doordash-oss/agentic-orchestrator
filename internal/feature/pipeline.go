@@ -168,23 +168,24 @@ func (p PipelineProfile) NextProfile() PipelineProfile {
 func DefaultCheckpointsForProfile(profile PipelineProfile) Checkpoints {
 	switch profile {
 	case PipelineMedium:
-		return Checkpoints{ManualPublish: true}
-	case PipelineLarge:
-		return Checkpoints{DesignReview: true, ManualPublish: true}
-	default: // PipelineMoonshot
-		return Checkpoints{DesignReview: true, PlanReview: true, ManualPublish: true}
+		return Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
+	case PipelineLarge, PipelineMoonshot:
+		return Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
+	default:
+		return Checkpoints{InquiryReview: true, ResearchReview: true, DesignReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}
 	}
 }
 
-// GateIndex represents a named gate position in the [5]bool array.
+// GateIndex represents a named gate position in the gate projection.
 type GateIndex int
 
 const (
-	GateInquiryReview  GateIndex = 0
-	GateResearchReview GateIndex = 1
-	GateDesignReview   GateIndex = 2
-	GatePlanReview     GateIndex = 3
-	GateManualPublish  GateIndex = 4
+	GateInquiryReview GateIndex = iota
+	GateResearchReview
+	GateDesignReview
+	GateRoadmapReview
+	GatePhasePlanReview
+	GateManualPublish
 )
 
 // GateProjection is the shared gate contract for a pipeline profile.
@@ -198,11 +199,11 @@ type GateProjection struct {
 func (p PipelineProfile) ApplicableGates() []GateIndex {
 	switch p {
 	case PipelineMedium:
-		return []GateIndex{GatePlanReview, GateManualPublish}
+		return []GateIndex{GateRoadmapReview, GatePhasePlanReview, GateManualPublish}
 	case PipelineLarge, PipelineMoonshot:
-		return []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GatePlanReview, GateManualPublish}
+		return []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}
 	default:
-		return []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GatePlanReview, GateManualPublish}
+		return []GateIndex{GateInquiryReview, GateResearchReview, GateDesignReview, GateRoadmapReview, GatePhasePlanReview, GateManualPublish}
 	}
 }
 
@@ -221,8 +222,11 @@ func (p PipelineProfile) FilterCheckpoints(cp Checkpoints) Checkpoints {
 	if !applicable[GateDesignReview] {
 		cp.DesignReview = false
 	}
-	if !applicable[GatePlanReview] {
-		cp.PlanReview = false
+	if !applicable[GateRoadmapReview] {
+		cp.RoadmapReview = false
+	}
+	if !applicable[GatePhasePlanReview] {
+		cp.PhasePlanReview = false
 	}
 	if !applicable[GateManualPublish] {
 		cp.ManualPublish = false
@@ -262,7 +266,8 @@ func mergeCheckpoints(checkpoints ...Checkpoints) Checkpoints {
 		merged.InquiryReview = merged.InquiryReview || cp.InquiryReview
 		merged.ResearchReview = merged.ResearchReview || cp.ResearchReview
 		merged.DesignReview = merged.DesignReview || cp.DesignReview
-		merged.PlanReview = merged.PlanReview || cp.PlanReview
+		merged.RoadmapReview = merged.RoadmapReview || cp.RoadmapReview
+		merged.PhasePlanReview = merged.PhasePlanReview || cp.PhasePlanReview
 		merged.ManualPublish = merged.ManualPublish || cp.ManualPublish
 	}
 	return merged
@@ -303,21 +308,23 @@ func ParsePipelineProfile(s string) (PipelineProfile, error) {
 // ConfigCheckpointsToFeature converts config.Checkpoints to feature.Checkpoints.
 func ConfigCheckpointsToFeature(cc config.Checkpoints) Checkpoints {
 	return Checkpoints{
-		InquiryReview:  cc.InquiryReview,
-		ResearchReview: cc.ResearchReview,
-		DesignReview:   cc.DesignReview,
-		PlanReview:     cc.PlanReview,
-		ManualPublish:  cc.ManualPublish,
+		InquiryReview:   cc.InquiryReview,
+		ResearchReview:  cc.ResearchReview,
+		DesignReview:    cc.DesignReview,
+		RoadmapReview:   cc.RoadmapReview,
+		PhasePlanReview: cc.PhasePlanReview,
+		ManualPublish:   cc.ManualPublish,
 	}
 }
 
 // FeatureCheckpointsToConfig converts feature.Checkpoints to config.Checkpoints.
 func FeatureCheckpointsToConfig(fc Checkpoints) config.Checkpoints {
 	return config.Checkpoints{
-		InquiryReview:  fc.InquiryReview,
-		ResearchReview: fc.ResearchReview,
-		DesignReview:   fc.DesignReview,
-		PlanReview:     fc.PlanReview,
-		ManualPublish:  fc.ManualPublish,
+		InquiryReview:   fc.InquiryReview,
+		ResearchReview:  fc.ResearchReview,
+		DesignReview:    fc.DesignReview,
+		RoadmapReview:   fc.RoadmapReview,
+		PhasePlanReview: fc.PhasePlanReview,
+		ManualPublish:   fc.ManualPublish,
 	}
 }

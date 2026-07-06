@@ -174,6 +174,24 @@ func TestRoleSpecCarriesRequiredPhasesAndAskingClauseProvider(t *testing.T) {
 	}
 }
 
+func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
+	got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+		Spec:         FinalReviewerRoleSpec(),
+		IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
+		SkillsDir:    "/skills",
+	})
+	for _, want := range []string{
+		"## Artifact Preflight",
+		"`AGENTICO_BIN` is set to the current Agentico executable",
+		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_reviewer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
+		"run it before creating `phase_complete`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("BuildRoleSystemPrompt() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestPlanningRoleSpecsDeriveContractPaths(t *testing.T) {
 	base := t.TempDir()
 	roadmapAttemptDir := filepath.Join(base, "roadmap", "attempt-02")
@@ -481,8 +499,7 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 			wantRoots:  []string{"iteration_dir"},
 			wantMarker: "/state/feat/run-001/review/iteration-01/phase_complete",
 			wantPaths: map[string]string{
-				"review_feedback":     "/state/feat/run-001/review/iteration-01/review-feedback.md",
-				"verification_report": "/state/feat/run-001/review/iteration-01/verification-report.yaml",
+				"review_feedback": "/state/feat/run-001/review/iteration-01/review-feedback.md",
 			},
 		},
 		{
@@ -687,6 +704,25 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 				t.Fatalf("%s system prompt contains read-only-outside-roots clause but role legitimately writes outside its output roots:\n%s", tt.name, got)
 			}
 		})
+	}
+}
+
+func TestBuildRoleSystemPromptSuppressSubagents(t *testing.T) {
+	const clause = "Sub-agents are available."
+	spec := IterationReviewerRoleSpec()
+
+	// Default: the subagent clause is present (unchanged behavior for every
+	// session that does have subagents).
+	deflt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{Spec: spec, IterationDir: "/state/feat/run-001/iter"})
+	if !strings.Contains(deflt, clause) {
+		t.Fatalf("default BuildRoleSystemPrompt: subagent clause missing in:\n%s", deflt)
+	}
+
+	// Bounded helpers run with no subagents (AgentNames empty); the clause must
+	// be omitted so glm does not attempt a task spawn that the handler denies.
+	suppressed := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{Spec: spec, IterationDir: "/state/feat/run-001/iter", SuppressSubagents: true})
+	if strings.Contains(suppressed, clause) {
+		t.Fatalf("SuppressSubagents=true: subagent clause should be omitted in:\n%s", suppressed)
 	}
 }
 

@@ -145,7 +145,8 @@ type RoadmapUserInput struct {
 	Description string
 	Repos       []RepoView
 
-	DesignArtifactPath string
+	DesignArtifactPath   string
+	ResearchArtifactPath string
 
 	VisualReferences VisualReferencesInput
 	QAFiles          QAFilesInput
@@ -176,8 +177,9 @@ type PhasePlanView struct {
 }
 
 type PhasePlanUserInput struct {
-	Phase       PhasePlanView
-	RoadmapPath string
+	Phase                PhasePlanView
+	RoadmapPath          string
+	ResearchArtifactPath string
 
 	QAFiles QAFilesInput
 
@@ -249,20 +251,15 @@ type FinalReviewUserInput struct {
 	Iteration     int
 	IsCycleReview bool
 
-	PhaseType   string
-	DiffBase    string
-	RoadmapPath string
+	PhaseType          string
+	DiffBase           string
+	RoadmapPath        string
+	DesignArtifactPath string
 
 	FeatureDescription string
 	ExitCriteria       string
 	CycleFocus         string
 
-	TestingContractPath string
-
-	VerificationPath string
-
-	PriorImplementationPlanPaths         []string
-	PriorImplementationContractPaths     []string
 	PriorImplementationReportPaths       []string
 	PriorImplementationEvidenceRootDirs  []string
 	PriorImplementationEvidenceArtifacts []string
@@ -398,9 +395,9 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "roadmap_user_multi_repo",
 			render: func() string {
 				in := RoadmapUserInput{
-					Name:                   "OAuth login",
-					Description:            "Sign in with Google.",
-					Repos:                  []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}},
+					Name:               "OAuth login",
+					Description:        "Sign in with Google.",
+					Repos:              []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}},
 					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
 					VisualReferences: VisualReferencesInput{
 						Images: []string{"/tmp/login.png"},
@@ -494,7 +491,8 @@ func TestGoldenSnapshots(t *testing.T) {
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
-					AskingClause: "## Asking Questions\n\nAsk one question at a time.",
+					SubagentsAvailable: true,
+					AskingClause:       "## Asking Questions\n\nAsk one question at a time.",
 				})
 			},
 		},
@@ -518,7 +516,8 @@ func TestGoldenSnapshots(t *testing.T) {
 						HasGuidelines: true,
 						HasSkills:     true,
 					},
-					AskingClause: "## Asking Questions\n\nUse numbered alternatives.",
+					SubagentsAvailable: true,
+					AskingClause:       "## Asking Questions\n\nUse numbered alternatives.",
 				})
 			},
 		},
@@ -562,18 +561,17 @@ func TestGoldenSnapshots(t *testing.T) {
 			name: "final_review_user_phase",
 			render: func() string {
 				return FinalReviewUserPrompt(FinalReviewUserInput{
-					VisualReferences:    VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "conducting this final review"},
-					Iteration:           1,
-					IsCycleReview:       false,
-					PhaseType:           "tdd-fill-in",
-					DiffBase:            "main",
-					RoadmapPath:         "/state/feat-x/run-1/roadmap/plan.md",
-					FeatureDescription:  "Sign in with Google.",
-					ExitCriteria:        "Relevant tests pass.",
-					TestingContractPath: "/state/feat-x/run-1/phase-1/contract.yaml",
-					VerificationPath:    "/state/feat-x/run-1/phase-1/iter-2/verification-report.yaml",
-					FeedbackPath:        "/state/feat-x/run-1/final-review/iter-1/review-feedback.md",
-					Publishable:         true,
+					VisualReferences:   VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "conducting this final review"},
+					Iteration:          1,
+					IsCycleReview:      false,
+					PhaseType:          "tdd-fill-in",
+					DiffBase:           "main",
+					RoadmapPath:        "/state/feat-x/run-1/roadmap/plan.md",
+					DesignArtifactPath: "/state/feat-x/run-1/design/design.md",
+					FeatureDescription: "Sign in with Google.",
+					ExitCriteria:       "Relevant tests pass.",
+					FeedbackPath:       "/state/feat-x/run-1/final-review/iter-1/review-feedback.md",
+					Publishable:        true,
 				})
 			},
 		},
@@ -661,6 +659,26 @@ func TestRoleSystemPromptSuppressesUsefulResourcesWhenEmpty(t *testing.T) {
 	})
 	if strings.Contains(got, "# Useful Resources") {
 		t.Fatalf("RoleSystemPrompt() rendered empty Useful Resources section:\n%s", got)
+	}
+}
+
+func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
+	const clause = "Sub-agents are available."
+	base := RoleSystemInput{
+		OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/state/feat-x/x"}},
+		MarkerPath:  "/state/feat-x/x/phase_complete",
+	}
+
+	avail := base
+	avail.SubagentsAvailable = true
+	if !strings.Contains(RoleSystemPrompt(avail), clause) {
+		t.Errorf("SubagentsAvailable=true: subagent clause missing")
+	}
+
+	unavail := base
+	unavail.SubagentsAvailable = false
+	if strings.Contains(RoleSystemPrompt(unavail), clause) {
+		t.Errorf("SubagentsAvailable=false: subagent clause should be omitted (helper has no subagents)")
 	}
 }
 

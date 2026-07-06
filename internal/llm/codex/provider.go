@@ -100,6 +100,9 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 	if opts.EffortLevel != "" {
 		args = append(args, "-c", "model_reasoning_effort="+MapEffortLevel(opts.EffortLevel))
 	}
+	if window := p.contextWindowOverrideForModel(opts.Model); window > 0 {
+		args = append(args, "-c", fmt.Sprintf("model_context_window=%d", window))
+	}
 	// Enable live web search so agents can fetch current web pages.
 	args = append(args, "-c", "web_search=live")
 
@@ -150,12 +153,7 @@ Self-check before sending every question. If any answer is "no" and the free-for
 }
 
 func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	r, ok := lookupRate(model)
-	if !ok {
-		return 0
-	}
-	return (float64(inputTokens)/1_000_000)*r.inputPerMToken +
-		(float64(outputTokens)/1_000_000)*r.outputPerMToken
+	return computeCost(model, int(inputTokens), 0, int(outputTokens))
 }
 
 func (p *Provider) ContextWindowForModel(model string) int {
@@ -177,6 +175,24 @@ func (p *Provider) ContextWindowForModel(model string) int {
 					return entry.ContextWindow
 				}
 			}
+		}
+	}
+	return 0
+}
+
+func (p *Provider) contextWindowOverrideForModel(model string) int {
+	if strings.TrimSpace(model) == "" || model == llm.StripModelContextWindow(model) {
+		return 0
+	}
+	p.mu.RLock()
+	cat := p.catalog
+	p.mu.RUnlock()
+	if len(cat) == 0 {
+		cat = p.defaultModelInfos()
+	}
+	for _, entry := range cat {
+		if strings.EqualFold(entry.ID, model) {
+			return entry.ContextWindow
 		}
 	}
 	return 0
@@ -300,11 +316,10 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 
 // defaultModelInfos returns Agentic's curated Codex/OpenAI model catalog.
 //
-// These values replace the former discovery pipeline (OpenAI models API and
-// codex app-server) because that pipeline never recorded a ContextWindow,
-// leaving the Session.ContextPercentage() signal dead until a runtime
-// tokenUsage event arrived. The handoff ticker and TUI badge need a window
-// from session start, so we hardcode one per model.
+// Runtime startup refreshes these values with `codex debug models`, which
+// exposes Codex's raw catalog including context windows. These values remain
+// as an offline fallback so the Session.ContextPercentage() signal works from
+// session start even when discovery is unavailable.
 //
 // Sources (verified 2026-04-18):
 //   - https://developers.openai.com/api/docs/models/gpt-5.5
@@ -312,17 +327,14 @@ func (p *Provider) OutputPricePerMToken(model string) float64 {
 //   - https://developers.openai.com/api/docs/models/gpt-5.4-mini
 //   - https://developers.openai.com/api/docs/models/gpt-5.3-codex
 //   - https://developers.openai.com/api/docs/models/gpt-5.2
-//
-// Note: gpt-5.4 has a 272K pricing inflection point (2× input / 1.5× output
-// above that) but the hard context limit is 1.05M. We encode the capacity,
-// not the pricing boundary.
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
-		{ID: "gpt-5.5", DisplayName: "GPT-5.5", ContextWindow: 1_050_000, Category: "capable"},
-		{ID: "gpt-5.4", DisplayName: "GPT-5.4", ContextWindow: 1_050_000, Category: "capable"},
-		{ID: "gpt-5.4-mini", DisplayName: "GPT-5.4 Mini", ContextWindow: 400_000, Category: "balanced"},
-		{ID: "gpt-5.3-codex", DisplayName: "GPT-5.3 Codex", Aliases: []string{"codex"}, ContextWindow: 400_000, Category: "balanced"},
-		{ID: "gpt-5.2", DisplayName: "GPT-5.2", ContextWindow: 400_000},
+		{ID: "gpt-5.5[272K]", DisplayName: "GPT-5.5 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.5"}, Category: "capable"},
+		{ID: "gpt-5.4[272K]", DisplayName: "GPT-5.4 (272K)", ContextWindow: 272_000, Aliases: []string{"gpt-5.4"}, Category: "balanced"},
+		{ID: "gpt-5.4[1M]", DisplayName: "GPT-5.4 (1M)", ContextWindow: 1_000_000, Category: "capable"},
+		{ID: "gpt-5.4-mini[400K]", DisplayName: "GPT-5.4 Mini (400K)", ContextWindow: 400_000, Aliases: []string{"gpt-5.4-mini"}, Category: "balanced"},
+		{ID: "gpt-5.3-codex[400K]", DisplayName: "GPT-5.3 Codex (400K)", Aliases: []string{"gpt-5.3-codex"}, ContextWindow: 400_000, Category: "balanced"},
+		{ID: "gpt-5.2[400K]", DisplayName: "GPT-5.2 (400K)", ContextWindow: 400_000, Aliases: []string{"gpt-5.2"}},
 	}
 }
 

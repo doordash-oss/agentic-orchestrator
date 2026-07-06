@@ -289,6 +289,629 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	}
 }
 
+func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	storeDir := t.TempDir()
+	store := feature.NewStore(storeDir)
+	cfg := config.NewDefault()
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
+
+	mgr := feature.NewManager(store, cfg)
+	mgr.Branches = newMockBranches(false)
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
+	}
+	mgr.Worktrees = worktrees
+	mgr.PRs = mocks.NewMockPublisher()
+
+	f, err := mgr.Create("Worktree Feature", "test worktree", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if len(worktrees.Calls) != 0 {
+		t.Fatalf("worktree create calls = %d, want 0", len(worktrees.Calls))
+	}
+	if f.Status != feature.StatusSettingUpWorktrees {
+		t.Errorf("created status = %v, want %v", f.Status, feature.StatusSettingUpWorktrees)
+	}
+	features, err := store.List()
+	if err != nil {
+		t.Fatalf("listing persisted features: %v", err)
+	}
+	if len(features) != 1 {
+		t.Fatalf("persisted features = %d, want 1", len(features))
+	}
+	persisted := features[0]
+	wantBranch := git.BranchName(persisted.Slug)
+	if got := persisted.Repos[0].Branch; got != wantBranch {
+		t.Fatalf("persisted branch = %q, want %q", got, wantBranch)
+	}
+	setup := persisted.Run().Setup
+	if setup == nil {
+		t.Fatal("persisted run setup state is nil")
+	}
+	if setup.Status != feature.SetupStatusRunning {
+		t.Fatalf("persisted setup status = %q, want %q", setup.Status, feature.SetupStatusRunning)
+	}
+	task, ok := setup.Tasks["worktree:test-repo"]
+	if !ok {
+		t.Fatal("persisted setup task worktree:test-repo missing")
+	}
+	if task.Kind != feature.SetupTaskWorktree || task.Status != feature.SetupStatusQueued || task.Branch != wantBranch {
+		t.Fatalf("persisted setup task = %+v, want queued worktree task on %s", task, wantBranch)
+	}
+	if persisted.StartedAt != nil {
+		t.Fatal("persisted setup feature started first phase")
+	}
+}
+
+func TestManagerCreateQueuedSetupDeduplicatesUpstreamBranchBeforeSave(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	storeDir := t.TempDir()
+	store := feature.NewStore(storeDir)
+	cfg := config.NewDefault()
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
+
+	mgr := feature.NewManager(store, cfg)
+	branches := newMockBranches(true)
+	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
+		return branch == "feature/upstream-conflict", nil
+	}
+	mgr.Branches = branches
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
+	}
+	mgr.Worktrees = worktrees
+	mgr.PRs = mocks.NewMockPublisher()
+
+	f, err := mgr.Create("Upstream Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if f.Slug == "upstream-conflict" {
+		t.Fatal("slug should have been modified to avoid upstream conflict")
+	}
+	if !strings.HasPrefix(f.Slug, "upstream-conflict-") {
+		t.Fatalf("slug = %q, want upstream-conflict-*", f.Slug)
+	}
+	if len(worktrees.Calls) != 0 {
+		t.Fatalf("worktree create calls = %d, want 0", len(worktrees.Calls))
+	}
+
+	persisted, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load persisted feature: %v", err)
+	}
+	wantBranch := git.BranchName(f.Slug)
+	if persisted.Repos[0].Branch != wantBranch {
+		t.Fatalf("persisted branch = %q, want %q", persisted.Repos[0].Branch, wantBranch)
+	}
+	task := persisted.Run().Setup.Tasks["worktree:test-repo"]
+	if task.Branch != wantBranch {
+		t.Fatalf("setup task branch = %q, want %q", task.Branch, wantBranch)
+	}
+}
+
+func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
+	storeDir := t.TempDir()
+	wtDir := t.TempDir()
+	store := feature.NewStore(storeDir)
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
+	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
+	mgr := feature.NewManager(store, cfg)
+	mgr.Branches = newMockBranches(false)
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		return filepath.Join(wtDir, featureSlug, repoName), nil
+	}
+	mgr.Worktrees = worktrees
+	mgr.PRs = mocks.NewMockPublisher()
+
+	tmpDir := t.TempDir()
+	imagePath := filepath.Join(tmpDir, "screenshot.png")
+	if err := os.WriteFile(imagePath, []byte("png bytes"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	attachmentPath := filepath.Join(tmpDir, "notes.md")
+	if err := os.WriteFile(attachmentPath, []byte("notes bytes"), 0o644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+
+	f, err := mgr.Create("Setup Complete", "copy assets", []string{"repo-a", "repo-b"}, cfg.Defaults.Models, "", "", []string{imagePath}, feature.CreateOptions{
+		QueueSetup:  true,
+		Attachments: []string{attachmentPath},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	var events []feature.SetupEvent
+	if err := mgr.RunSetup(f.ID, feature.SetupRunnerOptions{OnEvent: func(ev feature.SetupEvent) {
+		events = append(events, ev)
+	}}); err != nil {
+		t.Fatalf("run setup: %v", err)
+	}
+
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if loaded.Status != feature.StatusCreated {
+		t.Fatalf("Status = %s, want Created", loaded.Status)
+	}
+	setup := loaded.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusDone {
+		t.Fatalf("setup = %+v, want done setup", setup)
+	}
+	if loaded.ActiveRun != 1 || loaded.RunCount != 1 {
+		t.Fatalf("run identity = active %d count %d, want active 1 count 1", loaded.ActiveRun, loaded.RunCount)
+	}
+	for _, key := range []string{"worktree:repo-a", "worktree:repo-b", "image:1", "attachment:1"} {
+		task := setup.Tasks[key]
+		if task.Status != feature.SetupStatusDone {
+			t.Fatalf("task %s status = %s, want done", key, task.Status)
+		}
+		if task.Path == "" {
+			t.Fatalf("task %s path is empty", key)
+		}
+	}
+	for _, repo := range loaded.Repos {
+		wantPath := filepath.Join(wtDir, loaded.Slug, repo.Name)
+		if repo.WorktreePath != wantPath {
+			t.Fatalf("%s worktree path = %q, want %q", repo.Name, repo.WorktreePath, wantPath)
+		}
+		if repo.Branch != git.BranchName(loaded.Slug) {
+			t.Fatalf("%s branch = %q, want %q", repo.Name, repo.Branch, git.BranchName(loaded.Slug))
+		}
+	}
+	if got, want := len(loaded.Images), 1; got != want {
+		t.Fatalf("images = %d, want %d", got, want)
+	}
+	if data, err := os.ReadFile(loaded.Images[0]); err != nil || string(data) != "png bytes" {
+		t.Fatalf("copied image content = %q, err=%v", string(data), err)
+	}
+	if got, want := len(loaded.Attachments), 1; got != want {
+		t.Fatalf("attachments = %d, want %d", got, want)
+	}
+	if data, err := os.ReadFile(loaded.Attachments[0]); err != nil || string(data) != "notes bytes" {
+		t.Fatalf("copied attachment content = %q, err=%v", string(data), err)
+	}
+	logBytes, err := os.ReadFile(setup.LatestLogPath)
+	if err != nil {
+		t.Fatalf("read setup log: %v", err)
+	}
+	logText := string(logBytes)
+	wantOrder := []string{"task worktree:repo-a started", "task worktree:repo-b started", "task image:1 started", "task attachment:1 started", "setup attempt 1 completed"}
+	last := -1
+	for _, marker := range wantOrder {
+		idx := strings.Index(logText, marker)
+		if idx < 0 {
+			t.Fatalf("setup log missing %q:\n%s", marker, logText)
+		}
+		if idx <= last {
+			t.Fatalf("setup log marker %q out of order:\n%s", marker, logText)
+		}
+		last = idx
+	}
+	if len(events) == 0 || events[0].Kind != feature.SetupEventStarted || events[len(events)-1].Kind != feature.SetupEventCompleted {
+		t.Fatalf("events = %+v, want started...completed", events)
+	}
+	for _, ev := range events {
+		if ev.RunNumber != 1 || ev.Attempt != 1 {
+			t.Fatalf("event = %+v, want run 1 attempt 1", ev)
+		}
+	}
+}
+
+func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
+	mgr := newTestManager(t)
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		return "", errors.New("git worktree add failed: branch exists")
+	}
+	mgr.Worktrees = worktrees
+
+	f, err := mgr.Create("Setup Failure", "fail worktree", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	err = mgr.RunSetup(f.ID)
+	if err == nil {
+		t.Fatal("RunSetup succeeded, want failure")
+	}
+
+	loaded, loadErr := mgr.Get(f.ID)
+	if loadErr != nil {
+		t.Fatalf("get: %v", loadErr)
+	}
+	if loaded.ID != f.ID || loaded.Slug != f.Slug || loaded.ActiveRun != 1 || loaded.RunCount != 1 {
+		t.Fatalf("feature identity changed after failure: id=%q slug=%q active=%d count=%d", loaded.ID, loaded.Slug, loaded.ActiveRun, loaded.RunCount)
+	}
+	if loaded.Status != feature.StatusFailed || loaded.FailureType != feature.FailureWorktreeSetup {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureType, feature.FailureWorktreeSetup)
+	}
+	if !strings.Contains(loaded.LastError, "git worktree add failed") {
+		t.Fatalf("LastError = %q, want worktree diagnostic", loaded.LastError)
+	}
+	setup := loaded.Run().Setup
+	if setup == nil || setup.Status != feature.SetupStatusFailed || setup.LatestLogPath == "" {
+		t.Fatalf("setup = %+v, want failed setup with latest log", setup)
+	}
+	task := setup.Tasks["worktree:test-repo"]
+	if task.Status != feature.SetupStatusFailed || !strings.Contains(task.LastError, "git worktree add failed") {
+		t.Fatalf("task = %+v, want failed task diagnostic", task)
+	}
+	logBytes, err := os.ReadFile(setup.LatestLogPath)
+	if err != nil {
+		t.Fatalf("read setup log: %v", err)
+	}
+	if logText := string(logBytes); !strings.Contains(logText, "setup failed on worktree:test-repo") || !strings.Contains(logText, "git worktree add failed") {
+		t.Fatalf("setup log missing failure diagnostic:\n%s", logText)
+	}
+}
+
+func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
+	wtDir := t.TempDir()
+	mgr := newTestManager(t)
+	mgr.Worktrees = &mocks.MockWorktreeOperator{
+		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+			return filepath.Join(wtDir, featureSlug, repoName), nil
+		},
+	}
+
+	f, err := mgr.Create("Setup Image Failure", "missing image", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", []string{filepath.Join(t.TempDir(), "missing.png")}, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	err = mgr.RunSetup(f.ID)
+	if err == nil {
+		t.Fatal("RunSetup succeeded, want missing image failure")
+	}
+
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if loaded.Status != feature.StatusFailed || loaded.FailureType != feature.FailureWorktreeSetup {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureType, feature.FailureWorktreeSetup)
+	}
+	setup := loaded.Run().Setup
+	if setup.Tasks["worktree:test-repo"].Status != feature.SetupStatusDone {
+		t.Fatalf("worktree task = %+v, want completed before image failure", setup.Tasks["worktree:test-repo"])
+	}
+	if setup.Tasks["image:1"].Status != feature.SetupStatusFailed {
+		t.Fatalf("image task = %+v, want failed", setup.Tasks["image:1"])
+	}
+	if loaded.Repos[0].WorktreePath == "" {
+		t.Fatal("canonical worktree path was not preserved after later setup failure")
+	}
+}
+
+func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
+	storeDir := t.TempDir()
+	wtDir := t.TempDir()
+	store := feature.NewStore(storeDir)
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
+	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
+	mgr := feature.NewManager(store, cfg)
+	mgr.Branches = newMockBranches(false)
+	worktrees := mocks.NewMockWorktreeOperator()
+	failRepoB := true
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		if repoName == "repo-b" && failRepoB {
+			return "", errors.New("repo-b checkout failed")
+		}
+		return filepath.Join(wtDir, featureSlug, repoName), nil
+	}
+	mgr.Worktrees = worktrees
+	mgr.PRs = mocks.NewMockPublisher()
+
+	f, err := mgr.Create("Setup Retry", "retry missing repo", []string{"repo-a", "repo-b"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := mgr.RunSetup(f.ID); err == nil {
+		t.Fatal("initial RunSetup succeeded, want repo-b failure")
+	}
+	failed, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get failed: %v", err)
+	}
+	firstLog := failed.Run().Setup.LatestLogPath
+	if failed.Run().Setup.Tasks["worktree:repo-a"].Status != feature.SetupStatusDone {
+		t.Fatalf("repo-a task = %+v, want done", failed.Run().Setup.Tasks["worktree:repo-a"])
+	}
+
+	failRepoB = false
+	if err := mgr.RetrySetup(f.ID); err != nil {
+		t.Fatalf("retry setup: %v", err)
+	}
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if loaded.ID != f.ID || loaded.Slug != f.Slug || loaded.ActiveRun != 1 || loaded.RunCount != 1 {
+		t.Fatalf("feature/run identity changed after retry: id=%q slug=%q active=%d count=%d", loaded.ID, loaded.Slug, loaded.ActiveRun, loaded.RunCount)
+	}
+	if loaded.Status != feature.StatusCreated || setup.Status != feature.SetupStatusDone || setup.Attempt != 2 {
+		t.Fatalf("status/setup/attempt = %s/%s/%d, want Created/done/2", loaded.Status, setup.Status, setup.Attempt)
+	}
+	if setup.Tasks["worktree:repo-a"].Attempt != 1 {
+		t.Fatalf("repo-a attempt = %d, want preserved attempt 1", setup.Tasks["worktree:repo-a"].Attempt)
+	}
+	if setup.Tasks["worktree:repo-b"].Attempt != 2 {
+		t.Fatalf("repo-b attempt = %d, want retry attempt 2", setup.Tasks["worktree:repo-b"].Attempt)
+	}
+	if setup.LatestLogPath == firstLog {
+		t.Fatal("retry did not create a new latest attempt log")
+	}
+	if _, err := os.Stat(firstLog); err != nil {
+		t.Fatalf("first attempt log not preserved: %v", err)
+	}
+	var repoACreates int
+	for _, call := range worktrees.Calls {
+		if call.Method == "Create" && len(call.Args) >= 3 && call.Args[2] == "repo-a" {
+			repoACreates++
+		}
+	}
+	if repoACreates != 1 {
+		t.Fatalf("repo-a create calls = %d, want 1; calls=%+v", repoACreates, worktrees.Calls)
+	}
+}
+
+func TestManagerRetrySetupRefusesDuplicateActiveRunner(t *testing.T) {
+	mgr := newTestManager(t)
+	wtDir := t.TempDir()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	mgr.Worktrees = &mocks.MockWorktreeOperator{
+		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+			close(started)
+			<-release
+			return filepath.Join(wtDir, featureSlug, repoName), nil
+		},
+	}
+	f, err := mgr.Create("Setup Duplicate", "duplicate retry", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- mgr.RunSetup(f.ID) }()
+	<-started
+
+	err = mgr.RetrySetup(f.ID)
+	if !errors.Is(err, feature.ErrSetupAlreadyRunning) {
+		t.Fatalf("RetrySetup while RunSetup active = %v, want ErrSetupAlreadyRunning", err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("background RunSetup: %v", err)
+	}
+}
+
+func TestManagerRetrySetupFailsOnExpectedWorktreeBranchMismatch(t *testing.T) {
+	mgr := newTestManager(t)
+	conflictPath := filepath.Join(t.TempDir(), "setup-feature", "test-repo")
+	if err := os.MkdirAll(conflictPath, 0o755); err != nil {
+		t.Fatalf("mkdir conflict path: %v", err)
+	}
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		t.Fatalf("Create called despite persisted path conflict")
+		return "", nil
+	}
+	mgr.Worktrees = worktrees
+	branches := newMockBranches(false)
+	branches.CurrentBranchFn = func(repoPath string) (string, error) {
+		return "feature/someone-else", nil
+	}
+	mgr.Branches = branches
+	f, err := mgr.Create("Setup Branch Mismatch", "conflict", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		setup := ff.Run().Setup
+		setup.Status = feature.SetupStatusFailed
+		task := setup.Tasks["worktree:test-repo"]
+		task.Status = feature.SetupStatusFailed
+		task.Path = conflictPath
+		setup.Tasks[task.Key] = task
+		ff.Status = feature.StatusFailed
+		ff.FailureType = feature.FailureWorktreeSetup
+		return nil
+	}); err != nil {
+		t.Fatalf("seed failed setup: %v", err)
+	}
+
+	err = mgr.RetrySetup(f.ID)
+	if err == nil {
+		t.Fatal("RetrySetup succeeded, want branch mismatch failure")
+	}
+	if !strings.Contains(err.Error(), "want") || !strings.Contains(err.Error(), "someone-else") {
+		t.Fatalf("RetrySetup error = %v, want branch mismatch diagnostic", err)
+	}
+	if _, statErr := os.Stat(conflictPath); statErr != nil {
+		t.Fatalf("conflict path was removed: %v", statErr)
+	}
+	for _, call := range worktrees.Calls {
+		if call.Method == "Remove" {
+			t.Fatalf("unexpected destructive cleanup during retry: %+v", worktrees.Calls)
+		}
+	}
+}
+
+func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *testing.T) {
+	mgr := newTestManager(t)
+	expectedBase := t.TempDir()
+	expectedPath := filepath.Join(expectedBase, "setup-crash-window", "test-repo")
+	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
+		t.Fatalf("mkdir expected path: %v", err)
+	}
+	worktrees := mocks.NewMockWorktreeOperator()
+	worktrees.ExpectedPathFn = func(featureSlug, repoName string) string {
+		return expectedPath
+	}
+	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		t.Fatalf("Create called even though expected worktree path exists")
+		return "", nil
+	}
+	mgr.Worktrees = worktrees
+
+	var expectedBranch string
+	branches := newMockBranches(false)
+	branches.CurrentBranchFn = func(repoPath string) (string, error) {
+		if repoPath != expectedPath {
+			t.Fatalf("CurrentBranch path = %q, want %q", repoPath, expectedPath)
+		}
+		return expectedBranch, nil
+	}
+	mgr.Branches = branches
+
+	f, err := mgr.Create("Setup Crash Window", "reattach expected path", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	expectedBranch = git.BranchName(f.Slug)
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		setup := ff.Run().Setup
+		setup.Status = feature.SetupStatusFailed
+		task := setup.Tasks["worktree:test-repo"]
+		task.Status = feature.SetupStatusFailed
+		task.Path = ""
+		task.LastError = "process exited before setup state saved"
+		setup.Tasks[task.Key] = task
+		ff.Status = feature.StatusFailed
+		ff.FailureType = feature.FailureWorktreeSetup
+		ff.LastError = task.LastError
+		return nil
+	}); err != nil {
+		t.Fatalf("seed failed setup: %v", err)
+	}
+
+	if err := mgr.RetrySetup(f.ID); err != nil {
+		t.Fatalf("retry setup: %v", err)
+	}
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if loaded.Status != feature.StatusCreated {
+		t.Fatalf("Status = %s, want Created", loaded.Status)
+	}
+	task := loaded.Run().Setup.Tasks["worktree:test-repo"]
+	if task.Status != feature.SetupStatusDone || task.Path != expectedPath {
+		t.Fatalf("task = %+v, want done with expected path %s", task, expectedPath)
+	}
+	if loaded.Repos[0].WorktreePath != expectedPath {
+		t.Fatalf("canonical worktree = %q, want %q", loaded.Repos[0].WorktreePath, expectedPath)
+	}
+	for _, call := range worktrees.Calls {
+		if call.Method == "Create" {
+			t.Fatalf("unexpected Create call while reusing expected path: %+v", worktrees.Calls)
+		}
+	}
+}
+
+func TestManagerDeleteRemovesSetupTaskWorktreePaths(t *testing.T) {
+	mgr := newTestManager(t)
+	removed := make(map[string]bool)
+	mgr.Worktrees = &mocks.MockWorktreeOperator{
+		RemoveFn: func(worktreePath string, deleteBranch bool) error {
+			if !deleteBranch {
+				t.Fatalf("deleteBranch = false for %s, want true", worktreePath)
+			}
+			removed[worktreePath] = true
+			return nil
+		},
+	}
+	f, err := mgr.Create("Setup Delete", "cleanup partial setup", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	setupPath := filepath.Join(t.TempDir(), "setup-delete", "test-repo")
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		task := ff.Run().Setup.Tasks["worktree:test-repo"]
+		task.Path = setupPath
+		task.Status = feature.SetupStatusFailed
+		ff.Run().Setup.Tasks[task.Key] = task
+		ff.Run().Setup.Status = feature.SetupStatusFailed
+		ff.Status = feature.StatusFailed
+		ff.FailureType = feature.FailureWorktreeSetup
+		return nil
+	}); err != nil {
+		t.Fatalf("seed setup task path: %v", err)
+	}
+
+	if err := mgr.Delete(f.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !removed[setupPath] {
+		t.Fatalf("removed paths = %v, want setup task path %s", removed, setupPath)
+	}
+}
+
+func TestManagerReconcileAbandonedSetupsMarksFailed(t *testing.T) {
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Setup Reconcile", "stale active setup", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	logPath := filepath.Join(mgr.Store.RunDir(f.ID, 1), "setup", "attempt-01-output.txt")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir log dir: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("partial setup log"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		setup := ff.Run().Setup
+		setup.LatestLogPath = logPath
+		task := setup.Tasks["worktree:test-repo"]
+		task.Status = feature.SetupStatusRunning
+		task.Path = "/tmp/worktrees/setup-reconcile/test-repo"
+		setup.Tasks[task.Key] = task
+		return nil
+	}); err != nil {
+		t.Fatalf("seed running task: %v", err)
+	}
+
+	reconciled, err := mgr.ReconcileAbandonedSetups()
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(reconciled) != 1 || reconciled[0] != f.ID {
+		t.Fatalf("reconciled = %v, want [%s]", reconciled, f.ID)
+	}
+	loaded, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if loaded.Status != feature.StatusFailed || loaded.FailureType != feature.FailureWorktreeSetup {
+		t.Fatalf("status/failure = %s/%s, want Failed/%s", loaded.Status, loaded.FailureType, feature.FailureWorktreeSetup)
+	}
+	setup := loaded.Run().Setup
+	if setup.Status != feature.SetupStatusFailed || !strings.Contains(setup.LastError, "interrupted by shutdown or crash") {
+		t.Fatalf("setup = %+v, want failed crash diagnostic", setup)
+	}
+	if setup.LatestLogPath != logPath {
+		t.Fatalf("latest log = %q, want preserved %q", setup.LatestLogPath, logPath)
+	}
+	task := setup.Tasks["worktree:test-repo"]
+	if task.Status != feature.SetupStatusFailed || task.Path == "" || task.Branch == "" {
+		t.Fatalf("task = %+v, want failed task preserving path and branch", task)
+	}
+}
+
 func TestManagerCreateWithoutWorktree(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -387,6 +1010,58 @@ func TestManagerPhaseProgression(t *testing.T) {
 	f, _ = mgr.Get(f.ID)
 	if f.CurrentPhase != feature.PhasePublish {
 		t.Errorf("after MarkPublished: phase = %v, want Publish", f.CurrentPhase)
+	}
+}
+
+func TestMarkFinalReviewReadyTracksReviewRuntime(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Final Review Timing", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusReviewPassed
+		ff.CurrentPhase = feature.PhaseImplement
+		return nil
+	}); err != nil {
+		t.Fatalf("seed review passed: %v", err)
+	}
+
+	if err := mgr.MarkFinalReviewReady(f.ID); err != nil {
+		t.Fatalf("MarkFinalReviewReady: %v", err)
+	}
+	got, err := mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ActiveTimingKey != "review" {
+		t.Fatalf("ActiveTimingKey = %q, want review", got.ActiveTimingKey)
+	}
+	if got.ActivePhaseStart == nil {
+		t.Fatal("ActivePhaseStart = nil, want final review timer started")
+	}
+
+	past := time.Now().Add(-4 * time.Minute)
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.ActivePhaseStart = &past
+		return nil
+	}); err != nil {
+		t.Fatalf("backdate ActivePhaseStart: %v", err)
+	}
+	if err := mgr.Transition(f.ID, feature.StatusReviewPassed); err != nil {
+		t.Fatalf("finish final review: %v", err)
+	}
+	got, err = mgr.Get(f.ID)
+	if err != nil {
+		t.Fatalf("Get after finish: %v", err)
+	}
+	if got.ActivePhaseStart != nil {
+		t.Fatal("ActivePhaseStart should be nil after leaving final review")
+	}
+	if d := got.PhaseRuntime("review"); d < 4*time.Minute {
+		t.Fatalf("PhaseRuntime(review) = %v, want at least 4m", d)
 	}
 }
 
@@ -1237,11 +1912,11 @@ func TestRewindToPhase_ArtifactMap_ForwardCarriesCorrectSubset_SealedPreserved(t
 		f.Status = feature.StatusImplementing
 		f.CurrentPhase = feature.PhaseImplement
 		f.Artifacts = map[string]string{
-			"inquire":    "/path/to/inquire.md",
-			"research":   "/path/to/research.md",
-			"design": "/path/to/design.md",
-			"plan":       "/path/to/plan.md",
-			"implement":  "/path/to/impl.md",
+			"inquire":   "/path/to/inquire.md",
+			"research":  "/path/to/research.md",
+			"design":    "/path/to/design.md",
+			"plan":      "/path/to/plan.md",
+			"implement": "/path/to/impl.md",
 		}
 		return nil
 	})
@@ -4611,7 +5286,7 @@ func seedCarryForwardFixtures(t *testing.T, run1Dir string) {
 	files := map[string]string{
 		filepath.Join("inquire", "marker.txt"):            "inquire",
 		filepath.Join("research", "marker.txt"):           "research",
-		filepath.Join("design", "marker.txt"):         "design",
+		filepath.Join("design", "marker.txt"):             "design",
 		filepath.Join("plan", "plan.md"):                  "plan",
 		filepath.Join("roadmap", "roadmap.md"):            "roadmap",
 		filepath.Join("phase-01", "plan", "plan.md"):      "phase-01-plan",
@@ -5502,12 +6177,12 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 
 		if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 			ff.Artifacts = map[string]string{
-				"inquire":    absInquire,
-				"research":   absResearch,
-				"design": absDesign,
-				"plan":       absPlan,
-				"implement":  absImpl,
-				"pr_url":     "https://github.com/o/r/pull/1",
+				"inquire":   absInquire,
+				"research":  absResearch,
+				"design":    absDesign,
+				"plan":      absPlan,
+				"implement": absImpl,
+				"pr_url":    "https://github.com/o/r/pull/1",
 			}
 			return nil
 		}); err != nil {
@@ -5523,9 +6198,9 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 			t.Fatalf("Get: %v", err)
 		}
 		wantRel := map[string]string{
-			"inquire":    filepath.Join("inquire", "inquire.md"),
-			"research":   filepath.Join("research", "research.md"),
-			"design": filepath.Join("design", "design.md"),
+			"inquire":  filepath.Join("inquire", "inquire.md"),
+			"research": filepath.Join("research", "research.md"),
+			"design":   filepath.Join("design", "design.md"),
 		}
 		if len(got.Artifacts) != len(wantRel) {
 			t.Errorf("new run Artifacts len = %d, want %d: %v", len(got.Artifacts), len(wantRel), got.Artifacts)
@@ -5572,7 +6247,7 @@ func TestRewindToPhase_ArtifactMapCarriedForward(t *testing.T) {
 		absMap := map[string]string{
 			"inquire":      filepath.Join(run1Dir, "inquire", "inquire.md"),
 			"research":     filepath.Join(run1Dir, "research", "research.md"),
-			"design":   filepath.Join(run1Dir, "design", "design.md"),
+			"design":       filepath.Join(run1Dir, "design", "design.md"),
 			"plan":         filepath.Join(run1Dir, "plan", "plan.md"),
 			"roadmap":      filepath.Join(run1Dir, "roadmap", "roadmap.md"),
 			"phase-1-plan": filepath.Join(run1Dir, "phase-01", "plan", "plan.md"),

@@ -4,20 +4,26 @@ IMPORTANT: The user attached the image(s) below when creating this feature. They
 
 - [Image #1]: /tmp/login.png
 
-# Review Context
+# Product Acceptance Context
 
 **Review iteration**: 1
 **Diff base**: main
+**Review feedback output**: /state/feat-x/run-1/final-review/iter-1/review-feedback.md
 
-## Feature Intent
 
-**Roadmap**: /state/feat-x/run-1/roadmap/plan.md
+## Approved User Intent
 
-**Exit criteria**:
+**Approved design**: /state/feat-x/run-1/design/design.md
+
+
+
+Sign in with Google.
+
+## Exit Criteria
+
 Relevant tests pass.
 
-## Verification Context
+## Optional Scope Context
 
-**Testing contract**: /state/feat-x/run-1/phase-1/contract.yaml
-**Verification report**: /state/feat-x/run-1/phase-1/iter-2/verification-report.yaml
+**Roadmap**: /state/feat-x/run-1/roadmap/plan.md
 

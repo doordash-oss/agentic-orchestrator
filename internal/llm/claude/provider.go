@@ -76,6 +76,7 @@ func (p *Provider) AvailableModels() []string {
 }
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	opts.Model = p.claudeCLIModel(opts.Model)
 	args := buildInteractiveCommand(opts)
 	return args, nil, nil
 }
@@ -249,30 +250,92 @@ func (p *Provider) CLIVersion() (string, error) {
 	return clirun.ParseVersionOutput(out)
 }
 
+type claudeModelProbeCandidate struct {
+	Family                string
+	Selector              string
+	DisplayName           string
+	Category              string
+	FallbackContextWindow int
+}
+
+func claudeModelProbeCandidates() []claudeModelProbeCandidate {
+	return []claudeModelProbeCandidate{
+		{Family: "fable", Selector: "fable", DisplayName: "Claude Fable 5", FallbackContextWindow: 1_000_000, Category: "capable"},
+		{Family: "opus", Selector: "opus", DisplayName: "Claude Opus", FallbackContextWindow: 200_000, Category: "capable"},
+		{Family: "opus", Selector: "opus[1m]", DisplayName: "Claude Opus", FallbackContextWindow: 1_000_000, Category: "capable"},
+		{Family: "sonnet", Selector: "sonnet", DisplayName: "Claude Sonnet", FallbackContextWindow: 200_000, Category: "balanced"},
+		{Family: "sonnet", Selector: "sonnet[1m]", DisplayName: "Claude Sonnet", FallbackContextWindow: 1_000_000, Category: "balanced"},
+		{Family: "haiku", Selector: "haiku", DisplayName: "Claude Haiku", FallbackContextWindow: 200_000, Category: "cheap"},
+	}
+}
+
+func claudeModelInfoFromProbe(candidate claudeModelProbeCandidate, contextWindow int, resolved string) llm.ModelInfo {
+	if contextWindow <= 0 {
+		contextWindow = candidate.FallbackContextWindow
+	}
+	id := candidate.Family
+	displayName := candidate.DisplayName
+	if label := llm.ContextWindowLabel(contextWindow); label != "" {
+		id = candidate.Family + "[" + label + "]"
+		displayName = candidate.DisplayName + " (" + label + ")"
+	}
+	info := llm.ModelInfo{
+		ID:            id,
+		DisplayName:   displayName,
+		ContextWindow: contextWindow,
+		Category:      candidate.Category,
+	}
+	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, candidate.Selector)
+	info.Aliases = appendClaudeAlias(info.Aliases, info.ID, resolved)
+	return info
+}
+
+func appendClaudeAlias(aliases []string, id, alias string) []string {
+	alias = strings.TrimSpace(alias)
+	if alias == "" || alias == id {
+		return aliases
+	}
+	for _, existing := range aliases {
+		if existing == alias {
+			return aliases
+		}
+	}
+	if !strings.EqualFold(alias, id) {
+		for _, existing := range aliases {
+			if strings.EqualFold(existing, alias) {
+				return aliases
+			}
+		}
+	}
+	return append(aliases, alias)
+}
+
 // defaultModelInfos returns Agentic's curated Claude Code model catalog.
 //
-// These values replace the former discovery pipeline (Anthropic models API
-// and docs scraper) because that pipeline collapsed each family's base and
-// `[1m]` variants into a single entry, which then hid the fact that
-// `--model opus` (200K) and `--model opus[1m]` (1M) are distinct CLI
-// inputs. Hardcoding keeps the catalog aligned with how the Claude Code
-// CLI actually interprets --model strings.
+// Runtime startup tries to refresh these with DiscoverModelCatalog; they are
+// the offline fallback when probing fails. Entries carry no concrete-version
+// alias (e.g. claude-opus-4-8) because what an alias resolves to is
+// provider-dependent (Anthropic API vs Bedrock/Vertex/Foundry) and drifts over
+// time — a hardcoded version is a frequently-wrong guess. The probe sets the
+// resolved model when it runs. Claude exposes no machine-readable model catalog,
+// so the offline fallback has to keep curated probe selectors and context
+// windows.
 //
-// Sources (verified 2026-04-18):
+// Context-window sources (verified 2026-06-09):
 //   - https://platform.claude.com/docs/en/about-claude/models/overview
 //   - https://code.claude.com/docs/en/model-config
+//   - https://platform.claude.com/docs/en/about-claude/models/introducing-claude-fable-5-and-claude-mythos-5
 //
 // The 200K base windows for opus/sonnet were confirmed empirically from
 // auto-compact thresholds observed in live Claude Code sessions
 // (compaction at ~167K on --model opus ≈ 83% of 200K).
 func (p *Provider) defaultModelInfos() []llm.ModelInfo {
-	return []llm.ModelInfo{
-		{ID: "opus", DisplayName: "Claude Opus", Aliases: []string{"claude-opus-4-7"}, ContextWindow: 200_000, Category: "capable"},
-		{ID: "opus[1m]", DisplayName: "Claude Opus (1M)", Aliases: []string{"claude-opus-4-7[1m]"}, ContextWindow: 1_000_000, Category: "capable"},
-		{ID: "sonnet", DisplayName: "Claude Sonnet", Aliases: []string{"claude-sonnet-4-6"}, ContextWindow: 200_000, Category: "balanced"},
-		{ID: "sonnet[1m]", DisplayName: "Claude Sonnet (1M)", Aliases: []string{"claude-sonnet-4-6[1m]"}, ContextWindow: 1_000_000, Category: "balanced"},
-		{ID: "haiku", DisplayName: "Claude Haiku", Aliases: []string{"claude-haiku-4-5"}, ContextWindow: 200_000, Category: "cheap"},
+	candidates := claudeModelProbeCandidates()
+	models := make([]llm.ModelInfo, 0, len(candidates))
+	for _, candidate := range candidates {
+		models = append(models, claudeModelInfoFromProbe(candidate, candidate.FallbackContextWindow, ""))
 	}
+	return models
 }
 
 // --- Command building helpers ---
@@ -343,6 +406,43 @@ func buildInteractiveCommand(opts llm.CommandBuildOpts) []string {
 		}
 	}
 	return args
+}
+
+func (p *Provider) claudeCLIModel(model string) string {
+	p.mu.RLock()
+	cat := p.catalog
+	p.mu.RUnlock()
+	if len(cat) == 0 {
+		cat = p.defaultModelInfos()
+	}
+	for _, entry := range cat {
+		if strings.EqualFold(entry.ID, model) {
+			return claudeCLIModelForCatalogEntry(entry)
+		}
+		for _, alias := range entry.Aliases {
+			if strings.EqualFold(alias, model) {
+				return claudeCLIModelForCatalogEntry(entry)
+			}
+		}
+	}
+	return model
+}
+
+func claudeCLIModelForCatalogEntry(entry llm.ModelInfo) string {
+	for _, alias := range entry.Aliases {
+		if isStableClaudeCLISelector(alias) {
+			return alias
+		}
+	}
+	if isStableClaudeCLISelector(entry.ID) {
+		return entry.ID
+	}
+	return entry.ID
+}
+
+func isStableClaudeCLISelector(model string) bool {
+	model = strings.TrimSpace(model)
+	return model != "" && !strings.HasPrefix(strings.ToLower(model), "claude-")
 }
 
 func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {

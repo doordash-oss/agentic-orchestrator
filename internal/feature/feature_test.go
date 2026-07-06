@@ -797,6 +797,58 @@ func TestAddPhaseCostAccumulates(t *testing.T) {
 	}
 }
 
+func TestRecordSessionCostPersistsAndAggregates(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp-dir, no shared fixtures.
+	store := NewStore(t.TempDir())
+	f := &Feature{
+		ID:            "test-session-costs",
+		Status:        StatusCreated,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	f.RecordSessionCost(SessionCostRecord{
+		SessionID:     "sess-plan-1",
+		PhaseKey:      "phase-1-plan",
+		ObserverPhase: "review",
+		RepoName:      "repo-a",
+		CostUSD:       0.12,
+	})
+	f.RecordSessionCost(SessionCostRecord{
+		SessionID:     "sess-plan-2",
+		PhaseKey:      "phase-1-plan",
+		ObserverPhase: "plan",
+		RepoName:      "repo-a",
+		CostUSD:       0.34,
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.PhaseCost("phase-1-plan") != 0.46 {
+		t.Errorf("PhaseCost(phase-1-plan) = %v, want 0.46", got.PhaseCost("phase-1-plan"))
+	}
+	if got.TotalCost() != 0.46 {
+		t.Errorf("TotalCost() = %v, want 0.46", got.TotalCost())
+	}
+	if len(got.SessionCosts) != 2 {
+		t.Fatalf("len(SessionCosts) = %d, want 2", len(got.SessionCosts))
+	}
+	first := got.SessionCosts[0]
+	if first.SessionID != "sess-plan-1" || first.PhaseKey != "phase-1-plan" || first.ObserverPhase != "review" || first.RepoName != "repo-a" || first.CostUSD != 0.12 {
+		t.Errorf("SessionCosts[0] = %+v, want sess-plan-1 phase-1-plan review repo-a 0.12", first)
+	}
+	second := got.SessionCosts[1]
+	if second.SessionID != "sess-plan-2" || second.PhaseKey != "phase-1-plan" || second.ObserverPhase != "plan" || second.RepoName != "repo-a" || second.CostUSD != 0.34 {
+		t.Errorf("SessionCosts[1] = %+v, want sess-plan-2 phase-1-plan plan repo-a 0.34", second)
+	}
+}
+
 func TestAddPhaseCostZeroNegativeNoop(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1100,7 +1152,7 @@ func TestCheckpointsHasGateForPhase(t *testing.T) {
 		{"inquiry gate for research", Checkpoints{InquiryReview: true}, PhaseResearch, true},
 		{"research gate for design", Checkpoints{ResearchReview: true}, PhaseDesign, true},
 		{"design gate for plan", Checkpoints{DesignReview: true}, PhasePlan, true},
-		{"plan gate for implement", Checkpoints{PlanReview: true}, PhaseImplement, true},
+		{"phase-plan gate for implement", Checkpoints{PhasePlanReview: true}, PhaseImplement, true},
 		{"no gate for publish", Checkpoints{ManualPublish: true}, PhasePublish, false},
 		{"no gate for KB", Checkpoints{InquiryReview: true}, PhaseKnowledgeBase, false},
 		{"zero value has no gates", Checkpoints{}, PhaseResearch, false},
@@ -1142,11 +1194,12 @@ func TestCheckpointsYAMLRoundTrip(t *testing.T) {
 		ID:   "test",
 		Name: "test",
 		Checkpoints: Checkpoints{
-			InquiryReview:  true,
-			ResearchReview: false,
-			DesignReview:   true,
-			PlanReview:     false,
-			ManualPublish:  true,
+			InquiryReview:   true,
+			ResearchReview:  false,
+			DesignReview:    true,
+			RoadmapReview:   false,
+			PhasePlanReview: true,
+			ManualPublish:   true,
 		},
 	}
 	data, err := yaml.Marshal(f)

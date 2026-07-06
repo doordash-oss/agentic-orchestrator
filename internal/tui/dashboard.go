@@ -584,7 +584,7 @@ func (m DashboardModel) renderFooter() string {
 			hints = append(hints, "[Shift+N] Input alerts")
 			hints = append(hints, "[d] Delete")
 		}
-		hints = append(hints, "[Shift+E] Workspace Config")
+		hints = append(hints, "[Shift+E] Settings")
 		hints = append(hints, "[←/esc] Back")
 	} else {
 		// Left panel focused — show list actions

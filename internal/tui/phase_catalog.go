@@ -169,6 +169,22 @@ func BuildWorkspaceModelCatalog(reg *llm.Registry, defaults config.DefaultsConfi
 	return cat
 }
 
+func normalizeModelCatalogField(field string) string {
+	trimmed := strings.TrimSpace(field)
+	if trimmed == "" {
+		return ""
+	}
+	if mapped, ok := globalCatalogRoleToField[llm.PhaseRole(strings.ToLower(trimmed))]; ok {
+		return mapped
+	}
+	for _, candidate := range globalModelFields {
+		if strings.EqualFold(trimmed, candidate) {
+			return candidate
+		}
+	}
+	return trimmed
+}
+
 // ModelOptionsForField returns the provider-flattened model list for a phase
 // field, falling back to all models when the phase-specific list is empty.
 // Same semantics as WizardModel.modelOptionsForField.

@@ -124,8 +124,10 @@ func TestCycleConflictPropagation_TweakConflict_OneRepoFailsAnotherSucceeds(t *t
 
 	// 3. Update feature.Repos to point at the real repo paths and branches.
 	if err := store.Modify(feat.ID, func(f *feature.Feature) error {
+		publishable := true
 		f.Status = feature.StatusPublished
 		f.CurrentPhase = feature.PhasePublish
+		f.Checkpoints.ManualPublish = false
 		for i := range f.Repos {
 			r := &f.Repos[i]
 			switch r.Name {
@@ -137,6 +139,7 @@ func TestCycleConflictPropagation_TweakConflict_OneRepoFailsAnotherSucceeds(t *t
 				r.WorktreePath = repoBPath
 			}
 			r.Branch = branch
+			r.Publishable = &publishable
 		}
 		return nil
 	}); err != nil {

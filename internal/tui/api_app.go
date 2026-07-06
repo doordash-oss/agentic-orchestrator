@@ -817,6 +817,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.configEditor = newAPIEditConfigModel(msg.featureID, m.featureNameByID(msg.featureID), msg.config, apiFeatureModelCatalog(m.catalog))
+		if f := m.selectedAPIDashboardFeature(); f != nil && f.ID == msg.featureID {
+			m.configEditor.deferredEffectWarning = featureConfigChangesDeferred(f)
+		}
 		m.statusMessage = ""
 		return m, nil
 	case publishDescGeneratedMsg:
@@ -1233,8 +1236,8 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "No feature selected"
 			return m, nil
 		}
-		if f := m.selectedAPIDashboardFeature(); f == nil || !isFeatureQuiescent(f) {
-			m.statusMessage = "Config can only be edited when the feature is idle"
+		if f := m.selectedAPIDashboardFeature(); !canEditFeatureConfig(f) {
+			m.statusMessage = "No feature selected"
 			return m, nil
 		}
 		return m, m.fetchFeatureConfigCmd(m.selectedFeature)

@@ -3744,13 +3744,20 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 	}
 }
 
-func TestAPIAppModelFeatureConfigEditorRequiresQuiescentFeature(t *testing.T) {
+func TestAPIAppModelFeatureConfigEditorOpensForRunningFeature(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
+		featureConfig: server.FeatureConfigResponse{
+			FeatureID: "active",
+			Current: server.FeatureConfigDTO{
+				Inquireness: "targeted",
+				Pipeline:    "large",
+			},
+		},
 	}
 	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 	if err != nil {
@@ -3758,15 +3765,20 @@ func TestAPIAppModelFeatureConfigEditorRequiresQuiescentFeature(t *testing.T) {
 	}
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
-	if cmd != nil {
-		t.Fatal("Update(e) returned command for running feature, want quiescence gate")
+	if cmd == nil {
+		t.Fatal("Update(e) returned nil command for running feature, want config fetch")
 	}
-	blocked := model.(APIAppModel)
-	if got := client.featureConfigIDs; len(got) != 0 {
-		t.Fatalf("FeatureConfig calls = %v, want none for running feature", got)
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	editing := model.(APIAppModel)
+	if got := strings.Join(client.featureConfigIDs, ","); got != "active" {
+		t.Fatalf("FeatureConfig calls = %q, want active", got)
 	}
-	if !strings.Contains(blocked.statusMessage, "idle") {
-		t.Fatalf("statusMessage = %q, want idle gate", blocked.statusMessage)
+	if editing.configEditor == nil {
+		t.Fatal("configEditor is nil after loading running feature config")
+	}
+	if view := stripANSI(editing.View().Content); !strings.Contains(view, "next restart or next phase") {
+		t.Fatalf("running feature config editor missing deferred-effect warning:\n%s", view)
 	}
 }
 

@@ -6119,7 +6119,7 @@ func (m APIAppModel) renderAPIReviewCommentsPanel(width int) string {
 	if panel == nil {
 		return ""
 	}
-	panel.browser.resize(width, max(m.height-6, 18))
+	panel.browser.resize(width, max(m.height, 18))
 	return panel.browser.View()
 }
 

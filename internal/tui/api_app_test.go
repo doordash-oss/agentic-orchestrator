@@ -5607,6 +5607,13 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	if maxPlainLineWidth(view) < 130 {
 		t.Fatalf("review comments preview did not use wide terminal space:\n%s", view)
 	}
+	viewLines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(viewLines) < 46 {
+		t.Fatalf("review comments preview rendered %d lines, want at least 46 for a 48-line terminal:\n%s", len(viewLines), view)
+	}
+	if !strings.Contains(viewLines[len(viewLines)-1], "[Shift+A] Address all 1") {
+		t.Fatalf("review comments preview footer not on final rendered line:\n%s", view)
+	}
 	for _, want := range []string{
 		"Review Comments",
 		"Active work",

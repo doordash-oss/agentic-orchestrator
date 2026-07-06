@@ -385,14 +385,10 @@ func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 		t.Fatalf("dashboard repo WorktreePath = %q, want %q", got, workDir)
 	}
 	view := stripANSI(app.View().Content)
-	compactView := strings.Join(strings.Fields(view), "")
-	for _, want := range []string{"WorkDir", "agentic-orchestrator"} {
+	for _, want := range []string{"WorkDir", "worktrees/translate-readme-", "in-sicilian/agentic-orchestrator"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API dashboard View() missing %q in:\n%s", want, view)
 		}
-	}
-	if !strings.Contains(compactView, "worktrees/translate-readme-in-sicilian") {
-		t.Fatalf("API dashboard View() missing wrapped worktree slug in:\n%s", view)
 	}
 	if strings.Contains(view, "/repo/path") {
 		t.Fatalf("API dashboard View() rendered original repo path instead of feature workdir:\n%s", view)

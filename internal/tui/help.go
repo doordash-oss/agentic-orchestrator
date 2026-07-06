@@ -360,9 +360,10 @@ func reviewCommentsHelp() ViewHelpContext {
 			{
 				Title: "NAVIGATION",
 				Bindings: []HelpBinding{
-					{"↑/k", "Previous comment"},
-					{"↓/j", "Next comment"},
-					{"PgUp/PgDn", "Scroll selected comment detail"},
+					{"←/→", "Switch queue/detail panel"},
+					{"↑/k", "Previous comment or scroll detail up"},
+					{"↓/j", "Next comment or scroll detail down"},
+					{"PgUp/PgDn", "Scroll detail"},
 					{"/", "Filter comments"},
 					{"esc", "Clear filter / Back"},
 				},

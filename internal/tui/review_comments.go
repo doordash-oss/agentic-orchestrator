@@ -44,6 +44,7 @@ type reviewCommentsBrowserModel struct {
 	items       []reviewCommentItem
 	included    map[int]bool
 	selected    int
+	focus       reviewCommentsFocus
 	filter      string
 	filtering   bool
 	detail      viewport.Model
@@ -51,6 +52,13 @@ type reviewCommentsBrowserModel struct {
 	height      int
 	status      string
 }
+
+type reviewCommentsFocus int
+
+const (
+	reviewCommentsFocusQueue reviewCommentsFocus = iota
+	reviewCommentsFocusDetail
+)
 
 type ReviewCommentsActionMode string
 
@@ -187,8 +195,8 @@ func reviewCommentItemsFromDTO(comments []server.ReviewCommentDTO) []reviewComme
 
 func newReviewCommentsBrowserModel(slug, repo string, items []reviewCommentItem, width, height int) reviewCommentsBrowserModel {
 	detail := viewport.New(
-		viewport.WithWidth(reviewCommentsDetailWidth(width)),
-		viewport.WithHeight(reviewCommentsBodyHeight(height)),
+		viewport.WithWidth(reviewCommentsDetailContentWidth(width)),
+		viewport.WithHeight(reviewCommentsDetailContentHeight(width, height)),
 	)
 	detail.SoftWrap = true
 	m := reviewCommentsBrowserModel{
@@ -207,8 +215,19 @@ func newReviewCommentsBrowserModel(slug, repo string, items []reviewCommentItem,
 	return m
 }
 
-func reviewCommentsBodyHeight(height int) int {
-	return max(height-8, 8)
+func reviewCommentsPanelHeight(height int) int {
+	return max(height-3, 8)
+}
+
+func reviewCommentsPanelContentHeight(panelHeight int) int {
+	return max(panelHeight-2, 1)
+}
+
+func reviewCommentsNarrowPanelHeights(height int) (int, int) {
+	bodyBudget := max(height-2, 12)
+	queueHeight := min(max(bodyBudget/4, 5), 8)
+	detailHeight := max(bodyBudget-queueHeight-1, 6)
+	return queueHeight, detailHeight
 }
 
 func reviewCommentsQueueWidth(width int) int {
@@ -225,11 +244,23 @@ func reviewCommentsDetailWidth(width int) int {
 	return max(width-reviewCommentsQueueWidth(width)-7, 40)
 }
 
+func reviewCommentsDetailContentWidth(width int) int {
+	return max(reviewCommentsDetailWidth(width)-4, 20)
+}
+
+func reviewCommentsDetailContentHeight(width, height int) int {
+	if width < 88 {
+		_, detailHeight := reviewCommentsNarrowPanelHeights(height)
+		return reviewCommentsPanelContentHeight(detailHeight)
+	}
+	return reviewCommentsPanelContentHeight(reviewCommentsPanelHeight(height))
+}
+
 func (m *reviewCommentsBrowserModel) resize(width, height int) {
 	m.width = width
 	m.height = height
-	m.detail.SetWidth(reviewCommentsDetailWidth(width))
-	m.detail.SetHeight(reviewCommentsBodyHeight(height))
+	m.detail.SetWidth(reviewCommentsDetailContentWidth(width))
+	m.detail.SetHeight(reviewCommentsDetailContentHeight(width, height))
 	m.refreshDetail()
 }
 
@@ -257,21 +288,49 @@ func (m reviewCommentsBrowserModel) Update(msg tea.Msg) (reviewCommentsBrowserMo
 	}
 
 	switch {
+	case keyMsg.Code == tea.KeyRight:
+		m.focus = reviewCommentsFocusDetail
+		return m, nil
+	case keyMsg.Code == tea.KeyLeft:
+		m.focus = reviewCommentsFocusQueue
+		return m, nil
 	case keyMsg.Code == tea.KeyDown || keyMsg.Text == "j":
+		if m.focus == reviewCommentsFocusDetail {
+			var cmd tea.Cmd
+			m.detail, cmd = m.detail.Update(msg)
+			return m, cmd
+		}
 		m.moveSelection(1)
 		return m, nil
 	case keyMsg.Code == tea.KeyUp || keyMsg.Text == "k":
+		if m.focus == reviewCommentsFocusDetail {
+			var cmd tea.Cmd
+			m.detail, cmd = m.detail.Update(msg)
+			return m, cmd
+		}
 		m.moveSelection(-1)
 		return m, nil
 	case keyMsg.Code == tea.KeyHome:
+		if m.focus == reviewCommentsFocusDetail {
+			var cmd tea.Cmd
+			m.detail, cmd = m.detail.Update(msg)
+			return m, cmd
+		}
 		m.selected = 0
 		m.refreshDetail()
+		m.detail.GotoTop()
 		return m, nil
 	case keyMsg.Code == tea.KeyEnd:
+		if m.focus == reviewCommentsFocusDetail {
+			var cmd tea.Cmd
+			m.detail, cmd = m.detail.Update(msg)
+			return m, cmd
+		}
 		visible := m.visibleItems()
 		if len(visible) > 0 {
 			m.selected = len(visible) - 1
 			m.refreshDetail()
+			m.detail.GotoTop()
 		}
 		return m, nil
 	case keyMsg.Code == tea.KeySpace:
@@ -347,25 +406,49 @@ func (m reviewCommentsBrowserModel) renderHeader() string {
 
 func (m reviewCommentsBrowserModel) renderBody() string {
 	if m.width < 88 {
-		queue := panelStyle(false).Width(reviewCommentsQueueWidth(m.width)).Render(m.renderQueue(reviewCommentsQueueWidth(m.width) - 4))
-		detail := panelStyle(true).Width(reviewCommentsQueueWidth(m.width)).Render(m.detail.View())
+		queueHeight, detailHeight := reviewCommentsNarrowPanelHeights(m.height)
+		queueW := reviewCommentsQueueWidth(m.width)
+		queue := panelStyle(m.focus == reviewCommentsFocusQueue).
+			Width(queueW).
+			Height(queueHeight).
+			Render(m.renderQueue(queueW-4, reviewCommentsPanelContentHeight(queueHeight)))
+		detail := panelStyle(m.focus == reviewCommentsFocusDetail).
+			Width(queueW).
+			Height(detailHeight).
+			Render(m.detail.View())
 		return " " + strings.ReplaceAll(queue+"\n"+detail, "\n", "\n ")
 	}
 
 	queueW := reviewCommentsQueueWidth(m.width)
 	detailW := reviewCommentsDetailWidth(m.width)
-	queue := panelStyle(true).Width(queueW).Render(m.renderQueue(queueW - 4))
-	detail := panelStyle(false).Width(detailW).Render(m.detail.View())
+	panelHeight := reviewCommentsPanelHeight(m.height)
+	contentHeight := reviewCommentsPanelContentHeight(panelHeight)
+	queue := panelStyle(m.focus == reviewCommentsFocusQueue).
+		Width(queueW).
+		Height(panelHeight).
+		Render(m.renderQueue(queueW-4, contentHeight))
+	detail := panelStyle(m.focus == reviewCommentsFocusDetail).
+		Width(detailW).
+		Height(panelHeight).
+		Render(m.detail.View())
 	return " " + lipgloss.JoinHorizontal(lipgloss.Top, queue, " ", detail)
 }
 
-func (m reviewCommentsBrowserModel) renderQueue(width int) string {
+func (m reviewCommentsBrowserModel) renderQueue(width, maxLines int) string {
 	var b strings.Builder
 	b.WriteString(TitleStyle.Render("Queue"))
 	b.WriteString("\n")
-	for i, item := range m.visibleItems() {
-		row := m.renderQueueRow(i, item, width)
-		if i == m.selected {
+	visible := m.visibleItems()
+	maxRows := max((maxLines-1)/2, 1)
+	start := 0
+	if len(visible) > maxRows {
+		start = min(max(m.selected-maxRows/2, 0), len(visible)-maxRows)
+		visible = visible[start : start+maxRows]
+	}
+	for i, item := range visible {
+		index := start + i
+		row := m.renderQueueRow(index, item, width)
+		if index == m.selected {
 			row = SelectedRowStyle.Render(row)
 		}
 		b.WriteString(row)
@@ -440,7 +523,7 @@ func (m reviewCommentsBrowserModel) renderDetail() string {
 	if !ok {
 		return MutedStyle.Render("No comments match " + m.filter)
 	}
-	width := max(m.detail.Width(), 40)
+	width := max(m.detail.Width(), 20)
 	var b strings.Builder
 	b.WriteString(TitleStyle.Render("Detail"))
 	b.WriteString("\n")
@@ -472,7 +555,7 @@ func (m reviewCommentsBrowserModel) renderDetail() string {
 func (m reviewCommentsBrowserModel) renderFooter() string {
 	all := len(m.items)
 	included := m.includedCount()
-	return KeyHelpStyle.Render(fmt.Sprintf(" [Shift+A] Address all %d   [enter] Address included %d   [space] Include/exclude   [/] Filter   [esc] Back", all, included))
+	return KeyHelpStyle.Render(fmt.Sprintf(" [←/→] Panel   [Shift+A] Address all %d   [enter] Address included %d   [space] Include/exclude   [/] Filter   [esc] Back", all, included))
 }
 
 func (m reviewCommentsBrowserModel) includedCount() int {
@@ -539,6 +622,7 @@ func (m *reviewCommentsBrowserModel) moveSelection(delta int) {
 		m.selected = len(visible) - 1
 	}
 	m.refreshDetail()
+	m.detail.GotoTop()
 }
 
 func (m *reviewCommentsBrowserModel) startFilter() {
@@ -547,6 +631,7 @@ func (m *reviewCommentsBrowserModel) startFilter() {
 	m.selected = 0
 	m.status = "Filtering comments"
 	m.refreshDetail()
+	m.detail.GotoTop()
 }
 
 func (m *reviewCommentsBrowserModel) appendFilterRune(text string) {
@@ -554,6 +639,7 @@ func (m *reviewCommentsBrowserModel) appendFilterRune(text string) {
 	m.selected = 0
 	m.status = ""
 	m.refreshDetail()
+	m.detail.GotoTop()
 }
 
 func (m *reviewCommentsBrowserModel) backspaceFilter() {
@@ -564,6 +650,7 @@ func (m *reviewCommentsBrowserModel) backspaceFilter() {
 	m.filter = string(runes[:len(runes)-1])
 	m.selected = 0
 	m.refreshDetail()
+	m.detail.GotoTop()
 }
 
 func (m *reviewCommentsBrowserModel) clearFilter() {
@@ -572,6 +659,7 @@ func (m *reviewCommentsBrowserModel) clearFilter() {
 	m.selected = 0
 	m.status = ""
 	m.refreshDetail()
+	m.detail.GotoTop()
 }
 
 func (m reviewCommentsBrowserModel) renderNoMatches() string {

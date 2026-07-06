@@ -125,6 +125,34 @@ func TestReviewCommentsModelSelectionAndDetailScroll(t *testing.T) {
 	}
 }
 
+func TestReviewCommentsModelPanelFocusControlsArrowBehavior(t *testing.T) {
+	t.Parallel()
+
+	comments := testReviewComments()
+	comments[0].Body = strings.Repeat("Long review comment line with enough words to wrap inside the detail panel. ", 40)
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", comments, 120, 24)
+	focused, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	if focused.browser.focus != reviewCommentsFocusDetail {
+		t.Fatalf("right arrow focus = %v, want detail", focused.browser.focus)
+	}
+	scrolled, _ := focused.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if scrolled.browser.selected != focused.browser.selected {
+		t.Fatalf("down key in detail focus changed selection from %d to %d", focused.browser.selected, scrolled.browser.selected)
+	}
+	if scrolled.browser.detail.YOffset() <= focused.browser.detail.YOffset() {
+		t.Fatalf("down key in detail focus did not scroll detail; offset %d <= %d", scrolled.browser.detail.YOffset(), focused.browser.detail.YOffset())
+	}
+
+	focused, _ = scrolled.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if focused.browser.focus != reviewCommentsFocusQueue {
+		t.Fatalf("left arrow focus = %v, want queue", focused.browser.focus)
+	}
+	moved, _ := focused.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if moved.browser.selected != focused.browser.selected+1 {
+		t.Fatalf("down key in queue focus selected %d, want %d", moved.browser.selected, focused.browser.selected+1)
+	}
+}
+
 func TestReviewCommentsModelIncludeExcludeAndEnterAction(t *testing.T) {
 	t.Parallel()
 
@@ -246,5 +274,46 @@ func TestReviewCommentsModelFitsFooterWithinHeight(t *testing.T) {
 	}
 	if !strings.Contains(lines[len(lines)-1], "[Shift+A] Address all 3") {
 		t.Fatalf("footer not visible as final line:\n%s", view)
+	}
+}
+
+func TestReviewCommentsModelPgDownKeepsFooterVisible(t *testing.T) {
+	t.Parallel()
+
+	long := testReviewComments()[0]
+	long.Body = strings.Repeat("Long review comment line with enough words to wrap inside the detail panel. ", 80)
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", []git.ReviewComment{long}, 180, 30)
+	for i := 0; i < 12; i++ {
+		m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	}
+
+	view := stripANSI(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) > 30 {
+		t.Fatalf("view rendered %d lines after PgDown, want <= 30:\n%s", len(lines), view)
+	}
+	if !strings.Contains(lines[len(lines)-1], "[Shift+A] Address all 1") {
+		t.Fatalf("footer not visible as final line after PgDown:\n%s", view)
+	}
+}
+
+func TestReviewCommentsModelDesktopPanelsShareBottomBoundary(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 180, 30)
+	view := stripANSI(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	bottomLine := -1
+	for i, line := range lines {
+		if strings.Count(line, "╰") >= 2 {
+			bottomLine = i
+			break
+		}
+	}
+	if bottomLine == -1 {
+		t.Fatalf("queue and detail panels do not share a bottom border line:\n%s", view)
+	}
+	if strings.Count(lines[bottomLine], "╯") < 2 {
+		t.Fatalf("shared bottom border line missing both right corners:\n%s", lines[bottomLine])
 	}
 }

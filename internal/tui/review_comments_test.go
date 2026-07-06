@@ -297,40 +297,17 @@ func TestReviewCommentsModelPgDownKeepsFooterVisible(t *testing.T) {
 	}
 }
 
-func TestReviewCommentsModelDesktopPanelsShareBottomBoundary(t *testing.T) {
+func TestReviewCommentsModelUsesBorderlessSplitPanes(t *testing.T) {
 	t.Parallel()
 
 	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 180, 30)
 	view := stripANSI(m.View())
-	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
-	bottomLine := -1
-	for i, line := range lines {
-		if strings.Count(line, "└") >= 2 {
-			bottomLine = i
-			break
+	for _, border := range []string{"╭", "╮", "╰", "╯", "┌", "┐", "└", "┘"} {
+		if strings.Contains(view, border) {
+			t.Fatalf("review comments split panes should not render box corner %q:\n%s", border, view)
 		}
 	}
-	if bottomLine == -1 {
-		t.Fatalf("queue and detail panels do not share a bottom border line:\n%s", view)
-	}
-	if strings.Count(lines[bottomLine], "┘") < 2 {
-		t.Fatalf("shared bottom border line missing both right corners:\n%s", lines[bottomLine])
-	}
-}
-
-func TestReviewCommentsModelUsesSquarePanelCorners(t *testing.T) {
-	t.Parallel()
-
-	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 180, 30)
-	view := stripANSI(m.View())
-	for _, rounded := range []string{"╭", "╮", "╰", "╯"} {
-		if strings.Contains(view, rounded) {
-			t.Fatalf("review comments panel used rounded corner %q; square corners align better in terminal fonts:\n%s", rounded, view)
-		}
-	}
-	for _, square := range []string{"┌", "┐", "└", "┘"} {
-		if !strings.Contains(view, square) {
-			t.Fatalf("review comments panel missing square corner %q:\n%s", square, view)
-		}
+	if !strings.Contains(view, "Queue") || !strings.Contains(view, "Detail") || !strings.Contains(view, "│") {
+		t.Fatalf("review comments split panes missing queue/detail divider layout:\n%s", view)
 	}
 }

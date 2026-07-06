@@ -112,7 +112,7 @@ func TestReviewCommentsModelWindowResizePreservesSplitView(t *testing.T) {
 func TestReviewCommentsModelSelectionAndDetailScroll(t *testing.T) {
 	t.Parallel()
 
-	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 120, 18)
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 120, 24)
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "j"})
 	view := stripANSI(updated.View())
 	if !strings.Contains(view, "cmd/bpfagent/api.go:116") || !strings.Contains(view, "redactFlags(flags)") {
@@ -232,5 +232,19 @@ func TestReviewCommentsModelMissingDiffAndNarrowWidth(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("narrow/missing-diff view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestReviewCommentsModelFitsFooterWithinHeight(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 160, 24)
+	view := stripANSI(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if len(lines) > 24 {
+		t.Fatalf("view rendered %d lines, want <= 24:\n%s", len(lines), view)
+	}
+	if !strings.Contains(lines[len(lines)-1], "[Shift+A] Address all 3") {
+		t.Fatalf("footer not visible as final line:\n%s", view)
 	}
 }

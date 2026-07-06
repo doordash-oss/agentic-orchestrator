@@ -5580,6 +5580,8 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 180, Height: 48})
+	app = model.(APIAppModel)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'g', Text: "g"})
 	if cmd == nil {
@@ -5599,6 +5601,12 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 		t.Fatalf("StartReviewComments calls = %v before preview confirmation, want none", client.startReviewCommentsFeatureIDs)
 	}
 	view := stripANSI(previewing.View().Content)
+	if strings.Contains(view, "Features") {
+		t.Fatalf("review comments preview rendered over dashboard instead of full-screen surface:\n%s", view)
+	}
+	if maxPlainLineWidth(view) < 130 {
+		t.Fatalf("review comments preview did not use wide terminal space:\n%s", view)
+	}
 	for _, want := range []string{
 		"Review Comments",
 		"Active work",
@@ -5674,6 +5682,16 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
+}
+
+func maxPlainLineWidth(s string) int {
+	maxWidth := 0
+	for _, line := range strings.Split(s, "\n") {
+		if width := lipgloss.Width(line); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	return maxWidth
 }
 
 func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testing.T) {

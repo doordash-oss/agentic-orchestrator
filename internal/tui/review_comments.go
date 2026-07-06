@@ -21,6 +21,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
@@ -207,14 +208,14 @@ func newReviewCommentsBrowserModel(slug, repo string, items []reviewCommentItem,
 }
 
 func reviewCommentsBodyHeight(height int) int {
-	return max(height-5, 8)
+	return max(height-8, 8)
 }
 
 func reviewCommentsQueueWidth(width int) int {
 	if width < 88 {
 		return max(width-4, 40)
 	}
-	return max(width/3, 30)
+	return min(max(width*2/5, 42), 72)
 }
 
 func reviewCommentsDetailWidth(width int) int {
@@ -382,15 +383,49 @@ func (m reviewCommentsBrowserModel) renderQueueRow(index int, item reviewComment
 	if index == m.selected {
 		cursor = ">"
 	}
-	location := reviewCommentLocation(item)
-	line := fmt.Sprintf("%s %s %s", cursor, marker, location)
+	line := fmt.Sprintf("%s %s %s", cursor, marker, reviewCommentLocation(item))
+	line = truncateReviewCommentPlain(line, max(width, 20))
+
+	meta := m.renderQueueRowMeta(item, max(width, 20))
+	if meta == "" {
+		return line
+	}
+	return line + "\n" + meta
+}
+
+func (m reviewCommentsBrowserModel) renderQueueRowMeta(item reviewCommentItem, width int) string {
+	parts := make([]string, 0, 2)
 	if item.Author != "" {
-		line += " @" + item.Author
+		parts = append(parts, "@"+item.Author)
 	}
-	if item.Body != "" {
-		line += " - " + strings.TrimSpace(strings.Split(item.Body, "\n")[0])
+	if preview := reviewCommentPreview(item.Body); preview != "" {
+		parts = append(parts, preview)
 	}
-	return truncatePlain(line, max(width, 20))
+	if len(parts) == 0 {
+		return ""
+	}
+	return MutedStyle.Render(truncateReviewCommentPlain("  "+strings.Join(parts, " · "), width))
+}
+
+func reviewCommentPreview(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return strings.Join(strings.Fields(line), " ")
+		}
+	}
+	return ""
+}
+
+func truncateReviewCommentPlain(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, width, "...")
 }
 
 func (m *reviewCommentsBrowserModel) refreshDetail() {

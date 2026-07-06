@@ -1443,6 +1443,17 @@ func (m APIAppModel) View() tea.View {
 		v.AltScreen = true
 		return v
 	}
+	if m.reviewComments != nil {
+		view := m.renderAPIReviewCommentsPanel(max(m.width-2, 80))
+		if m.helpOverlayActive {
+			w := max(m.width, 80)
+			h := max(m.height, 24)
+			view = overlayModal(view, m.helpOverlay.View(), w, h)
+		}
+		v := tea.NewView(view)
+		v.AltScreen = true
+		return v
+	}
 	if m.contentPanelActive && m.snapshot.Content != nil {
 		view := m.renderAPIContentScreen()
 		if m.helpOverlayActive {
@@ -1482,9 +1493,6 @@ func (m APIAppModel) View() tea.View {
 		if m.wizard.IsRootPickerActive() {
 			view = overlayModal(view, m.wizard.RootPickerView(), w, h)
 		}
-	}
-	if m.reviewComments != nil {
-		view = overlayModal(view, m.renderAPIReviewCommentsPanel(min(w-4, 96)), w, h)
 	}
 	if m.repoActionPanel != nil {
 		view = overlayModal(view, m.renderAPIRepoActionPanel(min(w-4, 72)), w, h)

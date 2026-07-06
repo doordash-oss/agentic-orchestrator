@@ -1548,13 +1548,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				}
 				snap := m.editConfig.editor.Snapshot()
+				m.editConfig.saving = true
+				m.editConfig.saveErr = ""
+				if m.editConfig.isWorkspace {
+					return m, m.saveWorkspaceConfigCmd(snap)
+				}
 				input := orchestrator.UpdateFeatureConfigInput{
 					Models:      snap.Models,
 					Inquireness: snap.Inquireness,
 					Checkpoints: snap.Checkpoints,
 				}
-				m.editConfig.saving = true
-				m.editConfig.saveErr = ""
 				return m, m.saveConfigCmd(m.editConfig.featureID, input, m.editConfig.repos, m.editConfig.pipeline, m.editConfig.publishable)
 			default:
 				var cmd tea.Cmd
@@ -3329,6 +3332,8 @@ func (m AppModel) updateDashboard(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.confirmResumeAll(), nil
 	case key.Matches(msg, keys.WorkspaceManager):
 		return m.transitionToWorkspaceManager()
+	case key.Matches(msg, keys.EditWorkspaceConfig):
+		return m.openWorkspaceConfigEditor()
 	case key.Matches(msg, keys.Chat):
 		return m.transitionToChat()
 	case key.Matches(msg, keys.Attach):
@@ -3614,6 +3619,9 @@ func (m AppModel) updateDashboardRightPanel(msg tea.KeyPressMsg) (tea.Model, tea
 			m.editConfigActive = true
 			return m, nil
 		}
+
+	case key.Matches(msg, keys.EditWorkspaceConfig):
+		return m.openWorkspaceConfigEditor()
 
 	case key.Matches(msg, keys.MergeLocal):
 		if f != nil && f.Status == feature.StatusCodeReady && !f.IsPublishable() {
@@ -3923,6 +3931,9 @@ func (m AppModel) updateDetail(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
+
+	case key.Matches(msg, keys.EditWorkspaceConfig):
+		return m.openWorkspaceConfigEditor()
 
 	case key.Matches(msg, keys.MergeLocal):
 		if m.detail.feature != nil && m.detail.feature.Status == feature.StatusCodeReady && !m.detail.feature.IsPublishable() {
@@ -5497,6 +5508,19 @@ func (m AppModel) transitionToWorkspaceManager() (tea.Model, tea.Cmd) {
 	m.workspaceManager = NewWorkspaceManagerModel(roots, m.width, m.height)
 	m.workspaceManagerActive = true
 	return m, m.workspaceManager.Init()
+}
+
+// openWorkspaceConfigEditor opens the workspace-defaults Edit Config overlay
+// (Shift+E). Unlike keys.EditConfig, this is feature-independent: it edits
+// config.Defaults.Models/Inquireness/Checkpoints, which seed every new
+// feature, rather than a specific feature's config. Available from the
+// dashboard (either panel focused) and the full detail view — the same
+// three places WorkspaceManager and EditConfig are already reachable from.
+func (m AppModel) openWorkspaceConfigEditor() (tea.Model, tea.Cmd) {
+	cat := BuildWorkspaceModelCatalog(m.registry, m.featureManager.Config.Defaults)
+	m.editConfig = NewWorkspaceEditConfigModel(m.featureManager.Config, cat)
+	m.editConfigActive = true
+	return m, nil
 }
 
 // buildWorkspaceRoots creates the display model from config.
@@ -7476,6 +7500,23 @@ func (m AppModel) saveConfigCmd(featureID string, input orchestrator.UpdateFeatu
 			m.persistPipelinePreferences(repos, pipeline, input.Models, input.Inquireness, input.Checkpoints, publishable)
 		}
 		return editConfigResultMsg{featureID: featureID, err: err}
+	}
+}
+
+// saveWorkspaceConfigCmd persists the workspace-level Models/Inquireness/
+// Checkpoints defaults from a workspace-scoped EditConfigModel snapshot.
+// Unlike saveConfigCmd, there is no orchestrator round-trip: workspace
+// defaults only seed future features, so the change is just a config.Save.
+func (m AppModel) saveWorkspaceConfigCmd(snap feature.ConfigSnapshot) tea.Cmd {
+	return func() tea.Msg {
+		if m.featureManager.Config == nil {
+			return editConfigResultMsg{err: fmt.Errorf("no workspace config loaded")}
+		}
+		m.featureManager.Config.Defaults.Models = snap.Models
+		m.featureManager.Config.Defaults.Inquireness = string(snap.Inquireness)
+		m.featureManager.Config.Defaults.Checkpoints = feature.FeatureCheckpointsToConfig(snap.Checkpoints)
+		err := config.Save(m.configPath, m.featureManager.Config)
+		return editConfigResultMsg{err: err}
 	}
 }
 

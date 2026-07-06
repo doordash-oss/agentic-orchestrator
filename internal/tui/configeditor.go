@@ -417,6 +417,8 @@ func (m ConfigEditorModel) modelValueForField(field string) string {
 		return m.models.Implementation
 	case "Review":
 		return m.models.Review
+	case "Utilities":
+		return m.models.Utilities
 	case "KB Build":
 		return m.models.KBBuild
 	}
@@ -435,6 +437,8 @@ func (m *ConfigEditorModel) setModelValueForField(field, value string) {
 		m.models.Implementation = value
 	case "Review":
 		m.models.Review = value
+	case "Utilities":
+		m.models.Utilities = value
 	case "KB Build":
 		m.models.KBBuild = value
 	}

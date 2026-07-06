@@ -122,7 +122,8 @@ type keyMap struct {
 	PanelRight key.Binding
 
 	// Dashboard tools
-	WorkspaceManager key.Binding
+	WorkspaceManager    key.Binding
+	EditWorkspaceConfig key.Binding
 
 	// Wizard-specific
 	ShiftTab   key.Binding
@@ -188,7 +189,8 @@ var keys = keyMap{
 	PanelRight: key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "focus detail")),
 
 	// Dashboard tools
-	WorkspaceManager: key.NewBinding(key.WithKeys("W"), key.WithHelp("Shift+W", "manage workspaces")),
+	WorkspaceManager:    key.NewBinding(key.WithKeys("W"), key.WithHelp("Shift+W", "manage workspaces")),
+	EditWorkspaceConfig: key.NewBinding(key.WithKeys("E"), key.WithHelp("Shift+E", "edit workspace config")),
 
 	// Wizard-specific
 	ShiftTab:   key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "previous step")),

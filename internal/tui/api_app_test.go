@@ -885,6 +885,7 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 	}
 
 	view := stripANSI(app.View().Content)
+	flatView := strings.Join(strings.Fields(view), " ")
 	for _, want := range []string{
 		"Orchestrator v",
 		"Features",
@@ -895,13 +896,13 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 		"[→/enter] Focus",
 		"[Shift+W] Workspaces",
 		"[Shift+R] Resume All",
-		"[Shift+E] Settings",
+		"[Shift+E] Workspace Config",
 		"[tab] Panel",
 		"Layout: US",
 		"[/] Ask",
 		"[?] Help",
 	} {
-		if !strings.Contains(view, want) {
+		if !strings.Contains(flatView, want) {
 			t.Fatalf("API app production surface missing %q in:\n%s", want, view)
 		}
 	}
@@ -3723,6 +3724,10 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	edited := model.(APIAppModel)
 	model, cmd = edited.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter in model picker) returned save command, want local picker close")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want feature config update command")
 	}
@@ -3782,7 +3787,7 @@ func TestAPIAppModelFeatureConfigEditorOpensForRunningFeature(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
+func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -3794,6 +3799,19 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 				Implementation: "codex:gpt-5.4",
 				Review:         "codex:gpt-5.4",
 				KBBuild:        "codex:gpt-5.4",
+			},
+			FeatureDefaults: server.FeatureDefaultsDTO{
+				Models: config.ModelConfig{
+					Inquiry:        "codex:gpt-5.4",
+					Research:       "codex:gpt-5.4",
+					Planning:       "codex:gpt-5.4",
+					Implementation: "codex:gpt-5.4",
+					Review:         "codex:gpt-5.4",
+					KBBuild:        "codex:gpt-5.4",
+				},
+				Inquireness: "medium",
+				Pipeline:    "large",
+				Checkpoints: config.Checkpoints{ManualPublish: true},
 			},
 			Providers: []string{"codex"},
 		},
@@ -3826,7 +3844,7 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 	}
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Runtime config", "Default models", "Research", "codex / gpt-5.4"} {
+	for _, want := range []string{"Edit Config · Workspace Defaults", "Models", "Behavior", "Gates", "Phases", "Agents", "Models for codex"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -3835,8 +3853,20 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 		t.Fatalf("FeatureConfig calls = %v, want none for runtime config editor", client.featureConfigIDs)
 	}
 
-	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})              // enter Models tab body
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyRight}) // agents
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyRight}) // models
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})  // gpt-5.4 -> gpt-5.5
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter in model picker) returned save command, want local picker close")
+	}
 	edited := model.(APIAppModel)
+	if edited.configEditor == nil {
+		t.Fatal("configEditor closed before save")
+	}
+	edited.configEditor.editor.inquireness = feature.InquirenessHigh
+	edited.configEditor.editor.checkpoints.RoadmapReview = true
 	model, cmd = edited.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want runtime config update command")
@@ -3845,8 +3875,17 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	saved := model.(APIAppModel)
 
-	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Inquiry != "codex:gpt-5.5" {
-		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited inquiry default model", got)
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 ||
+		got[0].Defaults.Models.Inquiry != "codex:gpt-5.5" ||
+		got[0].Defaults.Inquireness != "high" ||
+		!got[0].Defaults.Checkpoints.RoadmapReview {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited models, behavior, and gates", got)
+	}
+	if saved.configEditor != nil {
+		t.Fatal("workspace config editor still open after successful save")
+	}
+	if saved.runtimeConfig.FeatureDefaults.Models.Inquiry != "codex:gpt-5.5" {
+		t.Fatalf("runtime snapshot inquiry default = %q, want reloaded codex:gpt-5.5", saved.runtimeConfig.FeatureDefaults.Models.Inquiry)
 	}
 	view = stripANSI(saved.View().Content)
 	for _, want := range []string{"Completed Runtime Config"} {
@@ -3856,7 +3895,7 @@ func TestAPIAppModelRuntimeConfigEditorSavesRESTMutation(t *testing.T) {
 	}
 }
 
-func TestAPIAppModelRuntimeConfigEditorIncludesUtilitiesAndDiscoveredRoleOptions(t *testing.T) {
+func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptions(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{
@@ -3868,6 +3907,18 @@ func TestAPIAppModelRuntimeConfigEditorIncludesUtilitiesAndDiscoveredRoleOptions
 				Review:         "codex:gpt-5.4",
 				Utilities:      "codex:gpt-5.4-mini",
 				KBBuild:        "codex:gpt-5.4",
+			},
+			FeatureDefaults: server.FeatureDefaultsDTO{
+				Models: config.ModelConfig{
+					Research:       "codex:gpt-5.4",
+					Planning:       "codex:gpt-5.4",
+					Implementation: "codex:gpt-5.4",
+					Review:         "codex:gpt-5.4",
+					Utilities:      "codex:gpt-5.4-mini",
+					KBBuild:        "codex:gpt-5.4",
+				},
+				Inquireness: "medium",
+				Pipeline:    "large",
 			},
 			Providers: []string{"codex"},
 		},
@@ -3897,26 +3948,32 @@ func TestAPIAppModelRuntimeConfigEditorIncludesUtilitiesAndDiscoveredRoleOptions
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Runtime config", "Default models", "Assignments", "Utilities", "codex / gpt-5.4-mini"} {
+	for _, want := range []string{"Edit Config · Workspace Defaults", "Phases", "Agents", "Models for codex", "Utilities", "gpt-5.4-mini"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("runtime config view missing %q:\n%s", want, view)
 		}
 	}
 
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // enter Models tab body
 	for i := 0; i < 5; i++ {
-		model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-		editing = model.(APIAppModel)
+		model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	}
+	editing = model.(APIAppModel)
 	view = stripANSI(editing.View().Content)
-	for _, want := range []string{"Choices for Utilities", "gpt-5.4-mini", "gpt-5.5-mini"} {
+	for _, want := range []string{"Utilities", "Models for codex", "gpt-5.4-mini", "gpt-5.5-mini"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("utilities choices missing %q:\n%s", want, view)
 		}
 	}
 
-	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	edited := model.(APIAppModel)
-	model, cmd := edited.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model, _ = editing.Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyRight})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("Update(enter in model picker) returned save command, want local picker close")
+	}
+	model, cmd = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want runtime config update command")
 	}
@@ -7699,6 +7756,19 @@ func (f *fakeTUIAPIClient) UpdateFeatureConfig(_ context.Context, featureID stri
 func (f *fakeTUIAPIClient) UpdateRuntimeConfig(_ context.Context, req server.RuntimeConfigMutationRequest) (server.RuntimeConfigUpdateResponse, error) {
 	f.calls = append(f.calls, "UpdateRuntimeConfig")
 	f.updateRuntimeConfigRequests = append(f.updateRuntimeConfigRequests, req)
+	if req.Defaults.Models != (config.ModelConfig{}) {
+		f.runtime.Defaults = req.Defaults.Models
+		f.runtime.FeatureDefaults.Models = req.Defaults.Models
+	}
+	if req.Defaults.Inquireness != "" {
+		f.runtime.FeatureDefaults.Inquireness = req.Defaults.Inquireness
+	}
+	if req.Defaults.Pipeline != "" {
+		f.runtime.FeatureDefaults.Pipeline = req.Defaults.Pipeline
+	}
+	if req.Defaults.Checkpoints != (config.Checkpoints{}) {
+		f.runtime.FeatureDefaults.Checkpoints = req.Defaults.Checkpoints
+	}
 	if req.WorkspaceRoots != nil {
 		f.runtime.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
 		f.runtime.Repos = testRuntimeConfigRepos(f.runtime.Repos, f.runtime.WorkspaceRoots)

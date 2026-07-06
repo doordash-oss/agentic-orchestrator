@@ -584,7 +584,7 @@ func (m DashboardModel) renderFooter() string {
 			hints = append(hints, "[Shift+N] Input alerts")
 			hints = append(hints, "[d] Delete")
 		}
-		hints = append(hints, "[Shift+E] Settings")
+		hints = append(hints, "[Shift+E] Workspace Config")
 		hints = append(hints, "[←/esc] Back")
 	} else {
 		// Left panel focused — show list actions
@@ -592,7 +592,7 @@ func (m DashboardModel) renderFooter() string {
 		if m.SelectedFeature() != nil {
 			hints = append(hints, "[→/enter] Focus")
 		}
-		hints = append(hints, "[Shift+W] Workspaces", "[Shift+R] Resume All", "[Shift+E] Settings", "[tab] Panel", "[q] Quit")
+		hints = append(hints, "[Shift+W] Workspaces", "[Shift+E] Workspace Config", "[Shift+R] Resume All", "[tab] Panel", "[q] Quit")
 	}
 
 	leftPart := KeyHelpStyle.Render(" " + strings.Join(hints, "   "))

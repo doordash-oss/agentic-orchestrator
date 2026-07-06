@@ -323,7 +323,6 @@ type APIAppModel struct {
 	refactorPrompt             *apiRefactorPrompt
 	refactorPipeline           *apiRefactorPipelinePanel
 	configEditor               *EditConfigModel
-	runtimeConfigEditor        *apiRuntimeConfigEditor
 	workspaceManager           *WorkspaceManagerModel
 	wizardRuntimeConfigPending bool
 	helpOverlayActive          bool
@@ -888,7 +887,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.configEditor = nil
 		}
 		if msg.kind == "runtime.config.update" {
-			m.runtimeConfigEditor = nil
+			m.configEditor = nil
 		}
 		if msg.requestID != "" {
 			m.clearResolvedControlRequest(msg.requestID)
@@ -935,11 +934,19 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case apiRuntimeConfigMutationMsg:
 		m.wizardRuntimeConfigPending = false
 		if msg.err != nil {
+			if m.configEditor != nil && m.configEditor.isWorkspace {
+				m.configEditor.saving = false
+				m.configEditor.saveErr = firstLine(msg.err.Error())
+				return m, nil
+			}
 			m.statusMessage = "Runtime config update failed: " + firstLine(msg.err.Error())
 			return m, nil
 		}
 		m.runtimeConfig = msg.config
 		ApplyKeyboardLayout(m.runtimeConfig.UI.KeyboardLayout)
+		if m.configEditor != nil && m.configEditor.isWorkspace {
+			m.configEditor = nil
+		}
 		if m.workspaceManager != nil {
 			m.workspaceManager.SetRoots(apiWorkspaceRoots(m.runtimeConfig.WorkspaceRoots))
 		}
@@ -1043,9 +1050,6 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.publish != nil {
 		return m.handleAPIPublishKey(msg)
-	}
-	if m.runtimeConfigEditor != nil {
-		return m.handleAPIRuntimeConfigEditorKey(msg)
 	}
 	if m.recoveryPanel != nil {
 		return m.handleAPIRecoveryKey(msg)
@@ -1460,9 +1464,6 @@ func (m APIAppModel) View() tea.View {
 	}
 	if m.configEditor != nil {
 		view = overlayModal(view, m.configEditor.View(), w, h)
-	}
-	if m.runtimeConfigEditor != nil {
-		view = overlayModal(view, m.runtimeConfigEditor.render(min(w-4, 96)), w, h)
 	}
 	if m.workspaceManager != nil {
 		view = overlayModal(view, m.workspaceManager.View(), w, h)
@@ -4001,7 +4002,6 @@ func (m APIAppModel) openCreateFeaturePrompt(_ int) APIAppModel {
 	}
 	m.wizard = &wizard
 	m.configEditor = nil
-	m.runtimeConfigEditor = nil
 	m.statusMessage = ""
 	return m
 }
@@ -4068,7 +4068,6 @@ func (m APIAppModel) openAPIWorkspaceManager() APIAppModel {
 	manager := NewWorkspaceManagerModel(apiWorkspaceRoots(m.runtimeConfig.WorkspaceRoots), m.width, m.height)
 	m.workspaceManager = &manager
 	m.configEditor = nil
-	m.runtimeConfigEditor = nil
 	m.statusMessage = ""
 	return m
 }
@@ -4432,8 +4431,9 @@ func (m APIAppModel) openRewindPanel() APIAppModel {
 }
 
 func (m APIAppModel) openRuntimeConfigEditor() APIAppModel {
-	m.runtimeConfigEditor = newAPIRuntimeConfigEditor(m.runtimeConfig.Defaults, apiPhaseModelCatalog(m.catalog))
-	m.configEditor = nil
+	cfg := &config.Config{Defaults: apiWizardDefaults(m.runtimeConfig)}
+	editor := NewWorkspaceEditConfigModel(cfg, apiPhaseModelCatalog(m.catalog))
+	m.configEditor = &editor
 	m.statusMessage = ""
 	return m
 }
@@ -7428,6 +7428,11 @@ func (m APIAppModel) handleAPIConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, t
 			return m, nil
 		}
 	}
+	if editor.activeTab == tabModels && editor.editor.ModelFilteringActive() {
+		updated, cmd := editor.Update(msg)
+		m.configEditor = &updated
+		return m, cmd
+	}
 	switch msg.String() {
 	case "esc":
 		if editor.editor.HasChanges() {
@@ -7437,51 +7442,25 @@ func (m APIAppModel) handleAPIConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, t
 		m.configEditor = nil
 		return m, nil
 	case "enter":
+		if editor.EnterIsLocal() {
+			updated, cmd := editor.Update(msg)
+			m.configEditor = &updated
+			return m, cmd
+		}
 		if editor.saving {
 			return m, nil
 		}
 		editor.saving = true
 		editor.saveErr = ""
+		if editor.isWorkspace {
+			return m, m.saveWorkspaceConfigCmd(*editor)
+		}
 		return m, m.saveFeatureConfigCmd(*editor)
 	default:
 		updated, cmd := editor.Update(msg)
 		m.configEditor = &updated
 		return m, cmd
 	}
-}
-
-func (m APIAppModel) handleAPIRuntimeConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	editor := m.runtimeConfigEditor
-	if editor == nil {
-		return m, nil
-	}
-	switch msg.Code {
-	case tea.KeyEscape:
-		m.runtimeConfigEditor = nil
-		return m, nil
-	case tea.KeyUp:
-		editor.move(-1)
-		return m, nil
-	case tea.KeyDown:
-		editor.move(1)
-		return m, nil
-	case tea.KeyTab:
-		if msg.Mod.Contains(tea.ModShift) {
-			editor.cycleModel(-1)
-		} else {
-			editor.cycleModel(1)
-		}
-		return m, nil
-	case tea.KeyEnter:
-		return m, m.saveRuntimeConfigCmd(*editor)
-	}
-	switch strings.ToLower(msg.Text) {
-	case "k":
-		editor.move(-1)
-	case "j":
-		editor.move(1)
-	}
-	return m, nil
 }
 
 func (m APIAppModel) handleAPIHelpPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -7595,19 +7574,26 @@ func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 	}
 }
 
-func (m APIAppModel) saveRuntimeConfigCmd(editor apiRuntimeConfigEditor) tea.Cmd {
+func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
 		if m.eventCtx != nil {
 			ctx = m.eventCtx
 		}
+		snap := editor.editor.Snapshot()
 		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
-			Defaults: config.DefaultsConfig{Models: editor.draft},
+			Defaults: config.DefaultsConfig{
+				Models:      snap.Models,
+				Inquireness: string(snap.Inquireness),
+				Checkpoints: feature.FeatureCheckpointsToConfig(snap.Checkpoints),
+				Pipeline:    string(editor.pipeline),
+			},
 		})
-		return apiMutationResultMsg{
-			kind: "runtime.config.update",
-			err:  err,
+		if err != nil {
+			return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", err: err}
 		}
+		cfg, err := m.client.RuntimeConfig(ctx)
+		return apiRuntimeConfigMutationMsg{kind: "runtime.config.update", config: cfg, err: err}
 	}
 }
 
@@ -7918,138 +7904,6 @@ func (m APIAppModel) stopOwnedServerCmd() tea.Cmd {
 			err = m.waitForOwnedServerShutdown(ctx)
 		}
 		return apiOwnedServerStoppedMsg{err: err}
-	}
-}
-
-type apiRuntimeConfigEditor struct {
-	draft   config.ModelConfig
-	catalog PhaseModelCatalog
-	cursor  int
-}
-
-func newAPIRuntimeConfigEditor(defaults config.ModelConfig, catalog PhaseModelCatalog) *apiRuntimeConfigEditor {
-	return &apiRuntimeConfigEditor{
-		draft:   defaults,
-		catalog: catalog,
-	}
-}
-
-func (e *apiRuntimeConfigEditor) move(delta int) {
-	fields := e.fields()
-	if len(fields) == 0 {
-		e.cursor = 0
-		return
-	}
-	e.cursor += delta
-	if e.cursor < 0 {
-		e.cursor = len(fields) - 1
-	}
-	if e.cursor >= len(fields) {
-		e.cursor = 0
-	}
-}
-
-func (e *apiRuntimeConfigEditor) cycleModel(delta int) {
-	field := e.currentField()
-	if field == "" {
-		return
-	}
-	opts := e.catalog.ModelOptionsForField(field)
-	if len(opts) == 0 {
-		return
-	}
-	current := e.modelValue(field)
-	idx := -1
-	for i, opt := range opts {
-		if opt == current {
-			idx = i
-			break
-		}
-	}
-	if idx == -1 {
-		if delta < 0 {
-			idx = len(opts) - 1
-		} else {
-			idx = 0
-		}
-	} else {
-		idx = (idx + delta + len(opts)) % len(opts)
-	}
-	e.setModelValue(field, opts[idx])
-}
-
-func (e apiRuntimeConfigEditor) render(width int) string {
-	if width < 52 {
-		width = 52
-	}
-	var b strings.Builder
-	b.WriteString("Runtime config\n\n")
-	b.WriteString(e.configEditor().renderModelsBoxWithTitle(width-4, "Default models"))
-	b.WriteString("\n")
-	b.WriteString(KeyHelpStyle.Render(" [up/down] Field   [tab] Change model   [enter] Save   [esc] Cancel"))
-	return panelStyle(true).Width(width).Render(b.String())
-}
-
-func (e apiRuntimeConfigEditor) configEditor() ConfigEditorModel {
-	return ConfigEditorModel{
-		models:    e.draft,
-		catalog:   e.catalog,
-		rowCursor: e.cursor,
-	}
-}
-
-func (e apiRuntimeConfigEditor) fields() []string {
-	if len(e.catalog.Fields) > 0 {
-		return e.catalog.Fields
-	}
-	return globalModelFields
-}
-
-func (e apiRuntimeConfigEditor) currentField() string {
-	fields := e.fields()
-	if e.cursor < 0 || e.cursor >= len(fields) {
-		return ""
-	}
-	return fields[e.cursor]
-}
-
-func (e apiRuntimeConfigEditor) modelValue(field string) string {
-	switch field {
-	case "Clarify":
-		return e.draft.Inquiry
-	case "Research":
-		return e.draft.Research
-	case "Planning":
-		return e.draft.Planning
-	case "Implementation":
-		return e.draft.Implementation
-	case "Review":
-		return e.draft.Review
-	case "Utilities":
-		return e.draft.Utilities
-	case "KB Build":
-		return e.draft.KBBuild
-	default:
-		return ""
-	}
-}
-
-func (e *apiRuntimeConfigEditor) setModelValue(field, value string) {
-	switch field {
-	case "Clarify":
-		e.draft.Inquiry = value
-	case "Research":
-		e.draft.Research = value
-	case "Planning":
-		e.draft.Planning = value
-	case "Implementation":
-		e.draft.Implementation = value
-	case "Review":
-		e.draft.Review = value
-	case "Utilities":
-		e.draft.Utilities = value
-	case "KB Build":
-		e.draft.KBBuild = value
 	}
 }
 

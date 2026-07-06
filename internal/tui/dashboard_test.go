@@ -615,14 +615,14 @@ func TestDashboardFooterHintsLeftPanel(t *testing.T) {
 	m.focusPanel = 0 // left panel
 
 	footer := m.renderFooter()
-	if !containsString(footer, "[Shift+E] Settings") {
-		t.Error("expected [Shift+E] Settings hint in footer when left panel focused")
-	}
 	if !containsString(footer, "["+ChatKeyHint()+"] Ask") {
 		t.Error("expected [/] Ask hint in footer when left panel focused")
 	}
 	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer when left panel focused")
+	}
+	if !containsString(footer, "[Shift+E] Workspace Config") {
+		t.Error("expected [Shift+E] Workspace Config hint in footer when left panel focused")
 	}
 }
 
@@ -642,8 +642,8 @@ func TestDashboardFooterHintsRightPanel(t *testing.T) {
 	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer when right panel focused")
 	}
-	if !containsString(footer, "[Shift+E] Settings") {
-		t.Error("expected [Shift+E] Settings hint in footer when right panel focused")
+	if !containsString(footer, "[Shift+E] Workspace Config") {
+		t.Error("expected [Shift+E] Workspace Config hint in footer when right panel focused")
 	}
 }
 

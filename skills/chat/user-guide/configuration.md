@@ -66,6 +66,20 @@ Agentic Orchestrator needs at least one authenticated provider CLI. Claude, Code
 
 Restrict the orchestrator to the CLIs you actually have with `--providers <list>` (e.g. `--providers claude,codex,opencode` or `--providers opencode`). With no flag, every installed and ready provider is registered.
 
+### Custom CLI binary
+
+Each provider invokes a default executable name (`claude`, `codex`, `opencode`). Override the binary Agentico launches with the `providers.<name>.cli` setting — useful when the CLI is installed under a different name or wrapped by a launcher script:
+
+```yaml
+providers:
+  claude:
+    cli: fcc-claude
+  codex:
+    cli: /opt/tools/bin/codex
+```
+
+The value can be a bare name resolved on `PATH` or an absolute path. It applies everywhere Agentico shells out to that provider — CLI detection, authentication/readiness checks, version checks, model discovery, and session launch — so the custom binary must be on `PATH` (or given as an absolute path) and behave like the provider CLI it replaces. When unset, the built-in default name is used, so existing configs are unaffected.
+
 ### OpenCode
 
 Install OpenCode from [opencode.ai](https://opencode.ai) (`curl -fsSL https://opencode.ai/install | bash`) and authenticate a backend provider with `opencode auth login`. OpenCode is a router in front of a backend model (Anthropic, OpenAI, Google, a local Ollama model, and so on); Agentico selects it with the explicit `opencode:<backend/model>` prefix or a bare slash-form backend id, as documented under [Model Configuration](#opencode-model-ids).

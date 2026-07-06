@@ -15,15 +15,17 @@
 package codex
 
 import (
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"go.uber.org/fx"
 )
 
 // Module registers the Codex provider in the LLM registry and exports it
-// for downstream modules (e.g. agent) to configure.
+// for downstream modules (e.g. agent) to configure. An optional CLI binary
+// override is read from config (providers.codex.cli).
 var Module = fx.Module("llm-codex",
-	fx.Provide(func() *Provider {
-		return &Provider{}
+	fx.Provide(func(cfg *config.Config) *Provider {
+		return &Provider{binary: cfg.ProviderCLI("codex", defaultBinary)}
 	}),
 	fx.Invoke(func(r *llm.Registry, p *Provider) {
 		r.Register(p)

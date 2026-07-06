@@ -1856,3 +1856,87 @@ func TestObservabilityConfig(t *testing.T) {
 		}
 	})
 }
+
+func TestProviderCLI_OverrideAndFallback(t *testing.T) {
+	tests := []struct {
+		name      string
+		providers map[string]ProviderConfig
+		key       string
+		fallback  string
+		want      string
+	}{
+		{
+			name:      "override set returns override",
+			providers: map[string]ProviderConfig{"claude": {CLI: "fcc-claude"}},
+			key:       "claude",
+			fallback:  "claude",
+			want:      "fcc-claude",
+		},
+		{
+			name:      "empty CLI returns fallback",
+			providers: map[string]ProviderConfig{"claude": {CLI: ""}},
+			key:       "claude",
+			fallback:  "claude",
+			want:      "claude",
+		},
+		{
+			name:      "whitespace CLI returns fallback",
+			providers: map[string]ProviderConfig{"claude": {CLI: "   "}},
+			key:       "claude",
+			fallback:  "claude",
+			want:      "claude",
+		},
+		{
+			name:      "key absent returns fallback",
+			providers: map[string]ProviderConfig{"codex": {CLI: "my-codex"}},
+			key:       "claude",
+			fallback:  "claude",
+			want:      "claude",
+		},
+		{
+			name:      "nil providers map returns fallback",
+			providers: nil,
+			key:       "claude",
+			fallback:  "claude",
+			want:      "claude",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &Config{Providers: tc.providers}
+			if got := cfg.ProviderCLI(tc.key, tc.fallback); got != tc.want {
+				t.Errorf("ProviderCLI(%q, %q) = %q, want %q", tc.key, tc.fallback, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProvidersRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	original := NewDefault()
+	original.Providers = map[string]ProviderConfig{"claude": {CLI: "fcc-claude"}}
+	if err := Save(path, original); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := loaded.ProviderCLI("claude", "claude"); got != "fcc-claude" {
+		t.Errorf("providers.claude.cli mismatch after round-trip: got %q, want fcc-claude", got)
+	}
+}
+
+func TestProvidersEmptyOmittedFromYAML(t *testing.T) {
+	data, err := yaml.Marshal(NewDefault())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "providers:") {
+		t.Errorf("empty Providers map should be omitted from YAML, got:\n%s", data)
+	}
+}

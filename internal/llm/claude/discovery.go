@@ -58,6 +58,7 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 	if runner == nil {
 		runner = clirun.DefaultRunner()
 	}
+	binary := p.cliBinary()
 
 	candidates := claudeModelProbeCandidates()
 	results := make([]claudeModelProbeResult, len(candidates))
@@ -72,7 +73,7 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 				results[i] = claudeModelProbeResult{candidate: candidate, err: err}
 				return
 			}
-			resolved, contextWindow, err := probeClaudeModel(ctx, runner, candidate)
+			resolved, contextWindow, err := probeClaudeModel(ctx, runner, binary, candidate)
 			if err != nil {
 				results[i] = claudeModelProbeResult{candidate: candidate, err: err}
 				return
@@ -138,13 +139,13 @@ func reportClaudeModelDiscovery(report llm.ModelDiscoveryReporter, info llm.Mode
 	report(info)
 }
 
-func probeClaudeModel(ctx context.Context, runner clirun.CommandRunner, candidate claudeModelProbeCandidate) (string, int, error) {
+func probeClaudeModel(ctx context.Context, runner clirun.CommandRunner, binary string, candidate claudeModelProbeCandidate) (string, int, error) {
 	var lastErr error
 	for range claudeModelProbeAttempts {
 		if err := ctx.Err(); err != nil {
 			return "", 0, err
 		}
-		out, err := runner(ctx, "claude", claudeModelProbeArgs(candidate.Selector), nil)
+		out, err := runner(ctx, binary, claudeModelProbeArgs(candidate.Selector), nil)
 		if err != nil {
 			if ctx.Err() != nil {
 				return "", 0, ctx.Err()

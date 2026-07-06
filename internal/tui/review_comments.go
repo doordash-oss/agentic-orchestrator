@@ -408,11 +408,11 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 	if m.width < 88 {
 		queueHeight, detailHeight := reviewCommentsNarrowPanelHeights(m.height)
 		queueW := reviewCommentsQueueWidth(m.width)
-		queue := panelStyle(m.focus == reviewCommentsFocusQueue).
+		queue := reviewCommentsPanelStyle(m.focus == reviewCommentsFocusQueue).
 			Width(queueW).
 			Height(queueHeight).
 			Render(m.renderQueue(queueW-4, reviewCommentsPanelContentHeight(queueHeight)))
-		detail := panelStyle(m.focus == reviewCommentsFocusDetail).
+		detail := reviewCommentsPanelStyle(m.focus == reviewCommentsFocusDetail).
 			Width(queueW).
 			Height(detailHeight).
 			Render(m.detail.View())
@@ -423,15 +423,19 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 	detailW := reviewCommentsDetailWidth(m.width)
 	panelHeight := reviewCommentsPanelHeight(m.height)
 	contentHeight := reviewCommentsPanelContentHeight(panelHeight)
-	queue := panelStyle(m.focus == reviewCommentsFocusQueue).
+	queue := reviewCommentsPanelStyle(m.focus == reviewCommentsFocusQueue).
 		Width(queueW).
 		Height(panelHeight).
 		Render(m.renderQueue(queueW-4, contentHeight))
-	detail := panelStyle(m.focus == reviewCommentsFocusDetail).
+	detail := reviewCommentsPanelStyle(m.focus == reviewCommentsFocusDetail).
 		Width(detailW).
 		Height(panelHeight).
 		Render(m.detail.View())
 	return " " + lipgloss.JoinHorizontal(lipgloss.Top, queue, " ", detail)
+}
+
+func reviewCommentsPanelStyle(active bool) lipgloss.Style {
+	return panelStyle(active).Border(lipgloss.NormalBorder())
 }
 
 func (m reviewCommentsBrowserModel) renderQueue(width, maxLines int) string {

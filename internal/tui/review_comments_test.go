@@ -305,7 +305,7 @@ func TestReviewCommentsModelDesktopPanelsShareBottomBoundary(t *testing.T) {
 	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
 	bottomLine := -1
 	for i, line := range lines {
-		if strings.Count(line, "╰") >= 2 {
+		if strings.Count(line, "└") >= 2 {
 			bottomLine = i
 			break
 		}
@@ -313,7 +313,24 @@ func TestReviewCommentsModelDesktopPanelsShareBottomBoundary(t *testing.T) {
 	if bottomLine == -1 {
 		t.Fatalf("queue and detail panels do not share a bottom border line:\n%s", view)
 	}
-	if strings.Count(lines[bottomLine], "╯") < 2 {
+	if strings.Count(lines[bottomLine], "┘") < 2 {
 		t.Fatalf("shared bottom border line missing both right corners:\n%s", lines[bottomLine])
+	}
+}
+
+func TestReviewCommentsModelUsesSquarePanelCorners(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 180, 30)
+	view := stripANSI(m.View())
+	for _, rounded := range []string{"╭", "╮", "╰", "╯"} {
+		if strings.Contains(view, rounded) {
+			t.Fatalf("review comments panel used rounded corner %q; square corners align better in terminal fonts:\n%s", rounded, view)
+		}
+	}
+	for _, square := range []string{"┌", "┐", "└", "┘"} {
+		if !strings.Contains(view, square) {
+			t.Fatalf("review comments panel missing square corner %q:\n%s", square, view)
+		}
 	}
 }

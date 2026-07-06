@@ -129,8 +129,9 @@ At iteration end, write artifacts in this exact order:
 
 1. `{iteration_dir}/verification-report.yaml`.
 2. `{phase_dir}/progress.md`.
-3. `{iteration_dir}/need-user-input.yaml` only when `progress.md` reports `NEED_USER_INPUT`.
-4. `{iteration_dir}/phase_complete`.
+3. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix any reported issue and rerun before continuing.
+4. `{iteration_dir}/need-user-input.yaml` only when `progress.md` reports `NEED_USER_INPUT`.
+5. `{iteration_dir}/phase_complete`.
 
 `progress.md` must use this schema:
 

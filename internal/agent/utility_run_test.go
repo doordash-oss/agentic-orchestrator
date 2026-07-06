@@ -44,6 +44,24 @@ type utilityTestSession struct {
 	pendingAsk  bool
 }
 
+type terminalStatusTestSession struct {
+	*utilityTestSession
+	status ports.SessionStatus
+}
+
+func newTerminalStatusTestSession(status ports.SessionStatus) *terminalStatusTestSession {
+	sess := &terminalStatusTestSession{
+		utilityTestSession: newUtilityTestSession(),
+		status:             status,
+	}
+	close(sess.done)
+	return sess
+}
+
+func (s *terminalStatusTestSession) Status() ports.SessionStatus {
+	return s.status
+}
+
 func newUtilityTestSession() *utilityTestSession {
 	return &utilityTestSession{
 		done:     make(chan struct{}),

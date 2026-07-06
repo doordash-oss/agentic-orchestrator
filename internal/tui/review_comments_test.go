@@ -297,17 +297,35 @@ func TestReviewCommentsModelPgDownKeepsFooterVisible(t *testing.T) {
 	}
 }
 
-func TestReviewCommentsModelUsesBorderlessSplitPanes(t *testing.T) {
+func TestReviewCommentsModelUsesClosedASCIIBoxes(t *testing.T) {
 	t.Parallel()
 
 	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 180, 30)
 	view := stripANSI(m.View())
-	for _, border := range []string{"╭", "╮", "╰", "╯", "┌", "┐", "└", "┘"} {
+	for _, border := range []string{"╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "│"} {
 		if strings.Contains(view, border) {
-			t.Fatalf("review comments split panes should not render box corner %q:\n%s", border, view)
+			t.Fatalf("review comments boxes should use ASCII borders, found %q:\n%s", border, view)
 		}
 	}
-	if !strings.Contains(view, "Queue") || !strings.Contains(view, "Detail") || !strings.Contains(view, "│") {
-		t.Fatalf("review comments split panes missing queue/detail divider layout:\n%s", view)
+
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	topLine := -1
+	bottomLine := -1
+	for i, line := range lines {
+		if strings.Count(line, "+") >= 4 && strings.Contains(line, "-") {
+			if topLine == -1 {
+				topLine = i
+			}
+			bottomLine = i
+		}
+	}
+	if topLine == -1 || bottomLine == topLine {
+		t.Fatalf("review comments did not render closed top and bottom ASCII box borders:\n%s", view)
+	}
+	if strings.Count(lines[topLine], "+") < 4 || strings.Count(lines[bottomLine], "+") < 4 {
+		t.Fatalf("review comments borders do not include both pane corners:\n%s\n%s", lines[topLine], lines[bottomLine])
+	}
+	if !strings.Contains(view, "| Queue") || !strings.Contains(view, "| Detail") {
+		t.Fatalf("review comments boxes missing framed queue/detail titles:\n%s", view)
 	}
 }

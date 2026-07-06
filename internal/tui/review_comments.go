@@ -20,6 +20,7 @@ import (
 
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
@@ -223,7 +224,7 @@ func reviewCommentsBodyHeight(height int, hasStatus bool) int {
 }
 
 func reviewCommentsNarrowPanelHeights(height int) (int, int) {
-	bodyBudget := reviewCommentsBodyHeight(height, false)
+	bodyBudget := max(height-2, 12)
 	queueHeight := min(max(bodyBudget/4, 5), 8)
 	detailHeight := max(bodyBudget-queueHeight-1, 6)
 	return queueHeight, detailHeight
@@ -244,15 +245,15 @@ func reviewCommentsDetailWidth(width int) int {
 }
 
 func reviewCommentsDetailContentWidth(width int) int {
-	return max(reviewCommentsDetailWidth(width), 20)
+	return max(reviewCommentsBoxContentWidth(reviewCommentsDetailWidth(width)), 20)
 }
 
 func reviewCommentsDetailContentHeight(width, height int) int {
 	if width < 88 {
 		_, detailHeight := reviewCommentsNarrowPanelHeights(height)
-		return detailHeight
+		return reviewCommentsBoxContentHeight(detailHeight)
 	}
-	return reviewCommentsBodyHeight(height, false)
+	return reviewCommentsBoxContentHeight(reviewCommentsBodyHeight(height, false))
 }
 
 func (m *reviewCommentsBrowserModel) resize(width, height int) {
@@ -407,27 +408,60 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 	if m.width < 88 {
 		queueHeight, detailHeight := reviewCommentsNarrowPanelHeights(m.height)
 		queueW := reviewCommentsQueueWidth(m.width)
-		queue := reviewCommentsFitLines(m.renderQueue(queueW, queueHeight), queueW, queueHeight)
-		detail := reviewCommentsFitLines(m.detail.View(), queueW, detailHeight)
-		separator := MutedStyle.Render(strings.Repeat("─", queueW))
+		queue := reviewCommentsBox(m.renderQueue(reviewCommentsBoxContentWidth(queueW), reviewCommentsBoxContentHeight(queueHeight)), queueW, queueHeight, m.focus == reviewCommentsFocusQueue)
+		detail := reviewCommentsBox(m.detail.View(), queueW, detailHeight, m.focus == reviewCommentsFocusDetail)
 		lines := make([]string, 0, queueHeight+detailHeight+1)
 		lines = append(lines, queue...)
-		lines = append(lines, separator)
+		lines = append(lines, "")
 		lines = append(lines, detail...)
 		return " " + strings.ReplaceAll(strings.Join(lines, "\n"), "\n", "\n ")
 	}
 
 	queueW := reviewCommentsQueueWidth(m.width)
 	detailW := reviewCommentsDetailWidth(m.width)
-	bodyHeight := reviewCommentsBodyHeight(m.height, m.status != "")
-	queue := reviewCommentsFitLines(m.renderQueue(queueW, bodyHeight), queueW, bodyHeight)
-	detail := reviewCommentsFitLines(m.detail.View(), detailW, bodyHeight)
-	divider := MutedStyle.Render("│")
-	lines := make([]string, bodyHeight)
-	for i := 0; i < bodyHeight; i++ {
-		lines[i] = " " + queue[i] + " " + divider + " " + detail[i]
+	panelHeight := reviewCommentsBodyHeight(m.height, m.status != "")
+	contentHeight := reviewCommentsBoxContentHeight(panelHeight)
+	queue := reviewCommentsBox(m.renderQueue(reviewCommentsBoxContentWidth(queueW), contentHeight), queueW, panelHeight, m.focus == reviewCommentsFocusQueue)
+	detail := reviewCommentsBox(m.detail.View(), detailW, panelHeight, m.focus == reviewCommentsFocusDetail)
+	lines := make([]string, panelHeight)
+	for i := 0; i < panelHeight; i++ {
+		lines[i] = " " + queue[i] + " " + detail[i]
 	}
 	return strings.Join(lines, "\n")
+}
+
+func reviewCommentsBox(content string, width, height int, active bool) []string {
+	width = max(width, 6)
+	height = max(height, 3)
+	contentWidth := reviewCommentsBoxContentWidth(width)
+	contentHeight := reviewCommentsBoxContentHeight(height)
+	contentLines := reviewCommentsFitLines(content, contentWidth, contentHeight)
+	border := reviewCommentsASCIIBoxBorderStyle(active)
+	top := border.Render("+" + strings.Repeat("-", width-2) + "+")
+	bottom := border.Render("+" + strings.Repeat("-", width-2) + "+")
+	lines := make([]string, 0, height)
+	lines = append(lines, top)
+	for _, line := range contentLines {
+		lines = append(lines, border.Render("|")+" "+line+" "+border.Render("|"))
+	}
+	lines = append(lines, bottom)
+	return lines
+}
+
+func reviewCommentsBoxContentWidth(width int) int {
+	return max(width-4, 1)
+}
+
+func reviewCommentsBoxContentHeight(height int) int {
+	return max(height-2, 1)
+}
+
+func reviewCommentsASCIIBoxBorderStyle(active bool) lipgloss.Style {
+	color := colorSurface
+	if active {
+		color = colorBrand
+	}
+	return lipgloss.NewStyle().Foreground(color)
 }
 
 func reviewCommentsFitLines(content string, width, height int) []string {

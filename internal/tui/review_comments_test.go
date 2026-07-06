@@ -108,3 +108,87 @@ func TestReviewCommentsModelWindowResizePreservesSplitView(t *testing.T) {
 		t.Fatalf("resized view lost split-view content:\n%s", view)
 	}
 }
+
+func TestReviewCommentsModelSelectionAndDetailScroll(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 120, 18)
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Text: "j"})
+	view := stripANSI(updated.View())
+	if !strings.Contains(view, "cmd/bpfagent/api.go:116") || !strings.Contains(view, "redactFlags(flags)") {
+		t.Fatalf("down key did not move selected detail to second comment:\n%s", view)
+	}
+
+	scrolled, _ := updated.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if scrolled.browser.selected != updated.browser.selected {
+		t.Fatalf("PgDown changed selected index from %d to %d", updated.browser.selected, scrolled.browser.selected)
+	}
+}
+
+func TestReviewCommentsModelIncludeExcludeAndEnterAction(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 120, 36)
+	excluded, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	view := stripANSI(excluded.View())
+	if !strings.Contains(view, "2 included") || !strings.Contains(view, "[enter] Address included 2") {
+		t.Fatalf("space did not update included count:\n%s", view)
+	}
+
+	_, cmd := excluded.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter returned nil command, want included review-comments action")
+	}
+	msg, ok := cmd().(ReviewCommentsActionMsg)
+	if !ok {
+		t.Fatalf("enter command type = %T, want ReviewCommentsActionMsg", cmd())
+	}
+	if msg.Mode != ReviewCommentsActionIncluded || len(msg.Comments) != 2 || msg.Comments[0].ID != 102 {
+		t.Fatalf("enter action = %+v, want included comments 102 and 201", msg)
+	}
+}
+
+func TestReviewCommentsModelShiftAAlwaysAddressesAll(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 120, 36)
+	excluded, _ := m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+
+	_, cmd := excluded.Update(tea.KeyPressMsg{Code: 'A', Text: "A"})
+	if cmd == nil {
+		t.Fatal("Shift+A returned nil command, want address-all action")
+	}
+	msg, ok := cmd().(ReviewCommentsActionMsg)
+	if !ok {
+		t.Fatalf("Shift+A command type = %T, want ReviewCommentsActionMsg", cmd())
+	}
+	if msg.Mode != ReviewCommentsActionAll || len(msg.Comments) != 3 {
+		t.Fatalf("Shift+A action = %+v, want all 3 comments", msg)
+	}
+}
+
+func TestReviewCommentsModelFilterAndEscape(t *testing.T) {
+	t.Parallel()
+
+	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 120, 36)
+	filtering, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'v', Text: "v"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'w', Text: "w"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	filtering, _ = filtering.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+
+	view := stripANSI(filtering.View())
+	if strings.Contains(view, "cmd/bpfagent/api.go:79") || !strings.Contains(view, "PR conversation") {
+		t.Fatalf("filter did not narrow to reviewer issue comment:\n%s", view)
+	}
+
+	cleared, _ := filtering.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	view = stripANSI(cleared.View())
+	if !strings.Contains(view, "cmd/bpfagent/api.go:79") || !strings.Contains(view, "3 pending") {
+		t.Fatalf("escape did not clear filter:\n%s", view)
+	}
+}

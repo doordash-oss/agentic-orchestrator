@@ -50,6 +50,19 @@ type reviewCommentsBrowserModel struct {
 	status      string
 }
 
+type ReviewCommentsActionMode string
+
+const (
+	ReviewCommentsActionAll      ReviewCommentsActionMode = "all"
+	ReviewCommentsActionIncluded ReviewCommentsActionMode = "included"
+)
+
+type ReviewCommentsActionMsg struct {
+	FeatureID string
+	Mode      ReviewCommentsActionMode
+	Comments  []git.ReviewComment
+}
+
 // ReviewCommentsModel displays fetched PR review comments and lets the user
 // choose how to handle them.
 type ReviewCommentsModel struct {
@@ -84,6 +97,17 @@ func (m ReviewCommentsModel) Update(msg tea.Msg) (ReviewCommentsModel, tea.Cmd) 
 		m.height = msg.Height
 		m.browser.resize(msg.Width, msg.Height)
 	case tea.KeyPressMsg:
+		switch {
+		case msg.Code == tea.KeyEnter:
+			included := m.includedComments()
+			if len(included) == 0 {
+				m.browser.status = "No comments included. Press space to include one, or Shift+A to address all."
+				return m, nil
+			}
+			return m, reviewCommentsActionCmd(m.featureID, ReviewCommentsActionIncluded, included)
+		case msg.Code == 'A' && msg.Text == "A":
+			return m, reviewCommentsActionCmd(m.featureID, ReviewCommentsActionAll, m.comments)
+		}
 		var cmd tea.Cmd
 		m.browser, cmd = m.browser.Update(msg)
 		return m, cmd
@@ -101,6 +125,26 @@ func (m ReviewCommentsModel) WithSize(width, height int) ReviewCommentsModel {
 
 func (m ReviewCommentsModel) View() string {
 	return m.browser.View()
+}
+
+func (m ReviewCommentsModel) includedComments() []git.ReviewComment {
+	out := make([]git.ReviewComment, 0, len(m.comments))
+	for _, c := range m.comments {
+		if m.browser.included[c.ID] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func reviewCommentsActionCmd(featureID string, mode ReviewCommentsActionMode, comments []git.ReviewComment) tea.Cmd {
+	return func() tea.Msg {
+		return ReviewCommentsActionMsg{
+			FeatureID: featureID,
+			Mode:      mode,
+			Comments:  append([]git.ReviewComment(nil), comments...),
+		}
+	}
 }
 
 func reviewCommentItemsFromGit(comments []git.ReviewComment) []reviewCommentItem {
@@ -144,7 +188,7 @@ func newReviewCommentsBrowserModel(slug, repo string, items []reviewCommentItem,
 }
 
 func reviewCommentsBodyHeight(height int) int {
-	return max(height-7, 8)
+	return max(height-5, 8)
 }
 
 func reviewCommentsQueueWidth(width int) int {
@@ -170,13 +214,66 @@ func (m *reviewCommentsBrowserModel) resize(width, height int) {
 }
 
 func (m reviewCommentsBrowserModel) Update(msg tea.Msg) (reviewCommentsBrowserModel, tea.Cmd) {
-	var cmd tea.Cmd
-	m.detail, cmd = m.detail.Update(msg)
-	return m, cmd
+	keyMsg, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		var cmd tea.Cmd
+		m.detail, cmd = m.detail.Update(msg)
+		return m, cmd
+	}
+
+	if m.filtering {
+		switch keyMsg.Code {
+		case tea.KeyEscape:
+			m.clearFilter()
+			return m, nil
+		case tea.KeyBackspace:
+			m.backspaceFilter()
+			return m, nil
+		}
+		if keyMsg.Text != "" && keyMsg.Code != tea.KeySpace {
+			m.appendFilterRune(keyMsg.Text)
+			return m, nil
+		}
+	}
+
+	switch {
+	case keyMsg.Code == tea.KeyDown || keyMsg.Text == "j":
+		m.moveSelection(1)
+		return m, nil
+	case keyMsg.Code == tea.KeyUp || keyMsg.Text == "k":
+		m.moveSelection(-1)
+		return m, nil
+	case keyMsg.Code == tea.KeyHome:
+		m.selected = 0
+		m.refreshDetail()
+		return m, nil
+	case keyMsg.Code == tea.KeyEnd:
+		visible := m.visibleItems()
+		if len(visible) > 0 {
+			m.selected = len(visible) - 1
+			m.refreshDetail()
+		}
+		return m, nil
+	case keyMsg.Code == tea.KeySpace:
+		m.toggleSelectedIncluded()
+		return m, nil
+	case keyMsg.Code == '/':
+		m.startFilter()
+		return m, nil
+	case keyMsg.Code == tea.KeyPgDown || keyMsg.Code == tea.KeyPgUp:
+		var cmd tea.Cmd
+		m.detail, cmd = m.detail.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 func (m reviewCommentsBrowserModel) View() string {
 	w := max(m.width, 80)
+	visible := m.visibleItems()
+	if len(visible) == 0 {
+		return m.renderNoMatches()
+	}
 	if len(m.items) == 0 {
 		return m.renderEmpty(w)
 	}
@@ -246,7 +343,7 @@ func (m reviewCommentsBrowserModel) renderQueue(width int) string {
 	var b strings.Builder
 	b.WriteString(TitleStyle.Render("Queue"))
 	b.WriteString("\n")
-	for i, item := range m.items {
+	for i, item := range m.visibleItems() {
 		row := m.renderQueueRow(i, item, width)
 		if i == m.selected {
 			row = SelectedRowStyle.Render(row)
@@ -285,7 +382,10 @@ func (m reviewCommentsBrowserModel) renderDetail() string {
 	if len(m.items) == 0 {
 		return ""
 	}
-	item := m.items[min(max(m.selected, 0), len(m.items)-1)]
+	item, ok := m.selectedItem()
+	if !ok {
+		return MutedStyle.Render("No comments match " + m.filter)
+	}
 	width := max(m.detail.Width(), 40)
 	var b strings.Builder
 	b.WriteString(TitleStyle.Render("Detail"))
@@ -329,6 +429,106 @@ func (m reviewCommentsBrowserModel) includedCount() int {
 		}
 	}
 	return count
+}
+
+func (m reviewCommentsBrowserModel) visibleItems() []reviewCommentItem {
+	if strings.TrimSpace(m.filter) == "" {
+		return append([]reviewCommentItem(nil), m.items...)
+	}
+	query := strings.ToLower(strings.TrimSpace(m.filter))
+	out := make([]reviewCommentItem, 0, len(m.items))
+	for _, item := range m.items {
+		haystack := strings.ToLower(strings.Join([]string{
+			reviewCommentLocation(item),
+			item.Author,
+			item.Body,
+			item.Type,
+			reviewCommentTypeLabel(item.Type),
+		}, "\n"))
+		if strings.Contains(haystack, query) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func (m reviewCommentsBrowserModel) selectedItem() (reviewCommentItem, bool) {
+	visible := m.visibleItems()
+	if len(visible) == 0 {
+		return reviewCommentItem{}, false
+	}
+	idx := min(max(m.selected, 0), len(visible)-1)
+	return visible[idx], true
+}
+
+func (m *reviewCommentsBrowserModel) toggleSelectedIncluded() {
+	item, ok := m.selectedItem()
+	if !ok {
+		return
+	}
+	m.included[item.ID] = !m.included[item.ID]
+	m.status = ""
+}
+
+func (m *reviewCommentsBrowserModel) moveSelection(delta int) {
+	visible := m.visibleItems()
+	if len(visible) == 0 {
+		m.selected = 0
+		m.refreshDetail()
+		return
+	}
+	m.selected += delta
+	if m.selected < 0 {
+		m.selected = 0
+	}
+	if m.selected >= len(visible) {
+		m.selected = len(visible) - 1
+	}
+	m.refreshDetail()
+}
+
+func (m *reviewCommentsBrowserModel) startFilter() {
+	m.filtering = true
+	m.filter = ""
+	m.selected = 0
+	m.status = "Filtering comments"
+	m.refreshDetail()
+}
+
+func (m *reviewCommentsBrowserModel) appendFilterRune(text string) {
+	m.filter += text
+	m.selected = 0
+	m.status = ""
+	m.refreshDetail()
+}
+
+func (m *reviewCommentsBrowserModel) backspaceFilter() {
+	if m.filter == "" {
+		return
+	}
+	runes := []rune(m.filter)
+	m.filter = string(runes[:len(runes)-1])
+	m.selected = 0
+	m.refreshDetail()
+}
+
+func (m *reviewCommentsBrowserModel) clearFilter() {
+	m.filter = ""
+	m.filtering = false
+	m.selected = 0
+	m.status = ""
+	m.refreshDetail()
+}
+
+func (m reviewCommentsBrowserModel) renderNoMatches() string {
+	var b strings.Builder
+	b.WriteString(m.renderHeader())
+	b.WriteString("\n\n ")
+	b.WriteString(MutedStyle.Render(fmt.Sprintf("No comments match %q", m.filter)))
+	b.WriteString("\n\n")
+	b.WriteString(m.renderFooter())
+	b.WriteString("\n")
+	return b.String()
 }
 
 func reviewCommentLocation(item reviewCommentItem) string {

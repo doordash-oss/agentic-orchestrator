@@ -297,35 +297,40 @@ func TestReviewCommentsModelPgDownKeepsFooterVisible(t *testing.T) {
 	}
 }
 
-func TestReviewCommentsModelUsesClosedASCIIBoxes(t *testing.T) {
+func TestReviewCommentsModelUsesDashboardStyleBoxes(t *testing.T) {
 	t.Parallel()
 
 	m := NewReviewCommentsModel("feat-1", "bpf-cassandra-probe", testReviewComments(), 180, 30)
 	view := stripANSI(m.View())
-	for _, border := range []string{"╭", "╮", "╰", "╯", "┌", "┐", "└", "┘", "│"} {
-		if strings.Contains(view, border) {
-			t.Fatalf("review comments boxes should use ASCII borders, found %q:\n%s", border, view)
-		}
-	}
 
 	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
 	topLine := -1
 	bottomLine := -1
 	for i, line := range lines {
-		if strings.Count(line, "+") >= 4 && strings.Contains(line, "-") {
+		if strings.Count(line, "╭") >= 2 && strings.Count(line, "╮") >= 2 {
 			if topLine == -1 {
 				topLine = i
 			}
+		}
+		if strings.Count(line, "╰") >= 2 && strings.Count(line, "╯") >= 2 {
 			bottomLine = i
 		}
 	}
-	if topLine == -1 || bottomLine == topLine {
-		t.Fatalf("review comments did not render closed top and bottom ASCII box borders:\n%s", view)
+	if topLine == -1 || bottomLine == -1 || bottomLine <= topLine {
+		t.Fatalf("review comments did not render closed dashboard-style box borders:\n%s", view)
 	}
-	if strings.Count(lines[topLine], "+") < 4 || strings.Count(lines[bottomLine], "+") < 4 {
+	for _, line := range []string{lines[topLine], lines[bottomLine]} {
+		for _, asciiBorder := range []string{"+", "|"} {
+			if strings.Contains(line, asciiBorder) {
+				t.Fatalf("review comments box border should match dashboard style, found ASCII %q in %q", asciiBorder, line)
+			}
+		}
+	}
+	if strings.Count(lines[topLine], "╭") < 2 || strings.Count(lines[topLine], "╮") < 2 ||
+		strings.Count(lines[bottomLine], "╰") < 2 || strings.Count(lines[bottomLine], "╯") < 2 {
 		t.Fatalf("review comments borders do not include both pane corners:\n%s\n%s", lines[topLine], lines[bottomLine])
 	}
-	if !strings.Contains(view, "| Queue") || !strings.Contains(view, "| Detail") {
-		t.Fatalf("review comments boxes missing framed queue/detail titles:\n%s", view)
+	if !strings.Contains(lines[topLine], "Queue") || !strings.Contains(lines[topLine], "Detail") {
+		t.Fatalf("review comments boxes should render titles in the top border like the dashboard:\n%s", lines[topLine])
 	}
 }

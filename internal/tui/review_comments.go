@@ -245,15 +245,15 @@ func reviewCommentsDetailWidth(width int) int {
 }
 
 func reviewCommentsDetailContentWidth(width int) int {
-	return max(reviewCommentsBoxContentWidth(reviewCommentsDetailWidth(width)), 20)
+	return max(reviewCommentsPanelContentWidth(reviewCommentsDetailWidth(width)), 20)
 }
 
 func reviewCommentsDetailContentHeight(width, height int) int {
 	if width < 88 {
 		_, detailHeight := reviewCommentsNarrowPanelHeights(height)
-		return reviewCommentsBoxContentHeight(detailHeight)
+		return reviewCommentsPanelContentHeight(detailHeight)
 	}
-	return reviewCommentsBoxContentHeight(reviewCommentsBodyHeight(height, false))
+	return reviewCommentsPanelContentHeight(reviewCommentsBodyHeight(height, false))
 }
 
 func (m *reviewCommentsBrowserModel) resize(width, height int) {
@@ -408,8 +408,8 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 	if m.width < 88 {
 		queueHeight, detailHeight := reviewCommentsNarrowPanelHeights(m.height)
 		queueW := reviewCommentsQueueWidth(m.width)
-		queue := reviewCommentsBox(m.renderQueue(reviewCommentsBoxContentWidth(queueW), reviewCommentsBoxContentHeight(queueHeight)), queueW, queueHeight, m.focus == reviewCommentsFocusQueue)
-		detail := reviewCommentsBox(m.detail.View(), queueW, detailHeight, m.focus == reviewCommentsFocusDetail)
+		queue := reviewCommentsBox("Queue", m.renderQueue(reviewCommentsPanelContentWidth(queueW), reviewCommentsPanelContentHeight(queueHeight)), queueW, queueHeight, m.focus == reviewCommentsFocusQueue)
+		detail := reviewCommentsBox("Detail", m.detail.View(), queueW, detailHeight, m.focus == reviewCommentsFocusDetail)
 		lines := make([]string, 0, queueHeight+detailHeight+1)
 		lines = append(lines, queue...)
 		lines = append(lines, "")
@@ -420,9 +420,9 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 	queueW := reviewCommentsQueueWidth(m.width)
 	detailW := reviewCommentsDetailWidth(m.width)
 	panelHeight := reviewCommentsBodyHeight(m.height, m.status != "")
-	contentHeight := reviewCommentsBoxContentHeight(panelHeight)
-	queue := reviewCommentsBox(m.renderQueue(reviewCommentsBoxContentWidth(queueW), contentHeight), queueW, panelHeight, m.focus == reviewCommentsFocusQueue)
-	detail := reviewCommentsBox(m.detail.View(), detailW, panelHeight, m.focus == reviewCommentsFocusDetail)
+	contentHeight := reviewCommentsPanelContentHeight(panelHeight)
+	queue := reviewCommentsBox("Queue", m.renderQueue(reviewCommentsPanelContentWidth(queueW), contentHeight), queueW, panelHeight, m.focus == reviewCommentsFocusQueue)
+	detail := reviewCommentsBox("Detail", m.detail.View(), detailW, panelHeight, m.focus == reviewCommentsFocusDetail)
 	lines := make([]string, panelHeight)
 	for i := 0; i < panelHeight; i++ {
 		lines[i] = " " + queue[i] + " " + detail[i]
@@ -430,38 +430,34 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 	return strings.Join(lines, "\n")
 }
 
-func reviewCommentsBox(content string, width, height int, active bool) []string {
+func reviewCommentsBox(title, content string, width, height int, active bool) []string {
 	width = max(width, 6)
 	height = max(height, 3)
-	contentWidth := reviewCommentsBoxContentWidth(width)
-	contentHeight := reviewCommentsBoxContentHeight(height)
+	contentWidth := reviewCommentsPanelContentWidth(width)
+	contentHeight := reviewCommentsPanelContentHeight(height)
 	contentLines := reviewCommentsFitLines(content, contentWidth, contentHeight)
-	border := reviewCommentsASCIIBoxBorderStyle(active)
-	top := border.Render("+" + strings.Repeat("-", width-2) + "+")
-	bottom := border.Render("+" + strings.Repeat("-", width-2) + "+")
-	lines := make([]string, 0, height)
-	lines = append(lines, top)
-	for _, line := range contentLines {
-		lines = append(lines, border.Render("|")+" "+line+" "+border.Render("|"))
+	panelContent := strings.Join(contentLines, "\n")
+	if !active {
+		panelContent = dimContent(panelContent)
 	}
-	lines = append(lines, bottom)
-	return lines
+	box := panelStyle(active).
+		Width(width).
+		Height(height).
+		Render(panelContent)
+	titleStyle := lipgloss.NewStyle().Foreground(colorBrand)
+	if !active {
+		titleStyle = lipgloss.NewStyle().Foreground(colorOverlay)
+	}
+	box = renderBorderTitle(box, title, titleStyle)
+	return reviewCommentsFitLines(box, width, height)
 }
 
-func reviewCommentsBoxContentWidth(width int) int {
+func reviewCommentsPanelContentWidth(width int) int {
 	return max(width-4, 1)
 }
 
-func reviewCommentsBoxContentHeight(height int) int {
+func reviewCommentsPanelContentHeight(height int) int {
 	return max(height-2, 1)
-}
-
-func reviewCommentsASCIIBoxBorderStyle(active bool) lipgloss.Style {
-	color := colorSurface
-	if active {
-		color = colorBrand
-	}
-	return lipgloss.NewStyle().Foreground(color)
 }
 
 func reviewCommentsFitLines(content string, width, height int) []string {
@@ -482,10 +478,8 @@ func reviewCommentsFitLines(content string, width, height int) []string {
 
 func (m reviewCommentsBrowserModel) renderQueue(width, maxLines int) string {
 	var b strings.Builder
-	b.WriteString(TitleStyle.Render("Queue"))
-	b.WriteString("\n")
 	visible := m.visibleItems()
-	maxRows := max((maxLines-1)/2, 1)
+	maxRows := max(maxLines/2, 1)
 	start := 0
 	if len(visible) > maxRows {
 		start = min(max(m.selected-maxRows/2, 0), len(visible)-maxRows)
@@ -571,8 +565,6 @@ func (m reviewCommentsBrowserModel) renderDetail() string {
 	}
 	width := max(m.detail.Width(), 20)
 	var b strings.Builder
-	b.WriteString(TitleStyle.Render("Detail"))
-	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("%s %s\n", LabelStyle.Render("Location"), reviewCommentLocation(item)))
 	if item.Author != "" {
 		b.WriteString(fmt.Sprintf("%s @%s\n", LabelStyle.Render("Author"), item.Author))

@@ -1249,6 +1249,76 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 	}
 }
 
+func TestRunPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, dir := range []string{workDir, phasePlanDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", dir, err)
+		}
+	}
+
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+
+	var sessionIDs []string
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature:      f,
+			FeatureStore: store,
+			StateDir:     tmpDir,
+			WorkDir:      workDir,
+			MaxAttempts:  1,
+			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
+			},
+			SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+				sessionIDs = append(sessionIDs, id)
+				if len(sessionIDs) == 1 {
+					return newTerminalStatusTestSession(ports.SessionFailed), nil
+				}
+				attemptDir := filepath.Join(phasePlanDir, "attempt-01")
+				if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
+					t.Fatalf("write plan.md: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(attemptDir, PhaseCompleteFile), nil, 0o644); err != nil {
+					t.Fatalf("write phase_complete: %v", err)
+				}
+				sess := newUtilityTestSession()
+				sess.statusCh <- agentStatusSuccess
+				return sess, nil
+			},
+		},
+		Phase: RoadmapPhase{
+			Number: 1,
+			Name:   "Retry plan",
+			Type:   "tdd-fill-in",
+			Goal:   "Retry a provider child process that died before doing work",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus != "approved" {
+		t.Fatalf("FinalStatus = %q, want approved", result.FinalStatus)
+	}
+	wantSessionIDs := []string{
+		"test-plan-001-phase-01-plan-01",
+		"test-plan-001-phase-01-plan-01-retry-02",
+	}
+	if !reflect.DeepEqual(sessionIDs, wantSessionIDs) {
+		t.Fatalf("session IDs = %#v, want %#v", sessionIDs, wantSessionIDs)
+	}
+	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02")); !os.IsNotExist(err) {
+		t.Fatalf("attempt-02 stat err = %v, want not exist", err)
+	}
+}
+
 func TestPlanRetrySessionAttempt(t *testing.T) {
 	dir := t.TempDir()
 	if got := nextPlanSessionAttempt(dir, 2); got != 1 {

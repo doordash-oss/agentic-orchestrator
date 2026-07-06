@@ -18,6 +18,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -456,6 +457,47 @@ func TestRunBoundedHelper_DoneBranchDoesNotNudge(t *testing.T) {
 	// nudge/decide path would change this count.
 	if sess.stopCalls != 1 {
 		t.Errorf("stopCalls = %d, want 1 (single deferred Stop)", sess.stopCalls)
+	}
+}
+
+func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
+	phaseDir := t.TempDir()
+	workDir := t.TempDir()
+	var sessionIDs []string
+
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		sessionIDs = append(sessionIDs, id)
+		if len(sessionIDs) == 1 {
+			return newTerminalStatusTestSession(ports.SessionFailed), nil
+		}
+		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+		if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
+			t.Fatalf("write marker: %v", err)
+		}
+		sess := newUtilityTestSession()
+		sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+		sess.statusCh <- agentStatusSuccess
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+
+	result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+		sessionID:        "review-helper",
+		workDir:          workDir,
+		phaseCompleteDir: phaseDir,
+		contractPhase:    feature.PhaseReview,
+		contractRole:     RoleIterationReviewer,
+	})
+	if err != nil {
+		t.Fatalf("runBoundedHelperSession() error = %v", err)
+	}
+	if result.Status != BoundedHelperStatusCompleted {
+		t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+	}
+	wantSessionIDs := []string{"review-helper", "review-helper-retry-02"}
+	if !reflect.DeepEqual(sessionIDs, wantSessionIDs) {
+		t.Fatalf("session IDs = %#v, want %#v", sessionIDs, wantSessionIDs)
 	}
 }
 

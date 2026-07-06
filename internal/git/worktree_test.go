@@ -60,6 +60,27 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 	}
 }
 
+func TestWorktreeCreateRejectsEmptyRepoPath(t *testing.T) {
+	repoDir := testutil.InitGitRepo(t)
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(oldWd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+
+	mgr := NewWorktreeManager(t.TempDir())
+	if _, err := mgr.Create("", "empty-repo-path", "test-repo", ""); err == nil {
+		t.Fatal("Create() error = nil, want empty repo path rejected")
+	}
+}
+
 func TestWorktreeList(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping worktree list extended regression in short mode")

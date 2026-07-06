@@ -540,6 +540,40 @@ func TestRuntimeConfigDiscoversWorkspaceRootReposOnRead(t *testing.T) {
 	}
 }
 
+func TestRuntimeConfigUsesDiscoveredPathForBlankExplicitRepo(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repoPath := filepath.Join(root, "bpfagent")
+	if err := os.MkdirAll(filepath.Join(repoPath, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir git repo: %v", err)
+	}
+	cfg := &config.Config{
+		Repos: map[string]config.RepoConfig{
+			"bpfagent": {
+				PipelineGates: map[string]config.Checkpoints{
+					"medium": {ManualPublish: true},
+				},
+			},
+		},
+		WorkspaceRoots: []string{root},
+	}
+	handler := NewHandler(HandlerOptions{Config: cfg})
+
+	body := getJSONMap(t, handler, "/api/v1/config/runtime")
+	repos := body["repos"].([]any)
+	for _, item := range repos {
+		repo := item.(map[string]any)
+		if repo["name"] == "bpfagent" {
+			if got := repo["path"]; got != repoPath {
+				t.Fatalf("bpfagent path = %v, want discovered path %q", got, repoPath)
+			}
+			return
+		}
+	}
+	t.Fatalf("runtime config repos = %+v, want bpfagent", repos)
+}
+
 func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)

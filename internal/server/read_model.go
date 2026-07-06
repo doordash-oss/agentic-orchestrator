@@ -602,14 +602,9 @@ func (h *apiHandler) configOrDefault() *config.Config {
 
 func configRepoDTOs(cfg *config.Config) []ConfigRepoDTO {
 	cfg = runtimeConfigRepoSnapshot(cfg)
-	repos := make([]ConfigRepoDTO, 0, len(cfg.Repos)+len(cfg.DiscoveredRepos))
-	for name, repo := range cfg.Repos {
-		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
-	}
-	for name, repo := range cfg.DiscoveredRepos {
-		if _, ok := cfg.Repos[name]; ok {
-			continue
-		}
+	allRepos := config.AllRepos(cfg)
+	repos := make([]ConfigRepoDTO, 0, len(allRepos))
+	for name, repo := range allRepos {
 		repos = append(repos, ConfigRepoDTO{Name: name, Path: repo.Path, PipelineGates: copyConfigPipelineGates(repo.PipelineGates)})
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })

@@ -658,6 +658,52 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	}
 }
 
+func TestServerMutationTargetCreateFeatureResolvesBlankExplicitRepoFromWorkspaceRoots(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	stateDir := filepath.Join(runtimeDir, "features")
+	workspaceRoot := filepath.Join(runtimeDir, "workspace")
+	repoPath := filepath.Join(workspaceRoot, "bpfagent")
+	if err := os.MkdirAll(filepath.Join(repoPath, ".git"), 0o755); err != nil {
+		t.Fatalf("create repo fixture: %v", err)
+	}
+	cfg := config.NewDefault()
+	cfg.WorkspaceRoots = []string{workspaceRoot}
+	cfg.Repos["bpfagent"] = config.RepoConfig{
+		PipelineGates: map[string]config.Checkpoints{
+			"medium": {ManualPublish: true},
+		},
+	}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	store := feature.NewStore(stateDir)
+	manager := feature.NewManager(store, cfg)
+	target := serverMutationTarget{
+		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		cfg:        cfg,
+		configPath: configPath,
+		store:      store,
+	}
+
+	result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
+		Name:     "Cassandra Probe",
+		Repos:    []string{"bpfagent"},
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("CreateFeature() error = %v", err)
+	}
+
+	created, err := store.Load(result.FeatureID)
+	if err != nil {
+		t.Fatalf("Load created feature: %v", err)
+	}
+	if got := created.Repos[0].Path; got != repoPath {
+		t.Fatalf("created repo path = %q, want discovered path %q", got, repoPath)
+	}
+}
+
 func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(t *testing.T) {
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")

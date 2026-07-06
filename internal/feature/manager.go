@@ -177,12 +177,19 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		}
 	}
 
+	if len(m.Config.WorkspaceRoots) > 0 {
+		config.DiscoverReposFromRoots(m.Config)
+	}
+
 	var featureRepos []FeatureRepo
 	allRepos := config.AllRepos(m.Config)
 	for _, repoName := range repos {
 		rc, ok := allRepos[repoName]
 		if !ok {
 			return nil, fmt.Errorf("repo %q not found in config", repoName)
+		}
+		if strings.TrimSpace(rc.Path) == "" {
+			return nil, fmt.Errorf("repo %q has no path configured; add it under workspace_roots or set repos.%s.path", repoName, repoName)
 		}
 		baseBranch, hasRemote, err := m.resolveRepoBase(rc.Path)
 		if err != nil {

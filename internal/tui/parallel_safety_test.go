@@ -60,6 +60,7 @@ import (
 //   - observer_fake_test.go
 //   - parallel_safety_test.go
 //   - phase_catalog_test.go
+//   - review_comments_test.go
 //   - repos_block_test.go
 //   - simpletextarea_test.go
 //   - styles_test.go
@@ -110,6 +111,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"observer_fake_test.go",
 	"parallel_safety_test.go",
 	"phase_catalog_test.go",
+	"review_comments_test.go",
 	"repos_block_test.go",
 	"simpletextarea_test.go",
 	"styles_test.go",

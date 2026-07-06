@@ -289,12 +289,12 @@ func (m reviewCommentsBrowserModel) Update(msg tea.Msg) (reviewCommentsBrowserMo
 
 func (m reviewCommentsBrowserModel) View() string {
 	w := max(m.width, 80)
+	if len(m.items) == 0 {
+		return m.renderEmpty(w)
+	}
 	visible := m.visibleItems()
 	if len(visible) == 0 {
 		return m.renderNoMatches()
-	}
-	if len(m.items) == 0 {
-		return m.renderEmpty(w)
 	}
 
 	var b strings.Builder

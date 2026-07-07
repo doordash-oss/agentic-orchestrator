@@ -24,10 +24,10 @@ const (
 	CommitSignatureTrailer = "Generated-by: Agentic (" + AgenticURL + ")"
 
 	// PRSignature is the markdown signature appended to PR bodies and comments.
-	PRSignature = "\n\n---\n\n*Generated with [Agentic](" + AgenticURL + ")*"
+	PRSignature = "\n\n---\n\n*Generated with [agentic orchestrator](" + AgenticURL + ")*"
 )
 
-// InjectPRSignature appends the Agentic signature to a PR body or comment.
+// InjectPRSignature appends the agentic orchestrator signature to a PR body or comment.
 // Idempotent — skips if the signature is already present.
 func InjectPRSignature(body string) string {
 	if strings.Contains(body, PRSignature) {

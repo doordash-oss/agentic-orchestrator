@@ -12,7 +12,7 @@
     "agentico",
     "skills"
   ],
-  "skills": "../skills/",
+  "skills": "skills",
   "interface": {
     "displayName": "Agentico Agent Integration",
     "shortDescription": "Create and manage Agentico features from Codex through CLI JSON.",

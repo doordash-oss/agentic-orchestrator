@@ -1,5 +1,5 @@
 # Codex Plugin Wrapper
 
-This is a thin wrapper around the shared `../skills` content.
+This is a Codex wrapper for the shared `../skills` content.
 
-Expose the shared `agentico-create-feature` and `agentico-manage-feature` skills to Codex without copying their instructions. The wrapper may provide Codex-specific manifest metadata, but runtime behavior must stay in the shared skill files and must use only `agentico ... --json` commands.
+Codex requires skill directories under the plugin root when installing from a marketplace, so this wrapper includes Codex-local copies of `agentico-create-feature` and `agentico-manage-feature`. Keep runtime behavior aligned with the shared skill files, and keep every runtime operation on `agentico ... --json` commands.

@@ -699,3 +699,39 @@ func TestChatModelRecapSlotLeftGoesBack(t *testing.T) {
 		t.Fatalf("currentQuestionIdx = %d, want 1 (last question) after left on recap slot", updated.currentQuestionIdx)
 	}
 }
+
+// TestChatModelSyncAutoPickedTurns covers the out-of-band auto-pick path:
+// an AskUserQuestion answered by the harness's auto-pick policy is
+// synthesized directly into the session's message log (bypassing AttachCh
+// entirely), so ChatModel must proactively rescan the log rather than only
+// reacting to streamed messages.
+func TestChatModelSyncAutoPickedTurns(t *testing.T) {
+	sess := mocks.NewMockSessionView("__chat__", "")
+	sess.MessageLog().Append(llm.SDKMessage{
+		Type:               "user",
+		LocallyAppended:    true,
+		AutoPicked:         true,
+		AutoPickQuestion:   "Which environment?",
+		AutoPickConfidence: 0.85,
+		User: &llm.UserMessage{
+			Message: llm.ConversationMsg{
+				Role:    "user",
+				Content: []llm.ContentBlock{{Type: "text", Text: "production"}},
+			},
+		},
+	})
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.sess = sess
+	m.syncAutoPickedTurns()
+	if len(m.turns) != 1 {
+		t.Fatalf("len(m.turns) = %d, want 1", len(m.turns))
+	}
+	if !m.turns[0].AutoPicked || m.turns[0].Confidence != 0.85 || m.turns[0].Text != "production" {
+		t.Errorf("m.turns[0] = %+v, want AutoPicked=true Confidence=0.85 Text=%q", m.turns[0], "production")
+	}
+	// Calling again must not duplicate the turn.
+	m.syncAutoPickedTurns()
+	if len(m.turns) != 1 {
+		t.Fatalf("len(m.turns) = %d after second sync, want 1 (no duplicate)", len(m.turns))
+	}
+}

@@ -3771,17 +3771,9 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 						// Rendered with a left accent bar and surrounding
 						// blank lines to visually separate them from the
 						// assistant's response above and below.
-						accent := colorBrand
-						label := "[you]"
-						if msg.AutoPicked {
-							accent = colorWarning
-							label = "[auto-picked]"
-							if msg.AutoPickConfidence > 0 {
-								label = fmt.Sprintf("[auto-picked, confidence: %.2f]", msg.AutoPickConfidence)
-							}
-						}
-						barStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
-						labelStyle := lipgloss.NewStyle().Foreground(accent).Bold(true)
+						label, tagStyle := autoPickedTag(msg.AutoPicked, msg.AutoPickConfidence)
+						barStyle := tagStyle
+						labelStyle := tagStyle
 						displayText := replacePastedPaths(block.Text, media)
 						bar := barStyle.Render("▍") + " "
 						prefix := labelStyle.Render(label) + " "

@@ -100,6 +100,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"activity_test.go",
 	"api_app_test.go",
 	"attention_test.go",
+	"auto_picked_tag_test.go",
 	"branding_test.go",
 	"configeditor_test.go",
 	"dashboard_test.go",

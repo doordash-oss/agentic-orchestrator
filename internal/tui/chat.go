@@ -98,6 +98,8 @@ type chatTurn struct {
 	Role       chatTurnRole
 	Text       string
 	InProgress bool
+	AutoPicked bool
+	Confidence float64
 }
 
 // ChatModel provides a bottom-panel chat interface backed by a single
@@ -133,7 +135,10 @@ type ChatModel struct {
 	// that hasn't caught up with the just-sent answer yet) doesn't
 	// re-activate the picker and duplicate the agent turn.
 	answeredAskRequestIDs map[string]struct{}
-	inputHeight           int // current input textarea height in lines (1-6)
+	// autoPickedSeen dedups auto-picked messages already synced into m.turns,
+	// keyed by autoPickedMessageKey.
+	autoPickedSeen map[string]struct{}
+	inputHeight    int // current input textarea height in lines (1-6)
 	// turnCostBaseline is the Cost() pointer observed at the moment the
 	// current turn started. The recovery tick clears responding when
 	// sess.Cost() no longer matches this baseline — i.e. a new Result was
@@ -254,7 +259,8 @@ func (m *ChatModel) rebuildViewport() {
 func renderChatTurn(t chatTurn, width int) string {
 	switch t.Role {
 	case chatTurnUser:
-		return chatUserTagStyle.Render("[you]") + "  " + t.Text
+		label, style := autoPickedTag(t.AutoPicked, t.Confidence)
+		return style.Render(label) + "  " + t.Text
 	case chatTurnAgent:
 		return chatAgentTagStyle.Render("[agent]") + "  " + renderMarkdown(t.Text, width)
 	case chatTurnError:
@@ -305,6 +311,38 @@ func (m *ChatModel) finalizeInProgressTurn() {
 func (m *ChatModel) discardInProgressTurn() {
 	if n := len(m.turns); n > 0 && m.turns[n-1].Role == chatTurnAgent && m.turns[n-1].InProgress {
 		m.turns = m.turns[:n-1]
+	}
+}
+
+// syncAutoPickedTurns scans the session's message log for AutoPicked
+// messages not yet reflected in m.turns and appends them. Auto-picked
+// answers are synthesized directly into the session's message log by
+// whatever decided to auto-answer (see appendMissingAutoPickedMessages),
+// bypassing the streamed AttachCh entirely — this is why ChatModel must
+// proactively rescan the log instead of only reacting to streamed messages.
+func (m *ChatModel) syncAutoPickedTurns() {
+	if m.sess == nil || m.sess.MessageLog() == nil {
+		return
+	}
+	appendMissingAutoPickedMessages(m.sess)
+	for _, msg := range m.sess.MessageLog().Messages() {
+		if !msg.AutoPicked || msg.User == nil {
+			continue
+		}
+		for _, block := range msg.User.Message.Content {
+			if !block.IsText() || block.Text == "" {
+				continue
+			}
+			key := autoPickedMessageKey(msg.AutoPickQuestion, block.Text, msg.AutoPickConfidence)
+			if m.autoPickedSeen == nil {
+				m.autoPickedSeen = make(map[string]struct{})
+			}
+			if _, seen := m.autoPickedSeen[key]; seen {
+				continue
+			}
+			m.autoPickedSeen[key] = struct{}{}
+			m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: block.Text, AutoPicked: true, Confidence: msg.AutoPickConfidence})
+		}
 	}
 }
 
@@ -866,7 +904,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					continue
 				}
 				questions := parseAskUserQuestions(sdkMsg.ControlRequest.Request.Input)
-				if len(questions) > 0 && !m.hasActiveQuestion() {
+				if len(questions) > 0 && !m.hasActiveQuestion() && !askUserQuestionsAlreadyAutoPicked(m.sess, questions) {
 					m.finalizeInProgressTurn()
 					m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: questions[0].Question})
 					m.activateQuestions(questions, sdkMsg.ControlRequest.RequestID, sdkMsg.ControlRequest.Request.Input)
@@ -878,6 +916,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 			}
 		}
+		m.syncAutoPickedTurns()
 		m.rebuildViewport()
 		if m.pollSession && m.sess != nil {
 			cmds = append(cmds, pollChatChCmd(m.sess))

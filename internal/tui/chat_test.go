@@ -640,3 +640,62 @@ func TestChatModelMultiSelectToggle(t *testing.T) {
 		t.Fatal("expected option 1 to be unticked after toggling twice")
 	}
 }
+
+// TestChatModelPickerScrollFollowsSelection covers Finding 2: descriptions
+// make each option take 2 rendered lines, so questionVisibleWindowPure
+// windows down to fewer visible rows than total options. Pressing "down"
+// past the initial window must advance questionScrollOffset so the cursor
+// stays inside the visible [start, end) range instead of scrolling off
+// screen with no way back.
+func TestChatModelPickerScrollFollowsSelection(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	options := []askUserOption{
+		{Label: "Alpha", Description: "First option"},
+		{Label: "Beta", Description: "Second option"},
+		{Label: "Gamma", Description: "Third option"},
+		{Label: "Delta", Description: "Fourth option"},
+		{Label: "Epsilon", Description: "Fifth option"},
+	}
+	m.activateQuestions([]askUserQuestion{{Question: "Pick a direction", Options: options}}, "req-1", nil)
+
+	contentWidth := max(m.width-6, 40)
+	optionArea := max(len(options), 3)
+
+	downKey := tea.KeyPressMsg{Code: 'j', Text: "j"}
+	for i := 0; i < len(options)-1; i++ {
+		updated, _ := m.Update(downKey)
+		m = updated
+		start, end, _, _ := questionVisibleWindowPure(options, m.selectedOption, m.questionScrollOffset, optionArea, contentWidth)
+		if m.selectedOption < start || m.selectedOption >= end {
+			t.Fatalf("after %d down presses, selectedOption=%d scrollOffset=%d outside visible window [%d, %d)",
+				i+1, m.selectedOption, m.questionScrollOffset, start, end)
+		}
+	}
+}
+
+// TestChatModelRecapSlotLeftGoesBack covers Finding 1: the recap slot's
+// footer advertises "[←] back" but the key handler never wired it up.
+// Pressing "left" on the recap slot must return to the last question
+// instead of being a silent no-op.
+func TestChatModelRecapSlotLeftGoesBack(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{Question: "First?", Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
+		{Question: "Second?", Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
+	}, "req-1", nil)
+	m.commitAnswer("A")
+	m.advanceQuestionOpts(1, false)
+	m.commitAnswer("C")
+	m.advanceQuestionOpts(1, false)
+	if !m.onRecapSlot() {
+		t.Fatalf("expected recap slot after answering both questions, currentQuestionIdx=%d", m.currentQuestionIdx)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if updated.onRecapSlot() {
+		t.Fatal("expected left on recap slot to leave the recap slot")
+	}
+	if updated.currentQuestionIdx != 1 {
+		t.Fatalf("currentQuestionIdx = %d, want 1 (last question) after left on recap slot", updated.currentQuestionIdx)
+	}
+}

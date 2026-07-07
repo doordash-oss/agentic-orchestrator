@@ -476,6 +476,67 @@ func (m *ChatModel) advanceQuestionOpts(delta int, snapshot bool) bool {
 	return true
 }
 
+// updateChatQuestionScrollOffset adjusts questionScrollOffset so that
+// selectedOption stays visible within the windowed option list (mirrors
+// AttachModel.updateQuestionScrollOffset), using the same optionArea/
+// contentWidth derivation as renderQuestionPicker.
+func (m *ChatModel) updateChatQuestionScrollOffset() {
+	if len(m.questions) == 0 || m.currentQuestionIdx >= len(m.questions) {
+		return
+	}
+	q := m.questions[m.currentQuestionIdx]
+	totalOptions := len(q.Options)
+
+	// "Type something" (index == totalOptions) is always visible below the
+	// separator; no scroll adjustment needed for it.
+	if m.selectedOption >= totalOptions {
+		return
+	}
+
+	contentWidth := max(m.width-6, 40)
+	totalLines := 0
+	for i, o := range q.Options {
+		totalLines += questionOptionLineCount(o, i, contentWidth)
+	}
+	optionArea := max(len(q.Options), 3)
+
+	if totalLines <= optionArea {
+		m.questionScrollOffset = 0
+		return
+	}
+
+	// If selected is above the window, scroll up.
+	if m.selectedOption < m.questionScrollOffset {
+		m.questionScrollOffset = m.selectedOption
+		return
+	}
+
+	// Already visible from current offset.
+	_, end, _, _ := questionVisibleWindowPure(q.Options, m.selectedOption, m.questionScrollOffset, optionArea, contentWidth)
+	if m.selectedOption < end {
+		return
+	}
+
+	// Scroll down: find minimum offset so selectedOption is the last visible
+	// option, working backwards from selectedOption until the budget runs out.
+	budget := optionArea - 1 // reserve for "above" indicator
+	if m.selectedOption < totalOptions-1 {
+		budget-- // reserve for "below" indicator
+	}
+	usedLines := 0
+	newOffset := m.selectedOption
+	for i := m.selectedOption; i >= 0; i-- {
+		ol := questionOptionLineCount(q.Options[i], i, contentWidth)
+		if usedLines+ol > budget {
+			newOffset = i + 1
+			break
+		}
+		usedLines += ol
+		newOffset = i
+	}
+	m.questionScrollOffset = newOffset
+}
+
 // submitAllQuestionAnswers dispatches the collected answers via the same
 // RespondToAskUser protocol chat.go already uses for a single pending
 // question, clears picker state, and echoes each answer as a user turn.
@@ -552,6 +613,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			switch msg.String() {
 			case "enter":
 				return m, m.submitAllQuestionAnswers()
+			case "left", "h":
+				m.advanceQuestionOpts(-1, false)
+				return m, nil
 			case "esc":
 				return m, func() tea.Msg { return ChatExitMsg{} }
 			}
@@ -568,11 +632,13 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			case "up", "k":
 				if m.selectedOption > 0 {
 					m.selectedOption--
+					m.updateChatQuestionScrollOffset()
 				}
 				return m, nil
 			case "down", "j":
 				if m.selectedOption < numOptions {
 					m.selectedOption++
+					m.updateChatQuestionScrollOffset()
 				}
 				return m, nil
 			case "left", "h":

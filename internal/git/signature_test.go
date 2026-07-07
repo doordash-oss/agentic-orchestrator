@@ -98,7 +98,10 @@ func TestConstants(t *testing.T) {
 	if !strings.Contains(CommitSignatureTrailer, "Generated-by: Agentic") {
 		t.Errorf("CommitSignatureTrailer should contain 'Generated-by: Agentic'")
 	}
-	if !strings.Contains(PRSignature, "Generated with [Agentic]") {
-		t.Errorf("PRSignature should contain 'Generated with [Agentic]'")
+	if !strings.Contains(PRSignature, "Generated with [agentic orchestrator]") {
+		t.Errorf("PRSignature should contain 'Generated with [agentic orchestrator]'")
+	}
+	if strings.Contains(PRSignature, "Generated with [Agentic]") {
+		t.Errorf("PRSignature should not contain legacy 'Generated with [Agentic]' label")
 	}
 }

@@ -431,6 +431,10 @@ func reviewCommentsExitCriteria(resolutionsPath string) string {
 func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resolutionsPath string) string {
 	// Sort targets by repo name for deterministic output.
 	sorted := append([]ReviewCommentsRepoTarget(nil), targets...)
+	for i := range sorted {
+		sorted[i].Comments = append([]ports.ReviewComment(nil), sorted[i].Comments...)
+		sortReviewCommentsChronologically(sorted[i].Comments)
+	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].RepoName < sorted[j].RepoName })
 
 	totalComments := 0

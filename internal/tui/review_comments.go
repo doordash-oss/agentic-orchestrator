@@ -85,11 +85,13 @@ type ReviewCommentsModel struct {
 }
 
 func NewReviewCommentsModel(featureID, slug string, comments []git.ReviewComment, width, height int) ReviewCommentsModel {
-	browser := newReviewCommentsBrowserModel(slug, "", reviewCommentItemsFromGit(comments), width, height)
+	ordered := append([]git.ReviewComment(nil), comments...)
+	git.SortReviewCommentsChronologically(ordered)
+	browser := newReviewCommentsBrowserModel(slug, "", reviewCommentItemsFromGit(ordered), width, height)
 	return ReviewCommentsModel{
 		featureID:   featureID,
 		featureSlug: slug,
-		comments:    append([]git.ReviewComment(nil), comments...),
+		comments:    ordered,
 		browser:     browser,
 		width:       width,
 		height:      height,

@@ -130,6 +130,22 @@ func TestParsePaginatedCommentsWithType(t *testing.T) {
 	}
 }
 
+func TestSortReviewCommentsChronologically(t *testing.T) {
+	comments := []ReviewComment{
+		{ID: 3, CreatedAt: "2026-07-07T12:00:00Z"},
+		{ID: 1, CreatedAt: "2026-07-07T10:00:00Z"},
+		{ID: 2, CreatedAt: "2026-07-07T11:00:00Z"},
+	}
+
+	sortReviewCommentsChronologically(comments)
+
+	for i, wantID := range []int{1, 2, 3} {
+		if comments[i].ID != wantID {
+			t.Fatalf("comments[%d].ID = %d, want %d", i, comments[i].ID, wantID)
+		}
+	}
+}
+
 func TestParseReviewThreadMap(t *testing.T) {
 	t.Run("unresolved threads", func(t *testing.T) {
 		input := `{

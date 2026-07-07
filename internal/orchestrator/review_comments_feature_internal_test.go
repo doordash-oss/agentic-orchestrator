@@ -27,6 +27,47 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+func TestAggregateReviewCommentTargetsSkipsNonThreadedComments(t *testing.T) {
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	f := &feature.Feature{
+		ID:            "feat-review-comments-filter",
+		Name:          "Review Comments Filter",
+		Slug:          "review-comments-filter",
+		Status:        feature.StatusPublished,
+		ActiveRun:     1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Repos: []feature.FeatureRepo{
+			{Name: "agentic", Path: "/tmp/agentic", Branch: "feature/review-comments-filter"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"agentic": {Touched: true, PRURL: "https://github.com/example/agentic/pull/1"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	if err := agent.SaveReviewCommentsForRepo(stateDir, f, "agentic", agent.ReviewCommentsData{
+		Mode: "auto",
+		Comments: []ports.ReviewComment{
+			{ID: 1, Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"},
+			{ID: 2, Type: ports.CommentTypeIssue, CreatedAt: "2026-07-07T11:00:00Z"},
+			{ID: 3, Type: ports.CommentTypeReviewBody, CreatedAt: "2026-07-07T12:00:00Z"},
+		},
+	}); err != nil {
+		t.Fatalf("save review comments: %v", err)
+	}
+
+	o := New(Deps{Store: store}, Hooks{})
+	targets := o.aggregateReviewCommentTargets(f)
+	if len(targets) != 1 {
+		t.Fatalf("targets = %d, want 1", len(targets))
+	}
+	if len(targets[0].Comments) != 1 || targets[0].Comments[0].ID != 1 {
+		t.Fatalf("aggregated comments = %+v, want only inline review comment 1", targets[0].Comments)
+	}
+}
+
 func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) {
 	store := feature.NewStore(t.TempDir())
 	cfg := config.NewDefault()

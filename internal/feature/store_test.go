@@ -122,6 +122,91 @@ func TestStoreList(t *testing.T) {
 	}
 }
 
+func TestStoreReadPathsDoNotWaitForInFlightModify(t *testing.T) {
+	// Not parallel: the test intentionally holds a Store.Modify goroutine open
+	// while asserting read-path responsiveness.
+	dir := t.TempDir()
+	store := NewStore(dir)
+	f := &Feature{
+		ID:            "responsive-read",
+		Name:          "Original",
+		Slug:          "responsive-read",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	modifyDone := make(chan error, 1)
+	go func() {
+		modifyDone <- store.Modify(f.ID, func(f *Feature) error {
+			close(started)
+			<-release
+			f.Name = "Updated"
+			return nil
+		})
+	}()
+	<-started
+	t.Cleanup(func() {
+		close(release)
+		if err := <-modifyDone; err != nil {
+			t.Errorf("modify: %v", err)
+		}
+	})
+
+	readDone := make(chan struct {
+		features []*Feature
+		loaded   *Feature
+		err      error
+	}, 1)
+	go func() {
+		features, err := store.List()
+		if err != nil {
+			readDone <- struct {
+				features []*Feature
+				loaded   *Feature
+				err      error
+			}{err: fmt.Errorf("list: %w", err)}
+			return
+		}
+		loaded, err := store.Load(f.ID)
+		if err != nil {
+			readDone <- struct {
+				features []*Feature
+				loaded   *Feature
+				err      error
+			}{err: fmt.Errorf("load: %w", err)}
+			return
+		}
+		readDone <- struct {
+			features []*Feature
+			loaded   *Feature
+			err      error
+		}{features: features, loaded: loaded}
+	}()
+
+	select {
+	case got := <-readDone:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if len(got.features) != 1 {
+			t.Fatalf("features len = %d, want 1", len(got.features))
+		}
+		if got.features[0].Name != "Original" {
+			t.Fatalf("listed name = %q, want last committed name Original", got.features[0].Name)
+		}
+		if got.loaded.Name != "Original" {
+			t.Fatalf("loaded name = %q, want last committed name Original", got.loaded.Name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("read paths blocked behind in-flight Modify")
+	}
+}
+
 func TestStoreListPartialLoad(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.

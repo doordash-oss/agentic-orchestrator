@@ -19,8 +19,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -51,10 +53,10 @@ func ParsePRURL(prURL string) (owner, repo string, number int, err error) {
 	return "", "", 0, fmt.Errorf("could not parse PR URL: %s", prURL)
 }
 
-// FetchPRComments fetches both inline review comments and general PR
-// conversation (issue) comments using the gh CLI. Returns only top-level
-// comments (excludes replies). Each comment's Type field is set to
-// CommentTypeReview or CommentTypeIssue accordingly.
+// FetchPRComments fetches inline PR review comments using the gh CLI. Returns
+// only top-level review comments (excludes replies). Each comment's Type field
+// is set to CommentTypeReview so completion can reply directly in the review
+// thread and then resolve the conversation.
 func FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
 	owner, repo, number, err := ParsePRURL(prURL)
 	if err != nil {
@@ -84,54 +86,44 @@ func FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
 		}
 	}
 
-	// Fetch general issue/conversation comments
-	issueEndpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
-	issueCmd := exec.Command("gh", "api", "--paginate", issueEndpoint)
-	issueCmd.Dir = repoPath
-	issueOut, err := issueCmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("fetching PR issue comments: %s: %w", strings.TrimSpace(string(issueOut)), err)
-	}
-
-	issueComments, err := parsePaginatedComments(issueOut)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, c := range issueComments {
-		c.Type = CommentTypeIssue
-		result = append(result, c)
-	}
-
-	// Fetch top-level PR review bodies (approve/request-changes/comment)
-	reviewsEndpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
-	reviewsCmd := exec.Command("gh", "api", "--paginate", reviewsEndpoint)
-	reviewsCmd.Dir = repoPath
-	reviewsOut, err := reviewsCmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("fetching PR reviews: %s: %w", strings.TrimSpace(string(reviewsOut)), err)
-	}
-
-	reviews, err := parsePaginatedReviews(reviewsOut)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, r := range reviews {
-		body := strings.TrimSpace(r.Body)
-		if body == "" {
-			continue
-		}
-		result = append(result, ReviewComment{
-			ID:        r.ID,
-			Body:      body,
-			User:      r.User,
-			CreatedAt: r.CreatedAt,
-			Type:      CommentTypeReviewBody,
-		})
-	}
-
+	sortReviewCommentsChronologically(result)
 	return result, nil
+}
+
+// SortReviewCommentsChronologically orders comments by their GitHub creation
+// time in ascending order. Comments without a parseable timestamp are placed
+// after dated comments, with ID as a deterministic tie-breaker.
+func SortReviewCommentsChronologically(comments []ReviewComment) {
+	sortReviewCommentsChronologically(comments)
+}
+
+func sortReviewCommentsChronologically(comments []ReviewComment) {
+	sort.SliceStable(comments, func(i, j int) bool {
+		ti, iok := parseReviewCommentCreatedAt(comments[i].CreatedAt)
+		tj, jok := parseReviewCommentCreatedAt(comments[j].CreatedAt)
+		switch {
+		case iok && jok:
+			if !ti.Equal(tj) {
+				return ti.Before(tj)
+			}
+		case iok != jok:
+			return iok
+		case comments[i].CreatedAt != comments[j].CreatedAt:
+			return comments[i].CreatedAt < comments[j].CreatedAt
+		}
+		return comments[i].ID < comments[j].ID
+	})
+}
+
+func parseReviewCommentCreatedAt(value string) (time.Time, bool) {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // prReview represents a top-level PR review (the body submitted with

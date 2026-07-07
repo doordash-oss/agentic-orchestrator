@@ -879,6 +879,29 @@ func TestBuildAggregatedReviewCommentsPlan_Formatting(t *testing.T) {
 	}
 }
 
+func TestBuildAggregatedReviewCommentsPlanSortsCommentsByCreatedAt(t *testing.T) {
+	late := ports.ReviewComment{ID: 3, Path: "late.go", Line: 30, Body: "late", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T12:00:00Z"}
+	middle := ports.ReviewComment{ID: 2, Path: "middle.go", Line: 20, Body: "middle", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T11:00:00Z"}
+	early := ports.ReviewComment{ID: 1, Path: "early.go", Line: 10, Body: "early", Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"}
+
+	plan := BuildAggregatedReviewCommentsPlan([]ReviewCommentsRepoTarget{{
+		RepoName: "api",
+		PRURL:    "https://github.com/o/api/pull/1",
+		Mode:     "auto",
+		Comments: []ports.ReviewComment{late, early, middle},
+	}}, "/state/review-resolutions.json")
+
+	idxEarly := strings.Index(plan, "ID: 1)")
+	idxMiddle := strings.Index(plan, "ID: 2)")
+	idxLate := strings.Index(plan, "ID: 3)")
+	if idxEarly < 0 || idxMiddle < 0 || idxLate < 0 {
+		t.Fatalf("plan missing expected comment IDs:\n%s", plan)
+	}
+	if !(idxEarly < idxMiddle && idxMiddle < idxLate) {
+		t.Fatalf("comment order indexes = early:%d middle:%d late:%d, want chronological", idxEarly, idxMiddle, idxLate)
+	}
+}
+
 func TestReviewCommentsSkillDocumentsStandardImplementHandoff(t *testing.T) {
 	data, err := os.ReadFile(repoRootPath(t, "skills", "review-comments", "SKILL.md"))
 	if err != nil {

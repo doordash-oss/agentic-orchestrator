@@ -1467,10 +1467,12 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	} else {
 		resp.Source = "provided"
 	}
+	comments = threadedReviewComments(comments)
 	if len(comments) == 0 {
 		resp.Result = "no_comments"
 		return resp, fmt.Errorf("review-comments: no unaddressed comments for repo %s", req.Repo)
 	}
+	git.SortReviewCommentsChronologically(comments)
 	resp.CommentCount = len(comments)
 	f, err := t.store.Load(featureID)
 	if err != nil {
@@ -1798,6 +1800,16 @@ func reviewCommentDTOsToPorts(repoName string, comments []serverruntime.ReviewCo
 		out = append(out, portComment)
 	}
 	return out
+}
+
+func threadedReviewComments(comments []ports.ReviewComment) []ports.ReviewComment {
+	filtered := comments[:0]
+	for _, comment := range comments {
+		if comment.Type == "" || comment.Type == ports.CommentTypeReview {
+			filtered = append(filtered, comment)
+		}
+	}
+	return filtered
 }
 
 func findFeatureRepo(f *feature.Feature, repoName string) (feature.FeatureRepo, bool) {

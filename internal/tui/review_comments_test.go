@@ -79,6 +79,36 @@ func TestReviewCommentsModelInitialSplitView(t *testing.T) {
 	}
 }
 
+func TestReviewCommentsModelSortsByCreatedAt(t *testing.T) {
+	t.Parallel()
+
+	comments := []git.ReviewComment{
+		{ID: 3, Type: git.CommentTypeReview, Path: "late.go", Line: 30, Body: "late", CreatedAt: "2026-07-07T12:00:00Z"},
+		{ID: 1, Type: git.CommentTypeReview, Path: "early.go", Line: 10, Body: "early", CreatedAt: "2026-07-07T10:00:00Z"},
+		{ID: 2, Type: git.CommentTypeReview, Path: "middle.go", Line: 20, Body: "middle", CreatedAt: "2026-07-07T11:00:00Z"},
+	}
+
+	m := NewReviewCommentsModel("feat-1", "chronological", comments, 120, 36)
+	if m.browser.items[0].ID != 1 || m.browser.items[1].ID != 2 || m.browser.items[2].ID != 3 {
+		t.Fatalf("browser item order = [%d %d %d], want [1 2 3]",
+			m.browser.items[0].ID, m.browser.items[1].ID, m.browser.items[2].ID)
+	}
+
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("enter returned nil command, want chronological action")
+	}
+	msg, ok := cmd().(ReviewCommentsActionMsg)
+	if !ok {
+		t.Fatalf("enter command type = %T, want ReviewCommentsActionMsg", cmd())
+	}
+	for i, wantID := range []int{1, 2, 3} {
+		if msg.Comments[i].ID != wantID {
+			t.Fatalf("action comments[%d].ID = %d, want %d", i, msg.Comments[i].ID, wantID)
+		}
+	}
+}
+
 func TestReviewCommentsModelEmptyState(t *testing.T) {
 	t.Parallel()
 

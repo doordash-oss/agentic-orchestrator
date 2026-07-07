@@ -151,7 +151,7 @@ func (o *Orchestrator) aggregateReviewCommentTargets(
 		addressed, _ := agent.LoadAddressedIDsForRepo(stateDir, f, repo.Name)
 		filtered := make([]ports.ReviewComment, 0, len(data.Comments))
 		for _, c := range data.Comments {
-			if !addressed[c.ID] {
+			if isThreadedReviewComment(c) && !addressed[c.ID] {
 				filtered = append(filtered, c)
 			}
 		}
@@ -166,6 +166,10 @@ func (o *Orchestrator) aggregateReviewCommentTargets(
 		})
 	}
 	return out
+}
+
+func isThreadedReviewComment(c ports.ReviewComment) bool {
+	return c.Type == "" || c.Type == ports.CommentTypeReview
 }
 
 // stageReviewCommentsPlanArtifacts writes the aggregated review plan +

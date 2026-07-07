@@ -67,7 +67,7 @@ func writeReviewResolutionsJSONForRepo(t *testing.T, stateDir, featureID, repoNa
 // ---------------------------------------------------------------------------
 // CompleteRepoCycle (review-comments) — happy path
 // ---------------------------------------------------------------------------
-func TestCompleteRepoCycle_ReviewComments_HappyPath(t *testing.T) {
+func TestCompleteRepoCycle_ReviewComments_RepliesOnlyToReviewThreads(t *testing.T) {
 	stateDir := t.TempDir()
 	f := &feature.Feature{
 		ID:        "feat-rc-cycle",
@@ -152,8 +152,8 @@ func TestCompleteRepoCycle_ReviewComments_HappyPath(t *testing.T) {
 	if got := countReviewerCalls(rev, "ReplyToPRComment"); got != 1 {
 		t.Errorf("ReplyToPRComment calls = %d, want 1", got)
 	}
-	if got := countReviewerCalls(rev, "ReplyToIssueComment"); got != 2 {
-		t.Errorf("ReplyToIssueComment calls = %d, want 2", got)
+	if got := countReviewerCalls(rev, "ReplyToIssueComment"); got != 0 {
+		t.Errorf("ReplyToIssueComment calls = %d, want 0", got)
 	}
 	if got := countReviewerCalls(rev, "ResolveReviewThread"); got != 1 {
 		t.Errorf("ResolveReviewThread calls = %d, want 1", got)
@@ -169,7 +169,7 @@ func TestCompleteRepoCycle_ReviewComments_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAddressedIDsForRepo: %v", err)
 	}
-	if len(addressed) != 3 || !addressed[11] || !addressed[22] || !addressed[33] {
+	if len(addressed) != 1 || !addressed[11] {
 		t.Fatalf("unexpected addressed ids: %v", addressed)
 	}
 }

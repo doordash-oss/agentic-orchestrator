@@ -64,7 +64,7 @@ func IsPartialLoadError(err error) bool {
 
 type Store struct {
 	BaseDir string
-	mu      sync.Mutex // serializes all read-modify-write cycles
+	mu      sync.Mutex // serializes writes while reads use atomic file commits
 }
 
 func NewStore(baseDir string) *Store {
@@ -79,9 +79,6 @@ func (s *Store) Save(f *Feature) error {
 }
 
 func (s *Store) Load(id string) (*Feature, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	return s.loadUnlocked(id)
 }
 
@@ -225,8 +222,9 @@ func (s *Store) runDirUnlocked(featureID string, runNumber int) string {
 	return filepath.Join(s.BaseDir, featureID, "runs", RunDirName(runNumber))
 }
 
-// loadUnlocked reads a feature and its active run.
-// Callers must hold s.mu.
+// loadUnlocked reads a feature and its active run from the last committed
+// atomic file renames. It intentionally does not acquire s.mu so read-model
+// endpoints stay responsive while a long Modify closure is in progress.
 func (s *Store) loadUnlocked(id string) (*Feature, error) {
 	path := filepath.Join(s.BaseDir, id, "feature.yaml")
 	data, err := os.ReadFile(path)
@@ -246,8 +244,8 @@ func (s *Store) loadUnlocked(id string) (*Feature, error) {
 	return &f, nil
 }
 
-// loadRunUnlocked reads the run.yaml for a specific run number.
-// Callers must hold s.mu.
+// loadRunUnlocked reads the run.yaml for a specific run number. It does not
+// acquire s.mu; run writes are committed by atomic rename.
 func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
 	path := filepath.Join(s.runDirUnlocked(featureID, runNumber), "run.yaml")
 	data, err := os.ReadFile(path)
@@ -263,9 +261,6 @@ func (s *Store) loadRunUnlocked(featureID string, runNumber int) (*Run, error) {
 }
 
 func (s *Store) List() ([]*Feature, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	entries, err := os.ReadDir(s.BaseDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -324,9 +319,6 @@ func (s *Store) CreateRun(featureID string, r *Run) error {
 
 // LoadRun reads a specific run's run.yaml.
 func (s *Store) LoadRun(featureID string, runNumber int) (*Run, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	return s.loadRunUnlocked(featureID, runNumber)
 }
 

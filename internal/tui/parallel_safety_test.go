@@ -106,6 +106,7 @@ var tuiParallelCandidateTestFiles = []string{
 	"design_snapshot_test.go",
 	"design_surfaces_test.go",
 	"detail_test.go",
+	"expanding_textarea_test.go",
 	"live_preview_test.go",
 	"logs_test.go",
 	"observer_fake_test.go",

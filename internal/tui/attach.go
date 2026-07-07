@@ -1367,7 +1367,7 @@ func (m *AttachModel) restoreThinkingLine() {
 // a newline is inserted. This prevents the textarea viewport from scrolling
 // prior lines out of view at the old (smaller) height.
 func (m *AttachModel) preExpandInput() {
-	h := min(m.inputHeight+1, maxInputLines)
+	h := growTextareaHeight(m.inputHeight, maxInputLines)
 	if h != m.inputHeight {
 		m.inputHeight = h
 		m.input.SetHeight(h)
@@ -1377,9 +1377,7 @@ func (m *AttachModel) preExpandInput() {
 // syncInputHeight recalculates the textarea height based on content line count.
 // Must be called after any operation that changes textarea content.
 func (m *AttachModel) syncInputHeight() {
-	lineCount := strings.Count(m.input.Value(), "\n") + 1
-	h := max(lineCount, minInputLines)
-	h = min(h, maxInputLines)
+	h := syncTextareaHeight(m.input.Value(), minInputLines, maxInputLines)
 	if h != m.inputHeight {
 		m.inputHeight = h
 		m.input.SetHeight(h)
@@ -2346,7 +2344,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 				m.syncInputMode()
 				m.syncInputHeight()
 				return m, nil
-			case key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))):
+			case key.Matches(msg, shiftEnterKey):
 				m.preExpandInput()
 				var cmd tea.Cmd
 				m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -2393,7 +2391,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 					return m, m.submitAnswer(text)
 				}
 				return m, nil
-			case key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))):
+			case key.Matches(msg, shiftEnterKey):
 				m.preExpandInput()
 				var cmd tea.Cmd
 				m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -2473,7 +2471,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			return m, m.sendChatInput()
 		case key.Matches(msg, key.NewBinding(key.WithKeys("ctrl+s"))):
 			return m, m.sendChatInput()
-		case key.Matches(msg, key.NewBinding(key.WithKeys("shift+enter"))):
+		case key.Matches(msg, shiftEnterKey):
 			// Pre-expand before inserting newline so prior lines stay visible.
 			m.preExpandInput()
 			var cmd tea.Cmd

@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -82,7 +81,6 @@ const (
 	minInputLines = 1 // textarea starts at 1 line
 	maxInputLines = 6 // textarea grows to at most 6 lines
 
-	questionPromptMaxLines              = 6  // cap long AskUser context so choices stay visible
 	questionPanelBaseMaxLines           = 20 // default AskUser panel cap for normal/small terminals
 	questionPanelTallMaxLines           = 32 // upper bound so the transcript remains visible
 	expandedQuestionPromptReservedLines = 4  // room for scroll indicators and the return hint
@@ -103,36 +101,6 @@ func (f attachFilter) String() string {
 
 func (f attachFilter) next() attachFilter {
 	return (f + 1) % 3
-}
-
-// askUserQuestion holds parsed AskUserQuestion data for attach rendering.
-type askUserQuestion struct {
-	RawQuestion string
-	Question    string
-	Header      string
-	MultiSelect bool
-	Options     []askUserOption
-}
-
-type askUserOption struct {
-	Label       string
-	Description string
-	Confidence  *float64
-	// Preview is free-text (markdown or HTML) Claude emits when the question
-	// benefits from a visual mockup; rendered in a bordered box alongside the
-	// option list. Empty when Claude did not attach a preview.
-	Preview string
-}
-
-// pendingAskBundle captures everything needed to re-activate a deferred
-// AskUserQuestion control_request after the active one is submitted.
-// Stored in AttachModel.pendingAskQueue; only requestID/questions/raw are
-// needed because per-question UI state is rebuilt fresh by
-// activateAskUserQuestions when the bundle is promoted.
-type pendingAskBundle struct {
-	questions []askUserQuestion
-	requestID string
-	raw       json.RawMessage
 }
 
 // controlRequestStillPending reports whether the given requestID is still
@@ -219,93 +187,6 @@ func autoPickedMessageKey(question, answer string, confidence float64) string {
 	return fmt.Sprintf("%s\x00%s\x00%.6f", question, answer, confidence)
 }
 
-// questionUIState is a per-question snapshot of selection/cursor state so that
-// back/forward navigation through an AskUserQuestion batch can restore what
-// the user had chosen.
-type questionUIState struct {
-	selectedOption int          // cursor row (incl. "Type something" slot)
-	selectedMulti  map[int]bool // ticked option indices for multiSelect
-	scrollOffset   int          // windowed option-list offset
-	typingCustom   bool         // answer was given via "Type something" freeform
-	customText     string       // stored freeform text for re-editing
-	askedEmitted   bool         // true once QuestionAsked observability fired
-}
-
-var numberedAskUserOptionRe = regexp.MustCompile(`^\d+\.\s+(.+)$`)
-var askUserConfidenceSuffixRe = regexp.MustCompile(`(?i)\s+\[confidence:\s*(0(?:\.\d+)?|1(?:\.0+)?)\]\s*$`)
-
-// buildAskUserAnnotations converts the collected per-question notes map into
-// the llm wire-format map; returns nil when no notes were captured so the
-// response payload omits the `annotations` key entirely.
-func buildAskUserAnnotations(notes map[string]string) map[string]llm.AskUserAnnotation {
-	if len(notes) == 0 {
-		return nil
-	}
-	out := make(map[string]llm.AskUserAnnotation, len(notes))
-	for q, n := range notes {
-		if n == "" {
-			continue
-		}
-		out[q] = llm.AskUserAnnotation{Notes: n}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-func questionUsesDirectFreeform(q askUserQuestion) bool {
-	return len(q.Options) == 0
-}
-
-// parseAskUserQuestions extracts structured question data from AskUserQuestion tool input.
-func parseAskUserQuestions(input json.RawMessage) []askUserQuestion {
-	if len(input) == 0 {
-		return nil
-	}
-	var parsed struct {
-		Questions []struct {
-			Question    string `json:"question"`
-			Header      string `json:"header"`
-			MultiSelect bool   `json:"multiSelect"`
-			Options     []struct {
-				Label       string   `json:"label"`
-				Description string   `json:"description"`
-				Confidence  *float64 `json:"confidence"`
-				Preview     string   `json:"preview"`
-			} `json:"options"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(input, &parsed); err != nil || len(parsed.Questions) == 0 {
-		return nil
-	}
-	var result []askUserQuestion
-	for _, q := range parsed.Questions {
-		aq := askUserQuestion{
-			RawQuestion: q.Question,
-			Question:    q.Question,
-			Header:      q.Header,
-			MultiSelect: q.MultiSelect,
-		}
-		for _, o := range q.Options {
-			aq.Options = append(aq.Options, askUserOption{
-				Label:       o.Label,
-				Description: o.Description,
-				Confidence:  o.Confidence,
-				Preview:     o.Preview,
-			})
-		}
-		if len(aq.Options) == 0 {
-			if cleaned, inferred, ok := inferAskUserOptionsFromQuestionText(q.Question); ok {
-				aq.Question = cleaned
-				aq.Options = inferred
-			}
-		}
-		result = append(result, aq)
-	}
-	return result
-}
-
 func (m *AttachModel) parseAskUserQuestionsForDisplay(input json.RawMessage) []askUserQuestion {
 	questions := parseAskUserQuestions(input)
 	if len(questions) == 0 {
@@ -378,116 +259,6 @@ func copyAskUserQuestionConfidence(questions, source []askUserQuestion) []askUse
 		}
 	}
 	return enriched
-}
-
-func inferAskUserOptionsFromQuestionText(question string) (string, []askUserOption, bool) {
-	lines := strings.Split(strings.ReplaceAll(question, "\r\n", "\n"), "\n")
-	stem := make([]string, 0, len(lines))
-	rawOptions := make([]string, 0, 4)
-	inOptions := false
-
-	for _, raw := range lines {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			if !inOptions && len(stem) > 0 && stem[len(stem)-1] != "" {
-				stem = append(stem, "")
-			}
-			continue
-		}
-
-		if matches := numberedAskUserOptionRe.FindStringSubmatch(line); matches != nil {
-			inOptions = true
-			rawOptions = append(rawOptions, strings.TrimSpace(matches[1]))
-			continue
-		}
-
-		if inOptions {
-			if isAskUserReplyInstruction(line) {
-				continue
-			}
-			if len(rawOptions) > 0 {
-				rawOptions[len(rawOptions)-1] += " " + line
-				continue
-			}
-		}
-
-		if !inOptions {
-			stem = append(stem, line)
-		}
-	}
-
-	if len(rawOptions) < 2 {
-		return "", nil, false
-	}
-	if looksLikeAskUserQuestionBundle(rawOptions) {
-		return "", nil, false
-	}
-
-	options := make([]askUserOption, 0, len(rawOptions))
-	for _, raw := range rawOptions {
-		label, desc, confidence := splitAskUserOption(raw)
-		if label == "" {
-			return "", nil, false
-		}
-		options = append(options, askUserOption{Label: label, Description: desc, Confidence: confidence})
-	}
-
-	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))
-	if cleaned == "" {
-		cleaned = question
-	}
-	return cleaned, options, true
-}
-
-func looksLikeAskUserQuestionBundle(rawOptions []string) bool {
-	questionCount := 0
-	for _, raw := range rawOptions {
-		text := strings.TrimSpace(raw)
-		if text == "" {
-			continue
-		}
-		if strings.Contains(text, "?") {
-			questionCount++
-		}
-	}
-	return questionCount == len(rawOptions)
-}
-
-func splitAskUserOption(raw string) (string, string, *float64) {
-	raw, confidence := splitAskUserOptionConfidence(raw)
-	if raw == "" {
-		return "", "", confidence
-	}
-	label := raw
-	desc := ""
-	if idx := strings.Index(raw, ":"); idx >= 0 {
-		label = strings.TrimSpace(raw[:idx])
-		desc = strings.TrimSpace(raw[idx+1:])
-	}
-	label = strings.Trim(label, "`")
-	label = strings.TrimSpace(label)
-	return label, desc, confidence
-}
-
-func splitAskUserOptionConfidence(raw string) (string, *float64) {
-	raw = strings.TrimSpace(raw)
-	matches := askUserConfidenceSuffixRe.FindStringSubmatch(raw)
-	if matches == nil {
-		return raw, nil
-	}
-	confidence, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return raw, nil
-	}
-	trimmed := strings.TrimSpace(raw[:len(raw)-len(matches[0])])
-	return trimmed, &confidence
-}
-
-func isAskUserReplyInstruction(line string) bool {
-	lower := strings.ToLower(strings.TrimSpace(line))
-	return strings.HasPrefix(lower, "reply with ") ||
-		strings.HasPrefix(lower, "respond with ") ||
-		strings.HasPrefix(lower, "answer with ")
 }
 
 // presentationStatus is the attach tab bar's per-tab rendering token. It
@@ -1004,46 +775,6 @@ func (m AttachModel) questionContentWidth() int {
 	return max(panelW-4, 10) // subtract border(2) + padding(0,1)(2)
 }
 
-// wrappedLineCount returns how many terminal lines text occupies when
-// rendered at the given width. Uses lipgloss for width-aware wrapping.
-func wrappedLineCount(text string, width int) int {
-	if width <= 0 || text == "" {
-		return 1
-	}
-	rendered := lipgloss.NewStyle().Width(width).Render(text)
-	return lipgloss.Height(rendered)
-}
-
-func questionPromptVisualLines(question string, width int) []string {
-	if question == "" {
-		return []string{""}
-	}
-	if width <= 0 {
-		return strings.Split(question, "\n")
-	}
-	rendered := lipgloss.NewStyle().Width(width).Render(question)
-	return strings.Split(rendered, "\n")
-}
-
-func questionPromptIsTruncated(question string, width int) bool {
-	return len(questionPromptVisualLines(question, width)) > questionPromptMaxLines
-}
-
-func questionPromptText(question string, width int) string {
-	if question == "" {
-		return question
-	}
-	lines := questionPromptVisualLines(question, width)
-	if len(lines) <= questionPromptMaxLines {
-		return question
-	}
-	return strings.Join(lines[:questionPromptMaxLines-1], "\n") + "\n..."
-}
-
-func questionPromptLineCount(question string, width int) int {
-	return wrappedLineCount(questionPromptText(question, width), width)
-}
-
 func (m AttachModel) questionPanelMaxHeight() int {
 	if m.height <= 0 {
 		return questionPanelBaseMaxLines
@@ -1053,22 +784,6 @@ func (m AttachModel) questionPanelMaxHeight() int {
 
 func (m AttachModel) expandedQuestionPromptLineBudget() int {
 	return max(m.questionPanelMaxHeight()-expandedQuestionPromptReservedLines, 1)
-}
-
-// questionOptionLineCount returns the number of wrapped terminal lines
-// a single option occupies at the given content width, including its
-// label and optional description.
-func questionOptionLineCount(opt askUserOption, idx int, width int) int {
-	label := fmt.Sprintf("  %d. %s", idx+1, opt.Label)
-	lines := wrappedLineCount(label, width)
-	if opt.Description != "" {
-		desc := fmt.Sprintf("     %s", opt.Description)
-		lines += wrappedLineCount(desc, width)
-	}
-	if opt.Confidence != nil {
-		lines += wrappedLineCount(fmt.Sprintf("     Confidence: %.2f", *opt.Confidence), width)
-	}
-	return lines
 }
 
 // chatPanelHeight returns the height needed for the chat panel.
@@ -1197,57 +912,7 @@ func (m AttachModel) questionVisibleOptions() int {
 // plus whether above/below scroll indicators are needed.
 func (m AttachModel) questionVisibleWindow() (start, end int, needAbove, needBelow bool) {
 	q := m.pendingQuestions[m.currentQuestionIdx]
-	totalOptions := len(q.Options)
-	optionArea := m.questionVisibleOptions()
-	contentW := m.questionContentWidth()
-
-	totalLines := 0
-	for i, o := range q.Options {
-		totalLines += questionOptionLineCount(o, i, contentW)
-	}
-
-	// No scrolling needed — all options fit.
-	if totalLines <= optionArea {
-		return 0, totalOptions, false, false
-	}
-
-	start = m.questionScrollOffset
-	if start >= totalOptions {
-		start = totalOptions - 1
-	}
-	if start < 0 {
-		start = 0
-	}
-
-	needAbove = start > 0
-	budget := optionArea
-	if needAbove {
-		budget-- // reserve 1 line for "↑ N more above"
-	}
-
-	// Fill options from start using width-aware line counts.
-	usedLines := 0
-	end = start
-	for i := start; i < totalOptions; i++ {
-		ol := questionOptionLineCount(q.Options[i], i, contentW)
-		if usedLines+ol > budget {
-			break
-		}
-		usedLines += ol
-		end = i + 1
-	}
-
-	needBelow = end < totalOptions
-	if needBelow {
-		// Reclaim 1 line for "↓ N more below" indicator.
-		for end > start && usedLines > budget-1 {
-			end--
-			ol := questionOptionLineCount(q.Options[end], end, contentW)
-			usedLines -= ol
-		}
-	}
-
-	return start, end, needAbove, needBelow
+	return questionVisibleWindowPure(q.Options, m.selectedOption, m.questionScrollOffset, m.questionVisibleOptions(), m.questionContentWidth())
 }
 
 // updateQuestionScrollOffset adjusts questionScrollOffset so that
@@ -1727,18 +1392,6 @@ func wrapLeadingSkillInstruction(text string, skills []AutocompleteItem) string 
 		}
 	}
 	return text
-}
-
-// cloneIntBoolMap returns a shallow copy of src, or nil if src is nil/empty.
-func cloneIntBoolMap(src map[int]bool) map[int]bool {
-	if len(src) == 0 {
-		return nil
-	}
-	out := make(map[int]bool, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
-	return out
 }
 
 // snapshotCurrentQuestion writes the live UI state into
@@ -2990,7 +2643,6 @@ func (m AttachModel) renderQuestion() string {
 	questionStyle := lipgloss.NewStyle().Bold(true)
 	selectedLabel := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	normalLabel := lipgloss.NewStyle()
-	descStyle := MutedStyle
 	hintStyle := MutedStyle
 	notesLabelStyle := lipgloss.NewStyle().Foreground(colorBrand)
 	separatorStyle := lipgloss.NewStyle().Foreground(colorSurface)
@@ -3020,50 +2672,13 @@ func (m AttachModel) renderQuestion() string {
 		}
 	}
 
-	// Top block: question title + options list + separator + "Type something".
-	// Rendered at its natural width so side-by-side placement with a preview
-	// doesn't force extra padding.
 	var top strings.Builder
 	contentW := m.questionContentWidth()
 	top.WriteString(questionStyle.Render(questionPromptText(q.Question, contentW)))
 	top.WriteString("\n\n")
 
 	start, end, needAbove, needBelow := m.questionVisibleWindow()
-	if needAbove {
-		top.WriteString(MutedStyle.Render(fmt.Sprintf("  ↑ %d more above", start)))
-		top.WriteByte('\n')
-	}
-	for i := start; i < end; i++ {
-		opt := q.Options[i]
-		cursor := "  "
-		labelStyle := normalLabel
-		if i == m.selectedOption {
-			cursor = "> "
-			labelStyle = selectedLabel
-		}
-		if q.MultiSelect {
-			checkbox := "[ ] "
-			if m.selectedMulti[i] {
-				checkbox = "[x] "
-			}
-			top.WriteString(labelStyle.Render(fmt.Sprintf("%s%d. %s%s", cursor, i+1, checkbox, opt.Label)))
-		} else {
-			top.WriteString(labelStyle.Render(fmt.Sprintf("%s%d. %s", cursor, i+1, opt.Label)))
-		}
-		top.WriteByte('\n')
-		if opt.Description != "" {
-			top.WriteString(descStyle.Render(fmt.Sprintf("     %s", opt.Description)))
-			top.WriteByte('\n')
-		}
-		if opt.Confidence != nil {
-			top.WriteString(descStyle.Render(fmt.Sprintf("     Confidence: %.2f", *opt.Confidence)))
-			top.WriteByte('\n')
-		}
-	}
-	if needBelow {
-		top.WriteString(MutedStyle.Render(fmt.Sprintf("  ↓ %d more below", numOptions-end)))
-		top.WriteByte('\n')
-	}
+	top.WriteString(renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow))
 
 	top.WriteString(separatorStyle.Render("  ────────────────────────────"))
 	top.WriteByte('\n')
@@ -3087,14 +2702,9 @@ func (m AttachModel) renderQuestion() string {
 		top.WriteString(MutedStyle.Render("  (" + priorPreview + ")"))
 	}
 
-	// Join the top block with the focused option's preview side-by-side when
-	// Claude supplied one. Claude's previews already carry their own ASCII
-	// frame, so render them verbatim at their natural width — no outer border,
-	// no line-count cap. JoinHorizontal pads the shorter column's height.
 	topBlock := top.String()
 	if hasAnyPreview && m.selectedOption < numOptions {
 		if preview := q.Options[m.selectedOption].Preview; preview != "" {
-			contentW := m.questionContentWidth()
 			previewW := 0
 			for _, line := range strings.Split(preview, "\n") {
 				if w := lipgloss.Width(line); w > previewW {
@@ -3111,14 +2721,9 @@ func (m AttachModel) renderQuestion() string {
 			if leftNaturalW+gap+previewW <= contentW {
 				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, topBlock, strings.Repeat(" ", gap), preview)
 			}
-			// Otherwise the preview would overflow the panel — skip it rather
-			// than wrap Claude's frame mid-row.
 		}
 	}
 
-	// Bottom block: notes line + footer hint, or an inline editor for notes
-	// or a freeform answer. Always renders full-width below the top block so
-	// the textarea's natural width doesn't fight the side-by-side layout.
 	var bottom strings.Builder
 	bottom.WriteByte('\n')
 	switch {
@@ -3141,33 +2746,9 @@ func (m AttachModel) renderQuestion() string {
 			bottom.WriteString(hintStyle.Render("press n to add notes"))
 		}
 		bottom.WriteByte('\n')
-		var hint string
-		if q.MultiSelect {
-			hint = "Space to toggle · Enter to submit · ↑/↓ to navigate"
-		} else {
-			hint = "Enter to select · ↑/↓ to navigate"
-		}
-		if questionPromptIsTruncated(q.Question, contentW) {
-			hint += " · ? full question"
-		}
-		hint += " · n for notes"
-		// Only surface arrow-key nav when it actually does something. Left
-		// requires a prior question; right requires this question to have a
-		// committed answer (otherwise forward is Enter-only).
 		canBack := m.currentQuestionIdx > 0
 		_, canForward := m.collectedAnswers[q.Question]
-		switch {
-		case canBack && canForward:
-			hint += " · ←/→ prev/next question"
-		case canBack:
-			hint += " · ← prev question"
-		case canForward:
-			hint += " · → next question"
-		}
-		if len(m.pendingQuestions) > 1 {
-			hint += fmt.Sprintf(" · Question %d of %d", m.currentQuestionIdx+1, len(m.pendingQuestions))
-		}
-		bottom.WriteString(hintStyle.Render(hint))
+		bottom.WriteString(renderQuestionFooterHint(q, m.currentQuestionIdx, len(m.pendingQuestions), canBack, canForward, questionPromptIsTruncated(q.Question, contentW), "n for notes"))
 	}
 
 	return topBlock + "\n" + bottom.String()
@@ -3204,7 +2785,7 @@ func (m AttachModel) renderExpandedQuestion(q askUserQuestion) string {
 		b.WriteString(MutedStyle.Render(fmt.Sprintf("↑ %d more above", start)))
 		b.WriteByte('\n')
 	}
-	b.WriteString(lipgloss.NewStyle().Bold(true).Render(strings.Join(lines[start:end], "\n")))
+	b.WriteString(lipgloss.NewStyle().Bold(true).Render(strings.Join(renderExpandedQuestionBody(q, contentW, start, end-start), "\n")))
 	b.WriteByte('\n')
 	if needBelow {
 		b.WriteString(MutedStyle.Render(fmt.Sprintf("↓ %d more below", len(lines)-end)))

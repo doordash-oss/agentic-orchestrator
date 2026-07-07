@@ -60,6 +60,18 @@ var (
 	ReviewStyle   = lipgloss.NewStyle().Foreground(colorBrand)
 	BadgeStyle    = lipgloss.NewStyle().Bold(true).Foreground(colorPeach)
 	MutedStyle    = lipgloss.NewStyle().Foreground(colorOverlay)
+
+	// chatUserTagStyle marks a "[you]" turn tag in the AMA/attach transcripts.
+	chatUserTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
+
+	// chatAgentTagStyle marks a "[agent]" turn tag — a distinct accent (Teal)
+	// from colorBrand so the agent's voice reads as a different kind of
+	// surface than chrome/user input, without clashing with colorInfo's
+	// existing "in-progress status" semantics elsewhere in styles.go.
+	chatAgentTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorActive)
+
+	// chatAgentTagErrorStyle is the error-state variant of the agent tag.
+	chatAgentTagErrorStyle = lipgloss.NewStyle().Bold(true).Foreground(colorError)
 )
 
 // Layout styles

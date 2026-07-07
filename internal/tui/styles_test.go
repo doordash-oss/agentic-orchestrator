@@ -295,3 +295,15 @@ func TestLeadingANSI(t *testing.T) {
 		})
 	}
 }
+
+func TestChatTagStylesAreDistinctColors(t *testing.T) {
+	t.Parallel()
+	userRendered := chatUserTagStyle.Render("[you]")
+	agentRendered := chatAgentTagStyle.Render("[agent]")
+	if userRendered == agentRendered {
+		t.Error("chatUserTagStyle and chatAgentTagStyle must render differently")
+	}
+	if chatAgentTagStyle.GetForeground() == chatUserTagStyle.GetForeground() {
+		t.Error("agent tag must use a different accent color than the user tag")
+	}
+}

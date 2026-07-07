@@ -2792,7 +2792,7 @@ func TestAPIAppModelChatRefreshRendersResultErrorAsRedResponse(t *testing.T) {
 	if len(turns) == 0 || turns[len(turns)-1].Role != chatTurnError || turns[len(turns)-1].Text != errorText {
 		t.Fatalf("expected trailing error turn with text %q, got turns: %+v", errorText, turns)
 	}
-	if rendered, want := renderChatTurn(turns[len(turns)-1], 80), ErrorStyle.Render("[agent]  "+errorText); rendered != want {
+	if rendered, want := renderChatTurn(turns[len(turns)-1], 80), chatAgentTagErrorStyle.Render("[agent]")+"  "+ErrorStyle.Render(errorText); rendered != want {
 		t.Fatalf("renderChatTurn(error turn) = %q, want %q (error not rendered in ErrorStyle)", rendered, want)
 	}
 	view := stripANSI(failed.View().Content)

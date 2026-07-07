@@ -239,19 +239,13 @@ func renderChatTurn(t chatTurn, width int) string {
 	case chatTurnAgent:
 		return chatAgentTagStyle.Render("[agent]") + "  " + renderMarkdown(t.Text, width)
 	case chatTurnError:
-		return ErrorStyle.Render("[agent]  " + t.Text)
+		return chatAgentTagErrorStyle.Render("[agent]") + "  " + ErrorStyle.Render(t.Text)
 	case chatTurnCancelled:
 		return MutedStyle.Render("[cancelled]")
 	default:
 		return t.Text
 	}
 }
-
-// chatUserTagStyle/chatAgentTagStyle are temporary placeholders for Task 3.
-// Task 4 replaces these definitions (moving them into styles.go) — it does
-// not introduce new names, so no other call sites need to change then.
-var chatUserTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
-var chatAgentTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorActive)
 
 // setInProgressAgentText updates (or starts) the trailing in-progress agent
 // turn with newly streamed text. partial snapshots replace the turn's text

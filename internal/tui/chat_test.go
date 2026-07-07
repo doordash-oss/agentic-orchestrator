@@ -569,3 +569,21 @@ func TestChatModelRendersAgentTextThroughMarkdown(t *testing.T) {
 		t.Errorf("expected a positive width passed to renderMarkdown, got %d", gotWidth)
 	}
 }
+
+func TestChatModelShowsSpinnerInAgentTag(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.responding = true
+	m.spinnerView = "⣹"
+	m.thinkingLine = "Using Read..."
+	m.rebuildViewport()
+	content := m.viewport.View()
+	if !strings.Contains(content, "⣹") {
+		t.Errorf("expected spinner frame in viewport while responding, got: %q", content)
+	}
+	if !strings.Contains(content, "agent") {
+		t.Errorf("expected the agent tag to still be visible while responding, got: %q", content)
+	}
+	if !strings.Contains(content, "Using Read...") {
+		t.Errorf("expected the thinking line text to be visible, got: %q", content)
+	}
+}

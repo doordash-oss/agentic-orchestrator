@@ -222,7 +222,7 @@ func (m *ChatModel) rebuildViewport() {
 		if line == "" {
 			line = "Thinking..."
 		}
-		b.WriteString("  " + m.spinnerView + " " + chatThinkingStyle.Render(line))
+		b.WriteString(renderAgentThinkingTag(m.spinnerView, line))
 	}
 	m.viewport.SetContent(wrapForViewport(strings.TrimRight(b.String(), "\n"), width))
 	m.viewport.GotoBottom()
@@ -245,6 +245,19 @@ func renderChatTurn(t chatTurn, width int) string {
 	default:
 		return t.Text
 	}
+}
+
+// renderAgentThinkingTag renders the "[agent]" tag with the current spinner
+// frame in place of the static glyph, plus the muted tool-use/thinking
+// snippet beside it — the signature element that makes the tag itself the
+// turn's live status indicator instead of a separate "Thinking..." line.
+func renderAgentThinkingTag(spinnerFrame, thinkingLine string) string {
+	frame := spinnerFrame
+	if frame == "" {
+		frame = "·"
+	}
+	tag := chatAgentTagStyle.Render("[" + frame + " agent]")
+	return tag + "  " + chatThinkingStyle.Render(thinkingLine)
 }
 
 // setInProgressAgentText updates (or starts) the trailing in-progress agent

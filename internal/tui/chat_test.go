@@ -29,6 +29,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// chatTurnsContainText reports whether any turn's Text contains substr.
+func chatTurnsContainText(turns []chatTurn, substr string) bool {
+	for _, turn := range turns {
+		if strings.Contains(turn.Text, substr) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestChatModelEscExitsWhenEmpty(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
 	updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -137,8 +147,8 @@ func TestChatModelEnterWithNoSessionMgrShowsError(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
 	m.input.SetValue("hello")
 	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !strings.Contains(updated.history, "Error") {
-		t.Error("expected error message in history when no session manager")
+	if !chatTurnsContainText(updated.turns, "no session manager available") {
+		t.Errorf("expected error turn in turns when no session manager, got: %+v", updated.turns)
 	}
 }
 
@@ -157,16 +167,16 @@ func TestChatModelHistorySurvivesMultipleUpdateCycles(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
 	m.input.SetValue("first question")
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !strings.Contains(m.history, "first question") {
-		t.Fatal("expected first question in history after first update")
+	if !chatTurnsContainText(m.turns, "first question") {
+		t.Fatal("expected first question in turns after first update")
 	}
 	m.input.SetValue("second question")
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !strings.Contains(m.history, "second question") {
-		t.Fatal("expected second question in history after second update")
+	if !chatTurnsContainText(m.turns, "second question") {
+		t.Fatal("expected second question in turns after second update")
 	}
-	if !strings.Contains(m.history, "first question") {
-		t.Fatal("expected first question still in history after second update")
+	if !chatTurnsContainText(m.turns, "first question") {
+		t.Fatal("expected first question still in turns after second update")
 	}
 }
 
@@ -192,8 +202,8 @@ func TestChatMsgsMsgStreaming(t *testing.T) {
 		},
 	}
 	updated, cmd := m.Update(msgs)
-	if !strings.Contains(updated.history, "Hello world") {
-		t.Fatalf("expected 'Hello world' in history, got %q", updated.history)
+	if !chatTurnsContainText(updated.turns, "Hello world") {
+		t.Fatalf("expected 'Hello world' in turns, got %+v", updated.turns)
 	}
 	if cmd == nil {
 		t.Fatal("expected non-nil cmd to continue listening")
@@ -233,8 +243,8 @@ func TestChatMsgsMsgSnapshotDrivenModeDoesNotPollSessionChannel(t *testing.T) {
 		},
 	})
 
-	if !strings.Contains(updated.history, "Snapshot answer") {
-		t.Fatalf("expected snapshot answer in history, got %q", updated.history)
+	if !chatTurnsContainText(updated.turns, "Snapshot answer") {
+		t.Fatalf("expected snapshot answer in turns, got %+v", updated.turns)
 	}
 	if cmd != nil {
 		t.Fatal("expected nil cmd in snapshot-driven mode")
@@ -289,8 +299,8 @@ func TestChatSendErrorMsgResetsState(t *testing.T) {
 	if updated.sess != nil {
 		t.Error("expected sess to be nil after send error")
 	}
-	if !strings.Contains(updated.history, "session ended") {
-		t.Error("expected reconnect hint in history")
+	if !chatTurnsContainText(updated.turns, "session ended") {
+		t.Error("expected reconnect hint in turns")
 	}
 	if cmd != nil {
 		t.Error("expected nil cmd after send error")
@@ -421,7 +431,7 @@ func TestChatRecoveryTickClearsRespondingWhenResultArrives(t *testing.T) {
 	m.sess = sess
 	m.responding = true
 	m.thinkingLine = "Using Agent..."
-	m.partialText = "partial answer"
+	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "partial answer", InProgress: true})
 	m.turnCostBaseline = nil // baseline before the Result landed
 
 	// Simulate: Claude finished the turn and the session recorded the
@@ -436,8 +446,9 @@ func TestChatRecoveryTickClearsRespondingWhenResultArrives(t *testing.T) {
 	if updated.thinkingLine != "" {
 		t.Errorf("expected thinkingLine cleared, got %q", updated.thinkingLine)
 	}
-	if !strings.Contains(updated.history, "partial answer") {
-		t.Errorf("expected partialText flushed to history, got %q", updated.history)
+	n := len(updated.turns)
+	if n == 0 || updated.turns[n-1].InProgress || updated.turns[n-1].Text != "partial answer" {
+		t.Errorf("expected in-progress turn finalized with text preserved, got %+v", updated.turns)
 	}
 	if updated.turnCostBaseline != sess.CostVal {
 		t.Errorf("expected baseline advanced to new Cost pointer")
@@ -525,5 +536,36 @@ func TestChatStartSession_SkillReadInstruction(t *testing.T) {
 	// User prompt should still contain the original question
 	if !strings.Contains(capturedOpts.Prompt, "hello world") {
 		t.Errorf("chat prompt missing original question 'hello world'")
+	}
+}
+
+func TestChatModelAppendsUserAndAgentTurns(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: "hello"})
+	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "**hi**", InProgress: false})
+	m.rebuildViewport()
+	content := m.viewport.View()
+	if !strings.Contains(content, "hello") {
+		t.Errorf("viewport missing user turn text: %q", content)
+	}
+}
+
+func TestChatModelRendersAgentTextThroughMarkdown(t *testing.T) {
+	old := renderMarkdown
+	defer func() { renderMarkdown = old }()
+	var gotWidth int
+	renderMarkdown = func(text string, width int) string {
+		gotWidth = width
+		return "RENDERED:" + text
+	}
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "hello"})
+	m.rebuildViewport()
+	content := m.viewport.View()
+	if !strings.Contains(content, "RENDERED:hello") {
+		t.Errorf("expected agent turn text to pass through renderMarkdown, got: %q", content)
+	}
+	if gotWidth <= 0 {
+		t.Errorf("expected a positive width passed to renderMarkdown, got %d", gotWidth)
 	}
 }

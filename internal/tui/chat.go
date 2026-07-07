@@ -75,15 +75,29 @@ const chatRecoveryInterval = 2 * time.Second
 
 const chatSessionID = "__chat__"
 
-// chatUserStyle styles user messages.
-var chatUserStyle = lipgloss.NewStyle().
-	Bold(true).
-	Foreground(colorBrand)
-
 // chatThinkingStyle styles the thinking/progress status line.
 var chatThinkingStyle = lipgloss.NewStyle().
 	Foreground(compat.AdaptiveColor{Light: lipgloss.Color("#6c6f85"), Dark: lipgloss.Color("#6c7086")}).
 	Italic(true)
+
+// chatTurnRole identifies who a chatTurn belongs to, for tag/color selection.
+type chatTurnRole int
+
+const (
+	chatTurnUser chatTurnRole = iota
+	chatTurnAgent
+	chatTurnError
+	chatTurnCancelled
+)
+
+// chatTurn is one entry in the AMA transcript. InProgress is true only for
+// the trailing agent turn while a response is still streaming — it is set
+// back to false and the text finalized once the turn's Result arrives.
+type chatTurn struct {
+	Role       chatTurnRole
+	Text       string
+	InProgress bool
+}
 
 // ChatModel provides a bottom-panel chat interface backed by a single
 // long-running interactive claude session. Messages are sent via
@@ -91,10 +105,9 @@ var chatThinkingStyle = lipgloss.NewStyle().
 type ChatModel struct {
 	viewport     viewport.Model
 	input        textarea.Model
-	history      string // accumulated conversation display text (finalized messages only)
-	partialText  string // in-progress partial response (replaced on each partial, cleared on final)
-	thinkingLine string // current thinking/progress status (overwritten on each update)
-	spinnerView  string // animated spinner frame, updated from the app-level spinner
+	turns        []chatTurn // one entry per user/agent/error/cancelled turn
+	thinkingLine string     // current thinking/progress status (overwritten on each update)
+	spinnerView  string     // animated spinner frame, updated from the app-level spinner
 	width        int
 	height       int
 	focused      bool
@@ -196,18 +209,77 @@ func (m ChatModel) resize(w, h int) ChatModel {
 	return m
 }
 
-// rebuildViewport sets the viewport content from history + thinking indicator.
+// rebuildViewport sets the viewport content from the turn list + thinking indicator.
 func (m *ChatModel) rebuildViewport() {
-	content := m.history + m.partialText
+	width := m.viewport.Width()
+	var b strings.Builder
+	for _, t := range m.turns {
+		b.WriteString(renderChatTurn(t, width))
+		b.WriteString("\n\n")
+	}
 	if m.responding {
 		line := m.thinkingLine
 		if line == "" {
 			line = "Thinking..."
 		}
-		content += "  " + m.spinnerView + " " + chatThinkingStyle.Render(line)
+		b.WriteString("  " + m.spinnerView + " " + chatThinkingStyle.Render(line))
 	}
-	m.viewport.SetContent(wrapForViewport(content, m.viewport.Width()))
+	m.viewport.SetContent(wrapForViewport(strings.TrimRight(b.String(), "\n"), width))
 	m.viewport.GotoBottom()
+}
+
+// renderChatTurn renders a single turn with its role tag, deferring to
+// renderMarkdown for agent text so code blocks/lists/emphasis render
+// correctly. Tag styling (colors, the animated agent tag) is added in
+// Task 4/5 — this task only wires the markdown call and turn-based layout.
+func renderChatTurn(t chatTurn, width int) string {
+	switch t.Role {
+	case chatTurnUser:
+		return chatUserTagStyle.Render("[you]") + "  " + t.Text
+	case chatTurnAgent:
+		return chatAgentTagStyle.Render("[agent]") + "  " + renderMarkdown(t.Text, width)
+	case chatTurnError:
+		return ErrorStyle.Render("[agent]  " + t.Text)
+	case chatTurnCancelled:
+		return MutedStyle.Render("[cancelled]")
+	default:
+		return t.Text
+	}
+}
+
+// chatUserTagStyle/chatAgentTagStyle are temporary placeholders for Task 3.
+// Task 4 replaces these definitions (moving them into styles.go) — it does
+// not introduce new names, so no other call sites need to change then.
+var chatUserTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorBrand)
+var chatAgentTagStyle = lipgloss.NewStyle().Bold(true).Foreground(colorActive)
+
+// setInProgressAgentText updates (or starts) the trailing in-progress agent
+// turn with newly streamed text. partial snapshots replace the turn's text
+// (the SDK sends accumulated text, not deltas); a final block's text is the
+// last write before finalizeInProgressTurn commits it.
+func (m *ChatModel) setInProgressAgentText(text string, partial bool) {
+	if n := len(m.turns); n > 0 && m.turns[n-1].Role == chatTurnAgent && m.turns[n-1].InProgress {
+		m.turns[n-1].Text = text
+		return
+	}
+	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: text, InProgress: true})
+}
+
+// finalizeInProgressTurn marks the trailing in-progress agent turn (if any)
+// as committed. No-op if there is no in-progress turn.
+func (m *ChatModel) finalizeInProgressTurn() {
+	if n := len(m.turns); n > 0 && m.turns[n-1].Role == chatTurnAgent && m.turns[n-1].InProgress {
+		m.turns[n-1].InProgress = false
+	}
+}
+
+// discardInProgressTurn removes the trailing in-progress agent turn (if
+// any) entirely — used when an error replaces a partial response rather
+// than following it.
+func (m *ChatModel) discardInProgressTurn() {
+	if n := len(m.turns); n > 0 && m.turns[n-1].Role == chatTurnAgent && m.turns[n-1].InProgress {
+		m.turns = m.turns[:n-1]
+	}
 }
 
 func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
@@ -239,11 +311,8 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.thinkingLine = ""
 				m.pendingAsk = nil
 				m.answeredAsk = nil
-				if m.partialText != "" {
-					m.history += m.partialText
-					m.partialText = ""
-				}
-				m.history += "\n  [cancelled]\n"
+				m.finalizeInProgressTurn()
+				m.turns = append(m.turns, chatTurn{Role: chatTurnCancelled})
 				m.rebuildViewport()
 				return m, nil
 			}
@@ -259,11 +328,11 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			m.input.Reset()
 
-			// Append user message to history
-			m.history += "\n" + chatUserStyle.Render("You: "+question) + "\n\n"
+			// Append user turn
+			m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: question})
 
 			if m.sessionMgr == nil && m.startSession == nil {
-				m.history += "  Error: no session manager available\n"
+				m.turns = append(m.turns, chatTurn{Role: chatTurnError, Text: "no session manager available"})
 				m.rebuildViewport()
 				return m, nil
 			}
@@ -334,13 +403,11 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 	case chatMsgsMsg:
 		if text, ok := chatErrorResponseText(msg.messages); ok {
-			if m.partialText != "" {
-				m.partialText = ""
-			}
+			m.discardInProgressTurn()
 			m.responding = false
 			m.thinkingLine = ""
 			m.pendingAsk = nil
-			m.history += ErrorStyle.Render(text) + "\n"
+			m.turns = append(m.turns, chatTurn{Role: chatTurnError, Text: text})
 			if m.sess != nil {
 				m.turnCostBaseline = m.sess.Cost()
 			}
@@ -352,24 +419,14 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				hasText := false
 				for _, block := range sdkMsg.Assistant.Message.Content {
 					if block.IsText() && block.Text != "" {
-						if sdkMsg.Subtype == "partial" {
-							// Partial messages contain accumulated text (snapshot);
-							// replace rather than append to avoid duplication.
-							m.partialText = block.Text
-						} else {
-							// Final message: commit to history, clear partial.
-							m.history += block.Text
-							m.partialText = ""
-						}
+						m.setInProgressAgentText(block.Text, sdkMsg.Subtype == "partial")
 						hasText = true
 					}
 					if block.IsThinking() && block.Thinking != "" {
-						// Show truncated thinking as the progress line
 						thinking := block.Thinking
 						if len(thinking) > 120 {
 							thinking = thinking[len(thinking)-120:]
 						}
-						// Take only the last line for a compact display
 						if idx := strings.LastIndex(thinking, "\n"); idx >= 0 {
 							thinking = thinking[idx+1:]
 						}
@@ -380,7 +437,6 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					}
 				}
 				if hasText {
-					// Real text arrived — clear the thinking line
 					m.thinkingLine = ""
 				}
 			}
@@ -391,16 +447,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.thinkingLine = sdkMsg.Status.Message
 			}
 			if sdkMsg.Result != nil {
-				// Turn complete — flush any remaining partial to history.
-				// Also move the recovery baseline forward so the ticker
-				// doesn't fire again for this now-processed Result.
-				if m.partialText != "" {
-					m.history += m.partialText
-					m.partialText = ""
-				}
+				m.finalizeInProgressTurn()
 				m.responding = false
 				m.thinkingLine = ""
-				m.history += "\n"
 				if m.sess != nil {
 					m.turnCostBaseline = m.sess.Cost()
 				}
@@ -409,12 +458,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				if chatAskUserAnswered(m.answeredAsk, sdkMsg.ControlRequest.RequestID) {
 					continue
 				}
-				if m.partialText != "" {
-					m.history += m.partialText
-					m.partialText = ""
-				}
+				m.finalizeInProgressTurn()
 				if m.pendingAsk == nil || m.pendingAsk.RequestID != sdkMsg.ControlRequest.RequestID {
-					m.history += chatAskUserPrompt(sdkMsg.ControlRequest)
+					m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: chatAskUserPrompt(sdkMsg.ControlRequest)})
 				}
 				m.pendingAsk = sdkMsg.ControlRequest
 				m.responding = false
@@ -446,13 +492,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 		if cur := m.sess.Cost(); cur != nil && cur != msg.baseline {
-			if m.partialText != "" {
-				m.history += m.partialText
-				m.partialText = ""
-			}
+			m.finalizeInProgressTurn()
 			m.responding = false
 			m.thinkingLine = ""
-			m.history += "\n"
 			m.turnCostBaseline = cur
 			m.rebuildViewport()
 			return m, nil
@@ -463,10 +505,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if msg.sess != m.sess {
 			return m, nil
 		}
-		if m.partialText != "" {
-			m.history += m.partialText
-			m.partialText = ""
-		}
+		m.finalizeInProgressTurn()
 		m.responding = false
 		m.thinkingLine = ""
 		m.pendingAsk = nil
@@ -481,10 +520,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		m.pendingAsk = nil
 		m.answeredAsk = nil
 		m.sess = nil
-		if m.partialText != "" {
-			m.history += m.partialText
-			m.partialText = ""
-		}
+		m.finalizeInProgressTurn()
 		detail := ""
 		if msg.err != nil {
 			detail = strings.TrimSpace(msg.err.Error())
@@ -492,7 +528,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if detail == "" {
 			detail = "session ended"
 		}
-		m.history += "  " + ErrorStyle.Render(detail) + "\n"
+		m.turns = append(m.turns, chatTurn{Role: chatTurnError, Text: detail})
 		m.rebuildViewport()
 		return m, nil
 
@@ -704,7 +740,7 @@ func pollChatChCmd(sess session.SessionView) tea.Cmd {
 
 func (m ChatModel) View() string {
 	vpContent := m.viewport.View()
-	if len(m.history) == 0 && !m.responding {
+	if len(m.turns) == 0 && !m.responding {
 		vpContent = lipgloss.NewStyle().
 			Foreground(colorSurface).
 			Height(m.viewport.Height()).

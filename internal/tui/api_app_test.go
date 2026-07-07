@@ -2788,8 +2788,9 @@ func TestAPIAppModelChatRefreshRendersResultErrorAsRedResponse(t *testing.T) {
 	if failed.chat.responding {
 		t.Fatal("chat remained responding after transcript result error")
 	}
-	if !strings.Contains(failed.chat.history, ErrorStyle.Render(errorText)) {
-		t.Fatalf("chat history missing red error response: %q", failed.chat.history)
+	turns := failed.chat.turns
+	if len(turns) == 0 || turns[len(turns)-1].Role != chatTurnError || turns[len(turns)-1].Text != errorText {
+		t.Fatalf("expected trailing error turn with text %q, got turns: %+v", errorText, turns)
 	}
 	view := stripANSI(failed.View().Content)
 	if !strings.Contains(view, errorText) {
@@ -3009,9 +3010,12 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 	}})
 	answered := model.(APIAppModel)
 	view = stripANSI(answered.View().Content)
-	history := stripANSI(answered.chat.history)
-	if got := strings.Count(history, "Pick a direction"); got != 1 {
-		t.Fatalf("stale AskUser prompt was recorded %d times, want once:\n%s", got, history)
+	occurrences := 0
+	for _, turn := range answered.chat.turns {
+		occurrences += strings.Count(turn.Text, "Pick a direction")
+	}
+	if occurrences != 1 {
+		t.Fatalf("stale AskUser prompt was recorded %d times, want once: %+v", occurrences, answered.chat.turns)
 	}
 	if !answered.chat.responding {
 		t.Fatalf("chat stopped waiting for assistant after stale AskUser prompt:\n%s", view)

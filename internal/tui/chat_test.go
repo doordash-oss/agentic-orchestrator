@@ -587,3 +587,56 @@ func TestChatModelShowsSpinnerInAgentTag(t *testing.T) {
 		t.Errorf("expected the thinking line text to be visible, got: %q", content)
 	}
 }
+
+func TestChatModelActivatesQuestionPicker(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{{Question: "Pick one", Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
+	if !m.hasActiveQuestion() {
+		t.Fatal("expected an active question after activateQuestions")
+	}
+	if m.selectedOption != 0 {
+		t.Errorf("selectedOption = %d, want 0", m.selectedOption)
+	}
+}
+
+func TestChatModelQuestionNavAndSubmit(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{Question: "First?", Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
+		{Question: "Second?", Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
+	}, "req-1", nil)
+
+	// Move selection down to "B" and submit it.
+	m.selectedOption = 1
+	m.commitAnswer("B")
+	m.advanceQuestionOpts(1, false)
+	if m.currentQuestionIdx != 1 {
+		t.Fatalf("currentQuestionIdx = %d, want 1 after submitting question 1", m.currentQuestionIdx)
+	}
+	if got := m.collectedAnswers["First?"]; got != "B" {
+		t.Errorf("collectedAnswers[First?] = %q, want %q", got, "B")
+	}
+
+	// Submit question 2, landing on the recap slot (index == len(questions)).
+	m.commitAnswer("C")
+	m.advanceQuestionOpts(1, false)
+	if !m.onRecapSlot() {
+		t.Fatalf("expected recap slot after answering both questions, currentQuestionIdx=%d", m.currentQuestionIdx)
+	}
+}
+
+func TestChatModelMultiSelectToggle(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{Question: "Which repos?", MultiSelect: true, Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
+	}, "req-1", nil)
+	m.selectedOption = 1
+	m.toggleSelectedMulti()
+	if !m.selectedMulti[1] {
+		t.Fatal("expected option 1 to be ticked after toggleSelectedMulti")
+	}
+	m.toggleSelectedMulti()
+	if m.selectedMulti[1] {
+		t.Fatal("expected option 1 to be unticked after toggling twice")
+	}
+}

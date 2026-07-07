@@ -2909,8 +2909,10 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 	if waiting.chat.responding {
 		t.Fatal("chat remained responding after pending AskUserQuestion snapshot")
 	}
+	// With descriptions, each option takes 2 lines, so the small chat panel's
+	// option window shows only the first option plus a scroll indicator.
 	view := stripANSI(waiting.View().Content)
-	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "[enter] Send"} {
+	for _, want := range []string{"Pick a direction", "Alpha", "more below", "Enter to select"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat view missing %q while waiting for AskUser answer:\n%s", want, view)
 		}
@@ -2919,10 +2921,17 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 		t.Fatalf("chat view still rendered responding footer:\n%s", view)
 	}
 
-	waiting.chat.input.SetValue("Beta")
-	model, cmd = waiting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Navigate the picker down to "Beta" and commit it — with a single
+	// question this lands on the recap slot, so a second Enter submits.
+	model, _ = waiting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	after := model.(APIAppModel)
+	if !after.chat.onRecapSlot() {
+		t.Fatalf("expected recap slot after answering the only question, currentQuestionIdx=%d", after.chat.currentQuestionIdx)
+	}
+	model, cmd = after.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want AskUser answer command")
+		t.Fatal("Update(enter) on recap slot returned nil command, want AskUser answer command")
 	}
 	model, _ = model.(APIAppModel).Update(cmd())
 	if len(client.helpRequests) != 0 {
@@ -2992,16 +3001,24 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 		t.Fatal("chat remained responding after prompt-only AskUserQuestion snapshot")
 	}
 	view := stripANSI(waiting.View().Content)
-	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "[enter] Send"} {
+	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "Enter to select"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat view missing %q after prompt-only AskUser snapshot:\n%s", want, view)
 		}
 	}
 
-	waiting.chat.input.SetValue("Gamma")
-	model, cmd = waiting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	// Navigate the picker down to "Gamma" and commit it — with a single
+	// question this lands on the recap slot, so a second Enter submits.
+	model, _ = waiting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	after := model.(APIAppModel)
+	if !after.chat.onRecapSlot() {
+		t.Fatalf("expected recap slot after answering the only question, currentQuestionIdx=%d", after.chat.currentQuestionIdx)
+	}
+	model, cmd = after.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("Update(enter) returned nil command, want AskUser answer command")
+		t.Fatal("Update(enter) on recap slot returned nil command, want AskUser answer command")
 	}
 	model, _ = model.(APIAppModel).Update(cmd())
 	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != "ask-1" || got[0].Answers["Pick a direction"] != "Gamma" {
@@ -4780,7 +4797,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotShowsReadableLongText(t *testin
 	for _, want := range []string{
 		"losing important workflow context?",
 		"Translate TUI labels too (Recommended)",
-		"[enter] Send",
+		"Enter to select",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat view missing %q after long AskUser snapshot:\n%s", want, view)

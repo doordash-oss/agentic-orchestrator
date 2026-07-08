@@ -1231,6 +1231,44 @@ func TestDefaultLaunchReportsServerReadinessTimeout(t *testing.T) {
 	}
 }
 
+func TestDefaultLaunchReadinessTimeoutCoversCatalogDiscoveryBudget(t *testing.T) {
+	runtimeDir := t.TempDir()
+	stateDir := filepath.Join(runtimeDir, "features")
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
+	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
+	var observedBudget time.Duration
+
+	_, err := waitForDefaultLaunchServerReady(context.Background(), defaultLaunchRequest{
+		ConfigPath:               configPath,
+		StateDir:                 stateDir,
+		EnabledProviders:         []string{"codex"},
+		WaitForReadyPollInterval: time.Millisecond,
+	}, defaultLaunchDeps{
+		PrepareDiscovery: func(ctx context.Context, runtimeDir string, gotIdentity serverruntime.RuntimeIdentity, gotPolicy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryDecision, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("PrepareDiscovery context has no deadline")
+			}
+			observedBudget = time.Until(deadline)
+			return serverruntime.DiscoveryDecision{
+				AlreadyRunning: true,
+				Record: serverruntime.DiscoveryRecord{
+					BaseURL:      "http://127.0.0.1:7777",
+					Runtime:      gotIdentity,
+					LaunchPolicy: gotPolicy,
+				},
+			}, nil
+		},
+	}, runtimeDir, identity, policy, &http.Client{Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("waitForDefaultLaunchServerReady() error = %v", err)
+	}
+	if observedBudget <= providerCatalogDiscoveryTimeout {
+		t.Fatalf("default readiness budget = %v; want greater than catalog discovery budget %v", observedBudget, providerCatalogDiscoveryTimeout)
+	}
+}
+
 func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testing.T) {
 	runtimeDir := t.TempDir()
 	stateDir := filepath.Join(runtimeDir, "features")

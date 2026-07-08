@@ -341,6 +341,7 @@ func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Write
 const providerReadinessTimeout = 5 * time.Second
 const providerReadinessNoticeDelay = 3 * time.Second
 const providerCatalogDiscoveryTimeout = 45 * time.Second
+const defaultLaunchServerReadyTimeout = providerCatalogDiscoveryTimeout + 15*time.Second
 
 type providerReadinessIssue struct {
 	provider llm.LLMProvider
@@ -2552,7 +2553,7 @@ func tuiProgramOptions() []tea.ProgramOption {
 func waitForDefaultLaunchServerReady(ctx context.Context, req defaultLaunchRequest, deps defaultLaunchDeps, runtimeDir string, identity serverruntime.RuntimeIdentity, policy serverruntime.LaunchPolicy, client *http.Client) (serverruntime.DiscoveryRecord, error) {
 	timeout := req.WaitForReadyTimeout
 	if timeout <= 0 {
-		timeout = 10 * time.Second
+		timeout = defaultLaunchServerReadyTimeout
 	}
 	poll := req.WaitForReadyPollInterval
 	if poll <= 0 {

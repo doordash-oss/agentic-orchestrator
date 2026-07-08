@@ -18,7 +18,13 @@ Own hygiene and pushability:
 - out-of-plan touched files or repositories
 - cross-repo and phase atomicity of the change set
 - coherence of generated artifacts, source edits, and committed intent
-- stray debug files, temporary files, and orphaned artifacts
+- stray binaries, build artifacts, debug files, temporary files, and orphaned artifacts
+- phase- or iteration-leaked names and comments, such as `phase2Handler`, "TODO next phase", or "temporary for step 1"
+- leftover scaffolding, debug instrumentation, and commented-out code that should not ship
+- `.gitignore` correctness for generated files, local state, caches, and build outputs
+- dependency manifest and lockfile sync
+- committed secrets, credentials, tokens, or local environment files
+- oversized files or binary assets that do not belong in the branch
 - changes that make the branch hard to review, publish, or revert cleanly
 
 When the implementer's changes in repo A depend on changes in repo B, a change in repo A that compiles and tests on its own but breaks repo B's build or contract is a Critical Cleanliness finding.

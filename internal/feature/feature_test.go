@@ -243,8 +243,6 @@ func TestPhaseInstructionKeyRoundTrip(t *testing.T) {
 		PhasePlan,
 		PhaseImplement,
 		PhaseReview,
-		PhaseFinalReview,
-		PhasePublish,
 	}
 	seen := make(map[string]Phase, len(phases))
 	for _, p := range phases {
@@ -263,14 +261,20 @@ func TestPhaseInstructionKeyRoundTrip(t *testing.T) {
 		}
 	}
 
-	// Review and FinalReview must be distinct keys even though they share a
-	// DirName.
-	if PhaseReview.InstructionKey() == PhaseFinalReview.InstructionKey() {
-		t.Fatalf("review and final_review must have distinct instruction keys")
+	// PhaseFinalReview and PhasePublish are not operator-addressable: final
+	// review runs under the PhaseReview RoleSpec (the "review" key covers it)
+	// and publish builds no system prompt. They must yield an empty key and be
+	// rejected as config keys so a misconfigured entry warns instead of
+	// silently no-op'ing.
+	for _, p := range []Phase{PhaseFinalReview, PhasePublish} {
+		if got := p.InstructionKey(); got != "" {
+			t.Errorf("Phase(%d).InstructionKey() = %q, want empty (not addressable)", p, got)
+		}
 	}
-
-	if _, ok := PhaseFromInstructionKey("nonsense"); ok {
-		t.Fatalf("PhaseFromInstructionKey(unknown) should return ok=false")
+	for _, key := range []string{"final_review", "publish", "nonsense"} {
+		if _, ok := PhaseFromInstructionKey(key); ok {
+			t.Errorf("PhaseFromInstructionKey(%q) should return ok=false", key)
+		}
 	}
 }
 

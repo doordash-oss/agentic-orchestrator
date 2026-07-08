@@ -163,7 +163,9 @@ defaults:
 ```
 
 Accepted phase keys: `knowledge_base`, `inquire`, `research`, `design`, `plan`,
-`implement`, `review`, `final_review`, `publish`.
+`implement`, `review`. The `review` key also applies to the final-review pass,
+which runs under the same review role. (Publish has no agent prompt, so it is
+not configurable here.)
 
 Notes:
 

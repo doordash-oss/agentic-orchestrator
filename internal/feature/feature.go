@@ -149,10 +149,16 @@ func (p Phase) DirName() string {
 	}
 }
 
-// InstructionKey returns the stable, collision-free config key used to attach
-// per-phase extra instructions (config.Defaults.PhaseExtraInstructions).
-// Unlike DirName, PhaseReview and PhaseFinalReview map to distinct keys so an
-// operator can target the deferred end-of-feature review pass separately.
+// InstructionKey returns the stable config key used to attach per-phase extra
+// instructions (config.Defaults.PhaseExtraInstructions).
+//
+// Only phases whose sessions are composed through BuildRoleSystemPrompt are
+// operator-addressable and return a non-empty key. PhaseFinalReview and
+// PhasePublish return "" on purpose: final review/fix sessions run under the
+// PhaseReview RoleSpec (so the "review" key already governs them), and publish
+// builds no system prompt at all. Returning "" keeps them out of the
+// accepted-key set so a misconfigured entry warns instead of silently
+// no-op'ing.
 func (p Phase) InstructionKey() string {
 	switch p {
 	case PhaseKnowledgeBase:
@@ -169,17 +175,14 @@ func (p Phase) InstructionKey() string {
 		return "implement"
 	case PhaseReview:
 		return "review"
-	case PhaseFinalReview:
-		return "final_review"
-	case PhasePublish:
-		return "publish"
 	default:
 		return ""
 	}
 }
 
 // PhaseFromInstructionKey resolves a lifecycle phase from its InstructionKey.
-// The bool is false for unknown keys so callers can warn on typos.
+// The bool is false for unknown or non-addressable keys (e.g. "final_review",
+// "publish") so callers can warn on typos and unsupported phases.
 func PhaseFromInstructionKey(key string) (Phase, bool) {
 	switch key {
 	case "knowledge_base":
@@ -196,10 +199,6 @@ func PhaseFromInstructionKey(key string) (Phase, bool) {
 		return PhaseImplement, true
 	case "review":
 		return PhaseReview, true
-	case "final_review":
-		return PhaseFinalReview, true
-	case "publish":
-		return PhasePublish, true
 	default:
 		return Phase(0), false
 	}

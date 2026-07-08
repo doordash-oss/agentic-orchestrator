@@ -314,7 +314,7 @@ func chatQuestionHistoryText(q askUserQuestion) string {
 
 // renderQuestionPicker renders the active AskUserQuestion bundle inline.
 func (m ChatModel) renderQuestionPicker() (body, footer string) {
-	contentWidth := max(m.width-6, 40)
+	contentWidth := chatBottomPanelContentWidth(m.chatContentWidth())
 	if m.onRecapSlot() {
 		var b strings.Builder
 		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Review & Submit"))
@@ -374,6 +374,6 @@ func (m ChatModel) renderQuestionPicker() (body, footer string) {
 func (m ChatModel) questionOptionArea(q askUserQuestion, contentWidth int) int {
 	promptLines := questionPromptLineCount(q.Question, contentWidth)
 	contentHeight := max(m.height-chatBorderHeight, 1)
-	available := contentHeight - m.viewport.Height() - chatSectionSeparators - chatFooterHeight - promptLines - 1 - 1
+	available := contentHeight - m.viewport.Height() - chatSectionSeparators - chatBottomPanelFrameHeight - chatFooterHeight - promptLines - 1 - 1
 	return max(available, 1)
 }

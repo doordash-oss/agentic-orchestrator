@@ -80,7 +80,9 @@ const (
 	chatInputMaxLines          = 6
 	chatBorderHeight           = 2
 	chatFooterHeight           = 1
-	chatSectionSeparators      = 2
+	chatSectionSeparators      = 1
+	chatBottomPanelFrameHeight = 2
+	chatBottomPanelHFrame      = 4
 	chatMinViewportHeight      = 1
 	chatQuestionMinOptionLines = 6
 )

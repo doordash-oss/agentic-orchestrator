@@ -132,6 +132,24 @@ func TestChatModelViewShowsFooter(t *testing.T) {
 	}
 }
 
+func TestChatModelViewBoxesMessageInputPanel(t *testing.T) {
+	m := NewChatModel(100, 20, nil, "/tmp", "test prompt", nil, "", "")
+	m.turns = append(m.turns,
+		chatTurn{Role: chatTurnUser, Text: "what is running?"},
+		chatTurn{Role: chatTurnAgent, Text: strings.Repeat("Transcript content. ", 18)},
+	)
+	m.rebuildViewport()
+	m = m.resize(100, 20)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, " Message ") {
+		t.Fatalf("message input should render with an inner Message box title:\n%s", view)
+	}
+	if strings.Count(view, "╭") < 2 || strings.Count(view, "╰") < 2 {
+		t.Fatalf("message input should add an inner box distinct from the outer chat panel:\n%s", view)
+	}
+}
+
 func TestChatModelViewShowsRespondingFooter(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
 	m.responding = true
@@ -819,6 +837,35 @@ func TestChatModelDoesNotDuplicateActiveAskUserQuestion(t *testing.T) {
 	view := stripANSI(updated.View())
 	if count := strings.Count(view, "What would you like help with?"); count != 1 {
 		t.Fatalf("active AskUserQuestion prompt rendered %d times, want 1:\n%s", count, view)
+	}
+}
+
+func TestChatModelViewBoxesActiveQuestionPanel(t *testing.T) {
+	m := NewChatModel(100, 24, nil, "", "", nil, "", "")
+	m.turns = append(m.turns,
+		chatTurn{Role: chatTurnUser, Text: "another 3 choices question pls"},
+		chatTurn{Role: chatTurnAgent, Text: strings.Repeat("Long answer content. ", 24)},
+	)
+	m.rebuildViewport()
+	m.activateQuestions([]askUserQuestion{{
+		Question: "What would you like to explore next?",
+		Options: []askUserOption{
+			{Label: "State machine & checkpoints", Description: "Feature states and review gates."},
+			{Label: "Post-publish actions", Description: "What happens after PR creation."},
+			{Label: "Something else entirely", Description: "Ask a different question."},
+		},
+	}}, "req-1", nil)
+	m = m.resize(100, 24)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, " Question ") {
+		t.Fatalf("active question should render with an inner Question box title:\n%s", view)
+	}
+	if strings.Count(view, "╭") < 2 || strings.Count(view, "╰") < 2 {
+		t.Fatalf("active question should add an inner box distinct from the outer chat panel:\n%s", view)
+	}
+	if questionIdx, promptIdx := strings.Index(view, " Question "), strings.Index(view, "What would you like to explore next?"); questionIdx < 0 || promptIdx < questionIdx {
+		t.Fatalf("Question box title should appear before the prompt:\n%s", view)
 	}
 }
 

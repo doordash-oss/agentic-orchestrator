@@ -52,20 +52,34 @@ func (m ChatModel) chatPanelHeight(totalHeight int) int {
 	return h
 }
 
+func (m ChatModel) chatContentWidth() int {
+	return max(m.width-6, 40)
+}
+
+func chatBottomPanelContentWidth(panelWidth int) int {
+	return max(panelWidth-chatBottomPanelHFrame, 1)
+}
+
+func chatBottomPanelHeight(bodyHeight int) int {
+	return bodyHeight + chatFooterHeight + chatBottomPanelFrameHeight
+}
+
 // resize recalculates layout dimensions for the bottom-panel layout.
 // h is the total height allocated to the chat panel (including border).
 func (m ChatModel) resize(w, h int) ChatModel {
 	m.width = w
 	m.height = h
-	contentWidth := max(w-6, 40)
+	panelWidth := m.chatContentWidth()
+	contentWidth := chatBottomPanelContentWidth(panelWidth)
 	inputHeight := m.currentInputHeight()
 	bottomHeight := inputHeight
 	if m.hasActiveQuestion() {
 		bottomHeight = m.minimumQuestionBodyHeight(contentWidth)
 	}
-	vpHeight := max(h-bottomHeight-chatFooterHeight-chatBorderHeight-chatSectionSeparators, chatMinViewportHeight)
+	bottomPanelHeight := chatBottomPanelHeight(bottomHeight)
+	vpHeight := max(h-bottomPanelHeight-chatBorderHeight-chatSectionSeparators, chatMinViewportHeight)
 
-	m.viewport.SetWidth(contentWidth)
+	m.viewport.SetWidth(panelWidth)
 	m.viewport.SetHeight(vpHeight)
 	m.input.SetWidth(contentWidth)
 	m.inputHeight = inputHeight
@@ -82,11 +96,12 @@ func (m ChatModel) currentInputHeight() int {
 }
 
 func (m ChatModel) minimumPanelHeight() int {
-	return chatBorderHeight + chatMinViewportHeight + m.currentInputHeight() + chatFooterHeight + chatSectionSeparators
+	return chatBorderHeight + chatMinViewportHeight + chatBottomPanelHeight(m.currentInputHeight()) + chatSectionSeparators
 }
 
 func (m ChatModel) minimumQuestionPanelHeight() int {
-	return chatBorderHeight + chatMinViewportHeight + m.minimumQuestionBodyHeight(max(m.width-6, 40)) + chatFooterHeight + chatSectionSeparators
+	contentWidth := chatBottomPanelContentWidth(m.chatContentWidth())
+	return chatBorderHeight + chatMinViewportHeight + chatBottomPanelHeight(m.minimumQuestionBodyHeight(contentWidth)) + chatSectionSeparators
 }
 
 func (m ChatModel) minimumQuestionBodyHeight(contentWidth int) int {
@@ -138,19 +153,22 @@ func (m ChatModel) View() string {
 			Render("Ask anything about Agentic Orchestrator... press Enter to send, Esc to close.")
 	}
 
-	var bottom, footer string
+	var bottom, footer, bottomTitle string
 	switch {
 	case m.hasActiveQuestion():
 		bottom, footer = m.renderQuestionPicker()
+		bottomTitle = "Question"
 	case m.responding:
 		bottom = m.input.View()
-		footer = KeyHelpStyle.Render("[esc] Background   [ctrl+c] Cancel   [ctrl+g] Full screen")
+		footer = KeyHelpStyle.Render("[esc] Background · [ctrl+c] Cancel · [ctrl+g] Full")
+		bottomTitle = "Message"
 	default:
 		bottom = m.input.View()
-		footer = KeyHelpStyle.Render("[enter] Send · [shift+enter] Newline · [esc] Close · [ctrl+g] Full screen")
+		footer = KeyHelpStyle.Render("[enter] Send · [shift+enter] Newline · [esc] Close · [ctrl+g] Full")
+		bottomTitle = "Message"
 	}
 
-	inner := vpContent + "\n" + bottom + "\n" + footer
+	inner := vpContent + "\n" + m.renderBottomPanel(bottomTitle, bottom, footer)
 
 	box := panelStyle(true).
 		Width(m.width).
@@ -159,6 +177,20 @@ func (m ChatModel) View() string {
 	box = renderBorderTitle(box, "Ask me Anything", lipgloss.NewStyle().Foreground(colorBrand))
 
 	return box
+}
+
+func (m ChatModel) renderBottomPanel(title, body, footer string) string {
+	content := body
+	if footer != "" {
+		content += "\n" + footer
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorActive).
+		Padding(0, 1).
+		Width(m.chatContentWidth()).
+		Render(content)
+	return renderBorderTitle(box, title, lipgloss.NewStyle().Foreground(colorActive))
 }
 
 // wrapForViewport applies ANSI-aware word-wrapping so long lines don't

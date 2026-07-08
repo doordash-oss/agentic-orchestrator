@@ -210,14 +210,16 @@ func NewAPIChatModel(width, height int, client APIClient) ChatModel {
 func (m ChatModel) chatPanelHeight(totalHeight int) int {
 	h := totalHeight * 35 / 100
 	floor := 10
+	ceiling := 18
 	if len(m.turns) == 0 && !m.responding {
 		floor = 5
+		ceiling = 8
 	}
 	if h < floor {
 		h = floor
 	}
-	if h > 18 {
-		h = 18
+	if h > ceiling {
+		h = ceiling
 	}
 	return h
 }

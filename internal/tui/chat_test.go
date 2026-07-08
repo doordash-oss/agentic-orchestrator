@@ -768,10 +768,27 @@ func TestChatModelFullscreenToggleAndEscHierarchy(t *testing.T) {
 	}
 }
 
-func TestChatPanelHeightMethodMatchesFreeFunctionRange(t *testing.T) {
-	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
-	h := m.chatPanelHeight(100)
-	if h < 10 || h > 18 {
-		t.Errorf("chatPanelHeight(100) = %d, want within [10, 18] (unchanged ceiling)", h)
+// TestChatPanelHeightEmptyVsNonEmpty verifies that empty and non-empty
+// conversations use distinct height ceilings by design: an empty chat dock
+// stays compact (ceiling 8, within floor/ceiling range [5, 8]) even at
+// typical/large terminal sizes, while a populated conversation keeps the
+// original, taller range (floor/ceiling [10, 18]) and hits the 18 ceiling
+// at totalHeight=100.
+func TestChatPanelHeightEmptyVsNonEmpty(t *testing.T) {
+	empty := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	if h := empty.chatPanelHeight(100); h < 5 || h > 8 {
+		t.Errorf("empty chatPanelHeight(100) = %d, want within [5, 8] (compact ceiling)", h)
+	}
+
+	nonEmpty := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	nonEmpty.turns = append(nonEmpty.turns, chatTurn{Role: chatTurnUser, Text: "hi"})
+	if h := nonEmpty.chatPanelHeight(100); h != 18 {
+		t.Errorf("non-empty chatPanelHeight(100) = %d, want exactly 18 (unchanged ceiling)", h)
+	}
+
+	responding := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	responding.responding = true
+	if h := responding.chatPanelHeight(100); h != 18 {
+		t.Errorf("responding chatPanelHeight(100) = %d, want exactly 18 (unchanged ceiling)", h)
 	}
 }

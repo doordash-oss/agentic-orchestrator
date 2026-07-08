@@ -2947,6 +2947,82 @@ func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelChatRecoveryTickFetchesSessionSnapshot(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		refreshSnapshot: server.RefreshSnapshot{
+			Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{
+				SessionSummaryDTO: server.SessionSummaryDTO{
+					ID:        chatSessionID,
+					FeatureID: chatSessionID,
+					Phase:     "research",
+					Status:    "WaitingHelp",
+					TurnState: "waiting_input",
+				},
+				TranscriptCursor: server.CursorDTO{Total: 2, Start: 0, End: 2},
+			}},
+			Transcript: &server.TranscriptResponse{
+				Cursor: server.CursorDTO{Total: 2, Start: 0, End: 2},
+				Messages: []server.TranscriptMessageDTO{
+					{Index: 0, Role: "assistant", Type: "text", Text: "Recovered answer."},
+					{Index: 1, Role: "system", Type: "result", Status: "success", Redacted: true},
+				},
+			},
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("yo")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	started := model.(APIAppModel)
+	if !started.chat.responding || started.chat.sess == nil {
+		t.Fatalf("setup: chat should be responding with a session, responding=%v sess=%#v", started.chat.responding, started.chat.sess)
+	}
+
+	model, cmd = started.Update(chatRecoveryTickMsg{sess: started.chat.sess})
+	if cmd == nil {
+		t.Fatal("chat recovery tick returned nil command, want snapshot fetch")
+	}
+
+	msgCh := make(chan tea.Msg, 1)
+	go func() { msgCh <- cmd() }()
+	var msg tea.Msg
+	select {
+	case msg = <-msgCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("chat recovery tick did not fetch the session snapshot promptly")
+	}
+	refresh, ok := msg.(apiRefreshSnapshotMsg)
+	if !ok {
+		t.Fatalf("chat recovery command returned %T, want apiRefreshSnapshotMsg", msg)
+	}
+	if got := client.refreshSignals; len(got) != 1 || got[0].Resource.Type != "session" || got[0].Resource.ID != chatSessionID || got[0].Resource.FeatureID != chatSessionID {
+		t.Fatalf("recovery refresh signals = %+v, want chat session-targeted refresh", got)
+	}
+
+	model, _ = model.(APIAppModel).Update(refresh)
+	recovered := model.(APIAppModel)
+	if recovered.chat.responding {
+		t.Fatal("chat remained responding after recovery snapshot")
+	}
+	view := stripANSI(recovered.View().Content)
+	if !strings.Contains(view, "Recovered answer.") || strings.Contains(view, "Thinking") {
+		t.Fatalf("chat view did not recover from snapshot:\n%s", view)
+	}
+}
+
 func TestAPIAppModelChatToolProgressOnlyWaitingHelpShowsNoAnswer(t *testing.T) {
 	t.Parallel()
 

@@ -755,7 +755,10 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		var cmd tea.Cmd
 		m, cmd = m.applyAPIChatRefreshSnapshot(msg.snapshot)
-		return m, cmd
+		if cmd != nil {
+			return m, cmd
+		}
+		return m, m.apiChatRecoveryCmdIfResponding()
 	case apiContentSelectionMsg:
 		if msg.err != nil {
 			m.statusMessage = "Content load failed: " + firstLine(msg.err.Error())
@@ -1404,6 +1407,9 @@ func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chat.fullscreen = false
 		return m, nil
 	}
+	if tick, ok := msg.(chatRecoveryTickMsg); ok && !m.chat.pollSession && tick.sess == m.chat.sess && m.chat.responding && m.chat.sess != nil {
+		return m, m.fetchRefreshSnapshotCmd(apiChatRecoveryRefreshSignal(m.chat.sess))
+	}
 	updated, cmd := m.chat.Update(msg)
 	m.chat = updated
 	// Re-sync docked/fullscreen dimensions after every message, not just on
@@ -1418,7 +1424,39 @@ func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else {
 		m.chat = m.chat.resize(m.width, m.chat.chatPanelHeight(m.height))
 	}
-	return m, cmd
+	if cmd != nil {
+		return m, cmd
+	}
+	if _, ok := msg.(chatSessionStartedMsg); ok {
+		return m, m.apiChatRecoveryCmdIfResponding()
+	}
+	return m, nil
+}
+
+func (m APIAppModel) apiChatRecoveryCmdIfResponding() tea.Cmd {
+	if !m.chatReady || m.chat.pollSession || !m.chat.responding || m.chat.sess == nil {
+		return nil
+	}
+	return chatRecoveryTickCmd(m.chat.sess, nil)
+}
+
+func apiChatRecoveryRefreshSignal(sess session.SessionView) server.RefreshSignal {
+	if sess == nil {
+		return server.RefreshSignal{}
+	}
+	resource := server.ResourceDTO{
+		Type:      "session",
+		ID:        sess.ID(),
+		FeatureID: sess.FeatureID(),
+		Phase:     sess.Phase().String(),
+	}
+	return server.RefreshSignal{
+		Event: server.SSEEventDTO{
+			Kind:     "session.updated",
+			Resource: resource,
+		},
+		Resource: resource,
+	}
 }
 
 func (m APIAppModel) transitionToAPIChat() (tea.Model, tea.Cmd) {

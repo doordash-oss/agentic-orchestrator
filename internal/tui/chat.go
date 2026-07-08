@@ -545,6 +545,9 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				if err := sess.SendUserMessage(question); err != nil {
 					return chatSendErrorMsg{err: err}
 				}
+				if !m.pollSession {
+					return chatRecoveryTickMsg{sess: sess, baseline: m.turnCostBaseline}
+				}
 				return nil
 			}
 			if !m.pollSession {

@@ -1,0 +1,615 @@
+@import "./tokens.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    margin: 0;
+  }
+
+  /* Native resizable textareas — every <textarea> is vertically
+     resizable by default. Specific resizableTextarea components will
+     override to "both" where needed. Meets the explicit "field
+     resizing for all textareas" requirement from M1 design doc. */
+  textarea {
+    resize: vertical;
+    min-height: 4rem;
+  }
+
+  /* Keyboard-only focus ring across the app. Mouse clicks don't show
+     the ring (via :focus-visible) so the UI stays clean for pointer
+     users while keyboard navigation gets a clear indicator. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline-offset: 1px;
+  }
+
+  /* Honour prefers-reduced-motion: kill non-essential transitions
+     for users who have requested less animation in their OS. The
+     splitter still uses transition for hover (a 150ms colour swap)
+     which is OK — the override below targets transform / scale /
+     opacity transitions that are more disruptive. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* ---- Status banners ---------------------------------------------------
+     Two-line callouts with a coloured left rail and a filled-icon square.
+     Drives the "Feature Not Enabled" amber and "XP Active" teal patterns.
+     Markup:
+       <div class="banner banner--warning">
+         <span class="banner-icon" aria-hidden>…</span>
+         <div>
+           <div class="banner-title">Feature Not Enabled</div>
+           <div class="banner-body">This record is not enrolled in the active experiment.</div>
+         </div>
+       </div>
+  */
+  .banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius-md);
+    border-left: 4px solid transparent;
+    font-size: 0.875rem;
+    line-height: 1.4;
+  }
+  .banner-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: var(--radius-sm);
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .banner-title {
+    font-weight: 600;
+  }
+  .banner-body {
+    margin-top: 0.125rem;
+  }
+
+  .banner--warning {
+    background: var(--banner-warning-bg);
+    border-left-color: var(--banner-warning-border);
+    color: var(--banner-warning-body);
+  }
+  .banner--warning .banner-icon  { background: var(--banner-warning-icon); }
+  .banner--warning .banner-title { color: var(--banner-warning-title); }
+
+  .banner--success {
+    background: var(--banner-success-bg);
+    border-left-color: var(--banner-success-border);
+    color: var(--banner-success-body);
+  }
+  .banner--success .banner-icon  { background: var(--banner-success-icon); }
+  .banner--success .banner-title { color: var(--banner-success-title); }
+
+  /* ---- KPI cards --------------------------------------------------------
+     Six-up metric grid: uppercase label, large value, optional MoM/YoY
+     delta chips, optional verdict score.
+  */
+  .kpi-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--radius-lg);
+    padding: 1rem 1.25rem;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .kpi-label {
+    color: var(--card-label);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .kpi-value {
+    color: var(--card-value);
+    font-size: 1.875rem;
+    font-weight: 700;
+    line-height: 1.1;
+  }
+  .kpi-deltas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-top: 0.25rem;
+  }
+  .kpi-delta {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  .kpi-delta--up {
+    background: var(--delta-positive-bg);
+    color: var(--delta-positive-text);
+  }
+  .kpi-delta--down {
+    background: var(--delta-negative-bg);
+    color: var(--delta-negative-text);
+  }
+
+  .kpi-score {
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+  .kpi-score--good    { color: var(--score-good); }
+  .kpi-score--improve { color: var(--score-improve); }
+  .kpi-score--poor    { color: var(--score-poor); }
+
+  /* ---- Attribute chip (key/value pair) ---------------------------------
+     Outlined pill with a muted key + darker value. Used in the FeatureDetail
+     header so identity facts (id, phase, risk) carry the same shape as the
+     primary tags below the title.
+       <span class="attr-chip"><b>type</b> agent</span>
+  */
+  .attr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    font-size: 0.7rem;
+    line-height: 1.4;
+    color: var(--text-primary);
+  }
+  .attr-chip > b {
+    color: var(--text-tertiary);
+    font-weight: 500;
+  }
+
+  /* ---- Tab strip --------------------------------------------------------
+     Underline-on-active tabs. Active tab gets a bold weight and a 2px
+     accent underline; inactive tabs sit on a hairline border. */
+  .tab-strip {
+    display: flex;
+    gap: 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .tab-strip__tab {
+    position: relative;
+    padding: 0.5rem 0;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    transition: color var(--transition-fast);
+  }
+  .tab-strip__tab:hover {
+    color: var(--text-secondary);
+  }
+  .tab-strip__tab--active {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+  .tab-strip__tab--active::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+
+  /* ---- Search input -----------------------------------------------------
+     Rounded-full input with a leading magnifier glyph. Wrap the <input> in
+     a .search-input and add a child .search-input__icon for the glyph. */
+  .search-input {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+  }
+  .search-input__icon {
+    position: absolute;
+    left: 0.625rem;
+    width: 0.875rem;
+    height: 0.875rem;
+    color: var(--text-tertiary);
+    pointer-events: none;
+  }
+  .search-input > input {
+    width: 100%;
+    padding: 0.3125rem 0.625rem 0.3125rem 1.875rem;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  }
+  .search-input > input::placeholder {
+    color: var(--text-tertiary);
+  }
+  .search-input > input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+
+  /* ---- Histogram strip --------------------------------------------------
+     Tiny vertical bars over a short timeline. Used as a sparkline header
+     above the Activity feed to visualise event burstiness. Taller and
+     more saturated than the original so it reads at a glance — picks up
+     the inspiration's vivid teal. */
+  .histogram {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 44px;
+    padding: 2px 0;
+  }
+  .histogram__bar {
+    flex: 1 1 0;
+    min-width: 2px;
+    background: var(--histogram-bar);
+    border-radius: 2px 2px 0 0;
+    transition: background var(--transition-fast);
+  }
+  .histogram__bar--empty {
+    background: var(--histogram-bar-quiet);
+  }
+  .histogram__bar--peak {
+    background: var(--histogram-bar-peak);
+  }
+  .histogram__axis {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.625rem;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+    margin-top: 4px;
+  }
+
+  /* ---- Semantic chip ----------------------------------------------------
+     Coloured category pill used in the Activity feed and feature status.
+     Pick a colour family via a `--<family>` modifier; `--solid` flips to
+     filled-accent for status emphasis (e.g. "running"). */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.0625rem 0.5rem;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--chip-slate-border);
+    background: var(--chip-slate-bg);
+    color: var(--chip-slate-text);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1.4;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+  .chip--teal   { background: var(--chip-teal-bg);   color: var(--chip-teal-text);   border-color: var(--chip-teal-border); }
+  .chip--blue   { background: var(--chip-blue-bg);   color: var(--chip-blue-text);   border-color: var(--chip-blue-border); }
+  .chip--purple { background: var(--chip-purple-bg); color: var(--chip-purple-text); border-color: var(--chip-purple-border); }
+  .chip--amber  { background: var(--chip-amber-bg);  color: var(--chip-amber-text);  border-color: var(--chip-amber-border); }
+  .chip--rose   { background: var(--chip-rose-bg);   color: var(--chip-rose-text);   border-color: var(--chip-rose-border); }
+  .chip--green  { background: var(--chip-green-bg);  color: var(--chip-green-text);  border-color: var(--chip-green-border); }
+  .chip--slate  { background: var(--chip-slate-bg);  color: var(--chip-slate-text);  border-color: var(--chip-slate-border); }
+
+  /* ---- Round check icon ------------------------------------------------
+     Outline circle + tick used as a per-row status glyph in the Activity
+     feed. Mirrors the inspiration's green ✓ icons. */
+  .check-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1rem;
+    height: 1rem;
+    border-radius: var(--radius-full);
+    border: 1.5px solid var(--green-500);
+    color: var(--green-600);
+    flex-shrink: 0;
+  }
+  .check-icon--warning { border-color: var(--amber-500); color: var(--amber-700); }
+  .check-icon--error   { border-color: var(--red-500);   color: var(--red-600); }
+  .check-icon--muted   { border-color: var(--slate-300); color: var(--slate-400); }
+  .check-icon > svg { width: 0.625rem; height: 0.625rem; }
+
+  /* ---- Count badge ------------------------------------------------------
+     Small numbered pill used to show child counts on a parent row
+     (matches the inspiration's `41`/`4`/`1` blue/teal counters). */
+  .count-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.125rem;
+    padding: 0 0.3125rem;
+    border-radius: var(--radius-sm);
+    background: var(--chip-blue-bg);
+    color: var(--chip-blue-text);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    border: 1px solid var(--chip-blue-border);
+  }
+
+  /* ---- Duration bar -----------------------------------------------------
+     Right-aligned progress track + green fill, with a tabular-numeric
+     duration label trailing. Used in the Activity feed to show how long
+     ago an event arrived relative to the visible window. */
+  .duration-bar {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-width: 88px;
+  }
+  .duration-bar__track {
+    position: relative;
+    flex: 1;
+    height: 6px;
+    background: var(--duration-track);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+  }
+  .duration-bar__fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--duration-fill);
+    border-radius: var(--radius-full);
+    transition: width var(--transition-base);
+  }
+  .duration-bar__label {
+    color: var(--green-700);
+    font-size: 0.6875rem;
+    font-variant-numeric: tabular-nums;
+    min-width: 36px;
+    text-align: right;
+  }
+
+  /* ---- Spinner ----------------------------------------------------------
+     Mint accent loading indicator. Visual idea borrowed from the nba-agent
+     LWC loading screen (rotating outer ring + pulsing core). Used inline
+     in buttons (size xs/sm) and in the BusyOverlay (size lg). Honours
+     prefers-reduced-motion via the global override in @layer base. */
+  .spinner-ring {
+    position: relative;
+    display: inline-block;
+    border-radius: 50%;
+    border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    border-top-color: var(--accent);
+    animation: spinner-rotate 0.9s linear infinite;
+    box-shadow: 0 0 8px var(--accent-glow);
+  }
+  .spinner-ring__core {
+    position: absolute;
+    inset: 25%;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: 0.85;
+    animation: spinner-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes spinner-rotate {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  @keyframes spinner-pulse {
+    0%, 100% { transform: scale(0.6); opacity: 0.55; }
+    50%      { transform: scale(1);   opacity: 1; }
+  }
+
+  /* Indeterminate progress bar for the top chrome — animates a 35% slice
+     across the bar so global background work has a calm but unmistakable
+     signal. Gated by useDelayedFlag(300ms) at the call site. */
+  .progress-bar {
+    position: relative;
+    height: 2px;
+    width: 100%;
+    overflow: hidden;
+    background: transparent;
+  }
+  .progress-bar__fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 35%;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--accent) 50%,
+      transparent 100%
+    );
+    animation: progress-slide 1.2s ease-in-out infinite;
+  }
+  @keyframes progress-slide {
+    0%   { left: -35%; }
+    100% { left: 100%; }
+  }
+
+  /* ---- Markdown body ----------------------------------------------------
+     Single styling block for react-markdown output. Hand-rolled rather
+     than via @tailwindcss/typography so the design tokens stay the
+     source of truth and dark mode is automatic. Covers everything
+     remark-gfm emits: headings, paragraphs, lists, tables, blockquotes,
+     inline code, fenced code, and links. */
+  .markdown-body {
+    color: var(--text-primary);
+    font-size: 0.8125rem;
+    line-height: 1.55;
+    word-wrap: break-word;
+  }
+  .markdown-body > *:first-child { margin-top: 0; }
+  .markdown-body > *:last-child  { margin-bottom: 0; }
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    color: var(--text-primary);
+    font-weight: 600;
+    line-height: 1.25;
+    margin: 1.25em 0 0.5em;
+  }
+  .markdown-body h1 {
+    font-size: 1.5rem;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .markdown-body h2 {
+    font-size: 1.25rem;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--border-color);
+  }
+  .markdown-body h3 { font-size: 1.05rem; }
+  .markdown-body h4 { font-size: 0.95rem; }
+  .markdown-body h5,
+  .markdown-body h6 { font-size: 0.85rem; color: var(--text-secondary); }
+
+  .markdown-body p { margin: 0 0 0.85em; }
+  .markdown-body strong { color: var(--text-primary); font-weight: 600; }
+  .markdown-body em { font-style: italic; }
+  .markdown-body hr {
+    border: 0;
+    border-top: 1px solid var(--border-color);
+    margin: 1.25em 0;
+  }
+
+  .markdown-body a {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: color-mix(in srgb, var(--accent) 50%, transparent);
+    transition: text-decoration-color var(--transition-fast);
+  }
+  .markdown-body a:hover { text-decoration-color: var(--accent); }
+
+  .markdown-body ul,
+  .markdown-body ol {
+    margin: 0 0 0.85em;
+    padding-left: 1.5em;
+  }
+  .markdown-body ul { list-style: disc; }
+  .markdown-body ol { list-style: decimal; }
+  .markdown-body li { margin: 0.2em 0; }
+  .markdown-body li > ul,
+  .markdown-body li > ol { margin: 0.2em 0 0; }
+  .markdown-body input[type="checkbox"] {
+    margin-right: 0.4em;
+    accent-color: var(--accent);
+  }
+
+  .markdown-body blockquote {
+    margin: 0 0 0.85em;
+    padding: 0.25em 0 0.25em 0.9em;
+    color: var(--text-secondary);
+    border-left: 3px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+  .markdown-body blockquote > :last-child { margin-bottom: 0; }
+
+  .markdown-body code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85em;
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+  }
+  .markdown-body pre {
+    margin: 0 0 0.85em;
+    padding: 0.75em 1em;
+    overflow-x: auto;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: 0.8em;
+    line-height: 1.5;
+  }
+  .markdown-body pre code {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    font-size: inherit;
+    color: var(--text-primary);
+    white-space: pre;
+  }
+
+  .markdown-body table {
+    width: 100%;
+    margin: 0 0 0.85em;
+    border-collapse: collapse;
+    border: 1px solid var(--border-color);
+    font-size: 0.85em;
+  }
+  .markdown-body th,
+  .markdown-body td {
+    padding: 0.45em 0.75em;
+    border: 1px solid var(--border-color);
+    text-align: left;
+    vertical-align: top;
+  }
+  .markdown-body th {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .markdown-body tr:nth-child(even) td {
+    background: color-mix(in srgb, var(--bg-tertiary) 50%, transparent);
+  }
+
+  .markdown-body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm);
+  }
+
+  /* ---- Status dot + text ------------------------------------------------ */
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+  }
+  .status-pill__dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: var(--radius-full);
+    background: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+  .status-pill__dot--success { background: var(--status-success); }
+  .status-pill__dot--warning { background: var(--status-warning); }
+  .status-pill__dot--error   { background: var(--status-error); }
+  .status-pill__dot--accent  { background: var(--accent); }
+}

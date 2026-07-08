@@ -3,7 +3,7 @@ BIN_DIR := ./bin
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X github.com/doordash-oss/agentic-orchestrator/internal/tui.version=$(VERSION)
 
-.PHONY: build install install-system uninstall clean lint generate-openapi test-fast jaeger jaeger-stop jaeger-status
+.PHONY: build install install-system uninstall clean lint generate-openapi test-fast web web-install web-dev jaeger jaeger-stop jaeger-status
 
 build:
 	rm -f $(BIN_DIR)/$(BINARY)
@@ -58,6 +58,15 @@ test-fast:
 	exit_status=$$core_status; \
 	if [ $$exit_status -eq 0 ]; then exit_status=$$ui_status; fi; \
 	exit $$exit_status
+
+web-install:
+	pnpm --dir web install --frozen-lockfile
+
+web:
+	pnpm --dir web build
+
+web-dev:
+	pnpm --dir web dev
 
 # ---------- Jaeger (local OTel collector + trace UI) ----------
 JAEGER_CONTAINER := agentic-jaeger

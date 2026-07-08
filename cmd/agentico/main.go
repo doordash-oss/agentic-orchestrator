@@ -1133,6 +1133,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	sessOpts.TurnMode = ports.TurnModeInteractive
 	sessOpts.Label = "chat"
 	sessOpts.LogPath = filepath.Join(chatDir, "output.txt")
+	sessOpts.StderrPath = filepath.Join(chatDir, "stderr.log")
 	sess, err := t.sessions.StartSession(serverChatSessionID, serverChatSessionID, feature.PhaseResearch, cmd, workDir, env, sessOpts)
 	if err != nil {
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)

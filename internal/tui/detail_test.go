@@ -1124,6 +1124,56 @@ func TestDetailViewRoadmapImplSubItems(t *testing.T) {
 	}
 }
 
+func TestDetailViewParentPhaseRowsAggregateRoadmapSubphaseTotals(t *testing.T) {
+	t.Parallel()
+	activeStart := time.Now().Add(-(3*time.Minute + 10*time.Second))
+	f := &feature.Feature{
+		ID:                  "feat-roadmap-totals",
+		Slug:                "roadmap-totals",
+		Status:              feature.StatusImplementing,
+		CurrentPhase:        feature.PhaseImplement,
+		CurrentIteration:    1,
+		CurrentRoadmapPhase: 2,
+		TotalRoadmapPhases:  2,
+		ActiveTimingKey:     "phase-2-impl",
+		ActivePhaseStart:    &activeStart,
+		Models:              config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
+		PhaseTimings: map[string]time.Duration{
+			"plan":         4 * time.Minute,
+			"phase-1-plan": 5 * time.Minute,
+			"phase-2-plan": 6 * time.Minute,
+			"phase-1-impl": 8 * time.Minute,
+		},
+		PhaseCosts: map[string]float64{
+			"plan":         1.00,
+			"phase-1-plan": 1.50,
+			"phase-2-plan": 2.00,
+			"phase-1-impl": 0.40,
+			"phase-2-impl": 0.20,
+		},
+	}
+
+	m := NewDetailModel(f, "")
+	view := stripANSI(m.renderPhaseProgressFull(f))
+	planningLine := renderedLineContaining(view, "Planning")
+	if !strings.Contains(planningLine, "15m") || !strings.Contains(planningLine, "$4.50") {
+		t.Fatalf("Planning row = %q, want aggregate of roadmap plan subphase totals", planningLine)
+	}
+	implementLine := renderedLineContaining(view, "Implement")
+	if !strings.Contains(implementLine, "11m") || !strings.Contains(implementLine, "$0.60") {
+		t.Fatalf("Implement row = %q, want aggregate of roadmap implementation subphase totals", implementLine)
+	}
+}
+
+func renderedLineContaining(view, needle string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
+}
+
 func TestDetailViewNoCycleTimingWhenNone(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{

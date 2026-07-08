@@ -750,15 +750,7 @@ func (m DetailModel) renderPhaseProgressFull(f *feature.Feature) string {
 			}
 		}
 
-		// Phase duration and cost
-		timing := ""
-		if p.timerKey != "" {
-			d := f.PhaseRuntime(p.timerKey)
-			timing = formatPhaseDuration(d)
-			if c := f.PhaseCost(p.timerKey); c > 0 {
-				timing += MutedStyle.Render(" " + formatCost(c))
-			}
-		}
+		timing := phaseProgressTiming(f, p.phase, p.timerKey)
 
 		// Context usage percentage (active phase only, full-screen view)
 		if current && isRunningStatus(f.Status) {
@@ -1057,15 +1049,7 @@ func (m DetailModel) renderPhaseProgress(f *feature.Feature) string {
 			}
 		}
 
-		// Phase duration and cost
-		timing := ""
-		if p.timerKey != "" {
-			d := f.PhaseRuntime(p.timerKey)
-			timing = formatPhaseDuration(d)
-			if c := f.PhaseCost(p.timerKey); c > 0 {
-				timing += MutedStyle.Render(" " + formatCost(c))
-			}
-		}
+		timing := phaseProgressTiming(f, p.phase, p.timerKey)
 
 		// Context usage percentage (active phase only)
 		if current && isRunningStatus(f.Status) {
@@ -1281,6 +1265,46 @@ func roadmapPhaseTiming(f *feature.Feature, key string) string {
 		timing += MutedStyle.Render(" " + formatCost(c))
 	}
 	return timing
+}
+
+func phaseProgressTiming(f *feature.Feature, phase feature.Phase, baseKey string) string {
+	d, c := phaseProgressTotals(f, phase, baseKey)
+	timing := formatPhaseDuration(d)
+	if c > 0 {
+		timing += MutedStyle.Render(" " + formatCost(c))
+	}
+	return timing
+}
+
+func phaseProgressTotals(f *feature.Feature, phase feature.Phase, baseKey string) (time.Duration, float64) {
+	var totalDur time.Duration
+	var totalCost float64
+	add := func(key string) {
+		if key == "" {
+			return
+		}
+		totalDur += f.PhaseRuntime(key)
+		totalCost += f.PhaseCost(key)
+	}
+
+	add(baseKey)
+	if f.TotalRoadmapPhases <= 0 {
+		return totalDur, totalCost
+	}
+
+	var suffix string
+	switch phase {
+	case feature.PhasePlan:
+		suffix = "plan"
+	case feature.PhaseImplement:
+		suffix = "impl"
+	default:
+		return totalDur, totalCost
+	}
+	for i := 1; i <= f.TotalRoadmapPhases; i++ {
+		add(fmt.Sprintf("phase-%d-%s", i, suffix))
+	}
+	return totalDur, totalCost
 }
 
 func detailShowsInputAttention(att featureAttention) bool {

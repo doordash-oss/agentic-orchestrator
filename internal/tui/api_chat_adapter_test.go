@@ -114,6 +114,33 @@ func TestAPIChatEventsFromSnapshotPendingAskUserSuppressesCompletion(t *testing.
 	}
 }
 
+func TestAPIChatEventsFromSnapshotFailedWithoutTranscriptEmitsError(t *testing.T) {
+	t.Parallel()
+
+	active := newTestAPIChatSession()
+	detail := server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        chatSessionID,
+			FeatureID: chatSessionID,
+			Status:    "Failed",
+			TurnState: "failed",
+		},
+		SafeError: "process exited with code 1",
+	}
+
+	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
+		Session:       active,
+		Detail:        detail,
+		Transcript:    &server.TranscriptResponse{},
+		WasResponding: true,
+	})
+
+	assertChatEventKinds(t, events, chatEventError)
+	if events[0].Text != "process exited with code 1" {
+		t.Fatalf("error text = %q, want safe session error", events[0].Text)
+	}
+}
+
 func TestAPIChatAnswerEchoSuppressesLocalTranscriptEcho(t *testing.T) {
 	t.Parallel()
 

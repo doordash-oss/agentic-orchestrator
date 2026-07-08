@@ -48,6 +48,9 @@ func apiChatEventsFromSnapshot(in apiChatSnapshotInput) []chatEvent {
 			events = append(events, event)
 		}
 	}
+	if in.WasResponding && apiChatSnapshotFailed(in.Detail) && !chatEventsEndTurn(events) {
+		events = append(events, chatEvent{Kind: chatEventError, Text: apiChatFailureText(in.Detail)})
+	}
 	if in.WasResponding && apiChatSnapshotReadyForNextMessage(in.Detail, controls) && !chatEventsEndTurn(events) {
 		if !in.HasInProgressAgentText && !chatEventsHaveAssistantText(events) {
 			events = append(events, chatEvent{Kind: chatEventAssistantText, Text: apiChatNoAnswerText})
@@ -285,6 +288,20 @@ func apiChatSnapshotReadyForNextMessage(detail server.SessionDetailDTO, controls
 	default:
 		return apiSessionStatus(detail.Status) == ports.SessionWaitingHelp
 	}
+}
+
+func apiChatSnapshotFailed(detail server.SessionDetailDTO) bool {
+	if normalizedTurnState(detail.TurnState) == "failed" {
+		return true
+	}
+	return apiSessionStatus(detail.Status) == ports.SessionFailed
+}
+
+func apiChatFailureText(detail server.SessionDetailDTO) string {
+	if text := strings.TrimSpace(detail.SafeError); text != "" {
+		return text
+	}
+	return "Session error"
 }
 
 func apiSessionStatusFromTurnState(turnState string) (ports.SessionStatus, bool) {

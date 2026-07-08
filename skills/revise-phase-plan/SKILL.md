@@ -30,6 +30,8 @@ description: Revise a per-phase implementation plan based on critic feedback
 6. **Only then**: write the complete revised plan
 7. Write only the revised plan markdown. There is no `execution-order.yaml` and no separate execution artifact.
 
+When revising an older plan that lacks the mandatory `## Metadata` section, add it before `## Overview` and set `**Frontend:** true|false` from the phase scope. Use `true` for any phase that adds or changes a user-facing UI surface, and pair `true` with a real top-level `### Visual Evidence` checklist item rather than `None required`.
+
 ## Plan Format
 
 The plan's output shape is defined in the `plan-phase/format.md` companion file. The user prompt provides its absolute path (look for "the plan output format at: …") — read that file directly using the absolute path; do NOT try to resolve `../plan-phase/format.md` by yourself. The revision MUST match that contract exactly.

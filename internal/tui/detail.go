@@ -1112,6 +1112,8 @@ func formatValidatorStatuses(statuses map[string]string) string {
 		{"Craft", "Craft"},
 		{"Functionality/Evidence", "Func"},
 		{"Cleanliness", "Clean"},
+		{"QA", "QA"},
+		{"Design", "Design"},
 	}
 	var parts []string
 	for _, v := range order {

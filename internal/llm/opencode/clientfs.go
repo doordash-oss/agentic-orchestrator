@@ -110,17 +110,18 @@ func (p *Protocol) resolveFSPath(path string) string {
 	return filepath.Clean(path)
 }
 
-// fsWriteAllowed reports whether a resolved path lies within the session's
-// writable roots, working directory, or feature state dir — the same surfaces
-// the generated OpenCode edit permission allows.
+// fsWriteAllowed reports whether a resolved path lies within the explicit
+// writable roots. WorkDir and StateDir are fallback writable surfaces only when
+// the session did not provide explicit roots.
 func (p *Protocol) fsWriteAllowed(path string) bool {
-	roots := make([]string, 0, len(p.opts.WritableRoots)+2)
-	roots = append(roots, p.opts.WritableRoots...)
-	if p.opts.WorkDir != "" {
-		roots = append(roots, p.opts.WorkDir)
-	}
-	if p.opts.StateDir != "" {
-		roots = append(roots, p.opts.StateDir)
+	roots := append([]string(nil), p.opts.WritableRoots...)
+	if len(roots) == 0 {
+		if p.opts.WorkDir != "" {
+			roots = append(roots, p.opts.WorkDir)
+		}
+		if p.opts.StateDir != "" {
+			roots = append(roots, p.opts.StateDir)
+		}
 	}
 	return pathWithinAny(path, roots)
 }

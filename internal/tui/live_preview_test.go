@@ -606,7 +606,7 @@ func TestLivePreviewValidationContextShowsAggregateAndSelectedValidator(t *testi
 		assistantMessage(llm.ContentBlock{Type: blockTypeToolUse, ID: "toolu_read", Name: toolNameBash, Input: rawJSON(`{"command":"go test ./..."}`)}),
 	)
 
-	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(160))
 	for _, want := range []string{
 		"Status", "Validating Phase 1 plan",
 		"Validators", "Arch ✓", "Test ⟳", "Scope ✗",
@@ -632,7 +632,7 @@ func TestLivePreviewImplementationReviewAxisOrder(t *testing.T) {
 	}
 	sess := validatorLivePreviewSession("implementation-review-functionality", "Functionality/Evidence")
 
-	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(180))
 	for _, want := range []string{
 		"Status", "Reviewing implementation",
 		"Validators", "Craft ✓", "Func ⟳",
@@ -651,6 +651,41 @@ func TestLivePreviewImplementationReviewAxisOrder(t *testing.T) {
 	if strings.Index(statuses, "Craft ✓") > strings.Index(statuses, "Func ⟳") ||
 		strings.Index(statuses, "Func ⟳") > strings.Index(statuses, "Clean ✗") {
 		t.Fatalf("implementation review axes rendered out of order: %q", statuses)
+	}
+}
+
+func TestLivePreviewFinalReviewAxisOrderIncludesQA(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status: feature.StatusFinalReviewing,
+		ValidatorStatuses: map[string]string{
+			"QA":          "running",
+			"Design":      "running",
+			"Cleanliness": "APPROVED",
+			"Craft":       "APPROVED",
+		},
+	}
+	sess := validatorLivePreviewSession("final-review-qa", "QA")
+
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	for _, want := range []string{
+		"Validators", "Craft ✓", "Clean ✓", "QA ⟳",
+		"Showing QA",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("final review live preview missing %q in:\n%s", want, view)
+		}
+	}
+	statuses := stripANSI(livePreviewValidatorStatusesValue(f))
+	for _, want := range []string{"Craft ✓", "Clean ✓", "QA ⟳", "Design ⟳"} {
+		if !strings.Contains(statuses, want) {
+			t.Fatalf("final review status row missing %q in %q", want, statuses)
+		}
+	}
+	if strings.Index(statuses, "Craft ✓") > strings.Index(statuses, "Clean ✓") ||
+		strings.Index(statuses, "Clean ✓") > strings.Index(statuses, "QA ⟳") ||
+		strings.Index(statuses, "QA ⟳") > strings.Index(statuses, "Design ⟳") {
+		t.Fatalf("final review axes rendered out of order: %q", statuses)
 	}
 }
 

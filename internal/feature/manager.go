@@ -1659,6 +1659,7 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 			// prefix from absolute values, producing run-relative entries
 			// per the roadmap's State Model.
 			newRun.Artifacts = carryForwardArtifactsMapForRequest(oldRun.Artifacts, targetPhase, sealedRunDir, partial.roadmapPhase)
+			newRun.RoadmapPhaseFrontendByPhase = carryForwardRoadmapPhaseFrontend(oldRun.RoadmapPhaseFrontendByPhase, targetPhase, partial.roadmapPhase)
 			if partial.enabled {
 				newRun.CurrentRoadmapPhase = partial.roadmapPhase
 				newRun.TotalRoadmapPhases = oldRun.TotalRoadmapPhases

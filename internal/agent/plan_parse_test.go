@@ -138,6 +138,53 @@ func TestPlanTaskRepos_SingleRepoEmptyTags(t *testing.T) {
 	}
 }
 
+func TestParsePhasePlanFrontend(t *testing.T) {
+	tests := []struct {
+		name string
+		plan string
+		want bool
+	}{
+		{
+			name: "true",
+			plan: "# Phase 1\n\n" +
+				"## Metadata\n\n" +
+				"**Frontend:** true\n\n" +
+				"## Overview\nBody.\n",
+			want: true,
+		},
+		{
+			name: "false",
+			plan: "# Phase 1\n\n" +
+				"## Metadata\n\n" +
+				"**Frontend:** FALSE\n\n" +
+				"## Overview\nBody.\n",
+			want: false,
+		},
+		{
+			name: "legacy no metadata",
+			plan: "# Phase 1\n\n" +
+				"## Overview\nBody.\n",
+			want: false,
+		},
+		{
+			name: "unrecognized value defaults false",
+			plan: "# Phase 1\n\n" +
+				"## Metadata\n\n" +
+				"**Frontend:** maybe\n\n" +
+				"## Overview\nBody.\n",
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParsePhasePlanFrontend(tt.plan)
+			if got != tt.want {
+				t.Errorf("ParsePhasePlanFrontend() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParsePlanTasks_FencedHeadingsDoNotTruncate(t *testing.T) {
 	plan := "# Plan\n" +
 		"\n" +

@@ -244,6 +244,31 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_NoRootsIsNoop(t *testing.T) {
 	}
 }
 
+func TestLiveRunReviewHandler_AllowsBroadShellAndScratchWritesOnly(t *testing.T) {
+	helperDir := t.TempDir()
+	sourceDir := t.TempDir()
+	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
+	markerPath := filepath.Join(helperDir, "phase_complete")
+	evidenceRoot := filepath.Join(helperDir, "evidence")
+	tempRoot := filepath.Join(helperDir, "tmp")
+
+	handler := &LiveRunReviewHandler{
+		AllowedPaths:  []string{feedbackPath, markerPath},
+		ScratchRoots:  []string{evidenceRoot, tempRoot},
+		DenyWriteHint: "live-run review may write only helper artifacts and scratch roots",
+	}
+
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"npm install && npm run build > build.log"}`)
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"for f in $(find . -name '*.go'); do go test ./...; done"}`)
+	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+filepath.Join(evidenceRoot, "screenshots", "home.png")+`"}`)
+	requirePermissionAllowed(t, handler, "Edit", `{"file_path":"`+filepath.Join(tempRoot, "server.log")+`"}`)
+	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+feedbackPath+`"}`)
+	requirePermissionAllowed(t, handler, "NotebookEdit", `{"file_path":"`+markerPath+`"}`)
+
+	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(sourceDir, "main.go")+`"}`)
+	requirePermissionDenied(t, handler, "Edit", `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
+}
+
 func requirePermissionAllowed(t *testing.T, handler ports.PermissionHandler, toolName, input string) {
 	t.Helper()
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolName, Input: input})

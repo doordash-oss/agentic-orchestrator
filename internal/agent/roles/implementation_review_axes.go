@@ -26,12 +26,18 @@ const (
 	RoleImplementationReviewFunctionalityEvidence Role = "implementation_review_functionality_evidence"
 	// RoleImplementationReviewCleanliness reviews change-set cleanliness.
 	RoleImplementationReviewCleanliness Role = "implementation_review_cleanliness"
+	// RoleImplementationReviewQA performs hands-on functional QA at Final Review.
+	RoleImplementationReviewQA Role = "implementation_review_qa"
+	// RoleImplementationReviewDesign reviews visible UI design and originality.
+	RoleImplementationReviewDesign Role = "implementation_review_design"
 )
 
 var implementationReviewAxisRoleSpecs = []RoleSpec{
 	implementationReviewAxisRoleSpec(RoleImplementationReviewCraft, "review-implementation-craft"),
 	implementationReviewAxisRoleSpec(RoleImplementationReviewFunctionalityEvidence, "review-implementation-functionality-evidence"),
 	implementationReviewAxisRoleSpec(RoleImplementationReviewCleanliness, "review-implementation-cleanliness"),
+	implementationReviewAxisRoleSpec(RoleImplementationReviewQA, "review-implementation-qa"),
+	implementationReviewAxisRoleSpec(RoleImplementationReviewDesign, "review-implementation-design"),
 }
 
 // ImplementationReviewAxisRoleSpecs returns the RoleSpec-backed per-axis

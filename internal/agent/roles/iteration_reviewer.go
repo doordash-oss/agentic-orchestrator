@@ -29,6 +29,7 @@ type ReviewUserInput struct {
 
 	GateLabel          string
 	FinalGate          bool
+	LiveRunAxis        bool
 	DiffBase           string
 	FeatureDescription string
 	DesignArtifactPath string

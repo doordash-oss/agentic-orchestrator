@@ -53,6 +53,8 @@ Write the plan to the output directory with a descriptive slug (e.g. `YYYY-MM-DD
 
 For multi-repo features, every `### Task N:` heading **must** be followed by a `**Repo:** <name>` tag whose value is in `Feature.Repos`. The unified phase implementer reads these tags as the single source of truth for which repos this phase touches and which sub-agent gets each Task. Single-repo features may omit tags (every Task implicitly belongs to the only repo); a single-repo plan may still tag Tasks for clarity but must not mix tagged and untagged Tasks. There is no separate `execution-order.yaml`.
 
+Set the mandatory plan metadata field `**Frontend:** true` when the phase adds or changes any user-facing UI surface. Otherwise set it to `false`. A `true` frontend flag must be paired with at least one real checklist item under the top-level `### Visual Evidence` section; never use `None required` for Visual Evidence when `**Frontend:** true`.
+
 Do not add a grounding table, file inventory, stub inventory, testing strategy section, or deferrals section. Exact file selection, code-level grounding, and implementation ceremony belong to the implementer.
 
 ## Plan Template

@@ -101,6 +101,9 @@ type Run struct {
 	// completed roadmap phase boundary. The outer key is the roadmap phase
 	// number; the inner key is FeatureRepo.Name.
 	RoadmapPhaseCommitAnchors map[int]map[string]string `yaml:"roadmap_phase_commit_anchors,omitempty"`
+	// RoadmapPhaseFrontendByPhase records whether each roadmap phase plan was
+	// marked as frontend work. Missing phases default to false.
+	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"roadmap_phase_frontend,omitempty"`
 
 	// Cycle state (moved from Feature).
 	// ActiveCycleType is the feature-level cycle type marker. Kept alongside
@@ -216,6 +219,46 @@ func (r *Run) AccumulateActiveTime() {
 // IsRefactoring returns true when the run is in an active refactor cycle.
 func (r *Run) IsRefactoring() bool {
 	return r != nil && r.RefactorPrompt != ""
+}
+
+// SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
+// work. Non-positive phases are ignored because roadmap phases are 1-indexed.
+func (r *Run) SetRoadmapPhaseFrontend(phase int, frontend bool) {
+	if r == nil || phase <= 0 {
+		return
+	}
+	if r.RoadmapPhaseFrontendByPhase == nil {
+		r.RoadmapPhaseFrontendByPhase = make(map[int]bool)
+	}
+	r.RoadmapPhaseFrontendByPhase[phase] = frontend
+}
+
+// RoadmapPhaseFrontend reports whether a roadmap phase was recorded as
+// frontend. Missing phases default to false.
+func (r *Run) RoadmapPhaseFrontend(phase int) bool {
+	if r == nil || phase <= 0 {
+		return false
+	}
+	if r.RoadmapPhaseFrontendByPhase != nil {
+		if frontend, ok := r.RoadmapPhaseFrontendByPhase[phase]; ok {
+			return frontend
+		}
+	}
+	return false
+}
+
+// AnyRoadmapPhaseFrontend reports whether any recorded roadmap phase is
+// frontend.
+func (r *Run) AnyRoadmapPhaseFrontend() bool {
+	if r == nil {
+		return false
+	}
+	for _, frontend := range r.RoadmapPhaseFrontendByPhase {
+		if frontend {
+			return true
+		}
+	}
+	return false
 }
 
 // RefactorPrefix returns the artifact directory prefix for the current

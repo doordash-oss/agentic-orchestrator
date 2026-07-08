@@ -29,9 +29,18 @@ If the plan references human decisions from the roadmap or prior Q&A, those are 
 
 The plan must use exactly these top-level sections, in order:
 
-1. `## Overview`
-2. `## Tasks`
-3. `## Success Criteria`
+1. `## Metadata`
+2. `## Overview`
+3. `## Tasks`
+4. `## Success Criteria`
+
+`## Metadata` contains exactly one plan-level UI signal:
+
+```markdown
+**Frontend:** true|false
+```
+
+`true` means the phase adds or changes a user-facing UI surface; `false` means it does not.
 
 Every task under `## Tasks` must use this shape:
 
@@ -67,6 +76,7 @@ Single-repo features may omit `**Repo:**`; multi-repo features must include it i
 - Manual verification bullets are checklist items without executable backtick commands, or exactly one `None required: <reason>` checklist item when manual verification is not meaningful.
 - Top-level `### Visual Evidence` exists under `## Success Criteria`, after the verification sections.
 - Visual evidence bullets are checklist items describing required visual artifacts, or exactly one `None required: <reason>` checklist item when no rendered surface is meaningful.
+- If `**Frontend:** true`, the Visual Evidence section must contain at least one real checklist visual evidence requirement. Reject `None required`, empty, or missing Visual Evidence for frontend phases; this is the frontend/visual-evidence rule.
 - Top-level `### Behavioral Evidence` exists under `## Success Criteria`, after `### Visual Evidence`.
 - Behavioral evidence bullets are checklist items describing required behavioral artifacts, or exactly one `None required: <reason>` checklist item when no primary user journey artifact is meaningful.
 - Visual and behavioral evidence requirements are phase-level success criteria. Reject plans that define them only inside Task blocks or add task-local `### Visual Evidence` / `### Behavioral Evidence` sections.
@@ -113,10 +123,11 @@ Only report high-severity issues.
 
 APPROVE if the plan:
 - Uses the required section shape
+- Sets `**Frontend:** true|false` in `## Metadata`
 - Has task-level `What to build`, acceptance criteria, and blockers
 - Has valid repo tags for the feature shape
 - Defines executable automated verification and meaningful manual verification
-- Defines visual and behavioral evidence sections, including explicit `None required: <reason>` markers when no evidence artifact is meaningful
+- Defines visual and behavioral evidence sections, including explicit `None required: <reason>` markers when no evidence artifact is meaningful and at least one real Visual Evidence requirement when `**Frontend:** true`
 
 Do NOT request changes for:
 - Missing exact file paths or function signatures

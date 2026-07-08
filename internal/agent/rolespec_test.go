@@ -469,14 +469,16 @@ func TestPlanValidatorRoleSpecs(t *testing.T) {
 
 func TestImplementationReviewAxisRoleSpecs(t *testing.T) {
 	specs := ImplementationReviewAxisRoleSpecs()
-	if len(specs) != 3 {
-		t.Fatalf("ImplementationReviewAxisRoleSpecs() length = %d, want 3", len(specs))
+	if len(specs) != 5 {
+		t.Fatalf("ImplementationReviewAxisRoleSpecs() length = %d, want 5", len(specs))
 	}
 
 	wantSkills := map[string]Role{
 		"review-implementation-craft":                  RoleImplementationReviewCraft,
 		"review-implementation-functionality-evidence": RoleImplementationReviewFunctionalityEvidence,
 		"review-implementation-cleanliness":            RoleImplementationReviewCleanliness,
+		"review-implementation-qa":                     RoleImplementationReviewQA,
+		"review-implementation-design":                 RoleImplementationReviewDesign,
 	}
 	for _, spec := range specs {
 		if spec.Phase != feature.PhaseReview {

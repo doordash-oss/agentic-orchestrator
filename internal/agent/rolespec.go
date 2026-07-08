@@ -46,6 +46,8 @@ const (
 	RoleImplementationReviewCraft                      = roles.RoleImplementationReviewCraft
 	RoleImplementationReviewFunctionalityEvidence      = roles.RoleImplementationReviewFunctionalityEvidence
 	RoleImplementationReviewCleanliness                = roles.RoleImplementationReviewCleanliness
+	RoleImplementationReviewQA                         = roles.RoleImplementationReviewQA
+	RoleImplementationReviewDesign                     = roles.RoleImplementationReviewDesign
 	RoleRefactorPlanStep                               = roles.RoleRefactorPlanStep
 	RoleKnowledgeBaseBuilder                           = roles.RoleKnowledgeBaseBuilder
 	RoleInquirer                                       = roles.RoleInquirer

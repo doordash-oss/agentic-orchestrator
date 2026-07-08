@@ -346,3 +346,28 @@ func carryForwardRoadmapPhaseCommitAnchors(old map[int]map[string]string, target
 	}
 	return out
 }
+
+func carryForwardRoadmapPhaseFrontend(old map[int]bool, target Phase, targetRoadmapPhase int) map[int]bool {
+	if len(old) == 0 {
+		return nil
+	}
+	out := make(map[int]bool, len(old))
+	switch {
+	case target == PhaseImplement && targetRoadmapPhase > 0:
+		for phase, frontend := range old {
+			if phase < targetRoadmapPhase {
+				out[phase] = frontend
+			}
+		}
+	case target == PhaseImplement || target == PhaseFinalReview:
+		for phase, frontend := range old {
+			out[phase] = frontend
+		}
+	default:
+		return nil
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

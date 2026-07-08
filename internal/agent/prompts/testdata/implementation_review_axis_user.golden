@@ -4,6 +4,10 @@ Review feedback output: /state/feat-x/run-1/phase-1/implement/iteration-02/revie
 Iteration under review: 2
 Iteration artifacts directory: /state/feat-x/run-1/phase-1/implement/iteration-02
 
+## Review Posture
+
+- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+
 ## Approved Roadmap
 
 This phase is one step in a larger plan. Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md

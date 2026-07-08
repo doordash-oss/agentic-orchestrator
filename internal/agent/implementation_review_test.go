@@ -30,57 +30,103 @@ import (
 
 func TestImplementationReviewAxesForGate(t *testing.T) {
 	tests := []struct {
-		name    string
-		gate    implementationReviewGate
-		profile feature.PipelineProfile
-		want    []string
+		name                 string
+		gate                 implementationReviewGate
+		profile              feature.PipelineProfile
+		currentPhaseFrontend bool
+		anyPhaseFrontend     bool
+		want                 []string
 	}{
 		{
-			name:    "moonshot selects the three read-only axes",
+			name:    "moonshot non-frontend per-phase selects existing read-only axes",
 			gate:    implementationReviewGatePerPhase,
 			profile: feature.PipelineMoonshot,
 			want:    []string{"Craft", "Functionality/Evidence", "Cleanliness"},
 		},
 		{
-			name:    "medium skips per-phase implementation review axes",
-			gate:    implementationReviewGatePerPhase,
-			profile: feature.PipelineMedium,
-			want:    nil,
+			name:                 "moonshot frontend per-phase adds Design",
+			gate:                 implementationReviewGatePerPhase,
+			profile:              feature.PipelineMoonshot,
+			currentPhaseFrontend: true,
+			anyPhaseFrontend:     true,
+			want:                 []string{"Craft", "Functionality/Evidence", "Cleanliness", "Design"},
 		},
 		{
-			name:    "large skips per-phase implementation review axes",
-			gate:    implementationReviewGatePerPhase,
-			profile: feature.PipelineLarge,
-			want:    nil,
+			name:                 "medium skips per-phase implementation review axes even for frontend",
+			gate:                 implementationReviewGatePerPhase,
+			profile:              feature.PipelineMedium,
+			currentPhaseFrontend: true,
+			anyPhaseFrontend:     true,
+			want:                 nil,
 		},
 		{
-			name:    "medium selects final review axes",
+			name:                 "large skips per-phase implementation review axes even for frontend",
+			gate:                 implementationReviewGatePerPhase,
+			profile:              feature.PipelineLarge,
+			currentPhaseFrontend: true,
+			anyPhaseFrontend:     true,
+			want:                 nil,
+		},
+		{
+			name:    "medium non-frontend final review selects existing axes",
 			gate:    implementationReviewGateFinal,
 			profile: feature.PipelineMedium,
-			want:    []string{"Craft", "Cleanliness", "Functionality/Evidence"},
+			want:    []string{"Craft", "Cleanliness", "QA"},
 		},
 		{
-			name:    "large selects final review axes",
+			name:    "large non-frontend final review selects existing axes",
 			gate:    implementationReviewGateFinal,
 			profile: feature.PipelineLarge,
-			want:    []string{"Craft", "Cleanliness", "Functionality/Evidence"},
+			want:    []string{"Craft", "Cleanliness", "QA"},
 		},
 		{
-			name:    "moonshot selects final review axes",
+			name:    "moonshot non-frontend final review selects existing axes",
 			gate:    implementationReviewGateFinal,
 			profile: feature.PipelineMoonshot,
-			want:    []string{"Craft", "Cleanliness", "Functionality/Evidence"},
+			want:    []string{"Craft", "Cleanliness", "QA"},
+		},
+		{
+			name:             "medium any-frontend final review adds Design",
+			gate:             implementationReviewGateFinal,
+			profile:          feature.PipelineMedium,
+			anyPhaseFrontend: true,
+			want:             []string{"Craft", "Cleanliness", "QA", "Design"},
+		},
+		{
+			name:             "large any-frontend final review adds Design",
+			gate:             implementationReviewGateFinal,
+			profile:          feature.PipelineLarge,
+			anyPhaseFrontend: true,
+			want:             []string{"Craft", "Cleanliness", "QA", "Design"},
+		},
+		{
+			name:             "moonshot any-frontend final review adds Design",
+			gate:             implementationReviewGateFinal,
+			profile:          feature.PipelineMoonshot,
+			anyPhaseFrontend: true,
+			want:             []string{"Craft", "Cleanliness", "QA", "Design"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			axes := implementationReviewAxesForGate(tt.gate, tt.profile)
+			axes := implementationReviewAxesForGate(tt.gate, implementationReviewAxisSelection{
+				Profile:              tt.profile,
+				CurrentPhaseFrontend: tt.currentPhaseFrontend,
+				AnyPhaseFrontend:     tt.anyPhaseFrontend,
+			})
 			got := make([]string, 0, len(axes))
 			for _, axis := range axes {
 				got = append(got, axis.Name)
-				if !axis.ReadOnly {
-					t.Errorf("axis %s ReadOnly = false, want true", axis.Name)
+				switch axis.Name {
+				case "QA", "Design":
+					if axis.ExecutionPosture != implementationReviewPostureLiveRun {
+						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, implementationReviewPostureLiveRun)
+					}
+				default:
+					if axis.ExecutionPosture != implementationReviewPostureReadOnly {
+						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, implementationReviewPostureReadOnly)
+					}
 				}
 				if axis.SkillName == "" || axis.ShortName == "" || axis.Role == "" {
 					t.Errorf("axis %s has incomplete registry entry: %+v", axis.Name, axis)
@@ -98,6 +144,8 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 		"review-implementation-craft":                  RoleImplementationReviewCraft,
 		"review-implementation-functionality-evidence": RoleImplementationReviewFunctionalityEvidence,
 		"review-implementation-cleanliness":            RoleImplementationReviewCleanliness,
+		"review-implementation-qa":                     RoleImplementationReviewQA,
+		"review-implementation-design":                 RoleImplementationReviewDesign,
 	}
 	if len(implementationReviewAxisRegistry) != len(wantSkills) {
 		t.Fatalf("implementationReviewAxisRegistry length = %d, want %d", len(implementationReviewAxisRegistry), len(wantSkills))
@@ -116,7 +164,7 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 		if axis.Role != wantRole {
 			t.Fatalf("registry role for %q = %q, want %q", axis.SkillName, axis.Role, wantRole)
 		}
-		if len(axis.Memberships) == 0 || axis.Name == "" || axis.ShortName == "" || !axis.ReadOnly {
+		if len(axis.Memberships) == 0 || axis.Name == "" || axis.ShortName == "" || axis.ExecutionPosture == "" {
 			t.Fatalf("registry row for %q is not well-formed: %+v", axis.SkillName, axis)
 		}
 		for _, membership := range axis.Memberships {
@@ -132,8 +180,8 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 		if spec.Role != axis.Role || spec.Phase != feature.PhaseReview || spec.SkillName != axis.SkillName {
 			t.Fatalf("role spec for %q = {role:%q phase:%q skill:%q}, want registry role %q phase %q skill %q", axis.SkillName, spec.Role, spec.Phase, spec.SkillName, axis.Role, feature.PhaseReview, axis.SkillName)
 		}
-		if spec.ReadOnlyOutsideRoots != axis.ReadOnly {
-			t.Fatalf("%s ReadOnlyOutsideRoots = %v, want registry ReadOnly=%v", axis.SkillName, spec.ReadOnlyOutsideRoots, axis.ReadOnly)
+		if !spec.ReadOnlyOutsideRoots {
+			t.Fatalf("%s ReadOnlyOutsideRoots = false, want true", axis.SkillName)
 		}
 		if spec.UserTemplate != "implementation_review_axis.user" {
 			t.Fatalf("%s UserTemplate = %q, want implementation_review_axis.user", axis.SkillName, spec.UserTemplate)
@@ -187,6 +235,31 @@ func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 	}
 	if status != ReviewChangesRequested {
 		t.Fatalf("composeImplementationReviewFeedback(fewer results) status = %s, want CHANGES_REQUESTED", status)
+	}
+}
+
+func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testing.T) {
+	results := []reviewAxisResult{
+		{Axis: "Craft", Status: ReviewApproved, Feedback: "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n"},
+		{Axis: "Design", Status: ReviewChangesRequested, Feedback: "## Findings\n- **High**: generic card grid contradicts the approved editorial direction and violates the frontend-design review rubric's distinctiveness dimension\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
+	}
+
+	status, feedback, err := composeImplementationReviewFeedback(results, 2)
+	if err != nil {
+		t.Fatalf("composeImplementationReviewFeedback() error = %v", err)
+	}
+	if status != ReviewChangesRequested {
+		t.Fatalf("composeImplementationReviewFeedback() status = %s, want CHANGES_REQUESTED", status)
+	}
+	for _, want := range []string{
+		"### Design",
+		"generic card grid contradicts the approved editorial direction",
+		"frontend-design review rubric's distinctiveness dimension",
+		"## Verdict\nCHANGES_REQUESTED",
+	} {
+		if !strings.Contains(feedback, want) {
+			t.Fatalf("aggregate feedback missing %q in:\n%s", want, feedback)
+		}
 	}
 }
 
@@ -274,6 +347,201 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 			t.Fatalf("BuildImplementationReviewAxisPromptWithOpts() unexpectedly included %q in Final prompt:\n%s", unwanted, got)
 		}
 	}
+}
+
+func TestBuildImplementationReviewAxisPromptLiveRunFinalGuidance(t *testing.T) {
+	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:             implementationReviewGateFinal,
+		AxisLabel:        "QA",
+		LiveRunAxis:      true,
+		IterDir:          "/review/iteration-01",
+		FeedbackPath:     "/review/iteration-01/qa/review-feedback.md",
+		ExitCriteria:     "Feature works end to end.",
+		RoadmapPath:      "/roadmap.md",
+		PlanPath:         "/phase-plan.md",
+		PreviousFeedback: "",
+	})
+
+	for _, want := range []string{
+		"Axis under review: QA",
+		"Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.",
+		"Treat the source tree as read-only. Write captured evidence only under the live-run evidence root named in this prompt.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("BuildImplementationReviewAxisPromptWithOpts() missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Keep this axis read-only") {
+		t.Fatalf("QA live-run prompt included read-only axis guidance:\n%s", got)
+	}
+}
+
+func TestBuildImplementationReviewAxisPromptLiveRunPerPhaseGuidance(t *testing.T) {
+	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:               implementationReviewGatePerPhase,
+		AxisLabel:          "Design",
+		FeatureDescription: "Frontend app intent.",
+		DesignArtifactPath: "/design.md",
+		LiveRunAxis:        true,
+		IterDir:            "/phase-02/implement/iteration-01",
+		FeedbackPath:       "/phase-02/implement/iteration-01/review/design/review-feedback.md",
+		ExitCriteria:       "The UI follows the approved baseline.",
+		RoadmapPath:        "/roadmap.md",
+		PlanPath:           "/phase-plan.md",
+		PhaseType:          "tdd-fill-in",
+	})
+
+	for _, want := range []string{
+		"Axis under review: Design",
+		"Gate under review: Per-Phase Implementation Review",
+		"Approved design: /design.md",
+		"Approved intent:\nFrontend app intent.",
+		"Use the live-run posture: build, launch, drive, screenshot, and record evidence as needed.",
+		"Judge from the attached baseline images plus the captured `### Visual Evidence` screenshots under this iteration's `screenshots/` directory.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("BuildImplementationReviewAxisPromptWithOpts() missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Keep this axis read-only") {
+		t.Fatalf("Design live-run per-phase prompt included read-only axis guidance:\n%s", got)
+	}
+}
+
+func TestBuildImplementationReviewAxisPromptReadOnlyOmitsLiveRunGuidance(t *testing.T) {
+	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:         implementationReviewGatePerPhase,
+		AxisLabel:    "Craft",
+		LiveRunAxis:  false,
+		IterDir:      "/phase-02/implement/iteration-01",
+		FeedbackPath: "/phase-02/implement/iteration-01/review/craft/review-feedback.md",
+		PlanPath:     "/phase-plan.md",
+	})
+
+	for _, unwanted := range []string{
+		"Use the live-run posture",
+		"captured `### Visual Evidence` screenshots",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("read-only prompt unexpectedly included %q in:\n%s", unwanted, got)
+		}
+	}
+	if !strings.Contains(got, "Keep this axis read-only") {
+		t.Fatalf("read-only prompt missing read-only guidance:\n%s", got)
+	}
+}
+
+func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testing.T) {
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	iterDir := filepath.Join(artifactDir, "iteration-01")
+	reviewDir := filepath.Join(iterDir, "review")
+	stateDir := filepath.Join(tmpDir, "state")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, dir := range []string{workDir, iterDir, scriptsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+
+	progressPath := filepath.Join(artifactDir, "progress.md")
+	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration State\n\nSUCCESS\n"), 0o644); err != nil {
+		t.Fatalf("write progress: %v", err)
+	}
+	reportPath := filepath.Join(iterDir, "verification-report.yaml")
+	if err := os.WriteFile(reportPath, []byte("version: 1\nrequired_checks: []\n"), 0o644); err != nil {
+		t.Fatalf("write verification report: %v", err)
+	}
+	planPath := filepath.Join(artifactDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	buildSession, captured := capturingBuildSession("", reviewScript)
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	f := newTestFeature(t, workDir)
+	f.ID = "test-implementation-review-design-live-run"
+	f.Name = "Implementation Review Design Live Run"
+	f.Pipeline = feature.PipelineMoonshot
+	f.CurrentRoadmapPhase = 1
+	f.SetRoadmapPhaseFrontend(1, true)
+	store := feature.NewStore(stateDir)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	cfg := ImplementConfig{
+		Feature:      f,
+		FeatureStore: store,
+		WorkDir:      workDir,
+		PlanPath:     planPath,
+		ExitCriteria: "Relevant tests pass",
+		ReviewModel:  "reviewer",
+		ArtifactDir:  artifactDir,
+		StateDir:     stateDir,
+		BuildSession: buildSession,
+		Observer:     observe.New(false, "", false, "", false, "test"),
+	}
+	status, feedback, err := runImplementationReviewAxes(
+		cfg,
+		sm,
+		1,
+		iterDir,
+		reviewDir,
+		observe.SpanContext{TraceID: f.TraceID, SpanID: "review-span", FeatureID: f.ID, FeatureName: f.Name, RunNumber: 1},
+		implementationReviewInput{ProgressPath: progressPath, VerificationReportPath: reportPath},
+	)
+	if err != nil {
+		t.Fatalf("runImplementationReviewAxes() error = %v", err)
+	}
+	if status != ReviewApproved {
+		t.Fatalf("status = %s, want APPROVED; feedback:\n%s", status, feedback)
+	}
+
+	var liveRun, readOnly int
+	var designOpts BuildSessionOpts
+	for _, opts := range *captured {
+		if opts.Model != "reviewer" {
+			continue
+		}
+		if permissionHandlerIncludesLiveRun(opts.PermHandler) {
+			liveRun++
+			designOpts = opts
+		}
+		if permissionHandlerIncludesBoundedArtifacts(opts.PermHandler) {
+			readOnly++
+		}
+	}
+	if liveRun != 1 {
+		t.Fatalf("live-run review BuildSession calls = %d, want exactly one Design axis; captured=%d", liveRun, len(*captured))
+	}
+	if readOnly != 3 {
+		t.Fatalf("read-only review BuildSession calls = %d, want Craft, Functionality/Evidence, and Cleanliness", readOnly)
+	}
+	if !strings.Contains(designOpts.Prompt, "Axis under review: Design") {
+		t.Fatalf("Design prompt missing axis label:\n%s", designOpts.Prompt)
+	}
+	for _, want := range []string{
+		filepath.Join(iterDir, "review", "design", "review-feedback.md"),
+		filepath.Join(iterDir, "review", "design", "phase_complete"),
+		filepath.Join(iterDir, "review", "design", "evidence"),
+		filepath.Join(iterDir, "review", "design", "build-cache"),
+		filepath.Join(iterDir, "review", "design", "tmp"),
+	} {
+		if !sliceContains(designOpts.WritableRoots, want) {
+			t.Fatalf("Design WritableRoots missing %q in %#v", want, designOpts.WritableRoots)
+		}
+	}
+	requirePermissionDecision(t, designOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
+	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(iterDir, "review", "design", "evidence", "home.png")+`"}`, "allow")
+	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(workDir, "main.go")+`"}`, "deny")
 }
 
 func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {

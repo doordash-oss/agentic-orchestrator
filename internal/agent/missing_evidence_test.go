@@ -65,7 +65,7 @@ func TestMissingEvidenceRequirements_ParsePhaseQualifiedMarkers(t *testing.T) {
 	}
 }
 
-func TestMissingEvidenceReviewerSkillDocumentsPerPhaseAndFinalGateRules(t *testing.T) {
+func TestMissingEvidenceReviewerSkillDocumentsPerPhaseRules(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
 	implementationReviewPath := filepath.Join(repoRoot, "skills", "review-implementation-functionality-evidence", "SKILL.md")
 
@@ -81,13 +81,15 @@ func TestMissingEvidenceReviewerSkillDocumentsPerPhaseAndFinalGateRules(t *testi
 		"MISSING_EVIDENCE_REQUIREMENT visual: <reviewer-authored requirement>",
 		"MISSING_EVIDENCE_REQUIREMENT behavioral: <reviewer-authored requirement>",
 		"phase-plan revision",
-		"At the Final gate",
-		"do not emit `MISSING_EVIDENCE_REQUIREMENT`",
-		"do not apply per-phase deferral criteria",
+		"per-phase implementation review gate",
+		"At the per-phase gate",
 	} {
 		if !strings.Contains(string(implementationReview), want) {
 			t.Errorf("%s missing %q", implementationReviewPath, want)
 		}
+	}
+	if strings.Contains(string(implementationReview), "At the Final gate") {
+		t.Errorf("%s still documents Final-gate Functionality/Evidence behavior after QA replaced it", implementationReviewPath)
 	}
 }
 

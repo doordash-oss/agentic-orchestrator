@@ -1139,7 +1139,7 @@ func livePreviewValidatorStatusesValue(f *feature.Feature) string {
 }
 
 func livePreviewOrderedValidatorNames(statuses map[string]string) []string {
-	order := []string{"Architecture", "Structural", "Grounding", "Security", "Performance", "Testing", "Scope", "Craft", "Functionality/Evidence", "Cleanliness"}
+	order := []string{"Architecture", "Structural", "Grounding", "Security", "Performance", "Testing", "Scope", "Craft", "Functionality/Evidence", "Cleanliness", "QA", "Design"}
 	seen := make(map[string]struct{}, len(statuses))
 	names := make([]string, 0, len(statuses))
 	for _, name := range order {
@@ -1181,6 +1181,10 @@ func livePreviewValidatorShortName(name string) string {
 		return "Func"
 	case "Cleanliness":
 		return "Clean"
+	case "QA":
+		return "QA"
+	case "Design":
+		return "Design"
 	default:
 		return name
 	}

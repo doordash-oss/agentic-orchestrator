@@ -2053,15 +2053,8 @@ phasePlanAttemptLoop:
 		if cfg.Feature.EffectivePipeline().ShouldSkipPlanValidation() {
 			planArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: agentStatusApproved})
-			if cfg.FeatureStore != nil && planArtifactPath != "" {
-				artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
-				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					if f.Artifacts == nil {
-						f.Artifacts = make(map[string]string)
-					}
-					f.Artifacts[artifactKey] = planArtifactPath
-					return nil
-				})
+			if err := recordApprovedPhasePlanArtifact(cfg, planArtifactPath); err != nil {
+				return nil, err
 			}
 			return &PlanLoopResult{FinalStatus: "approved", Iterations: attempt}, nil
 		}
@@ -2110,15 +2103,8 @@ phasePlanAttemptLoop:
 		switch reviewStatus {
 		case ReviewApproved:
 			_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{Attempt: attempt, AgentStatus: agentStatusSuccess, ReviewStatus: reviewStatus.String()})
-			if cfg.FeatureStore != nil && planArtifactPath != "" {
-				artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
-				_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-					if f.Artifacts == nil {
-						f.Artifacts = make(map[string]string)
-					}
-					f.Artifacts[artifactKey] = planArtifactPath
-					return nil
-				})
+			if err := recordApprovedPhasePlanArtifact(cfg, planArtifactPath); err != nil {
+				return nil, err
 			}
 			return &PlanLoopResult{FinalStatus: "approved", Iterations: attempt}, nil
 		case ReviewChangesRequested:
@@ -2265,6 +2251,26 @@ func handleCompletedPlanSession(
 		return planOutcomeRetrySession, nil, "", sessionAttempt + 1
 	}
 	return planOutcomeFailedNoRetry, nil, "", sessionAttempt
+}
+
+func recordApprovedPhasePlanArtifact(cfg PhasePlanLoopConfig, planArtifactPath string) error {
+	if cfg.FeatureStore == nil || planArtifactPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(planArtifactPath)
+	if err != nil {
+		return fmt.Errorf("reading approved phase plan metadata: %w", err)
+	}
+	frontend := ParsePhasePlanFrontend(string(data))
+	artifactKey := fmt.Sprintf("phase-%d-plan", cfg.Phase.Number)
+	return cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
+		if f.Artifacts == nil {
+			f.Artifacts = make(map[string]string)
+		}
+		f.Artifacts[artifactKey] = planArtifactPath
+		f.SetRoadmapPhaseFrontend(cfg.Phase.Number, frontend)
+		return nil
+	})
 }
 
 // setValidatingPlan persists the ValidatingPlan flag on the feature.

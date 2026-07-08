@@ -467,7 +467,10 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 	if cfg.Feature != nil {
 		profile = cfg.Feature.EffectivePipeline()
 	}
-	axes := implementationReviewAxesForGate(implementationReviewGateFinal, profile)
+	axes := implementationReviewAxesForGate(implementationReviewGateFinal, implementationReviewAxisSelection{
+		Profile:          profile,
+		AnyPhaseFrontend: cfg.Feature.AnyRoadmapPhaseFrontend(),
+	})
 	if len(axes) == 0 {
 		feedback := FormatStructuredReviewFeedback("Multi-Axis Final Review", "", "", ReviewApproved)
 		return ReviewApproved, feedback, nil
@@ -539,6 +542,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		AxisLabel:                            axis.Name,
 		FeatureDescription:                   cfg.Feature.Description,
 		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
+		LiveRunAxis:                          axis.ExecutionPosture == implementationReviewPostureLiveRun,
 		ExitCriteria:                         cfg.Feature.ExitCriteria,
 		DiffBase:                             diffBase,
 		PreviousFeedback:                     s.previousAggregateFeedback(iteration),
@@ -573,7 +577,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		Observer:       cfg.Observer,
 		BuildSessionFn: cfg.BuildSession,
 	}
-	helperResult, err := helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+	helperCfg := ReviewHelperConfig{
 		SessionID:              s.featureFinalReviewSessionID(axisSlug, iteration),
 		FeatureID:              cfg.Feature.ID,
 		Phase:                  feature.PhaseFinalReview,
@@ -593,7 +597,15 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		EffortLevel:            cfg.EffortLevel,
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
-	})
+	}
+	var helperResult *ReviewHelperResult
+	var err error
+	switch axis.ExecutionPosture {
+	case implementationReviewPostureLiveRun:
+		helperResult, err = helper.RunLiveRunReviewHelper(context.Background(), helperCfg)
+	default:
+		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), helperCfg)
+	}
 	if err != nil {
 		feedback := ""
 		if helperResult != nil {

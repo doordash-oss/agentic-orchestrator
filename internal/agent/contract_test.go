@@ -247,6 +247,94 @@ func TestContractRegistryPlanPhasePlannerReportsTaskScopedEvidenceSections(t *te
 	}
 }
 
+func TestContractRegistryPlanPhasePlannerRejectsFrontendWithoutRealVisualEvidence(t *testing.T) {
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
+		PlanText: "# Phase 1 Plan\n\n" +
+			"## Metadata\n\n" +
+			"**Frontend:** true\n\n" +
+			"## Overview\nShip the phase.\n\n" +
+			"## Tasks\n\n" +
+			"### Task 1: Build\n\n" +
+			"#### What to build\nDo the work.\n\n" +
+			"#### Acceptance criteria\n- [ ] Done.\n\n" +
+			"#### Blocked by\nNone - can start immediately\n\n" +
+			"## Success Criteria\n\n" +
+			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
+			"### Visual Evidence\n- [ ] None required: no UI surface.\n\n" +
+			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
+	})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if out.OK || !strings.Contains(got, "frontend/visual-evidence rule") || !strings.Contains(got, "real checklist visual evidence requirement") {
+		t.Fatalf("JoinProtocolViolations() = %q, want frontend visual evidence rule violation", got)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerAcceptsFrontendWithRealVisualEvidence(t *testing.T) {
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
+		PlanText: "# Phase 1 Plan\n\n" +
+			"## Metadata\n\n" +
+			"**Frontend:** true\n\n" +
+			"## Overview\nShip the phase.\n\n" +
+			"## Tasks\n\n" +
+			"### Task 1: Build\n\n" +
+			"#### What to build\nDo the work.\n\n" +
+			"#### Acceptance criteria\n- [ ] Done.\n\n" +
+			"#### Blocked by\nNone - can start immediately\n\n" +
+			"## Success Criteria\n\n" +
+			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
+			"### Visual Evidence\n- [ ] Capture the dashboard state after the UI update.\n\n" +
+			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
+	})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("Validate() violations = %v, want none", violations)
+	}
+	if !out.OK {
+		t.Fatalf("Validate() outcome = %+v, want OK", out)
+	}
+}
+
+func TestContractRegistryPlanPhasePlannerAllowsNonFrontendNoneRequiredVisualEvidence(t *testing.T) {
+	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
+		PlanText: "# Phase 1 Plan\n\n" +
+			"## Metadata\n\n" +
+			"**Frontend:** false\n\n" +
+			"## Overview\nShip the phase.\n\n" +
+			"## Tasks\n\n" +
+			"### Task 1: Build\n\n" +
+			"#### What to build\nDo the work.\n\n" +
+			"#### Acceptance criteria\n- [ ] Done.\n\n" +
+			"#### Blocked by\nNone - can start immediately\n\n" +
+			"## Success Criteria\n\n" +
+			"### Automated Verification\n- [ ] Tests pass: `go test ./...`\n\n" +
+			"### Manual Verification\n- [ ] None required: internal-only phase.\n\n" +
+			"### Visual Evidence\n- [ ] None required: no rendered surface.\n\n" +
+			"### Behavioral Evidence\n- [ ] None required: no user journey artifact.\n",
+	})
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanPhasePlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("Validate() violations = %v, want none", violations)
+	}
+	if !out.OK {
+		t.Fatalf("Validate() outcome = %+v, want OK", out)
+	}
+}
+
 func TestContractRegistryPlanPhasePlannerReportsMissingMeta(t *testing.T) {
 	attemptDir := writePhasePlannerAttempt(t, phasePlannerArtifacts{
 		PlanText: validPhasePlanText(),

@@ -40,7 +40,8 @@ At the Final gate, use the approved roadmap and feature intent as the scope boun
 ## Sibling Boundaries
 
 - Craft owns intrinsic code quality, naming, cohesion, and abstraction.
-- Functionality/Evidence owns behavior, verification evidence, and missing visual/behavioral evidence markers.
+- Functionality/Evidence owns per-phase behavior, verification evidence, and missing visual/behavioral evidence markers.
+- QA owns hands-on functional behavior at Final Review.
 - Do not emit `MISSING_EVIDENCE_REQUIREMENT`.
 - Do not judge code style unless the style issue creates hygiene or pushability risk.
 

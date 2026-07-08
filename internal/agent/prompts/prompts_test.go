@@ -215,6 +215,7 @@ type ReviewUserInput struct {
 
 	GateLabel          string
 	FinalGate          bool
+	LiveRunAxis        bool
 	DiffBase           string
 	FeatureDescription string
 	DesignArtifactPath string
@@ -516,6 +517,26 @@ func TestGoldenSnapshots(t *testing.T) {
 					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
 					PhaseType:              "tdd-fill-in",
 					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/functionality-evidence/review-feedback.md",
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_live_run_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:              1,
+					IterDir:                "/state/feat-x/run-1/phase-2/implement/iteration-01",
+					AxisLabel:              "Design",
+					LiveRunAxis:            true,
+					FeatureDescription:     "Launch a polished settings dashboard.",
+					DesignArtifactPath:     "/state/feat-x/run-1/design/design.md",
+					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:               "/state/feat-x/run-1/phase-2/plan.md",
+					ExitCriteria:           "Settings dashboard matches the approved design.",
+					VerificationReportPath: "/state/feat-x/run-1/phase-2/implement/iteration-01/verification-report.yaml",
+					ProgressPath:           "/state/feat-x/run-1/phase-2/implement/progress.md",
+					PhaseType:              "tdd-fill-in",
+					FeedbackPath:           "/state/feat-x/run-1/phase-2/implement/iteration-01/review/design/review-feedback.md",
 				})
 			},
 		},

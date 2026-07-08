@@ -95,6 +95,7 @@ type ImplementationReviewAxisPromptOpts struct {
 
 	FeatureDescription string
 	DesignArtifactPath string
+	LiveRunAxis        bool
 	ExitCriteria       string
 	DiffBase           string
 	PreviousFeedback   string
@@ -158,6 +159,7 @@ func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPr
 			IterDir:                              opts.IterDir,
 			GateLabel:                            implementationReviewGateLabel(opts.Gate),
 			FinalGate:                            opts.Gate == implementationReviewGateFinal,
+			LiveRunAxis:                          opts.LiveRunAxis,
 			DiffBase:                             opts.DiffBase,
 			FeatureDescription:                   opts.FeatureDescription,
 			DesignArtifactPath:                   opts.DesignArtifactPath,

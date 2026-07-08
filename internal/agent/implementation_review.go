@@ -36,72 +36,112 @@ const implementationReviewGateFinal implementationReviewGate = "final"
 type implementationReviewGateMembership struct {
 	Gate    implementationReviewGate
 	Order   int
-	Applies func(feature.PipelineProfile) bool
+	Applies func(implementationReviewAxisSelection) bool
 }
 
+type implementationReviewExecutionPosture string
+
+const (
+	implementationReviewPostureReadOnly implementationReviewExecutionPosture = "read_only"
+	implementationReviewPostureLiveRun  implementationReviewExecutionPosture = "live_run"
+)
+
 type implementationReviewAxis struct {
-	Name          string
-	ShortName     string
-	SkillName     string
-	Role          Role
-	ReadOnly      bool
-	ModelOverride string
-	Memberships   []implementationReviewGateMembership
+	Name             string
+	ShortName        string
+	SkillName        string
+	Role             Role
+	ExecutionPosture implementationReviewExecutionPosture
+	ModelOverride    string
+	Memberships      []implementationReviewGateMembership
+}
+
+type implementationReviewAxisSelection struct {
+	Profile              feature.PipelineProfile
+	CurrentPhaseFrontend bool
+	AnyPhaseFrontend     bool
 }
 
 var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
-		Name:      "Craft",
-		ShortName: "Craft",
-		SkillName: "review-implementation-craft",
-		Role:      RoleImplementationReviewCraft,
-		ReadOnly:  true,
+		Name:             "Craft",
+		ShortName:        "Craft",
+		SkillName:        "review-implementation-craft",
+		Role:             RoleImplementationReviewCraft,
+		ExecutionPosture: implementationReviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 10, Applies: moonshotImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 10, Applies: allImplementationReviewProfiles},
 		},
 	},
 	{
-		Name:      "Functionality/Evidence",
-		ShortName: "Func",
-		SkillName: "review-implementation-functionality-evidence",
-		Role:      RoleImplementationReviewFunctionalityEvidence,
-		ReadOnly:  true,
+		Name:             "Functionality/Evidence",
+		ShortName:        "Func",
+		SkillName:        "review-implementation-functionality-evidence",
+		Role:             RoleImplementationReviewFunctionalityEvidence,
+		ExecutionPosture: implementationReviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 20, Applies: moonshotImplementationReviewAxis},
-			// Temporary Final-gate evidence auditor; Phase 3 replaces this membership with the live-run QA axis.
-			{Gate: implementationReviewGateFinal, Order: 30, Applies: allImplementationReviewProfiles},
 		},
 	},
 	{
-		Name:      "Cleanliness",
-		ShortName: "Clean",
-		SkillName: "review-implementation-cleanliness",
-		Role:      RoleImplementationReviewCleanliness,
-		ReadOnly:  true,
+		Name:             "Cleanliness",
+		ShortName:        "Clean",
+		SkillName:        "review-implementation-cleanliness",
+		Role:             RoleImplementationReviewCleanliness,
+		ExecutionPosture: implementationReviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 30, Applies: moonshotImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 20, Applies: allImplementationReviewProfiles},
 		},
 	},
+	{
+		Name:             "QA",
+		ShortName:        "QA",
+		SkillName:        "review-implementation-qa",
+		Role:             RoleImplementationReviewQA,
+		ExecutionPosture: implementationReviewPostureLiveRun,
+		Memberships: []implementationReviewGateMembership{
+			{Gate: implementationReviewGateFinal, Order: 30, Applies: allImplementationReviewProfiles},
+		},
+	},
+	{
+		Name:             "Design",
+		ShortName:        "Design",
+		SkillName:        "review-implementation-design",
+		Role:             RoleImplementationReviewDesign,
+		ExecutionPosture: implementationReviewPostureLiveRun,
+		Memberships: []implementationReviewGateMembership{
+			{Gate: implementationReviewGatePerPhase, Order: 40, Applies: moonshotFrontendImplementationReviewAxis},
+			{Gate: implementationReviewGateFinal, Order: 40, Applies: frontendFinalImplementationReviewAxis},
+		},
+	},
 }
 
-func moonshotImplementationReviewAxis(profile feature.PipelineProfile) bool {
-	return profile == feature.PipelineMoonshot
+func moonshotImplementationReviewAxis(selection implementationReviewAxisSelection) bool {
+	return selection.Profile == feature.PipelineMoonshot
 }
 
-func allImplementationReviewProfiles(feature.PipelineProfile) bool {
+func moonshotFrontendImplementationReviewAxis(selection implementationReviewAxisSelection) bool {
+	return selection.Profile == feature.PipelineMoonshot && selection.CurrentPhaseFrontend
+}
+
+func frontendFinalImplementationReviewAxis(selection implementationReviewAxisSelection) bool {
+	return selection.AnyPhaseFrontend
+}
+
+func allImplementationReviewProfiles(implementationReviewAxisSelection) bool {
 	return true
 }
 
-func implementationReviewAxesForGate(gate implementationReviewGate, profile feature.PipelineProfile) []implementationReviewAxis {
+func implementationReviewAxesForGate(gate implementationReviewGate, selection implementationReviewAxisSelection) []implementationReviewAxis {
 	var axes []implementationReviewAxis
 	for _, axis := range implementationReviewAxisRegistry {
 		for _, membership := range axis.Memberships {
 			if membership.Gate != gate {
 				continue
 			}
-			if membership.Applies != nil && !membership.Applies(profile) {
+			if membership.Applies != nil && !membership.Applies(selection) {
 				continue
 			}
 			selected := axis
@@ -119,10 +159,18 @@ type reviewAxisResult = multiAxisReviewResult
 
 func runImplementationReviewAxes(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, reviewCtx observe.SpanContext, input implementationReviewInput) (ReviewStatus, string, error) {
 	profile := feature.PipelineMoonshot
+	var currentPhaseFrontend bool
+	var anyPhaseFrontend bool
 	if cfg.Feature != nil {
 		profile = cfg.Feature.EffectivePipeline()
+		currentPhaseFrontend = cfg.Feature.RoadmapPhaseFrontend(cfg.Feature.CurrentRoadmapPhase)
+		anyPhaseFrontend = cfg.Feature.AnyRoadmapPhaseFrontend()
 	}
-	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, profile)
+	axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, implementationReviewAxisSelection{
+		Profile:              profile,
+		CurrentPhaseFrontend: currentPhaseFrontend,
+		AnyPhaseFrontend:     anyPhaseFrontend,
+	})
 	if len(axes) == 0 {
 		feedback := FormatStructuredReviewFeedback("Implementation Review", "", "", ReviewApproved)
 		return ReviewApproved, feedback, nil
@@ -179,20 +227,24 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	RemovePhaseComplete(axisDir)
 
 	feedbackPath := filepath.Join(axisDir, "review-feedback.md")
-	reviewPrompt := BuildImplementationReviewAxisPrompt(
-		cfg.PlanPath,
-		cfg.ExitCriteria,
-		input.ProgressPath,
-		iterDir,
-		input.ContractPath,
-		input.VerificationReportPath,
-		iteration,
-		input.RequiredVerification,
-		cfg.RoadmapPath,
-		cfg.PhaseType,
-		feedbackPath,
-		axis.Name,
-	)
+	reviewPrompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:                   implementationReviewGatePerPhase,
+		AxisLabel:              axis.Name,
+		FeatureDescription:     featureDescriptionForImplementationReview(cfg.Feature),
+		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
+		LiveRunAxis:            axis.ExecutionPosture == implementationReviewPostureLiveRun,
+		PlanPath:               cfg.PlanPath,
+		ExitCriteria:           cfg.ExitCriteria,
+		ProgressPath:           input.ProgressPath,
+		IterDir:                iterDir,
+		ContractPath:           input.ContractPath,
+		VerificationReportPath: input.VerificationReportPath,
+		Iteration:              iteration,
+		RequiredVerification:   input.RequiredVerification,
+		RoadmapPath:            cfg.RoadmapPath,
+		PhaseType:              cfg.PhaseType,
+		FeedbackPath:           feedbackPath,
+	})
 	if cfg.Feature != nil {
 		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {
 			reviewPrompt = block + reviewPrompt
@@ -228,7 +280,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 	if cfg.Feature != nil {
 		featureID = cfg.Feature.ID
 	}
-	helperResult, err := helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+	helperCfg := ReviewHelperConfig{
 		SessionID:              reviewID,
 		FeatureID:              featureID,
 		Phase:                  feature.PhaseReview,
@@ -248,7 +300,15 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		EffortLevel:            cfg.EffortLevel,
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
-	})
+	}
+	var helperResult *ReviewHelperResult
+	var err error
+	switch axis.ExecutionPosture {
+	case implementationReviewPostureLiveRun:
+		helperResult, err = helper.RunLiveRunReviewHelper(context.Background(), helperCfg)
+	default:
+		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), helperCfg)
+	}
 	if err != nil {
 		feedback := ""
 		if helperResult != nil {
@@ -279,6 +339,20 @@ func implementationReviewSessionID(cfg ImplementConfig, axisSlug string, iterati
 		}
 	}
 	return fmt.Sprintf("%s%s-implementation-review-%s-%02d", featureID, phasePart, axisSlug, iteration)
+}
+
+func featureDescriptionForImplementationReview(f *feature.Feature) string {
+	if f == nil {
+		return ""
+	}
+	return f.Description
+}
+
+func designArtifactPathForImplementationReview(f *feature.Feature) string {
+	if f == nil {
+		return ""
+	}
+	return f.DesignArtifactPath()
 }
 
 func implementationReviewAxisSlug(name string) string {

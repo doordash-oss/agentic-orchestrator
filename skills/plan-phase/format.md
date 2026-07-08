@@ -14,12 +14,25 @@ Every phase emits one file in the plan directory:
 
 For multi-repo features, every `### Task N:` heading is followed by a `**Repo:** <name>` line that names the single repo this task touches. Single-repo features may omit repo tags entirely; if they use tags, every task must be tagged consistently.
 
+## Plan Metadata
+
+Every newly-authored phase plan includes a mandatory top-level `## Metadata` section before `## Overview`. The section contains the plan-level `**Frontend:** true|false` field:
+
+- `true` means this phase adds or changes a user-facing UI surface. A frontend phase must include at least one real checklist item under `### Visual Evidence`; it must not use `None required`.
+- `false` means this phase does not add or change a user-facing UI surface. Non-UI phases may use `None required: <reason>` under `### Visual Evidence` when no rendered surface is meaningful.
+
+The harness reads this field as the authoritative UI signal for the phase. Legacy plans with no `## Metadata` section or no `**Frontend:**` field are interpreted as `frontend: false` for compatibility, but new plans must write the field explicitly.
+
 ## Markdown Template
 
 Use this skeleton when emitting a phase plan. Section headings must match exactly so downstream section-matching (sticky-approval `frozen_sections`, validator routing) works. Every section below is mandatory unless its heading is annotated conditional (e.g. *tracer-bullet phases only*); never drop, reorder, or rename a section.
 
 ````markdown
 # Phase N: [Slice Name] — Implementation Plan
+
+## Metadata
+
+**Frontend:** true|false
 
 ## Overview
 
@@ -69,7 +82,7 @@ Use `- [ ] None required: <reason>` only when the phase has no meaningful manual
 
 - [ ] [Visual artifact requirement, such as a screenshot path or capture description.]
 
-Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
+Use `- [ ] None required: <reason>` only when the phase has no meaningful rendered surface to capture and `**Frontend:** false`. If `**Frontend:** true`, include at least one real visual evidence checklist item. Keep visual evidence requirements here at the phase level; do not add per-task visual evidence sections.
 
 ### Behavioral Evidence
 

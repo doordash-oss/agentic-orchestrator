@@ -228,8 +228,9 @@ type PendingUserInputCycle struct {
 }
 
 // SchemaVersionCurrent is the current durable on-disk schema version stamped
-// onto fresh features at Manager.Create time.
-const SchemaVersionCurrent = 6
+// onto fresh features at Manager.Create time. Schema 7 added
+// Run.RoadmapPhaseFrontendByPhase.
+const SchemaVersionCurrent = 7
 
 // CycleState tracks the feature-level active post-publish cycle (rebase,
 // review-comments, refactor). One cycle is active at a time per
@@ -694,9 +695,10 @@ type Feature struct {
 	CurrentPhaseStatus string `yaml:"-"`
 
 	// Roadmap tracking (transient shadows).
-	CurrentRoadmapPhase int    `yaml:"-"`
-	TotalRoadmapPhases  int    `yaml:"-"`
-	RoadmapPhaseType    string `yaml:"-"`
+	CurrentRoadmapPhase         int          `yaml:"-"`
+	TotalRoadmapPhases          int          `yaml:"-"`
+	RoadmapPhaseType            string       `yaml:"-"`
+	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"-"`
 
 	// Transient: populated by Store.Load, not serialized. Exposed via Run().
 	run *Run `yaml:"-"`
@@ -775,6 +777,11 @@ func (f *Feature) syncShadowsToRun() {
 	r.PlanIteration = f.PlanIteration
 	r.ReviewIteration = f.ReviewIteration
 	r.Artifacts = f.Artifacts
+	if f.RoadmapPhaseFrontendByPhase != nil {
+		r.RoadmapPhaseFrontendByPhase = f.RoadmapPhaseFrontendByPhase
+	} else if r.RoadmapPhaseFrontendByPhase != nil {
+		f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
+	}
 	r.RepoStates = f.RepoStates
 	r.RefactorPrompt = f.RefactorPrompt
 	r.RepoCycles = f.RepoCycles
@@ -818,6 +825,7 @@ func (f *Feature) syncRunToShadows() {
 	f.PlanIteration = r.PlanIteration
 	f.ReviewIteration = r.ReviewIteration
 	f.Artifacts = r.Artifacts
+	f.RoadmapPhaseFrontendByPhase = r.RoadmapPhaseFrontendByPhase
 	f.RepoStates = r.RepoStates
 	f.RefactorPrompt = r.RefactorPrompt
 	f.RepoCycles = r.RepoCycles
@@ -992,6 +1000,37 @@ func (f *Feature) AddressingReviews() bool { return f.Run().AddressingReviews }
 
 // SetAddressingReviews sets the run-level addressing-reviews flag.
 func (f *Feature) SetAddressingReviews(v bool) { f.Run().AddressingReviews = v }
+
+// SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
+// work on the active run.
+func (f *Feature) SetRoadmapPhaseFrontend(phase int, frontend bool) {
+	if f == nil || phase <= 0 {
+		return
+	}
+	if f.RoadmapPhaseFrontendByPhase == nil {
+		f.RoadmapPhaseFrontendByPhase = make(map[int]bool)
+	}
+	f.RoadmapPhaseFrontendByPhase[phase] = frontend
+	f.Run().SetRoadmapPhaseFrontend(phase, frontend)
+}
+
+// RoadmapPhaseFrontend reports whether a roadmap phase was recorded as
+// frontend on the active run. Missing phases default to false.
+func (f *Feature) RoadmapPhaseFrontend(phase int) bool {
+	if f == nil {
+		return false
+	}
+	return f.Run().RoadmapPhaseFrontend(phase)
+}
+
+// AnyRoadmapPhaseFrontend reports whether any recorded roadmap phase is
+// frontend on the active run.
+func (f *Feature) AnyRoadmapPhaseFrontend() bool {
+	if f == nil {
+		return false
+	}
+	return f.Run().AnyRoadmapPhaseFrontend()
+}
 
 // ActiveCycleType returns the feature's active post-publish cycle type.
 // For per-repo cycle inspection, callers should consult RepoCycles[name].Type

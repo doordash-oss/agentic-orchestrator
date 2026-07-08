@@ -22,7 +22,7 @@ import (
 	"time"
 )
 
-const expectedEmbeddedSkillCount = 29
+const expectedEmbeddedSkillCount = 31
 
 func TestParseSkillFile(t *testing.T) {
 	tests := []struct {

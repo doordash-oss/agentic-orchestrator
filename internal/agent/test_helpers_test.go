@@ -37,6 +37,8 @@ func isReviewHelper(h interface{}) bool {
 		return isReviewHelper(typed.Inner)
 	case *permission.BoundedHelperArtifactHandler:
 		return true
+	case *permission.LiveRunReviewHandler:
+		return true
 	case *permission.ReadOnlyHandler:
 		return true
 	}

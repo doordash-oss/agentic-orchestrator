@@ -5,23 +5,26 @@ Review feedback output: /state/feat-x/run-1/review/iteration-03/functionality-ev
 Iteration under review: 3
 Iteration artifacts directory: /state/feat-x/run-1/review/iteration-03
 
+## Approved Design Grounding
+
+Approved design: /state/feat-x/run-1/design/design.md
+
+Approved intent:
+Sign in with Google.
+
+## Review Posture
+
+- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+
 ## Final Review Scope
 
 Review the assembled feature across the cumulative cross-repo diff.
 Cumulative diff base: main
 
-Approved design: /state/feat-x/run-1/design/design.md
-
-
-Approved intent:
-Sign in with Google.
-
 Scope guidance:
 - Judge the whole assembled feature across all repositories in the workspace.
 - Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
 - Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
-- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
-
 Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
 
 Read the implementation plan at: /state/feat-x/run-1/phase-2/plan.md

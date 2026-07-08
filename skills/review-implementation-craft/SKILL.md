@@ -27,8 +27,8 @@ At the Final gate, judge Craft over the whole assembled feature and cumulative c
 
 ## Sibling Boundaries
 
-- Functionality/Evidence owns whether behavior meets the plan and whether verification evidence is sufficient.
-- Functionality/Evidence solely owns missing visual or behavioral evidence markers.
+- Functionality/Evidence owns per-phase behavior/evidence sufficiency and missing visual or behavioral evidence markers.
+- QA owns hands-on functional behavior at Final Review.
 - Cleanliness owns change-set hygiene, out-of-plan touches, stray artifacts, and pushability.
 - Do not duplicate sibling findings unless an issue is intrinsically a Craft issue.
 

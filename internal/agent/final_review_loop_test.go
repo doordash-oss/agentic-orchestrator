@@ -875,7 +875,7 @@ fi`,
 	}
 }
 
-func TestRunFeatureFinalReviewLoop_FinalGateRunsReadOnlyAxesAndAggregates(t *testing.T) {
+func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
@@ -898,7 +898,7 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsReadOnlyAxesAndAggregates(t *tes
 
 	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review-axes.sh",
 		testutil.JSONLInit+"\n"+
-			writeFinalAxisFeedbackScript(artDir)+"\n"+
+			writeFinalAxisFeedbackScript(artDir, true)+"\n"+
 			testutil.JSONLSuccess+"\n")
 	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
 		testutil.JSONLInit+"\n"+
@@ -939,7 +939,7 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsReadOnlyAxesAndAggregates(t *tes
 		t.Fatalf("Iterations = %d, want 2 after changes-requested aggregate and fix", result.Iterations)
 	}
 
-	for _, axisSlug := range []string{"craft", "cleanliness", "functionality-evidence"} {
+	for _, axisSlug := range []string{"craft", "cleanliness", "qa"} {
 		path := filepath.Join(artDir, "iteration-01", axisSlug, "review-feedback.md")
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("axis feedback %s missing: %v", path, err)
@@ -954,8 +954,8 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsReadOnlyAxesAndAggregates(t *tes
 	for _, want := range []string{
 		"### Craft",
 		"### Cleanliness",
-		"### Functionality/Evidence",
-		"missing final evidence",
+		"### QA",
+		"feature fails launched smoke journey",
 		"## Verdict\nCHANGES_REQUESTED",
 	} {
 		if !strings.Contains(string(aggregate), want) {
@@ -1002,14 +1002,189 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsReadOnlyAxesAndAggregates(t *tes
 	wantNames := []string{
 		"Cleanliness", "Cleanliness",
 		"Craft", "Craft",
-		"Functionality/Evidence", "Functionality/Evidence",
+		"QA", "QA",
 	}
 	if !slices.Equal(started, wantNames) {
 		t.Fatalf("validator.started names = %v, want %v", started, wantNames)
 	}
 }
 
-func writeFinalAxisFeedbackScript(artDir string) string {
+func TestRunFeatureFinalReviewLoop_QAAxisUsesLiveRunPosture(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-qa-live-run", []string{"app"})
+	f.Pipeline = feature.PipelineMedium
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review-axes.sh",
+		testutil.JSONLInit+"\n"+
+			writeFinalAxisFeedbackScript(artDir, false)+"\n"+
+			testutil.JSONLSuccess+"\n")
+	bs, captured := capturingBuildSessionByModel(map[string]string{"reviewer": reviewScript})
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	result, err := RunFeatureFinalReviewLoop(OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		ReviewModel:    "reviewer",
+		MaxIterations:  1,
+		MaxConsecFails: 3,
+		BuildSession:   bs,
+		SkillsDir:      filepath.Join(env.stateDir, "skills"),
+		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
+		Observer:       observe.New(false, "", false, "", false, "test"),
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed; LastError=%q", result.FinalStatus, result.LastError)
+	}
+
+	var liveRun, readOnly int
+	var qaOpts BuildSessionOpts
+	for _, opts := range *captured {
+		if opts.Model != "reviewer" {
+			continue
+		}
+		if permissionHandlerIncludesLiveRun(opts.PermHandler) {
+			liveRun++
+			qaOpts = opts
+		}
+		if permissionHandlerIncludesBoundedArtifacts(opts.PermHandler) {
+			readOnly++
+		}
+	}
+	if liveRun != 1 {
+		t.Fatalf("live-run review BuildSession calls = %d, want exactly one QA axis; captured=%d", liveRun, len(*captured))
+	}
+	if readOnly != 2 {
+		t.Fatalf("read-only review BuildSession calls = %d, want Craft and Cleanliness", readOnly)
+	}
+	if !strings.Contains(qaOpts.Prompt, "Axis under review: QA") {
+		t.Fatalf("QA prompt missing axis label:\n%s", qaOpts.Prompt)
+	}
+	for _, want := range []string{
+		filepath.Join(artDir, "iteration-01", "qa", "review-feedback.md"),
+		filepath.Join(artDir, "iteration-01", "qa", "phase_complete"),
+		filepath.Join(artDir, "iteration-01", "qa", "evidence"),
+		filepath.Join(artDir, "iteration-01", "qa", "build-cache"),
+		filepath.Join(artDir, "iteration-01", "qa", "tmp"),
+	} {
+		if !sliceContains(qaOpts.WritableRoots, want) {
+			t.Fatalf("QA WritableRoots missing %q in %#v", want, qaOpts.WritableRoots)
+		}
+	}
+	requirePermissionDecision(t, qaOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
+	requirePermissionDecision(t, qaOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(artDir, "iteration-01", "qa", "evidence", "home.png")+`"}`, "allow")
+	requirePermissionDecision(t, qaOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(f.Repos[0].Path, "main.go")+`"}`, "deny")
+}
+
+func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-design-live-run", []string{"app"})
+	f.Pipeline = feature.PipelineLarge
+	f.SetRoadmapPhaseFrontend(1, true)
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review-frontend-axes.sh",
+		testutil.JSONLInit+"\n"+
+			writeFinalAxisFeedbackScript(artDir, false)+"\n"+
+			testutil.JSONLSuccess+"\n")
+	bs, captured := capturingBuildSessionByModel(map[string]string{"reviewer": reviewScript})
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	result, err := RunFeatureFinalReviewLoop(OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		ReviewModel:    "reviewer",
+		MaxIterations:  1,
+		MaxConsecFails: 3,
+		BuildSession:   bs,
+		SkillsDir:      filepath.Join(env.stateDir, "skills"),
+		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
+		Observer:       observe.New(false, "", false, "", false, "test"),
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed; LastError=%q", result.FinalStatus, result.LastError)
+	}
+
+	var liveRun, readOnly int
+	var designOpts BuildSessionOpts
+	for _, opts := range *captured {
+		if opts.Model != "reviewer" {
+			continue
+		}
+		if permissionHandlerIncludesLiveRun(opts.PermHandler) {
+			liveRun++
+			if strings.Contains(opts.Prompt, "Axis under review: Design") {
+				designOpts = opts
+			}
+		}
+		if permissionHandlerIncludesBoundedArtifacts(opts.PermHandler) {
+			readOnly++
+		}
+	}
+	if liveRun != 2 {
+		t.Fatalf("live-run review BuildSession calls = %d, want QA and Design axes; captured=%d", liveRun, len(*captured))
+	}
+	if readOnly != 2 {
+		t.Fatalf("read-only review BuildSession calls = %d, want Craft and Cleanliness", readOnly)
+	}
+	if !strings.Contains(designOpts.Prompt, "Axis under review: Design") {
+		t.Fatalf("Design prompt missing axis label:\n%s", designOpts.Prompt)
+	}
+	for _, want := range []string{
+		filepath.Join(artDir, "iteration-01", "design", "review-feedback.md"),
+		filepath.Join(artDir, "iteration-01", "design", "phase_complete"),
+		filepath.Join(artDir, "iteration-01", "design", "evidence"),
+		filepath.Join(artDir, "iteration-01", "design", "build-cache"),
+		filepath.Join(artDir, "iteration-01", "design", "tmp"),
+	} {
+		if !sliceContains(designOpts.WritableRoots, want) {
+			t.Fatalf("Design WritableRoots missing %q in %#v", want, designOpts.WritableRoots)
+		}
+	}
+	requirePermissionDecision(t, designOpts.PermHandler, "Bash", `{"command":"npm install && npm run build > out.log"}`, "allow")
+	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(artDir, "iteration-01", "design", "evidence", "home.png")+`"}`, "allow")
+	requirePermissionDecision(t, designOpts.PermHandler, "Write", `{"file_path":"`+filepath.Join(f.Repos[0].Path, "main.go")+`"}`, "deny")
+}
+
+func writeFinalAxisFeedbackScript(artDir string, qaRequestsChangesFirstIteration bool) string {
+	qaChanges := "0"
+	if qaRequestsChangesFirstIteration {
+		qaChanges = "1"
+	}
 	return fmt.Sprintf(`for _prompt in $(find "%s" -mindepth 3 -maxdepth 3 -name review-prompt.md -type f 2>/dev/null); do
   _dir=$(dirname "$_prompt")
   _axis=$(basename "$_dir")
@@ -1021,9 +1196,9 @@ func writeFinalAxisFeedbackScript(artDir string) string {
   fi
   _verdict="APPROVED"
   _findings="- (none)"
-  if [ "$_iter" = "iteration-01" ] && [ "$_axis" = "functionality-evidence" ]; then
+  if [ "%s" = "1" ] && [ "$_iter" = "iteration-01" ] && [ "$_axis" = "qa" ]; then
     _verdict="CHANGES_REQUESTED"
-    _findings="- **Critical**: missing final evidence"
+    _findings="- **Critical**: feature fails launched smoke journey"
   fi
   cat > "$_fb" << REVIEWEOF
 ## Findings
@@ -1036,7 +1211,7 @@ $_findings
 $_verdict
 REVIEWEOF
   touch "$_dir/phase_complete"
-done`, artDir)
+done`, artDir, qaChanges)
 }
 
 func touchFinalAxisPhaseCompleteWithoutFeedback(artDir string) string {

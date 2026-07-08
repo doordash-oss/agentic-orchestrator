@@ -15,7 +15,6 @@ You run as a read-only, audit-only reviewer. Inspect the supplied plan or roadma
 ## Axis Scope
 
 Own hygiene and pushability:
-- out-of-plan touched files or repositories
 - cross-repo and phase atomicity of the change set
 - coherence of generated artifacts, source edits, and committed intent
 - stray binaries, build artifacts, debug files, temporary files, and orphaned artifacts
@@ -32,24 +31,6 @@ When the implementer's changes in repo A depend on changes in repo B, a change i
 Consult the relevant language guidelines and Knowledge Base before judging local hygiene conventions.
 
 At the Final gate, judge Cleanliness over the whole assembled feature and cumulative cross-repo diff. Cross-repo atomicity, stale artifacts, and publish/revert risk are naturally in scope across the full feature.
-
-## Out-of-Plan Touches
-
-Iteration 1 treats plan repo tags as a scope hint, not a hard fence. Still flag genuinely irrelevant edits as Critical.
-
-For iteration 2+, out-of-plan touches are High by default unless prior reviewer feedback explicitly authorized them. Promote to Critical when the touch is non-trivial and unauthorised.
-
-Trivial mechanical follow-ons of an authorized change are acceptable.
-
-At the Final gate, use the approved roadmap and feature intent as the scope boundary instead of per-iteration repo tags.
-
-## Sibling Boundaries
-
-- Craft owns intrinsic code quality, naming, cohesion, and abstraction.
-- Functionality/Evidence owns per-phase behavior, verification evidence, and missing visual/behavioral evidence markers.
-- QA owns hands-on functional behavior at Final Review.
-- Do not emit `MISSING_EVIDENCE_REQUIREMENT`.
-- Do not judge code style unless the style issue creates hygiene or pushability risk.
 
 ## Non-Goals
 

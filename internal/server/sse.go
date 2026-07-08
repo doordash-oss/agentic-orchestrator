@@ -78,12 +78,19 @@ func (b *eventBroker) publish(evt SSEEventDTO) {
 		select {
 		case ch <- evt:
 		default:
+			// Channel full: evict the oldest queued event to make room, then
+			// enqueue a coalesced marker carrying evt's own resource identity
+			// (not a generic "runtime" one) so the client can still refetch
+			// exactly the resource it missed — e.g. a chat session's
+			// completion — instead of only a Health check that leaves that
+			// resource stale until some other, unrelated event happens to
+			// arrive for it.
 			select {
 			case <-ch:
 			default:
 			}
 			select {
-			case ch <- snapshotRequiredEvent(b.newID(), "backpressure.coalesced", ResourceDTO{Type: "runtime"}):
+			case ch <- snapshotRequiredEvent(b.newID(), "backpressure.coalesced", evt.Resource):
 			default:
 			}
 		}

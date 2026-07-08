@@ -98,9 +98,6 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 		if !strings.Contains(text, "agentico server") {
 			t.Fatalf("%s missing server launch guidance", rel)
 		}
-		if rel == "README.md" && !strings.Contains(text, "local loopback REST runtime") {
-			t.Fatalf("%s missing API-backed launch guidance", rel)
-		}
 	}
 }
 

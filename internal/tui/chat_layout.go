@@ -61,7 +61,7 @@ func chatBottomPanelContentWidth(panelWidth int) int {
 }
 
 func chatBottomPanelHeight(bodyHeight int) int {
-	return bodyHeight + chatFooterHeight + chatBottomPanelFrameHeight
+	return bodyHeight + chatFooterHeight + chatBottomPanelFooterGap + chatBottomPanelFrameHeight
 }
 
 // resize recalculates layout dimensions for the bottom-panel layout.
@@ -77,10 +77,15 @@ func (m ChatModel) resize(w, h int) ChatModel {
 		bottomHeight = m.minimumQuestionBodyHeight(contentWidth)
 	}
 	bottomPanelHeight := chatBottomPanelHeight(bottomHeight)
-	vpHeight := max(h-bottomPanelHeight-chatBorderHeight-chatSectionSeparators, chatMinViewportHeight)
+	gapRows := m.transcriptInputGapRows(bottomPanelHeight)
+	vpHeight := max(h-bottomPanelHeight-chatBorderHeight-gapRows, chatMinViewportHeight)
+	wasAtBottom := m.viewport.AtBottom() || m.viewport.TotalLineCount() <= m.viewport.Height()
 
 	m.viewport.SetWidth(panelWidth)
 	m.viewport.SetHeight(vpHeight)
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+	}
 	m.input.SetWidth(contentWidth)
 	m.inputHeight = inputHeight
 	m.input.SetHeight(inputHeight)
@@ -96,12 +101,14 @@ func (m ChatModel) currentInputHeight() int {
 }
 
 func (m ChatModel) minimumPanelHeight() int {
-	return chatBorderHeight + chatMinViewportHeight + chatBottomPanelHeight(m.currentInputHeight()) + chatSectionSeparators
+	bottomPanelHeight := chatBottomPanelHeight(m.currentInputHeight())
+	return chatBorderHeight + chatMinViewportHeight + bottomPanelHeight + m.desiredTranscriptInputGapRows()
 }
 
 func (m ChatModel) minimumQuestionPanelHeight() int {
 	contentWidth := chatBottomPanelContentWidth(m.chatContentWidth())
-	return chatBorderHeight + chatMinViewportHeight + chatBottomPanelHeight(m.minimumQuestionBodyHeight(contentWidth)) + chatSectionSeparators
+	bottomPanelHeight := chatBottomPanelHeight(m.minimumQuestionBodyHeight(contentWidth))
+	return chatBorderHeight + chatMinViewportHeight + bottomPanelHeight + m.desiredTranscriptInputGapRows()
 }
 
 func (m ChatModel) minimumQuestionBodyHeight(contentWidth int) int {
@@ -114,6 +121,18 @@ func (m ChatModel) minimumQuestionBodyHeight(contentWidth int) int {
 		return promptLines + 1 + m.currentInputHeight()
 	}
 	return promptLines + 1 + chatQuestionMinOptionLines + 1
+}
+
+func (m ChatModel) desiredTranscriptInputGapRows() int {
+	if len(m.turns) == 0 && !m.responding {
+		return 0
+	}
+	return chatTranscriptInputGapRows
+}
+
+func (m ChatModel) transcriptInputGapRows(bottomPanelHeight int) int {
+	available := m.height - chatBorderHeight - chatMinViewportHeight - bottomPanelHeight
+	return min(m.desiredTranscriptInputGapRows(), max(available, 0))
 }
 
 // rebuildViewport sets the viewport content from the turn list + thinking indicator.
@@ -168,7 +187,9 @@ func (m ChatModel) View() string {
 		bottomTitle = "Message"
 	}
 
-	inner := vpContent + "\n" + m.renderBottomPanel(bottomTitle, bottom, footer)
+	bottomPanelHeight := chatBottomPanelHeight(lipgloss.Height(bottom))
+	separator := strings.Repeat("\n", m.transcriptInputGapRows(bottomPanelHeight)+1)
+	inner := vpContent + separator + m.renderBottomPanel(bottomTitle, bottom, footer)
 
 	box := panelStyle(true).
 		Width(m.width).

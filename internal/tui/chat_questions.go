@@ -374,6 +374,7 @@ func (m ChatModel) renderQuestionPicker() (body, footer string) {
 func (m ChatModel) questionOptionArea(q askUserQuestion, contentWidth int) int {
 	promptLines := questionPromptLineCount(q.Question, contentWidth)
 	contentHeight := max(m.height-chatBorderHeight, 1)
-	available := contentHeight - m.viewport.Height() - chatSectionSeparators - chatBottomPanelFrameHeight - chatFooterHeight - promptLines - 1 - 1
+	bottomGapRows := m.transcriptInputGapRows(chatBottomPanelHeight(m.minimumQuestionBodyHeight(contentWidth)))
+	available := contentHeight - m.viewport.Height() - bottomGapRows - chatBottomPanelFrameHeight - chatFooterHeight - chatBottomPanelFooterGap - promptLines - 1 - 1
 	return max(available, 1)
 }

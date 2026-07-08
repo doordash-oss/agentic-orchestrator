@@ -150,6 +150,53 @@ func TestChatModelViewBoxesMessageInputPanel(t *testing.T) {
 	}
 }
 
+func TestChatModelViewLeavesTwoBlankRowsAboveMessageInput(t *testing.T) {
+	const finalAnswer = "final answer above the message box"
+	m := NewChatModel(100, 14, nil, "/tmp", "test prompt", nil, "", "")
+	for i := range 8 {
+		text := fmt.Sprintf("earlier answer %d", i)
+		if i == 7 {
+			text = finalAnswer
+		}
+		m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: text})
+	}
+	m.rebuildViewport()
+	m = m.resize(100, 14)
+
+	view := stripANSI(m.View())
+	lines := strings.Split(view, "\n")
+	finalLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, finalAnswer) {
+			finalLine = i
+		}
+	}
+	if finalLine == -1 {
+		t.Fatalf("chat view missing final answer %q:\n%s", finalAnswer, view)
+	}
+	messageLine := -1
+	for i := finalLine + 1; i < len(lines); i++ {
+		if strings.Contains(lines[i], " Message ") {
+			messageLine = i
+			break
+		}
+	}
+	if messageLine == -1 {
+		t.Fatalf("chat view missing Message input box after final answer:\n%s", view)
+	}
+
+	blankRows := 0
+	for _, line := range lines[finalLine+1 : messageLine] {
+		if strings.Trim(line, " │") != "" {
+			t.Fatalf("expected only blank rows between final answer and Message box, got %q in:\n%s", line, view)
+		}
+		blankRows++
+	}
+	if blankRows != 2 {
+		t.Fatalf("blank rows between final answer and Message box = %d, want 2:\n%s", blankRows, view)
+	}
+}
+
 func TestChatModelViewShowsRespondingFooter(t *testing.T) {
 	m := NewChatModel(80, 24, nil, "/tmp", "test prompt", nil, "", "")
 	m.responding = true

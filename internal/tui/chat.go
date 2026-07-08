@@ -80,7 +80,8 @@ const (
 	chatInputMaxLines          = 6
 	chatBorderHeight           = 2
 	chatFooterHeight           = 1
-	chatSectionSeparators      = 1
+	chatBottomPanelFooterGap   = 1
+	chatTranscriptInputGapRows = 2
 	chatBottomPanelFrameHeight = 2
 	chatBottomPanelHFrame      = 4
 	chatMinViewportHeight      = 1

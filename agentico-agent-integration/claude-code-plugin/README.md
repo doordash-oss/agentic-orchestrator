@@ -1,5 +1,0 @@
-# Claude Code Plugin Wrapper
-
-This is a thin wrapper around the shared `../skills` content.
-
-Expose the shared `agentico-create-feature` and `agentico-manage-feature` skills to Claude Code without copying their instructions. The wrapper may provide Claude-specific manifest metadata, but runtime behavior must stay in the shared skill files and must use only `agentico ... --json` commands.

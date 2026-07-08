@@ -266,11 +266,6 @@ Flags:
   --version, -v                    Show version
 ```
 
-`agentico` starts a local loopback REST runtime and connects the terminal UI
-through the API-backed client. `agentico server` starts the foreground loopback
-HTTP server for the selected runtime and uses the same launch flags. Harness
-integrations should use CLI JSON commands and shared skills for automation.
-
 ### Local API Security Boundary
 
 Agentico does not use bearer-token authentication for the local REST server. The

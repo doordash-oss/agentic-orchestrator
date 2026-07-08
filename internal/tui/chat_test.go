@@ -735,3 +735,43 @@ func TestChatModelSyncAutoPickedTurns(t *testing.T) {
 		t.Fatalf("len(m.turns) = %d after second sync, want 1 (no duplicate)", len(m.turns))
 	}
 }
+
+func TestChatModelFullscreenToggleAndEscHierarchy(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+
+	// ctrl+g toggles fullscreen on.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if !updated.fullscreen {
+		t.Fatal("expected ctrl+g to enable fullscreen")
+	}
+
+	// esc while fullscreen drops to docked, chat stays open (no ChatExitMsg).
+	updated, cmd := updated.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if updated.fullscreen {
+		t.Fatal("expected esc to disable fullscreen")
+	}
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, isExit := msg.(ChatExitMsg); isExit {
+				t.Fatal("esc from fullscreen should not close the chat panel")
+			}
+		}
+	}
+
+	// esc again (docked, empty input) closes the chat.
+	_, cmd = updated.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if cmd == nil {
+		t.Fatal("expected esc on docked+empty input to return a close command")
+	}
+	if _, isExit := cmd().(ChatExitMsg); !isExit {
+		t.Fatal("expected esc on docked+empty input to emit ChatExitMsg")
+	}
+}
+
+func TestChatPanelHeightMethodMatchesFreeFunctionRange(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	h := m.chatPanelHeight(100)
+	if h < 10 || h > 18 {
+		t.Errorf("chatPanelHeight(100) = %d, want within [10, 18] (unchanged ceiling)", h)
+	}
+}

@@ -693,7 +693,11 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.contentViewport.Resize(msg.Width, msg.Height)
 		}
 		if m.chatOpen {
-			m.chat = m.chat.resize(msg.Width, chatPanelHeight(msg.Height))
+			if m.chat.fullscreen {
+				m.chat = m.chat.resize(msg.Width, msg.Height)
+			} else {
+				m.chat = m.chat.resize(msg.Width, m.chat.chatPanelHeight(msg.Height))
+			}
 		}
 		if m.welcome != nil {
 			welcome, _ := m.welcome.Update(msg)
@@ -1391,13 +1395,21 @@ func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chatOpen = false
 		return m, nil
 	}
+	wasFullscreen := m.chat.fullscreen
 	updated, cmd := m.chat.Update(msg)
 	m.chat = updated
+	if m.chat.fullscreen != wasFullscreen {
+		if m.chat.fullscreen {
+			m.chat = m.chat.resize(m.width, m.height)
+		} else {
+			m.chat = m.chat.resize(m.width, m.chat.chatPanelHeight(m.height))
+		}
+	}
 	return m, cmd
 }
 
 func (m APIAppModel) transitionToAPIChat() (tea.Model, tea.Cmd) {
-	chatH := chatPanelHeight(m.height)
+	chatH := m.chat.chatPanelHeight(m.height)
 	if !m.chatReady {
 		m.chat = NewAPIChatModel(m.width, chatH, m.client)
 		m.chatReady = true
@@ -1465,11 +1477,16 @@ func (m APIAppModel) View() tea.View {
 		v.AltScreen = true
 		return v
 	}
-	view := m.renderAPIDashboard()
-	if m.chatOpen {
-		view += m.chat.View()
-	} else if m.chatReady && m.chat.responding {
-		view += lipgloss.NewStyle().Foreground(colorBrand).Render("  * Chat thinking... press " + ChatKeyHint() + " to view")
+	var view string
+	if m.chatOpen && m.chat.fullscreen {
+		view = m.chat.View()
+	} else {
+		view = m.renderAPIDashboard()
+		if m.chatOpen {
+			view += m.chat.View()
+		} else if m.chatReady && m.chat.responding {
+			view += lipgloss.NewStyle().Foreground(colorBrand).Render("  * Chat thinking... press " + ChatKeyHint() + " to view")
+		}
 	}
 	w := max(m.width, 80)
 	h := max(m.height, 24)
@@ -1549,7 +1566,7 @@ func (m APIAppModel) apiDashboardModel() DashboardModel {
 	dashboard.width = max(m.width, 80)
 	dashboard.height = max(m.height, 24)
 	if m.chatOpen {
-		dashboard.height = max(m.height-chatPanelHeight(m.height), 6)
+		dashboard.height = max(m.height-m.chat.chatPanelHeight(m.height), 6)
 	} else if m.chatReady && m.chat.responding {
 		dashboard.height = max(m.height-1, 6)
 	}

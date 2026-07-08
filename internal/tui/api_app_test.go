@@ -7984,3 +7984,50 @@ func countString(values []string, needle string) int {
 	}
 	return count
 }
+
+func TestAPIAppModelFullscreenChatSkipsDashboard(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Translate README in Sicilian",
+		Slug:         "translate-readme-in-sicilian",
+		Status:       "Planning",
+		CurrentPhase: "plan",
+		Repos:        []string{"agentic-orchestrator"},
+		CreatedAt:    time.Now(),
+	}
+	app := APIAppModel{
+		width:          100,
+		height:         30,
+		focusPanel:     0,
+		rightPanelMode: dashboardRightPanelOverview,
+		featureList:    server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+		featureDetails: map[string]server.FeatureDetailResponse{
+			summary.ID: {Feature: server.FeatureDetailDTO{FeatureSummary: summary}},
+		},
+		runtimeConfig: server.RuntimeConfigResponse{
+			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+		},
+	}
+	app.rebuildPresentation(summary.ID)
+
+	// Docked (not fullscreen): dashboard chrome is present alongside the chat panel.
+	app.chatReady = true
+	app.chat = NewAPIChatModel(app.width, 10, nil)
+	app.chatOpen = true
+	docked := stripANSI(app.View().Content)
+	if !strings.Contains(docked, "IN PROGRESS") {
+		t.Fatalf("expected dashboard section header present while docked, got:\n%s", docked)
+	}
+
+	// Fullscreen: dashboard chrome is gone, only the chat panel renders.
+	app.chat.fullscreen = true
+	fullscreen := stripANSI(app.View().Content)
+	if strings.Contains(fullscreen, "IN PROGRESS") {
+		t.Errorf("expected dashboard section header absent while chat is fullscreen, got:\n%s", fullscreen)
+	}
+	if !strings.Contains(fullscreen, "Ask me Anything") {
+		t.Errorf("expected the chat panel itself still to render while fullscreen, got:\n%s", fullscreen)
+	}
+}

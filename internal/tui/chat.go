@@ -114,6 +114,7 @@ type ChatModel struct {
 	width        int
 	height       int
 	focused      bool
+	fullscreen   bool                // true when the panel occupies the full terminal (ctrl+g toggles)
 	responding   bool                // true while claude is generating
 	sess         session.SessionView // the persistent interactive session (nil before first message)
 	// AskUserQuestion picker state — shares its rendering and layout math
@@ -202,10 +203,18 @@ func NewAPIChatModel(width, height int, client APIClient) ChatModel {
 	return m
 }
 
-func chatPanelHeight(totalHeight int) int {
+// chatPanelHeight returns the docked-mode panel height for the given total
+// terminal height. The floor is smaller when there's no conversation to
+// show yet; the ceiling (18 rows / 35% of height) is unchanged from before
+// this method existed as a free function of total height only.
+func (m ChatModel) chatPanelHeight(totalHeight int) int {
 	h := totalHeight * 35 / 100
-	if h < 10 {
-		h = 10
+	floor := 10
+	if len(m.turns) == 0 && !m.responding {
+		floor = 5
+	}
+	if h < floor {
+		h = floor
 	}
 	if h > 18 {
 		h = 18
@@ -655,6 +664,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.advanceQuestionOpts(-1, false)
 				return m, nil
 			case "esc":
+				if m.fullscreen {
+					m.fullscreen = false
+					return m, nil
+				}
 				return m, func() tea.Msg { return ChatExitMsg{} }
 			}
 			return m, nil
@@ -722,6 +735,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 				return m, nil
 			case "esc":
+				if m.fullscreen {
+					m.fullscreen = false
+					return m, nil
+				}
 				return m, func() tea.Msg { return ChatExitMsg{} }
 			}
 			return m, nil
@@ -760,7 +777,15 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
+		case "ctrl+g":
+			m.fullscreen = !m.fullscreen
+			return m, nil
+
 		case "esc":
+			if m.fullscreen {
+				m.fullscreen = false
+				return m, nil
+			}
 			if m.responding {
 				// Minimize panel — response continues in the background.
 				// Use ctrl+c to actually cancel.

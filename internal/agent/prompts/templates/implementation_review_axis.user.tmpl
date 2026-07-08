@@ -5,12 +5,48 @@
 */ -}}
 {{- define "implementation_review_axis.user" -}}
 Axis under review: {{ .AxisLabel }}
+{{ if .GateLabel }}Gate under review: {{ .GateLabel }}
+{{ end -}}
 Review feedback output: {{ .FeedbackPath }}
 
 Iteration under review: {{ .Iteration }}
 Iteration artifacts directory: {{ .IterDir }}
 
-{{ if .RoadmapPath }}## Approved Roadmap
+{{ if .FinalGate }}## Final Review Scope
+
+Review the assembled feature across the cumulative cross-repo diff.
+{{ if .DiffBase }}Cumulative diff base: {{ .DiffBase }}
+{{ end }}
+{{ if .DesignArtifactPath }}Approved design: {{ .DesignArtifactPath }}
+
+{{ end }}
+{{ if .FeatureDescription }}Approved intent:
+{{ .FeatureDescription }}
+
+{{ end }}Scope guidance:
+- Judge the whole assembled feature across all repositories in the workspace.
+- Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
+- Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
+- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+
+{{ if .RoadmapPath }}Read the approved roadmap at: {{ .RoadmapPath }}
+
+{{ end }}{{ if .PlanPath }}Read the implementation plan at: {{ .PlanPath }}
+
+{{ end }}{{ if .PreviousFeedback }}## Prior Aggregate Feedback
+
+{{ .PreviousFeedback }}
+
+{{ end }}{{ if or .PriorImplementationReportPaths .PriorImplementationEvidenceRootDirs .PriorImplementationEvidenceArtifacts }}## Prior Implementation Evidence
+
+{{ if .PriorImplementationReportPaths }}Implementation verification reports:
+{{ range .PriorImplementationReportPaths }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceRootDirs }}Evidence roots:
+{{ range .PriorImplementationEvidenceRootDirs }}- {{ . }}
+{{ end }}{{ end }}{{ if .PriorImplementationEvidenceArtifacts }}Evidence artifacts:
+{{ range .PriorImplementationEvidenceArtifacts }}- {{ . }}
+{{ end }}{{ end }}
+{{ end }}{{ else if .RoadmapPath }}## Approved Roadmap
 
 This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
 
@@ -21,11 +57,11 @@ Scope guidance:
 - Do NOT request changes for incomplete features that are scheduled for later phases.
 - DO flag issues where this phase's specific objectives are not met.
 
-{{ end }}## Implementation Plan
+{{ end }}{{ if and (not .FinalGate) .PlanPath }}## Implementation Plan
 
 Read the implementation plan (source of truth) at: {{ .PlanPath }}
 
-{{ if .ExitCriteria }}## Exit Criteria
+{{ end }}{{ if .ExitCriteria }}## Exit Criteria
 
 {{ .ExitCriteria }}
 
@@ -50,7 +86,7 @@ Apply the "Review Rules (With Verification Items)" section from the axis methodo
 
 Read the current progress at: {{ .ProgressPath }}
 
-{{ end }}{{ if .PhaseType }}## Phase Type
+{{ end }}{{ if and (not .FinalGate) .PhaseType }}## Phase Type
 
 This is a **{{ .PhaseType }}** phase. If the axis methodology defines phase-aware criteria, apply them; otherwise use the phase type as scope context.
 {{ end }}{{- end -}}

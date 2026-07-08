@@ -168,12 +168,6 @@ func FinalFixUserPrompt(in any) string {
 	return MustRender("final_fix.user", in)
 }
 
-// FinalReviewUserPrompt renders the Final-Review interactive-reviewer
-// user prompt (final_review.user.tmpl).
-func FinalReviewUserPrompt(in any) string {
-	return MustRender("final_review.user", in)
-}
-
 // ScoutUserPrompt renders the per-scout subprocess prompt (scout.user.tmpl).
 func ScoutUserPrompt(in ScoutUserInput) string {
 	return MustRender("scout.user", in)

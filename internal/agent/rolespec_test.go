@@ -177,14 +177,14 @@ func TestRoleSpecCarriesRequiredPhasesAndAskingClauseProvider(t *testing.T) {
 
 func TestRoleSystemPromptIncludesArtifactPreflightCommand(t *testing.T) {
 	got := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:         FinalReviewerRoleSpec(),
+		Spec:         FinalReviewFixerRoleSpec(),
 		IterationDir: "/state/feat-x/runs/run-001/review/iteration-03",
 		SkillsDir:    "/skills",
 	})
 	for _, want := range []string{
 		"## Artifact Preflight",
 		"`AGENTICO_BIN` is set to the current Agentico executable",
-		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_reviewer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
+		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_review_fixer --dir "/state/feat-x/runs/run-001/review/iteration-03"`,
 		"run it before creating `phase_complete`",
 	} {
 		if !strings.Contains(got, want) {
@@ -522,18 +522,6 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 		wantNoOp   bool
 	}{
 		{
-			name:       "final reviewer",
-			phase:      feature.PhaseReview,
-			role:       RoleFinalReviewer,
-			iterDir:    "/state/feat/run-001/review/iteration-01",
-			wantSkill:  "final-review",
-			wantRoots:  []string{"iteration_dir"},
-			wantMarker: "/state/feat/run-001/review/iteration-01/phase_complete",
-			wantPaths: map[string]string{
-				"review_feedback": "/state/feat/run-001/review/iteration-01/review-feedback.md",
-			},
-		},
-		{
 			name:       "final review fixer",
 			phase:      feature.PhaseReview,
 			role:       RoleFinalReviewFixer,
@@ -600,13 +588,6 @@ func TestBuildReviewFamilySystemPromptsFromRoleSpec(t *testing.T) {
 		wantSkill string
 	}{
 		{
-			name:      "final reviewer",
-			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleFinalReviewer),
-			iterDir:   "/state/feat/run-001/review/iteration-01",
-			wantRoots: []string{"`iteration_dir`: /state/feat/run-001/review/iteration-01"},
-			wantSkill: "/skills/final-review/SKILL.md",
-		},
-		{
 			name:      "final review fixer",
 			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleFinalReviewFixer),
 			iterDir:   "/state/feat/run-001/review/iteration-01",
@@ -662,8 +643,8 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 	// Document-only planning roles and bounded implementation-review axes must
 	// refuse source writes outside their declared output roots. Implementer,
-	// final reviewers, validators, refactor-plan, KB-builder, and InteractivePTY
-	// all have legitimate non-document writes.
+	// validators, refactor-plan, KB-builder, and InteractivePTY all have
+	// legitimate non-document writes.
 	readOnly := []struct {
 		name string
 		spec RoleSpec
@@ -711,7 +692,6 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		spec RoleSpec
 	}{
 		{"implementer", ImplementRoleSpec()},
-		{"final reviewer", FinalReviewerRoleSpec()},
 		{"final review fixer", FinalReviewFixerRoleSpec()},
 		{"researcher", ResearcherRoleSpec()},
 		{"knowledge base builder", KnowledgeBaseBuilderRoleSpec()},

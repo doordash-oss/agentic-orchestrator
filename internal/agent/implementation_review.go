@@ -31,17 +31,22 @@ import (
 type implementationReviewGate string
 
 const implementationReviewGatePerPhase implementationReviewGate = "per_phase"
+const implementationReviewGateFinal implementationReviewGate = "final"
+
+type implementationReviewGateMembership struct {
+	Gate    implementationReviewGate
+	Order   int
+	Applies func(feature.PipelineProfile) bool
+}
 
 type implementationReviewAxis struct {
 	Name          string
 	ShortName     string
 	SkillName     string
-	Gate          implementationReviewGate
-	Order         int
 	Role          Role
 	ReadOnly      bool
 	ModelOverride string
-	Applies       func(feature.PipelineProfile) bool
+	Memberships   []implementationReviewGateMembership
 }
 
 var implementationReviewAxisRegistry = []implementationReviewAxis{
@@ -49,31 +54,35 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Name:      "Craft",
 		ShortName: "Craft",
 		SkillName: "review-implementation-craft",
-		Gate:      implementationReviewGatePerPhase,
-		Order:     10,
 		Role:      RoleImplementationReviewCraft,
 		ReadOnly:  true,
-		Applies:   moonshotImplementationReviewAxis,
+		Memberships: []implementationReviewGateMembership{
+			{Gate: implementationReviewGatePerPhase, Order: 10, Applies: moonshotImplementationReviewAxis},
+			{Gate: implementationReviewGateFinal, Order: 10, Applies: allImplementationReviewProfiles},
+		},
 	},
 	{
 		Name:      "Functionality/Evidence",
 		ShortName: "Func",
 		SkillName: "review-implementation-functionality-evidence",
-		Gate:      implementationReviewGatePerPhase,
-		Order:     20,
 		Role:      RoleImplementationReviewFunctionalityEvidence,
 		ReadOnly:  true,
-		Applies:   moonshotImplementationReviewAxis,
+		Memberships: []implementationReviewGateMembership{
+			{Gate: implementationReviewGatePerPhase, Order: 20, Applies: moonshotImplementationReviewAxis},
+			// Temporary Final-gate evidence auditor; Phase 3 replaces this membership with the live-run QA axis.
+			{Gate: implementationReviewGateFinal, Order: 30, Applies: allImplementationReviewProfiles},
+		},
 	},
 	{
 		Name:      "Cleanliness",
 		ShortName: "Clean",
 		SkillName: "review-implementation-cleanliness",
-		Gate:      implementationReviewGatePerPhase,
-		Order:     30,
 		Role:      RoleImplementationReviewCleanliness,
 		ReadOnly:  true,
-		Applies:   moonshotImplementationReviewAxis,
+		Memberships: []implementationReviewGateMembership{
+			{Gate: implementationReviewGatePerPhase, Order: 30, Applies: moonshotImplementationReviewAxis},
+			{Gate: implementationReviewGateFinal, Order: 20, Applies: allImplementationReviewProfiles},
+		},
 	},
 }
 
@@ -81,19 +90,27 @@ func moonshotImplementationReviewAxis(profile feature.PipelineProfile) bool {
 	return profile == feature.PipelineMoonshot
 }
 
+func allImplementationReviewProfiles(feature.PipelineProfile) bool {
+	return true
+}
+
 func implementationReviewAxesForGate(gate implementationReviewGate, profile feature.PipelineProfile) []implementationReviewAxis {
 	var axes []implementationReviewAxis
 	for _, axis := range implementationReviewAxisRegistry {
-		if axis.Gate != gate {
-			continue
+		for _, membership := range axis.Memberships {
+			if membership.Gate != gate {
+				continue
+			}
+			if membership.Applies != nil && !membership.Applies(profile) {
+				continue
+			}
+			selected := axis
+			selected.Memberships = []implementationReviewGateMembership{membership}
+			axes = append(axes, selected)
 		}
-		if axis.Applies != nil && !axis.Applies(profile) {
-			continue
-		}
-		axes = append(axes, axis)
 	}
 	sort.SliceStable(axes, func(i, j int) bool {
-		return axes[i].Order < axes[j].Order
+		return axes[i].Memberships[0].Order < axes[j].Memberships[0].Order
 	})
 	return axes
 }
@@ -297,6 +314,10 @@ func clearImplementationReviewAxisStatuses(cfg ImplementConfig) {
 }
 
 func composeImplementationReviewFeedback(results []reviewAxisResult, selectedCount int) (ReviewStatus, string, error) {
+	return composeMultiAxisReviewFeedback("Multi-Axis Implementation Review", results, selectedCount)
+}
+
+func composeMultiAxisReviewFeedback(title string, results []reviewAxisResult, selectedCount int) (ReviewStatus, string, error) {
 	status := strictMultiAxisReviewStatus(results, selectedCount)
 	firstErr := firstMultiAxisReviewError(results)
 	var findings strings.Builder
@@ -321,7 +342,7 @@ func composeImplementationReviewFeedback(results []reviewAxisResult, selectedCou
 		}
 	}
 	return status, FormatStructuredReviewFeedback(
-		"Multi-Axis Implementation Review",
+		title,
 		strings.TrimRight(findings.String(), "\n"),
 		strings.TrimRight(suggestions.String(), "\n"),
 		status,

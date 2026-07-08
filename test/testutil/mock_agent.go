@@ -603,7 +603,7 @@ func MarkLatestVerificationReportPassed(artifactDir string) string {
 	return fmt.Sprintf(`for _d in "%s"/iteration-*; do :; done
 if [ -f "$_d/verification-report.yaml" ]; then
   %s
-fi`, artifactDir, rewriteExistingReportRowsPassed("$_d", "mock final reviewer reported success for this contract check"))
+fi`, artifactDir, rewriteExistingReportRowsPassed("$_d", "mock final review reported success for this contract check"))
 }
 
 // WriteReviewFeedback writes the supplied structured body verbatim into the
@@ -668,7 +668,7 @@ func writeIterationReviewFeedbackInLatestIter(artifactDir, body string, touchMar
   touch "$_d/phase_complete"`
 	}
 	return fmt.Sprintf(`_wrote_review_feedback=
-for _prompt in $(find "%s" -path '*/iteration-*/review*/review-prompt.md' -type f 2>/dev/null | sort); do
+for _prompt in $(find "%s" \( -path '*/iteration-*/*/review-prompt.md' -o -path '*/iteration-*/*/*/review-prompt.md' \) -type f 2>/dev/null | sort); do
   [ -f "$_prompt" ] || continue
   _d=$(dirname "$_prompt")
   _fb="$_d/review-feedback.md"

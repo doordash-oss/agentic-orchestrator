@@ -158,22 +158,6 @@ func TestBuildRoadmapRevisionPrompt_OmitsVisualReferences(t *testing.T) {
 	}
 }
 
-func TestBuildFinalReviewPrompt_EmitsVisualReferences(t *testing.T) {
-	prompt := BuildFinalReviewPrompt(FinalReviewPromptOpts{
-		FeatureDescription: "build a thing",
-		ExitCriteria:       "tests pass",
-		Iteration:          1,
-		Images:             []string{"/tmp/mock.png"},
-		FeedbackPath:       "/tmp/fb.md",
-	})
-	if !strings.Contains(prompt, "Visual References") {
-		t.Errorf("final review prompt missing Visual References block")
-	}
-	if !strings.Contains(prompt, "/tmp/mock.png") {
-		t.Errorf("final review prompt missing mockup path")
-	}
-}
-
 func TestBuildFinalFixPrompt_EmitsVisualReferences(t *testing.T) {
 	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
 		Feedback:     "fix this",

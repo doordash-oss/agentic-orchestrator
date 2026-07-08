@@ -978,7 +978,7 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var launchedTUI, launchedServer, updateCalled bool
 	code := runArgs(
-		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleFinalReviewer), cliFlagDir, iterDir},
+		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleImplementationReviewCraft), cliFlagDir, iterDir},
 		&stdout,
 		&stderr,
 		func(string, string, bool, []string, bool) int {
@@ -1014,7 +1014,7 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := runArgs(
-		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleFinalReviewer), cliFlagDir, iterDir},
+		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleImplementationReviewCraft), cliFlagDir, iterDir},
 		&stdout,
 		&stderr,
 		failingLauncher(t),

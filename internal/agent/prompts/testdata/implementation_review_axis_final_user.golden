@@ -1,0 +1,49 @@
+Axis under review: Functionality/Evidence
+Gate under review: Final Review
+Review feedback output: /state/feat-x/run-1/review/iteration-03/functionality-evidence/review-feedback.md
+
+Iteration under review: 3
+Iteration artifacts directory: /state/feat-x/run-1/review/iteration-03
+
+## Final Review Scope
+
+Review the assembled feature across the cumulative cross-repo diff.
+Cumulative diff base: main
+
+Approved design: /state/feat-x/run-1/design/design.md
+
+
+Approved intent:
+Sign in with Google.
+
+Scope guidance:
+- Judge the whole assembled feature across all repositories in the workspace.
+- Use the approved roadmap as scope context for the completed feature, not as a reason to ignore feature-level gaps.
+- Do not apply per-phase deferral criteria; the full feature is in scope at Final Review.
+- Keep this axis read-only: inspect source and artifacts, then write only the required review-feedback.md file.
+
+Read the approved roadmap at: /state/feat-x/run-1/roadmap/plan.md
+
+Read the implementation plan at: /state/feat-x/run-1/phase-2/plan.md
+
+## Prior Aggregate Feedback
+
+## Findings
+### Craft
+- Tighten error handling.
+
+## Prior Implementation Evidence
+
+Implementation verification reports:
+- /state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml
+Evidence roots:
+- /state/feat-x/run-1/phase-1/implement/iteration-02
+Evidence artifacts:
+- /state/feat-x/run-1/phase-1/implement/iteration-02/screenshots/login.png
+
+## Exit Criteria
+
+Relevant tests pass.
+
+Apply the "Review Rules (Without Verification Items)" section from the axis methodology.
+

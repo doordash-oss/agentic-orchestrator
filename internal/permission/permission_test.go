@@ -383,7 +383,7 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 		{name: "find", command: `{"command":"find src -type f"}`},
 		// agentico's own artifact-validation preflight, run by every agent
 		// session before phase_complete (see rolespec_prompt.go).
-		{name: "validate-artifacts", command: `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_reviewer --dir \"/state/feat-x/runs/run-001/review/iteration-03\""}`},
+		{name: "validate-artifacts", command: `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_review_fixer --dir \"/state/feat-x/runs/run-001/review/iteration-03\""}`},
 		{name: "cd then validate-artifacts", command: `{"command":"cd /repo && \"$AGENTICO_BIN\" validate-artifacts --phase plan --role designer --dir \"/state/feat-x/plan\""}`},
 	}
 

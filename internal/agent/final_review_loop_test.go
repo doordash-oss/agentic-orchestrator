@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -177,15 +179,21 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		iterDir := latestFinalReviewIterationDir(t, artDir)
 		switch {
-		case strings.Contains(id, "-final-review-01"):
-			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", agentStatusChangesRequested))
-			touchPhaseComplete(t, iterDir)
 		case strings.Contains(id, "-fix-01"):
 			markFinalReviewReportPassed(t, iterDir)
 			touchPhaseComplete(t, iterDir)
-		case strings.Contains(id, "-final-review-02"):
-			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("", "", agentStatusApproved))
-			touchPhaseComplete(t, iterDir)
+		case strings.HasSuffix(id, "-01"), strings.HasSuffix(id, "-02"):
+			iteration := 1
+			feedback := testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", agentStatusChangesRequested)
+			if strings.HasSuffix(id, "-02") {
+				iteration = 2
+				feedback = testutil.StructuredReviewFeedback("", "", agentStatusApproved)
+			}
+			suffix := fmt.Sprintf("-%02d", iteration)
+			axisSlug := strings.TrimSuffix(strings.TrimPrefix(id, f.ID+"-"), suffix)
+			axisDir := filepath.Join(iterDir, axisSlug)
+			writeFinalReviewFeedbackFile(t, axisDir, feedback)
+			touchPhaseComplete(t, axisDir)
 		default:
 			t.Fatalf("unexpected session id %q", id)
 		}
@@ -225,8 +233,8 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 			t.Fatalf("StartSession(%q) phase = %s, want %s; all calls: %v", call.ID, call.Phase, feature.PhaseFinalReview, got)
 		}
 	}
-	if len(sm.StartSessionCalls) != 3 {
-		t.Fatalf("StartSession call count = %d, want 3; calls: %v", len(sm.StartSessionCalls), got)
+	if len(sm.StartSessionCalls) != 7 {
+		t.Fatalf("StartSession call count = %d, want 7 (three axes, fix, three re-review axes); calls: %v", len(sm.StartSessionCalls), got)
 	}
 }
 
@@ -469,7 +477,13 @@ done
 		MaxIterations:        3,
 		MaxConsecFails:       3,
 		FinishOrViolateNudge: true,
-		BuildSession:         mockBuildSessionByModel(map[string]string{"reviewer": reviewScript}),
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+			command, env, sessOpts, err := mockBuildSessionByModel(map[string]string{"reviewer": reviewScript})(opts)
+			if sessOpts != nil {
+				sessOpts.SupportsFinishOrViolateNudge = true
+			}
+			return command, env, sessOpts, err
+		},
 	}
 
 	result, err := RunFeatureFinalReviewLoop(cfg, sm)
@@ -844,8 +858,8 @@ fi`,
 		}
 		for _, want := range []string{
 			"## Output Roots",
-			"`iteration_dir`:",
-			filepath.Join(cfg.SkillsDir, "final-review", "SKILL.md"),
+			"`helper_dir`:",
+			filepath.Join(cfg.SkillsDir, "review-implementation-"),
 			"## Completion",
 		} {
 			if !strings.Contains(opts.SystemPrompt, want) {
@@ -859,6 +873,178 @@ fi`,
 			t.Errorf("reviewer AgentNames = %v, want exploration set %v", opts.AgentNames, explorationAgentNames())
 		}
 	}
+}
+
+func TestRunFeatureFinalReviewLoop_FinalGateRunsReadOnlyAxesAndAggregates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-multi-axis", []string{"api", "web"})
+	f.Pipeline = feature.PipelineMedium
+	f.TraceID = "trace-fr-multi-axis"
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+	observeDir := filepath.Join(env.stateDir, "observe")
+	if err := os.MkdirAll(filepath.Join(observeDir, f.ID), 0o755); err != nil {
+		t.Fatalf("mkdir observe feature dir: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review-axes.sh",
+		testutil.JSONLInit+"\n"+
+			writeFinalAxisFeedbackScript(artDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
+		testutil.JSONLInit+"\n"+
+			testutil.WriteFinalReviewFixSuccessArtifacts(artDir)+"\n"+
+			testutil.JSONLSuccess+"\n")
+
+	bs, captured := capturingBuildSessionByModel(map[string]string{
+		"reviewer": reviewScript,
+		"agent":    fixScript,
+	})
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  3,
+		MaxConsecFails: 3,
+		BuildSession:   bs,
+		SkillsDir:      filepath.Join(env.stateDir, "skills"),
+		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
+		Observer:       observe.New(true, observeDir, false, "", false, "test"),
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
+	}
+	if result.FinalStatus != "review_passed" {
+		t.Fatalf("FinalStatus = %q, want review_passed; LastError=%q", result.FinalStatus, result.LastError)
+	}
+	if result.Iterations != 2 {
+		t.Fatalf("Iterations = %d, want 2 after changes-requested aggregate and fix", result.Iterations)
+	}
+
+	for _, axisSlug := range []string{"craft", "cleanliness", "functionality-evidence"} {
+		path := filepath.Join(artDir, "iteration-01", axisSlug, "review-feedback.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("axis feedback %s missing: %v", path, err)
+		}
+	}
+
+	aggregatePath := filepath.Join(artDir, "iteration-01", "review-feedback.md")
+	aggregate, err := os.ReadFile(aggregatePath)
+	if err != nil {
+		t.Fatalf("read aggregate feedback: %v", err)
+	}
+	for _, want := range []string{
+		"### Craft",
+		"### Cleanliness",
+		"### Functionality/Evidence",
+		"missing final evidence",
+		"## Verdict\nCHANGES_REQUESTED",
+	} {
+		if !strings.Contains(string(aggregate), want) {
+			t.Fatalf("aggregate feedback missing %q in:\n%s", want, aggregate)
+		}
+	}
+
+	reviewerCalls := 0
+	for _, opts := range *captured {
+		if opts.Model != "reviewer" {
+			continue
+		}
+		reviewerCalls++
+		if strings.Contains(opts.SystemPrompt, "/skills/final-") {
+			t.Fatalf("reviewer system prompt used a final-review family skill instead of an axis skill:\n%s", opts.SystemPrompt)
+		}
+		if !strings.Contains(opts.SystemPrompt, "/skills/review-implementation-") {
+			t.Fatalf("reviewer system prompt missing implementation-review axis skill:\n%s", opts.SystemPrompt)
+		}
+	}
+	if reviewerCalls != 6 {
+		t.Fatalf("reviewer BuildSession calls = %d, want 6 (three axes across two iterations)", reviewerCalls)
+	}
+
+	events := readObserveEvents(t, observeDir, f.ID)
+	validationStarted := filterEventsByType(events, "validation.started")
+	if len(validationStarted) != 2 {
+		t.Fatalf("validation.started count = %d, want 2", len(validationStarted))
+	}
+	if validationStarted[0].Phase != "final_review" || validationStarted[0].Data["validator_count"] != float64(3) {
+		t.Fatalf("first validation.started = %+v, want final_review with validator_count=3", validationStarted[0])
+	}
+	validationCompleted := filterEventsByType(events, "validation.completed")
+	if len(validationCompleted) != 2 {
+		t.Fatalf("validation.completed count = %d, want 2", len(validationCompleted))
+	}
+	if validationCompleted[0].Phase != "final_review" || validationCompleted[0].Status != "CHANGES_REQUESTED" {
+		t.Fatalf("first validation.completed = %+v, want final_review CHANGES_REQUESTED", validationCompleted[0])
+	}
+	if validationCompleted[1].Phase != "final_review" || validationCompleted[1].Status != "APPROVED" {
+		t.Fatalf("second validation.completed = %+v, want final_review APPROVED", validationCompleted[1])
+	}
+	started := validatorNamesByEvent(events, "validator.started")
+	wantNames := []string{
+		"Cleanliness", "Cleanliness",
+		"Craft", "Craft",
+		"Functionality/Evidence", "Functionality/Evidence",
+	}
+	if !slices.Equal(started, wantNames) {
+		t.Fatalf("validator.started names = %v, want %v", started, wantNames)
+	}
+}
+
+func writeFinalAxisFeedbackScript(artDir string) string {
+	return fmt.Sprintf(`for _prompt in $(find "%s" -mindepth 3 -maxdepth 3 -name review-prompt.md -type f 2>/dev/null); do
+  _dir=$(dirname "$_prompt")
+  _axis=$(basename "$_dir")
+  _iter=$(basename "$(dirname "$_dir")")
+  _fb="$_dir/review-feedback.md"
+  if [ -f "$_fb" ]; then
+    touch "$_dir/phase_complete"
+    continue
+  fi
+  _verdict="APPROVED"
+  _findings="- (none)"
+  if [ "$_iter" = "iteration-01" ] && [ "$_axis" = "functionality-evidence" ]; then
+    _verdict="CHANGES_REQUESTED"
+    _findings="- **Critical**: missing final evidence"
+  fi
+  cat > "$_fb" << REVIEWEOF
+## Findings
+$_findings
+
+## Suggestions
+- (none)
+
+## Verdict
+$_verdict
+REVIEWEOF
+  touch "$_dir/phase_complete"
+done`, artDir)
+}
+
+func touchFinalAxisPhaseCompleteWithoutFeedback(artDir string) string {
+	return fmt.Sprintf(`for _prompt in $(find "%s" -mindepth 3 -maxdepth 3 -name review-prompt.md -type f 2>/dev/null); do
+  _dir=$(dirname "$_prompt")
+  rm -f "$_dir/review-feedback.md"
+  touch "$_dir/phase_complete"
+done`, artDir)
 }
 
 // TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp covers the
@@ -1198,15 +1384,15 @@ func TestRunFeatureFinalReviewLoop_ReviewerMissingPhaseCompleteTripsProtocolViol
 		t.Skip("skipping integration test in short mode")
 	}
 	result := runFinalReviewWithReviewScript(t, func(artDir string) string {
-		return testutil.WriteReviewApproved(artDir)
+		return testutil.WriteReviewApprovedWithoutPhaseComplete(artDir)
 	})
 
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
-	if !strings.Contains(result.LastError, "final_reviewer @") ||
+	if !strings.Contains(result.LastError, "implementation_review_") ||
 		!strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want final_reviewer phase_complete violation", result.LastError)
+		t.Fatalf("LastError = %q, want implementation review axis phase_complete violation", result.LastError)
 	}
 }
 
@@ -1215,15 +1401,15 @@ func TestRunFeatureFinalReviewLoop_ReviewerMissingFeedbackTripsProtocolViolation
 		t.Skip("skipping integration test in short mode")
 	}
 	result := runFinalReviewWithReviewScript(t, func(artDir string) string {
-		return testutil.TouchPhaseComplete(artDir)
+		return touchFinalAxisPhaseCompleteWithoutFeedback(artDir)
 	})
 
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
-	if !strings.Contains(result.LastError, "final_reviewer @") ||
+	if !strings.Contains(result.LastError, "implementation_review_") ||
 		!strings.Contains(result.LastError, "review-feedback.md") {
-		t.Fatalf("LastError = %q, want final_reviewer review-feedback violation", result.LastError)
+		t.Fatalf("LastError = %q, want implementation review axis review-feedback violation", result.LastError)
 	}
 }
 
@@ -1238,7 +1424,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerMalformedVerdictTripsProtocolViolatio
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
-	if !strings.Contains(result.LastError, "final_reviewer @") ||
+	if !strings.Contains(result.LastError, "implementation_review_") ||
 		!strings.Contains(result.LastError, "LGTM") {
 		t.Fatalf("LastError = %q, want malformed verdict violation", result.LastError)
 	}

@@ -202,12 +202,11 @@ func TestBuildSession_GuidelinesEmptyDir(t *testing.T) {
 	}
 }
 
-func TestBuildSession_GuidelinesFinalReviewer(t *testing.T) {
+func TestBuildSession_GuidelinesReviewAxis(t *testing.T) {
 	pr, mockProv := newGuidelinesTestRunner(t)
 
-	// The final reviewer is an interactive session with Phase: PhaseReview and
-	// a non-empty SystemPrompt, which triggers the guidelines preamble
-	// injection in BuildSession.
+	// Review-axis sessions carry PhaseReview and a non-empty SystemPrompt,
+	// which triggers the guidelines preamble injection in BuildSession.
 	_, _, _, err := pr.BuildSession(BuildSessionOpts{
 		Model:        "test-model",
 		SystemPrompt: "You are a code reviewer.",
@@ -222,10 +221,10 @@ func TestBuildSession_GuidelinesFinalReviewer(t *testing.T) {
 	}
 	sysPrompt := mockProv.BuildCommandCalls[0].Opts.SystemPrompt
 	if !strings.Contains(sysPrompt, "Available Language Guidelines") {
-		t.Error("final reviewer system prompt missing guidelines preamble")
+		t.Error("review axis system prompt missing guidelines preamble")
 	}
 }
 
 // Guidelines are no longer inlined in BuildReviewPrompt — they are discovered
 // via the system prompt preamble injected by BuildSession. See
-// TestBuildSession_GuidelinesFinalReviewer for the preamble test.
+// TestBuildSession_GuidelinesReviewAxis for the preamble test.

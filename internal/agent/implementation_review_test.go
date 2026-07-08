@@ -28,38 +28,57 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-func TestImplementationReviewAxesForPerPhaseGate(t *testing.T) {
+func TestImplementationReviewAxesForGate(t *testing.T) {
 	tests := []struct {
 		name    string
+		gate    implementationReviewGate
 		profile feature.PipelineProfile
 		want    []string
 	}{
 		{
 			name:    "moonshot selects the three read-only axes",
+			gate:    implementationReviewGatePerPhase,
 			profile: feature.PipelineMoonshot,
 			want:    []string{"Craft", "Functionality/Evidence", "Cleanliness"},
 		},
 		{
 			name:    "medium skips per-phase implementation review axes",
+			gate:    implementationReviewGatePerPhase,
 			profile: feature.PipelineMedium,
 			want:    nil,
 		},
 		{
 			name:    "large skips per-phase implementation review axes",
+			gate:    implementationReviewGatePerPhase,
 			profile: feature.PipelineLarge,
 			want:    nil,
+		},
+		{
+			name:    "medium selects final review axes",
+			gate:    implementationReviewGateFinal,
+			profile: feature.PipelineMedium,
+			want:    []string{"Craft", "Cleanliness", "Functionality/Evidence"},
+		},
+		{
+			name:    "large selects final review axes",
+			gate:    implementationReviewGateFinal,
+			profile: feature.PipelineLarge,
+			want:    []string{"Craft", "Cleanliness", "Functionality/Evidence"},
+		},
+		{
+			name:    "moonshot selects final review axes",
+			gate:    implementationReviewGateFinal,
+			profile: feature.PipelineMoonshot,
+			want:    []string{"Craft", "Cleanliness", "Functionality/Evidence"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			axes := implementationReviewAxesForGate(implementationReviewGatePerPhase, tt.profile)
+			axes := implementationReviewAxesForGate(tt.gate, tt.profile)
 			got := make([]string, 0, len(axes))
 			for _, axis := range axes {
 				got = append(got, axis.Name)
-				if axis.Gate != implementationReviewGatePerPhase {
-					t.Errorf("axis %s Gate = %q, want %q", axis.Name, axis.Gate, implementationReviewGatePerPhase)
-				}
 				if !axis.ReadOnly {
 					t.Errorf("axis %s ReadOnly = false, want true", axis.Name)
 				}
@@ -68,7 +87,7 @@ func TestImplementationReviewAxesForPerPhaseGate(t *testing.T) {
 				}
 			}
 			if !slices.Equal(got, tt.want) {
-				t.Fatalf("implementationReviewAxesForGate(%s, %s) = %v, want %v", implementationReviewGatePerPhase, tt.profile, got, tt.want)
+				t.Fatalf("implementationReviewAxesForGate(%s, %s) = %v, want %v", tt.gate, tt.profile, got, tt.want)
 			}
 		})
 	}
@@ -97,8 +116,13 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 		if axis.Role != wantRole {
 			t.Fatalf("registry role for %q = %q, want %q", axis.SkillName, axis.Role, wantRole)
 		}
-		if axis.Gate != implementationReviewGatePerPhase || axis.Order == 0 || axis.Name == "" || axis.ShortName == "" || !axis.ReadOnly || axis.Applies == nil {
+		if len(axis.Memberships) == 0 || axis.Name == "" || axis.ShortName == "" || !axis.ReadOnly {
 			t.Fatalf("registry row for %q is not well-formed: %+v", axis.SkillName, axis)
+		}
+		for _, membership := range axis.Memberships {
+			if membership.Gate == "" || membership.Order == 0 || membership.Applies == nil {
+				t.Fatalf("registry membership for %q is not well-formed: %+v", axis.SkillName, membership)
+			}
 		}
 
 		spec, ok := ImplementationReviewAxisRoleForSkill(axis.SkillName)
@@ -197,6 +221,57 @@ func TestBuildImplementationReviewAxisPromptIncludesSingleReviewerContextPlusAxi
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("BuildImplementationReviewAxisPrompt() missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.T) {
+	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:                                 implementationReviewGateFinal,
+		AxisLabel:                            "Functionality/Evidence",
+		FeatureDescription:                   "Assembled feature intent.",
+		DesignArtifactPath:                   "/design.md",
+		ExitCriteria:                         "Feature fully implemented.",
+		DiffBase:                             "main",
+		PreviousFeedback:                     "Prior aggregate finding.",
+		Iteration:                            2,
+		RoadmapPath:                          "/roadmap.md",
+		PlanPath:                             "/phase-plan.md",
+		PhaseType:                            "tdd-fill-in",
+		IterDir:                              "/review/iteration-02",
+		FeedbackPath:                         "/review/iteration-02/functionality-evidence/review-feedback.md",
+		PriorImplementationReportPaths:       []string{"/phase-01/implement/iteration-01/verification-report.yaml"},
+		PriorImplementationEvidenceRootDirs:  []string{"/phase-01/implement/iteration-01"},
+		PriorImplementationEvidenceArtifacts: []string{"/phase-01/implement/iteration-01/screenshots/dashboard.png"},
+	})
+
+	for _, want := range []string{
+		"Axis under review: Functionality/Evidence",
+		"Gate under review: Final Review",
+		"Cumulative diff base: main",
+		"Review the assembled feature across the cumulative cross-repo diff.",
+		"Approved design: /design.md",
+		"Assembled feature intent.",
+		"Feature fully implemented.",
+		"Read the approved roadmap at: /roadmap.md",
+		"Read the implementation plan at: /phase-plan.md",
+		"Prior aggregate finding.",
+		"/phase-01/implement/iteration-01/verification-report.yaml",
+		"/phase-01/implement/iteration-01",
+		"/phase-01/implement/iteration-01/screenshots/dashboard.png",
+		"Review feedback output: /review/iteration-02/functionality-evidence/review-feedback.md",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("BuildImplementationReviewAxisPromptWithOpts() missing %q in:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"## Phase Type",
+		"This is a **tdd-fill-in** phase",
+		"Read the implementation plan (source of truth) at: /phase-plan.md",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("BuildImplementationReviewAxisPromptWithOpts() unexpectedly included %q in Final prompt:\n%s", unwanted, got)
 		}
 	}
 }

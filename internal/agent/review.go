@@ -85,34 +85,107 @@ func BuildReviewPrompt(planPath, exitCriteria, progressPath, iterDir, contractPa
 	})
 }
 
+// ImplementationReviewAxisPromptOpts carries the shared prompt context for an
+// implementation review axis. The per-phase gate populates the phase-scoped
+// fields; the Final Review gate also supplies cumulative-diff and prior
+// implementation evidence context.
+type ImplementationReviewAxisPromptOpts struct {
+	Gate      implementationReviewGate
+	AxisLabel string
+
+	FeatureDescription string
+	DesignArtifactPath string
+	ExitCriteria       string
+	DiffBase           string
+	PreviousFeedback   string
+
+	ProgressPath           string
+	IterDir                string
+	ContractPath           string
+	VerificationReportPath string
+	Iteration              int
+	RequiredVerification   []RequiredVerificationItem
+	RoadmapPath            string
+	PlanPath               string
+	PhaseType              string
+	FeedbackPath           string
+
+	PriorImplementationReportPaths       []string
+	PriorImplementationEvidenceRootDirs  []string
+	PriorImplementationEvidenceArtifacts []string
+}
+
 // BuildImplementationReviewAxisPrompt constructs the prompt for one
 // implementation review axis. It carries the same review context as the legacy
 // single-reviewer prompt plus the selected axis label.
 func BuildImplementationReviewAxisPrompt(planPath, exitCriteria, progressPath, iterDir, contractPath, verificationReportPath string, iteration int, requiredVerification []RequiredVerificationItem, roadmapPath, phaseType, feedbackPath, axisLabel string) string {
-	required := make([]roles.VerificationItemView, 0, len(requiredVerification))
-	for _, item := range requiredVerification {
+	return BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+		Gate:                   implementationReviewGatePerPhase,
+		AxisLabel:              axisLabel,
+		PlanPath:               planPath,
+		ExitCriteria:           exitCriteria,
+		ProgressPath:           progressPath,
+		IterDir:                iterDir,
+		ContractPath:           contractPath,
+		VerificationReportPath: verificationReportPath,
+		Iteration:              iteration,
+		RequiredVerification:   requiredVerification,
+		RoadmapPath:            roadmapPath,
+		PhaseType:              phaseType,
+		FeedbackPath:           feedbackPath,
+	})
+}
+
+// BuildImplementationReviewAxisPromptWithOpts renders one gate-aware
+// implementation review axis prompt.
+func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPromptOpts) string {
+	required := make([]roles.VerificationItemView, 0, len(opts.RequiredVerification))
+	for _, item := range opts.RequiredVerification {
 		required = append(required, roles.VerificationItemView{
 			Name:        item.Name,
 			Requirement: item.Requirement,
 		})
 	}
 
+	phaseType := opts.PhaseType
+	if opts.Gate == implementationReviewGateFinal {
+		phaseType = ""
+	}
+
 	return roles.BuildImplementationReviewAxisPrompt(roles.ImplementationReviewAxisUserInput{
 		ReviewUserInput: roles.ReviewUserInput{
-			Iteration:              iteration,
-			IterDir:                iterDir,
-			RoadmapPath:            roadmapPath,
-			PlanPath:               planPath,
-			ExitCriteria:           exitCriteria,
-			VerificationReportPath: verificationReportPath,
-			ContractPath:           contractPath,
-			RequiredVerification:   required,
-			ProgressPath:           progressPath,
-			PhaseType:              phaseType,
-			FeedbackPath:           feedbackPath,
+			Iteration:                            opts.Iteration,
+			IterDir:                              opts.IterDir,
+			GateLabel:                            implementationReviewGateLabel(opts.Gate),
+			FinalGate:                            opts.Gate == implementationReviewGateFinal,
+			DiffBase:                             opts.DiffBase,
+			FeatureDescription:                   opts.FeatureDescription,
+			DesignArtifactPath:                   opts.DesignArtifactPath,
+			PreviousFeedback:                     opts.PreviousFeedback,
+			RoadmapPath:                          opts.RoadmapPath,
+			PlanPath:                             opts.PlanPath,
+			ExitCriteria:                         opts.ExitCriteria,
+			VerificationReportPath:               opts.VerificationReportPath,
+			ContractPath:                         opts.ContractPath,
+			RequiredVerification:                 required,
+			PriorImplementationReportPaths:       opts.PriorImplementationReportPaths,
+			PriorImplementationEvidenceRootDirs:  opts.PriorImplementationEvidenceRootDirs,
+			PriorImplementationEvidenceArtifacts: opts.PriorImplementationEvidenceArtifacts,
+			ProgressPath:                         opts.ProgressPath,
+			PhaseType:                            phaseType,
+			FeedbackPath:                         opts.FeedbackPath,
 		},
-		AxisLabel: axisLabel,
+		AxisLabel: opts.AxisLabel,
 	})
+}
+
+func implementationReviewGateLabel(gate implementationReviewGate) string {
+	switch gate {
+	case implementationReviewGateFinal:
+		return "Final Review"
+	default:
+		return "Per-Phase Implementation Review"
+	}
 }
 
 // reviewVerdictHeading is the ATX heading used by the review handoff

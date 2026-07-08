@@ -28,30 +28,29 @@ import (
 type Role = roles.Role
 
 const (
-	RoleImplementer                               = roles.RoleImplementer
-	RoleFinalReviewFixer                          = roles.RoleFinalReviewFixer
-	RoleFinalReviewer                             = roles.RoleFinalReviewer
-	RolePlanRoadmapPlanner                        = roles.RolePlanRoadmapPlanner
-	RolePlanRoadmapReviser                        = roles.RolePlanRoadmapReviser
-	RolePlanPhasePlanner                          = roles.RolePlanPhasePlanner
-	RolePlanPhaseReviser                          = roles.RolePlanPhaseReviser
-	RoleValidateRoadmapArchitecture               = roles.RoleValidateRoadmapArchitecture
-	RoleValidateRoadmapScope                      = roles.RoleValidateRoadmapScope
-	RoleValidatePhasePlanStructural               = roles.RoleValidatePhasePlanStructural
-	RoleValidatePhasePlanScope                    = roles.RoleValidatePhasePlanScope
-	RoleValidatePhasePlanGrounding                = roles.RoleValidatePhasePlanGrounding
-	RoleValidatePlanSecurity                      = roles.RoleValidatePlanSecurity
-	RoleValidatePlanPerformance                   = roles.RoleValidatePlanPerformance
-	RoleValidatePlanTesting                       = roles.RoleValidatePlanTesting
-	RoleIterationReviewer                         = roles.RoleIterationReviewer
-	RoleImplementationReviewCraft                 = roles.RoleImplementationReviewCraft
-	RoleImplementationReviewFunctionalityEvidence = roles.RoleImplementationReviewFunctionalityEvidence
-	RoleImplementationReviewCleanliness           = roles.RoleImplementationReviewCleanliness
-	RoleRefactorPlanStep                          = roles.RoleRefactorPlanStep
-	RoleKnowledgeBaseBuilder                      = roles.RoleKnowledgeBaseBuilder
-	RoleInquirer                                  = roles.RoleInquirer
-	RoleResearcher                                = roles.RoleResearcher
-	RoleDesigner                                  = roles.RoleDesigner
+	RoleImplementer                                    = roles.RoleImplementer
+	RoleFinalReviewFixer                               = roles.RoleFinalReviewFixer
+	RolePlanRoadmapPlanner                             = roles.RolePlanRoadmapPlanner
+	RolePlanRoadmapReviser                             = roles.RolePlanRoadmapReviser
+	RolePlanPhasePlanner                               = roles.RolePlanPhasePlanner
+	RolePlanPhaseReviser                               = roles.RolePlanPhaseReviser
+	RoleValidateRoadmapArchitecture                    = roles.RoleValidateRoadmapArchitecture
+	RoleValidateRoadmapScope                           = roles.RoleValidateRoadmapScope
+	RoleValidatePhasePlanStructural                    = roles.RoleValidatePhasePlanStructural
+	RoleValidatePhasePlanScope                         = roles.RoleValidatePhasePlanScope
+	RoleValidatePhasePlanGrounding                     = roles.RoleValidatePhasePlanGrounding
+	RoleValidatePlanSecurity                           = roles.RoleValidatePlanSecurity
+	RoleValidatePlanPerformance                        = roles.RoleValidatePlanPerformance
+	RoleValidatePlanTesting                            = roles.RoleValidatePlanTesting
+	RoleIterationReviewer                         Role = "iteration_reviewer"
+	RoleImplementationReviewCraft                      = roles.RoleImplementationReviewCraft
+	RoleImplementationReviewFunctionalityEvidence      = roles.RoleImplementationReviewFunctionalityEvidence
+	RoleImplementationReviewCleanliness                = roles.RoleImplementationReviewCleanliness
+	RoleRefactorPlanStep                               = roles.RoleRefactorPlanStep
+	RoleKnowledgeBaseBuilder                           = roles.RoleKnowledgeBaseBuilder
+	RoleInquirer                                       = roles.RoleInquirer
+	RoleResearcher                                     = roles.RoleResearcher
+	RoleDesigner                                       = roles.RoleDesigner
 )
 
 type ArtifactPresence = roles.ArtifactPresence
@@ -133,11 +132,6 @@ func ImplementationReviewAxisRoleSpecs() []RoleSpec {
 func ImplementationReviewAxisRoleForSkill(skillName string) (RoleSpec, bool) {
 	spec, ok := roles.ImplementationReviewAxisRoleForSkill(skillName)
 	return wrapRoleSpec(spec), ok
-}
-
-// FinalReviewerRoleSpec returns the RoleSpec-backed final-review gate role.
-func FinalReviewerRoleSpec() RoleSpec {
-	return wrapRoleSpec(roles.FinalReviewerRoleSpec())
 }
 
 // FinalReviewFixerRoleSpec returns the RoleSpec-backed final-review fix role.

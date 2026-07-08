@@ -27,6 +27,13 @@ type ReviewUserInput struct {
 	Iteration int
 	IterDir   string
 
+	GateLabel          string
+	FinalGate          bool
+	DiffBase           string
+	FeatureDescription string
+	DesignArtifactPath string
+	PreviousFeedback   string
+
 	RoadmapPath            string
 	PlanPath               string
 	ExitCriteria           string
@@ -34,6 +41,10 @@ type ReviewUserInput struct {
 
 	ContractPath         string
 	RequiredVerification []VerificationItemView
+
+	PriorImplementationReportPaths       []string
+	PriorImplementationEvidenceRootDirs  []string
+	PriorImplementationEvidenceArtifacts []string
 
 	ProgressPath string
 	PhaseType    string

@@ -33,27 +33,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// FinalReviewPromptOpts contains the parameters for building the final review prompt.
-type FinalReviewPromptOpts struct {
-	FeatureDescription string
-	ExitCriteria       string
-	DiffBase           string // branch to diff against (e.g., "main")
-	WorkDir            string // repo working directory
-	PreviousFeedback   string // feedback from prior review iteration (empty on first)
-	Iteration          int
-	RoadmapPath        string // path to the roadmap file (reviewer reads it via tool access)
-	DesignArtifactPath string // retained for caller compatibility; no longer re-injected
-	Images             []string
-	PhaseType          string // "tracer-bullet", "tdd-fill-in", "collapsed", or ""
-	CycleFocus         string // short description of the active cycle's review scope
-	FeedbackPath       string // path where the reviewer must write its feedback file
-	Publishable        bool   // whether the repo has a remote / is publishable
-
-	PriorImplementationReportPaths       []string
-	PriorImplementationEvidenceRootDirs  []string
-	PriorImplementationEvidenceArtifacts []string
-}
-
 // FinalFixPromptOpts contains the parameters for building the fix agent prompt.
 type FinalFixPromptOpts struct {
 	Feedback               string
@@ -65,36 +44,6 @@ type FinalFixPromptOpts struct {
 	Publishable            bool
 	DesignArtifactPath     string   // retained for caller compatibility; no longer re-injected
 	Images                 []string // user-attached visual references, re-injected per iteration
-}
-
-// BuildFinalReviewPrompt constructs the prompt for the Final Review session.
-// Unlike BuildReviewPrompt (print-mode, audits verification report), this
-// produces a prompt for an interactive session that can explore the codebase,
-// run tests/build, and read the full diff.
-//
-// The prose lives in internal/agent/prompts/templates/final_review.user.tmpl.
-func BuildFinalReviewPrompt(opts FinalReviewPromptOpts) string {
-	return roles.BuildFinalReviewPrompt(roles.FinalReviewUserInput{
-		VisualReferences: prompts.VisualReferencesInput{
-			Images: opts.Images,
-			Label:  "conducting this final review",
-		},
-		Iteration:                            opts.Iteration,
-		IsCycleReview:                        opts.CycleFocus != "",
-		PhaseType:                            opts.PhaseType,
-		DiffBase:                             opts.DiffBase,
-		RoadmapPath:                          opts.RoadmapPath,
-		DesignArtifactPath:                   opts.DesignArtifactPath,
-		FeatureDescription:                   opts.FeatureDescription,
-		ExitCriteria:                         opts.ExitCriteria,
-		CycleFocus:                           opts.CycleFocus,
-		PriorImplementationReportPaths:       opts.PriorImplementationReportPaths,
-		PriorImplementationEvidenceRootDirs:  opts.PriorImplementationEvidenceRootDirs,
-		PriorImplementationEvidenceArtifacts: opts.PriorImplementationEvidenceArtifacts,
-		FeedbackPath:                         opts.FeedbackPath,
-		Publishable:                          opts.Publishable,
-		PreviousFeedback:                     opts.PreviousFeedback,
-	})
 }
 
 // BuildFinalFixPrompt constructs the prompt for the fix agent session.
@@ -159,6 +108,17 @@ func guidelineAdditionalDirs(dir string) []string {
 		return nil
 	}
 	return []string{dir}
+}
+
+func finalReviewArtifactPath(stateDir string, f *feature.Feature, key string) string {
+	if f == nil {
+		return ""
+	}
+	path := f.Artifacts[key]
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(ActiveRunDir(stateDir, f), path)
 }
 
 // writeAggregateVerificationStub preserves the legacy non-contract final

@@ -35,9 +35,12 @@ import (
 // on ParseReviewFeedback(FeedbackPath) after the turn ends. FeedbackPath,
 // HelperIterDir, and Role are required.
 type ReviewHelperConfig struct {
-	SessionID              string
-	FeatureID              string
-	Phase                  feature.Phase
+	SessionID string
+	FeatureID string
+	Phase     feature.Phase
+	// ContractPhase selects the RoleSpec and artifact contract when it differs
+	// from the lifecycle phase shown for the session. It defaults to Phase.
+	ContractPhase          feature.Phase
 	ParentSpanCtx          observe.SpanContext
 	Model                  string
 	Prompt                 string
@@ -117,9 +120,13 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
 	}
 
-	spec, ok := lookupRoleSpec(cfg.Phase, cfg.Role)
+	contractPhase := cfg.ContractPhase
+	if contractPhase == 0 {
+		contractPhase = cfg.Phase
+	}
+	spec, ok := lookupRoleSpec(contractPhase, cfg.Role)
 	if !ok {
-		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", cfg.Phase, cfg.Role)
+		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
 	}
 	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
 		Spec:          spec,
@@ -202,7 +209,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		sessOpts:             sessOpts,
 		requireOutput:        false,
 		phaseCompleteDir:     cfg.HelperIterDir,
-		contractPhase:        cfg.Phase,
+		contractPhase:        contractPhase,
 		contractRole:         cfg.Role,
 		parentSpanCtx:        cfg.ParentSpanCtx,
 		finishOrViolateNudge: nudgeSupported,

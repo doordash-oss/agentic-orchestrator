@@ -30,13 +30,6 @@ Do not block merely because recorded implementation evidence is missing; that is
 
 When you cannot exercise a surface for a reason you cannot attribute to the code, record a non-blocking caveat in `## Suggestions`. Examples: a headless browser unavailable in this environment, a local service dependency not present, or a toolchain requiring in-tree writes under an OS sandbox. Be explicit about what you could not verify and why.
 
-## Sibling Boundaries
-
-- Craft owns intrinsic code quality, naming, cohesion, and abstraction.
-- Cleanliness owns change-set hygiene, out-of-plan touches, stray artifacts, and pushability.
-- Functionality/Evidence owns per-phase verification evidence and missing visual or behavioral evidence coverage.
-- Design owns visible UI aesthetics, layout, accessibility, interaction states, and originality.
-
 ## Handoff Contract
 
 Write exactly one `review-feedback.md` with these three `## ` sections, in order:

@@ -641,6 +641,81 @@ func TestChatModelMultiSelectToggle(t *testing.T) {
 	}
 }
 
+// TestChatModelRenderQuestionPickerShowsFreeformRow covers Finding 1: the
+// option list must advertise the "Type something." freeform escape hatch
+// even when not selected, matching attach.go's renderQuestion.
+func TestChatModelRenderQuestionPickerShowsFreeformRow(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{Question: "Pick one", Options: []askUserOption{{Label: "Alpha"}, {Label: "Beta"}}},
+	}, "req-1", nil)
+
+	body, _ := m.renderQuestionPicker()
+	if !strings.Contains(body, "Type something.") {
+		t.Fatal(`expected renderQuestionPicker body to contain a "Type something." row`)
+	}
+}
+
+// TestChatModelRenderQuestionPickerFreeformInput covers Finding 1: once the
+// cursor reaches the freeform slot and enter is pressed, typingCustom must
+// switch the rendered body to the input box instead of continuing to show
+// the (now stale) option list.
+func TestChatModelRenderQuestionPickerFreeformInput(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{Question: "Pick one", Options: []askUserOption{{Label: "Alpha"}, {Label: "Beta"}}},
+	}, "req-1", nil)
+
+	downKey := tea.KeyPressMsg{Code: 'j', Text: "j"}
+	for i := 0; i < len(m.questions[0].Options); i++ {
+		updated, _ := m.Update(downKey)
+		m = updated
+	}
+	if m.selectedOption != len(m.questions[0].Options) {
+		t.Fatalf("selectedOption = %d, want freeform slot %d", m.selectedOption, len(m.questions[0].Options))
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated
+	if !m.typingCustom {
+		t.Fatal("expected enter on freeform slot to enable typingCustom")
+	}
+
+	body, _ := m.renderQuestionPicker()
+	if strings.Contains(body, "Alpha") || strings.Contains(body, "Beta") {
+		t.Fatal("expected freeform render to hide the stale option list")
+	}
+	if !strings.Contains(body, m.input.View()) {
+		t.Fatal("expected freeform render to show the input box")
+	}
+}
+
+// TestChatModelBackNavRestoresQ0Selection covers Finding 2: navigating back
+// to question 0 after answering it and advancing must restore the recorded
+// selection instead of resetting the cursor to option 0.
+func TestChatModelBackNavRestoresQ0Selection(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{Question: "First?", Options: []askUserOption{{Label: "A"}, {Label: "B"}, {Label: "C"}}},
+		{Question: "Second?", Options: []askUserOption{{Label: "D"}, {Label: "E"}}},
+	}, "req-1", nil)
+
+	m.selectedOption = 2
+	m.commitAnswer("C")
+	m.advanceQuestionOpts(1, false)
+	if m.currentQuestionIdx != 1 {
+		t.Fatalf("currentQuestionIdx = %d, want 1 after advancing past Q0", m.currentQuestionIdx)
+	}
+
+	m.advanceQuestionOpts(-1, true)
+	if m.currentQuestionIdx != 0 {
+		t.Fatalf("currentQuestionIdx = %d, want 0 after navigating back", m.currentQuestionIdx)
+	}
+	if m.selectedOption != 2 {
+		t.Errorf("selectedOption = %d, want 2 (Q0's recorded answer), not reset to 0", m.selectedOption)
+	}
+}
+
 // TestChatModelPickerScrollFollowsSelection covers Finding 2: descriptions
 // make each option take 2 rendered lines, so questionVisibleWindowPure
 // windows down to fewer visible rows than total options. Pressing "down"

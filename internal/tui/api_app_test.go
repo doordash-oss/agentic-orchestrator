@@ -2711,6 +2711,32 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 	}
 }
 
+// TestAPIAppModelChatExitResetsFullscreen covers Finding 3: fullscreen must
+// not survive a chat close, or the next open sizes the panel for docked mode
+// while View() still renders chat-only (fullscreen) from stale state.
+func TestAPIAppModelChatExitResetsFullscreen(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.fullscreen = true
+
+	model, _ = chatting.Update(ChatExitMsg{})
+	closed := model.(APIAppModel)
+	if closed.chatOpen {
+		t.Fatal("expected ChatExitMsg to close the chat panel")
+	}
+	if closed.chat.fullscreen {
+		t.Fatal("expected ChatExitMsg to reset fullscreen so the next open starts docked")
+	}
+}
+
 func TestAPIAppModelChatStartErrorStopsRespondingAndRendersError(t *testing.T) {
 	t.Parallel()
 

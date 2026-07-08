@@ -386,6 +386,7 @@ func (m *ChatModel) activateQuestions(questions []askUserQuestion, requestID str
 	}
 	m.questions = questions
 	m.questionStates = make([]questionUIState, len(questions))
+	m.questionStates[0].askedEmitted = true
 	m.pendingAskRequestID = requestID
 	m.pendingAskRaw = raw
 	m.collectedAnswers = make(map[string]string)
@@ -1187,14 +1188,22 @@ func (m ChatModel) renderQuestionPicker() (body, footer string) {
 		return b.String(), KeyHelpStyle.Render("[enter] Submit · [←] back · [esc] close")
 	}
 	q := m.questions[m.currentQuestionIdx]
-	if questionUsesDirectFreeform(q) {
+	if questionUsesDirectFreeform(q) || m.typingCustom {
 		body := lipgloss.NewStyle().Bold(true).Render(questionPromptText(q.Question, contentWidth)) + "\n\n" + m.input.View()
 		return body, KeyHelpStyle.Render("[enter] Send · [shift+enter] Newline · [esc] Back")
 	}
 	optionArea := max(len(q.Options), 3)
 	start, end, needAbove, needBelow := questionVisibleWindowPure(q.Options, m.selectedOption, m.questionScrollOffset, optionArea, contentWidth)
+	typeIdx := len(q.Options)
+	var typeRow string
+	if m.selectedOption == typeIdx {
+		typeRow = lipgloss.NewStyle().Foreground(colorBrand).Bold(true).Render(fmt.Sprintf("> %d. Type something.", typeIdx+1))
+	} else {
+		typeRow = lipgloss.NewStyle().Render(fmt.Sprintf("  %d. Type something.", typeIdx+1))
+	}
 	topBlock := lipgloss.NewStyle().Bold(true).Render(questionPromptText(q.Question, contentWidth)) + "\n\n" +
-		renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow)
+		renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow) +
+		typeRow
 
 	// Join the focused option's preview side-by-side when Claude supplied
 	// one and it fits — same width guard as attach.go's renderQuestion, so

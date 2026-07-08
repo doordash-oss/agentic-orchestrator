@@ -1393,6 +1393,7 @@ func apiChatOwnsMsg(msg tea.Msg) bool {
 func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(ChatExitMsg); ok {
 		m.chatOpen = false
+		m.chat.fullscreen = false
 		return m, nil
 	}
 	wasFullscreen := m.chat.fullscreen

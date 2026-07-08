@@ -682,6 +682,38 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	}
 }
 
+func TestRoleSystemPromptOperatorInstructions(t *testing.T) {
+	base := RoleSystemInput{
+		OutputRoots: []OutputRootView{{Name: "phase_dir", Path: "/state/feat-x/x"}},
+		MarkerPath:  "/state/feat-x/x/phase_complete",
+	}
+
+	const header = "## Operator Instructions (Highest Priority)"
+
+	// Empty: no section, and the prompt must still end at the asking clause
+	// slot (no trailing operator block).
+	empty := RoleSystemPrompt(base)
+	if strings.Contains(empty, header) {
+		t.Fatalf("empty ExtraInstructions rendered the operator section:\n%s", empty)
+	}
+
+	// Set: section present, positioned after the asking clause, and carries
+	// the operator text verbatim.
+	withExtra := base
+	withExtra.AskingClause = "## Asking Questions\n\nAsk via provider."
+	withExtra.ExtraInstructions = "Always write commit messages in haiku."
+	got := RoleSystemPrompt(withExtra)
+	if !strings.Contains(got, header) {
+		t.Fatalf("ExtraInstructions set but operator section missing:\n%s", got)
+	}
+	if !strings.Contains(got, "Always write commit messages in haiku.") {
+		t.Fatalf("operator instruction text missing:\n%s", got)
+	}
+	if strings.Index(got, header) < strings.Index(got, "## Asking Questions") {
+		t.Fatalf("operator section should render after the asking clause (recency slot):\n%s", got)
+	}
+}
+
 func TestLegacyPromptSurfacesAreRemoved(t *testing.T) {
 	removedPaths := []string{
 		filepath.Join("templates", "system_completion_protocol.tmpl"),

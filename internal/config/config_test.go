@@ -159,6 +159,31 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestLoadPhaseExtraInstructions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	original := NewDefault()
+	original.Defaults.PhaseExtraInstructions = map[string]string{
+		"plan":      "./prompts/plan-extra.md",
+		"implement": "~/agentico/impl.md",
+	}
+
+	if err := Save(path, original); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := loaded.Defaults.PhaseExtraInstructions["plan"]; got != "./prompts/plan-extra.md" {
+		t.Errorf("plan path mismatch: got %q", got)
+	}
+	if got := loaded.Defaults.PhaseExtraInstructions["implement"]; got != "~/agentico/impl.md" {
+		t.Errorf("implement path mismatch: got %q", got)
+	}
+}
+
 func TestLoadOrCreate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

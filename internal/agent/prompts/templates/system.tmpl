@@ -80,4 +80,12 @@ In addition to the skill(s) already loaded in your system instructions, the foll
 {{ end }}
 {{ end }}{{ end }}
 {{ .AskingClause }}
+{{- if .ExtraInstructions }}
+
+## Operator Instructions (Highest Priority)
+
+The following instructions were provided by the operator for this phase. Treat them as the highest priority; where they conflict with any earlier guidance, follow these.
+
+{{ .ExtraInstructions }}
+{{- end }}
 {{- end -}}

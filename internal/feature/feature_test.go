@@ -232,6 +232,48 @@ func TestPhaseDirName(t *testing.T) {
 	}
 }
 
+func TestPhaseInstructionKeyRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, no shared state.
+	phases := []Phase{
+		PhaseKnowledgeBase,
+		PhaseInquire,
+		PhaseResearch,
+		PhaseDesign,
+		PhasePlan,
+		PhaseImplement,
+		PhaseReview,
+		PhaseFinalReview,
+		PhasePublish,
+	}
+	seen := make(map[string]Phase, len(phases))
+	for _, p := range phases {
+		key := p.InstructionKey()
+		if key == "" {
+			t.Errorf("Phase(%d).InstructionKey() is empty", p)
+			continue
+		}
+		if prev, dup := seen[key]; dup {
+			t.Errorf("InstructionKey %q collides between Phase(%d) and Phase(%d)", key, prev, p)
+		}
+		seen[key] = p
+		got, ok := PhaseFromInstructionKey(key)
+		if !ok || got != p {
+			t.Errorf("PhaseFromInstructionKey(%q) = (%d, %v), want (%d, true)", key, got, ok, p)
+		}
+	}
+
+	// Review and FinalReview must be distinct keys even though they share a
+	// DirName.
+	if PhaseReview.InstructionKey() == PhaseFinalReview.InstructionKey() {
+		t.Fatalf("review and final_review must have distinct instruction keys")
+	}
+
+	if _, ok := PhaseFromInstructionKey("nonsense"); ok {
+		t.Fatalf("PhaseFromInstructionKey(unknown) should return ok=false")
+	}
+}
+
 func TestStatusString(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.

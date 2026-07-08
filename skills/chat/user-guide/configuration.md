@@ -148,6 +148,33 @@ defaults:
 
 A markdown checklist included in implementation prompts as success criteria. Customize this to match your project's quality standards.
 
+## Phase Extra Instructions
+
+Append your own markdown to a specific phase's system prompt. Each entry maps a
+lifecycle phase to a markdown file whose contents are added as the final,
+highest-priority section of that phase's system prompt.
+
+```yaml
+defaults:
+  phase_extra_instructions:
+    research: ./prompts/research-extra.md
+    plan: ~/agentico/plan-extra.md
+    implement: /abs/path/implement-extra.md
+```
+
+Accepted phase keys: `knowledge_base`, `inquire`, `research`, `design`, `plan`,
+`implement`, `review`, `final_review`, `publish`.
+
+Notes:
+
+- Paths may be absolute, `~/`-prefixed, or relative to the config file's directory.
+- The file contents are placed at the end of the system prompt, where they get
+  the strongest attention, under an "Operator Instructions (Highest Priority)"
+  header.
+- A missing, unreadable, empty, or non-text/binary file (or an unknown phase
+  key) only logs a warning at startup and is skipped — Agentico continues
+  without it. Files must be valid UTF-8 text with no NUL bytes.
+
 ## Workspace Roots
 
 ```yaml

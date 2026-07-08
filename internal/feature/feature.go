@@ -149,6 +149,62 @@ func (p Phase) DirName() string {
 	}
 }
 
+// InstructionKey returns the stable, collision-free config key used to attach
+// per-phase extra instructions (config.Defaults.PhaseExtraInstructions).
+// Unlike DirName, PhaseReview and PhaseFinalReview map to distinct keys so an
+// operator can target the deferred end-of-feature review pass separately.
+func (p Phase) InstructionKey() string {
+	switch p {
+	case PhaseKnowledgeBase:
+		return "knowledge_base"
+	case PhaseInquire:
+		return "inquire"
+	case PhaseResearch:
+		return "research"
+	case PhaseDesign:
+		return "design"
+	case PhasePlan:
+		return "plan"
+	case PhaseImplement:
+		return "implement"
+	case PhaseReview:
+		return "review"
+	case PhaseFinalReview:
+		return "final_review"
+	case PhasePublish:
+		return "publish"
+	default:
+		return ""
+	}
+}
+
+// PhaseFromInstructionKey resolves a lifecycle phase from its InstructionKey.
+// The bool is false for unknown keys so callers can warn on typos.
+func PhaseFromInstructionKey(key string) (Phase, bool) {
+	switch key {
+	case "knowledge_base":
+		return PhaseKnowledgeBase, true
+	case "inquire":
+		return PhaseInquire, true
+	case "research":
+		return PhaseResearch, true
+	case "design":
+		return PhaseDesign, true
+	case "plan":
+		return PhasePlan, true
+	case "implement":
+		return PhaseImplement, true
+	case "review":
+		return PhaseReview, true
+	case "final_review":
+		return PhaseFinalReview, true
+	case "publish":
+		return PhasePublish, true
+	default:
+		return Phase(0), false
+	}
+}
+
 // RequiresGrilling reports whether a phase relies on the [grill-me] directive
 // — i.e. whether its prompt expects the agent to interview the user. Used by
 // session builders to override the user's Claude Code "auto" default mode,

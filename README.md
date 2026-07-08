@@ -265,6 +265,57 @@ Flags:
   --version, -v                    Show version
 ```
 
+`agentico` starts a local loopback REST runtime and connects the terminal UI
+through the API-backed client. `agentico server` starts the foreground loopback
+HTTP server for the selected runtime and uses the same launch flags. Harness
+integrations should use CLI JSON commands and shared skills for automation.
+
+### Web UI Development
+
+The browser UI under `web/` is a Vite/React client for the same `agentico server`
+REST and SSE contracts. It does not start a second Go runtime, does not use the
+legacy WebSocket protocol, and sends trusted browser mutations with
+`X-Agentico-Client: local`.
+
+Start the API server in one terminal:
+
+```bash
+agentico server --config /tmp/agentico-web/config.yaml --state-dir /tmp/agentico-web/features
+```
+
+Then start the Vite dev server in another:
+
+```bash
+pnpm --dir web install
+AGENTICO_SERVER_URL=http://127.0.0.1:7878 pnpm --dir web dev
+```
+
+The dev server proxies `/api/v1/*` and `/api/v1/events` to `agentico server`.
+Use `make web` to run the TypeScript and production build checks.
+
+### Local API Security Boundary
+
+Agentico does not use bearer-token authentication for the local REST server. The
+server binds only to loopback HTTP and trusts local processes that can reach
+that listener. Mutating REST requests must also send
+`X-Agentico-Client: local`, use JSON bodies within the configured size limit,
+and pass browser-origin checks.
+
+Browser-based callers are intentionally narrower than local processes: mutating
+REST requests accept loopback origins such as `http://localhost:<port>` or
+`http://127.0.0.1:<port>` and reject non-loopback origins by default, including
+preflight requests. Read and SSE endpoints do not grant permissive CORS access
+to arbitrary websites.
+
+Discovery metadata is treated as local trust material. Clients replace discovery
+records that are unreadable, unsafe for the current user, stale, non-loopback, or
+for a different runtime identity or launch policy.
+
+Action results, structured errors, DTOs, and shutdown events are metadata
+surfaces. They should expose feature IDs, repo names, status, and bounded
+summaries, not raw prompts, secret values, credentials, full private paths, or
+oversized error payloads.
+
 ### Updating
 
 ```text

@@ -1,0 +1,286 @@
+/*
+ * Design tokens. Lifted verbatim from nucleus/css/styles.css (:root and
+ * [data-theme="dark"]). Runtime accents flow through --accent and
+ * --accent-hover on the root element.
+ */
+
+:root {
+  --gopher-cyan: #00add8;
+  --gopher-cyan-light: #5dc9e2;
+  --gopher-cyan-dark: #007d9c;
+  --gopher-yellow: #fddd00;
+  --gopher-pink: #ce3262;
+
+  --sand-50: #fdfcfa;
+  --sand-100: #f5f3ef;
+  --sand-200: #e8e4dc;
+  --sand-300: #d4cfc4;
+  --sand-400: #a8a093;
+  --sand-500: #7a7267;
+  --sand-600: #5c554b;
+  --sand-700: #433d35;
+  --sand-800: #2a2520;
+  --sand-900: #1a1714;
+
+  /*
+   * Cool slate scale — used by dark mode for chrome and surfaces. Warm
+   * sand worked for light cream but muddied the amber + teal status
+   * palette on dark backgrounds, so dark mode reaches for slate instead.
+   */
+  --slate-50:  #F8FAFC;
+  --slate-100: #F1F5F9;
+  --slate-200: #E2E8F0;
+  --slate-300: #CBD5E1;
+  --slate-400: #94A3B8;
+  --slate-500: #64748B;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1E293B;
+  --slate-900: #0F172A;
+
+  /*
+   * Caption blue — used for tertiary text and small uppercase labels
+   * (id: …, phase: …, KPI labels). A soft-but-saturated blue reads
+   * more modern than mid-grey and stays distinct from the gopher-cyan
+   * accent so the two roles don't clash. Two stops: one for light
+   * mode, one for dark (overridden in [data-theme="dark"] below).
+   */
+  --caption: #2d78e3;
+
+  /*
+   * Light mode chrome reaches for cool slate + pure white rather than the
+   * warm sand scale. Sand worked for the original cream brief but made
+   * the dashboard feel beige; slate keeps the surfaces crisp and lets the
+   * resize-handle accent pop.
+   */
+  --bg-primary: #ffffff;
+  --bg-secondary: var(--slate-50);
+  --bg-tertiary: var(--slate-100);
+  --bg-code: var(--slate-800);
+  --text-primary: var(--slate-900);
+  --text-secondary: var(--slate-600);
+  --text-tertiary: var(--caption);
+  --text-inverse: var(--slate-50);
+  --border-color: var(--slate-200);
+
+  /* Resize handle — a hairline cool-slate gutter between resizable
+     panels. Sits quietly on the light chrome and lights up to the
+     accent on hover/drag. Dark mode keeps it transparent (overridden
+     below). */
+  --resize-handle-bg:        var(--slate-200);
+  --resize-handle-hover-bg:  var(--accent);
+
+  --accent: #8fdef1;
+  --accent-hover: #5eb8d9;
+  --accent-glow: rgba(143, 222, 241, 0.3);
+
+  /*
+   * Status palette — drives amber warning banners, teal success banners,
+   * and red/green delta chips on KPI cards. Scales mirror Tailwind's
+   * defaults so designers can reach for familiar shades.
+   */
+  --amber-50:  #FFFBEB;
+  --amber-100: #FEF3C7;
+  --amber-300: #FCD34D;
+  --amber-500: #F59E0B;
+  --amber-700: #B45309;
+  --amber-900: #78350F;
+
+  --teal-50:   #F0FDFA;
+  --teal-100:  #CCFBF1;
+  --teal-300:  #5EEAD4;
+  --teal-500:  #14B8A6;
+  --teal-700:  #0F766E;
+  --teal-900:  #134E4A;
+
+  --red-50:    #FEF2F2;
+  --red-100:   #FEE2E2;
+  --red-500:   #EF4444;
+  --red-600:   #DC2626;
+  --red-700:   #B91C1C;
+
+  --green-50:  #F0FDF4;
+  --green-100: #DCFCE7;
+  --green-500: #22C55E;
+  --green-600: #16A34A;
+  --green-700: #15803D;
+
+  /* Semantic — banners */
+  --banner-warning-bg:     var(--amber-50);
+  --banner-warning-border: var(--amber-500);
+  --banner-warning-icon:   var(--amber-500);
+  --banner-warning-title:  var(--amber-900);
+  --banner-warning-body:   var(--amber-700);
+
+  --banner-success-bg:     var(--teal-50);
+  --banner-success-border: var(--teal-500);
+  --banner-success-icon:   var(--teal-500);
+  --banner-success-title:  var(--teal-900);
+  --banner-success-body:   var(--teal-700);
+
+  /* Semantic — KPI deltas */
+  --delta-negative-bg:   var(--red-100);
+  --delta-negative-text: var(--red-700);
+  --delta-positive-bg:   var(--green-100);
+  --delta-positive-text: var(--green-700);
+
+  /* Semantic — KPI card surface */
+  --card-bg:     #ffffff;
+  --card-border: var(--slate-200);
+  --card-label:  var(--caption);
+  --card-value:  var(--slate-900);
+
+  /* Score colours — "Value Programme Score" and similar verdict cells */
+  --score-good:    var(--green-600);
+  --score-improve: var(--amber-500);
+  --score-poor:    var(--red-600);
+
+  /* Flat status tokens — kept for legacy callsites; back the same hues */
+  --status-success: var(--teal-700);
+  --status-warning: var(--amber-500);
+  --status-error:   var(--red-600);
+
+  /*
+   * Semantic chip palette — drives the colourful category pills that
+   * the observability-panel inspiration uses for `workflow`, `agent`,
+   * `tool`, `entry`, `parallel`, etc. Each family carries a tinted
+   * background, a soft border, and a darker text colour so the chip
+   * reads at a glance without becoming a solid slab.
+   */
+  --chip-teal-bg:     var(--teal-100);
+  --chip-teal-text:   var(--teal-700);
+  --chip-teal-border: rgba(20, 184, 166, 0.25);
+
+  --chip-blue-bg:     #DBEAFE;
+  --chip-blue-text:   #1D4ED8;
+  --chip-blue-border: rgba(59, 130, 246, 0.25);
+
+  --chip-purple-bg:     #EDE9FE;
+  --chip-purple-text:   #7C3AED;
+  --chip-purple-border: rgba(124, 58, 237, 0.30);
+
+  --chip-amber-bg:     var(--amber-100);
+  --chip-amber-text:   var(--amber-700);
+  --chip-amber-border: rgba(245, 158, 11, 0.30);
+
+  --chip-rose-bg:     #FFE4E6;
+  /* rose-700 — softer than crimson #BE123C so the chip carries the same
+     visual weight as green-on-mint (CodeReady). Avoids screaming "ERROR"
+     when the surrounding chips are pastel. */
+  --chip-rose-text:   #9F1239;
+  --chip-rose-border: rgba(244, 63, 94, 0.25);
+
+  --chip-green-bg:     var(--green-100);
+  --chip-green-text:   var(--green-700);
+  --chip-green-border: rgba(34, 197, 94, 0.25);
+
+  --chip-slate-bg:     var(--slate-100);
+  --chip-slate-text:   var(--slate-700);
+  --chip-slate-border: var(--slate-200);
+
+  /* Activity histogram — picks up the inspiration's saturated teal. */
+  --histogram-bar:        #14B8A6;
+  --histogram-bar-peak:   #0D9488;
+  --histogram-bar-quiet:  rgba(20, 184, 166, 0.15);
+
+  /* Duration bar — green progress track for row-level timings. */
+  --duration-track: var(--slate-100);
+  --duration-fill:  #34D399;
+
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  --space-3xl: 4rem;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 20px var(--accent-glow);
+
+  --transition-fast: 150ms ease;
+  --transition-base: 250ms ease;
+  --transition-slow: 400ms ease;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+}
+
+[data-theme="dark"] {
+  --bg-primary:   var(--slate-900);
+  --bg-secondary: var(--slate-800);
+  --bg-tertiary:  var(--slate-800);
+  --bg-code:      #0d1117;
+  --text-primary:   var(--slate-100);
+  --text-secondary: var(--slate-300);
+  --text-tertiary:  var(--caption);
+  --text-inverse:   var(--slate-900);
+  --border-color:   var(--slate-700);
+  --accent: #8fdef1;
+  --accent-hover: #5eb8d9;
+  --accent-glow: rgba(143, 222, 241, 0.3);
+
+  /* Dark caption — softer, less saturated so it doesn't punch through
+     the dark chrome but keeps the same role as the light blue. */
+  --caption: #7DA8E8;
+
+  /* Status surfaces are tinted-translucent on dark to avoid heavy slabs */
+  --banner-warning-bg:    rgba(245, 158, 11, 0.10);
+  --banner-warning-title: var(--amber-100);
+  --banner-warning-body:  var(--amber-300);
+
+  --banner-success-bg:    rgba(20, 184, 166, 0.10);
+  --banner-success-title: var(--teal-100);
+  --banner-success-body:  var(--teal-300);
+
+  --delta-negative-bg:   rgba(239, 68, 68, 0.18);
+  --delta-negative-text: #FCA5A5;
+  --delta-positive-bg:   rgba(34, 197, 94, 0.18);
+  --delta-positive-text: #86EFAC;
+
+  --card-bg:     var(--slate-800);
+  --card-border: var(--slate-700);
+  --card-label:  var(--caption);
+  --card-value:  var(--slate-100);
+
+  /* Dark mode keeps the gutter unobtrusive — hover reveals the accent. */
+  --resize-handle-bg:       transparent;
+  --resize-handle-hover-bg: var(--accent);
+
+  /* Translucent chip tints so they don't slab on the dark chrome. */
+  --chip-teal-bg:     rgba(20, 184, 166, 0.16);
+  --chip-teal-text:   #5EEAD4;
+  --chip-teal-border: rgba(20, 184, 166, 0.35);
+
+  --chip-blue-bg:     rgba(59, 130, 246, 0.18);
+  --chip-blue-text:   #93C5FD;
+  --chip-blue-border: rgba(59, 130, 246, 0.35);
+
+  --chip-purple-bg:     rgba(139, 92, 246, 0.18);
+  --chip-purple-text:   #C4B5FD;
+  --chip-purple-border: rgba(139, 92, 246, 0.35);
+
+  --chip-amber-bg:     rgba(245, 158, 11, 0.16);
+  --chip-amber-text:   var(--amber-300);
+  --chip-amber-border: rgba(245, 158, 11, 0.35);
+
+  --chip-rose-bg:     rgba(244, 63, 94, 0.18);
+  --chip-rose-text:   #FDA4AF;
+  --chip-rose-border: rgba(244, 63, 94, 0.35);
+
+  --chip-green-bg:     rgba(34, 197, 94, 0.16);
+  --chip-green-text:   #86EFAC;
+  --chip-green-border: rgba(34, 197, 94, 0.35);
+
+  --chip-slate-bg:     var(--slate-800);
+  --chip-slate-text:   var(--slate-200);
+  --chip-slate-border: var(--slate-700);
+
+  --duration-track: var(--slate-800);
+}
+

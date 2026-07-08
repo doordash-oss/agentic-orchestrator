@@ -1,0 +1,7 @@
+# pnpm 11+ moved the build-script allowlist into pnpm-workspace.yaml.
+# esbuild ships a platform-specific binary that needs to be fetched
+# at install time, so we whitelist its postinstall script.
+allowBuilds:
+  esbuild: true
+onlyBuiltDependencies:
+  - esbuild

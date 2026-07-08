@@ -25,13 +25,6 @@ Consult the relevant language guidelines and Knowledge Base before judging local
 
 At the Final gate, judge Craft over the whole assembled feature and cumulative cross-repo diff. Do not limit review to a single implementation iteration.
 
-## Sibling Boundaries
-
-- Functionality/Evidence owns per-phase behavior/evidence sufficiency and missing visual or behavioral evidence markers.
-- QA owns hands-on functional behavior at Final Review.
-- Cleanliness owns change-set hygiene, out-of-plan touches, stray artifacts, and pushability.
-- Do not duplicate sibling findings unless an issue is intrinsically a Craft issue.
-
 ## Non-Goals
 
 - Do not audit whether every verification item passed.

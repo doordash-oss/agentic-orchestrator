@@ -158,6 +158,7 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 		Provider:   sess.ProviderName(),
 		Model:      sess.Model(),
 		Status:     sess.Status().String(),
+		TurnState:  sessionTurnState(sess),
 		StartedAt:  sess.StartedAt(),
 		Iteration:  sess.Iteration(),
 		ContextPct: sess.ContextPercentage(),
@@ -166,6 +167,29 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 			OutputTokens: usage.OutputTokens,
 			CostUSD:      cost,
 		},
+	}
+}
+
+func sessionTurnState(sess ports.SessionView) string {
+	if sess == nil {
+		return ""
+	}
+	switch sess.Status() {
+	case ports.SessionRunning:
+		return "running"
+	case ports.SessionWaitingPermission:
+		return "waiting_permission"
+	case ports.SessionWaitingHelp:
+		if sessionHasPendingAskUserControl(sess) {
+			return "waiting_question"
+		}
+		return "waiting_input"
+	case ports.SessionDone:
+		return "completed"
+	case ports.SessionFailed:
+		return "failed"
+	default:
+		return ""
 	}
 }
 
@@ -216,12 +240,13 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 
 func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir string, locallyAppended bool, autoPicked bool, autoPickQuestion string, autoPickConfidence float64) []TranscriptMessageDTO {
 	var out []TranscriptMessageDTO
-	for _, block := range blocks {
+	for blockIndex, block := range blocks {
 		switch {
 		case block.IsText():
 			userLocal := role == "user" && locallyAppended
 			out = append(out, TranscriptMessageDTO{
 				Index:              index,
+				BlockIndex:         blockIndex,
 				Role:               role,
 				Type:               "text",
 				Text:               safeTranscriptText(block.Text, role, locallyAppended),
@@ -233,6 +258,7 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 		case block.IsToolUse():
 			out = append(out, TranscriptMessageDTO{
 				Index:      index,
+				BlockIndex: blockIndex,
 				Role:       role,
 				Type:       "tool_use",
 				Tool:       block.Name,
@@ -241,9 +267,9 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 				ToolCall:   toolCallDTOFromToolUse(block),
 			})
 		case block.IsToolResult():
-			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "tool_result", Redacted: true})
+			out = append(out, TranscriptMessageDTO{Index: index, BlockIndex: blockIndex, Role: role, Type: "tool_result", Redacted: true})
 		case block.IsThinking():
-			out = append(out, TranscriptMessageDTO{Index: index, Role: role, Type: "thinking", Redacted: true})
+			out = append(out, TranscriptMessageDTO{Index: index, BlockIndex: blockIndex, Role: role, Type: "thinking", Redacted: true})
 		}
 	}
 	if len(out) == 0 {

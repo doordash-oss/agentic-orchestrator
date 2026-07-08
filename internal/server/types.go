@@ -28,6 +28,9 @@ const APIVersion = "v1"
 
 const discoveryFilename = ".agentico-server.json"
 
+// ChatSessionID is the stable utility-session identity used by the AMA chat.
+const ChatSessionID = "__chat__"
+
 type RuntimeIdentity struct {
 	RuntimeDir string `json:"runtime_dir"`
 	StateDir   string `json:"state_dir"`
@@ -562,6 +565,7 @@ type SessionSummaryDTO struct {
 	Provider   string    `json:"provider,omitempty"`
 	Model      string    `json:"model,omitempty"`
 	Status     string    `json:"status"`
+	TurnState  string    `json:"turn_state,omitempty"`
 	StartedAt  time.Time `json:"started_at"`
 	Iteration  int       `json:"iteration,omitempty"`
 	ContextPct int       `json:"context_percentage,omitempty"`
@@ -599,6 +603,7 @@ type TranscriptResponse struct {
 
 type TranscriptMessageDTO struct {
 	Index              int            `json:"index"`
+	BlockIndex         int            `json:"block_index,omitempty"`
 	Role               string         `json:"role"`
 	Type               string         `json:"type"`
 	Text               string         `json:"text,omitempty"`

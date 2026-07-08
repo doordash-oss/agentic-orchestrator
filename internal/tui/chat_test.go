@@ -15,6 +15,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -22,6 +23,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -92,6 +94,13 @@ func TestChatModelViewDoesNotUseDarkTextareaCursorLine(t *testing.T) {
 	view := m.View()
 	if strings.Contains(view, "\x1b[40m") || strings.Contains(view, "\x1b[48;5;0m") {
 		t.Fatalf("chat view rendered Bubble textarea's dark cursor-line background: %q", view)
+	}
+}
+
+func TestChatModelViewFitsAllocatedEmptyPanelHeight(t *testing.T) {
+	m := NewChatModel(100, 8, nil, "/tmp", "test prompt", nil, "", "")
+	if got := lipgloss.Height(m.View()); got > m.height {
+		t.Fatalf("empty chat view height = %d, want <= allocated height %d", got, m.height)
 	}
 }
 
@@ -221,6 +230,41 @@ func TestChatMsgsMsgStreaming(t *testing.T) {
 	updated, _ = updated.Update(resultMsgs)
 	if updated.responding {
 		t.Error("expected responding to be false after result message")
+	}
+}
+
+func TestChatMsgsMsgAppendsNonPartialAssistantTextFragments(t *testing.T) {
+	m := NewChatModel(100, 24, nil, "/tmp", "test", nil, "", "")
+	m.responding = true
+
+	messages := []llm.SDKMessage{
+		{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+				Content: []llm.ContentBlock{{Type: "text", Text: "## Feature State\n\nStatus discrepancy: feature.yaml says CodeReady."}},
+			}},
+		},
+		{
+			Type: "assistant",
+			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+				Content: []llm.ContentBlock{{Type: "text", Text: "Run 001 (single run) is complete and published."}},
+			}},
+		},
+		{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}},
+	}
+
+	updated, _ := m.Update(chatMsgsMsg{messages: messages})
+	if updated.responding {
+		t.Fatal("chat remained responding after result")
+	}
+	if len(updated.turns) != 1 {
+		t.Fatalf("turn count = %d, want one assistant turn: %+v", len(updated.turns), updated.turns)
+	}
+	text := updated.turns[0].Text
+	for _, want := range []string{"Feature State", "Status discrepancy", "Run 001", "complete and published"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("assistant turn missing %q after fragment merge:\n%s", want, text)
+		}
 	}
 }
 
@@ -588,6 +632,19 @@ func TestChatModelShowsSpinnerInAgentTag(t *testing.T) {
 	}
 }
 
+func TestRenderAgentThinkingTagKeepsStableAgentLabel(t *testing.T) {
+	rendered := stripANSI(renderAgentThinkingTag("::", "Using Read..."))
+	if !strings.Contains(rendered, "[agent]") {
+		t.Fatalf("thinking tag missing stable [agent] label: %q", rendered)
+	}
+	if strings.Contains(rendered, "[:: agent]") {
+		t.Fatalf("thinking tag embedded spinner inside agent label: %q", rendered)
+	}
+	if !strings.Contains(rendered, "::") || !strings.Contains(rendered, "Using Read...") {
+		t.Fatalf("thinking tag missing spinner or status text: %q", rendered)
+	}
+}
+
 func TestChatModelActivatesQuestionPicker(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{{Question: "Pick one", Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
@@ -653,6 +710,78 @@ func TestChatModelRenderQuestionPickerShowsFreeformRow(t *testing.T) {
 	body, _ := m.renderQuestionPicker()
 	if !strings.Contains(body, "Type something.") {
 		t.Fatal(`expected renderQuestionPicker body to contain a "Type something." row`)
+	}
+}
+
+func TestChatModelQuestionPickerShowsWrappedOptions(t *testing.T) {
+	m := NewChatModel(72, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{
+			Question: "What would you like help with?",
+			Options: []askUserOption{
+				{Label: "Understand Agentic Orchestrator (Recommended)", Description: "Learn features, phases, and how the TUI works end-to-end."},
+				{Label: "Debug an issue", Description: "Trace errors, inspect feature state, and read logs to find root cause."},
+				{Label: "Explore the codebase", Description: "Search files and explain internal implementation details."},
+			},
+		},
+	}, "req-1", nil)
+
+	body, _ := m.renderQuestionPicker()
+	stripped := stripANSI(body)
+	if !strings.Contains(stripped, "Understand Agentic Orchestrator") {
+		t.Fatalf("expected wrapped first option to remain visible, got:\n%s", stripped)
+	}
+}
+
+func TestChatModelQuestionPickerKeepsChoiceVisibleWhenTypeRowSelected(t *testing.T) {
+	m := NewChatModel(72, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{
+			Question: "What would you like help with?",
+			Options: []askUserOption{
+				{Label: "Understand Agentic Orchestrator (Recommended)", Description: "Learn features, phases, architecture, session lifecycle, and how the terminal UI works end-to-end."},
+				{Label: "Debug an issue", Description: "Trace errors, inspect feature state, read logs, compare snapshots, and find the root cause."},
+				{Label: "Explore the codebase", Description: "Search files, explain internal implementation details, and map the relevant packages."},
+			},
+		},
+	}, "req-1", nil)
+
+	for i := 0; i < len(m.questions[0].Options); i++ {
+		updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		m = updated
+	}
+	if m.selectedOption != len(m.questions[0].Options) {
+		t.Fatalf("selectedOption = %d, want Type something row", m.selectedOption)
+	}
+
+	body, _ := m.renderQuestionPicker()
+	stripped := stripANSI(body)
+	if !strings.Contains(stripped, "Explore the codebase") {
+		t.Fatalf("expected at least one real choice to remain visible above Type something, got:\n%s", stripped)
+	}
+}
+
+func TestChatModelDoesNotDuplicateActiveAskUserQuestion(t *testing.T) {
+	input := json.RawMessage(`{"questions":[{"question":"What would you like help with?","options":[{"label":"Understand Agentic Orchestrator (Recommended)","description":"Learn features, phases, and how the TUI works end-to-end."},{"label":"Debug an issue","description":"Trace errors, inspect feature state, and read logs to find root cause."},{"label":"Explore the codebase","description":"Search files and explain internal implementation details."}]}]}`)
+	m := NewChatModel(100, 20, nil, "", "", nil, "", "")
+	m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: "yo?"})
+	m.responding = true
+
+	updated, _ := m.Update(chatMsgsMsg{messages: []llm.SDKMessage{{
+		Type: "control_request",
+		ControlRequest: &llm.ControlRequestMessage{
+			RequestID: "ask-1",
+			Request: llm.ControlRequest{
+				Subtype:  "can_use_tool",
+				ToolName: "AskUserQuestion",
+				Input:    input,
+			},
+		},
+	}}})
+
+	view := stripANSI(updated.View())
+	if count := strings.Count(view, "What would you like help with?"); count != 1 {
+		t.Fatalf("active AskUserQuestion prompt rendered %d times, want 1:\n%s", count, view)
 	}
 }
 
@@ -888,6 +1017,20 @@ func TestChatModelShiftEnterInsertsNewlineInMainInput(t *testing.T) {
 
 	if !strings.Contains(m.input.Value(), "\n") {
 		t.Errorf("expected newline in main chat input after shift+enter, got %q", m.input.Value())
+	}
+}
+
+func TestChatModelResizePreservesDynamicInputHeight(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.input.SetValue("line1\nline2\nline3\nline4")
+	m.syncChatInputHeight()
+	if got := m.input.Height(); got != 4 {
+		t.Fatalf("test setup invalid: input height = %d, want 4", got)
+	}
+
+	m = m.resize(80, 20)
+	if got := m.input.Height(); got != 4 {
+		t.Fatalf("resize reset multiline input height to %d, want 4", got)
 	}
 }
 

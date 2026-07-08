@@ -678,6 +678,11 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.attach != nil {
 		return m.updateAPIAttach(msg)
 	}
+	if m.chatOpen {
+		if _, ok := msg.(tea.PasteMsg); ok {
+			return m.updateAPIChat(msg)
+		}
+	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -2517,7 +2522,7 @@ func newAPIChatSession(client APIClient, sessionID string) *apiSessionView {
 		id:                    sessionID,
 		featureID:             chatSessionID,
 		phase:                 feature.PhaseResearch,
-		kind:                  ports.KindPhase,
+		kind:                  ports.KindChat,
 		label:                 "chat",
 		status:                ports.SessionRunning,
 		startedAt:             time.Now(),
@@ -2575,6 +2580,8 @@ func apiSessionKind(kind string) ports.SessionKind {
 		return ports.KindReviewHelper
 	case "tweak":
 		return ports.KindTweak
+	case "chat":
+		return ports.KindChat
 	default:
 		return ports.KindPhase
 	}
@@ -2829,7 +2836,7 @@ func apiTranscriptRowKey(row server.TranscriptMessageDTO) string {
 	if row.Task != nil {
 		taskKey = fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", row.Task.ID, row.Task.ToolUseID, row.Task.Description, row.Task.TaskType, row.Task.Prompt, row.Task.LastToolName, row.Task.Status, row.Task.Summary, row.Task.OutputFile)
 	}
-	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t\x00%t\x00%s\x00%.6f\x00%s\x00%s\x00%s", row.Index, row.Role, row.Type, row.Tool, row.Status, row.Redacted, row.LocallyAppended, row.AutoPicked, row.AutoPickQuestion, row.AutoPickConfidence, fileChangeKey, toolCallKey, taskKey)
+	return fmt.Sprintf("%d\x00%d\x00%s\x00%s\x00%s\x00%s\x00%t\x00%t\x00%t\x00%s\x00%.6f\x00%s\x00%s\x00%s", row.Index, row.BlockIndex, row.Role, row.Type, row.Tool, row.Status, row.Redacted, row.LocallyAppended, row.AutoPicked, row.AutoPickQuestion, row.AutoPickConfidence, fileChangeKey, toolCallKey, taskKey)
 }
 
 func apiTranscriptRowSignature(row server.TranscriptMessageDTO) string {
@@ -3011,52 +3018,24 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 			detail.PendingControls = controls
 		}
 	}
-	newMessages := active.applyAPISessionSnapshot(detail, transcript, controls)
-	if m.chat.responding {
-		if pendingAsk := firstPendingAskUserControlRequest(active); pendingAsk != nil && !apiMessagesContainControlRequest(newMessages, pendingAsk.RequestID) {
-			newMessages = append(newMessages, llm.SDKMessage{Type: "control_request", ControlRequest: pendingAsk})
-		}
-	}
-	if m.chat.responding && apiChatSnapshotWaitingForNextMessage(detail, newMessages) {
-		newMessages = append(newMessages, llm.SDKMessage{
-			Type: "result",
-			Result: &llm.ResultMessage{
-				Type:      "result",
-				Subtype:   "success",
-				SessionID: active.ID(),
-			},
-		})
-	}
-	if len(newMessages) == 0 {
+	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
+		Session:                active,
+		Detail:                 detail,
+		Transcript:             transcript,
+		Controls:               controls,
+		WasResponding:          m.chat.responding,
+		HasInProgressAgentText: m.chat.hasInProgressAgentText(),
+	})
+	if len(events) == 0 {
 		return m, nil
 	}
-	updated, cmd := m.chat.Update(chatMsgsMsg{messages: newMessages})
-	m.chat = updated
-	return m, cmd
-}
-
-func apiMessagesContainControlRequest(messages []llm.SDKMessage, requestID string) bool {
-	for _, msg := range messages {
-		if msg.ControlRequest == nil {
-			continue
-		}
-		if requestID == "" || msg.ControlRequest.RequestID == requestID {
-			return true
-		}
+	m.chat = m.chat.ApplyEvents(events)
+	if m.chat.fullscreen {
+		m.chat = m.chat.resize(m.width, m.height)
+	} else {
+		m.chat = m.chat.resize(m.width, m.chat.chatPanelHeight(m.height))
 	}
-	return false
-}
-
-func apiChatSnapshotWaitingForNextMessage(detail server.SessionDetailDTO, messages []llm.SDKMessage) bool {
-	if apiSessionStatus(detail.Status) != ports.SessionWaitingHelp || len(detail.PendingControls) > 0 {
-		return false
-	}
-	for _, msg := range messages {
-		if msg.Result != nil {
-			return false
-		}
-	}
-	return true
+	return m, nil
 }
 
 func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO, transcript *server.TranscriptResponse, controls []server.ControlRequestDTO) []llm.SDKMessage {

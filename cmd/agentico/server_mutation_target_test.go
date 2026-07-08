@@ -347,8 +347,8 @@ func TestServerMutationTargetStartChatStartsReadOnlyInteractiveUtilitySession(t 
 	if start.id != serverChatSessionID || start.featureID != serverChatSessionID || start.phase != feature.PhaseResearch || start.workdir != "/workspace" {
 		t.Fatalf("StartSession call = %+v, want chat utility identity and research session in workspace", start)
 	}
-	if start.opts == nil || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != "chat" || start.opts.InitialPrompt != build.Prompt {
-		t.Fatalf("StartSession opts = %+v, want interactive labeled chat with initial prompt", start.opts)
+	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != "chat" || start.opts.InitialPrompt != build.Prompt {
+		t.Fatalf("StartSession opts = %+v, want chat-kind interactive session with initial prompt", start.opts)
 	}
 	assertJSONDoesNotContain(t, result, "What is running?")
 }

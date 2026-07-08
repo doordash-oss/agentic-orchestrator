@@ -49,8 +49,10 @@ import (
 // over in-memory state:
 //   - activity_test.go
 //   - api_app_test.go
+//   - api_chat_adapter_test.go
 //   - attention_test.go
 //   - branding_test.go
+//   - chat_events_test.go
 //   - configeditor_test.go
 //   - cycle_dispatch_test.go
 //   - dashboard_test.go
@@ -99,9 +101,11 @@ var tuiParallelIneligibleTestFiles = []string{
 var tuiParallelCandidateTestFiles = []string{
 	"activity_test.go",
 	"api_app_test.go",
+	"api_chat_adapter_test.go",
 	"attention_test.go",
 	"auto_picked_tag_test.go",
 	"branding_test.go",
+	"chat_events_test.go",
 	"configeditor_test.go",
 	"dashboard_test.go",
 	"design_snapshot_test.go",

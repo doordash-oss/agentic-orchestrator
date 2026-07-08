@@ -1073,7 +1073,7 @@ func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (se
 	return serverruntime.HelpSendResponse{FeatureID: sess.FeatureID(), SessionID: sess.ID(), Result: "sent"}, nil
 }
 
-const serverChatSessionID = "__chat__"
+const serverChatSessionID = serverruntime.ChatSessionID
 
 func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (serverruntime.ChatStartResponse, error) {
 	message := strings.TrimSpace(req.Message)
@@ -1128,6 +1128,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		sessOpts = &ports.SessionOpts{}
 	}
 	sessOpts.InitialPrompt = prompt
+	sessOpts.Kind = ports.KindChat
 	sessOpts.TurnMode = ports.TurnModeInteractive
 	sessOpts.Label = "chat"
 	sessOpts.LogPath = filepath.Join(chatDir, "output.txt")

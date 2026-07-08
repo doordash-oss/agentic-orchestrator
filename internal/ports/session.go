@@ -79,6 +79,8 @@ const (
 	KindReviewHelper
 	// KindTweak is an interactive tweak/revise session spawned from the TUI.
 	KindTweak
+	// KindChat is the interactive AMA utility session.
+	KindChat
 )
 
 // SessionTurnMode controls how a session interprets provider Result messages.
@@ -107,6 +109,8 @@ func (k SessionKind) String() string {
 		return "review-helper"
 	case KindTweak:
 		return "tweak"
+	case KindChat:
+		return "chat"
 	default:
 		return "unknown"
 	}

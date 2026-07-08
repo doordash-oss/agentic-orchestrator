@@ -238,6 +238,36 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	}
 }
 
+func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
+	t.Parallel()
+
+	rows := transcriptDTOs([]llm.SDKMessage{{
+		Type: "assistant",
+		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: "assistant",
+			Content: []llm.ContentBlock{
+				{Type: "text", Text: "first section"},
+				{Type: "text", Text: "second section"},
+			},
+		}},
+	}}, 7)
+
+	if len(rows) != 2 {
+		t.Fatalf("transcriptDTOs returned %d rows, want 2: %+v", len(rows), rows)
+	}
+	for i, row := range rows {
+		if row.Index != 7 {
+			t.Fatalf("row[%d].Index = %d, want 7", i, row.Index)
+		}
+		if row.BlockIndex != i {
+			t.Fatalf("row[%d].BlockIndex = %d, want %d", i, row.BlockIndex, i)
+		}
+	}
+	if rows[0].Text != "first section" || rows[1].Text != "second section" {
+		t.Fatalf("transcript rows lost text order: %+v", rows)
+	}
+}
+
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -1131,6 +1161,62 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 	wantIDs := []string{"sess-completed", "sess-running", "sess-failed"}
 	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("session order = %v; want %v", gotIDs, wantIDs)
+	}
+}
+
+func TestSessionListExposesChatSessionKind(t *testing.T) {
+	t.Parallel()
+	store, _ := seedReadFeature(t)
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id:        ChatSessionID,
+			featureID: ChatSessionID,
+			phase:     feature.PhaseResearch,
+			kind:      ports.KindChat,
+			label:     "chat",
+			status:    ports.SessionWaitingHelp,
+		},
+		&fakeSessionView{
+			id:        "chat-ask",
+			featureID: ChatSessionID,
+			phase:     feature.PhaseResearch,
+			kind:      ports.KindChat,
+			label:     "chat",
+			status:    ports.SessionWaitingHelp,
+			pending: []*llm.ControlRequestMessage{{
+				RequestID: "ask-1",
+				Request:   llm.ControlRequest{ToolName: "AskUserQuestion"},
+			}},
+		},
+	}}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	body := getJSONMap(t, handler, "/api/v1/sessions")
+	rawSessions := body["sessions"].([]any)
+	if len(rawSessions) != 2 {
+		t.Fatalf("sessions length = %d; want both chat sessions", len(rawSessions))
+	}
+	byID := map[string]map[string]any{}
+	for _, raw := range rawSessions {
+		session := raw.(map[string]any)
+		byID[session["id"].(string)] = session
+	}
+	chat := byID[ChatSessionID]
+	if chat["id"] != ChatSessionID || chat["feature_id"] != ChatSessionID {
+		t.Fatalf("chat session identity = %+v; want stable chat identity", chat)
+	}
+	if chat["kind"] != "chat" || chat["label"] != "chat" {
+		t.Fatalf("chat session metadata = kind %v label %v; want chat/chat", chat["kind"], chat["label"])
+	}
+	if chat["turn_state"] != "waiting_input" {
+		t.Fatalf("chat turn_state = %v; want waiting_input", chat["turn_state"])
+	}
+	if got := byID["chat-ask"]["turn_state"]; got != "waiting_question" {
+		t.Fatalf("chat AskUser turn_state = %v; want waiting_question", got)
 	}
 }
 

@@ -1402,6 +1402,17 @@ func TestAPITranscriptRowToSDKMessagePreservesToolProgress(t *testing.T) {
 	}
 }
 
+func TestAPITranscriptRowKeyIncludesBlockIndex(t *testing.T) {
+	t.Parallel()
+
+	first := server.TranscriptMessageDTO{Index: 1, BlockIndex: 0, Role: "assistant", Type: "text", Text: "first section"}
+	second := server.TranscriptMessageDTO{Index: 1, BlockIndex: 1, Role: "assistant", Type: "text", Text: "second section"}
+
+	if apiTranscriptRowKey(first) == apiTranscriptRowKey(second) {
+		t.Fatalf("same-index transcript text rows produced identical keys: %q", apiTranscriptRowKey(first))
+	}
+}
+
 func TestAPITranscriptRowToSDKMessagePreservesAutoPickedUserEcho(t *testing.T) {
 	t.Parallel()
 
@@ -2885,6 +2896,57 @@ func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelChatToolProgressOnlyWaitingHelpShowsNoAnswer(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	chatting := model.(APIAppModel)
+	chatting.chat.input.SetValue("what is the status?")
+	model, cmd := chatting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter) returned nil command, want chat start command")
+	}
+	model, _ = model.(APIAppModel).Update(cmd())
+	started := model.(APIAppModel)
+
+	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{
+			SessionSummaryDTO: server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "WaitingHelp"},
+			TranscriptCursor:  server.CursorDTO{Total: 1, Start: 0, End: 1},
+		}},
+		Transcript: &server.TranscriptResponse{
+			Cursor: server.CursorDTO{Total: 1, Start: 0, End: 1},
+			Messages: []server.TranscriptMessageDTO{
+				{Index: 0, Role: "system", Type: "tool_progress", Tool: "Read", Redacted: true},
+			},
+		},
+	}})
+	waiting := model.(APIAppModel)
+
+	if waiting.chat.responding {
+		t.Fatal("chat remained responding after a tool-progress-only WaitingHelp snapshot")
+	}
+	view := stripANSI(waiting.View().Content)
+	if !strings.Contains(view, "No answer was returned") {
+		t.Fatalf("chat view did not surface missing assistant response:\n%s", view)
+	}
+	if strings.Contains(view, "Using Read...") {
+		t.Fatalf("chat kept stale live tool progress after the session became ready:\n%s", view)
+	}
+	if !strings.Contains(view, "[enter] Send") {
+		t.Fatalf("chat did not return to send mode after the session became ready:\n%s", view)
+	}
+}
+
 func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 	t.Parallel()
 
@@ -2935,10 +2997,8 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 	if waiting.chat.responding {
 		t.Fatal("chat remained responding after pending AskUserQuestion snapshot")
 	}
-	// With descriptions, each option takes 2 lines, so the small chat panel's
-	// option window shows only the first option plus a scroll indicator.
 	view := stripANSI(waiting.View().Content)
-	for _, want := range []string{"Pick a direction", "Alpha", "more below", "Enter to select"} {
+	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "Enter to select"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat view missing %q while waiting for AskUser answer:\n%s", want, view)
 		}
@@ -3060,11 +3120,30 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 	for _, turn := range answered.chat.turns {
 		occurrences += strings.Count(turn.Text, "Pick a direction")
 	}
-	if occurrences != 1 {
-		t.Fatalf("stale AskUser prompt was recorded %d times, want once: %+v", occurrences, answered.chat.turns)
+	if occurrences != 0 {
+		t.Fatalf("stale AskUser prompt was recorded in transcript %d times, want none while prompt is inactive: %+v", occurrences, answered.chat.turns)
+	}
+	if answered.chat.hasActiveQuestion() {
+		t.Fatalf("stale AskUser prompt reactivated after answer:\n%s", view)
 	}
 	if !answered.chat.responding {
 		t.Fatalf("chat stopped waiting for assistant after stale AskUser prompt:\n%s", view)
+	}
+}
+
+func TestAPIAppModelChatAcceptsTerminalPaste(t *testing.T) {
+	t.Parallel()
+
+	app := APIAppModel{width: 100, height: 30}
+	app.chatReady = true
+	app.chatOpen = true
+	app.chat = NewAPIChatModel(app.width, 10, nil)
+
+	model, _ := app.Update(tea.PasteMsg{Content: "line one\nline two"})
+	updated := model.(APIAppModel)
+
+	if got := updated.chat.input.Value(); got != "line one\nline two" {
+		t.Fatalf("chat input after paste = %q, want pasted text", got)
 	}
 }
 

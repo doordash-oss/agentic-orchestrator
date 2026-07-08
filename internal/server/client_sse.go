@@ -54,7 +54,7 @@ type RefreshSnapshot struct {
 }
 
 const refreshTranscriptLimit = 50
-const chatUtilityFeatureID = "__chat__"
+const chatUtilityFeatureID = ChatSessionID
 
 func isUtilityFeatureID(featureID string) bool {
 	return featureID == chatUtilityFeatureID

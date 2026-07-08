@@ -28,7 +28,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -74,7 +73,17 @@ type chatRecoveryTickMsg struct {
 // enough to stay out of the way of normal in-band delivery.
 const chatRecoveryInterval = 2 * time.Second
 
-const chatSessionID = "__chat__"
+const chatSessionID = server.ChatSessionID
+
+const (
+	chatInputMinLines          = 1
+	chatInputMaxLines          = 6
+	chatBorderHeight           = 2
+	chatFooterHeight           = 1
+	chatSectionSeparators      = 2
+	chatMinViewportHeight      = 1
+	chatQuestionMinOptionLines = 6
+)
 
 // chatThinkingStyle styles the thinking/progress status line.
 var chatThinkingStyle = lipgloss.NewStyle().
@@ -203,66 +212,6 @@ func NewAPIChatModel(width, height int, client APIClient) ChatModel {
 	return m
 }
 
-// chatPanelHeight returns the docked-mode panel height for the given total
-// terminal height. The floor is smaller when there's no conversation to
-// show yet; the ceiling (18 rows / 35% of height) is unchanged from before
-// this method existed as a free function of total height only.
-func (m ChatModel) chatPanelHeight(totalHeight int) int {
-	h := totalHeight * 35 / 100
-	floor := 10
-	ceiling := 18
-	if len(m.turns) == 0 && !m.responding {
-		floor = 5
-		ceiling = 8
-	}
-	if h < floor {
-		h = floor
-	}
-	if h > ceiling {
-		h = ceiling
-	}
-	return h
-}
-
-// resize recalculates layout dimensions for the bottom-panel layout.
-// h is the total height allocated to the chat panel (including border).
-func (m ChatModel) resize(w, h int) ChatModel {
-	m.width = w
-	m.height = h
-	// Content width: total - frame (4) - margin (2)
-	contentWidth := max(w-6, 40)
-	inputHeight := 3
-	footerHeight := 1
-	borderHeight := 2
-	separators := 2 // newlines between viewport, input, and footer
-	vpHeight := max(h-inputHeight-footerHeight-borderHeight-separators, 3)
-
-	m.viewport.SetWidth(contentWidth)
-	m.viewport.SetHeight(vpHeight)
-	m.input.SetWidth(contentWidth)
-	m.input.SetHeight(inputHeight)
-	return m
-}
-
-// rebuildViewport sets the viewport content from the turn list + thinking indicator.
-func (m *ChatModel) rebuildViewport() {
-	width := m.viewport.Width()
-	var b strings.Builder
-	for _, t := range m.turns {
-		b.WriteString(renderChatTurn(t, width))
-		b.WriteString("\n\n")
-	}
-	if m.responding {
-		line := m.thinkingLine
-		if line == "" {
-			line = "Thinking..."
-		}
-		b.WriteString(renderAgentThinkingTag(m.spinnerView, line))
-	}
-	m.viewport.SetContent(wrapForViewport(strings.TrimRight(b.String(), "\n"), width))
-	m.viewport.GotoBottom()
-}
-
 // renderChatTurn renders a single turn with its role tag, deferring to
 // renderMarkdown for agent text so code blocks/lists/emphasis render
 // correctly. Tag styling (colors, the animated agent tag) is added in
@@ -283,17 +232,15 @@ func renderChatTurn(t chatTurn, width int) string {
 	}
 }
 
-// renderAgentThinkingTag renders the "[agent]" tag with the current spinner
-// frame in place of the static glyph, plus the muted tool-use/thinking
-// snippet beside it — the signature element that makes the tag itself the
-// turn's live status indicator instead of a separate "Thinking..." line.
+// renderAgentThinkingTag renders the stable "[agent]" tag with the current
+// spinner frame beside it, plus the muted tool-use/thinking snippet.
 func renderAgentThinkingTag(spinnerFrame, thinkingLine string) string {
-	frame := spinnerFrame
+	frame := strings.TrimSpace(spinnerFrame)
 	if frame == "" {
 		frame = "·"
 	}
-	tag := chatAgentTagStyle.Render("[" + frame + " agent]")
-	return tag + "  " + chatThinkingStyle.Render(thinkingLine)
+	tag := chatAgentTagStyle.Render("[agent]")
+	return tag + "  " + frame + " " + chatThinkingStyle.Render(thinkingLine)
 }
 
 // setInProgressAgentText updates (or starts) the trailing in-progress agent
@@ -302,10 +249,34 @@ func renderAgentThinkingTag(spinnerFrame, thinkingLine string) string {
 // last write before finalizeInProgressTurn commits it.
 func (m *ChatModel) setInProgressAgentText(text string, partial bool) {
 	if n := len(m.turns); n > 0 && m.turns[n-1].Role == chatTurnAgent && m.turns[n-1].InProgress {
-		m.turns[n-1].Text = text
+		if partial {
+			m.turns[n-1].Text = text
+		} else {
+			m.turns[n-1].Text = mergeAssistantText(m.turns[n-1].Text, text)
+		}
 		return
 	}
 	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: text, InProgress: true})
+}
+
+func mergeAssistantText(existing, next string) string {
+	if strings.TrimSpace(existing) == "" {
+		return next
+	}
+	if strings.TrimSpace(next) == "" {
+		return existing
+	}
+	if strings.Contains(next, existing) {
+		return next
+	}
+	if strings.Contains(existing, next) {
+		return existing
+	}
+	separator := "\n\n"
+	if strings.HasSuffix(existing, "\n") || strings.HasPrefix(next, "\n") {
+		separator = ""
+	}
+	return existing + separator + next
 }
 
 // finalizeInProgressTurn marks the trailing in-progress agent turn (if any)
@@ -314,6 +285,11 @@ func (m *ChatModel) finalizeInProgressTurn() {
 	if n := len(m.turns); n > 0 && m.turns[n-1].Role == chatTurnAgent && m.turns[n-1].InProgress {
 		m.turns[n-1].InProgress = false
 	}
+}
+
+func (m ChatModel) hasInProgressAgentText() bool {
+	n := len(m.turns)
+	return n > 0 && m.turns[n-1].Role == chatTurnAgent && m.turns[n-1].InProgress && strings.TrimSpace(m.turns[n-1].Text) != ""
 }
 
 // discardInProgressTurn removes the trailing in-progress agent turn (if
@@ -354,303 +330,6 @@ func (m *ChatModel) syncAutoPickedTurns() {
 			m.autoPickedSeen[key] = struct{}{}
 			m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: block.Text, AutoPicked: true, Confidence: msg.AutoPickConfidence})
 		}
-	}
-}
-
-// hasActiveQuestion reports whether the picker is showing a question or the
-// recap slot (mirrors AttachModel.hasActiveQuestion).
-func (m ChatModel) hasActiveQuestion() bool {
-	return len(m.questions) > 0 && m.currentQuestionIdx <= len(m.questions)
-}
-
-// onRecapSlot reports whether the picker is on the "Review & Submit" slot
-// one past the final question (mirrors AttachModel.onRecapSlot).
-func (m ChatModel) onRecapSlot() bool {
-	return len(m.questions) > 0 && m.currentQuestionIdx == len(m.questions)
-}
-
-// onQuestionSlot reports whether the picker is showing a real question,
-// not the recap slot (mirrors AttachModel.onQuestionSlot).
-func (m ChatModel) onQuestionSlot() bool {
-	return len(m.questions) > 0 && m.currentQuestionIdx < len(m.questions)
-}
-
-// activateQuestions starts a fresh multi-question AskUserQuestion bundle.
-// AMA does not queue a second bundle that arrives mid-answer (see Scope
-// Notes) — if one arrives while hasActiveQuestion() is true, the caller
-// should simply not call activateQuestions again until the current bundle
-// is submitted.
-func (m *ChatModel) activateQuestions(questions []askUserQuestion, requestID string, raw json.RawMessage) {
-	if len(questions) == 0 {
-		return
-	}
-	m.questions = questions
-	m.questionStates = make([]questionUIState, len(questions))
-	m.questionStates[0].askedEmitted = true
-	m.pendingAskRequestID = requestID
-	m.pendingAskRaw = raw
-	m.collectedAnswers = make(map[string]string)
-	m.currentQuestionIdx = 0
-	m.selectedOption = 0
-	m.selectedMulti = nil
-	m.questionScrollOffset = 0
-	m.typingCustom = questionUsesDirectFreeform(questions[0])
-	m.input.Reset()
-	m.syncChatInputHeight()
-}
-
-// toggleSelectedMulti flips the ticked state of the focused option on a
-// multi-select question (mirrors the " "/"space" case in AttachModel.Update).
-func (m *ChatModel) toggleSelectedMulti() {
-	if !m.onQuestionSlot() {
-		return
-	}
-	q := m.questions[m.currentQuestionIdx]
-	if !q.MultiSelect || m.selectedOption >= len(q.Options) {
-		return
-	}
-	if m.selectedMulti == nil {
-		m.selectedMulti = make(map[int]bool)
-	}
-	if m.selectedMulti[m.selectedOption] {
-		delete(m.selectedMulti, m.selectedOption)
-	} else {
-		m.selectedMulti[m.selectedOption] = true
-	}
-}
-
-// commitAnswer records the answer for the currently focused question,
-// mirroring AttachModel.commitCurrentAnswer (minus the observability emit,
-// which chat.go does not have).
-func (m *ChatModel) commitAnswer(answer string) {
-	if !m.onQuestionSlot() || m.collectedAnswers == nil {
-		return
-	}
-	idx := m.currentQuestionIdx
-	q := m.questions[idx]
-	m.collectedAnswers[q.Question] = answer
-	if idx < len(m.questionStates) {
-		st := &m.questionStates[idx]
-		st.scrollOffset = m.questionScrollOffset
-		if m.typingCustom {
-			st.typingCustom = true
-			st.customText = answer
-			st.selectedOption = len(q.Options)
-			st.selectedMulti = nil
-		} else {
-			st.typingCustom = false
-			st.customText = ""
-			st.selectedOption = m.selectedOption
-			if q.MultiSelect {
-				if len(m.selectedMulti) == 0 {
-					st.selectedMulti = map[int]bool{m.selectedOption: true}
-				} else {
-					st.selectedMulti = cloneIntBoolMap(m.selectedMulti)
-				}
-			} else {
-				st.selectedMulti = nil
-			}
-		}
-	}
-}
-
-// restoreQuestionState primes the live UI state for the question at idx
-// (mirrors AttachModel.restoreQuestion).
-func (m *ChatModel) restoreQuestionState(idx int) {
-	if idx < 0 || idx >= len(m.questions) {
-		return
-	}
-	q := m.questions[idx]
-	m.input.Reset()
-	st := m.questionStates[idx]
-	if questionUsesDirectFreeform(q) {
-		m.selectedOption = 0
-		m.selectedMulti = nil
-		m.questionScrollOffset = 0
-		m.typingCustom = true
-		if st.askedEmitted {
-			m.input.SetValue(st.customText)
-		}
-		return
-	}
-	if st.askedEmitted {
-		m.selectedOption = st.selectedOption
-		m.selectedMulti = cloneIntBoolMap(st.selectedMulti)
-		m.questionScrollOffset = st.scrollOffset
-	} else {
-		m.selectedOption = 0
-		m.selectedMulti = nil
-		m.questionScrollOffset = 0
-	}
-	m.typingCustom = false
-}
-
-// advanceQuestionOpts moves currentQuestionIdx by delta, snapshotting the
-// current question first when snapshot is true (mirrors
-// AttachModel.advanceQuestionOpts — pass snapshot=false when the caller,
-// e.g. commitAnswer, has already written authoritative state).
-func (m *ChatModel) advanceQuestionOpts(delta int, snapshot bool) bool {
-	if len(m.questions) == 0 {
-		return false
-	}
-	newIdx := m.currentQuestionIdx + delta
-	maxIdx := len(m.questions)
-	if newIdx < 0 || newIdx > maxIdx || newIdx == m.currentQuestionIdx {
-		return false
-	}
-	if snapshot && m.onQuestionSlot() && m.currentQuestionIdx < len(m.questionStates) {
-		st := &m.questionStates[m.currentQuestionIdx]
-		st.selectedOption = m.selectedOption
-		st.selectedMulti = cloneIntBoolMap(m.selectedMulti)
-		st.scrollOffset = m.questionScrollOffset
-		st.typingCustom = m.typingCustom
-		if m.typingCustom {
-			st.customText = m.input.Value()
-		}
-	}
-	m.currentQuestionIdx = newIdx
-	if newIdx == maxIdx {
-		m.selectedOption = 0
-		m.selectedMulti = nil
-		m.questionScrollOffset = 0
-		m.typingCustom = false
-		m.input.Reset()
-		m.syncChatInputHeight()
-		return true
-	}
-	m.restoreQuestionState(newIdx)
-	if newIdx < len(m.questionStates) {
-		m.questionStates[newIdx].askedEmitted = true
-	}
-	m.syncChatInputHeight()
-	return true
-}
-
-// updateChatQuestionScrollOffset adjusts questionScrollOffset so that
-// selectedOption stays visible within the windowed option list (mirrors
-// AttachModel.updateQuestionScrollOffset), using the same optionArea/
-// contentWidth derivation as renderQuestionPicker.
-func (m *ChatModel) updateChatQuestionScrollOffset() {
-	if len(m.questions) == 0 || m.currentQuestionIdx >= len(m.questions) {
-		return
-	}
-	q := m.questions[m.currentQuestionIdx]
-	totalOptions := len(q.Options)
-
-	// "Type something" (index == totalOptions) is always visible below the
-	// separator; no scroll adjustment needed for it.
-	if m.selectedOption >= totalOptions {
-		return
-	}
-
-	contentWidth := max(m.width-6, 40)
-	totalLines := 0
-	for i, o := range q.Options {
-		totalLines += questionOptionLineCount(o, i, contentWidth)
-	}
-	optionArea := max(len(q.Options), 3)
-
-	if totalLines <= optionArea {
-		m.questionScrollOffset = 0
-		return
-	}
-
-	// If selected is above the window, scroll up.
-	if m.selectedOption < m.questionScrollOffset {
-		m.questionScrollOffset = m.selectedOption
-		return
-	}
-
-	// Already visible from current offset.
-	_, end, _, _ := questionVisibleWindowPure(q.Options, m.selectedOption, m.questionScrollOffset, optionArea, contentWidth)
-	if m.selectedOption < end {
-		return
-	}
-
-	// Scroll down: find minimum offset so selectedOption is the last visible
-	// option, working backwards from selectedOption until the budget runs out.
-	budget := optionArea - 1 // reserve for "above" indicator
-	if m.selectedOption < totalOptions-1 {
-		budget-- // reserve for "below" indicator
-	}
-	usedLines := 0
-	newOffset := m.selectedOption
-	for i := m.selectedOption; i >= 0; i-- {
-		ol := questionOptionLineCount(q.Options[i], i, contentWidth)
-		if usedLines+ol > budget {
-			newOffset = i + 1
-			break
-		}
-		usedLines += ol
-		newOffset = i
-	}
-	m.questionScrollOffset = newOffset
-}
-
-// submitAllQuestionAnswers dispatches the collected answers via the same
-// RespondToAskUser protocol chat.go already uses for a single pending
-// question, clears picker state, and echoes each answer as a user turn.
-func (m *ChatModel) submitAllQuestionAnswers() tea.Cmd {
-	requestID := m.pendingAskRequestID
-	raw := m.pendingAskRaw
-	answers := m.collectedAnswers
-	sess := m.sess
-
-	for _, q := range m.questions {
-		if a, ok := answers[q.Question]; ok && a != "" {
-			m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: a})
-		}
-	}
-
-	if requestID != "" {
-		if m.answeredAskRequestIDs == nil {
-			m.answeredAskRequestIDs = make(map[string]struct{})
-		}
-		m.answeredAskRequestIDs[requestID] = struct{}{}
-		// Clear session state synchronously (mirrors AttachModel.submitAllAnswers)
-		// so re-attaching before the async control_response write completes
-		// does not re-show the question via LastControlRequest.
-		if sess != nil {
-			sess.ClearPendingQuestion(requestID)
-		}
-	}
-
-	m.questions = nil
-	m.questionStates = nil
-	m.currentQuestionIdx = 0
-	m.selectedOption = 0
-	m.selectedMulti = nil
-	m.questionScrollOffset = 0
-	m.typingCustom = false
-	m.collectedAnswers = nil
-	m.pendingAskRequestID = ""
-	m.pendingAskRaw = nil
-	m.responding = true
-	m.rebuildViewport()
-
-	if sess == nil || requestID == "" {
-		return nil
-	}
-	sendCmd := func() tea.Msg {
-		if err := sess.RespondToAskUser(requestID, raw, answers, nil); err != nil {
-			return chatSendErrorMsg{err: err}
-		}
-		return nil
-	}
-	if !m.pollSession {
-		return sendCmd
-	}
-	m.turnCostBaseline = sess.Cost()
-	return tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
-}
-
-// syncChatInputHeight recalculates the chat input's height from its content,
-// delegating the arithmetic to the shared helper from Task 1.
-func (m *ChatModel) syncChatInputHeight() {
-	h := syncTextareaHeight(m.input.Value(), 1, 6)
-	if h != m.inputHeight {
-		m.inputHeight = h
-		m.input.SetHeight(h)
 	}
 }
 
@@ -942,7 +621,6 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				questions := parseAskUserQuestions(sdkMsg.ControlRequest.Request.Input)
 				if len(questions) > 0 && !m.hasActiveQuestion() && !askUserQuestionsAlreadyAutoPicked(m.sess, questions) {
 					m.finalizeInProgressTurn()
-					m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: questions[0].Question})
 					m.activateQuestions(questions, sdkMsg.ControlRequest.RequestID, sdkMsg.ControlRequest.Request.Input)
 					m.responding = false
 					m.thinkingLine = ""
@@ -1061,6 +739,8 @@ func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 		if err != nil {
 			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}
 		}
+		sessOpts.Kind = ports.KindChat
+		sessOpts.Label = "chat"
 		sessOpts.InitialPrompt = prompt
 		sess, err := m.sessionMgr.StartSession(chatSessionID, "", feature.PhaseResearch, cmd, m.workDir, env, sessOpts)
 		if err != nil {
@@ -1145,112 +825,6 @@ func pollChatChCmd(sess session.SessionView) tea.Cmd {
 			}
 		}
 	}
-}
-
-func (m ChatModel) View() string {
-	vpContent := m.viewport.View()
-	if len(m.turns) == 0 && !m.responding {
-		vpContent = lipgloss.NewStyle().
-			Foreground(colorSurface).
-			Height(m.viewport.Height()).
-			Render("Ask anything about Agentic Orchestrator... press Enter to send, Esc to close.")
-	}
-
-	var bottom, footer string
-	switch {
-	case m.hasActiveQuestion():
-		bottom, footer = m.renderQuestionPicker()
-	case m.responding:
-		bottom = m.input.View()
-		footer = KeyHelpStyle.Render("[esc] Background   [ctrl+c] Cancel   [ctrl+g] Full screen")
-	default:
-		bottom = m.input.View()
-		footer = KeyHelpStyle.Render("[enter] Send · [shift+enter] Newline · [esc] Close · [ctrl+g] Full screen")
-	}
-
-	inner := vpContent + "\n" + bottom + "\n" + footer
-
-	box := panelStyle(true).
-		Width(m.width).
-		Height(m.height).
-		Render(inner)
-	box = renderBorderTitle(box, "Ask me Anything", lipgloss.NewStyle().Foreground(colorBrand))
-
-	return box
-}
-
-// renderQuestionPicker renders the active AskUserQuestion bundle inline —
-// the option list (or recap) plus its contextual footer hint — using the
-// shared layout math and rendering from question_picker.go.
-func (m ChatModel) renderQuestionPicker() (body, footer string) {
-	contentWidth := max(m.width-6, 40)
-	if m.onRecapSlot() {
-		var b strings.Builder
-		b.WriteString(lipgloss.NewStyle().Bold(true).Render("Review & Submit"))
-		b.WriteString("\n\n")
-		for _, q := range m.questions {
-			if a, ok := m.collectedAnswers[q.Question]; ok {
-				b.WriteString(fmt.Sprintf("  %s → %s\n", q.Question, a))
-			}
-		}
-		return b.String(), KeyHelpStyle.Render("[enter] Submit · [←] back · [esc] close")
-	}
-	q := m.questions[m.currentQuestionIdx]
-	if questionUsesDirectFreeform(q) || m.typingCustom {
-		body := lipgloss.NewStyle().Bold(true).Render(questionPromptText(q.Question, contentWidth)) + "\n\n" + m.input.View()
-		return body, KeyHelpStyle.Render("[enter] Send · [shift+enter] Newline · [esc] Back")
-	}
-	optionArea := max(len(q.Options), 3)
-	start, end, needAbove, needBelow := questionVisibleWindowPure(q.Options, m.selectedOption, m.questionScrollOffset, optionArea, contentWidth)
-	typeIdx := len(q.Options)
-	var typeRow string
-	if m.selectedOption == typeIdx {
-		typeRow = lipgloss.NewStyle().Foreground(colorBrand).Bold(true).Render(fmt.Sprintf("> %d. Type something.", typeIdx+1))
-	} else {
-		typeRow = lipgloss.NewStyle().Render(fmt.Sprintf("  %d. Type something.", typeIdx+1))
-	}
-	topBlock := lipgloss.NewStyle().Bold(true).Render(questionPromptText(q.Question, contentWidth)) + "\n\n" +
-		renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow) +
-		typeRow
-
-	// Join the focused option's preview side-by-side when Claude supplied
-	// one and it fits — same width guard as attach.go's renderQuestion, so
-	// a narrow terminal collapses to options-only instead of overflowing.
-	if m.selectedOption < len(q.Options) {
-		if preview := q.Options[m.selectedOption].Preview; preview != "" {
-			previewW := 0
-			for _, line := range strings.Split(preview, "\n") {
-				if w := lipgloss.Width(line); w > previewW {
-					previewW = w
-				}
-			}
-			leftNaturalW := 0
-			for _, line := range strings.Split(topBlock, "\n") {
-				if w := lipgloss.Width(line); w > leftNaturalW {
-					leftNaturalW = w
-				}
-			}
-			const gap = 2
-			if leftNaturalW+gap+previewW <= contentWidth {
-				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, topBlock, strings.Repeat(" ", gap), preview)
-			}
-		}
-	}
-
-	canBack := m.currentQuestionIdx > 0
-	_, canForward := m.collectedAnswers[q.Question]
-	footerText := renderQuestionFooterHint(q, m.currentQuestionIdx, len(m.questions), canBack, canForward, questionPromptIsTruncated(q.Question, contentWidth), "")
-	return topBlock, footerText
-}
-
-// wrapForViewport applies ANSI-aware word-wrapping so long lines don't
-// overflow the viewport horizontally. Uses ansi.Wrap (not Wordwrap) so
-// words longer than width are hard-wrapped instead of overflowing.
-func wrapForViewport(content string, width int) string {
-	if width <= 0 {
-		return content
-	}
-	return ansi.Wrap(content, width, "")
 }
 
 // isChatSession returns true for chat session IDs.

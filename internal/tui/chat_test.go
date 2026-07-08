@@ -867,3 +867,42 @@ func TestChatPanelHeightEmptyVsNonEmpty(t *testing.T) {
 		t.Errorf("responding chatPanelHeight(100) = %d, want exactly 18 (unchanged ceiling)", h)
 	}
 }
+
+// TestChatModelShiftEnterInsertsNewlineInMainInput verifies that Shift+Enter
+// inserts a literal newline into the main chat input when no question is
+// active — matching attach.go's established convention and the footer hint
+// chat.go itself renders ("[shift+enter] Newline"). Before this fix,
+// shiftEnterKey was only wired inside the question-picker's freeform-answer
+// branch; the main input had no handler for it at all, so the footer's
+// promise was never honored outside an active question.
+func TestChatModelShiftEnterInsertsNewlineInMainInput(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+
+	for _, ch := range "line1" {
+		m, _ = m.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
+	}
+	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	for _, ch := range "line2" {
+		m, _ = m.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
+	}
+
+	if !strings.Contains(m.input.Value(), "\n") {
+		t.Errorf("expected newline in main chat input after shift+enter, got %q", m.input.Value())
+	}
+}
+
+// TestChatModelFooterMentionsFullscreenToggle verifies the idle and
+// responding footers both advertise ctrl+g, since the key works in both
+// states (only the active-question picker's own footer, covered elsewhere,
+// intentionally swallows it while a question owns the keyboard).
+func TestChatModelFooterMentionsFullscreenToggle(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	if idle := m.View(); !strings.Contains(idle, "ctrl+g") {
+		t.Errorf("idle footer missing ctrl+g hint:\n%s", idle)
+	}
+
+	m.responding = true
+	if responding := m.View(); !strings.Contains(responding, "ctrl+g") {
+		t.Errorf("responding footer missing ctrl+g hint:\n%s", responding)
+	}
+}

@@ -784,6 +784,14 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.fullscreen = !m.fullscreen
 			return m, nil
 
+		case "shift+enter":
+			m.inputHeight = growTextareaHeight(m.inputHeight, 6)
+			m.input.SetHeight(m.inputHeight)
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+			m.syncChatInputHeight()
+			return m, cmd
+
 		case "esc":
 			if m.fullscreen {
 				m.fullscreen = false
@@ -1154,10 +1162,10 @@ func (m ChatModel) View() string {
 		bottom, footer = m.renderQuestionPicker()
 	case m.responding:
 		bottom = m.input.View()
-		footer = KeyHelpStyle.Render("[esc] Background   [ctrl+c] Cancel")
+		footer = KeyHelpStyle.Render("[esc] Background   [ctrl+c] Cancel   [ctrl+g] Full screen")
 	default:
 		bottom = m.input.View()
-		footer = KeyHelpStyle.Render("[enter] Send · [shift+enter] Newline · [esc] Close")
+		footer = KeyHelpStyle.Render("[enter] Send · [shift+enter] Newline · [esc] Close · [ctrl+g] Full screen")
 	}
 
 	inner := vpContent + "\n" + bottom + "\n" + footer

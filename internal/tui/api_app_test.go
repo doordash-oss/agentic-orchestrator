@@ -8057,3 +8057,45 @@ func TestAPIAppModelFullscreenChatSkipsDashboard(t *testing.T) {
 		t.Errorf("expected the chat panel itself still to render while fullscreen, got:\n%s", fullscreen)
 	}
 }
+
+// TestAPIAppModelChatResizesAsConversationGrowsWithoutWindowResize verifies
+// that the docked chat panel's rendered height stays in sync with
+// chatPanelHeight as turns are added, even when no tea.WindowSizeMsg ever
+// arrives. Before this fix, ChatModel.height/width were only recomputed on
+// initial open, a real window resize, or the fullscreen toggle — so as a
+// conversation grew during a live session, the panel kept rendering at
+// whatever height it had when last opened while the dashboard's own layout
+// math (which calls chatPanelHeight fresh every render) reserved a
+// different amount of space, producing a visible mismatch (overflow or a
+// large gap of empty space) until the user closed and reopened the chat.
+func TestAPIAppModelChatResizesAsConversationGrowsWithoutWindowResize(t *testing.T) {
+	t.Parallel()
+
+	app := APIAppModel{width: 100, height: 100}
+	app.chatReady = true
+	app.chat = NewAPIChatModel(app.width, 8, nil) // matches the empty-state ceiling at height=100
+	app.chatOpen = true
+
+	if got := app.chat.height; got != 8 {
+		t.Fatalf("test setup invalid: chat.height = %d, want 8 (empty-state ceiling)", got)
+	}
+
+	// Simulate a turn having been added without any resize having happened
+	// yet (e.g. a streamed response arriving via chatMsgsMsg/refresh-snapshot
+	// handling) — chatPanelHeight should now report the non-empty range.
+	app.chat.turns = []chatTurn{{Role: chatTurnUser, Text: "hello"}}
+	wantHeight := app.chat.chatPanelHeight(app.height)
+	if wantHeight != 18 {
+		t.Fatalf("test setup invalid: chatPanelHeight = %d, want 18 (non-empty ceiling at height=100)", wantHeight)
+	}
+
+	updatedModel, _ := app.updateAPIChat(chatRecoveryTickMsg{})
+	updated, ok := updatedModel.(APIAppModel)
+	if !ok {
+		t.Fatalf("updateAPIChat returned %T, want APIAppModel", updatedModel)
+	}
+
+	if updated.chat.height != wantHeight {
+		t.Fatalf("chat.height = %d after updateAPIChat, want %d (chatPanelHeight resynced to reflect the new turn without a window resize)", updated.chat.height, wantHeight)
+	}
+}

@@ -1396,15 +1396,19 @@ func (m APIAppModel) updateAPIChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chat.fullscreen = false
 		return m, nil
 	}
-	wasFullscreen := m.chat.fullscreen
 	updated, cmd := m.chat.Update(msg)
 	m.chat = updated
-	if m.chat.fullscreen != wasFullscreen {
-		if m.chat.fullscreen {
-			m.chat = m.chat.resize(m.width, m.height)
-		} else {
-			m.chat = m.chat.resize(m.width, m.chat.chatPanelHeight(m.height))
-		}
+	// Re-sync docked/fullscreen dimensions after every message, not just on
+	// a fullscreen flip — chatPanelHeight depends on turns/responding, which
+	// change on ordinary messages (a streamed reply, a new turn) with no
+	// tea.WindowSizeMsg involved. Without this, the panel's rendered height
+	// stays stuck at whatever it was when last resized while the dashboard's
+	// own layout math (which calls chatPanelHeight fresh every render)
+	// drifts out of sync with it.
+	if m.chat.fullscreen {
+		m.chat = m.chat.resize(m.width, m.height)
+	} else {
+		m.chat = m.chat.resize(m.width, m.chat.chatPanelHeight(m.height))
 	}
 	return m, cmd
 }

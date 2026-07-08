@@ -37,6 +37,7 @@ type UtilityRunConfig struct {
 	RepoName    string
 	Timeout     time.Duration
 	Phase       feature.Phase
+	EffortLevel llm.EffortLevel
 	PermHandler ports.PermissionHandler
 	RequireText bool
 }
@@ -72,6 +73,10 @@ func (pr *PhaseRunner) RunUtilitySession(ctx context.Context, cfg UtilityRunConf
 			return nil, fmt.Errorf("running utility session: determining work dir: %w", err)
 		}
 	}
+	effort := cfg.EffortLevel
+	if effort == "" {
+		effort = llm.EffortLow
+	}
 
 	result, err := pr.RunBoundedHelper(ctx, BoundedHelperConfig{
 		SessionID:     cfg.SessionID,
@@ -82,6 +87,7 @@ func (pr *PhaseRunner) RunUtilitySession(ctx context.Context, cfg UtilityRunConf
 		WorkDir:       workDir,
 		RepoName:      cfg.RepoName,
 		Timeout:       cfg.Timeout,
+		EffortLevel:   effort,
 		PermHandler:   cfg.PermHandler,
 		RequireOutput: cfg.RequireText,
 	})

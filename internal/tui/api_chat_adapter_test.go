@@ -15,6 +15,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
@@ -113,11 +114,42 @@ func TestAPIChatEventsFromSnapshotPendingAskUserSuppressesCompletion(t *testing.
 	}
 }
 
+func TestAPIChatAnswerEchoSuppressesLocalTranscriptEcho(t *testing.T) {
+	t.Parallel()
+
+	active := newTestAPIChatSession()
+	active.client = &fakeTUIAPIClient{}
+	raw := json.RawMessage(`{"questions":[{"question":"Pick a direction"}]}`)
+	if err := active.RespondToAskUser("ask-1", raw, map[string]string{"Pick a direction": "nothing"}, nil); err != nil {
+		t.Fatalf("RespondToAskUser() error = %v", err)
+	}
+	if !apiHasLocalUserEcho(active.log, "nothing") {
+		t.Fatal("api chat session log missing local answer echo")
+	}
+
+	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
+		Session: active,
+		Detail: server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
+			ID:        chatSessionID,
+			FeatureID: chatSessionID,
+			Status:    "Running",
+		}},
+		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+			{Index: 1, Role: "user", Type: "text", Text: "nothing", LocallyAppended: true},
+		}},
+	})
+
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want local transcript echo suppressed", events)
+	}
+}
+
 func newTestAPIChatSession() *apiSessionView {
 	return &apiSessionView{
-		id:        chatSessionID,
-		featureID: chatSessionID,
-		log:       session.NewMessageLog(),
+		id:                    chatSessionID,
+		featureID:             chatSessionID,
+		log:                   session.NewMessageLog(),
+		lastTranscriptMessage: -1,
 	}
 }
 

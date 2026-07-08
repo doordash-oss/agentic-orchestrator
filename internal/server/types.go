@@ -361,6 +361,27 @@ type RuntimeConfigResponse struct {
 	Providers       []string              `json:"providers"`
 }
 
+type WorkspaceBrowseQuery struct {
+	Path       string `json:"path,omitempty"`
+	ShowHidden bool   `json:"show_hidden,omitempty"`
+}
+
+type WorkspaceBrowseResponse struct {
+	APIVersion     string                    `json:"api_version"`
+	Meta           ResponseMeta              `json:"meta"`
+	Path           string                    `json:"path"`
+	IsGitRepo      bool                      `json:"is_git_repo"`
+	ChildRepoCount int                       `json:"child_repo_count"`
+	Entries        []WorkspaceBrowseEntryDTO `json:"entries"`
+}
+
+type WorkspaceBrowseEntryDTO struct {
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	IsGitRepo      bool   `json:"is_git_repo"`
+	ChildRepoCount int    `json:"child_repo_count,omitempty"`
+}
+
 type ConfigRepoDTO struct {
 	Name          string                        `json:"name"`
 	Path          string                        `json:"path,omitempty"`

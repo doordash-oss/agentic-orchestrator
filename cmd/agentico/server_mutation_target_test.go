@@ -332,6 +332,9 @@ func TestServerMutationTargetStartChatStartsReadOnlyInteractiveUtilitySession(t 
 	if build.Model != "cheap-chat" || build.WorkDir != "/workspace" || build.Phase != utilskill.PhaseAll || build.TurnMode != ports.TurnModeInteractive {
 		t.Fatalf("BuildSession opts = %+v, want utility interactive chat in workspace", build)
 	}
+	if build.EffortLevel != llm.EffortLow {
+		t.Fatalf("BuildSession EffortLevel = %q, want low for AMA utility chat", build.EffortLevel)
+	}
 	for _, tool := range []string{"Edit", "Write", "NotebookEdit", "Bash"} {
 		if !slices.Contains(build.DisallowedTools, tool) {
 			t.Fatalf("BuildSession DisallowedTools = %v, missing %s", build.DisallowedTools, tool)

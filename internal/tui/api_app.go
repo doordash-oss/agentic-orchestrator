@@ -1010,6 +1010,9 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.workspaceManager != nil {
 			return m.updateAPIWorkspaceManager(msg)
 		}
+		if m.welcome != nil {
+			return m.updateAPIWelcome(msg)
+		}
 		if m.refactorPrompt != nil {
 			return m.handleAPIRefactorPromptMsg(msg)
 		}
@@ -2306,7 +2309,7 @@ func (s *apiSessionView) RespondToControl(requestID string, allow bool, _ string
 	})
 	return err
 }
-func (s *apiSessionView) RespondToAskUser(requestID string, _ json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
+func (s *apiSessionView) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
 	if s.client == nil {
 		return errors.New("api session client is not available")
 	}
@@ -2315,8 +2318,57 @@ func (s *apiSessionView) RespondToAskUser(requestID string, _ json.RawMessage, a
 		SessionID: s.id,
 		Answers:   answers,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	s.appendLocalAskUserAnswerEchoes(questions, answers)
+	return nil
 }
+
+func (s *apiSessionView) appendLocalAskUserAnswerEchoes(questions json.RawMessage, answers map[string]string) {
+	if s.log == nil || len(answers) == 0 {
+		return
+	}
+	for _, question := range apiAskUserAnswerKeysInPresentedOrder(questions, answers) {
+		answer := answers[question]
+		if strings.TrimSpace(answer) == "" || apiHasLocalUserEcho(s.log, answer) {
+			continue
+		}
+		s.log.Append(llm.SDKMessage{
+			Type:            "user",
+			LocallyAppended: true,
+			User: &llm.UserMessage{
+				Message: llm.ConversationMsg{
+					Role:    "user",
+					Content: []llm.ContentBlock{{Type: "text", Text: answer}},
+				},
+			},
+		})
+	}
+}
+
+func apiAskUserAnswerKeysInPresentedOrder(questions json.RawMessage, answers map[string]string) []string {
+	seen := map[string]bool{}
+	var keys []string
+	for _, q := range parseAskUserQuestions(questions) {
+		if q.Question == "" || seen[q.Question] {
+			continue
+		}
+		if _, ok := answers[q.Question]; ok {
+			keys = append(keys, q.Question)
+			seen[q.Question] = true
+		}
+	}
+	var remaining []string
+	for key := range answers {
+		if !seen[key] {
+			remaining = append(remaining, key)
+		}
+	}
+	sort.Strings(remaining)
+	return append(keys, remaining...)
+}
+
 func (s *apiSessionView) ClearPendingQuestion(requestID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

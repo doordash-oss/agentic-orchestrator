@@ -1873,6 +1873,7 @@ func TestBuildSession_Claude_EffortLevel(t *testing.T) {
 		effortLevel llm.EffortLevel
 		wantFlag    string // expected --effort value in command
 	}{
+		{"low effort", llm.EffortLow, "low"},
 		{"medium effort", llm.EffortMedium, "medium"},
 		{"high effort", llm.EffortHigh, "high"},
 		{"max effort maps to xhigh", llm.EffortMax, "xhigh"},

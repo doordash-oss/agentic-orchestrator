@@ -954,6 +954,57 @@ func TestAPIAppModelShowsWelcomeWhenWorkspaceRootsEmpty(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelWelcomeRoutesDirPickerScanMessages(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "repo", ".git"), 0o755); err != nil {
+		t.Fatalf("create repo fixture: %v", err)
+	}
+	client := &fakeTUIAPIClient{
+		features:                    server.FeatureListResponse{},
+		runtime:                     server.RuntimeConfigResponse{},
+		allowEmptyWorkspaceRoots:    true,
+		updateRuntimeConfigAccepted: apiTestActionResponse{},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter welcome) returned nil command, want picker init scans")
+	}
+	app = model.(APIAppModel)
+	if app.welcome == nil || app.welcome.step != welcomeStepPicker {
+		t.Fatalf("welcome = %+v, want picker step", app.welcome)
+	}
+	app.welcome.picker.setCurrentDir(root)
+
+	model, _ = app.Update(gitRepoScanMsg{
+		dir:           root,
+		count:         1,
+		repoDirs:      map[string]bool{"repo": true},
+		dirRepoCounts: map[string]int{},
+	})
+	app = model.(APIAppModel)
+	if got := app.welcome.picker.gitRepoCount; got != 1 {
+		t.Fatalf("welcome picker gitRepoCount = %d, want 1", got)
+	}
+
+	model, cmd = app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Update(enter selected repo) returned nil command, want runtime config mutation")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	app = model.(APIAppModel)
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].WorkspaceRoots == nil || len(*got[0].WorkspaceRoots) != 1 || (*got[0].WorkspaceRoots)[0] != filepath.Join(root, "repo") {
+		t.Fatalf("UpdateRuntimeConfig requests = %+v, want selected repo root", got)
+	}
+}
+
 func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 	t.Parallel()
 
@@ -3120,8 +3171,17 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 	for _, turn := range answered.chat.turns {
 		occurrences += strings.Count(turn.Text, "Pick a direction")
 	}
-	if occurrences != 0 {
-		t.Fatalf("stale AskUser prompt was recorded in transcript %d times, want none while prompt is inactive: %+v", occurrences, answered.chat.turns)
+	if occurrences != 1 {
+		t.Fatalf("AskUser prompt history count = %d, want exactly one inactive history entry: %+v", occurrences, answered.chat.turns)
+	}
+	answerOccurrences := 0
+	for _, turn := range answered.chat.turns {
+		if turn.Role == chatTurnUser {
+			answerOccurrences += strings.Count(turn.Text, "Gamma")
+		}
+	}
+	if answerOccurrences != 1 {
+		t.Fatalf("AskUser answer history count = %d, want exactly one: %+v", answerOccurrences, answered.chat.turns)
 	}
 	if answered.chat.hasActiveQuestion() {
 		t.Fatalf("stale AskUser prompt reactivated after answer:\n%s", view)

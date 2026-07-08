@@ -262,11 +262,13 @@ type ProtocolOpts struct {
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider
-// maps to its own CLI-specific naming. The pipeline profile determines the
-// effort level: Medium → Medium, Large → High, Moonshot → Max.
+// maps to its own CLI-specific naming. Utility sessions can request Low
+// directly; pipeline profiles determine phase effort as Medium → Medium,
+// Large → High, Moonshot → Max.
 type EffortLevel string
 
 const (
+	EffortLow    EffortLevel = "low"
 	EffortMedium EffortLevel = "medium"
 	EffortHigh   EffortLevel = "high"
 	EffortMax    EffortLevel = "max"

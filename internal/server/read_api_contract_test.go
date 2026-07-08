@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -602,6 +603,42 @@ func TestRuntimeConfigUsesDiscoveredPathForBlankExplicitRepo(t *testing.T) {
 		}
 	}
 	t.Fatalf("runtime config repos = %+v, want bpfagent", repos)
+}
+
+func TestWorkspaceBrowseProjectsRepoMetadata(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "repo", ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "group", "nested", ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir nested repo: %v", err)
+	}
+	handler := NewHandler(HandlerOptions{})
+
+	body := getJSONMap(t, handler, "/api/v1/workspace/browse?path="+url.QueryEscape(root))
+	if body["api_version"] != APIVersion {
+		t.Fatalf("api_version = %v, want %s", body["api_version"], APIVersion)
+	}
+	if body["path"] != root {
+		t.Fatalf("path = %v, want %s", body["path"], root)
+	}
+	if body["child_repo_count"] != float64(1) {
+		t.Fatalf("child_repo_count = %v, want 1", body["child_repo_count"])
+	}
+	entries := body["entries"].([]any)
+	byName := make(map[string]map[string]any, len(entries))
+	for _, raw := range entries {
+		entry := raw.(map[string]any)
+		byName[entry["name"].(string)] = entry
+	}
+	if got := byName["repo"]; got["path"] != filepath.Join(root, "repo") || got["is_git_repo"] != true {
+		t.Fatalf("repo entry = %+v, want git repo path", got)
+	}
+	if got := byName["group"]; got["is_git_repo"] == true || got["child_repo_count"] != float64(1) {
+		t.Fatalf("group entry = %+v, want nested child repo count", got)
+	}
 }
 
 func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
@@ -1337,6 +1374,42 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 	autoPicked := messages[2].(map[string]any)
 	if autoPicked["text"] != "Redis (Recommended)" || autoPicked["locally_appended"] != true || autoPicked["auto_picked"] != true || autoPicked["auto_pick_confidence"] != 0.72 || autoPicked["auto_pick_question"] != "Which cache?" {
 		t.Fatalf("auto-picked user row = %+v, want visible auto-picked metadata", autoPicked)
+	}
+}
+
+func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
+	t.Parallel()
+	store, f := seedReadFeature(t)
+	longAnswer := "The chat answer must stay complete for the AMA transcript.\n\n" +
+		strings.Repeat("This sentence is part of the answer body and must remain visible. ", 12) +
+		"tail marker"
+	sessions := fakeSessionManager{
+		views: []ports.SessionView{&fakeSessionView{
+			id: "sess-chat-long-answer", featureID: f.ID, phase: feature.PhaseResearch,
+			kind: ports.KindChat, status: ports.SessionRunning,
+			messages: []llm.SDKMessage{{
+				Type: "assistant",
+				Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+					Role:    "assistant",
+					Content: []llm.ContentBlock{{Type: "text", Text: longAnswer}},
+				}},
+			}},
+		}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features: store,
+		Sessions: sessions,
+	})
+
+	body := getJSONMap(t, handler, "/api/v1/sessions/sess-chat-long-answer/transcript")
+	messages := body["messages"].([]any)
+	if len(messages) != 1 {
+		t.Fatalf("messages length = %d, want assistant row", len(messages))
+	}
+	row := messages[0].(map[string]any)
+	if row["text"] != longAnswer {
+		t.Fatalf("assistant transcript text was truncated:\ngot  %q\nwant %q", row["text"], longAnswer)
 	}
 }
 

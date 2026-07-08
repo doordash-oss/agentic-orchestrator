@@ -338,6 +338,10 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+g" {
+			m.fullscreen = !m.fullscreen
+			return m, nil
+		}
 		if m.onRecapSlot() {
 			switch msg.String() {
 			case "enter":
@@ -459,10 +463,6 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 		}
 		switch msg.String() {
-		case "ctrl+g":
-			m.fullscreen = !m.fullscreen
-			return m, nil
-
 		case "shift+enter":
 			m.inputHeight = growTextareaHeight(m.inputHeight, 6)
 			m.input.SetHeight(m.inputHeight)
@@ -735,6 +735,7 @@ func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 			PermHandler:     &session.ReadOnlyHandler{},
 			Phase:           utilskill.PhaseAll, // chat gets all utility skills for answering user questions
 			TurnMode:        ports.TurnModeInteractive,
+			EffortLevel:     llm.EffortLow,
 		})
 		if err != nil {
 			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}

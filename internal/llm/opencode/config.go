@@ -385,6 +385,8 @@ func reasoningEffortFor(backend string, level llm.EffortLevel) (string, bool) {
 		return "", false
 	}
 	switch level {
+	case llm.EffortLow:
+		return "low", true
 	case llm.EffortMedium:
 		return "medium", true
 	case llm.EffortHigh:

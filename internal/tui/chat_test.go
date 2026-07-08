@@ -401,6 +401,9 @@ func TestChatStartSessionUsesCallback(t *testing.T) {
 	if capturedOpts.TurnMode != ports.TurnModeInteractive {
 		t.Errorf("expected interactive turn mode, got %v", capturedOpts.TurnMode)
 	}
+	if capturedOpts.EffortLevel != llm.EffortLow {
+		t.Errorf("expected low effort for chat, got %q", capturedOpts.EffortLevel)
+	}
 	// Check disallowed tools
 	expectedDisallowed := []string{"Edit", "Write", "NotebookEdit", "Bash"}
 	if !reflect.DeepEqual(capturedOpts.DisallowedTools, expectedDisallowed) {
@@ -682,6 +685,30 @@ func TestChatModelQuestionNavAndSubmit(t *testing.T) {
 	}
 }
 
+func TestChatModelSubmitQuestionAnswersAddsPromptAndAnswerToHistory(t *testing.T) {
+	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{
+		{Question: "Pick a direction", Options: []askUserOption{{Label: "Alpha"}, {Label: "Beta"}}},
+	}, "req-1", nil)
+	m.selectedOption = 1
+	m.commitAnswer("Beta")
+	m.advanceQuestionOpts(1, false)
+
+	if cmd := m.submitAllQuestionAnswers(); cmd != nil {
+		t.Fatalf("submitAllQuestionAnswers() command = %T, want nil without session", cmd())
+	}
+
+	if m.hasActiveQuestion() {
+		t.Fatal("question remained active after submit")
+	}
+	if got := chatTurnTextCount(m.turns, chatTurnAgent, "Pick a direction"); got != 1 {
+		t.Fatalf("agent question history count = %d, want 1: %+v", got, m.turns)
+	}
+	if got := chatTurnTextCount(m.turns, chatTurnUser, "Beta"); got != 1 {
+		t.Fatalf("user answer history count = %d, want 1: %+v", got, m.turns)
+	}
+}
+
 func TestChatModelMultiSelectToggle(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{
@@ -696,6 +723,16 @@ func TestChatModelMultiSelectToggle(t *testing.T) {
 	if m.selectedMulti[1] {
 		t.Fatal("expected option 1 to be unticked after toggling twice")
 	}
+}
+
+func chatTurnTextCount(turns []chatTurn, role chatTurnRole, text string) int {
+	count := 0
+	for _, turn := range turns {
+		if turn.Role == role && strings.Contains(turn.Text, text) {
+			count++
+		}
+	}
+	return count
 }
 
 // TestChatModelRenderQuestionPickerShowsFreeformRow covers Finding 1: the
@@ -969,6 +1006,57 @@ func TestChatModelFullscreenToggleAndEscHierarchy(t *testing.T) {
 	}
 	if _, isExit := cmd().(ChatExitMsg); !isExit {
 		t.Fatal("expected esc on docked+empty input to emit ChatExitMsg")
+	}
+}
+
+func TestChatModelFullscreenToggleWorksWhileQuestionActive(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(ChatModel) ChatModel
+	}{
+		{
+			name: "option picker",
+			setup: func(m ChatModel) ChatModel {
+				m.activateQuestions([]askUserQuestion{{Question: "Pick one", Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
+				return m
+			},
+		},
+		{
+			name: "recap",
+			setup: func(m ChatModel) ChatModel {
+				m.activateQuestions([]askUserQuestion{{Question: "Pick one", Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
+				m.commitAnswer("A")
+				m.advanceQuestionOpts(1, false)
+				return m
+			},
+		},
+		{
+			name: "custom text",
+			setup: func(m ChatModel) ChatModel {
+				m.activateQuestions([]askUserQuestion{{Question: "Describe it"}}, "req-1", nil)
+				return m
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.setup(NewChatModel(80, 20, nil, "", "", nil, "", ""))
+			if !m.hasActiveQuestion() {
+				t.Fatal("setup: expected active question")
+			}
+
+			updated, cmd := m.Update(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+			if cmd != nil {
+				t.Fatalf("ctrl+g returned command %T while question was active", cmd())
+			}
+			if !updated.fullscreen {
+				t.Fatal("expected ctrl+g to enable fullscreen while question was active")
+			}
+			if !updated.hasActiveQuestion() {
+				t.Fatal("fullscreen toggle cleared the active question")
+			}
+		})
 	}
 }
 

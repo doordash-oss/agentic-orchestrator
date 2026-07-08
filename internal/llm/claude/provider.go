@@ -344,6 +344,8 @@ func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 // Claude CLI accepts: low, medium, high, xhigh, max.
 func MapEffortLevel(level llm.EffortLevel) string {
 	switch level {
+	case llm.EffortLow:
+		return "low"
 	case llm.EffortMedium:
 		return "medium"
 	case llm.EffortHigh:

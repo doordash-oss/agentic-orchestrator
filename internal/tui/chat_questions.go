@@ -259,6 +259,9 @@ func (m *ChatModel) submitAllQuestionAnswers() tea.Cmd {
 
 	for _, q := range m.questions {
 		if a, ok := answers[q.Question]; ok && a != "" {
+			if question := chatQuestionHistoryText(q); question != "" {
+				m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: question})
+			}
 			m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: a})
 		}
 	}
@@ -300,6 +303,13 @@ func (m *ChatModel) submitAllQuestionAnswers() tea.Cmd {
 	}
 	m.turnCostBaseline = sess.Cost()
 	return tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
+}
+
+func chatQuestionHistoryText(q askUserQuestion) string {
+	if text := strings.TrimSpace(q.Question); text != "" {
+		return text
+	}
+	return strings.TrimSpace(q.Header)
 }
 
 // renderQuestionPicker renders the active AskUserQuestion bundle inline.

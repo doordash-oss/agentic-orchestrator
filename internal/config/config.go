@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 	"gopkg.in/yaml.v3"
 )
 
@@ -255,8 +256,7 @@ func DiscoverRepos(cfg *Config, baseDir string) int {
 			continue
 		}
 		repoPath := filepath.Join(baseDir, entry.Name())
-		gitDir := filepath.Join(repoPath, ".git")
-		if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
+		if workspace.IsGitRepo(repoPath) {
 			// Check if already in config
 			if _, exists := cfg.Repos[entry.Name()]; !exists {
 				cfg.Repos[entry.Name()] = RepoConfig{Path: repoPath}
@@ -366,172 +366,17 @@ func DiscoverReposFromRoots(cfg *Config) int {
 		return 0
 	}
 
-	// Collect explicit repo names that already have a path into a skip-set.
-	// Repos with an empty path are NOT skipped so that discovery can fill it in.
-	explicitNames := make(map[string]bool, len(cfg.Repos))
+	explicitRepoPaths := make(map[string]string, len(cfg.Repos))
 	for name, rc := range cfg.Repos {
-		if rc.Path != "" {
-			explicitNames[name] = true
-		}
+		explicitRepoPaths[name] = rc.Path
 	}
 
-	// Deduplicate roots by resolved path before scanning.
-	type repoTuple struct {
-		rootResolved string
-		rootBasename string
-		repoName     string
-		repoPath     string
-	}
-
-	seenRoots := make(map[string]bool)
-	var tuples []repoTuple
-
-	for _, root := range cfg.WorkspaceRoots {
-		expanded := ExpandHome(root)
-		resolved, err := filepath.Abs(expanded)
-		if err != nil {
-			resolved = expanded
-		}
-		if seenRoots[resolved] {
-			continue
-		}
-		seenRoots[resolved] = true
-
-		// Check if the workspace root itself is a git repo.
-		rootGitDir := filepath.Join(expanded, ".git")
-		if info, err := os.Stat(rootGitDir); err == nil && info.IsDir() {
-			repoName := filepath.Base(resolved)
-			if !explicitNames[repoName] {
-				tuples = append(tuples, repoTuple{
-					rootResolved: filepath.Dir(resolved),
-					rootBasename: filepath.Base(filepath.Dir(resolved)),
-					repoName:     repoName,
-					repoPath:     expanded,
-				})
-			}
-			continue
-		}
-
-		entries, err := os.ReadDir(expanded)
-		if err != nil {
-			continue
-		}
-		rootBase := filepath.Base(resolved)
-		for _, entry := range entries {
-			if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-				continue
-			}
-			repoPath := filepath.Join(expanded, entry.Name())
-			gitDir := filepath.Join(repoPath, ".git")
-			if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
-				repoName := entry.Name()
-				if explicitNames[repoName] {
-					continue
-				}
-				tuples = append(tuples, repoTuple{
-					rootResolved: resolved,
-					rootBasename: rootBase,
-					repoName:     repoName,
-					repoPath:     repoPath,
-				})
-			}
-		}
-	}
-
-	// Detect collisions: group by repoName, tracking distinct root paths per name.
-	nameRoots := make(map[string]map[string]bool) // repoName -> set of rootResolved
-	for _, t := range tuples {
-		if nameRoots[t.repoName] == nil {
-			nameRoots[t.repoName] = make(map[string]bool)
-		}
-		nameRoots[t.repoName][t.rootResolved] = true
-	}
-
-	// For colliding repo names, check if the root basenames are also identical.
-	// If so, we need a more specific qualifier than just rootBasename.
-	basenameCounts := make(map[string]map[string]bool) // repoName -> set of rootBasename
-	for _, t := range tuples {
-		if len(nameRoots[t.repoName]) <= 1 {
-			continue
-		}
-		if basenameCounts[t.repoName] == nil {
-			basenameCounts[t.repoName] = make(map[string]bool)
-		}
-		basenameCounts[t.repoName][t.rootBasename] = true
-	}
-
-	// Second pass: compute keys and populate DiscoveredRepos.
-	for _, t := range tuples {
-		key := t.repoName
-		if len(nameRoots[t.repoName]) > 1 {
-			// Collision — need to qualify. Use rootBasename if unique, else
-			// use progressively more parent path components.
-			if len(basenameCounts[t.repoName]) == len(nameRoots[t.repoName]) {
-				// All root basenames are distinct — rootBasename is sufficient.
-				key = t.rootBasename + "/" + t.repoName
-			} else {
-				// Some root basenames collide — use enough path components to disambiguate.
-				key = uniqueRootPrefix(t.rootResolved, nameRoots[t.repoName]) + "/" + t.repoName
-			}
-		}
-		cfg.DiscoveredRepos[key] = RepoConfig{Path: t.repoPath}
+	repos := workspace.DiscoverReposFromRoots(cfg.WorkspaceRoots, explicitRepoPaths)
+	for _, repo := range repos {
+		cfg.DiscoveredRepos[repo.Name] = RepoConfig{Path: repo.Path}
 	}
 
 	return len(cfg.DiscoveredRepos)
-}
-
-// uniqueRootPrefix returns the shortest trailing path components of rootPath
-// that distinguish it from all other roots in the set.
-func uniqueRootPrefix(rootPath string, allRoots map[string]bool) string {
-	// Split rootPath into components.
-	parts := strings.Split(filepath.ToSlash(rootPath), "/")
-	// Remove empty leading component from absolute paths.
-	var cleaned []string
-	for _, p := range parts {
-		if p != "" {
-			cleaned = append(cleaned, p)
-		}
-	}
-	if len(cleaned) == 0 {
-		return rootPath
-	}
-
-	// Collect other roots' component lists.
-	var others [][]string
-	for r := range allRoots {
-		if r == rootPath {
-			continue
-		}
-		rParts := strings.Split(filepath.ToSlash(r), "/")
-		var rCleaned []string
-		for _, p := range rParts {
-			if p != "" {
-				rCleaned = append(rCleaned, p)
-			}
-		}
-		others = append(others, rCleaned)
-	}
-
-	// Try progressively more trailing components until unique.
-	for depth := 1; depth <= len(cleaned); depth++ {
-		suffix := cleaned[len(cleaned)-depth:]
-		candidate := strings.Join(suffix, "/")
-		unique := true
-		for _, other := range others {
-			if len(other) >= depth {
-				otherSuffix := other[len(other)-depth:]
-				if strings.Join(otherSuffix, "/") == candidate {
-					unique = false
-					break
-				}
-			}
-		}
-		if unique {
-			return candidate
-		}
-	}
-	// Fallback: use the full path (should not happen for distinct roots).
-	return strings.Join(cleaned, "/")
 }
 
 // AllRepos merges DiscoveredRepos with Repos. Explicit Repos entries take priority,

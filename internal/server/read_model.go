@@ -28,6 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
 const maxFeatureDetailHistoricalRuns = 5
@@ -505,6 +506,41 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 	revision := revisionForAny(resp)
 	resp.Meta = responseMeta(revision)
 	writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+}
+
+func (h *apiHandler) handleWorkspaceBrowse(w http.ResponseWriter, r *http.Request) {
+	snapshot := workspace.Browse(
+		r.URL.Query().Get("path"),
+		parseBoolQuery(r.URL.Query().Get("show_hidden")),
+	)
+	entries := make([]WorkspaceBrowseEntryDTO, 0, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
+		entries = append(entries, WorkspaceBrowseEntryDTO{
+			Name:           entry.Name,
+			Path:           entry.Path,
+			IsGitRepo:      entry.IsGitRepo,
+			ChildRepoCount: entry.ChildRepoCount,
+		})
+	}
+	resp := WorkspaceBrowseResponse{
+		APIVersion:     APIVersion,
+		Path:           snapshot.Path,
+		IsGitRepo:      snapshot.IsGitRepo,
+		ChildRepoCount: snapshot.ChildRepoCount,
+		Entries:        entries,
+	}
+	revision := revisionForAny(resp)
+	resp.Meta = responseMeta(revision)
+	writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+}
+
+func parseBoolQuery(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "t", "true", "y", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request, featureID string) {

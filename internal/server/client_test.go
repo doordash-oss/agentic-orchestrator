@@ -391,6 +391,38 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 	}
 }
 
+func TestClientWorkspaceBrowseSendsQuery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/workspace/browse" {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+		if got := r.URL.Query().Get("path"); got != "/workspace" {
+			t.Fatalf("path query = %q, want /workspace", got)
+		}
+		if got := r.URL.Query().Get("show_hidden"); got != "true" {
+			t.Fatalf("show_hidden query = %q, want true", got)
+		}
+		writeJSON(w, http.StatusOK, WorkspaceBrowseResponse{
+			APIVersion: APIVersion,
+			Path:       "/workspace",
+			Entries:    []WorkspaceBrowseEntryDTO{{Name: "api", Path: "/workspace/api", IsGitRepo: true}},
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	resp, err := client.WorkspaceBrowse(context.Background(), WorkspaceBrowseQuery{Path: "/workspace", ShowHidden: true})
+	if err != nil {
+		t.Fatalf("WorkspaceBrowse() error = %v", err)
+	}
+	if resp.Path != "/workspace" || len(resp.Entries) != 1 || resp.Entries[0].Name != "api" {
+		t.Fatalf("WorkspaceBrowse() = %+v, want workspace api entry", resp)
+	}
+}
+
 func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 	var sawTrustedHeader bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

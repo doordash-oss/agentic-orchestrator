@@ -83,6 +83,8 @@ func (p *Provider) AvailableModels() []string {
 // Codex accepts: low, medium, high, xhigh.
 func MapEffortLevel(level llm.EffortLevel) string {
 	switch level {
+	case llm.EffortLow:
+		return "low"
 	case llm.EffortMedium:
 		return "medium"
 	case llm.EffortHigh:

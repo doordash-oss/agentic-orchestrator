@@ -124,6 +124,12 @@ func (c *Client) RuntimeConfig(ctx context.Context) (RuntimeConfigResponse, erro
 	return out, err
 }
 
+func (c *Client) WorkspaceBrowse(ctx context.Context, query WorkspaceBrowseQuery) (WorkspaceBrowseResponse, error) {
+	var out WorkspaceBrowseResponse
+	err := c.getJSON(ctx, "/api/v1/workspace/browse", workspaceBrowseValues(query), &out)
+	return out, err
+}
+
 func (c *Client) FeatureConfig(ctx context.Context, featureID string) (FeatureConfigResponse, error) {
 	var out FeatureConfigResponse
 	err := c.getJSON(ctx, "/api/v1/features/"+pathSegment(featureID)+"/config", nil, &out)
@@ -466,6 +472,17 @@ func transcriptValues(query CursorQuery) url.Values {
 	}
 	if query.Limit > 0 {
 		values.Set("limit", strconv.Itoa(query.Limit))
+	}
+	return values
+}
+
+func workspaceBrowseValues(query WorkspaceBrowseQuery) url.Values {
+	values := url.Values{}
+	if query.Path != "" {
+		values.Set("path", query.Path)
+	}
+	if query.ShowHidden {
+		values.Set("show_hidden", "true")
 	}
 	return values
 }

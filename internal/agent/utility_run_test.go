@@ -220,6 +220,9 @@ func TestPhaseRunnerRunUtilitySession_Success(t *testing.T) {
 	if opts.Phase != feature.PhaseResearch {
 		t.Errorf("BuildSessionOpts.Phase = %v, want %v", opts.Phase, feature.PhaseResearch)
 	}
+	if opts.EffortLevel != llm.EffortLow {
+		t.Errorf("BuildSessionOpts.EffortLevel = %q, want low for utility session", opts.EffortLevel)
+	}
 }
 
 func TestPhaseRunnerRunUtilitySession_TimesOut(t *testing.T) {

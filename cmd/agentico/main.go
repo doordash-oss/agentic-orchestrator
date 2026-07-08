@@ -1120,6 +1120,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		PermHandler:     &session.ReadOnlyHandler{},
 		Phase:           utilskill.PhaseAll,
 		TurnMode:        ports.TurnModeInteractive,
+		EffortLevel:     llm.EffortLow,
 	})
 	if err != nil {
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("build chat session: %w", err)

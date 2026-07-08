@@ -1022,6 +1022,18 @@ func createFakeGitRepo(t *testing.T, parentDir, name string) string {
 	return repoDir
 }
 
+func createFakeGitWorktreeRepo(t *testing.T, parentDir, name string) string {
+	t.Helper()
+	repoDir := filepath.Join(parentDir, name)
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".git"), []byte("gitdir: /tmp/main/.git/worktrees/"+name+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return repoDir
+}
+
 // --- workspace roots tests ---
 
 func TestWorkspaceRootsYAMLRoundTrip(t *testing.T) {
@@ -1127,6 +1139,36 @@ func TestDiscoverReposFromRoots(t *testing.T) {
 	// cfg.Repos should remain unchanged
 	if len(cfg.Repos) != 0 {
 		t.Errorf("expected cfg.Repos to remain empty, got %d entries", len(cfg.Repos))
+	}
+}
+
+func TestDiscoverReposFromRootsAcceptsWorktreeGitFile(t *testing.T) {
+	root := t.TempDir()
+	repoPath := createFakeGitWorktreeRepo(t, root, "worktree-repo")
+
+	cfg := NewDefault()
+	cfg.WorkspaceRoots = []string{root}
+
+	n := DiscoverReposFromRoots(cfg)
+	if n != 1 {
+		t.Fatalf("expected 1 discovered repo, got %d", n)
+	}
+	if got := cfg.DiscoveredRepos["worktree-repo"].Path; got != repoPath {
+		t.Fatalf("discovered worktree path = %q, want %q", got, repoPath)
+	}
+}
+
+func TestDiscoverReposLegacyAcceptsWorktreeGitFile(t *testing.T) {
+	root := t.TempDir()
+	repoPath := createFakeGitWorktreeRepo(t, root, "legacy-worktree")
+
+	cfg := NewDefault()
+	n := DiscoverRepos(cfg, root)
+	if n != 1 {
+		t.Fatalf("expected 1 discovered repo, got %d", n)
+	}
+	if got := cfg.Repos["legacy-worktree"].Path; got != repoPath {
+		t.Fatalf("legacy worktree path = %q, want %q", got, repoPath)
 	}
 }
 

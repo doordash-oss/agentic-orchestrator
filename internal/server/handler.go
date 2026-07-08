@@ -101,6 +101,7 @@ func (h *apiHandler) routesWithMCP(includeMCP bool) http.Handler {
 	mux.HandleFunc("/api/v1/features", h.handleFeaturesRoot)
 	mux.HandleFunc("/api/v1/features/", h.handleFeatureRoutes)
 	mux.HandleFunc("/api/v1/config/runtime", h.handleRuntimeConfigRoute)
+	mux.HandleFunc("/api/v1/workspace/browse", methodHandler(http.MethodGet, h.handleWorkspaceBrowse))
 	mux.HandleFunc("/api/v1/catalog/models", methodHandler(http.MethodGet, h.handleModelCatalog))
 	mux.HandleFunc("/api/v1/prompts", methodHandler(http.MethodGet, h.handlePrompts))
 	mux.HandleFunc("/api/v1/prompts/", h.handlePromptMutationRoutes)

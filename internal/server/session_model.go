@@ -282,6 +282,9 @@ func safeTranscriptText(text, role string, locallyAppended bool) string {
 	if role == "user" && !locallyAppended {
 		return safeTranscriptPrompt(text)
 	}
+	if role == "assistant" {
+		return safeDisplayText(text, 0)
+	}
 	return safeDisplayText(text, 500)
 }
 

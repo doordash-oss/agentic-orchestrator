@@ -38,12 +38,6 @@ or
 
 The requirement text must describe the evidence the phase plan should add, for example "Capture the updated setup wizard empty state" or "Record the create-project CLI journey through persisted config." Do not tell the implementer to edit the verification report directly. Missing evidence is repaired by phase-plan revision.
 
-## Sibling Boundaries
-
-- Craft owns intrinsic code quality and idiom.
-- Cleanliness owns change-set hygiene, out-of-plan touches, stray artifacts, and pushability.
-- Do not opine on naming, abstraction, formatting, or stray files unless they directly prevent required behavior or evidence from being trustworthy.
-
 ## Review Rules
 
 When the prompt lists required verification items:

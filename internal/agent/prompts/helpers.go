@@ -144,6 +144,12 @@ func ReviewUserPrompt(in any) string {
 	return MustRender("review.user", in)
 }
 
+// ImplementationReviewAxisUserPrompt renders the per-axis implementation
+// review prompt (implementation_review_axis.user.tmpl).
+func ImplementationReviewAxisUserPrompt(in any) string {
+	return MustRender("implementation_review_axis.user", in)
+}
+
 // SummaryUserPrompt renders the bounded-helper summary-generation prompt
 // (summary.user.tmpl).
 func SummaryUserPrompt(in SummaryUserInput) string {

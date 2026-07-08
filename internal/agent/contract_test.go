@@ -1104,22 +1104,28 @@ func TestContractRegistryRejectsLegacyGenericPlanValidator(t *testing.T) {
 	}
 }
 
-func TestContractRegistryIterationReviewerRequiresReviewFeedback(t *testing.T) {
-	helperDir := filepath.Join(t.TempDir(), "review")
+func TestContractRegistryRejectsLegacyIterationReviewer(t *testing.T) {
+	if _, ok := Lookup(feature.PhaseReview, RoleIterationReviewer); ok {
+		t.Fatal("Lookup(PhaseReview, iteration_reviewer) ok = true, want false; implementation review must use per-axis RoleSpecs")
+	}
+}
+
+func TestContractRegistryImplementationReviewAxisRequiresReviewFeedback(t *testing.T) {
+	helperDir := filepath.Join(t.TempDir(), "review", "craft")
 	if err := os.MkdirAll(helperDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	writeReviewFeedbackFile(t, filepath.Join(helperDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 
-	contract, ok := Lookup(feature.PhaseReview, RoleIterationReviewer)
+	contract, ok := Lookup(feature.PhaseReview, RoleImplementationReviewCraft)
 	if !ok {
-		t.Fatal("Lookup(PhaseReview, RoleIterationReviewer) ok = false, want true")
+		t.Fatal("Lookup(PhaseReview, RoleImplementationReviewCraft) ok = false, want true")
 	}
-	if contract.Role != RoleIterationReviewer {
-		t.Fatalf("Lookup(PhaseReview, RoleIterationReviewer).Role = %q, want %q", contract.Role, RoleIterationReviewer)
+	if contract.Role != RoleImplementationReviewCraft {
+		t.Fatalf("Lookup(PhaseReview, RoleImplementationReviewCraft).Role = %q, want %q", contract.Role, RoleImplementationReviewCraft)
 	}
 
-	out, violations, err := Validate(feature.PhaseReview, RoleIterationReviewer, helperDir)
+	out, violations, err := Validate(feature.PhaseReview, RoleImplementationReviewCraft, helperDir)
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}

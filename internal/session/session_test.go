@@ -172,7 +172,7 @@ sleep 30
 		&SessionOpts{
 			ProviderName: "test-provider",
 			Watchdog: &ports.SessionWatchdogConfig{
-				PendingToolIdleTimeout:    25 * time.Millisecond,
+				PendingToolIdleTimeout:    200 * time.Millisecond,
 				TurnCompletionIdleTimeout: 100 * time.Millisecond,
 				PollInterval:              5 * time.Millisecond,
 			},

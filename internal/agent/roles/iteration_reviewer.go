@@ -14,41 +14,7 @@
 
 package roles
 
-import (
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-)
-
-// RoleIterationReviewer is a bounded helper that reviews one implement
-// iteration.
-const RoleIterationReviewer Role = "iteration_reviewer"
-
-var iterationReviewerRoleSpec = RoleSpec{
-	Phase:        feature.PhaseReview,
-	Role:         RoleIterationReviewer,
-	SkillName:    "review-implementation",
-	UserTemplate: "review.user",
-	Required:     []feature.Phase{feature.PhaseImplement},
-	OutputRoots: []OutputRootSpec{
-		{
-			Name:        "helper_dir",
-			Description: "Iteration review helper artifact directory.",
-			ResolvePath: func(rt RoleRuntime) string {
-				return rt.IterationDir
-			},
-		},
-	},
-	MarkerRoot: "helper_dir",
-	Artifacts: []RoleArtifactSpec{
-		reviewFeedbackRoleArtifact("helper_dir"),
-	},
-}
-
-// IterationReviewerRoleSpec returns the RoleSpec-backed implementation review
-// helper role.
-func IterationReviewerRoleSpec() RoleSpec {
-	return CloneRoleSpec(iterationReviewerRoleSpec)
-}
+import "github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 
 // VerificationItemView projects a RequiredVerificationItem for review templates.
 type VerificationItemView struct {

@@ -72,7 +72,7 @@ func PlanValidatorRoleForSkill(skillName string) (RoleSpec, bool) {
 }
 
 func planValidatorRoleSpec(role Role, skillName, axis string) RoleSpec {
-	return RoleSpec{
+	return reviewFeedbackAxisRoleSpec(reviewFeedbackAxisRoleSpecConfig{
 		Phase:        feature.PhasePlan,
 		Role:         role,
 		SkillName:    skillName,
@@ -82,18 +82,16 @@ func planValidatorRoleSpec(role Role, skillName, axis string) RoleSpec {
 			validatorHelperDirOutputRoot(),
 		},
 		MarkerRoot: "helper_dir",
-		Artifacts: []RoleArtifactSpec{
-			{
-				Name:         "plan_validator_feedback",
-				DisplayPath:  fmt.Sprintf("validation-%s-feedback.md", axis),
-				RootName:     "helper_dir",
-				RelativePath: fmt.Sprintf("validation-%s-feedback.md", axis),
-				Presence:     ArtifactRequired,
-				Description:  "structured validation feedback markdown with verdict and findings for this axis",
-				Validate:     ValidatorReviewFeedback,
-			},
+		Artifact: RoleArtifactSpec{
+			Name:         "plan_validator_feedback",
+			DisplayPath:  fmt.Sprintf("validation-%s-feedback.md", axis),
+			RootName:     "helper_dir",
+			RelativePath: fmt.Sprintf("validation-%s-feedback.md", axis),
+			Presence:     ArtifactRequired,
+			Description:  "structured validation feedback markdown with verdict and findings for this axis",
+			Validate:     ValidatorReviewFeedback,
 		},
-	}
+	})
 }
 
 // ValidateSpecializedUserInput is the data passed to

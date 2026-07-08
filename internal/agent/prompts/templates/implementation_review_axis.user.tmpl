@@ -1,0 +1,56 @@
+{{- /*
+  implementation_review_axis.user: prompt for a per-axis implementation review
+  helper. It intentionally carries the same context as review.user plus the
+  selected axis label.
+*/ -}}
+{{- define "implementation_review_axis.user" -}}
+Axis under review: {{ .AxisLabel }}
+Review feedback output: {{ .FeedbackPath }}
+
+Iteration under review: {{ .Iteration }}
+Iteration artifacts directory: {{ .IterDir }}
+
+{{ if .RoadmapPath }}## Approved Roadmap
+
+This phase is one step in a larger plan. Read the approved roadmap at: {{ .RoadmapPath }}
+
+Scope guidance:
+- Your review MUST be scoped to the current phase's objectives only.
+- Consult the roadmap to understand what this phase is responsible for and what later phases will handle.
+- Do NOT flag missing functionality that is explicitly deferred to a subsequent phase in the roadmap.
+- Do NOT request changes for incomplete features that are scheduled for later phases.
+- DO flag issues where this phase's specific objectives are not met.
+
+{{ end }}## Implementation Plan
+
+Read the implementation plan (source of truth) at: {{ .PlanPath }}
+
+{{ if .ExitCriteria }}## Exit Criteria
+
+{{ .ExitCriteria }}
+
+{{ end }}{{ if .VerificationReportPath }}## Verification Report
+
+Read the verification report at: {{ .VerificationReportPath }}
+
+{{ end }}{{ if .ContractPath }}## Testing Contract
+
+Read the binding testing contract at: {{ .ContractPath }}
+
+{{ else if .RequiredVerification }}## Required Verification Items
+
+{{ range $i, $item := .RequiredVerification }}{{ inc $i }}. {{ if $item.Name }}{{ $item.Name }}
+   Requirement: {{ $item.Requirement }}{{ else }}{{ $item.Requirement }}{{ end }}
+{{ end }}
+Apply the "Review Rules (With Verification Items)" section from the axis methodology.
+
+{{ else }}Apply the "Review Rules (Without Verification Items)" section from the axis methodology.
+
+{{ end }}{{ if .ProgressPath }}## Progress
+
+Read the current progress at: {{ .ProgressPath }}
+
+{{ end }}{{ if .PhaseType }}## Phase Type
+
+This is a **{{ .PhaseType }}** phase. If the axis methodology defines phase-aware criteria, apply them; otherwise use the phase type as scope context.
+{{ end }}{{- end -}}

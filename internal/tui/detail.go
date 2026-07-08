@@ -1109,6 +1109,9 @@ func formatValidatorStatuses(statuses map[string]string) string {
 		{"Performance", "Perf"},
 		{"Testing", "Test"},
 		{"Scope", "Scope"},
+		{"Craft", "Craft"},
+		{"Functionality/Evidence", "Func"},
+		{"Cleanliness", "Clean"},
 	}
 	var parts []string
 	for _, v := range order {
@@ -1146,6 +1149,9 @@ func formatPhaseStatus(f *feature.Feature) string {
 	switch f.Status {
 	case feature.StatusImplementing:
 		if f.ReviewingGate {
+			if len(f.ValidatorStatuses) > 0 {
+				return ReviewStyle.Render("reviewing: ") + formatValidatorStatuses(f.ValidatorStatuses)
+			}
 			return ReviewStyle.Render(fmt.Sprintf("reviewing [%d]", f.CurrentIteration))
 		}
 		return lipgloss.NewStyle().Foreground(colorInfo).Render(

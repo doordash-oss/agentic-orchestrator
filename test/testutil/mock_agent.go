@@ -571,10 +571,9 @@ func WriteReviewApproved(artifactDir string) string {
 	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback("", "", "APPROVED"), true)
 }
 
-// WriteReviewApprovedWithoutPhaseComplete writes an iteration-reviewer
-// APPROVED feedback file but intentionally omits the helper-local
-// phase_complete marker. It falls back to the legacy parent path when no
-// iteration review helper prompt exists.
+// WriteReviewApprovedWithoutPhaseComplete writes implementation-review
+// APPROVED feedback but intentionally omits the helper-local phase_complete
+// marker. It falls back to the parent path when no review helper prompt exists.
 func WriteReviewApprovedWithoutPhaseComplete(artifactDir string) string {
 	return writeIterationReviewFeedbackInLatestIter(artifactDir, StructuredReviewFeedback("", "", "APPROVED"), false)
 }
@@ -669,12 +668,15 @@ func writeIterationReviewFeedbackInLatestIter(artifactDir, body string, touchMar
   touch "$_d/phase_complete"`
 	}
 	return fmt.Sprintf(`_wrote_review_feedback=
-for _prompt in "%s"/iteration-*/review/review-prompt.md; do
+for _prompt in $(find "%s" -path '*/iteration-*/review*/review-prompt.md' -type f 2>/dev/null | sort); do
   [ -f "$_prompt" ] || continue
   _d=$(dirname "$_prompt")
-  cat > "$_d/review-feedback.md" << 'REVIEWEOF'
+  _fb="$_d/review-feedback.md"
+  _tmp="$_fb.tmp.$$"
+  cat > "$_tmp" << 'REVIEWEOF'
 %s
 REVIEWEOF%s
+  mv "$_tmp" "$_fb"
   _wrote_review_feedback=1
 done
 if [ -z "$_wrote_review_feedback" ]; then
@@ -700,6 +702,19 @@ func WriteMultiRepoReviewApproved(artifactBase string) string {
 	body := strings.TrimRight(StructuredReviewFeedback("", "", "APPROVED"), "\n")
 	return fmt.Sprintf(`for _repo_dir in "%s"/*; do
   [ -d "$_repo_dir" ] || continue
+  _wrote_review_feedback=
+  for _prompt in $(find "$_repo_dir" -path '*/iteration-*/review*/review-prompt.md' -type f 2>/dev/null | sort); do
+    _dir=$(dirname "$_prompt")
+    _fb="$_dir/review-feedback.md"
+    _tmp="$_fb.tmp.$$"
+    cat > "$_tmp" << 'REVIEWEOF'
+%s
+REVIEWEOF
+    mv "$_tmp" "$_fb"
+    touch "$_dir/phase_complete"
+    _wrote_review_feedback=1
+  done
+  if [ -n "$_wrote_review_feedback" ]; then continue; fi
   for _iter in "$_repo_dir"/iteration-*; do :; done
   [ -d "$_iter" ] || continue
   if [ -f "$_iter/review-feedback.md" ]; then continue; fi
@@ -707,7 +722,7 @@ func WriteMultiRepoReviewApproved(artifactBase string) string {
 %s
 REVIEWEOF
   break
-done`, artifactBase, body)
+done`, artifactBase, body, body)
 }
 
 // WriteValidatorApproved returns a shell snippet that writes a minimal APPROVED

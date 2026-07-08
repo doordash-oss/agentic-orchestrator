@@ -2283,8 +2283,7 @@ func TestImplementLoopSkipIterationReview(t *testing.T) {
 }
 
 // TestImplementLoopNoSkipIterationReview verifies that when SkipIterationReview
-// is false, the loop runs the per-iteration review gate after SUCCESS
-// (BuildSession called at least twice: once for implementation, once for review).
+// is false, the loop runs the per-axis review gate after SUCCESS.
 func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
@@ -2355,10 +2354,10 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 
-	// BuildSession should have been called at least twice: once for
-	// implementation and once for the review gate.
-	if len(*captured) < 2 {
-		t.Errorf("expected BuildSession called at least 2 times (impl + review), got %d", len(*captured))
+	// BuildSession should have been called once for implementation and once
+	// for each selected implementation-review axis.
+	if len(*captured) != 4 {
+		t.Errorf("expected BuildSession called 4 times (impl + 3 review axes), got %d", len(*captured))
 	}
 	assertExplicitEmptyAgentNames(t, (*captured)[0].AgentNames)
 	assertExplorationAgentNames(t, (*captured)[1].AgentNames)
@@ -2367,19 +2366,20 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("implement"); got != 0.002 {
-		t.Errorf("PhaseCost(implement) = %v, want 0.002", got)
+	if got := updated.PhaseCost("implement"); got != 0.004 {
+		t.Errorf("PhaseCost(implement) = %v, want 0.004", got)
 	}
-	if len(updated.SessionCosts) != 2 {
-		t.Fatalf("len(SessionCosts) = %d, want 2", len(updated.SessionCosts))
+	if len(updated.SessionCosts) != 4 {
+		t.Fatalf("len(SessionCosts) = %d, want 4", len(updated.SessionCosts))
 	}
 	implCost := updated.SessionCosts[0]
 	if implCost.SessionID != "test-noskip-001-impl-01" || implCost.PhaseKey != "implement" || implCost.ObserverPhase != "implement" || implCost.CostUSD != 0.001 {
 		t.Errorf("SessionCosts[0] = %+v, want implementation session cost under implement", implCost)
 	}
-	reviewCost := updated.SessionCosts[1]
-	if reviewCost.SessionID != "test-noskip-001-review-01" || reviewCost.PhaseKey != "implement" || reviewCost.ObserverPhase != "review" || reviewCost.CostUSD != 0.001 {
-		t.Errorf("SessionCosts[1] = %+v, want review helper session cost under implement", reviewCost)
+	for i, reviewCost := range updated.SessionCosts[1:] {
+		if !strings.Contains(reviewCost.SessionID, "implementation-review-") || reviewCost.PhaseKey != "implement" || reviewCost.ObserverPhase != "review" || reviewCost.CostUSD != 0.001 {
+			t.Errorf("SessionCosts[%d] = %+v, want implementation review axis session cost under implement", i+1, reviewCost)
+		}
 	}
 }
 
@@ -2434,8 +2434,12 @@ func TestImplementLoopReviewHelperUsesChildDirAndMarker(t *testing.T) {
 	}
 	iterDir := filepath.Join(artifactDir, "iteration-01")
 	for _, path := range []string{
-		filepath.Join(iterDir, "review", "phase_complete"),
-		filepath.Join(iterDir, "review", "review-feedback.md"),
+		filepath.Join(iterDir, "review", "craft", "phase_complete"),
+		filepath.Join(iterDir, "review", "craft", "review-feedback.md"),
+		filepath.Join(iterDir, "review", "functionality-evidence", "phase_complete"),
+		filepath.Join(iterDir, "review", "functionality-evidence", "review-feedback.md"),
+		filepath.Join(iterDir, "review", "cleanliness", "phase_complete"),
+		filepath.Join(iterDir, "review", "cleanliness", "review-feedback.md"),
 		filepath.Join(iterDir, "review-feedback.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -2498,8 +2502,8 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if !strings.Contains(result.LastError, "iteration_reviewer") || !strings.Contains(result.LastError, "phase_complete") {
-		t.Fatalf("LastError = %q, want iteration_reviewer phase_complete violation", result.LastError)
+	if !strings.Contains(result.LastError, "implementation_review_") || !strings.Contains(result.LastError, "phase_complete") {
+		t.Fatalf("LastError = %q, want implementation-review axis phase_complete violation", result.LastError)
 	}
 
 	metaBytes, err := os.ReadFile(filepath.Join(artifactDir, "iteration-02", "meta.yaml"))
@@ -2513,7 +2517,7 @@ func TestImplementLoopReviewHelperMissingPhaseCompleteCountsConsecutiveFailure(t
 	if meta.AgentStatus != agentStatusProtocolViolation {
 		t.Fatalf("AgentStatus = %q, want %q", meta.AgentStatus, agentStatusProtocolViolation)
 	}
-	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-02", "review", "review-feedback.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-02", "review", "craft", "review-feedback.md")); err != nil {
 		t.Fatalf("expected helper review feedback in child dir: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(artifactDir, "iteration-02", "review-feedback.md")); err != nil {

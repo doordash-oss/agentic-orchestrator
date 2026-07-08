@@ -67,7 +67,7 @@ func TestMissingEvidenceRequirements_ParsePhaseQualifiedMarkers(t *testing.T) {
 
 func TestMissingEvidenceReviewerSkillsShareSafetyNetRule(t *testing.T) {
 	repoRoot := filepath.Join("..", "..")
-	implementationReviewPath := filepath.Join(repoRoot, "skills", "review-implementation", "SKILL.md")
+	implementationReviewPath := filepath.Join(repoRoot, "skills", "review-implementation-functionality-evidence", "SKILL.md")
 	finalReviewPath := filepath.Join(repoRoot, "skills", "final-review", "SKILL.md")
 
 	implementationReview, err := os.ReadFile(implementationReviewPath)

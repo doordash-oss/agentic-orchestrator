@@ -377,7 +377,7 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 			workDir:              t.TempDir(),
 			phaseCompleteDir:     phaseDir,
 			contractPhase:        feature.PhaseReview,
-			contractRole:         RoleIterationReviewer,
+			contractRole:         RoleImplementationReviewCraft,
 			finishOrViolateNudge: true,
 		})
 		resultCh <- result
@@ -428,7 +428,7 @@ func TestRunBoundedHelper_DoneBranchDoesNotNudge(t *testing.T) {
 			sessionID:            "helper-done",
 			workDir:              t.TempDir(),
 			phaseCompleteDir:     phaseDir,
-			contractRole:         RoleIterationReviewer,
+			contractRole:         RoleImplementationReviewCraft,
 			finishOrViolateNudge: true,
 		})
 		resultCh <- result
@@ -487,7 +487,7 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 		workDir:          workDir,
 		phaseCompleteDir: phaseDir,
 		contractPhase:    feature.PhaseReview,
-		contractRole:     RoleIterationReviewer,
+		contractRole:     RoleImplementationReviewCraft,
 	})
 	if err != nil {
 		t.Fatalf("runBoundedHelperSession() error = %v", err)
@@ -520,7 +520,7 @@ func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 			sessionID:            "helper-cap",
 			workDir:              t.TempDir(),
 			phaseCompleteDir:     phaseDir,
-			contractRole:         RoleIterationReviewer,
+			contractRole:         RoleImplementationReviewCraft,
 			finishOrViolateNudge: true,
 		})
 		resultCh <- result

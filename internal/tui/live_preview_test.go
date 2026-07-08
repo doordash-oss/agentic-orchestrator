@@ -475,7 +475,7 @@ func TestLivePreviewToolProgressRendersCompactToolRows(t *testing.T) {
 		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: toolNameBash, Data: longResult}},
 		llm.SDKMessage{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{ToolName: toolNameWrite, Data: "A README.scn.md"}},
 	)
-	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(180))
 
 	for _, want := range []string{"$ Bash", "Bash result: PASS ok ./...", "Bash result: tool-output-", "[...]", "$ Write", "Write result: A README.scn.md"} {
 		if !strings.Contains(view, want) {
@@ -615,6 +615,42 @@ func TestLivePreviewValidationContextShowsAggregateAndSelectedValidator(t *testi
 		if !strings.Contains(view, want) {
 			t.Fatalf("validation live preview missing %q in:\n%s", want, view)
 		}
+	}
+}
+
+func TestLivePreviewImplementationReviewAxisOrder(t *testing.T) {
+	t.Parallel()
+	f := &feature.Feature{
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		ReviewingGate: true,
+		ValidatorStatuses: map[string]string{
+			"Cleanliness":            "CHANGES_REQUESTED",
+			"Functionality/Evidence": "running",
+			"Craft":                  "APPROVED",
+		},
+	}
+	sess := validatorLivePreviewSession("implementation-review-functionality", "Functionality/Evidence")
+
+	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
+	for _, want := range []string{
+		"Status", "Reviewing implementation",
+		"Validators", "Craft ✓", "Func ⟳",
+		"Current: Reviewing implementation", "1 ✓", "1 ✗", "1 running", "Showing Functionality/Evidence",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("implementation review live preview missing %q in:\n%s", want, view)
+		}
+	}
+	statuses := stripANSI(livePreviewValidatorStatusesValue(f))
+	for _, want := range []string{"Craft ✓", "Func ⟳", "Clean ✗"} {
+		if !strings.Contains(statuses, want) {
+			t.Fatalf("implementation review status row missing %q in %q", want, statuses)
+		}
+	}
+	if strings.Index(statuses, "Craft ✓") > strings.Index(statuses, "Func ⟳") ||
+		strings.Index(statuses, "Func ⟳") > strings.Index(statuses, "Clean ✗") {
+		t.Fatalf("implementation review axes rendered out of order: %q", statuses)
 	}
 }
 

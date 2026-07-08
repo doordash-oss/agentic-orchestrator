@@ -16,7 +16,6 @@ package agent
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -742,7 +741,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
 				// Review failed to run, treat as changes requested
-				reviewerFeedback = fmt.Sprintf("Review failed to execute: %v", reviewErr)
+				if strings.TrimSpace(feedback) == "" {
+					feedback = fmt.Sprintf("Review failed to execute: %v", reviewErr)
+				}
+				reviewerFeedback = feedback
 				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_error")
 				continue
 			}
@@ -939,8 +941,8 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	}
 
 	// Report Integrity Gate: deterministic pre-review. Malformed or missing
-	// reports degrade to the LLM reviewer (which treats them as Critical
-	// findings via the review-implementation skill). The gate runs two
+	// reports degrade to the Functionality/Evidence axis (which treats them
+	// as Critical findings). The gate runs two
 	// passes — schema/hedge against verification-report.yaml, and
 	// deferral-ledger against the parsed progress.md — merged into a
 	// single Rejected verdict so the agent sees all failure modes at once.
@@ -973,9 +975,8 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	} else {
 		// No verification-report.yaml on disk: still run the deferral
 		// gate so a missing report doesn't accidentally bypass cross-
-		// phase commitment enforcement. The reviewer's own checks
-		// (review-implementation/SKILL.md) flag the missing report as
-		// Critical separately.
+		// phase commitment enforcement. The Functionality/Evidence axis
+		// flags the missing report as Critical separately.
 		deferralResult := ValidateDeferralLedger(parsedDeferrals, parsedClosedDeferrals, ledger, currentPhase, cfg.RepoName)
 		if deferralResult.Rejected {
 			feedback := FormatGateFeedback(deferralResult)
@@ -1009,114 +1010,25 @@ func runReviewGate(cfg ImplementConfig, sm ports.SessionManager, iteration int, 
 	}
 	RemovePhaseComplete(reviewDir)
 
-	feedbackPath := filepath.Join(reviewDir, "review-feedback.md")
 	parentFeedbackPath := filepath.Join(iterDir, "review-feedback.md")
-	reviewPrompt := BuildReviewPrompt(
-		cfg.PlanPath,
-		cfg.ExitCriteria,
-		progressPath,
-		iterDir,
-		contractPath,
-		verificationReportPath,
-		iteration,
-		requiredVerification,
-		cfg.RoadmapPath,
-		cfg.PhaseType,
-		feedbackPath,
-	)
-
-	// Re-inject user-attached visual references so the reviewer can
-	// compare what was built against the pixel-level intent.
-	if cfg.Feature != nil {
-		if block := visualReferencesSection(cfg.Feature.Images, "reviewing this iteration"); block != "" {
-			reviewPrompt = block + reviewPrompt
-		}
-	}
-	// Surface due-this-phase deferrals so the reviewer can cross-check
-	// closures against the diff and flag chronic re-deferrals.
-	if cfg.Feature != nil {
-		if run := cfg.Feature.Run(); run != nil {
-			currentPhase := cfg.Feature.CurrentRoadmapPhase
-			if block := deferralsDueThisPhaseSection(run.Deferrals, currentPhase, deferralPromptKindReview, cfg.RepoName); block != "" {
-				reviewPrompt = block + reviewPrompt
-			}
-		}
-	}
-
-	// Surface agent-declared caveats to the LLM reviewer so they get
-	// cross-checked against the phase plan rather than silently accepted.
-	if addendum := KnownCaveatsReviewAddendum(gateResult); addendum != "" {
-		reviewPrompt = addendum + "\n\n" + reviewPrompt
-	}
-
-	reviewPromptPath := filepath.Join(reviewDir, "review-prompt.md")
-	logPath := filepath.Join(reviewDir, "review-output.txt")
-
-	var reviewID string
-	if cfg.Feature.CurrentRoadmapPhase > 0 {
-		reviewID = fmt.Sprintf("%s-phase-%02d-review", cfg.Feature.ID, cfg.Feature.CurrentRoadmapPhase)
-	} else {
-		reviewID = cfg.Feature.ID + "-review"
-	}
-	reviewID += fmt.Sprintf("-%02d", iteration)
-	helper := &PhaseRunner{
-		SessionManager: sm,
-		FeatureStore:   cfg.FeatureStore,
-		StateDir:       cfg.StateDir,
-		SkillsDir:      cfg.SkillsDir,
-		GuidelinesDir:  cfg.GuidelinesDir,
-		Observer:       cfg.Observer,
-		BuildSessionFn: cfg.BuildSession,
-	}
-	helperResult, err := helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
-		SessionID:              reviewID,
-		FeatureID:              cfg.Feature.ID,
-		Phase:                  feature.PhaseReview,
-		ParentSpanCtx:          reviewCtx,
-		Model:                  cfg.ReviewModel,
-		Prompt:                 reviewPrompt,
-		PromptPath:             reviewPromptPath,
-		FeedbackPath:           feedbackPath,
-		HelperIterDir:          reviewDir,
-		Role:                   RoleIterationReviewer,
-		WorkDir:                cfg.WorkDir,
-		RepoName:               cfg.RepoName,
-		LogPath:                logPath,
-		SystemPromptPrefix:     "review",
-		CompletionAskingClause: cfg.AskingClause,
-		EffortLevel:            cfg.EffortLevel,
+	reviewStatus, feedback, err := runImplementationReviewAxes(cfg, sm, iteration, iterDir, reviewDir, reviewCtx, implementationReviewInput{
+		ProgressPath:           progressPath,
+		ContractPath:           contractPath,
+		VerificationReportPath: verificationReportPath,
+		RequiredVerification:   requiredVerification,
+		KnownCaveatsGateResult: gateResult,
 	})
 	if err != nil {
-		feedback := ""
-		if helperResult != nil {
-			feedback = helperResult.Feedback
-		}
-		// The helper writes review-feedback.md itself under the new
-		// handoff protocol (and synthesizes a CHANGES_REQUESTED file
-		// when the LLM's output is malformed). When the helper failed
-		// before producing anything, fall back to a deterministic stub
-		// so the next iteration's implement prompt still has a
-		// well-formed feedback document to inject.
-		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
-			stub := FormatStructuredReviewFeedback(
-				"Implementation Review — Helper Failed",
-				fmt.Sprintf("- **Critical**: review helper terminated before writing review-feedback.md: %v", err),
-				"",
-				ReviewChangesRequested,
-			)
-			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
-			feedback = stub
-		}
 		if strings.TrimSpace(feedback) != "" {
 			_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
 		}
-		return ReviewFailed, feedback, fmt.Errorf("running review gate: %w", err)
+		return reviewStatus, feedback, fmt.Errorf("running review gate: %w", err)
 	}
 
-	if strings.TrimSpace(helperResult.Feedback) != "" {
-		_ = os.WriteFile(parentFeedbackPath, []byte(helperResult.Feedback), 0o644)
+	if strings.TrimSpace(feedback) != "" {
+		_ = os.WriteFile(parentFeedbackPath, []byte(feedback), 0o644)
 	}
-	return helperResult.Status, helperResult.Feedback, nil
+	return reviewStatus, feedback, nil
 }
 
 func resolveImplementationContractPath(stateDir string, f *feature.Feature, repoName string) (string, bool) {

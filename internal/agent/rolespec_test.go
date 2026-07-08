@@ -23,6 +23,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -466,6 +467,48 @@ func TestPlanValidatorRoleSpecs(t *testing.T) {
 	}
 }
 
+func TestImplementationReviewAxisRoleSpecs(t *testing.T) {
+	specs := ImplementationReviewAxisRoleSpecs()
+	if len(specs) != 3 {
+		t.Fatalf("ImplementationReviewAxisRoleSpecs() length = %d, want 3", len(specs))
+	}
+
+	wantSkills := map[string]Role{
+		"review-implementation-craft":                  RoleImplementationReviewCraft,
+		"review-implementation-functionality-evidence": RoleImplementationReviewFunctionalityEvidence,
+		"review-implementation-cleanliness":            RoleImplementationReviewCleanliness,
+	}
+	for _, spec := range specs {
+		if spec.Phase != feature.PhaseReview {
+			t.Fatalf("%s Phase = %v, want PhaseReview", spec.SkillName, spec.Phase)
+		}
+		if spec.UserTemplate != "implementation_review_axis.user" {
+			t.Fatalf("%s UserTemplate = %q, want implementation_review_axis.user", spec.SkillName, spec.UserTemplate)
+		}
+		if wantRole, ok := wantSkills[spec.SkillName]; !ok || spec.Role != wantRole {
+			t.Fatalf("unexpected implementation review axis spec skill=%q role=%q", spec.SkillName, spec.Role)
+		}
+		if got := spec.MarkerPath(RoleRuntime{IterationDir: "/tmp/iter-01/review/craft"}); got != "/tmp/iter-01/review/craft/phase_complete" {
+			t.Fatalf("%s marker path = %q, want helper-local phase_complete", spec.SkillName, got)
+		}
+		if len(spec.Artifacts) != 1 {
+			t.Fatalf("%s artifact count = %d, want review feedback only", spec.SkillName, len(spec.Artifacts))
+		}
+		if artifact := spec.Artifacts[0]; artifact.RootName != "helper_dir" || artifact.RelativePath != "review-feedback.md" || artifact.Validate != roles.ValidatorReviewFeedback {
+			t.Fatalf("%s feedback artifact = %+v, want helper_dir review-feedback.md review validator", spec.SkillName, artifact)
+		}
+	}
+	for skill, wantRole := range wantSkills {
+		spec, ok := ImplementationReviewAxisRoleForSkill(skill)
+		if !ok {
+			t.Fatalf("ImplementationReviewAxisRoleForSkill(%q) ok = false, want true", skill)
+		}
+		if spec.Role != wantRole {
+			t.Fatalf("ImplementationReviewAxisRoleForSkill(%q).Role = %q, want %q", skill, spec.Role, wantRole)
+		}
+	}
+}
+
 func TestReviewFamilyRoleSpecs(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -478,18 +521,6 @@ func TestReviewFamilyRoleSpecs(t *testing.T) {
 		wantPaths  map[string]string
 		wantNoOp   bool
 	}{
-		{
-			name:       "iteration reviewer",
-			phase:      feature.PhaseReview,
-			role:       RoleIterationReviewer,
-			iterDir:    "/state/feat/run-001/phase-04/implement/iteration-01/review",
-			wantSkill:  "review-implementation",
-			wantRoots:  []string{"helper_dir"},
-			wantMarker: "/state/feat/run-001/phase-04/implement/iteration-01/review/phase_complete",
-			wantPaths: map[string]string{
-				"review_feedback": "/state/feat/run-001/phase-04/implement/iteration-01/review/review-feedback.md",
-			},
-		},
 		{
 			name:       "final reviewer",
 			phase:      feature.PhaseReview,
@@ -569,13 +600,6 @@ func TestBuildReviewFamilySystemPromptsFromRoleSpec(t *testing.T) {
 		wantSkill string
 	}{
 		{
-			name:      "iteration reviewer",
-			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleIterationReviewer),
-			iterDir:   "/state/feat/run-001/phase-04/implement/iteration-01/review",
-			wantRoots: []string{"`helper_dir`: /state/feat/run-001/phase-04/implement/iteration-01/review"},
-			wantSkill: "/skills/review-implementation/SKILL.md",
-		},
-		{
 			name:      "final reviewer",
 			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleFinalReviewer),
 			iterDir:   "/state/feat/run-001/review/iteration-01",
@@ -636,10 +660,10 @@ func TestBuildPlanningSystemPromptFromRoleSpec(t *testing.T) {
 }
 
 func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
-	// Only the four planning/research/design role families are document-only
-	// agents that must refuse to touch source code. Implementer, validators,
-	// reviewers, refactor-plan, KB-builder, and InteractivePTY all have
-	// legitimate non-document writes (code, working-tree artifacts, etc.).
+	// Document-only planning roles and bounded implementation-review axes must
+	// refuse source writes outside their declared output roots. Implementer,
+	// final reviewers, validators, refactor-plan, KB-builder, and InteractivePTY
+	// all have legitimate non-document writes.
 	readOnly := []struct {
 		name string
 		spec RoleSpec
@@ -650,6 +674,15 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		{"roadmap reviser", RoadmapReviserRoleSpec()},
 		{"phase plan creator", PhasePlanCreatorRoleSpec()},
 		{"phase plan reviser", PhasePlanReviserRoleSpec()},
+	}
+	for _, spec := range ImplementationReviewAxisRoleSpecs() {
+		readOnly = append(readOnly, struct {
+			name string
+			spec RoleSpec
+		}{
+			name: string(spec.Role),
+			spec: spec,
+		})
 	}
 	for _, tt := range readOnly {
 		t.Run(tt.name+"_flag_set", func(t *testing.T) {
@@ -680,7 +713,6 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 		{"implementer", ImplementRoleSpec()},
 		{"final reviewer", FinalReviewerRoleSpec()},
 		{"final review fixer", FinalReviewFixerRoleSpec()},
-		{"iteration reviewer", IterationReviewerRoleSpec()},
 		{"researcher", ResearcherRoleSpec()},
 		{"knowledge base builder", KnowledgeBaseBuilderRoleSpec()},
 		{"refactor plan", RefactorPlanRoleSpec()},
@@ -709,7 +741,7 @@ func TestReadOnlyOutsideRootsRoleSpecs(t *testing.T) {
 
 func TestBuildRoleSystemPromptSuppressSubagents(t *testing.T) {
 	const clause = "Sub-agents are available."
-	spec := IterationReviewerRoleSpec()
+	spec := ImplementationReviewAxisRoleSpecs()[0]
 
 	// Default: the subagent clause is present (unchanged behavior for every
 	// session that does have subagents).

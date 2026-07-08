@@ -53,7 +53,8 @@ func (s ReviewStatus) String() string {
 // BuildReviewPrompt constructs the prompt for the review gate.
 // Large artifacts (plan, roadmap, progress, verification report) are referenced
 // by path so the reviewer reads them via tool use, keeping the prompt compact.
-// The review methodology is loaded from the review-implementation skill file.
+// Per-phase implementation review now uses axis prompts; this helper remains
+// for the generic review prompt contract and tests.
 //
 // feedbackPath is the absolute path to the structured `review-feedback.md` the
 // reviewer must write under the Handoff Contract. Pass "" when the caller is
@@ -81,6 +82,36 @@ func BuildReviewPrompt(planPath, exitCriteria, progressPath, iterDir, contractPa
 		ProgressPath:           progressPath,
 		PhaseType:              phaseType,
 		FeedbackPath:           feedbackPath,
+	})
+}
+
+// BuildImplementationReviewAxisPrompt constructs the prompt for one
+// implementation review axis. It carries the same review context as the legacy
+// single-reviewer prompt plus the selected axis label.
+func BuildImplementationReviewAxisPrompt(planPath, exitCriteria, progressPath, iterDir, contractPath, verificationReportPath string, iteration int, requiredVerification []RequiredVerificationItem, roadmapPath, phaseType, feedbackPath, axisLabel string) string {
+	required := make([]roles.VerificationItemView, 0, len(requiredVerification))
+	for _, item := range requiredVerification {
+		required = append(required, roles.VerificationItemView{
+			Name:        item.Name,
+			Requirement: item.Requirement,
+		})
+	}
+
+	return roles.BuildImplementationReviewAxisPrompt(roles.ImplementationReviewAxisUserInput{
+		ReviewUserInput: roles.ReviewUserInput{
+			Iteration:              iteration,
+			IterDir:                iterDir,
+			RoadmapPath:            roadmapPath,
+			PlanPath:               planPath,
+			ExitCriteria:           exitCriteria,
+			VerificationReportPath: verificationReportPath,
+			ContractPath:           contractPath,
+			RequiredVerification:   required,
+			ProgressPath:           progressPath,
+			PhaseType:              phaseType,
+			FeedbackPath:           feedbackPath,
+		},
+		AxisLabel: axisLabel,
 	})
 }
 

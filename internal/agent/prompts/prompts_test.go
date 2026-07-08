@@ -211,6 +211,7 @@ type ImplementUserInput struct {
 type ReviewUserInput struct {
 	Iteration int
 	IterDir   string
+	AxisLabel string
 
 	RoadmapPath            string
 	PlanPath               string
@@ -510,6 +511,24 @@ func TestGoldenSnapshots(t *testing.T) {
 				return SummaryUserPrompt(SummaryUserInput{
 					Name:        "Add OAuth login",
 					Description: "Sign in with Google.",
+				})
+			},
+		},
+		{
+			name: "implementation_review_axis_user",
+			render: func() string {
+				return ImplementationReviewAxisUserPrompt(ReviewUserInput{
+					Iteration:              2,
+					IterDir:                "/state/feat-x/run-1/phase-1/implement/iteration-02",
+					AxisLabel:              "Functionality/Evidence",
+					RoadmapPath:            "/state/feat-x/run-1/roadmap/plan.md",
+					PlanPath:               "/state/feat-x/run-1/phase-1/plan.md",
+					ExitCriteria:           "Relevant tests pass.",
+					VerificationReportPath: "/state/feat-x/run-1/phase-1/implement/iteration-02/verification-report.yaml",
+					ContractPath:           "/state/feat-x/run-1/testing-contract.yaml",
+					ProgressPath:           "/state/feat-x/run-1/phase-1/implement/progress.md",
+					PhaseType:              "tdd-fill-in",
+					FeedbackPath:           "/state/feat-x/run-1/phase-1/implement/iteration-02/review/functionality-evidence/review-feedback.md",
 				})
 			},
 		},

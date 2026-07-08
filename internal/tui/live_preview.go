@@ -1063,13 +1063,16 @@ func livePreviewValidationTitle(f *feature.Feature, sess session.SessionView) st
 }
 
 func livePreviewHasValidationContext(f *feature.Feature, sess session.SessionView) bool {
-	if f != nil && (f.ValidatingPlan || len(f.ValidatorStatuses) > 0) {
+	if f != nil && (f.ValidatingPlan || f.ReviewingGate) && len(f.ValidatorStatuses) > 0 {
 		return true
 	}
 	return sess != nil && sess.Kind() == ports.KindValidator
 }
 
 func livePreviewValidationTarget(f *feature.Feature) string {
+	if f != nil && f.CurrentPhase == feature.PhaseImplement && f.ReviewingGate {
+		return "Reviewing implementation"
+	}
 	if f != nil && f.CurrentRoadmapPhase > 0 {
 		return fmt.Sprintf("Validating Phase %d plan", f.CurrentRoadmapPhase)
 	}
@@ -1136,7 +1139,7 @@ func livePreviewValidatorStatusesValue(f *feature.Feature) string {
 }
 
 func livePreviewOrderedValidatorNames(statuses map[string]string) []string {
-	order := []string{"Architecture", "Structural", "Grounding", "Security", "Performance", "Testing", "Scope"}
+	order := []string{"Architecture", "Structural", "Grounding", "Security", "Performance", "Testing", "Scope", "Craft", "Functionality/Evidence", "Cleanliness"}
 	seen := make(map[string]struct{}, len(statuses))
 	names := make([]string, 0, len(statuses))
 	for _, name := range order {
@@ -1172,6 +1175,12 @@ func livePreviewValidatorShortName(name string) string {
 		return "Test"
 	case "Scope":
 		return "Scope"
+	case "Craft":
+		return "Craft"
+	case "Functionality/Evidence":
+		return "Func"
+	case "Cleanliness":
+		return "Clean"
 	default:
 		return name
 	}

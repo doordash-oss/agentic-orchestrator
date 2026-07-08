@@ -246,6 +246,7 @@ func TestAgentSessionEntryPointsWireEnvVariable(t *testing.T) {
 	files := []string{
 		"phase.go",
 		"implement.go",
+		"implementation_review.go",
 		"plan_validation.go",
 	}
 
@@ -286,7 +287,7 @@ func TestAgentSessionEntryPointsWireEnvVariable(t *testing.T) {
 						nilEnvCalls = append(nilEnvCalls,
 							fset.Position(call.Pos()).String()+": passes nil instead of env")
 					}
-				case "RunReadOnlyReviewHelper", "RunBoundedHelper":
+				case "BuildSession", "RunReadOnlyReviewHelper", "RunBoundedHelper":
 					sessionEntryPoints++
 				}
 

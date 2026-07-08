@@ -24,7 +24,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"time"
 
@@ -1183,11 +1182,11 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 		}
 	}
 
-	// Fan out validators in parallel. Each validator is an independent
-	// read-only bounded helper session — no shared mutable state except the
-	// results slice (indexed writes, no race) and the feature store / observer
-	// (both goroutine-safe). Wall-clock ≈ slowest validator instead of sum.
-	var wg sync.WaitGroup
+	type pendingValidator struct {
+		index  int
+		domain validatorDomain
+	}
+	var pending []pendingValidator
 	for i, v := range validators {
 		axisName := strings.ToLower(v.Name)
 		if approval, ok := priorApprovals[axisName]; ok && approval.ApprovedDigest != "" {
@@ -1208,35 +1207,41 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 				continue
 			}
 		}
-		wg.Add(1)
-		go func(i int, v validatorDomain) {
-			defer wg.Done()
-			// Validator span — child of validation span
-			validatorCtx := validationCtx.Child()
-			validatorStart := time.Now()
-			cfg.Observer.ValidatorStarted(validatorCtx, v.Name)
-
-			status, feedback, markers, err := runSpecializedPlanValidationForArtifact(cfg, sm, attempt, attemptDir, planArtifactPath, v, kind, extras, validatorCtx)
-			results[i] = ValidatorResult{
-				Domain:         v.Name,
-				Status:         status,
-				Feedback:       feedback,
-				Error:          err,
-				AxisApproved:   markers.AxisApproved,
-				FrozenSections: markers.FrozenSections,
-			}
-
-			// Validator completed
-			verdict := status.String()
-			if err != nil {
-				verdict = "error"
-			}
-			cfg.Observer.ValidatorCompleted(validatorCtx, v.Name, verdict, time.Since(validatorStart))
-
-			updateValidatorStatus(cfg, v.Name, status, err)
-		}(i, v)
+		pending = append(pending, pendingValidator{index: i, domain: v})
 	}
-	wg.Wait()
+
+	// Fan out validators in parallel. Each validator is an independent
+	// read-only bounded helper session — no shared mutable state except the
+	// results slice (indexed writes, no race) and the feature store / observer
+	// (both goroutine-safe). Wall-clock ≈ slowest validator instead of sum.
+	runMultiAxisReviews(len(pending), func(pendingIndex int) {
+		item := pending[pendingIndex]
+		i := item.index
+		v := item.domain
+		// Validator span — child of validation span
+		validatorCtx := validationCtx.Child()
+		validatorStart := time.Now()
+		cfg.Observer.ValidatorStarted(validatorCtx, v.Name)
+
+		status, feedback, markers, err := runSpecializedPlanValidationForArtifact(cfg, sm, attempt, attemptDir, planArtifactPath, v, kind, extras, validatorCtx)
+		results[i] = ValidatorResult{
+			Domain:         v.Name,
+			Status:         status,
+			Feedback:       feedback,
+			Error:          err,
+			AxisApproved:   markers.AxisApproved,
+			FrozenSections: markers.FrozenSections,
+		}
+
+		// Validator completed
+		verdict := status.String()
+		if err != nil {
+			verdict = "error"
+		}
+		cfg.Observer.ValidatorCompleted(validatorCtx, v.Name, verdict, time.Since(validatorStart))
+
+		updateValidatorStatus(cfg, v.Name, status, err)
+	})
 
 	// Clear validator statuses after completion
 	clearValidatorStatuses(cfg)
@@ -1265,45 +1270,30 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 
 // setValidatorStatuses initializes the validator status map for TUI display.
 func setValidatorStatuses(cfg PlanLoopConfig, validators []validatorDomain, results []ValidatorResult) {
-	if cfg.FeatureStore == nil {
+	if cfg.Feature == nil {
 		return
 	}
-	_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-		f.ValidatorStatuses = make(map[string]string, len(validators))
-		for _, v := range validators {
-			f.ValidatorStatuses[v.Name] = "running"
-		}
-		return nil
-	})
+	names := make([]string, 0, len(validators))
+	for _, v := range validators {
+		names = append(names, v.Name)
+	}
+	setMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID, names)
 }
 
 // updateValidatorStatus updates a single validator's status for TUI display.
 func updateValidatorStatus(cfg PlanLoopConfig, domain string, status ReviewStatus, err error) {
-	if cfg.FeatureStore == nil {
+	if cfg.Feature == nil {
 		return
 	}
-	_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-		if f.ValidatorStatuses == nil {
-			f.ValidatorStatuses = make(map[string]string)
-		}
-		if err != nil {
-			f.ValidatorStatuses[domain] = "error"
-		} else {
-			f.ValidatorStatuses[domain] = status.String()
-		}
-		return nil
-	})
+	updateMultiAxisValidatorStatus(cfg.FeatureStore, cfg.Feature.ID, domain, status, err)
 }
 
 // clearValidatorStatuses removes validator statuses after validation completes.
 func clearValidatorStatuses(cfg PlanLoopConfig) {
-	if cfg.FeatureStore == nil {
+	if cfg.Feature == nil {
 		return
 	}
-	_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
-		f.ValidatorStatuses = nil
-		return nil
-	})
+	clearMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID)
 }
 
 // composeValidatorResults merges individual validator results into a single
@@ -1315,11 +1305,9 @@ func clearValidatorStatuses(cfg PlanLoopConfig) {
 //   - All validators APPROVED → overall APPROVED.
 func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) (ReviewStatus, string, error) {
 	var b strings.Builder
-	hasError := false
 	var validatorErrors []error
 	approvedCount := 0
 	nitsCount := 0
-	changesCount := 0
 
 	// Summary table
 	b.WriteString("# Multi-Validator Plan Review\n\n")
@@ -1331,26 +1319,24 @@ func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) 
 		switch {
 		case r.Error != nil:
 			verdict = "ERROR"
-			hasError = true
 			validatorErrors = append(validatorErrors, fmt.Errorf("%s validator: %w", r.Domain, r.Error))
 		case r.Status == ReviewApproved:
 			approvedCount++
-		case r.Status == ReviewChangesRequested:
-			changesCount++
 		}
 		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", r.Domain, weight, verdict))
 	}
 	b.WriteString("\n")
 
-	var overallStatus ReviewStatus
 	var overall string
-	switch {
-	case hasError || changesCount > 0 || approvedCount < len(results):
+	overallStatus := strictMultiAxisReviewStatus(validatorResultsToMultiAxisResults(results), len(results))
+	switch overallStatus {
+	case ReviewChangesRequested:
+		overall = agentStatusChangesRequested
+	case ReviewApproved:
+		overall = agentStatusApproved
+	default:
 		overall = agentStatusChangesRequested
 		overallStatus = ReviewChangesRequested
-	default:
-		overall = agentStatusApproved
-		overallStatus = ReviewApproved
 	}
 	b.WriteString(fmt.Sprintf("**Overall: %s** (%d/%d validators approved", overall, approvedCount, len(results)))
 	if nitsCount > 0 {

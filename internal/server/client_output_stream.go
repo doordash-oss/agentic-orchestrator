@@ -51,10 +51,11 @@ func (c *Client) SubscribeSessionOutput(ctx context.Context, sessionID string, o
 		defer close(lines)
 		defer close(errs)
 		if err := c.consumeSessionOutput(ctx, sessionID, opts, lines); err != nil {
-			select {
-			case errs <- err:
-			case <-ctx.Done():
-			}
+			// errs is buffered with capacity 1 and this is its only send, so
+			// this never blocks — do not guard it with a ctx.Done() select
+			// arm, which would coin-flip real errors into silent drops
+			// whenever the context happens to already be cancelled.
+			errs <- err
 		}
 	}()
 	return lines, errs
@@ -115,7 +116,13 @@ func dispatchSessionOutputBlock(sessionID string, block sseBlock, pending *strin
 	}
 	event := block.event
 	if event == "session.output.error" {
-		return false, nil
+		// The server closes the stream right after writing this event
+		// (session_model.go's writeSessionOutputStreamError path) — surface
+		// it as an error so SubscribeSessionOutput's caller can reconnect,
+		// per this function's own doc comment. Returning (false, nil) here
+		// would swallow it: the scanner then hits EOF, consumeSessionOutput
+		// returns nil, and both channels close with no signal at all.
+		return false, fmt.Errorf("session output stream error at offset %d", resp.Offset)
 	}
 	pending.WriteString(resp.Data)
 	buffered := pending.String()
@@ -136,5 +143,14 @@ func dispatchSessionOutputBlock(sessionID string, block sseBlock, pending *strin
 			return true, nil
 		}
 	}
-	return event == "session.output.done" || resp.Done, nil
+	// resp.Done is true on every chunk once the session has finished
+	// (session_model.go passes done=!sess.IsActive() into every
+	// sessionOutputResponse call for that session, not just the last one).
+	// The server only names the SSE event "session.output.done" once
+	// !sess.IsActive() && !resp.Truncated — that event name, not resp.Done,
+	// is the sole authoritative end-of-stream signal. Terminating on
+	// resp.Done here would stop after the *first* chunk of any finished
+	// session whose log exceeds one read window, silently discarding the
+	// rest.
+	return event == "session.output.done", nil
 }

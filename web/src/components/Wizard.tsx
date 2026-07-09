@@ -345,7 +345,7 @@ function StepWhat({
           value={draft.name}
           onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
           autoFocus
-          placeholder="marketplace claude integration"
+          placeholder="Name that represents the short product outcome, also used as the slug."
           className="w-full px-2 py-1.5 text-sm rounded-sm bg-bg-tertiary border border-border text-text-primary focus:outline-none focus:border-accent"
         />
       </Field>
@@ -360,7 +360,7 @@ function StepWhat({
           }
           rows={6}
           data-persist-key="wizard.description"
-          placeholder="Add a side-panel chat to the marketplace tab so AMs can…"
+          placeholder="Describe the user problem, who this is for, and what a good outcome looks like. Add any useful context, constraints, examples, or edge cases — the more relevant detail you provide here, the better the agents can understand what you actually need."
           className="w-full px-2 py-1.5 text-sm rounded-sm bg-bg-tertiary border border-border text-text-primary focus:outline-none focus:border-accent font-mono"
         />
       </Field>

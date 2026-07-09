@@ -14,7 +14,11 @@
 
 package server
 
-import "testing"
+import (
+	"fmt"
+	"sync"
+	"testing"
+)
 
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()
@@ -36,6 +40,51 @@ func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	}
 	if first.ResourceVersion != 1 || second.ResourceVersion != 2 {
 		t.Fatalf("resource versions = %d, %d; want 1, 2", first.ResourceVersion, second.ResourceVersion)
+	}
+}
+
+func TestEventBrokerConcurrentPublishAssignsUniqueMonotonicSeqs(t *testing.T) {
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 512})
+
+	const publishers = 16
+	const perPublisher = 32
+	var wg sync.WaitGroup
+	wg.Add(publishers)
+	for p := 0; p < publishers; p++ {
+		p := p
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perPublisher; i++ {
+				b.publish(SSEEventDTO{
+					Kind:     "feature.state",
+					Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("F-%02d", p)},
+				})
+			}
+		}()
+	}
+	wg.Wait()
+
+	want := uint64(publishers * perPublisher)
+	if got := b.currentSeq(); got != want {
+		t.Fatalf("current seq = %d, want %d", got, want)
+	}
+	ch, replay, reset := b.subscribeAfter(0, "")
+	defer b.unsubscribe(ch)
+	if reset != nil {
+		t.Fatalf("initial subscribe reset = %+v, want none", *reset)
+	}
+	if len(replay) != 0 {
+		t.Fatalf("initial replay len = %d, want 0", len(replay))
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	seen := make(map[uint64]bool, len(b.ring))
+	for _, evt := range b.ring {
+		if seen[evt.Seq] {
+			t.Fatalf("duplicate seq in replay ring: %d", evt.Seq)
+		}
+		seen[evt.Seq] = true
 	}
 }
 
@@ -78,6 +127,71 @@ func TestEventBrokerStaleCursorReturnsReset(t *testing.T) {
 	}
 	if reset.Kind != "stream.reset" || reset.Seq != 4 || reset.Epoch != "epoch-test" {
 		t.Fatalf("reset = %+v, want stream.reset at current seq 4", *reset)
+	}
+}
+
+func TestEventBrokerReplayRingBoundaries(t *testing.T) {
+	t.Parallel()
+
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 3})
+	for i := 1; i <= 5; i++ {
+		b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("F-%d", i)}})
+	}
+
+	ch, replay, reset := b.subscribeAfter(2, "epoch-test")
+	defer b.unsubscribe(ch)
+	if reset != nil {
+		t.Fatalf("exact oldest-1 cursor reset = %+v, want replay", *reset)
+	}
+	if got := eventSeqs(replay); fmt.Sprint(got) != "[3 4 5]" {
+		t.Fatalf("replay seqs from oldest-1 = %v, want [3 4 5]", got)
+	}
+
+	ch, replay, reset = b.subscribeAfter(1, "epoch-test")
+	defer b.unsubscribe(ch)
+	if reset == nil || len(replay) != 0 {
+		t.Fatalf("evicted cursor replay=%+v reset=%+v, want reset only", replay, reset)
+	}
+
+	ch, replay, reset = b.subscribeAfter(6, "epoch-test")
+	defer b.unsubscribe(ch)
+	if reset == nil || len(replay) != 0 {
+		t.Fatalf("future cursor replay=%+v reset=%+v, want reset only", replay, reset)
+	}
+}
+
+func TestEventBrokerCursorWithoutEpochReturnsReset(t *testing.T) {
+	t.Parallel()
+
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 4})
+	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
+
+	ch, replay, reset := b.subscribeAfter(1, "")
+	defer b.unsubscribe(ch)
+	if len(replay) != 0 {
+		t.Fatalf("replay len = %d, want reset only when cursor has no epoch", len(replay))
+	}
+	if reset == nil {
+		t.Fatal("reset = nil, want stream.reset for epoch-less cursor")
+	}
+	if reset.Kind != "stream.reset" || reset.Epoch != "epoch-test" {
+		t.Fatalf("reset = %+v, want stream.reset with current epoch", *reset)
+	}
+}
+
+func TestEventBrokerEpochMismatchReturnsReset(t *testing.T) {
+	t.Parallel()
+
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-new", ReplayLimit: 4})
+	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
+
+	ch, replay, reset := b.subscribeAfter(1, "epoch-old")
+	defer b.unsubscribe(ch)
+	if len(replay) != 0 {
+		t.Fatalf("replay len = %d, want reset only on epoch mismatch", len(replay))
+	}
+	if reset == nil || reset.Kind != "stream.reset" || reset.Epoch != "epoch-new" {
+		t.Fatalf("reset = %+v, want stream.reset with new epoch", reset)
 	}
 }
 
@@ -153,4 +267,79 @@ drained:
 	if last.Resource != triggering.Resource {
 		t.Fatalf("coalesced resource = %+v, want %+v (the triggering event's resource, so the client can refetch exactly what it missed)", last.Resource, triggering.Resource)
 	}
+}
+
+func TestEventBrokerSlowSubscriberReceivesNewestTerminalState(t *testing.T) {
+	t.Parallel()
+
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 128})
+	ch := b.subscribe()
+	defer b.unsubscribe(ch)
+
+	for i := 0; i < subscriberFIFOSize; i++ {
+		b.publish(SSEEventDTO{Kind: "config.updated", Resource: ResourceDTO{Type: "runtime"}})
+	}
+	resource := ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"}
+	for i := 0; i < 8; i++ {
+		b.publish(SSEEventDTO{Kind: "session.updated", Resource: resource, Summary: fmt.Sprintf("intermediate-%d", i)})
+	}
+	b.publish(SSEEventDTO{Kind: "session.ended", Resource: resource, SnapshotRequired: true, Summary: "terminal"})
+
+	<-ch
+	b.flushSubscriber(ch)
+
+	var terminal *SSEEventDTO
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Resource == resource {
+				copied := evt
+				terminal = &copied
+			}
+		default:
+			if terminal == nil {
+				t.Fatal("no coalesced session event delivered to slow subscriber")
+			}
+			if terminal.Kind != "session.ended" || terminal.Summary != "terminal" {
+				t.Fatalf("coalesced session event = %+v, want newest terminal state", *terminal)
+			}
+			return
+		}
+	}
+}
+
+func TestEventBrokerCoalescedOverflowDeliversReset(t *testing.T) {
+	t.Parallel()
+
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 2048})
+	ch := b.subscribe()
+	defer b.unsubscribe(ch)
+
+	for i := 0; i < subscriberFIFOSize; i++ {
+		b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("queued-%d", i)}})
+	}
+	for i := 0; i <= maxSubscriberCoalescedEvents; i++ {
+		b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("overflow-%d", i)}})
+	}
+
+	<-ch
+	b.flushSubscriber(ch)
+	for {
+		select {
+		case evt := <-ch:
+			if evt.Kind == "stream.reset" {
+				return
+			}
+		default:
+			t.Fatal("coalesced overflow did not deliver stream.reset after subscriber drained")
+		}
+	}
+}
+
+func eventSeqs(events []SSEEventDTO) []uint64 {
+	seqs := make([]uint64, 0, len(events))
+	for _, evt := range events {
+		seqs = append(seqs, evt.Seq)
+	}
+	return seqs
 }

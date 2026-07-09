@@ -34,6 +34,8 @@ const (
 	defaultEventReplayLimit      = 4096
 	subscriberFIFOSize           = 16
 	maxSubscriberCoalescedEvents = 1024
+	maxOutputActivityKeys        = 4096
+	streamWriteTimeout           = 5 * time.Second
 )
 
 type eventBroker struct {
@@ -108,6 +110,10 @@ func (b *eventBroker) subscribeAfter(after uint64, epoch string) (chan SSEEventD
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.subs[ch] = &subscriberState{coalesced: map[string]SSEEventDTO{}}
+	if after > 0 && epoch == "" {
+		reset := b.streamResetEventLocked()
+		return ch, nil, &reset
+	}
 	if epoch != "" && epoch != b.epoch {
 		reset := b.streamResetEventLocked()
 		return ch, nil, &reset
@@ -167,7 +173,25 @@ func (b *eventBroker) shouldPublishEventLocked(evt SSEEventDTO) bool {
 		return false
 	}
 	b.lastOutputActivity[key] = now
+	b.pruneOutputActivityLocked(now)
 	return true
+}
+
+func (b *eventBroker) pruneOutputActivityLocked(now time.Time) {
+	if len(b.lastOutputActivity) <= maxOutputActivityKeys {
+		return
+	}
+	for key, at := range b.lastOutputActivity {
+		if now.Sub(at) > time.Minute {
+			delete(b.lastOutputActivity, key)
+		}
+	}
+	for key := range b.lastOutputActivity {
+		if len(b.lastOutputActivity) <= maxOutputActivityKeys/2 {
+			return
+		}
+		delete(b.lastOutputActivity, key)
+	}
 }
 
 func (b *eventBroker) flushSubscriber(ch chan SSEEventDTO) {
@@ -261,6 +285,12 @@ func (b *eventBroker) currentSeq() uint64 {
 	return b.nextSeq
 }
 
+func (b *eventBroker) currentCursor() (uint64, string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.nextSeq, b.epoch
+}
+
 func (b *eventBroker) currentEpoch() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -330,11 +360,13 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 			h.broker.flushSubscriber(ch)
 		case now := <-ticker.C:
+			h.broker.flushSubscriber(ch)
+			seq, epoch := h.broker.currentCursor()
 			evt := SSEEventDTO{
 				APIVersion:       APIVersion,
-				ID:               strconv.FormatUint(h.broker.currentSeq(), 10),
-				Seq:              h.broker.currentSeq(),
-				Epoch:            h.broker.currentEpoch(),
+				ID:               strconv.FormatUint(seq, 10),
+				Seq:              seq,
+				Epoch:            epoch,
 				Kind:             "heartbeat",
 				At:               now.UTC(),
 				Resource:         ResourceDTO{Type: "runtime"},
@@ -373,10 +405,15 @@ func writeSSE(w http.ResponseWriter, event string, data SSEEventDTO) error {
 	if err != nil {
 		return err
 	}
+	setStreamWriteDeadline(w)
 	if _, err := fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", data.ID, event, payload); err != nil {
 		return err
 	}
 	return nil
+}
+
+func setStreamWriteDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(streamWriteTimeout))
 }
 
 func (b *eventBroker) snapshotRequiredEvent(kind string, resource ResourceDTO) SSEEventDTO {

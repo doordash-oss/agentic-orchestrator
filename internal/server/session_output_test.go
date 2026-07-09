@@ -98,3 +98,36 @@ func TestSessionOutputStreamBackfillsAndTerminatesForCompletedSession(t *testing
 		t.Fatalf("stream missing terminal event:\n%s", got)
 	}
 }
+
+func TestSessionOutputStreamErrorIsRetriableForActiveSession(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{
+		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
+			id:      "sess-1",
+			logPath: filepath.Join(t.TempDir(), "missing-output.txt"),
+			status:  ports.SessionRunning,
+		}}},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sess-1/output/stream?from=0", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want 200 body=%s", resp.StatusCode, w.Body.String())
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read stream: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "event: session.output.error") {
+		t.Fatalf("stream missing retriable error event:\n%s", got)
+	}
+	if strings.Contains(got, `"done":true`) {
+		t.Fatalf("stream error was marked terminal:\n%s", got)
+	}
+}

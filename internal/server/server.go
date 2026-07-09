@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -34,6 +35,9 @@ type RuntimeServer struct {
 }
 
 func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
+	if strings.TrimSpace(opts.AuthToken) == "" && !opts.AllowUnauthenticated {
+		return nil, errors.New("server auth token is required")
+	}
 	startedAt := time.Now().UTC()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -46,6 +50,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		StartedAt:       startedAt,
 		Owner:           opts.Owner,
 		AuthToken:       opts.AuthToken,
+		ValidateHost:    true,
 		Features:        opts.Features,
 		FeatureStore:    opts.FeatureStore,
 		Freshness:       opts.Freshness,
@@ -58,10 +63,10 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		RequestShutdown: opts.RequestShutdown,
 	})
 	httpServer := &http.Server{
-		Handler:      handler.routes(),
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+		Handler:           handler.routes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       30 * time.Second,
 	}
 	s := &RuntimeServer{
 		baseURL:   baseURL,

@@ -32,6 +32,10 @@ import (
 func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 	t.Parallel()
 	runtimeDir := t.TempDir()
+	authToken, err := EnsureAuthToken(runtimeDir)
+	if err != nil {
+		t.Fatalf("EnsureAuthToken() error = %v", err)
+	}
 	identity := RuntimeIdentity{
 		RuntimeDir: runtimeDir,
 		StateDir:   filepath.Join(runtimeDir, "features"),
@@ -49,6 +53,7 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 		LaunchPolicy: policy,
 		StartMode:    "server",
 		Owner:        owner,
+		AuthToken:    authToken,
 		Features:     featureListerFunc(nil),
 	})
 	if err != nil {
@@ -67,7 +72,12 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 		t.Fatalf("BaseURL() = %q; want loopback dynamic port", baseURL)
 	}
 
-	resp, err := http.Get(baseURL + "/api/v1/health")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, baseURL+"/api/v1/health", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /api/v1/health error = %v", err)
 	}
@@ -102,6 +112,22 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 	}
 	if srv.EventEpoch() == "" {
 		t.Fatal("EventEpoch() is empty; discovery cannot publish stream epoch")
+	}
+	if srv.srv.WriteTimeout != 0 {
+		t.Fatalf("server WriteTimeout = %s, want 0 so SSE streams are not killed by the shared server timeout", srv.srv.WriteTimeout)
+	}
+}
+
+func TestStartRejectsMissingAuthToken(t *testing.T) {
+	t.Parallel()
+
+	srv, err := Start(context.Background(), Options{})
+	if err == nil {
+		_ = srv.Close(context.Background())
+		t.Fatal("Start() error = nil, want missing auth token error")
+	}
+	if !strings.Contains(err.Error(), "auth token") {
+		t.Fatalf("Start() error = %v, want auth token error", err)
 	}
 }
 

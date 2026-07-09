@@ -247,6 +247,7 @@ func writeSessionOutputSSE(w http.ResponseWriter, event, id string, data Session
 	if err != nil {
 		return err
 	}
+	setStreamWriteDeadline(w)
 	_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", id, event, payload)
 	return err
 }
@@ -257,7 +258,7 @@ func writeSessionOutputStreamError(w http.ResponseWriter, sessionID string, offs
 		SessionID:  sessionID,
 		Offset:     offset,
 		NextOffset: offset,
-		Done:       true,
+		Done:       false,
 	})
 }
 

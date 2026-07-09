@@ -1865,7 +1865,7 @@ func TestSSEEmitsShutdownFromDomainEvents(t *testing.T) {
 }
 
 func TestRuntimeServerCloseEmitsShutdownNotification(t *testing.T) {
-	srv, err := Start(context.Background(), Options{})
+	srv, err := Start(context.Background(), Options{AuthToken: "test-token"})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1879,6 +1879,7 @@ func TestRuntimeServerCloseEmitsShutdownNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
+	req.Header.Set("Authorization", "Bearer test-token")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET SSE error = %v", err)

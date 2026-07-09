@@ -18,6 +18,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -51,6 +52,7 @@ type apiHandler struct {
 	broker          *eventBroker
 	mutations       MutationTarget
 	requestShutdown func()
+	validateHost    bool
 
 	recoveryMu        sync.Mutex
 	recoverySnapshots map[string][]ports.RecoveryItem
@@ -86,6 +88,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		broker:          newEventBroker(opts.Events, opts.DomainEvents),
 		mutations:       opts.Mutations,
 		requestShutdown: opts.RequestShutdown,
+		validateHost:    opts.ValidateHost,
 	}
 	return handler
 }
@@ -110,6 +113,9 @@ func (h *apiHandler) routes() http.Handler {
 	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.setSequenceHeader(w)
+		if h.rejectInvalidHost(w, r) {
+			return
+		}
 		if h.handleMutationPreflight(w, r) {
 			return
 		}
@@ -413,6 +419,39 @@ func (h *apiHandler) rejectUnauthorized(w http.ResponseWriter, r *http.Request) 
 	}
 	writeAPIError(w, http.StatusUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized), nil)
 	return true
+}
+
+func (h *apiHandler) rejectInvalidHost(w http.ResponseWriter, r *http.Request) bool {
+	if h == nil || !h.validateHost {
+		return false
+	}
+	if isAllowedLoopbackHost(r.Host) {
+		return false
+	}
+	writeAPIError(w, http.StatusForbidden, "forbidden", "invalid host", nil)
+	return true
+}
+
+func isAllowedLoopbackHost(raw string) bool {
+	host := strings.TrimSpace(raw)
+	if host == "" {
+		return false
+	}
+	if split, _, err := net.SplitHostPort(host); err == nil {
+		host = split
+	} else if strings.HasPrefix(host, "[") && strings.Contains(host, "]") {
+		end := strings.Index(host, "]")
+		host = host[1:end]
+	} else if strings.Count(host, ":") > 0 {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	switch strings.ToLower(host) {
+	case "127.0.0.1", "localhost", "::1":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *apiHandler) authorized(r *http.Request) bool {

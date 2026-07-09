@@ -44,21 +44,24 @@ type LaunchPolicy struct {
 }
 
 type Options struct {
-	Runtime         RuntimeIdentity
-	LaunchPolicy    LaunchPolicy
-	StartMode       string
-	Owner           instancelock.Owner
-	AuthToken       string
-	Features        FeatureLister
-	FeatureStore    FeatureReader
-	Freshness       RepoFreshnessProvider
-	Config          *config.Config
-	Registry        *llm.Registry
-	Sessions        ports.SessionManager
-	Events          <-chan interface{}
-	DomainEvents    <-chan ports.Event
-	Mutations       MutationTarget
-	RequestShutdown func()
+	Runtime      RuntimeIdentity
+	LaunchPolicy LaunchPolicy
+	StartMode    string
+	Owner        instancelock.Owner
+	AuthToken    string
+	// AllowUnauthenticated is only for tests that intentionally exercise the
+	// server without discovery bootstrap. Production Start requires AuthToken.
+	AllowUnauthenticated bool
+	Features             FeatureLister
+	FeatureStore         FeatureReader
+	Freshness            RepoFreshnessProvider
+	Config               *config.Config
+	Registry             *llm.Registry
+	Sessions             ports.SessionManager
+	Events               <-chan interface{}
+	DomainEvents         <-chan ports.Event
+	Mutations            MutationTarget
+	RequestShutdown      func()
 }
 
 type HandlerOptions struct {
@@ -67,6 +70,7 @@ type HandlerOptions struct {
 	StartedAt       time.Time
 	Owner           instancelock.Owner
 	AuthToken       string
+	ValidateHost    bool
 	Features        FeatureLister
 	FeatureStore    FeatureReader
 	Freshness       RepoFreshnessProvider

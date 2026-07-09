@@ -54,3 +54,26 @@ func TestBearerTokenAcceptedForSSEQueryFallback(t *testing.T) {
 		t.Fatalf("SSE query token status = %d, want 200", resp.StatusCode)
 	}
 }
+
+func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token", ValidateHost: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Host = "attacker.example"
+	req.Header.Set("Authorization", "Bearer test-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusForbidden {
+		t.Fatalf("bad Host status = %d, want 403", w.Result().StatusCode)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Host = "127.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer test-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("loopback Host status = %d, want 200", w.Result().StatusCode)
+	}
+}

@@ -94,6 +94,7 @@ type APIClient interface {
 	SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error)
 	FetchRefreshSnapshot(context.Context, server.RefreshSignal) (server.RefreshSnapshot, error)
 	SubscribeSessionOutput(context.Context, string, server.SessionOutputStreamOptions) (<-chan server.SessionOutputLine, <-chan error)
+	SessionOutput(context.Context, string, server.OutputQuery) (server.SessionOutputResponse, error)
 }
 
 type APIAppOptions struct {
@@ -6702,7 +6703,19 @@ func (m *APIAppModel) startLiveSessionOutput(sess *apiSessionView) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.liveOutputCancel = cancel
 	m.liveOutputSessionID = sess.ID()
-	m.liveOutputLines, m.liveOutputErrs = m.client.SubscribeSessionOutput(ctx, sess.ID(), server.SessionOutputStreamOptions{})
+	// Start the tail from the raw log's current end rather than byte 0:
+	// apiSessionView's log is already populated from the transcript REST
+	// snapshot (newAPIAttachSession), so replaying the whole raw log here
+	// would re-decode and duplicate that entire history. This accepts a
+	// small, self-correcting gap between the transcript snapshot and the
+	// live tail's start point — the byte-offset/message-index mismatch
+	// documented in Task 13, not a new problem. Fall back to AfterOffset 0
+	// if the lookup fails rather than not starting the feed at all.
+	afterOffset := int64(0)
+	if resp, err := m.client.SessionOutput(context.Background(), sess.ID(), server.OutputQuery{Limit: 1}); err == nil {
+		afterOffset = resp.Size
+	}
+	m.liveOutputLines, m.liveOutputErrs = m.client.SubscribeSessionOutput(ctx, sess.ID(), server.SessionOutputStreamOptions{AfterOffset: afterOffset})
 	m.liveOutputDecoder = newSessionOutputDecoder(sess.ProviderName())
 	return m.listenLiveSessionOutputCmd(sess, m.liveOutputDecoder)
 }
@@ -6735,6 +6748,14 @@ func (m APIAppModel) listenLiveSessionOutputCmd(sess *apiSessionView, decoder *s
 				return apiSessionOutputDoneMsg{sessionID: sessionID}
 			}
 			for _, decoded := range decoder.Decode(line.Text) {
+				// Append before signaling: by the time attach.go drains
+				// attachCh and calls updateViewport(), which renders from
+				// sess.MessageLog(), the message must already be there or
+				// the render shows stale content for one more tick.
+				// MessageLog.Append takes its own internal mutex, so this
+				// is safe to call from this background goroutine
+				// concurrently with the TUI's render goroutine.
+				sess.MessageLog().Append(decoded)
 				select {
 				case sess.attachCh <- decoded:
 				default:

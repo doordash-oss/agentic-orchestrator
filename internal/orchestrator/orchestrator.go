@@ -137,9 +137,9 @@ type ReviewDecision struct {
 	IsRewind    bool
 	PhasePlan   bool
 	Roadmap     bool
-	// Comment carries free-text rejection feedback from a roadmap review
-	// menu. Only meaningful when Roadmap == true && Decision == "iterate"
-	// (the roadmap reject path). Mirrors RoadmapReviewDecisionMsg.Comment.
+	// Comment carries free-text rejection feedback from a review menu.
+	// On iterate, it is persisted as validation-feedback.md so the next
+	// planner attempt sees the reviewer's requested change.
 	Comment string
 }
 
@@ -1508,6 +1508,7 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 	if d.IsRewind && d.Decision == "proceed" {
 		return o.ProceedFromRewindReview(featureID, d.TargetPhase)
 	}
+	d = o.normalizeReviewDecision(f, d)
 
 	switch d.Decision {
 	case "proceed":
@@ -1517,6 +1518,22 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 	default:
 		return fmt.Errorf("unknown review decision %q", d.Decision)
 	}
+}
+
+func (o *Orchestrator) normalizeReviewDecision(f *feature.Feature, d ReviewDecision) ReviewDecision {
+	if f == nil || f.Status != feature.StatusPlanNeedsReview || d.Roadmap || d.PhasePlan || d.TargetPhase != feature.PhaseResearch {
+		return d
+	}
+	if f.CurrentRoadmapPhase > 0 {
+		d.PhasePlan = true
+		return d
+	}
+	if o.resolveArtifactPath(f, "roadmap") != "" || f.TotalRoadmapPhases > 0 {
+		d.Roadmap = true
+		return d
+	}
+	d.TargetPhase = feature.PhaseImplement
+	return d
 }
 
 // reviewProceed handles "proceed" from a gate or plan-review menu. Phase
@@ -1645,7 +1662,7 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 	}); err != nil {
 		return fmt.Errorf("bump MaxPlanIterations: %w", err)
 	}
-	o.writePlanAttemptChangesRequested(f, d.PhasePlan)
+	o.writePlanAttemptChangesRequested(f, d.PhasePlan, d.Comment)
 	startedPhase, started, err := o.startPhase(featureID, feature.PhasePlan)
 	if err != nil {
 		return err
@@ -1809,7 +1826,7 @@ func (o *Orchestrator) persistRoadmapPhaseCount(featureID string, f *feature.Fea
 //
 // Best-effort: fails silently when state dir is unresolved or no prior
 // attempt has completed successfully.
-func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phasePlan bool) {
+func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phasePlan bool, feedback string) {
 	baseDir := o.stateDir()
 	if baseDir == "" {
 		return
@@ -1848,6 +1865,10 @@ func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phas
 			Attempt:      latestAttempt,
 			ReviewStatus: "CHANGES_REQUESTED",
 		})
+		if strings.TrimSpace(feedback) != "" {
+			feedbackPath := filepath.Join(planDir, fmt.Sprintf("attempt-%02d", latestAttempt), "validation-feedback.md")
+			_ = os.WriteFile(feedbackPath, []byte(feedback), 0o644)
+		}
 	}
 }
 

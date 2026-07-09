@@ -1076,6 +1076,52 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	}
 }
 
+func TestServerMutationTargetRetryFeatureRestartsFailedPhase(t *testing.T) {
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("Retry failed phase via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+		Pipeline: feature.PipelineMedium,
+	})
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(f *feature.Feature) error {
+		f.Status = feature.StatusFailed
+		f.CurrentPhase = feature.PhasePlan
+		f.FailureType = feature.FailureInfrastructure
+		f.LastError = "previous planning failure"
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare failed feature: %v", err)
+	}
+
+	target := serverMutationTarget{
+		orch:  orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		store: store,
+	}
+	result, err := target.RetryFeature(f.ID)
+	if err != nil {
+		t.Fatalf("RetryFeature() error = %v, want failed phase restarted", err)
+	}
+	if result.Result != "retried" || result.FeatureID != f.ID {
+		t.Fatalf("RetryFeature() result = %+v, want retried feature", result)
+	}
+
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load retried feature: %v", err)
+	}
+	if updated.Status != feature.StatusPlanning || updated.CurrentPhase != feature.PhasePlan {
+		t.Fatalf("feature status/phase = %s/%s, want Planning/Plan after retry dispatch", updated.Status, updated.CurrentPhase)
+	}
+	if updated.FailureType != "" || updated.LastError != "" {
+		t.Fatalf("failure fields = %q/%q, want cleared", updated.FailureType, updated.LastError)
+	}
+}
+
 func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()

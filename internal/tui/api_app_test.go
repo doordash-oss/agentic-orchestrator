@@ -1224,6 +1224,32 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 	}
 }
 
+func TestOpenAPIAttachStartsLiveOutputFeed(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.openAPIAttachForFeature("feat-1")
+	updated := model.(APIAppModel)
+	if updated.liveOutputCancel == nil {
+		t.Fatal("openAPIAttachForFeature did not start a live output feed")
+	}
+	if updated.liveOutputSessionID != "sess-1" {
+		t.Fatalf("liveOutputSessionID = %q, want sess-1", updated.liveOutputSessionID)
+	}
+}
+
 func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 	t.Parallel()
 
@@ -8214,6 +8240,14 @@ func (f *fakeTUIAPIClient) FetchRefreshSnapshot(_ context.Context, signal server
 	f.calls = append(f.calls, "FetchRefreshSnapshot")
 	f.refreshSignals = append(f.refreshSignals, signal)
 	return f.refreshSnapshot, nil
+}
+
+func (f *fakeTUIAPIClient) SubscribeSessionOutput(context.Context, string, server.SessionOutputStreamOptions) (<-chan server.SessionOutputLine, <-chan error) {
+	lines := make(chan server.SessionOutputLine)
+	errs := make(chan error)
+	close(lines)
+	close(errs)
+	return lines, errs
 }
 
 func countString(values []string, needle string) int {

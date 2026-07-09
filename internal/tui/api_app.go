@@ -93,6 +93,7 @@ type APIClient interface {
 	Shutdown(context.Context) (server.ShutdownResponse, error)
 	SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error)
 	FetchRefreshSnapshot(context.Context, server.RefreshSignal) (server.RefreshSnapshot, error)
+	SubscribeSessionOutput(context.Context, string, server.SessionOutputStreamOptions) (<-chan server.SessionOutputLine, <-chan error)
 }
 
 type APIAppOptions struct {
@@ -342,10 +343,30 @@ type APIAppModel struct {
 	cancelEvents               context.CancelFunc
 	signals                    <-chan server.RefreshSignal
 	eventErrs                  <-chan error
+	liveOutputCancel           context.CancelFunc
+	liveOutputSessionID        string
+	liveOutputLines            <-chan server.SessionOutputLine
+	liveOutputErrs             <-chan error
+	liveOutputDecoder          *sessionOutputDecoder
 }
 
 type apiRefreshSignalMsg struct {
 	signal server.RefreshSignal
+}
+
+// apiSessionOutputLineMsg carries one decoded raw-output line from the
+// attach view's live output feed (see startLiveSessionOutput). Delivered
+// messages have already been pushed onto the target session's attachCh —
+// this msg only re-arms the listen loop.
+type apiSessionOutputLineMsg struct {
+	sessionID string
+	line      server.SessionOutputLine
+}
+
+// apiSessionOutputDoneMsg signals that the live output feed for sessionID
+// ended (channel closed or a stream error) and should be stopped.
+type apiSessionOutputDoneMsg struct {
+	sessionID string
 }
 
 type apiRefreshSnapshotMsg struct {
@@ -1331,18 +1352,35 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetchFeatureDetailCmd(msg.FeatureID)
 		}
 		return m, nil
+	case apiSessionOutputLineMsg:
+		if msg.sessionID != m.liveOutputSessionID {
+			return m, nil
+		}
+		sess := m.attachedSessionView()
+		if sess == nil || sess.ID() != m.liveOutputSessionID {
+			m.stopLiveSessionOutput()
+			return m, nil
+		}
+		return m, m.listenLiveSessionOutputCmd(sess, m.liveOutputDecoder)
+	case apiSessionOutputDoneMsg:
+		if msg.sessionID == m.liveOutputSessionID {
+			m.stopLiveSessionOutput()
+		}
+		return m, nil
 	}
 
 	updated, cmd := m.attach.Update(msg)
 	m.attach = &updated
 	if updated.Detached() || updated.Done() {
 		m.attach = nil
+		m.stopLiveSessionOutput()
 		if m.selectedFeature != "" {
 			return m, tea.Batch(cmd, m.fetchFeatureDetailCmd(m.selectedFeature))
 		}
 		return m, cmd
 	}
-	return m, cmd
+	liveCmd := m.syncLiveSessionOutputForAttach()
+	return m, tea.Batch(cmd, liveCmd)
 }
 
 func apiArtifactReviewOwnsMsg(msg tea.Msg) bool {
@@ -3055,6 +3093,7 @@ func (m APIAppModel) rebuildAPIAttachTabs() (APIAppModel, tea.Cmd) {
 	if len(next) == 0 {
 		m.attach = nil
 		m.statusMessage = "No active sessions to watch."
+		m.stopLiveSessionOutput()
 		return m, nil
 	}
 	if !m.attach.rebuildTabs(next) {
@@ -3067,7 +3106,8 @@ func (m APIAppModel) rebuildAPIAttachTabs() (APIAppModel, tea.Cmd) {
 	var cmd tea.Cmd
 	updated, cmd := m.attach.switchToTab(idx)
 	m.attach = &updated
-	return m, cmd
+	liveCmd := m.syncLiveSessionOutputForAttach()
+	return m, tea.Batch(cmd, liveCmd)
 }
 
 func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot) (APIAppModel, tea.Cmd) {
@@ -4931,7 +4971,11 @@ func (m APIAppModel) openAPIAttachForFeature(featureID string) (tea.Model, tea.C
 	}
 	m.attach = &attach
 	m.statusMessage = ""
-	return m, attach.Init()
+	var liveCmd tea.Cmd
+	if sess, ok := tabs[initialIdx].sess.(*apiSessionView); ok {
+		liveCmd = m.startLiveSessionOutput(sess)
+	}
+	return m, tea.Batch(attach.Init(), liveCmd)
 }
 
 func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
@@ -6643,6 +6687,106 @@ func (m APIAppModel) listenForAPIEvents() tea.Cmd {
 			return nil
 		}
 	}
+}
+
+// startLiveSessionOutput begins tailing sess's raw output and decoding it
+// into the session's own attachCh, so the existing AttachModel render loop
+// (drainAndPollAttachChCmd/pollAttachCh) picks messages up with no further
+// wiring. Any previously running feed is stopped first — only one session's
+// output is tailed at a time, matching the single visible attach tab.
+func (m *APIAppModel) startLiveSessionOutput(sess *apiSessionView) tea.Cmd {
+	m.stopLiveSessionOutput()
+	if sess == nil || m.client == nil || !sess.IsActive() {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.liveOutputCancel = cancel
+	m.liveOutputSessionID = sess.ID()
+	m.liveOutputLines, m.liveOutputErrs = m.client.SubscribeSessionOutput(ctx, sess.ID(), server.SessionOutputStreamOptions{})
+	m.liveOutputDecoder = newSessionOutputDecoder(sess.ProviderName())
+	return m.listenLiveSessionOutputCmd(sess, m.liveOutputDecoder)
+}
+
+// stopLiveSessionOutput cancels any in-flight live output subscription and
+// clears its bookkeeping. Safe to call when no feed is running.
+func (m *APIAppModel) stopLiveSessionOutput() {
+	if m.liveOutputCancel != nil {
+		m.liveOutputCancel()
+	}
+	m.liveOutputCancel = nil
+	m.liveOutputSessionID = ""
+	m.liveOutputLines = nil
+	m.liveOutputErrs = nil
+	m.liveOutputDecoder = nil
+}
+
+// listenLiveSessionOutputCmd blocks for the next line or error on the
+// channels captured when the feed started, decodes lines through decoder,
+// and forwards decoded messages onto sess's attachCh — mirroring the
+// non-blocking select/default pattern session/manager.go uses for local
+// sessions so a slow consumer can't stall the decode loop.
+func (m APIAppModel) listenLiveSessionOutputCmd(sess *apiSessionView, decoder *sessionOutputDecoder) tea.Cmd {
+	lines, errs := m.liveOutputLines, m.liveOutputErrs
+	sessionID := sess.ID()
+	return func() tea.Msg {
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				return apiSessionOutputDoneMsg{sessionID: sessionID}
+			}
+			for _, decoded := range decoder.Decode(line.Text) {
+				select {
+				case sess.attachCh <- decoded:
+				default:
+				}
+			}
+			return apiSessionOutputLineMsg{sessionID: sessionID, line: line}
+		case _, ok := <-errs:
+			if !ok {
+				return apiSessionOutputDoneMsg{sessionID: sessionID}
+			}
+			// Reconnect-on-error is left to a future task; for now a stream
+			// error just ends this feed like a closed channel would.
+			return apiSessionOutputDoneMsg{sessionID: sessionID}
+		}
+	}
+}
+
+// attachedSessionView returns the *apiSessionView AttachModel is currently
+// polling — its sess field, the same pointer switchToTab installs and
+// drainAndPollAttachChCmd/pollAttachCh drain — or nil if there is no attach
+// view or its active session isn't a live API session.
+//
+// This is deliberately not repoTabs[activeTabIdx].sess: apiAttachTabsForFeature
+// rebuilds every repoTab's *apiSessionView (with a fresh, empty attachCh)
+// on every refresh snapshot, but AttachModel.sess only repoints at one of
+// those fresh objects when switchToTab actually runs (see
+// rebuildAPIAttachTabs). Writing to a repoTabs pointer that AttachModel
+// isn't (yet) polling would silently drop every decoded message.
+func (m *APIAppModel) attachedSessionView() *apiSessionView {
+	if m.attach == nil {
+		return nil
+	}
+	sess, _ := m.attach.sess.(*apiSessionView)
+	return sess
+}
+
+// syncLiveSessionOutputForAttach reconciles the live output feed with
+// AttachModel's current sess: stopped if the attach view closed, restarted
+// against the new session if it changed. This is called after any point
+// where AttachModel's own Update (tab/shift+tab key handling) or
+// api_app.go's tab-rebuild logic may have repointed sess, since neither of
+// those call sites knows about the live feed.
+func (m *APIAppModel) syncLiveSessionOutputForAttach() tea.Cmd {
+	if m.attach == nil {
+		m.stopLiveSessionOutput()
+		return nil
+	}
+	sess := m.attachedSessionView()
+	if sess != nil && sess.ID() == m.liveOutputSessionID {
+		return nil
+	}
+	return m.startLiveSessionOutput(sess)
 }
 
 func (m APIAppModel) fetchRefreshSnapshotCmd(signal server.RefreshSignal) tea.Cmd {

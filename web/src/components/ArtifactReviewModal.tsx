@@ -15,6 +15,20 @@ import { MarkdownPreview } from "./MarkdownPreview";
 // artifact changes.
 type ViewerMode = "rendered" | "raw";
 
+function latestPhasePlanArtifact(items: ArtifactRef[]): ArtifactRef | undefined {
+  let best: { item: ArtifactRef; phaseNumber: number } | undefined;
+  for (const item of items) {
+    const match = item.key.match(/^phase-(\d+)-plan$/);
+    if (!match) continue;
+    const phaseNumber = Number(match[1]);
+    if (!Number.isFinite(phaseNumber)) continue;
+    if (!best || phaseNumber > best.phaseNumber) {
+      best = { item, phaseNumber };
+    }
+  }
+  return best?.item;
+}
+
 function defaultModeFor(mime: string | undefined): ViewerMode {
   return mime?.startsWith("text/markdown") ? "rendered" : "raw";
 }
@@ -67,13 +81,20 @@ export function ArtifactReviewModal({
     const phaseHit = pendingReviewPhase
       ? items.find((i) => i.phase === pendingReviewPhase || i.key === pendingReviewPhase)
       : undefined;
-    return (phaseHit ?? items[0]).key;
+    const latestPhasePlan =
+      pendingReviewPhase?.toLowerCase() === "plan"
+        ? latestPhasePlanArtifact(items)
+        : undefined;
+    return (phaseHit ?? latestPhasePlan ?? items[0]).key;
   }, [items, pendingReviewPhase]);
 
   const [selected, setSelected] = useState<string | null>(initialKey);
   useEffect(() => {
     if (initialKey && selected === null) setSelected(initialKey);
   }, [initialKey, selected]);
+  useEffect(() => {
+    if (open && initialKey) setSelected(initialKey);
+  }, [open, initialKey]);
 
   const selectedRef = useMemo(
     () => items.find((i) => i.key === selected) ?? null,
@@ -121,6 +142,7 @@ export function ArtifactReviewModal({
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["features"] });
       await qc.invalidateQueries({ queryKey: ["feature", featureId] });
+      setComment("");
       onClose();
     },
   });

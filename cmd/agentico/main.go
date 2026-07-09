@@ -1347,7 +1347,12 @@ func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.Ret
 			return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "retried"}, nil
 		}
 	}
-	if err := t.orch.RetryPhase(featureID); err != nil {
+	outcome, err := t.orch.RestartPhase(featureID, 0, 0)
+	if err != nil {
+		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+	}
+	restartResp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: "retried"}
+	if err := t.dispatchRestartOutcome(featureID, outcome, &restartResp); err != nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "failed"}, err
 	}
 	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "retried"}, nil

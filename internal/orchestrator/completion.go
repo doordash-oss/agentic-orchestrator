@@ -616,13 +616,31 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
-	if isTerminalForCompletion(f) {
+	if f != nil && f.Status == feature.StatusInterrupted {
 		return nil
 	}
 	if result == nil {
+		if isTerminalForCompletion(f) {
+			return nil
+		}
 		errMsg := "plan loop returned no result"
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
+	}
+	if f != nil && f.Status == feature.StatusFailed {
+		if !planResultCanReviveFailedFeature(result) {
+			return nil
+		}
+		if err := o.reviveFailedPlanCompletion(featureID); err != nil {
+			return err
+		}
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return fmt.Errorf("reload revived feature: %w", err)
+		}
+	}
+	if err := o.promoteLatestPlanAttemptArtifact(f, result); err != nil {
+		return err
 	}
 	planDir := o.planReadOnlyGuardDir(f)
 	repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, feature.PhasePlan, planDir)
@@ -668,6 +686,62 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 	}
 }
 
+func (o *Orchestrator) promoteLatestPlanAttemptArtifact(f *feature.Feature, result *agent.PlanLoopResult) error {
+	if f == nil || result == nil || result.Iterations <= 0 || f.CurrentRoadmapPhase <= 0 {
+		return nil
+	}
+	switch result.FinalStatus {
+	case "approved", "needs_human_review":
+	default:
+		return nil
+	}
+	planDir := o.phasePlanDirForFeature(f, f.CurrentRoadmapPhase)
+	if planDir == "" {
+		return nil
+	}
+	src := filepath.Join(planDir, fmt.Sprintf("attempt-%02d", result.Iterations), "phase-plan.md")
+	dst := filepath.Join(planDir, "phase-plan.md")
+	if src == dst {
+		return nil
+	}
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read revised phase plan artifact: %w", err)
+	}
+	if err := os.WriteFile(dst, data, 0o644); err != nil {
+		return fmt.Errorf("promote revised phase plan artifact: %w", err)
+	}
+	return nil
+}
+
+func planResultCanReviveFailedFeature(result *agent.PlanLoopResult) bool {
+	if result == nil {
+		return false
+	}
+	switch result.FinalStatus {
+	case "approved", "needs_human_review":
+		return true
+	default:
+		return false
+	}
+}
+
+func (o *Orchestrator) reviveFailedPlanCompletion(featureID string) error {
+	return o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+		if f.Status != feature.StatusFailed || f.CurrentPhase != feature.PhasePlan {
+			return nil
+		}
+		f.Status = feature.StatusPlanning
+		f.FailureType = ""
+		f.LastError = ""
+		f.CurrentPhaseStatus = ""
+		return nil
+	})
+}
+
 // onPlanApproved handles the plan-approved success branch.
 func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) error {
 	// Roadmap mode: if we're approving the top-level roadmap (CurrentRoadmapPhase==0),
@@ -699,8 +773,8 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		}
 		if ff.Checkpoints.RoadmapReview {
 			// Route through review gate.
-			if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
-				return fmt.Errorf("mark needs plan review: %w", err)
+			if err := o.ensurePlanReviewGate(featureID, ff); err != nil {
+				return err
 			}
 			o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 			phase := feature.PhasePlan
@@ -741,8 +815,8 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 	// is enabled, we surface it as a review gate; otherwise we run
 	// StartRoadmapPhaseImplementation and start implementation.
 	if f.Checkpoints.PhasePlanReview {
-		if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
-			return fmt.Errorf("mark needs plan review: %w", err)
+		if err := o.ensurePlanReviewGate(featureID, f); err != nil {
+			return err
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 		phase := feature.PhasePlan
@@ -785,10 +859,10 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 // feature here would discard a working plan over an exception path the
 // user can resolve in a few seconds.
 //
-// f is unused but retained for symmetry with the other completion handlers.
-func (o *Orchestrator) onPlanNeedsReview(featureID string, _ *feature.Feature) error {
-	if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
-		return fmt.Errorf("mark needs plan review: %w", err)
+// f is used to make repeated review-gate completions idempotent.
+func (o *Orchestrator) onPlanNeedsReview(featureID string, f *feature.Feature) error {
+	if err := o.ensurePlanReviewGate(featureID, f); err != nil {
+		return err
 	}
 	o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 	phase := feature.PhasePlan
@@ -799,6 +873,23 @@ func (o *Orchestrator) onPlanNeedsReview(featureID string, _ *feature.Feature) e
 	})
 	if o.hooks.OnReviewRequired != nil {
 		o.hooks.OnReviewRequired(featureID, phase)
+	}
+	return nil
+}
+
+func (o *Orchestrator) ensurePlanReviewGate(featureID string, f *feature.Feature) error {
+	if f == nil {
+		var err error
+		f, err = o.deps.Lifecycle.Get(featureID)
+		if err != nil {
+			return fmt.Errorf("load feature before plan review gate: %w", err)
+		}
+	}
+	if f.Status == feature.StatusPlanNeedsReview {
+		return nil
+	}
+	if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
+		return fmt.Errorf("mark needs plan review: %w", err)
 	}
 	return nil
 }

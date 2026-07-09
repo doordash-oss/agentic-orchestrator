@@ -223,7 +223,6 @@ export function FeatureList() {
     </section>
   );
 }
-
 // formatUSD renders a USD cost compactly. Mirrors the TUI: two-decimal
 // precision for small numbers, $-prefixed.
 function formatUSD(n: number): string {
@@ -553,4 +552,3 @@ function StatusIcon({ status }: { status: string }) {
     </span>
   );
 }
-

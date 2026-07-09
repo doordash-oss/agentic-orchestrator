@@ -19,6 +19,8 @@ export type FeatureStatus =
   | "PlanNeedsReview"
   | "Inquiring"
   | "InquireReady"
+  | "DesignReady"
+  | "Designing"
   | "BrainstormReady"
   | "Brainstorming"
   | "PromptNeedsReview"
@@ -27,7 +29,8 @@ export type FeatureStatus =
   | "DesignNeedsReview"
   | "Reviewing"
   | "NeedUserInput"
-  | "FinalReviewing";
+  | "FinalReviewing"
+  | "SettingUpWorktrees";
 
 export type PhaseName =
   | "research"
@@ -73,6 +76,8 @@ export interface Checkpoints {
   inquiry_review?: boolean;
   research_review?: boolean;
   design_review?: boolean;
+  roadmap_review?: boolean;
+  phase_plan_review?: boolean;
   plan_review?: boolean;
   manual_publish?: boolean;
 }
@@ -132,6 +137,7 @@ export interface PermissionItem {
 
 export interface FeatureDetail extends FeatureSummary {
   description?: string;
+  failure?: FeatureFailure;
   exit_criteria?: string;
   models: ModelConfig;
   checkpoints: Checkpoints;
@@ -155,6 +161,11 @@ export interface FeatureDetail extends FeatureSummary {
   active_run?: number;
   run_count?: number;
   pending_need_user_input?: NeedUserInputView[];
+}
+
+export interface FeatureFailure {
+  type?: string;
+  message: string;
 }
 
 export interface NeedUserInputView {
@@ -272,6 +283,7 @@ export interface RecoveryItem {
 }
 
 export interface RecoveryScanResponse {
+  snapshot_id: string;
   items: RecoveryItem[];
 }
 

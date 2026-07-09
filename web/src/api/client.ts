@@ -109,8 +109,34 @@ export const api = {
     return mapHealth(dto);
   },
   featuresList: async (signal?: AbortSignal) => {
-    const dto = await getJSON<FeatureListDTO>(`${API}/features`, signal);
-    return { features: dto.features.map(mapFeatureSummary) } satisfies FeaturesListResponse;
+    const [dto, sessions] = await Promise.all([
+      getJSON<FeatureListDTO>(`${API}/features`, signal),
+      optional(() => getJSON<SessionListDTO>(`${API}/sessions`, signal)),
+    ]);
+    const details = await Promise.all(
+      dto.features.map((feature) =>
+        optional(() =>
+          getJSON<FeatureDetailDTOResponse>(
+            `${API}/features/${encodeURIComponent(feature.id)}`,
+            signal,
+          ),
+        ),
+      ),
+    );
+    const detailByID = new Map(
+      details.flatMap((detail) =>
+        detail?.feature ? [[detail.feature.id, detail.feature] as const] : [],
+      ),
+    );
+    return {
+      features: dto.features.map((feature) =>
+        mapFeatureSummary(
+          feature,
+          sessions?.sessions ?? [],
+          detailByID.get(feature.id),
+        ),
+      ),
+    } satisfies FeaturesListResponse;
   },
   featureDetail: async (id: string, signal?: AbortSignal) => {
     const [detail, sessions, prompts, permissions] = await Promise.all([
@@ -134,7 +160,11 @@ export const api = {
     return mapConfig(runtime, models);
   },
   createFeature: async (body: CreateFeatureRequest) => {
-    const created = await sendJSON<ActionResultDTO>("POST", `${API}/features`, body);
+    const created = await sendJSON<ActionResultDTO>(
+      "POST",
+      `${API}/features`,
+      mapCreateFeatureRequest(body),
+    );
     return {
       id: created.feature_id ?? "",
       slug: created.feature_id ?? "",
@@ -161,9 +191,15 @@ export const api = {
       "POST",
       `${API}/features/${encodeURIComponent(id)}/actions/delete`,
     ),
+  retryFeature: (id: string) =>
+    sendJSON<void>(
+      "POST",
+      `${API}/features/${encodeURIComponent(id)}/actions/retry`,
+    ),
   recovery: async (signal?: AbortSignal) => {
     const dto = await getJSON<RecoverySnapshotDTO>(`${API}/recovery`, signal);
     return {
+      snapshot_id: dto.snapshot_id,
       items: dto.items.map((item) => ({
         key: item.key,
         feature_id: item.feature_id,
@@ -176,9 +212,12 @@ export const api = {
       })),
     } satisfies RecoveryScanResponse;
   },
-  executeRecovery: (actions: Record<string, RecoveryActionValue>) =>
-    sendJSON<void>("POST", `${API}/recovery/actions`, { actions }),
+  executeRecovery: (snapshotID: string, actions: Record<string, RecoveryActionValue>) =>
+    sendJSON<void>("POST", `${API}/recovery/actions`, { snapshot_id: snapshotID, actions }),
   logs: async (id: string, phase: string, iter?: number, signal?: AbortSignal) => {
+    if (phase === "session-output") {
+      return activeSessionOutput(id, signal);
+    }
     const runNumber = iter && iter > 0 ? iter : await activeRunNumber(id, signal);
     const logID = phase === "observe" ? "observe" : phase === "phase" ? "phase" : "session";
     const content = await getJSON<TextContentDTO>(
@@ -195,14 +234,17 @@ export const api = {
     const runs = [detail.feature.active_run_detail, ...detail.feature.historical_runs]
       .filter((run): run is RunSummaryDTO => !!run && run.run_number > 0);
     const iterations = Array.from(new Set(runs.map((run) => run.run_number))).sort((a, b) => a - b);
+    const sessions = await optional(() => getJSON<SessionListDTO>(`${API}/sessions`, signal));
+    const hasActiveSession = (sessions?.sessions ?? []).some(
+      (session) =>
+        session.feature_id === id && isActiveSessionStatus(sessionStatusKey(session)),
+    );
+    const runLogEntries = await availableRunLogEntries(id, iterations, signal);
     return {
-      entries: iterations.length === 0
-        ? []
-        : [
-            { phase: "session", iterations },
-            { phase: "phase", iterations },
-            { phase: "observe", iterations },
-          ],
+      entries: [
+        ...runLogEntries,
+        ...(hasActiveSession ? [{ phase: "session-output", iterations: [1] }] : []),
+      ],
     };
   },
   diff: async (_id: string, _signal?: AbortSignal) => {
@@ -348,12 +390,74 @@ export async function sessionTranscript(sessionID: string, signal?: AbortSignal)
   return dto.messages;
 }
 
+export async function sessionPendingControls(sessionID: string, signal?: AbortSignal) {
+  const dto = await getJSON<SessionDetailDTOResponse>(
+    `${API}/sessions/${encodeURIComponent(sessionID)}`,
+    signal,
+  );
+  return dto.session.pending_controls ?? [];
+}
+
+export async function sessionOutputTail(sessionID: string, signal?: AbortSignal) {
+  const first = await getJSON<SessionOutputDTO>(
+    `${API}/sessions/${encodeURIComponent(sessionID)}/output?from=0&limit=1`,
+    signal,
+  );
+  const from = Math.max(0, (first.size ?? 0) - 50_000);
+  const output = await getJSON<SessionOutputDTO>(
+    `${API}/sessions/${encodeURIComponent(sessionID)}/output?from=${from}&limit=50000`,
+    signal,
+  );
+  return output.data ?? "";
+}
+
 async function activeRunNumber(id: string, signal?: AbortSignal): Promise<number> {
   const detail = await getJSON<FeatureDetailDTOResponse>(
     `${API}/features/${encodeURIComponent(id)}`,
     signal,
   );
   return detail.feature.active_run || detail.feature.run_count || 1;
+}
+
+async function availableRunLogEntries(
+  id: string,
+  iterations: number[],
+  signal?: AbortSignal,
+): Promise<{ phase: string; iterations: number[] }[]> {
+  const logIDs = ["session", "phase", "observe"];
+  const entries = await Promise.all(
+    logIDs.map(async (logID) => {
+      const available = await Promise.all(
+        iterations.map(async (runNumber) => {
+          const content = await optional(() =>
+            getJSON<TextContentDTO>(
+              `${API}/features/${encodeURIComponent(id)}/runs/${runNumber}/logs/${logID}?limit=1`,
+              signal,
+            ),
+          );
+          return content ? runNumber : null;
+        }),
+      );
+      return {
+        phase: logID,
+        iterations: available.filter((n): n is number => n !== null),
+      };
+    }),
+  );
+  return entries.filter((entry) => entry.iterations.length > 0);
+}
+
+async function activeSessionOutput(id: string, signal?: AbortSignal): Promise<string> {
+  const sessions = await getJSON<SessionListDTO>(`${API}/sessions`, signal);
+  const session = sessions.sessions.find(
+    (row) => row.feature_id === id && isActiveSessionStatus(sessionStatusKey(row)),
+  );
+  if (!session) return "(no active session output)";
+  const output = await getJSON<SessionOutputDTO>(
+    `${API}/sessions/${encodeURIComponent(session.id)}/output?from=0&limit=50000`,
+    signal,
+  );
+  return output.data || "(empty session output)";
 }
 
 async function optional<T>(fn: () => Promise<T>): Promise<T | null> {
@@ -375,8 +479,28 @@ function mapHealth(dto: HealthDTO): Health {
   };
 }
 
-function mapFeatureSummary(dto: FeatureSummaryDTO): FeatureSummary {
-  const status = dto.status as FeatureSummary["status"];
+function mapCreateFeatureRequest(body: CreateFeatureRequest): CreateFeatureRequest {
+  const planReview = body.checkpoints.plan_review;
+  return {
+    ...body,
+    checkpoints: {
+      inquiry_review: body.checkpoints.inquiry_review,
+      research_review: body.checkpoints.research_review,
+      design_review: body.checkpoints.design_review,
+      roadmap_review: body.checkpoints.roadmap_review ?? planReview,
+      phase_plan_review: body.checkpoints.phase_plan_review ?? planReview,
+      manual_publish: body.checkpoints.manual_publish,
+    },
+  };
+}
+
+function mapFeatureSummary(
+  dto: FeatureSummaryDTO,
+  sessions: SessionDTO[] = [],
+  detail?: FeatureDetailDTO,
+): FeatureSummary {
+  const status = effectiveFeatureStatus(dto, sessions);
+  const running = isRunningStatus(status) || hasActiveSessionForFeature(dto.id, sessions);
   return {
     id: dto.id,
     slug: dto.slug,
@@ -385,8 +509,9 @@ function mapFeatureSummary(dto: FeatureSummaryDTO): FeatureSummary {
     current_phase: dto.current_phase,
     repo_names: dto.repos,
     created: dto.created_at,
-    is_running: isRunningStatus(dto.status),
-    needs_review: isReviewStatus(dto.status),
+    is_running: running,
+    needs_review: !running && isReviewGateStatus(status),
+    total_cost_usd: featureTotalCost(dto.id, sessions, detail),
   };
 }
 
@@ -396,7 +521,7 @@ function mapFeatureDetail(
   prompts: PromptSnapshotDTO | null,
   permissions: PermissionSnapshotDTO | null,
 ): FeatureDetail {
-  const summary = mapFeatureSummary(dto);
+  const summary = mapFeatureSummary(dto, sessions);
   const activeRun = dto.active_run_detail;
   const featureSessions = sessions.filter((session) => session.feature_id === dto.id);
   const helpQueue = (prompts?.help_queue ?? [])
@@ -413,6 +538,7 @@ function mapFeatureDetail(
   return {
     ...summary,
     description: dto.description,
+    failure: dto.failure,
     models: dto.models,
     checkpoints: {
       inquiry_review: dto.checkpoints.inquiry_review,
@@ -434,21 +560,24 @@ function mapFeatureDetail(
       pr_url: repo.pr_url,
       has_error: !!repo.last_error,
     })),
-    sessions: featureSessions.map((session) => ({
-      id: session.id,
-      feature_id: session.feature_id,
-      phase: session.phase,
-      repo_name: session.repo,
-      kind: session.kind,
-      label: session.label,
-      status: session.status,
-      is_active: session.status === "running" || session.status === "active",
-      iteration: session.iteration,
-      started_at: session.started_at,
-      provider: session.provider,
-      model: session.model,
-      context_percentage: session.context_percentage,
-    })),
+    sessions: featureSessions.map((session) => {
+      const status = sessionStatusKey(session);
+      return {
+        id: session.id,
+        feature_id: session.feature_id,
+        phase: session.phase,
+        repo_name: session.repo,
+        kind: session.kind,
+        label: session.label,
+        status: session.status,
+        is_active: isActiveSessionStatus(status),
+        iteration: session.iteration,
+        started_at: session.started_at,
+        provider: session.provider,
+        model: session.model,
+        context_percentage: session.context_percentage,
+      };
+    }),
     active_cycle: dto.cycle
       ? {
           type: dto.cycle.type ?? "",
@@ -557,11 +686,102 @@ function mapReviewComment(dto: ReviewCommentDTO) {
 }
 
 function isRunningStatus(status: string): boolean {
-  return status.endsWith("ing") || status === "Reviewing" || status === "FinalReviewing";
+  return (
+    status.endsWith("ing") ||
+    status === "Reviewing" ||
+    status === "FinalReviewing" ||
+    status === "SettingUpWorktrees"
+  );
 }
 
-function isReviewStatus(status: string): boolean {
-  return status.includes("Review") || status === "NeedUserInput";
+function effectiveFeatureStatus(
+  feature: FeatureSummaryDTO,
+  sessions: SessionDTO[],
+): FeatureSummary["status"] {
+  const declared = feature.status as FeatureSummary["status"];
+  const active = sessions.find(
+    (session) =>
+      session.feature_id === feature.id &&
+      isActiveSessionStatus(sessionStatusKey(session)),
+  );
+  if (active) {
+    if (sessionStatusKey(active).startsWith("waiting")) {
+      return "NeedUserInput";
+    }
+    return runningStatusForPhase(active.phase ?? feature.current_phase) ?? declared;
+  }
+
+  return declared;
+}
+
+function featureTotalCost(
+  featureID: string,
+  sessions: SessionDTO[],
+  detail?: FeatureDetailDTO,
+): number | undefined {
+  if (detail && detail.cost.total_usd > 0) return detail.cost.total_usd;
+  const sessionTotal = sessions
+    .filter((session) => session.feature_id === featureID)
+    .reduce((sum, session) => sum + (session.usage?.cost_usd ?? 0), 0);
+  return sessionTotal > 0 ? sessionTotal : undefined;
+}
+
+function sessionStatusKey(session: SessionDTO): string {
+  return (session.status || session.turn_state || "").toLowerCase();
+}
+
+function isActiveSessionStatus(status: string): boolean {
+  return (
+    status === "active" ||
+    status === "running" ||
+    status === "waitinghelp" ||
+    status === "waitingpermission" ||
+    status === "waitinginput" ||
+    status === "waiting_permission" ||
+    status === "waiting_question"
+  );
+}
+
+function hasActiveSessionForFeature(featureID: string, sessions: SessionDTO[]): boolean {
+  return sessions.some(
+    (session) =>
+      session.feature_id === featureID &&
+      isActiveSessionStatus(sessionStatusKey(session)),
+  );
+}
+
+function runningStatusForPhase(phase?: string): FeatureSummary["status"] | null {
+  switch ((phase ?? "").toLowerCase()) {
+    case "inquire":
+    case "inquiry":
+      return "Inquiring";
+    case "research":
+      return "Researching";
+    case "design":
+      return "Designing";
+    case "plan":
+    case "planning":
+      return "Planning";
+    case "implement":
+    case "implementation":
+      return "Implementing";
+    case "review":
+      return "Reviewing";
+    case "final_review":
+    case "final review":
+    case "finalreview":
+      return "FinalReviewing";
+    case "knowledge_base":
+    case "knowledgebase":
+    case "kb":
+      return "BuildingKB";
+    default:
+      return null;
+  }
+}
+
+function isReviewGateStatus(status: string): boolean {
+  return status.endsWith("NeedsReview");
 }
 
 interface HealthDTO {
@@ -594,6 +814,7 @@ interface FeatureSummaryDTO {
 
 interface FeatureDetailDTO extends FeatureSummaryDTO {
   description?: string;
+  failure?: { type?: string; message: string };
   summary?: string;
   pipeline?: string;
   models: FeatureDetail["models"];
@@ -654,6 +875,7 @@ interface ModelCatalogDTO {
 }
 
 interface RecoverySnapshotDTO {
+  snapshot_id: string;
   items: {
     key: string;
     feature_id: string;
@@ -686,6 +908,26 @@ interface SessionListDTO {
   sessions: SessionDTO[];
 }
 
+interface SessionDetailDTOResponse {
+  session: SessionDetailDTO;
+}
+
+interface SessionDetailDTO extends SessionDTO {
+  pending_controls?: ControlRequestDTO[];
+}
+
+export interface ControlRequestDTO {
+  request_id: string;
+  session_id?: string;
+  feature_id?: string;
+  phase?: string;
+  tool_name: string;
+  status: string;
+  summary?: string;
+  input?: unknown;
+  questions?: unknown;
+}
+
 interface SessionDTO {
   id: string;
   feature_id: string;
@@ -696,9 +938,13 @@ interface SessionDTO {
   provider?: string;
   model?: string;
   status: string;
+  turn_state?: string;
   started_at: string;
   iteration?: number;
   context_percentage?: number;
+  usage?: {
+    cost_usd?: number;
+  };
 }
 
 interface PromptSnapshotDTO {
@@ -751,4 +997,9 @@ export interface TranscriptMessageDTO {
   text?: string;
   tool?: string;
   status?: string;
+}
+
+interface SessionOutputDTO {
+  data: string;
+  size?: number;
 }

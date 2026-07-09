@@ -106,6 +106,32 @@ type DefaultsConfig struct {
 	MaxConsecutiveNoProgress int                           `yaml:"max_consecutive_no_progress"`
 	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              Checkpoints                   `yaml:"checkpoints"`
+	RateLimitRetry           RateLimitRetryConfig          `yaml:"rate_limit_retry,omitempty"`
+}
+
+// RateLimitRetryConfig tunes the bounded exponential backoff applied when an
+// artifact phase (inquire/research/design) fails its completion contract
+// because the upstream model rate-limited the agent (HTTP 429 and friends).
+// Non-rate-limit protocol violations are unaffected and keep their immediate,
+// small-budget retry behavior. Delays are expressed as Go duration strings
+// (for example "15s", "5m") so they round-trip cleanly through YAML.
+type RateLimitRetryConfig struct {
+	// Enabled turns rate-limit-aware backoff on. When false, rate-limit
+	// violations fall back to the default immediate retry path.
+	Enabled bool `yaml:"enabled"`
+	// MaxRetries is the consecutive rate-limit violation budget before the
+	// feature fails terminally. Larger than the default protocol-violation
+	// cap so a transient rate limit has room to clear.
+	MaxRetries int `yaml:"max_retries,omitempty"`
+	// BaseDelay is the first backoff interval (Go duration string).
+	BaseDelay string `yaml:"base_delay,omitempty"`
+	// MaxDelay caps the exponential growth (Go duration string).
+	MaxDelay string `yaml:"max_delay,omitempty"`
+	// Multiplier is the exponential growth factor between attempts.
+	Multiplier float64 `yaml:"multiplier,omitempty"`
+	// Jitter is the fractional randomization applied to each delay in the
+	// range [0,1]; 0.2 means +/-20%.
+	Jitter float64 `yaml:"jitter,omitempty"`
 }
 
 // PipelinePreference stores the last-used feature-creation settings for a

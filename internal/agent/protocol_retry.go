@@ -16,6 +16,8 @@ package agent
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +52,10 @@ type ProtocolRetrySidecar struct {
 	Consecutive   int       `yaml:"consecutive"`
 	LastViolation string    `yaml:"last_violation"`
 	UpdatedAt     time.Time `yaml:"updated_at"`
+	// RateLimited records whether the current violation streak was classified
+	// as an upstream rate-limit failure (and therefore governed by the
+	// larger rate-limit budget and exponential backoff).
+	RateLimited bool `yaml:"rate_limited,omitempty"`
 }
 
 // ProtocolRetryDecision tells the caller whether to succeed, retry, or fail terminally.
@@ -58,6 +64,108 @@ type ProtocolRetryDecision struct {
 	Consecutive    int
 	FormattedError string
 	NewSidecar     *ProtocolRetrySidecar
+	// RetryDelay is how long the caller should wait before restarting the
+	// phase. It is non-zero only for rate-limit-classified retries under an
+	// enabled RateLimitRetryPolicy; all other retries are immediate.
+	RetryDelay time.Duration
+}
+
+// RateLimitRetryPolicy tunes the bounded exponential backoff applied to
+// rate-limit-classified protocol violations. The zero value is inert; callers
+// build one via DefaultRateLimitRetryPolicy or from config. Numeric zero
+// fields fall back to defaults at decision time so partially-specified
+// policies stay safe.
+type RateLimitRetryPolicy struct {
+	Enabled    bool
+	MaxRetries int
+	BaseDelay  time.Duration
+	MaxDelay   time.Duration
+	Multiplier float64
+	Jitter     float64
+
+	// jitterFn, when set, replaces the default RNG for jitter. It must return
+	// a value in [-1, 1]. Test-only seam for deterministic backoff assertions.
+	jitterFn func() float64
+}
+
+// DefaultRateLimitRetryPolicy returns the built-in backoff policy: enabled, a
+// 6-attempt budget, 15s base doubling up to a 5m cap, with 20% jitter.
+func DefaultRateLimitRetryPolicy() RateLimitRetryPolicy {
+	return RateLimitRetryPolicy{
+		Enabled:    true,
+		MaxRetries: 6,
+		BaseDelay:  15 * time.Second,
+		MaxDelay:   5 * time.Minute,
+		Multiplier: 2.0,
+		Jitter:     0.2,
+	}
+}
+
+// WithJitterFn returns a copy of the policy with a deterministic jitter
+// source. Intended for tests.
+func (p RateLimitRetryPolicy) WithJitterFn(fn func() float64) RateLimitRetryPolicy {
+	p.jitterFn = fn
+	return p
+}
+
+// withDefaults fills numeric zero/invalid fields from the built-in defaults,
+// leaving Enabled and the jitter seam untouched.
+func (p RateLimitRetryPolicy) withDefaults() RateLimitRetryPolicy {
+	d := DefaultRateLimitRetryPolicy()
+	if p.MaxRetries <= 0 {
+		p.MaxRetries = d.MaxRetries
+	}
+	if p.BaseDelay <= 0 {
+		p.BaseDelay = d.BaseDelay
+	}
+	if p.MaxDelay <= 0 {
+		p.MaxDelay = d.MaxDelay
+	}
+	if p.MaxDelay < p.BaseDelay {
+		p.MaxDelay = p.BaseDelay
+	}
+	if p.Multiplier <= 1 {
+		p.Multiplier = d.Multiplier
+	}
+	if p.Jitter < 0 {
+		p.Jitter = 0
+	}
+	return p
+}
+
+// backoffDelay computes the delay for the given 1-based consecutive attempt:
+// base * multiplier^(consecutive-1), clamped to MaxDelay, then randomized by
+// +/- Jitter. Assumes withDefaults has been applied.
+func (p RateLimitRetryPolicy) backoffDelay(consecutive int) time.Duration {
+	if consecutive < 1 {
+		consecutive = 1
+	}
+	grown := float64(p.BaseDelay) * math.Pow(p.Multiplier, float64(consecutive-1))
+	maxD := float64(p.MaxDelay)
+	if grown > maxD || math.IsInf(grown, 1) {
+		grown = maxD
+	}
+	if p.Jitter > 0 {
+		grown *= 1 + p.Jitter*p.jitterFraction()
+	}
+	if grown < 0 {
+		grown = 0
+	}
+	return time.Duration(grown)
+}
+
+func (p RateLimitRetryPolicy) jitterFraction() float64 {
+	if p.jitterFn != nil {
+		f := p.jitterFn()
+		if f < -1 {
+			return -1
+		}
+		if f > 1 {
+			return 1
+		}
+		return f
+	}
+	return rand.Float64()*2 - 1 //nolint:gosec // jitter does not need crypto-grade randomness
 }
 
 // ReadProtocolRetrySidecar reads a retry sidecar from dir. Missing files are not errors.
@@ -155,7 +263,9 @@ func RemovePhaseCompleteMarker(dir string) error {
 	return fmt.Errorf("removing phase_complete marker: %w", err)
 }
 
-// DecideProtocolRetry computes the bounded retry action for protocol violations.
+// DecideProtocolRetry computes the bounded retry action for protocol
+// violations using the default immediate-retry policy (no backoff). Callers
+// that want rate-limit-aware backoff use DecideProtocolRetryWithRateLimit.
 func DecideProtocolRetry(
 	role Role,
 	phaseDir string,
@@ -163,6 +273,37 @@ func DecideProtocolRetry(
 	sidecar *ProtocolRetrySidecar,
 	violations []ProtocolViolation,
 	maxConsecutive int,
+) ProtocolRetryDecision {
+	return decideProtocolRetry(role, phaseDir, currentActiveRun, sidecar, violations, maxConsecutive, false, RateLimitRetryPolicy{})
+}
+
+// DecideProtocolRetryWithRateLimit is DecideProtocolRetry plus rate-limit
+// awareness. When isRateLimit is true and policy.Enabled is set, the decision
+// uses the policy's larger MaxRetries budget as the cap and returns an
+// exponential RetryDelay; otherwise it behaves identically to
+// DecideProtocolRetry (immediate retry, defaultMaxConsecutive cap).
+func DecideProtocolRetryWithRateLimit(
+	role Role,
+	phaseDir string,
+	currentActiveRun int,
+	sidecar *ProtocolRetrySidecar,
+	violations []ProtocolViolation,
+	defaultMaxConsecutive int,
+	isRateLimit bool,
+	policy RateLimitRetryPolicy,
+) ProtocolRetryDecision {
+	return decideProtocolRetry(role, phaseDir, currentActiveRun, sidecar, violations, defaultMaxConsecutive, isRateLimit, policy)
+}
+
+func decideProtocolRetry(
+	role Role,
+	phaseDir string,
+	currentActiveRun int,
+	sidecar *ProtocolRetrySidecar,
+	violations []ProtocolViolation,
+	maxConsecutive int,
+	isRateLimit bool,
+	policy RateLimitRetryPolicy,
 ) ProtocolRetryDecision {
 	if len(violations) == 0 {
 		return ProtocolRetryDecision{Action: ProtocolRetryActionSucceed}
@@ -178,9 +319,22 @@ func DecideProtocolRetry(
 		cap = DefaultMaxConsecutiveProtocolViolations
 	}
 
+	// Rate-limit failures get a larger budget and exponential backoff, but
+	// only when the policy is enabled. A disabled policy degrades to the
+	// default immediate-retry path even for rate-limit classifications.
+	rateLimited := isRateLimit && policy.Enabled
+	var retryDelay time.Duration
+	if rateLimited {
+		pol := policy.withDefaults()
+		cap = pol.MaxRetries
+		retryDelay = pol.backoffDelay(consecutive)
+	}
+
 	action := ProtocolRetryActionRetry
 	if consecutive >= cap {
 		action = ProtocolRetryActionTerminal
+		// No point waiting before a terminal failure.
+		retryDelay = 0
 	}
 
 	lastViolation := JoinProtocolViolations(violations)
@@ -188,12 +342,14 @@ func DecideProtocolRetry(
 		Action:         action,
 		Consecutive:    consecutive,
 		FormattedError: FormatSingleShotProtocolViolationError(role, phaseDir, violations),
+		RetryDelay:     retryDelay,
 		NewSidecar: &ProtocolRetrySidecar{
 			Role:          role,
 			ActiveRun:     currentActiveRun,
 			Consecutive:   consecutive,
 			LastViolation: lastViolation,
 			UpdatedAt:     time.Now().UTC().Round(0),
+			RateLimited:   rateLimited,
 		},
 	}
 }

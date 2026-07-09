@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -173,6 +174,12 @@ type Deps struct {
 	CmdRunner   ports.CommandRunner
 	Recovery    ports.RecoveryOperator
 	PhaseRunner *agent.PhaseRunner // concrete — not behind a port interface
+
+	// RateLimitRetry, when non-nil, tunes the exponential backoff applied to
+	// rate-limit-classified artifact-phase protocol violations. Nil means
+	// "use the built-in defaults" so tests that construct Deps directly get
+	// sensible behavior without wiring config.
+	RateLimitRetry *agent.RateLimitRetryPolicy
 }
 
 // PhaseStartOutcome enumerates the possible results of starting a phase.
@@ -336,6 +343,70 @@ func (o *Orchestrator) Done() <-chan struct{} { return o.doneCh }
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
 // can race with in-flight writes from the implementation/refactor loop.
 func (o *Orchestrator) WaitForCycles() { o.cycleWG.Wait() }
+
+// rateLimitRetryPolicy returns the effective rate-limit backoff policy,
+// falling back to the built-in defaults when Deps.RateLimitRetry is unset.
+func (o *Orchestrator) rateLimitRetryPolicy() agent.RateLimitRetryPolicy {
+	if o.deps.RateLimitRetry != nil {
+		return *o.deps.RateLimitRetry
+	}
+	return agent.DefaultRateLimitRetryPolicy()
+}
+
+// RateLimitRetryPolicyFromConfig converts the user-facing config block into an
+// agent.RateLimitRetryPolicy, parsing duration strings and falling back to the
+// built-in defaults for empty or invalid values.
+func RateLimitRetryPolicyFromConfig(c config.RateLimitRetryConfig) agent.RateLimitRetryPolicy {
+	def := agent.DefaultRateLimitRetryPolicy()
+	policy := agent.RateLimitRetryPolicy{
+		Enabled:    c.Enabled,
+		MaxRetries: c.MaxRetries,
+		BaseDelay:  parseDurationOr(c.BaseDelay, def.BaseDelay),
+		MaxDelay:   parseDurationOr(c.MaxDelay, def.MaxDelay),
+		Multiplier: c.Multiplier,
+		Jitter:     c.Jitter,
+	}
+	if policy.MaxRetries <= 0 {
+		policy.MaxRetries = def.MaxRetries
+	}
+	if policy.Multiplier <= 1 {
+		policy.Multiplier = def.Multiplier
+	}
+	if policy.Jitter < 0 {
+		policy.Jitter = def.Jitter
+	}
+	return policy
+}
+
+func parseDurationOr(s string, fallback time.Duration) time.Duration {
+	if d, err := time.ParseDuration(s); err == nil && d > 0 {
+		return d
+	}
+	return fallback
+}
+
+// scheduleArtifactPhaseRetry restarts an artifact phase after delay, tracked
+// by cycleWG so tests can drain it via WaitForCycles. The wait honors
+// Shutdown via doneCh. Runs off the caller's goroutine so it never blocks the
+// synchronous HandlePhaseCompletion path (which executes inside the Bubble
+// Tea Update loop).
+func (o *Orchestrator) scheduleArtifactPhaseRetry(featureID string, phase feature.Phase, delay time.Duration) {
+	o.cycleWG.Go(func() {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-o.doneCh:
+				return
+			}
+		}
+		if err := o.retryArtifactPhase(featureID, phase); err != nil {
+			o.emitPhaseCompleted(featureID, phase, err)
+			_ = o.markFailedWithEvent(featureID, feature.FailureInfrastructure, err.Error())
+		}
+	})
+}
 
 // SetPublishFn installs a test hook that intercepts publish dispatch in place
 // of o.Publish. Intended for tests only — production code leaves it unset so

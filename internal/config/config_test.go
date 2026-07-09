@@ -1940,3 +1940,76 @@ func TestProvidersEmptyOmittedFromYAML(t *testing.T) {
 		t.Errorf("empty Providers map should be omitted from YAML, got:\n%s", data)
 	}
 }
+
+func TestConfig_RateLimitRetry_Defaults(t *testing.T) {
+	rl := NewDefault().Defaults.RateLimitRetry
+	if !rl.Enabled {
+		t.Error("RateLimitRetry.Enabled = false, want true by default")
+	}
+	if rl.MaxRetries != 6 {
+		t.Errorf("MaxRetries = %d, want 6", rl.MaxRetries)
+	}
+	if rl.BaseDelay != "15s" {
+		t.Errorf("BaseDelay = %q, want 15s", rl.BaseDelay)
+	}
+	if rl.MaxDelay != "5m" {
+		t.Errorf("MaxDelay = %q, want 5m", rl.MaxDelay)
+	}
+	if rl.Multiplier != 2.0 {
+		t.Errorf("Multiplier = %v, want 2.0", rl.Multiplier)
+	}
+	if rl.Jitter != 0.2 {
+		t.Errorf("Jitter = %v, want 0.2", rl.Jitter)
+	}
+}
+
+func TestConfig_RateLimitRetry_YAMLRoundTrip(t *testing.T) {
+	const yamlBody = `
+defaults:
+  rate_limit_retry:
+    enabled: true
+    max_retries: 9
+    base_delay: "30s"
+    max_delay: "10m"
+    multiplier: 3
+    jitter: 0.5
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(yamlBody), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	rl := cfg.Defaults.RateLimitRetry
+	if !rl.Enabled || rl.MaxRetries != 9 || rl.BaseDelay != "30s" ||
+		rl.MaxDelay != "10m" || rl.Multiplier != 3 || rl.Jitter != 0.5 {
+		t.Fatalf("parsed rate_limit_retry = %+v, want the yaml values", rl)
+	}
+
+	// marshal -> unmarshal equality.
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round Config
+	if err := yaml.Unmarshal(data, &round); err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if round.Defaults.RateLimitRetry != rl {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", round.Defaults.RateLimitRetry, rl)
+	}
+}
+
+func TestConfig_RateLimitRetry_OmittedLeavesZeroValues(t *testing.T) {
+	const yamlBody = `
+defaults:
+  max_iterations: 5
+`
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(yamlBody), &cfg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Without the block, the struct stays zero; the orchestrator getter
+	// (RateLimitRetryPolicyFromConfig) is responsible for supplying defaults.
+	if cfg.Defaults.RateLimitRetry != (RateLimitRetryConfig{}) {
+		t.Errorf("omitted rate_limit_retry = %+v, want zero value", cfg.Defaults.RateLimitRetry)
+	}
+}

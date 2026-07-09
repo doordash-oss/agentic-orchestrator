@@ -112,6 +112,9 @@ var Module = fx.Module("orchestrator",
 			// feature manager so orphan-session discovery and dispatch can
 			// reach the right state without widening ports.SessionManager.
 			Recovery: session.NewRecoveryAdapter(p.FeatureStore.BaseDir, p.FeatureManager),
+			// Rate-limit backoff policy derived from user config; nil-safe
+			// when the feature manager has no config attached.
+			RateLimitRetry: rateLimitRetryFromManager(p.FeatureManager),
 		}, BuildHooks(p.Observer, p.PermissionStore, p.FeatureStore, p.FeatureStore.BaseDir))
 
 		p.Lifecycle.Append(fx.Hook{
@@ -123,3 +126,14 @@ var Module = fx.Module("orchestrator",
 		return o
 	}),
 )
+
+// rateLimitRetryFromManager derives the rate-limit backoff policy from the
+// feature manager's config, returning nil (defaults) when no config is
+// attached so the orchestrator's getter supplies the built-in policy.
+func rateLimitRetryFromManager(m *feature.Manager) *agent.RateLimitRetryPolicy {
+	if m == nil || m.Config == nil {
+		return nil
+	}
+	policy := RateLimitRetryPolicyFromConfig(m.Config.Defaults.RateLimitRetry)
+	return &policy
+}

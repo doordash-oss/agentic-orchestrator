@@ -232,6 +232,52 @@ func TestPhaseDirName(t *testing.T) {
 	}
 }
 
+func TestPhaseInstructionKeyRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, no shared state.
+	phases := []Phase{
+		PhaseKnowledgeBase,
+		PhaseInquire,
+		PhaseResearch,
+		PhaseDesign,
+		PhasePlan,
+		PhaseImplement,
+		PhaseReview,
+	}
+	seen := make(map[string]Phase, len(phases))
+	for _, p := range phases {
+		key := p.InstructionKey()
+		if key == "" {
+			t.Errorf("Phase(%d).InstructionKey() is empty", p)
+			continue
+		}
+		if prev, dup := seen[key]; dup {
+			t.Errorf("InstructionKey %q collides between Phase(%d) and Phase(%d)", key, prev, p)
+		}
+		seen[key] = p
+		got, ok := PhaseFromInstructionKey(key)
+		if !ok || got != p {
+			t.Errorf("PhaseFromInstructionKey(%q) = (%d, %v), want (%d, true)", key, got, ok, p)
+		}
+	}
+
+	// PhaseFinalReview and PhasePublish are not operator-addressable: final
+	// review runs under the PhaseReview RoleSpec (the "review" key covers it)
+	// and publish builds no system prompt. They must yield an empty key and be
+	// rejected as config keys so a misconfigured entry warns instead of
+	// silently no-op'ing.
+	for _, p := range []Phase{PhaseFinalReview, PhasePublish} {
+		if got := p.InstructionKey(); got != "" {
+			t.Errorf("Phase(%d).InstructionKey() = %q, want empty (not addressable)", p, got)
+		}
+	}
+	for _, key := range []string{"final_review", "publish", "nonsense"} {
+		if _, ok := PhaseFromInstructionKey(key); ok {
+			t.Errorf("PhaseFromInstructionKey(%q) should return ok=false", key)
+		}
+	}
+}
+
 func TestStatusString(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.

@@ -106,6 +106,15 @@ type DefaultsConfig struct {
 	MaxConsecutiveNoProgress int                           `yaml:"max_consecutive_no_progress"`
 	MaxPhasePlanIterations   int                           `yaml:"max_phase_plan_iterations,omitempty"`
 	Checkpoints              Checkpoints                   `yaml:"checkpoints"`
+	// PhaseExtraInstructions maps a lifecycle phase key to a path to a markdown
+	// file whose contents are appended to that phase's system prompt as the
+	// highest-priority section. Accepted keys: "knowledge_base", "inquire",
+	// "research", "design", "plan", "implement", "review" (the "review" key
+	// also governs the final-review pass, which shares the review RoleSpec).
+	// Paths may be absolute, "~/"-prefixed, or relative to the config file's
+	// directory. Missing/unreadable/binary files and unknown keys are logged
+	// and skipped at startup.
+	PhaseExtraInstructions map[string]string `yaml:"phase_extra_instructions,omitempty"`
 }
 
 // PipelinePreference stores the last-used feature-creation settings for a

@@ -149,6 +149,61 @@ func (p Phase) DirName() string {
 	}
 }
 
+// InstructionKey returns the stable config key used to attach per-phase extra
+// instructions (config.Defaults.PhaseExtraInstructions).
+//
+// Only phases whose sessions are composed through BuildRoleSystemPrompt are
+// operator-addressable and return a non-empty key. PhaseFinalReview and
+// PhasePublish return "" on purpose: final review/fix sessions run under the
+// PhaseReview RoleSpec (so the "review" key already governs them), and publish
+// builds no system prompt at all. Returning "" keeps them out of the
+// accepted-key set so a misconfigured entry warns instead of silently
+// no-op'ing.
+func (p Phase) InstructionKey() string {
+	switch p {
+	case PhaseKnowledgeBase:
+		return "knowledge_base"
+	case PhaseInquire:
+		return "inquire"
+	case PhaseResearch:
+		return "research"
+	case PhaseDesign:
+		return "design"
+	case PhasePlan:
+		return "plan"
+	case PhaseImplement:
+		return "implement"
+	case PhaseReview:
+		return "review"
+	default:
+		return ""
+	}
+}
+
+// PhaseFromInstructionKey resolves a lifecycle phase from its InstructionKey.
+// The bool is false for unknown or non-addressable keys (e.g. "final_review",
+// "publish") so callers can warn on typos and unsupported phases.
+func PhaseFromInstructionKey(key string) (Phase, bool) {
+	switch key {
+	case "knowledge_base":
+		return PhaseKnowledgeBase, true
+	case "inquire":
+		return PhaseInquire, true
+	case "research":
+		return PhaseResearch, true
+	case "design":
+		return PhaseDesign, true
+	case "plan":
+		return PhasePlan, true
+	case "implement":
+		return PhaseImplement, true
+	case "review":
+		return PhaseReview, true
+	default:
+		return Phase(0), false
+	}
+}
+
 // RequiresGrilling reports whether a phase relies on the [grill-me] directive
 // — i.e. whether its prompt expects the agent to interview the user. Used by
 // session builders to override the user's Claude Code "auto" default mode,

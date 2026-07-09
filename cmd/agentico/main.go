@@ -811,6 +811,14 @@ func runTUI(configPath, stateDir string, dangerouslySkipPerms bool, enabledProvi
 	}
 	stop()
 
+	// Load operator-provided per-phase extra instructions. Missing/unreadable
+	// files only warn; startup continues without them.
+	extraInstructions, extraWarnings := agent.LoadPhaseExtraInstructions(cfg.Defaults.PhaseExtraInstructions, filepath.Dir(configPath))
+	for _, w := range extraWarnings {
+		fmt.Fprintln(os.Stderr, w)
+	}
+	agent.SetPhaseExtraInstructions(extraInstructions)
+
 	// Provider-generic version check (replaces old CheckCLIVersion)
 	for _, vr := range agent.CheckProviderVersions(detected) {
 		if vr.Err != nil {

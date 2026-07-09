@@ -93,6 +93,7 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 		ReadOnlyOutsideRoots: spec.ReadOnlyOutsideRoots,
 		SubagentsAvailable:   !in.SuppressSubagents,
 		AskingClause:         askingClause,
+		ExtraInstructions:    PhaseExtraInstruction(spec.Phase),
 	})
 }
 

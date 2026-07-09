@@ -82,6 +82,12 @@ type RoleSystemInput struct {
 	SubagentsAvailable bool
 
 	AskingClause string
+
+	// ExtraInstructions is operator-provided text (from a per-phase markdown
+	// file) rendered as the final, highest-priority section of the system
+	// prompt. Empty suppresses the section entirely so default renders are
+	// unchanged.
+	ExtraInstructions string
 }
 
 // PreflightInput is the data passed to the RoleSpec system template's

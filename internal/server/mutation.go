@@ -276,7 +276,7 @@ func (h *apiHandler) handleMutationPreflight(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", requestMethod)
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Agentico-Client")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Agentico-Client")
 	w.WriteHeader(http.StatusNoContent)
 	return true
 }
@@ -362,7 +362,7 @@ func isAllowedMutationPreflightHeaders(raw string) bool {
 			continue
 		}
 		switch header {
-		case "content-type", "x-agentico-client":
+		case "authorization", "content-type", "x-agentico-client":
 			seen[header] = true
 		default:
 			return false

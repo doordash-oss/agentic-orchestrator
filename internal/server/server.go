@@ -45,6 +45,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		LaunchPolicy:    opts.LaunchPolicy,
 		StartedAt:       startedAt,
 		Owner:           opts.Owner,
+		AuthToken:       opts.AuthToken,
 		Features:        opts.Features,
 		FeatureStore:    opts.FeatureStore,
 		Freshness:       opts.Freshness,
@@ -76,7 +77,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		}
 		s.done <- err
 	}()
-	if err := waitForHealth(ctx, baseURL); err != nil {
+	if err := waitForHealth(ctx, baseURL, opts.AuthToken); err != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = s.Close(shutdownCtx)
@@ -99,6 +100,13 @@ func (s *RuntimeServer) StartedAt() time.Time {
 	return s.startedAt
 }
 
+func (s *RuntimeServer) EventEpoch() string {
+	if s == nil || s.broker == nil {
+		return ""
+	}
+	return s.broker.currentEpoch()
+}
+
 func (s *RuntimeServer) Close(ctx context.Context) error {
 	if s == nil || s.srv == nil {
 		return nil
@@ -106,7 +114,7 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	srv := s.srv
 	s.srv = nil
 	if s.broker != nil {
-		s.broker.publish(eventDTOFromDomain(ports.Event{Type: ports.RuntimeShutdownStarted}, s.broker.newID()))
+		s.broker.publish(eventDTOFromDomain(ports.Event{Type: ports.RuntimeShutdownStarted}))
 	}
 	shutdownErr := srv.Shutdown(ctx)
 	var serveErr error
@@ -118,14 +126,14 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	return errors.Join(shutdownErr, serveErr)
 }
 
-func waitForHealth(ctx context.Context, baseURL string) error {
+func waitForHealth(ctx context.Context, baseURL, token string) error {
 	client := &http.Client{Timeout: 250 * time.Millisecond}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if ctx.Err() != nil {
 			return fmt.Errorf("wait for health: %w", ctx.Err())
 		}
-		if discoveryHealthOK(ctx, client, baseURL) {
+		if discoveryHealthOK(ctx, client, baseURL, token) {
 			return nil
 		}
 		if time.Now().After(deadline) {

@@ -109,8 +109,12 @@ func TestReadModelSSEBackpressureConcurrentPolling(t *testing.T) {
 	if revalidated.StatusCode != http.StatusNotModified {
 		t.Fatalf("concurrent revalidate status = %d; want 304", revalidated.StatusCode)
 	}
-	if block := readIntegrationSSEBlock(t, reader, "session.updated"); !strings.Contains(block, `"snapshot_required":true`) {
-		t.Fatalf("session event = %s; want snapshot_required", block)
+	block := readIntegrationSSEBlock(t, reader, "session.output.activity")
+	if strings.Contains(block, `"snapshot_required":true`) {
+		t.Fatalf("session output activity = %s; want non-snapshot output signal", block)
+	}
+	if !strings.Contains(block, `"feature_id":"`+f.ID+`"`) {
+		t.Fatalf("session output activity = %s; want feature id %s", block, f.ID)
 	}
 }
 

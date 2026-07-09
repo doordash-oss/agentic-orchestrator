@@ -100,6 +100,9 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 	if body.Owner != wantOwner {
 		t.Fatalf("health owner = %+v; want %+v", body.Owner, wantOwner)
 	}
+	if srv.EventEpoch() == "" {
+		t.Fatal("EventEpoch() is empty; discovery cannot publish stream epoch")
+	}
 }
 
 func TestPublishDiscoveryWritesOwnerOnlyAtomically(t *testing.T) {
@@ -157,6 +160,33 @@ func TestPublishDiscoveryWritesOwnerOnlyAtomically(t *testing.T) {
 	}
 	if got.BaseURL != rec.BaseURL || got.Runtime.StateDir != rec.Runtime.StateDir {
 		t.Fatalf("ReadDiscovery() = %+v; want published record", got)
+	}
+}
+
+func TestEnsureAuthTokenCreatesOwnerOnlyStableToken(t *testing.T) {
+	t.Parallel()
+
+	runtimeDir := t.TempDir()
+	first, err := EnsureAuthToken(runtimeDir)
+	if err != nil {
+		t.Fatalf("EnsureAuthToken(first) error = %v", err)
+	}
+	if first == "" {
+		t.Fatal("EnsureAuthToken(first) returned empty token")
+	}
+	info, err := os.Stat(AuthTokenPath(runtimeDir))
+	if err != nil {
+		t.Fatalf("stat token: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("token mode = %#o; want 0600", got)
+	}
+	second, err := EnsureAuthToken(runtimeDir)
+	if err != nil {
+		t.Fatalf("EnsureAuthToken(second) error = %v", err)
+	}
+	if second != first {
+		t.Fatalf("EnsureAuthToken second = %q, want stable first token", second)
 	}
 }
 
@@ -271,6 +301,7 @@ func TestPrepareDiscoveryClassifiesHealthyMatchingServer(t *testing.T) {
 		SchemaVersion: 1,
 		APIVersion:    APIVersion,
 		BaseURL:       "http://127.0.0.1:4567",
+		AuthToken:     "test-token",
 		Runtime:       identity,
 		LaunchPolicy:  policy,
 		StartMode:     "server",
@@ -278,7 +309,10 @@ func TestPrepareDiscoveryClassifiesHealthyMatchingServer(t *testing.T) {
 	if err := PublishDiscovery(runtimeDir, rec); err != nil {
 		t.Fatalf("PublishDiscovery() error = %v", err)
 	}
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("discovery health Authorization = %q, want bearer token", got)
+		}
 		return jsonResponse(http.StatusOK, HealthResponse{
 			APIVersion:   APIVersion,
 			Status:       "ok",

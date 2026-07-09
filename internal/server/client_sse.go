@@ -30,6 +30,8 @@ type EventSubscriptionOptions struct {
 	HeartbeatInterval time.Duration
 	ReconnectDelay    time.Duration
 	MaxReconnects     int
+	AfterSeq          uint64
+	Epoch             string
 }
 
 type RefreshSignal struct {
@@ -78,12 +80,13 @@ func (c *Client) eventLoop(ctx context.Context, opts EventSubscriptionOptions, s
 	if reconnectDelay <= 0 {
 		reconnectDelay = 250 * time.Millisecond
 	}
+	cursor := eventStreamCursor{seq: opts.AfterSeq, epoch: opts.Epoch}
 	reconnects := 0
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
-		err := c.consumeEvents(ctx, opts, signals)
+		err := c.consumeEvents(ctx, opts, signals, &cursor)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -104,16 +107,30 @@ func (c *Client) eventLoop(ctx context.Context, opts EventSubscriptionOptions, s
 	}
 }
 
-func (c *Client) consumeEvents(ctx context.Context, opts EventSubscriptionOptions, signals chan<- RefreshSignal) error {
+type eventStreamCursor struct {
+	seq   uint64
+	epoch string
+}
+
+func (c *Client) consumeEvents(ctx context.Context, opts EventSubscriptionOptions, signals chan<- RefreshSignal, cursor *eventStreamCursor) error {
 	query := url.Values{}
 	if opts.HeartbeatInterval > 0 {
 		query.Set("heartbeat_ms", strconv.FormatInt(opts.HeartbeatInterval.Milliseconds(), 10))
+	}
+	if cursor != nil && cursor.seq > 0 {
+		query.Set("after", strconv.FormatUint(cursor.seq, 10))
+		if cursor.epoch != "" {
+			query.Set("epoch", cursor.epoch)
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/api/v1/events", query), nil)
 	if err != nil {
 		return fmt.Errorf("build event request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("connect event stream: %w", err)
@@ -128,7 +145,7 @@ func (c *Client) consumeEvents(ctx context.Context, opts EventSubscriptionOption
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
-			if err := c.dispatchSSEBlock(ctx, block, signals); err != nil {
+			if err := c.dispatchSSEBlock(ctx, block, signals, cursor); err != nil {
 				return err
 			}
 			block = sseBlock{}
@@ -142,7 +159,7 @@ func (c *Client) consumeEvents(ctx context.Context, opts EventSubscriptionOption
 	return nil
 }
 
-func (c *Client) dispatchSSEBlock(ctx context.Context, block sseBlock, signals chan<- RefreshSignal) error {
+func (c *Client) dispatchSSEBlock(ctx context.Context, block sseBlock, signals chan<- RefreshSignal, cursor *eventStreamCursor) error {
 	if strings.TrimSpace(block.data.String()) == "" {
 		return nil
 	}
@@ -155,6 +172,15 @@ func (c *Client) dispatchSSEBlock(ctx context.Context, block sseBlock, signals c
 	}
 	if evt.ID == "" {
 		evt.ID = block.id
+	}
+	if evt.Seq == 0 && evt.ID != "" {
+		evt.Seq, _ = strconv.ParseUint(evt.ID, 10, 64)
+	}
+	if cursor != nil && evt.Seq > 0 {
+		cursor.seq = evt.Seq
+		if evt.Epoch != "" {
+			cursor.epoch = evt.Epoch
+		}
 	}
 	if evt.Kind == "heartbeat" && !evt.SnapshotRequired {
 		return nil
@@ -215,6 +241,9 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	if evt.Kind == "connected" || (evt.Kind == "heartbeat" && signal.SnapshotRequired) {
 		return c.fetchFullSnapshot(ctx)
 	}
+	if evt.Kind == "session.output.activity" {
+		return RefreshSnapshot{}, nil
+	}
 	switch {
 	case evt.Kind == "config.updated":
 		if resource.FeatureID != "" {
@@ -232,7 +261,7 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	case resource.Type == "live_preview" || evt.Kind == "live_preview.updated":
 		preview, err := c.LivePreview(ctx, resource.FeatureID)
 		return RefreshSnapshot{LivePreview: &preview}, err
-	case resource.Type == "session" || evt.Kind == "session.updated" || evt.Kind == "log.updated":
+	case resource.Type == "session" || evt.Kind == "session.updated":
 		snapshot := RefreshSnapshot{}
 		featureID := resource.FeatureID
 		refreshFeatureDetail := false

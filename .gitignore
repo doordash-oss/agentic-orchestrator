@@ -11,6 +11,7 @@ dist/
 *.test
 *.out
 coverage.html
+docs/dev/
 
 # Go workspace
 go.work

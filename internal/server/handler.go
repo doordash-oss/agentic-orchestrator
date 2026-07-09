@@ -15,6 +15,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -40,6 +41,7 @@ type apiHandler struct {
 	policy          LaunchPolicy
 	startedAt       time.Time
 	owner           instancelock.Owner
+	authToken       string
 	features        FeatureLister
 	store           FeatureReader
 	freshness       RepoFreshnessProvider
@@ -74,6 +76,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		policy:          opts.LaunchPolicy,
 		startedAt:       startedAt,
 		owner:           opts.Owner,
+		authToken:       opts.AuthToken,
 		features:        features,
 		store:           store,
 		freshness:       opts.Freshness,
@@ -88,14 +91,6 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 }
 
 func (h *apiHandler) routes() http.Handler {
-	return h.routesWithMCP(true)
-}
-
-func (h *apiHandler) restRoutes() http.Handler {
-	return h.routesWithMCP(false)
-}
-
-func (h *apiHandler) routesWithMCP(includeMCP bool) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/health", methodHandler(http.MethodGet, h.handleHealth))
 	mux.HandleFunc("/api/v1/features", h.handleFeaturesRoot)
@@ -113,14 +108,15 @@ func (h *apiHandler) routesWithMCP(includeMCP bool) http.Handler {
 	mux.HandleFunc("/api/v1/recovery/actions", h.handleRecoveryActionRoute)
 	mux.HandleFunc("/api/v1/shutdown", h.handleShutdownMutationRoute)
 	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
-	if includeMCP {
-		mux.Handle(MCPEndpointPath, h.mcpHTTPHandler())
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.setSequenceHeader(w)
 		if h.handleMutationPreflight(w, r) {
 			return
 		}
 		if h.applyMutationCORS(w, r) {
+			return
+		}
+		if h.rejectUnauthorized(w, r) {
 			return
 		}
 		escaped := r.URL.EscapedPath()
@@ -162,9 +158,9 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		Features []FeatureSummary
 		Warnings []WarningDTO
 	}{Features: summaries, Warnings: warnings})
-	writeRevisionedJSON(w, r, http.StatusOK, revision, FeatureListResponse{
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, FeatureListResponse{
 		APIVersion: APIVersion,
-		Meta:       responseMeta(revision),
+		Meta:       h.responseMeta(revision),
 		Features:   summaries,
 		Warnings:   warnings,
 	})
@@ -227,9 +223,9 @@ func (h *apiHandler) handleFeatureDetail(w http.ResponseWriter, r *http.Request,
 	revision := revisionForAny(detail)
 	detail.Revision = revision
 	detail.CacheRevalidate = "etag"
-	writeRevisionedJSON(w, r, http.StatusOK, revision, FeatureDetailResponse{
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, FeatureDetailResponse{
 		APIVersion: APIVersion,
-		Meta:       responseMeta(revision),
+		Meta:       h.responseMeta(revision),
 		Feature:    detail,
 	})
 }
@@ -245,6 +241,10 @@ func (h *apiHandler) handleSessionRoutes(w http.ResponseWriter, r *http.Request)
 		h.handleSessionDetail(w, r, parts[0])
 	case len(parts) == 2 && parts[1] == "transcript":
 		h.handleTranscript(w, r, parts[0])
+	case len(parts) == 2 && parts[1] == "output":
+		h.handleSessionOutput(w, r, parts[0])
+	case len(parts) == 3 && parts[1] == "output" && parts[2] == "stream":
+		h.handleSessionOutputStream(w, r, parts[0])
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
 	}
@@ -376,11 +376,13 @@ func writeStoreError(w http.ResponseWriter, err error, entity, id string) {
 	writeAPIError(w, http.StatusInternalServerError, "internal_error", "read "+entity, target)
 }
 
-func responseMeta(revision string) ResponseMeta {
-	return ResponseMeta{Revision: revision, GeneratedAt: time.Now().UTC()}
+func (h *apiHandler) responseMeta(revision string) ResponseMeta {
+	asOfSeq := h.currentSeq()
+	return ResponseMeta{Revision: revision, GeneratedAt: time.Now().UTC(), AsOfSeq: asOfSeq}
 }
 
-func writeRevisionedJSON(w http.ResponseWriter, r *http.Request, status int, revision string, v any) {
+func (h *apiHandler) writeRevisionedJSON(w http.ResponseWriter, r *http.Request, status int, revision string, v any) {
+	h.setSequenceHeader(w)
 	if revision != "" {
 		w.Header().Set("ETag", `"`+revision+`"`)
 		if revisionMatches(r, revision) {
@@ -389,6 +391,53 @@ func writeRevisionedJSON(w http.ResponseWriter, r *http.Request, status int, rev
 		}
 	}
 	writeJSON(w, status, v)
+}
+
+func (h *apiHandler) setSequenceHeader(w http.ResponseWriter) {
+	w.Header().Set("X-Agentico-Seq", strconv.FormatUint(h.currentSeq(), 10))
+}
+
+func (h *apiHandler) currentSeq() uint64 {
+	if h == nil || h.broker == nil {
+		return 0
+	}
+	return h.broker.currentSeq()
+}
+
+func (h *apiHandler) rejectUnauthorized(w http.ResponseWriter, r *http.Request) bool {
+	if h == nil || h.authToken == "" || !authRequiredPath(r.URL.EscapedPath()) {
+		return false
+	}
+	if h.authorized(r) {
+		return false
+	}
+	writeAPIError(w, http.StatusUnauthorized, "unauthorized", http.StatusText(http.StatusUnauthorized), nil)
+	return true
+}
+
+func (h *apiHandler) authorized(r *http.Request) bool {
+	if bearer := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); bearer != "" && constantTimeEqual(bearer, h.authToken) {
+		return true
+	}
+	if sseTokenFallbackAllowed(r.URL.EscapedPath()) {
+		return constantTimeEqual(r.URL.Query().Get("access_token"), h.authToken)
+	}
+	return false
+}
+
+func authRequiredPath(path string) bool {
+	return strings.HasPrefix(path, "/api/v1/")
+}
+
+func sseTokenFallbackAllowed(path string) bool {
+	return path == "/api/v1/events" || strings.HasSuffix(path, "/output/stream")
+}
+
+func constantTimeEqual(got, want string) bool {
+	if got == "" || want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func revisionMatches(r *http.Request, revision string) bool {

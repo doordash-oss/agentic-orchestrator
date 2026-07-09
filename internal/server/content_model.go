@@ -65,9 +65,9 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 		artifacts = append(artifacts, dto)
 	}
 	revision := revisionForAny(artifacts)
-	writeRevisionedJSON(w, r, http.StatusOK, revision, ArtifactListResponse{
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, ArtifactListResponse{
 		APIVersion: APIVersion,
-		Meta:       responseMeta(revision),
+		Meta:       h.responseMeta(revision),
 		Artifacts:  artifacts,
 	})
 }
@@ -235,8 +235,8 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 		Truncated:  offset+int64(n) < info.Size(),
 	}
 	revision := revisionForAny(resp)
-	resp.Meta = responseMeta(revision)
-	writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	resp.Meta = h.responseMeta(revision)
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
 }
 
 func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, featureID string) {
@@ -265,8 +265,8 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 		resp.Transcript = transcriptDTOs(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), 0, sess.WorkDir())
 	}
 	revision := revisionForAny(resp)
-	resp.Meta = responseMeta(revision)
-	writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	resp.Meta = h.responseMeta(revision)
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
 }
 
 func (h *apiHandler) sessionForFeature(featureID string) ports.SessionView {

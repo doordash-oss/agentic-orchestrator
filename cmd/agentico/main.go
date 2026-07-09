@@ -2327,6 +2327,7 @@ type serverProcessPID interface {
 
 type defaultClientLaunch struct {
 	BaseURL      string
+	AuthToken    string
 	Runtime      serverruntime.RuntimeIdentity
 	LaunchPolicy serverruntime.LaunchPolicy
 	OwnedServer  bool
@@ -2379,6 +2380,7 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 	if decision.AlreadyRunning {
 		return deps.LaunchClient(ctx, defaultClientLaunch{
 			BaseURL:      decision.Record.BaseURL,
+			AuthToken:    decision.Record.AuthToken,
 			Runtime:      identity,
 			LaunchPolicy: policy,
 		})
@@ -2404,6 +2406,7 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 			}
 			return deps.LaunchClient(ctx, defaultClientLaunch{
 				BaseURL:      record.BaseURL,
+				AuthToken:    record.AuthToken,
 				Runtime:      identity,
 				LaunchPolicy: policy,
 			})
@@ -2429,6 +2432,7 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 	}
 	return deps.LaunchClient(ctx, defaultClientLaunch{
 		BaseURL:      record.BaseURL,
+		AuthToken:    record.AuthToken,
 		Runtime:      identity,
 		LaunchPolicy: policy,
 		OwnedServer:  owned,
@@ -2467,7 +2471,7 @@ func (deps defaultLaunchDeps) withDefaults() defaultLaunchDeps {
 }
 
 func launchAPIClientTUI(ctx context.Context, launch defaultClientLaunch) error {
-	client, err := serverruntime.NewClient(serverruntime.ClientOptions{BaseURL: launch.BaseURL})
+	client, err := serverruntime.NewClient(serverruntime.ClientOptions{BaseURL: launch.BaseURL, Token: launch.AuthToken})
 	if err != nil {
 		return fmt.Errorf("create API client: %w", err)
 	}
@@ -2784,12 +2788,18 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		fmt.Fprintf(os.Stderr, "Error: Agentic server is already running at %s\n", decision.Record.BaseURL)
 		return 1
 	}
+	authToken, err := serverruntime.EnsureAuthToken(boot.runtime.RuntimeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: preparing server auth token: %v\n", err)
+		return 1
+	}
 
 	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
 		Runtime:      boot.runtime,
 		LaunchPolicy: policy,
 		StartMode:    "server",
 		Owner:        boot.owner,
+		AuthToken:    authToken,
 		Features:     boot.featureManager,
 		FeatureStore: boot.featureManager.Store,
 		Freshness:    gitFreshnessProvider{},
@@ -2828,6 +2838,8 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		SchemaVersion: 1,
 		APIVersion:    serverruntime.APIVersion,
 		BaseURL:       runtimeServer.BaseURL(),
+		Epoch:         runtimeServer.EventEpoch(),
+		AuthToken:     authToken,
 		Runtime:       boot.runtime,
 		LaunchPolicy:  policy,
 		StartMode:     "server",

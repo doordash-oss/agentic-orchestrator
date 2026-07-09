@@ -66,9 +66,6 @@ func PublishDiscovery(runtimeDir string, rec DiscoveryRecord) error {
 	if rec.PublishedAt.IsZero() {
 		rec.PublishedAt = time.Now().UTC()
 	}
-	if rec.MCP == (MCPMetadata{}) {
-		rec.MCP = mcpMetadataForBaseURL(rec.BaseURL)
-	}
 	var body bytes.Buffer
 	enc := json.NewEncoder(&body)
 	enc.SetIndent("", "  ")
@@ -104,16 +101,6 @@ func PublishDiscovery(runtimeDir string, rec DiscoveryRecord) error {
 	return nil
 }
 
-func mcpMetadataForBaseURL(baseURL string) MCPMetadata {
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	return MCPMetadata{
-		Transport:      "streamable_http",
-		Path:           MCPEndpointPath,
-		Endpoint:       baseURL + MCPEndpointPath,
-		RESTAPIVersion: APIVersion,
-	}
-}
-
 func NewLaunchPolicy(enabledProviders []string, dangerouslySkipPerms bool) LaunchPolicy {
 	return LaunchPolicy{
 		Resolved:                   true,
@@ -145,7 +132,7 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 	if !launchPolicyEquivalent(policy, rec.LaunchPolicy) {
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery policy", Record: rec}, nil
 	}
-	health, ok, reason := discoveryHealth(ctx, client, rec.BaseURL)
+	health, ok, reason := discoveryHealth(ctx, client, rec.BaseURL, rec.AuthToken)
 	if !ok {
 		if reason == "" {
 			reason = "stale discovery"
@@ -214,18 +201,21 @@ func isLoopbackOrigin(raw string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func discoveryHealthOK(ctx context.Context, client *http.Client, baseURL string) bool {
-	_, ok, _ := discoveryHealth(ctx, client, baseURL)
+func discoveryHealthOK(ctx context.Context, client *http.Client, baseURL, token string) bool {
+	_, ok, _ := discoveryHealth(ctx, client, baseURL, token)
 	return ok
 }
 
-func discoveryHealth(ctx context.Context, client *http.Client, baseURL string) (HealthResponse, bool, string) {
+func discoveryHealth(ctx context.Context, client *http.Client, baseURL, token string) (HealthResponse, bool, string) {
 	if client == nil {
 		client = &http.Client{Timeout: time.Second}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api/v1/health", nil)
 	if err != nil {
 		return HealthResponse{}, false, "invalid discovery health URL"
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

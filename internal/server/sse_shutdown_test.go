@@ -26,16 +26,20 @@ import (
 func TestSSEMapsShutdownDomainEventToMetadataOnlyRuntimeDTO(t *testing.T) {
 	t.Parallel()
 
-	dto := eventDTOFromRuntime(ports.Event{
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 8})
+	ch := b.subscribe()
+	defer b.unsubscribe(ch)
+	b.publish(eventDTOFromRuntime(ports.Event{
 		Type:    ports.RuntimeShutdownStarted,
 		Message: "private-token /tmp/agentico-runtime/shutdown.log",
-	}, "shutdown-1")
+	}))
+	dto := <-ch
 
 	if dto.APIVersion != APIVersion {
 		t.Fatalf("api_version = %q; want %q", dto.APIVersion, APIVersion)
 	}
-	if dto.ID != "shutdown-1" {
-		t.Fatalf("id = %q; want shutdown-1", dto.ID)
+	if dto.ID != "1" || dto.Seq != 1 || dto.Epoch != "epoch-test" {
+		t.Fatalf("envelope = id %q seq %d epoch %q; want id/seq 1 and epoch-test", dto.ID, dto.Seq, dto.Epoch)
 	}
 	if dto.Kind != "shutdown.updated" {
 		t.Fatalf("kind = %q; want shutdown.updated", dto.Kind)

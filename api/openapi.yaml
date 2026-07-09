@@ -1,0 +1,1025 @@
+openapi: 3.1.0
+info:
+  title: Agentico Server API
+  version: v1
+  description: Loopback REST and SSE API for the Agentico headless runtime.
+servers:
+  - url: http://127.0.0.1:{port}
+    variables:
+      port:
+        default: "0"
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/health:
+    get:
+      operationId: getHealth
+      summary: Read runtime health and launch metadata.
+      responses:
+        "200":
+          $ref: "#/components/responses/HealthResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features:
+    get:
+      operationId: listFeatures
+      summary: List feature dashboard summaries.
+      responses:
+        "200":
+          $ref: "#/components/responses/FeatureListResponse"
+        "304":
+          $ref: "#/components/responses/NotModified"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createFeature
+      summary: Create a feature.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "201":
+          $ref: "#/components/responses/ActionResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}:
+    get:
+      operationId: getFeature
+      summary: Read one feature.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/FeatureDetailResponse"
+        "304":
+          $ref: "#/components/responses/NotModified"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/features/{feature_id}/config:
+    get:
+      operationId: getFeatureConfig
+      summary: Read feature configuration.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/FeatureConfigResponse"
+        "304":
+          $ref: "#/components/responses/NotModified"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: updateFeatureConfig
+      summary: Update feature configuration.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/live-preview:
+    get:
+      operationId: getFeatureLivePreview
+      summary: Read a feature's compact live preview.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+      responses:
+        "200":
+          $ref: "#/components/responses/LivePreviewResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/start:
+    post:
+      operationId: startFeatureLegacy
+      summary: Start or resume a feature.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/resume:
+    post:
+      operationId: resumeFeatureLegacy
+      summary: Resume a feature.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/stop:
+    post:
+      operationId: stopFeatureLegacy
+      summary: Stop a feature.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/interrupt:
+    post:
+      operationId: interruptFeatureLegacy
+      summary: Interrupt a feature.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/restart:
+    post:
+      operationId: restartFeatureLegacy
+      summary: Restart a feature.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/review-decision:
+    post:
+      operationId: submitReviewDecisionLegacy
+      summary: Submit a review decision.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/need-user-input:
+    post:
+      operationId: answerNeedUserInputLegacy
+      summary: Submit a need-user-input gate decision.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/need-user-input-draft:
+    post:
+      operationId: draftNeedUserInputLegacy
+      summary: Generate draft answers for a need-user-input gate.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/input-notifications:
+    post:
+      operationId: toggleInputNotificationsLegacy
+      summary: Toggle feature input notifications.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/actions/{action}:
+    post:
+      operationId: runFeatureAction
+      summary: Run a named feature action.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/FeatureAction"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/actions/{action}/{subaction}:
+    post:
+      operationId: runFeatureSubaction
+      summary: Run a named feature subaction.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/FeatureAction"
+        - $ref: "#/components/parameters/FeatureSubaction"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs/{run_number}/artifacts:
+    get:
+      operationId: listArtifacts
+      summary: List artifacts for one feature run.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+      responses:
+        "200":
+          $ref: "#/components/responses/ArtifactListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs/{run_number}/artifacts/{artifact_id}:
+    get:
+      operationId: getArtifactContent
+      summary: Read a bounded text artifact slice.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+        - $ref: "#/components/parameters/ArtifactID"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/TextContentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/features/{feature_id}/runs/{run_number}/logs/{log_id}:
+    get:
+      operationId: getRunLogContent
+      summary: Read a bounded run log slice.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/RunNumber"
+        - $ref: "#/components/parameters/LogID"
+        - $ref: "#/components/parameters/Offset"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/TextContentResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/config/runtime:
+    get:
+      operationId: getRuntimeConfig
+      summary: Read runtime configuration.
+      responses:
+        "200":
+          $ref: "#/components/responses/RuntimeConfigResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      operationId: patchRuntimeConfig
+      summary: Patch runtime configuration.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      operationId: putRuntimeConfig
+      summary: Replace runtime configuration.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/workspace/browse:
+    get:
+      operationId: browseWorkspace
+      summary: Browse workspace paths.
+      parameters:
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/WorkspaceBrowseResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/catalog/models:
+    get:
+      operationId: listModels
+      summary: List available provider models.
+      responses:
+        "200":
+          $ref: "#/components/responses/ModelCatalogResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/prompts:
+    get:
+      operationId: listPrompts
+      summary: List pending prompt requests.
+      responses:
+        "200":
+          $ref: "#/components/responses/PromptSnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/prompts/ask-user/answer:
+    post:
+      operationId: answerAskUserPrompt
+      summary: Answer an ask-user prompt.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/prompts/help/send:
+    post:
+      operationId: sendHelpPrompt
+      summary: Send a help message to a session.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/prompts/chat/start:
+    post:
+      operationId: startChatPrompt
+      summary: Start a chat prompt session.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/permissions:
+    get:
+      operationId: listPermissions
+      summary: List pending permission requests.
+      responses:
+        "200":
+          $ref: "#/components/responses/PermissionSnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/permissions/answer:
+    post:
+      operationId: answerPermission
+      summary: Answer a permission request.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/sessions:
+    get:
+      operationId: listSessions
+      summary: List active and recent sessions.
+      responses:
+        "200":
+          $ref: "#/components/responses/SessionListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/sessions/{session_id}:
+    get:
+      operationId: getSession
+      summary: Read a session summary.
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+      responses:
+        "200":
+          $ref: "#/components/responses/SessionDetailResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/sessions/{session_id}/transcript:
+    get:
+      operationId: getSessionTranscript
+      summary: Read a bounded structured session transcript.
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/TranscriptResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/sessions/{session_id}/output:
+    get:
+      operationId: getSessionOutput
+      summary: Read a bounded byte slice from the append-only session output log.
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/SessionOutputResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/sessions/{session_id}/output/stream:
+    get:
+      operationId: streamSessionOutput
+      summary: Stream append-only session output chunks as SSE.
+      description: Emits `session.output` events with byte offsets and a terminal `session.output.done` event.
+      security:
+        - bearerAuth: []
+        - sseAccessToken: []
+      parameters:
+        - $ref: "#/components/parameters/SessionID"
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          $ref: "#/components/responses/SessionOutputStream"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/recovery:
+    get:
+      operationId: getRecoverySnapshot
+      summary: Scan recoverable sessions.
+      responses:
+        "200":
+          $ref: "#/components/responses/RecoverySnapshotResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/recovery/actions:
+    post:
+      operationId: executeRecoveryActions
+      summary: Execute recovery actions from a recovery snapshot.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/shutdown:
+    post:
+      operationId: shutdownRuntime
+      summary: Request runtime shutdown.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/ActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/events:
+    get:
+      operationId: streamEvents
+      summary: Stream ordered runtime events as SSE.
+      description: Emits envelope JSON under SSE `data:` lines. Every non-control event includes a monotonic `seq`, `epoch`, resource identity, and resource version. Clients resume with `Last-Event-ID` or `after`.
+      security:
+        - bearerAuth: []
+        - sseAccessToken: []
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+        - name: epoch
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: heartbeat_ms
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          $ref: "#/components/responses/EventStream"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: instance-token
+      description: Per-instance token from discovery metadata.
+    sseAccessToken:
+      type: apiKey
+      in: query
+      name: access_token
+      description: SSE fallback for browser EventSource clients that cannot set Authorization.
+
+  parameters:
+    FeatureID:
+      name: feature_id
+      in: path
+      required: true
+      schema:
+        type: string
+    RunNumber:
+      name: run_number
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+    ArtifactID:
+      name: artifact_id
+      in: path
+      required: true
+      schema:
+        type: string
+    LogID:
+      name: log_id
+      in: path
+      required: true
+      schema:
+        type: string
+    SessionID:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+    FeatureAction:
+      name: action
+      in: path
+      required: true
+      schema:
+        type: string
+        enum:
+          - start
+          - resume
+          - pause-stop
+          - restart
+          - publish
+          - merge
+          - rewind
+          - retry
+          - rebase
+          - review-comments
+          - tweak
+          - refactor
+          - mark-done
+          - cleanup
+          - delete
+    FeatureSubaction:
+      name: subaction
+      in: path
+      required: true
+      schema:
+        type: string
+        enum:
+          - description
+          - fetch
+          - finish
+          - restart
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+    TrustedMutationHeader:
+      name: X-Agentico-Client
+      in: header
+      required: true
+      schema:
+        type: string
+        enum: ["local"]
+      description: CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+
+  requestBodies:
+    JSONMutation:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+
+  responses:
+    HealthResponse:
+      description: Runtime health.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HealthResponse"
+    FeatureListResponse:
+      description: Feature list.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FeatureListResponse"
+    FeatureDetailResponse:
+      description: Feature detail.
+      headers:
+        X-Agentico-Seq:
+          $ref: "#/components/headers/Sequence"
+        ETag:
+          $ref: "#/components/headers/ETag"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FeatureDetailResponse"
+    FeatureConfigResponse:
+      description: Feature config.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/FeatureConfigResponse"
+    RuntimeConfigResponse:
+      description: Runtime config.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeConfigResponse"
+    WorkspaceBrowseResponse:
+      description: Workspace browse result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/WorkspaceBrowseResponse"
+    ModelCatalogResponse:
+      description: Model catalog.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ModelCatalogResponse"
+    PromptSnapshotResponse:
+      description: Pending prompt snapshot.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PromptSnapshotResponse"
+    PermissionSnapshotResponse:
+      description: Pending permission snapshot.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/PermissionSnapshotResponse"
+    ArtifactListResponse:
+      description: Artifact list.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ArtifactListResponse"
+    TextContentResponse:
+      description: Bounded text content.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/TextContentResponse"
+    LivePreviewResponse:
+      description: Live preview.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/LivePreviewResponse"
+    SessionListResponse:
+      description: Session list.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SessionListResponse"
+    SessionDetailResponse:
+      description: Session detail.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SessionDetailResponse"
+    TranscriptResponse:
+      description: Structured transcript.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/TranscriptResponse"
+    SessionOutputResponse:
+      description: Append-only output backfill.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SessionOutputResponse"
+    RecoverySnapshotResponse:
+      description: Recovery snapshot.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RecoverySnapshotResponse"
+    ActionResponse:
+      description: Mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ActionResponse"
+    ErrorResponse:
+      description: Structured API error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotModified:
+      description: Snapshot revision matches the supplied validator.
+    EventStream:
+      description: Runtime SSE stream carrying `SSEEvent` JSON envelopes.
+      content:
+        text/event-stream:
+          schema:
+            type: string
+    SessionOutputStream:
+      description: Session output SSE stream carrying `SessionOutputChunk` JSON payloads.
+      content:
+        text/event-stream:
+          schema:
+            type: string
+
+  headers:
+    Sequence:
+      description: Current event broker sequence at response time.
+      schema:
+        type: integer
+        minimum: 0
+    ETag:
+      description: Snapshot revision validator.
+      schema:
+        type: string
+
+  schemas:
+    ResponseMeta:
+      type: object
+      required: [revision, generated_at, as_of_seq]
+      properties:
+        revision:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        as_of_seq:
+          type: integer
+          minimum: 0
+    ErrorResponse:
+      type: object
+      required: [api_version, error]
+      properties:
+        api_version:
+          type: string
+        error:
+          $ref: "#/components/schemas/Error"
+    Error:
+      type: object
+      required: [code, message, status]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        status:
+          type: integer
+        target:
+          type: object
+          additionalProperties: true
+    Resource:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+        id:
+          type: string
+        feature_id:
+          type: string
+        phase:
+          type: string
+    SSEEvent:
+      type: object
+      required: [api_version, id, kind, at, resource, snapshot_required]
+      properties:
+        api_version:
+          type: string
+        id:
+          type: string
+        seq:
+          type: integer
+          minimum: 0
+        epoch:
+          type: string
+        kind:
+          type: string
+        at:
+          type: string
+          format: date-time
+        resource:
+          $ref: "#/components/schemas/Resource"
+        resource_version:
+          type: integer
+          minimum: 0
+        revision:
+          type: string
+        snapshot_required:
+          type: boolean
+        summary:
+          type: string
+    SessionOutputChunk:
+      type: object
+      required: [offset, data]
+      properties:
+        offset:
+          type: integer
+          minimum: 0
+        data:
+          type: string
+    SessionOutputResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [session_id, offset, next_offset, size, data, truncated, done]
+          properties:
+            session_id:
+              type: string
+            offset:
+              type: integer
+              minimum: 0
+            next_offset:
+              type: integer
+              minimum: 0
+            size:
+              type: integer
+              minimum: 0
+            data:
+              type: string
+            truncated:
+              type: boolean
+            done:
+              type: boolean
+    JSONResponse:
+      type: object
+      required: [api_version]
+      properties:
+        api_version:
+          type: string
+        meta:
+          $ref: "#/components/schemas/ResponseMeta"
+      additionalProperties: true
+    HealthResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    FeatureListResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    FeatureDetailResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    FeatureConfigResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    RuntimeConfigResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    WorkspaceBrowseResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    ModelCatalogResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    PromptSnapshotResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    PermissionSnapshotResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    ArtifactListResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    TextContentResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    LivePreviewResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    SessionListResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    SessionDetailResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    TranscriptResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    RecoverySnapshotResponse:
+      $ref: "#/components/schemas/JSONResponse"
+    ActionResponse:
+      $ref: "#/components/schemas/JSONResponse"

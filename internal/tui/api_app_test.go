@@ -1781,8 +1781,8 @@ func TestAPIAppModelLogRefreshUsesBoundedContentTail(t *testing.T) {
 		Text:   "refreshed artifact tail",
 	}
 	signal := server.RefreshSignal{
-		Event:    server.SSEEventDTO{Kind: "log.updated"},
-		Resource: server.ResourceDTO{Type: "session", ID: "sess-live", FeatureID: "active"},
+		Event:    server.SSEEventDTO{Kind: "log.resource.updated"},
+		Resource: server.ResourceDTO{Type: "log", ID: "session", FeatureID: "active"},
 	}
 	msg := app.fetchRefreshSnapshotCmd(signal)()
 	model, _ := app.Update(msg)
@@ -2068,7 +2068,7 @@ func TestAPIAppModelContentRefreshPreservesSelectedArtifactAndLog(t *testing.T) 
 		Text:   "refreshed phase log from server",
 	}
 	signal := server.RefreshSignal{
-		Event:    server.SSEEventDTO{Kind: "log.updated"},
+		Event:    server.SSEEventDTO{Kind: "log.resource.updated"},
 		Resource: server.ResourceDTO{Type: "log", ID: "phase", FeatureID: "active"},
 	}
 	msg = app.fetchRefreshSnapshotCmd(signal)()
@@ -2119,7 +2119,7 @@ func TestAPIAppModelLivePreviewRefreshUsesBoundedAPIReadModel(t *testing.T) {
 	initialTranscriptCalls := countString(client.calls, "Transcript")
 
 	signal := server.RefreshSignal{
-		Event:    server.SSEEventDTO{Kind: "log.updated"},
+		Event:    server.SSEEventDTO{Kind: "session.updated"},
 		Resource: server.ResourceDTO{Type: "session", ID: "sess-live", FeatureID: "active"},
 	}
 	client.refreshSnapshot = server.RefreshSnapshot{
@@ -2183,7 +2183,7 @@ func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSessionChanges(t *testi
 		},
 	}
 	signal := server.RefreshSignal{
-		Event:    server.SSEEventDTO{Kind: "log.updated"},
+		Event:    server.SSEEventDTO{Kind: "session.updated"},
 		Resource: server.ResourceDTO{Type: "session", ID: "sess-new", FeatureID: "active"},
 	}
 	msg := app.fetchRefreshSnapshotCmd(signal)()

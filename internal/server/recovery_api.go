@@ -45,7 +45,7 @@ func (h *apiHandler) handleRecoveryRoute(w http.ResponseWriter, r *http.Request)
 	snapshotID := h.storeRecoverySnapshot(items, dtoItems)
 	response := RecoverySnapshotResponse{
 		APIVersion: APIVersion,
-		Meta:       responseMeta(revisionForAny(dtoItems)),
+		Meta:       h.responseMeta(revisionForAny(dtoItems)),
 		SnapshotID: snapshotID,
 		Items:      dtoItems,
 	}

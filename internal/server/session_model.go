@@ -16,12 +16,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -39,9 +44,9 @@ func (h *apiHandler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		summaries = append(summaries, sessionSummaryDTO(sess))
 	}
 	revision := revisionForAny(summaries)
-	writeRevisionedJSON(w, r, http.StatusOK, revision, SessionListResponse{
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, SessionListResponse{
 		APIVersion: APIVersion,
-		Meta:       responseMeta(revision),
+		Meta:       h.responseMeta(revision),
 		Sessions:   summaries,
 	})
 }
@@ -66,9 +71,9 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 		SafeError:       safeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240),
 	}
 	revision := revisionForAny(detail)
-	writeRevisionedJSON(w, r, http.StatusOK, revision, SessionDetailResponse{
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, SessionDetailResponse{
 		APIVersion: APIVersion,
-		Meta:       responseMeta(revision),
+		Meta:       h.responseMeta(revision),
 		Session:    detail,
 	})
 }
@@ -97,8 +102,163 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 		Messages:   transcriptDTOs(messages, offset, sess.WorkDir()),
 	}
 	revision := revisionForAny(resp)
-	resp.Meta = responseMeta(revision)
-	writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	resp.Meta = h.responseMeta(revision)
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+}
+
+func (h *apiHandler) handleSessionOutput(w http.ResponseWriter, r *http.Request, sessionID string) {
+	sess := h.getSession(sessionID)
+	if sess == nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
+		return
+	}
+	path := sess.LogFilePath()
+	if path == "" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "session output not found", map[string]any{"session_id": sessionID})
+		return
+	}
+	resp, err := h.sessionOutputResponse(sessionID, path, parseInt64Query(r, "from", 0), parseInt64Query(r, "limit", defaultTextLimit), !sess.IsActive())
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read session output", map[string]any{"session_id": sessionID})
+		return
+	}
+	if resp.Offset < 0 || resp.NextOffset < 0 {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output bounds", map[string]any{"session_id": sessionID})
+		return
+	}
+	revision := revisionForAny(resp)
+	resp.Meta = h.responseMeta(revision)
+	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+}
+
+func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Request, sessionID string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "streaming unavailable", nil)
+		return
+	}
+	sess := h.getSession(sessionID)
+	if sess == nil {
+		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
+		return
+	}
+	path := sess.LogFilePath()
+	if path == "" {
+		writeAPIError(w, http.StatusNotFound, "not_found", "session output not found", map[string]any{"session_id": sessionID})
+		return
+	}
+	offset := sessionOutputStreamOffset(r)
+	if offset < 0 {
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output offset", map[string]any{"session_id": sessionID})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		resp, err := h.sessionOutputResponse(sessionID, path, offset, defaultTextLimit, !sess.IsActive())
+		if err != nil {
+			writeSessionOutputStreamError(w, sessionID, offset)
+			flusher.Flush()
+			return
+		}
+		if resp.Data != "" {
+			if err := writeSessionOutputSSE(w, "session.output", strconv.FormatInt(resp.NextOffset, 10), resp); err != nil {
+				return
+			}
+			flusher.Flush()
+			offset = resp.NextOffset
+		}
+		if !sess.IsActive() && !resp.Truncated {
+			resp.Done = true
+			if err := writeSessionOutputSSE(w, "session.output.done", strconv.FormatInt(offset, 10), resp); err != nil {
+				return
+			}
+			flusher.Flush()
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (h *apiHandler) sessionOutputResponse(sessionID, path string, offset, limit int64, done bool) (SessionOutputResponse, error) {
+	resp := SessionOutputResponse{APIVersion: APIVersion, SessionID: sessionID, Offset: offset, Done: done}
+	if offset < 0 || limit <= 0 || limit > maxTextLimit {
+		resp.Offset = -1
+		resp.NextOffset = -1
+		return resp, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return resp, err
+	}
+	if info.IsDir() {
+		return resp, os.ErrInvalid
+	}
+	if offset > info.Size() {
+		offset = info.Size()
+	}
+	resp.Offset = offset
+	resp.Size = info.Size()
+	file, err := os.Open(path)
+	if err != nil {
+		return resp, err
+	}
+	defer file.Close()
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return resp, err
+	}
+	remaining := info.Size() - offset
+	buf := make([]byte, min(limit, remaining))
+	n, err := io.ReadFull(file, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return resp, err
+	}
+	resp.Data = string(buf[:n])
+	resp.NextOffset = offset + int64(n)
+	resp.Truncated = resp.NextOffset < info.Size()
+	return resp, nil
+}
+
+func sessionOutputStreamOffset(r *http.Request) int64 {
+	raw := r.URL.Query().Get("from")
+	if raw == "" {
+		raw = r.Header.Get("Last-Event-ID")
+	}
+	if raw == "" {
+		return 0
+	}
+	offset, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return -1
+	}
+	return offset
+}
+
+func writeSessionOutputSSE(w http.ResponseWriter, event, id string, data SessionOutputResponse) error {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", id, event, payload)
+	return err
+}
+
+func writeSessionOutputStreamError(w http.ResponseWriter, sessionID string, offset int64) {
+	_ = writeSessionOutputSSE(w, "session.output.error", strconv.FormatInt(offset, 10), SessionOutputResponse{
+		APIVersion: APIVersion,
+		SessionID:  sessionID,
+		Offset:     offset,
+		NextOffset: offset,
+		Done:       true,
+	})
 }
 
 func (h *apiHandler) allSessions() []ports.SessionView {

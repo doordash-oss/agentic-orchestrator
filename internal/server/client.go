@@ -33,11 +33,13 @@ type ClientOptions struct {
 	BaseURL    string
 	HTTPClient *http.Client
 	Timeout    time.Duration
+	Token      string
 }
 
 type Client struct {
 	baseURL string
 	client  *http.Client
+	token   string
 }
 
 type APIError struct {
@@ -74,6 +76,11 @@ type TextQuery struct {
 	Limit  int64 `json:"limit,omitempty"`
 }
 
+type OutputQuery struct {
+	From  int64 `json:"from,omitempty"`
+	Limit int64 `json:"limit,omitempty"`
+}
+
 func NewClient(opts ClientOptions) (*Client, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {
@@ -90,7 +97,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		copyClient.Timeout = clientTimeout(opts.Timeout)
 		httpClient = &copyClient
 	}
-	return &Client{baseURL: baseURL, client: httpClient}, nil
+	return &Client{baseURL: baseURL, client: httpClient, token: strings.TrimSpace(opts.Token)}, nil
 }
 
 func clientTimeout(timeout time.Duration) time.Duration {
@@ -169,6 +176,12 @@ func (c *Client) SessionDetail(ctx context.Context, sessionID string) (SessionDe
 func (c *Client) Transcript(ctx context.Context, sessionID string, query CursorQuery) (TranscriptResponse, error) {
 	var out TranscriptResponse
 	err := c.getJSON(ctx, "/api/v1/sessions/"+pathSegment(sessionID)+"/transcript", transcriptValues(query), &out)
+	return out, err
+}
+
+func (c *Client) SessionOutput(ctx context.Context, sessionID string, query OutputQuery) (SessionOutputResponse, error) {
+	var out SessionOutputResponse
+	err := c.getJSON(ctx, "/api/v1/sessions/"+pathSegment(sessionID)+"/output", outputValues(query), &out)
 	return out, err
 }
 
@@ -423,6 +436,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
 	if trusted {
 		req.Header.Set("X-Agentico-Client", "local")
 	}
@@ -472,6 +488,17 @@ func transcriptValues(query CursorQuery) url.Values {
 	}
 	if query.Limit > 0 {
 		values.Set("limit", strconv.Itoa(query.Limit))
+	}
+	return values
+}
+
+func outputValues(query OutputQuery) url.Values {
+	values := url.Values{}
+	if query.From > 0 {
+		values.Set("from", strconv.FormatInt(query.From, 10))
+	}
+	if query.Limit > 0 {
+		values.Set("limit", strconv.FormatInt(query.Limit, 10))
 	}
 	return values
 }

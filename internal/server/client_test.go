@@ -585,8 +585,78 @@ func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 	}
 }
 
+func TestClientSessionOutputUsesFromOffset(t *testing.T) {
+	t.Parallel()
+
+	var sawFrom string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/sessions/sess-1/output" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		sawFrom = r.URL.Query().Get("from")
+		writeJSON(w, http.StatusOK, SessionOutputResponse{APIVersion: APIVersion, SessionID: "sess-1", Offset: 7, NextOffset: 12, Data: "hello"})
+	}))
+	defer srv.Close()
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	resp, err := client.SessionOutput(context.Background(), "sess-1", OutputQuery{From: 7, Limit: 5})
+	if err != nil {
+		t.Fatalf("SessionOutput() error = %v", err)
+	}
+	if sawFrom != "7" || resp.Data != "hello" || resp.NextOffset != 12 {
+		t.Fatalf("SessionOutput sawFrom=%q resp=%+v, want from 7 and hello chunk", sawFrom, resp)
+	}
+}
+
+func TestClientSendsBearerTokenOnReadsMutationsAndEvents(t *testing.T) {
+	var sawReadAuth, sawMutationAuth, sawEventAuth atomic.Bool
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("%s %s Authorization = %q, want bearer token", r.Method, r.URL.Path, r.Header.Get("Authorization"))
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v1/features":
+			sawReadAuth.Store(true)
+			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion})
+		case "POST /api/v1/shutdown":
+			sawMutationAuth.Store(true)
+			writeJSON(w, http.StatusOK, ShutdownResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, Result: "ok"})
+		case "GET /api/v1/events":
+			sawEventAuth.Store(true)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("event: connected\ndata: {\"api_version\":\"v1\",\"id\":\"1\",\"kind\":\"connected\",\"resource\":{\"type\":\"runtime\"},\"snapshot_required\":true}\n\n"))
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	})
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL, Token: "test-token"})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	if _, err := client.Features(context.Background()); err != nil {
+		t.Fatalf("Features() error = %v", err)
+	}
+	if _, err := client.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	signals, errs := client.SubscribeEvents(ctx, EventSubscriptionOptions{})
+	_ = waitRefreshSignal(t, signals)
+	cancel()
+	<-errs
+	if !sawReadAuth.Load() || !sawMutationAuth.Load() || !sawEventAuth.Load() {
+		t.Fatalf("auth seen read=%v mutation=%v event=%v; want all true", sawReadAuth.Load(), sawMutationAuth.Load(), sawEventAuth.Load())
+	}
+}
+
 func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 	var eventConnections atomic.Int32
+	var secondAfter atomic.Value
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/events":
@@ -598,6 +668,7 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 				flusher.Flush()
 				return
 			}
+			secondAfter.Store(r.URL.Query().Get("after"))
 			_, _ = w.Write([]byte("id: 2\nevent: lifecycle.updated\ndata: {\"api_version\":\"v1\",\"id\":\"2\",\"kind\":\"lifecycle.updated\",\"resource\":{\"type\":\"feature\",\"feature_id\":\"feat-1\"},\"snapshot_required\":true}\n\n"))
 			flusher.Flush()
 			<-r.Context().Done()
@@ -634,6 +705,9 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 	}
 	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != "feat-1" || snapshot.LivePreview == nil {
 		t.Fatalf("FetchRefreshSnapshot() = %+v, want feature and live preview snapshots", snapshot)
+	}
+	if got, _ := secondAfter.Load().(string); got != "1" {
+		t.Fatalf("second event connection after = %q, want 1", got)
 	}
 	cancel()
 	select {
@@ -727,7 +801,7 @@ func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testin
 	}
 }
 
-func TestClientFetchRefreshSnapshotIncludesLivePreviewForSessionOutput(t *testing.T) {
+func TestClientFetchRefreshSnapshotIgnoresSessionOutputActivity(t *testing.T) {
 	var sawSessionDetail bool
 	var sawTranscript bool
 	var sawLivePreview bool
@@ -769,20 +843,17 @@ func TestClientFetchRefreshSnapshotIncludesLivePreviewForSessionOutput(t *testin
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "log.updated"},
+		Event:    SSEEventDTO{Kind: "session.output.activity"},
 		Resource: ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "sess-1" {
-		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want sess-1 detail", snapshot.Session, sawSessionDetail)
+	if sawSessionDetail || sawTranscript || sawLivePreview {
+		t.Fatalf("session output activity triggered refetches session=%v transcript=%v live_preview=%v; want none", sawSessionDetail, sawTranscript, sawLivePreview)
 	}
-	if !sawTranscript || snapshot.Transcript == nil || len(snapshot.Transcript.Messages) != 1 || snapshot.Transcript.Messages[0].Text != "fresh tail" {
-		t.Fatalf("FetchRefreshSnapshot() transcript = %+v, sawTranscript=%v; want bounded tail", snapshot.Transcript, sawTranscript)
-	}
-	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" || snapshot.LivePreview.Activity != "Using Bash..." {
-		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want feat-1 preview", snapshot.LivePreview, sawLivePreview)
+	if snapshot != (RefreshSnapshot{}) {
+		t.Fatalf("FetchRefreshSnapshot() = %+v, want empty snapshot for output activity", snapshot)
 	}
 }
 

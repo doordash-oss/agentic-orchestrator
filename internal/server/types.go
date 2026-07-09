@@ -48,6 +48,7 @@ type Options struct {
 	LaunchPolicy    LaunchPolicy
 	StartMode       string
 	Owner           instancelock.Owner
+	AuthToken       string
 	Features        FeatureLister
 	FeatureStore    FeatureReader
 	Freshness       RepoFreshnessProvider
@@ -65,6 +66,7 @@ type HandlerOptions struct {
 	LaunchPolicy    LaunchPolicy
 	StartedAt       time.Time
 	Owner           instancelock.Owner
+	AuthToken       string
 	Features        FeatureLister
 	FeatureStore    FeatureReader
 	Freshness       RepoFreshnessProvider
@@ -92,6 +94,7 @@ type ResponseMeta struct {
 	Revision    string    `json:"revision"`
 	GeneratedAt time.Time `json:"generated_at"`
 	CacheHit    bool      `json:"cache_hit,omitempty"`
+	AsOfSeq     uint64    `json:"as_of_seq,omitempty"`
 }
 
 type ErrorResponse struct {
@@ -622,6 +625,18 @@ type TranscriptResponse struct {
 	Messages   []TranscriptMessageDTO `json:"messages"`
 }
 
+type SessionOutputResponse struct {
+	APIVersion string       `json:"api_version"`
+	Meta       ResponseMeta `json:"meta"`
+	SessionID  string       `json:"session_id"`
+	Offset     int64        `json:"offset"`
+	NextOffset int64        `json:"next_offset"`
+	Size       int64        `json:"size"`
+	Data       string       `json:"data"`
+	Truncated  bool         `json:"truncated"`
+	Done       bool         `json:"done,omitempty"`
+}
+
 type TranscriptMessageDTO struct {
 	Index              int            `json:"index"`
 	BlockIndex         int            `json:"block_index,omitempty"`
@@ -923,9 +938,12 @@ type ShutdownResponse struct {
 type SSEEventDTO struct {
 	APIVersion       string      `json:"api_version"`
 	ID               string      `json:"id"`
+	Seq              uint64      `json:"seq,omitempty"`
+	Epoch            string      `json:"epoch,omitempty"`
 	Kind             string      `json:"kind"`
 	At               time.Time   `json:"at"`
 	Resource         ResourceDTO `json:"resource"`
+	ResourceVersion  uint64      `json:"resource_version,omitempty"`
 	Revision         string      `json:"revision,omitempty"`
 	SnapshotRequired bool        `json:"snapshot_required"`
 	Summary          string      `json:"summary,omitempty"`
@@ -942,7 +960,8 @@ type DiscoveryRecord struct {
 	SchemaVersion int             `json:"schema_version"`
 	APIVersion    string          `json:"api_version"`
 	BaseURL       string          `json:"base_url"`
-	MCP           MCPMetadata     `json:"mcp"`
+	Epoch         string          `json:"epoch,omitempty"`
+	AuthToken     string          `json:"auth_token,omitempty"`
 	Runtime       RuntimeIdentity `json:"runtime"`
 	LaunchPolicy  LaunchPolicy    `json:"launch_policy"`
 	StartMode     string          `json:"start_mode"`
@@ -951,13 +970,6 @@ type DiscoveryRecord struct {
 	StartedAt     time.Time       `json:"started_at"`
 	PublishedAt   time.Time       `json:"published_at"`
 	Owner         OwnerDTO        `json:"owner"`
-}
-
-type MCPMetadata struct {
-	Transport      string `json:"transport"`
-	Path           string `json:"path"`
-	Endpoint       string `json:"endpoint"`
-	RESTAPIVersion string `json:"rest_api_version"`
 }
 
 type DiscoveryDecision struct {

@@ -104,6 +104,34 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 	}
 }
 
+func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
+	t.Parallel()
+
+	handler := newAPIHandler(HandlerOptions{
+		Runtime: RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/runtime/features", Config: "/runtime/config.yaml"},
+		Features: featureListerFunc(func() ([]*feature.Feature, error) {
+			return nil, nil
+		}),
+	})
+	handler.broker.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "feat-1"}})
+
+	w := httptest.NewRecorder()
+	handler.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	if got := resp.Header.Get("X-Agentico-Seq"); got != "1" {
+		t.Fatalf("X-Agentico-Seq = %q, want 1", got)
+	}
+	var body FeatureListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Meta.AsOfSeq != 1 {
+		t.Fatalf("meta.as_of_seq = %d, want 1", body.Meta.AsOfSeq)
+	}
+}
+
 func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 	t.Parallel()
 	handler := NewHandler(HandlerOptions{

@@ -6827,8 +6827,6 @@ func (m APIAppModel) shouldRefreshSelectedContent(signal server.RefreshSignal) b
 		return false
 	}
 	switch {
-	case signal.Event.Kind == "log.updated":
-		return true
 	case resource.Type == "log" || resource.Type == "artifact":
 		return true
 	default:

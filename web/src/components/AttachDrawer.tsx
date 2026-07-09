@@ -74,7 +74,6 @@ export function AttachDrawer({
 
   const send = useMutation({
     mutationFn: (text: string) => api.sessionMessage(sessionId!, text),
-    onSuccess: () => setDraft(""),
   });
   const stop = useMutation({
     mutationFn: () => api.sessionStop(sessionId!),
@@ -130,6 +129,7 @@ export function AttachDrawer({
     const text = draft.trim();
     if (text === "") return;
     send.mutate(text);
+    setDraft("");
   };
 
   return (
@@ -421,6 +421,8 @@ function MessageRow({
       return <FaintRow text={typeof msg.message === "string" ? msg.message : ""} />;
     case "tool_progress":
       return <FaintRow text={`progress · ${msg.tool_name ?? ""}`} />;
+    case "raw_output":
+      return <RawOutputRow text={typeof msg.message === "string" ? msg.message : ""} />;
     case "rate_limit":
       return (
         <FaintRow
@@ -476,6 +478,20 @@ function UserRow({ blocks }: { blocks: SDKContentBlock[] }) {
           <BlockBody key={i} block={b} />
         ))}
       </div>
+    </article>
+  );
+}
+
+function RawOutputRow({ text }: { text: string }) {
+  if (text.trim() === "") return null;
+  return (
+    <article className="rounded-md border border-border bg-bg-tertiary p-2">
+      <header className="text-[0.65rem] uppercase tracking-wide text-text-tertiary mb-1">
+        live output
+      </header>
+      <pre className="text-[0.7rem] font-mono text-text-primary whitespace-pre-wrap break-words max-h-[40vh] overflow-auto">
+        {text}
+      </pre>
     </article>
   );
 }
@@ -861,7 +877,10 @@ function filterMessages(msgs: SDKMessage[], filter: Filter): SDKMessage[] {
   if (filter === "all") return msgs;
   if (filter === "no-tools") {
     return msgs.filter(
-      (m) => m.type !== "tool_progress" && m.type !== "system",
+      (m) =>
+        m.type !== "tool_progress" &&
+        m.type !== "raw_output" &&
+        m.type !== "system",
     );
   }
   // text-only: only assistant/user with text

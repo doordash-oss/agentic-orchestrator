@@ -42,7 +42,7 @@ export function RecoveryModal() {
   }, [open, items]);
 
   const submit = useMutation({
-    mutationFn: () => api.executeRecovery(actions),
+    mutationFn: () => api.executeRecovery(scan.data!.snapshot_id, actions),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["features"] });
       setDismissed(true);

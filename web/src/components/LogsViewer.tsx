@@ -39,7 +39,8 @@ export function LogsViewer({
   const [iter, setIter] = useState(0);
 
   useEffect(() => {
-    if (phase === "" && initialPhase) {
+    const currentEntry = entries.find((e) => e.phase === phase);
+    if ((phase === "" || !currentEntry) && initialPhase) {
       const entry = entries.find((e) => e.phase === initialPhase);
       const iters = entry?.iterations ?? [];
       const last = iters.length > 0 ? iters[iters.length - 1] : 1;
@@ -88,7 +89,7 @@ export function LogsViewer({
                 {entries.length === 0 && <option value="">—</option>}
                 {entries.map((e) => (
                   <option key={e.phase} value={e.phase}>
-                    {e.phase}
+                    {e.phase === "session-output" ? "live session" : e.phase}
                   </option>
                 ))}
               </select>

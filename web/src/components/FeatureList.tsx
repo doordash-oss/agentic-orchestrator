@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "../api/client";
 import type { FeatureSummary } from "../api/types";
@@ -57,6 +57,18 @@ export function FeatureList() {
     queryFn: ({ signal }) => api.featuresList(signal),
     refetchInterval: 10_000,
   });
+
+  useEffect(() => {
+    if (!data) return;
+    const features = data.features;
+    if (features.length === 0) {
+      if (selectedId) selectFeature(null);
+      return;
+    }
+    if (!selectedId || !features.some((f) => f.id === selectedId)) {
+      selectFeature(features[0].id);
+    }
+  }, [data, selectedId, selectFeature]);
 
   const grouped = useMemo(() => {
     const features = data?.features ?? [];

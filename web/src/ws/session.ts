@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { sessionTranscript, type TranscriptMessageDTO } from "../api/client";
+import {
+  sessionPendingControls,
+  sessionOutputTail,
+  sessionTranscript,
+  type ControlRequestDTO,
+  type TranscriptMessageDTO,
+} from "../api/client";
 import type {
   SDKMessage,
   SDKContentBlock,
@@ -50,9 +56,25 @@ export function useSessionWS(sessionId: string | null): SessionConnection {
 
     const poll = async () => {
       try {
-        const rows = await sessionTranscript(sessionId, controller.signal);
+        const [rows, output, controls] = await Promise.all([
+          sessionTranscript(sessionId, controller.signal),
+          sessionOutputTail(sessionId, controller.signal),
+          sessionPendingControls(sessionId, controller.signal),
+        ]);
         if (cancelled) return;
-        setMessages(rows.map(mapTranscriptMessage).slice(-HISTORY_CAP));
+        const transcriptMessages = rows
+          .map(mapTranscriptMessage)
+          .filter(hasVisibleContent);
+        const outputMessage = output.trim()
+          ? [mapRawOutput(output)]
+          : [];
+        setMessages(
+          [
+            ...transcriptMessages,
+            ...outputMessage,
+            ...controls.map(mapPendingControl),
+          ].slice(-HISTORY_CAP),
+        );
         setState("open");
         setDone(false);
         setDoneStatus(undefined);
@@ -105,4 +127,56 @@ function mapTranscriptMessage(row: TranscriptMessageDTO): SDKMessage {
 
 function textBlocks(text: string | undefined): SDKContentBlock[] {
   return text ? [{ type: "text", text }] : [];
+}
+
+function hasVisibleContent(msg: SDKMessage): boolean {
+  if (msg.type === "assistant" || msg.type === "user") {
+    return conversationText(msg).trim() !== "";
+  }
+  if (msg.type === "tool_progress") {
+    return Boolean(msg.tool_name || String(msg.data ?? "").trim());
+  }
+  if (typeof msg.message === "string") {
+    return msg.message.trim() !== "";
+  }
+  return msg.type === "control_request";
+}
+
+function conversationText(msg: SDKMessage): string {
+  const message = msg.message;
+  if (!message || typeof message !== "object" || !Array.isArray(message.content)) {
+    return "";
+  }
+  return message.content
+    .map((block) => {
+      if (block.type === "text") return block.text ?? "";
+      if (block.type === "thinking") return block.thinking ?? "";
+      return "";
+    })
+    .join("\n");
+}
+
+function mapRawOutput(output: string): SDKMessage {
+  return {
+    type: "raw_output",
+    message: trimOutput(output),
+  };
+}
+
+function trimOutput(output: string): string {
+  const lines = output.split(/\r?\n/);
+  const tail = lines.slice(-200).join("\n").trim();
+  return tail || output.slice(-20_000);
+}
+
+function mapPendingControl(row: ControlRequestDTO): SDKMessage {
+  return {
+    type: "control_request",
+    request_id: row.request_id,
+    request: {
+      tool_name: row.tool_name,
+      input: row.questions ? { questions: row.questions } : row.input,
+    },
+    message: row.summary,
+  };
 }

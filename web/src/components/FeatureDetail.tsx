@@ -94,6 +94,13 @@ function FeatureDetailLoaded({
       setConfirmDeleteOpen(false);
     },
   });
+  const retryMut = useMutation({
+    mutationFn: () => api.retryFeature(featureId),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["features"] });
+      await qc.invalidateQueries({ queryKey: ["feature", featureId] });
+    },
+  });
 
   const pendingReview = data.needs_review;
   const repoNames = (data.repos ?? []).map((r) => r.name);
@@ -149,10 +156,12 @@ function FeatureDetailLoaded({
           onTweak={() => setTweakOpen(true)}
           onRefactor={() => setRefactorOpen(true)}
           onRebase={() => setRebaseOpen(true)}
+          onRetry={() => retryMut.mutate()}
           onStop={triggerStop}
           onDelete={triggerDelete}
           isRunning={data.is_running}
           stopPending={stopMut.isPending}
+          retryPending={retryMut.isPending}
           needsReview={pendingReview}
           status={data.status}
         />
@@ -164,6 +173,7 @@ function FeatureDetailLoaded({
         />
         {tab === "overview" && (
           <>
+            <FailureBanner f={data} retryPending={retryMut.isPending} onRetry={() => retryMut.mutate()} />
             <NeedUserInputPanel f={data} featureId={featureId} />
             <Lifecycle f={data} />
             <Repos f={data} />
@@ -264,10 +274,12 @@ function Actions({
   onTweak,
   onRefactor,
   onRebase,
+  onRetry,
   onStop,
   onDelete,
   isRunning,
   stopPending,
+  retryPending,
   needsReview,
   status,
 }: {
@@ -279,10 +291,12 @@ function Actions({
   onTweak: () => void;
   onRefactor: () => void;
   onRebase: () => void;
+  onRetry: () => void;
   onStop: () => void;
   onDelete: () => void;
   isRunning: boolean;
   stopPending: boolean;
+  retryPending: boolean;
   needsReview: boolean;
   status: string;
 }) {
@@ -382,6 +396,18 @@ function Actions({
         </>
       )}
       <span className="flex-1" />
+      {status === "Failed" && (
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retryPending}
+          className="px-2 py-1 text-xs rounded-sm text-text-inverse disabled:opacity-50"
+          style={{ background: "var(--accent)" }}
+          title="Retry the failed feature setup"
+        >
+          {retryPending ? "retrying…" : "retry"}
+        </button>
+      )}
       {isRunning && (
         <button
           type="button"
@@ -617,6 +643,47 @@ function StatusBadge({ status }: { status: string }) {
       </span>
       {status}
     </span>
+  );
+}
+
+function FailureBanner({
+  f,
+  retryPending,
+  onRetry,
+}: {
+  f: Detail;
+  retryPending: boolean;
+  onRetry: () => void;
+}) {
+  if (!f.failure) return null;
+  return (
+    <div
+      className="mt-4 rounded-md border p-3 text-sm space-y-2"
+      style={{
+        borderColor: "color-mix(in srgb, var(--status-error) 35%, transparent)",
+        background: "color-mix(in srgb, var(--status-error) 8%, var(--bg-secondary))",
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="font-medium" style={{ color: "var(--status-error)" }}>
+            Feature failed{f.failure.type ? `: ${f.failure.type}` : ""}
+          </p>
+          <p className="mt-1 text-text-secondary">{f.failure.message}</p>
+        </div>
+        {f.status === "Failed" && (
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={retryPending}
+            className="shrink-0 px-2 py-1 text-xs rounded-sm text-text-inverse disabled:opacity-50"
+            style={{ background: "var(--accent)" }}
+          >
+            {retryPending ? "retrying…" : "retry"}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

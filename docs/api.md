@@ -4,6 +4,10 @@ The headless runtime exposes a loopback-only REST/SSE API under `/api/v1`.
 `api/openapi.yaml` is the machine-readable contract for routes, response
 shapes, auth, and stream envelopes.
 
+Generated Go contract code lives in `internal/server/serverapi`. Regenerate it
+with `make generate-openapi` or `go generate ./internal/server/serverapi`.
+Tests fail if the committed generated code drifts from `api/openapi.yaml`.
+
 ## Discovery And Auth
 
 `agentico server` writes `.agentico-server.json` in the runtime directory with

@@ -479,11 +479,12 @@ paths:
       summary: Read a bounded structured session transcript.
       parameters:
         - $ref: "#/components/parameters/SessionID"
-        - name: cursor
+        - name: offset
           in: query
           required: false
           schema:
             type: integer
+            format: int64
             minimum: 0
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -503,6 +504,7 @@ paths:
           required: false
           schema:
             type: integer
+            format: int64
             minimum: 0
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -526,6 +528,7 @@ paths:
           required: false
           schema:
             type: integer
+            format: int64
             minimum: 0
       responses:
         "200":
@@ -585,6 +588,8 @@ paths:
           required: false
           schema:
             type: integer
+            format: int64
+            x-go-type: uint64
             minimum: 0
         - name: epoch
           in: query
@@ -687,6 +692,7 @@ components:
       required: false
       schema:
         type: integer
+        format: int64
         minimum: 0
     Limit:
       name: limit
@@ -694,6 +700,7 @@ components:
       required: false
       schema:
         type: integer
+        format: int64
         minimum: 1
     TrustedMutationHeader:
       name: X-Agentico-Client
@@ -885,6 +892,8 @@ components:
           format: date-time
         as_of_seq:
           type: integer
+          format: int64
+          x-go-type: uint64
           minimum: 0
     ErrorResponse:
       type: object
@@ -929,6 +938,8 @@ components:
           type: string
         seq:
           type: integer
+          format: int64
+          x-go-type: uint64
           minimum: 0
         epoch:
           type: string
@@ -941,6 +952,8 @@ components:
           $ref: "#/components/schemas/Resource"
         resource_version:
           type: integer
+          format: int64
+          x-go-type: uint64
           minimum: 0
         revision:
           type: string
@@ -954,6 +967,7 @@ components:
       properties:
         offset:
           type: integer
+          format: int64
           minimum: 0
         data:
           type: string
@@ -967,12 +981,15 @@ components:
               type: string
             offset:
               type: integer
+              format: int64
               minimum: 0
             next_offset:
               type: integer
+              format: int64
               minimum: 0
             size:
               type: integer
+              format: int64
               minimum: 0
             data:
               type: string

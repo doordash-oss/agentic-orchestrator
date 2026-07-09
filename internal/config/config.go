@@ -34,13 +34,32 @@ var validKeyboardLayouts = map[string]bool{
 }
 
 type Config struct {
-	Defaults        DefaultsConfig        `yaml:"defaults"`
-	Repos           map[string]RepoConfig `yaml:"repos"`
-	WorkspaceRoots  []string              `yaml:"workspace_roots,omitempty"`
-	DiscoveredRepos map[string]RepoConfig `yaml:"-"` // in-memory only, never persisted
-	Notifications   NotificationConfig    `yaml:"notifications,omitempty"`
-	UI              UIConfig              `yaml:"ui,omitempty"`
-	Observability   ObservabilityConfig   `yaml:"observability,omitempty"`
+	Defaults        DefaultsConfig            `yaml:"defaults"`
+	Repos           map[string]RepoConfig     `yaml:"repos"`
+	WorkspaceRoots  []string                  `yaml:"workspace_roots,omitempty"`
+	DiscoveredRepos map[string]RepoConfig     `yaml:"-"` // in-memory only, never persisted
+	Notifications   NotificationConfig        `yaml:"notifications,omitempty"`
+	UI              UIConfig                  `yaml:"ui,omitempty"`
+	Observability   ObservabilityConfig       `yaml:"observability,omitempty"`
+	Providers       map[string]ProviderConfig `yaml:"providers,omitempty"`
+}
+
+// ProviderConfig holds per-provider overrides. CLI overrides the executable
+// name (or path) Agentico invokes for that provider; when empty, the provider's
+// built-in default binary name is used.
+type ProviderConfig struct {
+	CLI string `yaml:"cli,omitempty"`
+}
+
+// ProviderCLI returns the configured CLI binary for a provider, or fallback
+// when no override is set.
+func (c *Config) ProviderCLI(name, fallback string) string {
+	if pc, ok := c.Providers[name]; ok {
+		if b := strings.TrimSpace(pc.CLI); b != "" {
+			return b
+		}
+	}
+	return fallback
 }
 
 // ObservabilityConfig controls JSONL event emission and OTel export.

@@ -15,13 +15,15 @@
 package claude
 
 import (
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"go.uber.org/fx"
 )
 
-// Module registers the Claude provider in the LLM registry.
+// Module registers the Claude provider in the LLM registry, honoring an
+// optional CLI binary override from config (providers.claude.cli).
 var Module = fx.Module("llm-claude",
-	fx.Invoke(func(r *llm.Registry) {
-		r.Register(&Provider{})
+	fx.Invoke(func(r *llm.Registry, cfg *config.Config) {
+		r.Register(&Provider{binary: cfg.ProviderCLI("claude", defaultBinary)})
 	}),
 )

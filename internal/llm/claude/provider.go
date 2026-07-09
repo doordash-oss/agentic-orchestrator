@@ -26,14 +26,29 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
 )
 
+// defaultBinary is the executable name Agentico invokes for Claude when no
+// override is configured.
+const defaultBinary = "claude"
+
 // Provider implements llm.LLMProvider for Claude Code CLI.
 type Provider struct {
 	mu      sync.RWMutex
 	catalog []llm.ModelInfo
 	runner  clirun.CommandRunner
+	// binary overrides the CLI executable name; empty means defaultBinary.
+	binary string
 }
 
 func (p *Provider) Name() string { return "claude" }
+
+// cliBinary returns the configured CLI executable name, falling back to the
+// provider default when no override is set.
+func (p *Provider) cliBinary() string {
+	if p.binary != "" {
+		return p.binary
+	}
+	return defaultBinary
+}
 
 func (p *Provider) MatchesModel(model string) bool {
 	p.mu.RLock()
@@ -57,7 +72,7 @@ func (p *Provider) MatchesModel(model string) bool {
 }
 
 func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath("claude")
+	_, err := exec.LookPath(p.cliBinary())
 	return err == nil
 }
 
@@ -77,7 +92,7 @@ func (p *Provider) AvailableModels() []string {
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	opts.Model = p.claudeCLIModel(opts.Model)
-	args := buildInteractiveCommand(opts)
+	args := buildInteractiveCommand(p.cliBinary(), opts)
 	return args, nil, nil
 }
 
@@ -148,9 +163,10 @@ func (p *Provider) InstallHint() string {
 }
 
 func (p *Provider) VersionInfo() (string, error) {
-	out, err := exec.Command("claude", "--version").CombinedOutput()
+	bin := p.cliBinary()
+	out, err := exec.Command(bin, "--version").CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to run 'claude --version': %w", err)
+		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -172,7 +188,7 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 	if runner == nil {
 		runner = clirun.DefaultRunner()
 	}
-	out, err := runner(ctx, "claude", []string{"auth", "status", "--json"}, nil)
+	out, err := runner(ctx, p.cliBinary(), []string{"auth", "status", "--json"}, nil)
 
 	var status authStatus
 	if parseErr := json.Unmarshal(out, &status); parseErr == nil {
@@ -243,9 +259,10 @@ func (p *Provider) CLIVersion() (string, error) {
 	if runner == nil {
 		runner = clirun.DefaultRunner()
 	}
-	out, err := runner(context.Background(), "claude", []string{"--version"}, nil)
+	bin := p.cliBinary()
+	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
 	if err != nil {
-		return "", fmt.Errorf("running claude --version: %w", err)
+		return "", fmt.Errorf("running %s --version: %w", bin, err)
 	}
 	return clirun.ParseVersionOutput(out)
 }
@@ -369,8 +386,8 @@ func InsertAfterBinary(cmd []string, flags ...string) []string {
 	return result
 }
 
-func buildInteractiveCommand(opts llm.CommandBuildOpts) []string {
-	args := []string{"claude",
+func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string {
+	args := []string{binary,
 		"--model", opts.Model,
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",

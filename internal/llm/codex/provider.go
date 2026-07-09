@@ -30,14 +30,29 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
 )
 
+// defaultBinary is the executable name Agentico invokes for Codex when no
+// override is configured.
+const defaultBinary = "codex"
+
 // Provider implements llm.LLMProvider for the Codex CLI (app-server mode).
 type Provider struct {
 	mu      sync.RWMutex
 	catalog []llm.ModelInfo
 	runner  clirun.CommandRunner
+	// binary overrides the CLI executable name; empty means defaultBinary.
+	binary string
 }
 
 func (p *Provider) Name() string { return "codex" }
+
+// cliBinary returns the configured CLI executable name, falling back to the
+// provider default when no override is set.
+func (p *Provider) cliBinary() string {
+	if p.binary != "" {
+		return p.binary
+	}
+	return defaultBinary
+}
 
 func (p *Provider) MatchesModel(model string) bool {
 	p.mu.RLock()
@@ -61,7 +76,7 @@ func (p *Provider) MatchesModel(model string) bool {
 }
 
 func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath("codex")
+	_, err := exec.LookPath(p.cliBinary())
 	return err == nil
 }
 
@@ -98,7 +113,7 @@ func MapEffortLevel(level llm.EffortLevel) string {
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	// Interactive: app-server mode. Model/prompt delivered via JSON-RPC.
-	args := []string{"codex", "app-server"}
+	args := []string{p.cliBinary(), "app-server"}
 	if opts.EffortLevel != "" {
 		args = append(args, "-c", "model_reasoning_effort="+MapEffortLevel(opts.EffortLevel))
 	}
@@ -209,9 +224,10 @@ func (p *Provider) InstallHint() string {
 }
 
 func (p *Provider) VersionInfo() (string, error) {
-	out, err := exec.Command("codex", "--version").CombinedOutput()
+	bin := p.cliBinary()
+	out, err := exec.Command(bin, "--version").CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to run 'codex --version': %w", err)
+		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -236,7 +252,7 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 		// logged-in account look like empty status.
 		runner = clirun.CombinedRunner()
 	}
-	out, err := runner(ctx, "codex", []string{"login", "status"}, nil)
+	out, err := runner(ctx, p.cliBinary(), []string{"login", "status"}, nil)
 	text := strings.TrimSpace(string(out))
 	lower := strings.ToLower(text)
 
@@ -300,9 +316,10 @@ func (p *Provider) CLIVersion() (string, error) {
 	if runner == nil {
 		runner = clirun.DefaultRunner()
 	}
-	out, err := runner(context.Background(), "codex", []string{"--version"}, nil)
+	bin := p.cliBinary()
+	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
 	if err != nil {
-		return "", fmt.Errorf("running codex --version: %w", err)
+		return "", fmt.Errorf("running %s --version: %w", bin, err)
 	}
 	return clirun.ParseVersionOutput(out)
 }

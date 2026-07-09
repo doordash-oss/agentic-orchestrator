@@ -596,7 +596,7 @@ func TestBuildInteractiveCommand_PermissionMode(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			args := buildInteractiveCommand(llm.CommandBuildOpts{
+			args := buildInteractiveCommand(defaultBinary, llm.CommandBuildOpts{
 				Model:          "opus",
 				PermissionMode: tc.mode,
 			})
@@ -622,7 +622,7 @@ func TestBuildInteractiveCommand_PermissionMode(t *testing.T) {
 // runtime permission handling, but --permission-mode still suppresses the
 // auto-mode system-reminder.
 func TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP(t *testing.T) {
-	args := buildInteractiveCommand(llm.CommandBuildOpts{
+	args := buildInteractiveCommand(defaultBinary, llm.CommandBuildOpts{
 		Model:                "opus",
 		DangerouslySkipPerms: true,
 		PermissionMode:       "default",
@@ -633,4 +633,73 @@ func TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP(t *testing.T) {
 	if !slices.Contains(args, "--permission-mode") {
 		t.Errorf("missing --permission-mode:\n%v", args)
 	}
+}
+
+func TestClaudeProvider_CLIBinaryDefault(t *testing.T) {
+	if got := (&Provider{}).cliBinary(); got != "claude" {
+		t.Errorf("cliBinary() = %q, want claude", got)
+	}
+}
+
+func TestClaudeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		args, _, err := (&Provider{}).BuildCommand(llm.CommandBuildOpts{Model: "opus"})
+		if err != nil {
+			t.Fatalf("BuildCommand() error: %v", err)
+		}
+		if len(args) == 0 || args[0] != "claude" {
+			t.Errorf("args[0] = %q, want claude; args=%v", firstArg(args), args)
+		}
+	})
+	t.Run("override", func(t *testing.T) {
+		p := &Provider{binary: "fcc-claude"}
+		args, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "opus"})
+		if err != nil {
+			t.Fatalf("BuildCommand() error: %v", err)
+		}
+		if len(args) == 0 || args[0] != "fcc-claude" {
+			t.Errorf("args[0] = %q, want fcc-claude; args=%v", firstArg(args), args)
+		}
+	})
+}
+
+func TestClaudeProvider_CheckReadinessUsesCustomBinary(t *testing.T) {
+	var gotName string
+	p := &Provider{
+		binary: "fcc-claude",
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			gotName = name
+			return []byte(`{"loggedIn":true,"authMethod":"claude.ai","email":"user@example.com"}`), nil
+		},
+	}
+	if status := p.CheckReadiness(context.Background()); !status.Ready {
+		t.Fatalf("CheckReadiness().Ready = false, detail=%q", status.Detail)
+	}
+	if gotName != "fcc-claude" {
+		t.Errorf("CheckReadiness probed %q, want fcc-claude", gotName)
+	}
+}
+
+func TestClaudeProvider_CLIVersionUsesCustomBinary(t *testing.T) {
+	var gotName string
+	p := &Provider{
+		binary: "fcc-claude",
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			gotName = name
+			return []byte("2.1.81 (Claude Code)"), nil
+		},
+	}
+	if _, err := p.CLIVersion(); err != nil {
+		t.Fatalf("CLIVersion() error: %v", err)
+	}
+	if gotName != "fcc-claude" {
+		t.Errorf("CLIVersion probed %q, want fcc-claude", gotName)
+	}
+}
+
+func firstArg(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }

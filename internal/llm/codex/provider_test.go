@@ -693,3 +693,57 @@ func TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *test
 		})
 	}
 }
+
+func TestCodexProvider_CLIBinaryDefault(t *testing.T) {
+	if got := (&Provider{}).cliBinary(); got != "codex" {
+		t.Errorf("cliBinary() = %q, want codex", got)
+	}
+}
+
+func TestCodexProvider_BuildCommandUsesCustomBinary(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("CODEX_HOME", filepath.Join(homeDir, ".codex"))
+
+	tests := []struct {
+		name   string
+		binary string
+		want   string
+	}{
+		{name: "default", binary: "", want: "codex"},
+		{name: "override", binary: "my-codex", want: "my-codex"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Provider{binary: tt.binary}
+			cmd, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "gpt-5.4"})
+			if err != nil {
+				t.Fatalf("BuildCommand() error: %v", err)
+			}
+			if len(cmd) < 2 || cmd[0] != tt.want || cmd[1] != "app-server" {
+				t.Fatalf("BuildCommand() cmd = %v, want [%s app-server ...]", cmd, tt.want)
+			}
+		})
+	}
+}
+
+func TestCodexProvider_CheckReadinessUsesCustomBinary(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+	t.Setenv("CODEX_HOME", filepath.Join(homeDir, ".codex"))
+
+	var gotName string
+	p := &Provider{
+		binary: "my-codex",
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			gotName = name
+			return []byte("Logged in using ChatGPT\n"), nil
+		},
+	}
+	if status := p.CheckReadiness(context.Background()); !status.Ready {
+		t.Fatalf("CheckReadiness().Ready = false, detail=%q", status.Detail)
+	}
+	if gotName != "my-codex" {
+		t.Errorf("CheckReadiness probed %q, want my-codex", gotName)
+	}
+}

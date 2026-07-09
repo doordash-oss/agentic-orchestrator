@@ -229,6 +229,26 @@ func TestBuildCommand_ACPStdioWithModelEnv(t *testing.T) {
 	}
 }
 
+func TestOpenCodeProvider_CLIBinaryDefault(t *testing.T) {
+	if got := New().cliBinary(); got != "opencode" {
+		t.Errorf("cliBinary() = %q, want opencode", got)
+	}
+	if got := NewWithBinary("").cliBinary(); got != "opencode" {
+		t.Errorf("NewWithBinary(\"\").cliBinary() = %q, want opencode", got)
+	}
+}
+
+func TestOpenCodeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
+	p := NewWithBinary("my-opencode")
+	cmd, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5"})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	if !slices.Equal(cmd, []string{"my-opencode", "acp"}) {
+		t.Fatalf("BuildCommand() cmd = %v, want [my-opencode acp]", cmd)
+	}
+}
+
 func TestBuildCommand_StripsRoutingPrefixBeforeModelEnv(t *testing.T) {
 	// Defensive: even if the routing-prefixed form reaches BuildCommand, the
 	// prefix is stripped exactly once before being handed to OpenCode.

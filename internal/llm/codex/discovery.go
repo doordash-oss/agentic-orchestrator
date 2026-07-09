@@ -52,8 +52,9 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 	if runner == nil {
 		runner = clirun.DefaultRunner()
 	}
+	binary := p.cliBinary()
 
-	out, err := runner(ctx, "codex", []string{"debug", "models"}, nil)
+	out, err := runner(ctx, binary, []string{"debug", "models"}, nil)
 	if err == nil {
 		models, parseErr := parseCodexModelCatalogWithProgress(out, report)
 		if parseErr == nil {
@@ -62,7 +63,7 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 		err = parseErr
 	}
 
-	bundled, bundledErr := runner(ctx, "codex", []string{"debug", "models", "--bundled"}, nil)
+	bundled, bundledErr := runner(ctx, binary, []string{"debug", "models", "--bundled"}, nil)
 	if bundledErr != nil {
 		return nil, fmt.Errorf("running codex debug models: %w; bundled fallback: %v", err, bundledErr)
 	}

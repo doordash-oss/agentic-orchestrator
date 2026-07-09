@@ -15,6 +15,7 @@
 package opencode
 
 import (
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"go.uber.org/fx"
 )
@@ -26,7 +27,9 @@ import (
 // registered and ready it discovers and contributes a model catalog like the
 // other providers.
 var Module = fx.Module("llm-opencode",
-	fx.Provide(New),
+	fx.Provide(func(cfg *config.Config) *Provider {
+		return NewWithBinary(cfg.ProviderCLI(providerName, defaultBinary))
+	}),
 	fx.Invoke(func(r *llm.Registry, p *Provider) {
 		r.Register(p)
 	}),

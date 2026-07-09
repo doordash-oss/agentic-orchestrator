@@ -77,11 +77,12 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 		runner = clirun.DefaultRunner()
 	}
 
+	binary := p.cliBinary()
 	attempts := discoveryAttempts()
 	var lastErr error
 	for i, args := range attempts {
 		attemptCtx, cancel := discoveryAttemptContext(ctx, len(attempts)-i)
-		out, err := runner(attemptCtx, "opencode", args, nil)
+		out, err := runner(attemptCtx, binary, args, nil)
 		cancel()
 		if err != nil {
 			lastErr = fmt.Errorf(

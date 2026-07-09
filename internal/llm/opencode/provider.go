@@ -66,6 +66,21 @@ type Provider struct {
 	catalog []llm.ModelInfo
 	rates   map[string]modelRate
 	runner  clirun.CommandRunner
+	// binary overrides the CLI executable name; empty means defaultBinary.
+	binary string
+}
+
+// defaultBinary is the executable name Agentico invokes for OpenCode when no
+// override is configured.
+const defaultBinary = "opencode"
+
+// cliBinary returns the configured CLI executable name, falling back to the
+// provider default when no override is set.
+func (p *Provider) cliBinary() string {
+	if p.binary != "" {
+		return p.binary
+	}
+	return defaultBinary
 }
 
 // modelRate holds the per-million-token pricing discovered for one backend
@@ -77,8 +92,14 @@ type modelRate struct {
 	outputPerMToken float64
 }
 
-// New returns a Provider with the default (production) command runner.
+// New returns a Provider with the default (production) command runner and the
+// default CLI binary name.
 func New() *Provider { return &Provider{} }
+
+// NewWithBinary returns a Provider that invokes the supplied CLI binary name
+// (or the default when empty). It is the constructor used by the FX module to
+// honor the providers.opencode.cli config override.
+func NewWithBinary(binary string) *Provider { return &Provider{binary: binary} }
 
 // NewWithRunner returns a Provider that uses the supplied command runner for its
 // version, readiness, and model-discovery probes instead of shelling out to the
@@ -145,7 +166,7 @@ func (p *Provider) catalogContains(model string) bool {
 
 // DetectCLI reports whether the OpenCode CLI binary is available in PATH.
 func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath("opencode")
+	_, err := exec.LookPath(p.cliBinary())
 	return err == nil
 }
 
@@ -181,7 +202,7 @@ func (p *Provider) AvailableModels() []string {
 // none of which mutates the user's global OpenCode configuration. Any build
 // failure aborts before a launchable command exists. See buildManagedSession.
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
-	return buildManagedSession(opts)
+	return buildManagedSession(p.cliBinary(), opts)
 }
 
 // validateBackendModel reports whether a stripped OpenCode backend model is a
@@ -277,9 +298,10 @@ func (p *Provider) VersionInfo() (string, error) {
 	if runner == nil {
 		runner = clirun.DefaultRunner()
 	}
-	out, err := runner(context.Background(), "opencode", []string{"--version"}, nil)
+	bin := p.cliBinary()
+	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to run 'opencode --version': %w", err)
+		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
 	version, err := clirun.ParseVersionOutput(out)
 	if err != nil {
@@ -493,7 +515,7 @@ func (p *Provider) CheckReadiness(ctx context.Context) llm.ProviderReadiness {
 		runner = clirun.DefaultRunner()
 	}
 
-	out, err := runner(ctx, "opencode", []string{"models"}, nil)
+	out, err := runner(ctx, p.cliBinary(), []string{"models"}, nil)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return llm.ProviderReadiness{

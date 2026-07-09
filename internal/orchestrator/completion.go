@@ -444,13 +444,16 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	if err != nil {
 		return fmt.Errorf("read %s retry sidecar: %w", phaseKey, err)
 	}
-	decision := agent.DecideProtocolRetry(
+	isRateLimit := artifactPhaseHitRateLimit(phaseDir)
+	decision := agent.DecideProtocolRetryWithRateLimit(
 		artifactPhaseRoleMust(input.Phase),
 		phaseDir,
 		f.ActiveRun,
 		sidecar,
 		violations,
 		agent.DefaultMaxConsecutiveProtocolViolations,
+		isRateLimit,
+		o.rateLimitRetryPolicy(),
 	)
 	switch decision.Action {
 	case agent.ProtocolRetryActionSucceed:
@@ -465,6 +468,13 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 		}
 		if err := agent.RemovePhaseCompleteMarker(phaseDir); err != nil {
 			return fmt.Errorf("remove %s phase_complete marker: %w", phaseKey, err)
+		}
+		// Rate-limit retries back off asynchronously so the upstream can
+		// recover; every other retry stays immediate and synchronous to
+		// preserve existing behavior.
+		if decision.RetryDelay > 0 {
+			o.scheduleArtifactPhaseRetry(featureID, input.Phase, decision.RetryDelay)
+			return nil
 		}
 		return o.retryArtifactPhase(featureID, input.Phase)
 	case agent.ProtocolRetryActionTerminal:
@@ -505,6 +515,23 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 func artifactPhaseRoleMust(phase feature.Phase) agent.Role {
 	role, _ := artifactPhaseRole(phase)
 	return role
+}
+
+// artifactPhaseHitRateLimit reports whether the just-finished artifact-phase
+// session recorded an upstream rate-limit failure. The TUI writes the full
+// session transcript to phaseDir/output.txt immediately before signaling
+// completion, so scanning it is a best-effort, self-contained classification
+// with no new plumbing. A missing or unreadable file classifies as "not rate
+// limited" so unrelated protocol violations keep their immediate retry path.
+func artifactPhaseHitRateLimit(phaseDir string) bool {
+	if phaseDir == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(phaseDir, "output.txt"))
+	if err != nil {
+		return false
+	}
+	return agent.IsRateLimitError(string(data))
 }
 
 func (o *Orchestrator) retryArtifactPhase(featureID string, phase feature.Phase) error {

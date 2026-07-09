@@ -850,7 +850,7 @@ type artifactPhaseRetryFixture struct {
 	lifecycle    *mocks.MockFeatureLifecycle
 }
 
-func newArtifactPhaseRetryFixture(t *testing.T, tc artifactPhaseCase, checkpoints feature.Checkpoints) artifactPhaseRetryFixture {
+func newArtifactPhaseRetryFixture(t *testing.T, tc artifactPhaseCase, checkpoints feature.Checkpoints, depsOpts ...func(*orchestrator.Deps)) artifactPhaseRetryFixture {
 	t.Helper()
 
 	cpr := newCapturingPhaseRunner(t)
@@ -922,13 +922,17 @@ func newArtifactPhaseRetryFixture(t *testing.T, tc artifactPhaseCase, checkpoint
 		})
 	}
 
-	o := orchestrator.New(orchestrator.Deps{
+	deps := orchestrator.Deps{
 		Lifecycle:   lc,
 		Store:       store,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
 		CmdRunner:   cpr.cmd,
-	}, orchestrator.Hooks{})
+	}
+	for _, opt := range depsOpts {
+		opt(&deps)
+	}
+	o := orchestrator.New(deps, orchestrator.Hooks{})
 
 	return artifactPhaseRetryFixture{
 		orchestrator: o,

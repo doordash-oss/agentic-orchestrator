@@ -21,6 +21,20 @@ const defaultExitCriteria = `- Feature fully implemented per plan
 - Relevant tests pass
 - No linting errors`
 
+// NewDefaultRateLimitRetry returns the built-in rate-limit backoff defaults:
+// enabled, a 6-attempt budget, 15s base delay doubling up to a 5m cap, with
+// 20% jitter.
+func NewDefaultRateLimitRetry() RateLimitRetryConfig {
+	return RateLimitRetryConfig{
+		Enabled:    true,
+		MaxRetries: 6,
+		BaseDelay:  "15s",
+		MaxDelay:   "5m",
+		Multiplier: 2.0,
+		Jitter:     0.2,
+	}
+}
+
 func NewDefault() *Config {
 	return &Config{
 		Defaults: DefaultsConfig{
@@ -47,6 +61,7 @@ func NewDefault() *Config {
 			MaxIterations:            10,
 			MaxConsecutiveFailures:   3,
 			MaxConsecutiveNoProgress: 3,
+			RateLimitRetry:           NewDefaultRateLimitRetry(),
 		},
 		Repos: make(map[string]RepoConfig),
 		Observability: ObservabilityConfig{

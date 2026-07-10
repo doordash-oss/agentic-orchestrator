@@ -262,30 +262,6 @@ func LoadOrCreate(path string) (*Config, error) {
 	return cfg, err
 }
 
-// DiscoverRepos scans baseDir for immediate subdirectories that contain a .git directory
-// and adds them to the config if not already present. Returns the number of newly added repos.
-func DiscoverRepos(cfg *Config, baseDir string) int {
-	entries, err := os.ReadDir(baseDir)
-	if err != nil {
-		return 0
-	}
-	added := 0
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name()[0] == '.' {
-			continue
-		}
-		repoPath := filepath.Join(baseDir, entry.Name())
-		if workspace.IsGitRepo(repoPath) {
-			// Check if already in config
-			if _, exists := cfg.Repos[entry.Name()]; !exists {
-				cfg.Repos[entry.Name()] = RepoConfig{Path: repoPath}
-				added++
-			}
-		}
-	}
-	return added
-}
-
 func applyDefaults(cfg *Config) {
 	d := NewDefault()
 	if cfg.Defaults.Models.Inquiry == "" {

@@ -243,7 +243,7 @@ func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
 	t.Parallel()
 
 	reg := llm.NewRegistry()
-	reg.Register(&testCatalogProvider{
+	reg.Register(fakeProvider{
 		name: "codex",
 		catalog: []llm.ModelInfo{
 			{ID: "gpt-5.4", Category: "capable"},
@@ -294,40 +294,3 @@ type ioNopCloser struct {
 }
 
 func (ioNopCloser) Close() error { return nil }
-
-type testCatalogProvider struct {
-	name    string
-	catalog []llm.ModelInfo
-}
-
-func (p *testCatalogProvider) Name() string { return p.name }
-
-func (p *testCatalogProvider) MatchesModel(model string) bool {
-	for _, info := range p.catalog {
-		if info.ID == model || p.name+":"+info.ID == model {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *testCatalogProvider) DetectCLI() bool { return true }
-
-func (p *testCatalogProvider) AvailableModels() []string {
-	models := make([]string, 0, len(p.catalog))
-	for _, info := range p.catalog {
-		models = append(models, info.ID)
-	}
-	return models
-}
-
-func (p *testCatalogProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
-	return nil, nil, nil
-}
-
-func (p *testCatalogProvider) NewProtocol(llm.ProtocolOpts) llm.Protocol { return nil }
-func (p *testCatalogProvider) InstallHint() string                       { return "" }
-func (p *testCatalogProvider) VersionInfo() (string, error)              { return "", nil }
-func (p *testCatalogProvider) MinVersion() [3]int                        { return [3]int{} }
-func (p *testCatalogProvider) EnvVarsToExclude() []string                { return nil }
-func (p *testCatalogProvider) ModelCatalog() []llm.ModelInfo             { return p.catalog }

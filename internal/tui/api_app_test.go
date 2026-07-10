@@ -156,10 +156,7 @@ func TestAPIAppModelDashboardKeepsManualPublishCodeReady(t *testing.T) {
 			},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	features := app.apiDashboardFeatures()
 	if len(features) != 1 {
@@ -194,10 +191,7 @@ func TestAPIAppModelRefreshErrorStillAppliesPartialSnapshot(t *testing.T) {
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
 		detail:   server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{FeatureSummary: summary}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	if got := app.Snapshot().Features[0].AttentionCount; got != 0 {
 		t.Fatalf("initial AttentionCount = %d, want 0", got)
 	}
@@ -529,10 +523,7 @@ func TestAPIAppModelRShortcutRetriesFailedSetup(t *testing.T) {
 		detail:        detail,
 		retryAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	if cmd == nil {
@@ -881,10 +872,7 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 			Session:  &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Label: "Implement", Status: "running"},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	view := stripANSI(app.View().Content)
 	flatView := strings.Join(strings.Fields(view), " ")
@@ -926,10 +914,7 @@ func TestAPIAppModelShowsWelcomeWhenWorkspaceRootsEmpty(t *testing.T) {
 		runtime:                  server.RuntimeConfigResponse{},
 		allowEmptyWorkspaceRoots: true,
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	view := stripANSI(app.View().Content)
 	for _, want := range []string{
@@ -969,10 +954,7 @@ func TestAPIAppModelWelcomeRoutesDirPickerScanMessages(t *testing.T) {
 		allowEmptyWorkspaceRoots:    true,
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
@@ -1098,10 +1080,7 @@ func TestAPIAppModelRecoveryTweakShowsKillOnlyAffordance(t *testing.T) {
 		},
 		executeRecoveryAccepted: apiTestActionResponse{Result: "executed"},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	view := stripANSI(app.View().Content)
 	for _, want := range []string{"Tweak me", "[K]ill", "interactive tweak - kill only", "[k] Kill", "[enter] Continue"} {
 		if !strings.Contains(view, want) {
@@ -1191,10 +1170,7 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Running"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -1313,10 +1289,7 @@ func TestOpenAPIAttachStartsLiveOutputFeed(t *testing.T) {
 			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.openAPIAttachForFeature("feat-1")
 	updated := model.(APIAppModel)
@@ -1349,10 +1322,7 @@ func TestLiveSessionOutputFeedAppliesTranscriptRow(t *testing.T) {
 			{SessionID: "sess-1", Index: 1, Message: server.TranscriptMessageDTO{Index: 1, Role: "assistant", Type: "text", Text: "there"}},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.openAPIAttachForFeature("feat-1")
 	updated := model.(APIAppModel)
@@ -1400,10 +1370,7 @@ func TestAPIAttachDetachStopsLiveOutputFeed(t *testing.T) {
 			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.openAPIAttachForFeature("feat-1")
 	attached := model.(APIAppModel)
@@ -1437,10 +1404,7 @@ func TestAPIAttachTabSwitchResyncsLiveOutputFeed(t *testing.T) {
 			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Running"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -1535,10 +1499,7 @@ func TestAPIAppModelOverviewUsesLivePreviewContextPct(t *testing.T) {
 			Context: server.ContextDTO{Percentage: 42},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	app.rightPanelMode = dashboardRightPanelOverview
 	dashboard := app.apiDashboardModel()
@@ -1574,10 +1535,7 @@ func TestAPIAppModelOverviewParsesFinalReviewPhaseFromREST(t *testing.T) {
 			ActiveRun:      &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: "Final Review"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	app.rightPanelMode = dashboardRightPanelOverview
 	dashboard := app.apiDashboardModel()
@@ -2628,10 +2586,7 @@ func TestAPIAppModelIgnoresStaleAttentionForInterruptedFeature(t *testing.T) {
 			{FeatureID: "stopped", RequestID: "perm-1", Status: "pending", ToolName: "Bash", Summary: "go test ./internal/tui"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	snapshot := app.Snapshot()
 	if len(snapshot.Features) != 1 {
@@ -2844,10 +2799,7 @@ func TestAPIAppModelContextualRetryUsesRESTMutation(t *testing.T) {
 		}},
 		retryAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -2874,10 +2826,7 @@ func TestAPIAppModelDetailContextualRetryUsesAWithoutResumeAll(t *testing.T) {
 		}},
 		retryAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	model, cmd := model.(APIAppModel).Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
@@ -2910,10 +2859,7 @@ func TestAPIAppModelResumeAllUsesRESTMutations(t *testing.T) {
 		resumeAccepted: apiTestActionResponse{},
 		retryAccepted:  apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	focused := model.(APIAppModel)
@@ -2960,10 +2906,7 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 		}},
 		toggleInputAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil {
@@ -3050,10 +2993,7 @@ func TestAPIAppModelChatExitResetsFullscreen(t *testing.T) {
 	t.Parallel()
 
 	client := &fakeTUIAPIClient{}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
@@ -3078,10 +3018,7 @@ func TestAPIAppModelChatStartErrorStopsRespondingAndRendersError(t *testing.T) {
 		}},
 		startChatErr: errors.New("monthly spend limit"),
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
@@ -3113,10 +3050,7 @@ func TestAPIAppModelChatRefreshRendersResultErrorAsRedResponse(t *testing.T) {
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
 	chatting.chat.input.SetValue("yo")
@@ -3170,10 +3104,7 @@ func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
 	chatting.chat.input.SetValue("yo")
@@ -3244,10 +3175,7 @@ func TestAPIAppModelChatRecoveryTickFetchesSessionSnapshot(t *testing.T) {
 			},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
 	chatting.chat.input.SetValue("yo")
@@ -3301,10 +3229,7 @@ func TestAPIAppModelChatToolProgressOnlyWaitingHelpShowsNoAnswer(t *testing.T) {
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
 	chatting.chat.input.SetValue("what is the status?")
@@ -3352,10 +3277,7 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
 	chatting.chat.input.SetValue("ask me a question with 3 choices")
@@ -3433,10 +3355,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
 	chatting.chat.input.SetValue("ask me a question with 3 choices")
@@ -3573,10 +3492,7 @@ func TestAPIAppModelCreateFeatureUsesRESTMutation(t *testing.T) {
 		},
 		createAccepted: apiTestActionResponse{FeatureID: "feat-created"},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if cmd != nil {
@@ -3672,10 +3588,7 @@ func TestAPIAppModelWorkspaceManagerUsesRuntimeConfigMutation(t *testing.T) {
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'W', Text: "W"})
 	if cmd != nil {
@@ -3737,10 +3650,7 @@ func TestAPIAppModelWizardBrowseRootPersistsAndRefreshesRepos(t *testing.T) {
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	creating := model.(APIAppModel)
@@ -3788,10 +3698,7 @@ func TestAPIAppModelWizardCreateRepoPersistsRootRescansAndAutoSelects(t *testing
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	creating := model.(APIAppModel)
@@ -3829,6 +3736,15 @@ func makeGitRepoDir(t *testing.T, root, name string) {
 	if err := os.MkdirAll(filepath.Join(root, name, ".git"), 0o755); err != nil {
 		t.Fatalf("create git repo fixture: %v", err)
 	}
+}
+
+func newTestAPIAppModel(t *testing.T, client *fakeTUIAPIClient) APIAppModel {
+	t.Helper()
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	return app
 }
 
 func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
@@ -4220,10 +4136,7 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 		},
 		updateFeatureConfigAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	if cmd == nil {
@@ -4299,10 +4212,7 @@ func TestAPIAppModelFeatureConfigEditorOpensForRunningFeature(t *testing.T) {
 			},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	if cmd == nil {
@@ -4368,10 +4278,7 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
 	if cmd != nil {
@@ -4475,10 +4382,7 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
 	editing := model.(APIAppModel)
@@ -4565,10 +4469,7 @@ func TestAPIAppModelFeatureConfigEditorDoesNotExposeUtilities(t *testing.T) {
 			Publish: server.PublishabilityDTO{ManualPublish: true, Repos: map[string]bool{"api": true}},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
 	if cmd == nil {
@@ -4595,10 +4496,7 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 		}},
 		needUserInputAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
 	if cmd != nil {
@@ -4655,10 +4553,7 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 		}},
 		permissionAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -4712,10 +4607,7 @@ func TestAPIAppModelHelpMessageUsesRESTMutation(t *testing.T) {
 		}},
 		helpAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
 	if cmd != nil {
@@ -4784,10 +4676,7 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 		}},
 		askUserAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -5172,10 +5061,7 @@ func TestAPIAppModelAskUserAnswerUsesFullInputQuestionKey(t *testing.T) {
 		}},
 		askUserAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
 	prompting := model.(APIAppModel)
@@ -5226,10 +5112,7 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 		}},
 		askUserAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
 	prompting := model.(APIAppModel)
@@ -5266,10 +5149,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotShowsReadableLongText(t *testin
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "design", CreatedAt: time.Now()},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 320, Height: 60})
 	app = model.(APIAppModel)
 	model, _ = app.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
@@ -5332,10 +5212,7 @@ func TestAPIAppModelAttachRefreshActivatesAskUserPrompt(t *testing.T) {
 			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -5393,10 +5270,7 @@ func TestAPIAppModelAttachAskUserAnswerDoesNotReactivateCachedPrompt(t *testing.
 			},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -5446,10 +5320,7 @@ func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
 			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	if cmd == nil {
@@ -5503,10 +5374,7 @@ func TestAPIAppModelAttachBackfillsOlderTranscriptOnScrollTop(t *testing.T) {
 			Messages: apiTestTranscriptRows(0, 50),
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	app.storeSessionDetail(server.SessionDetailResponse{Session: server.SessionDetailDTO{
 		SessionSummaryDTO: server.SessionSummaryDTO{
 			ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
@@ -5585,10 +5453,7 @@ func TestAPIAppModelAttachRendersSessionInitialPrompt(t *testing.T) {
 			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	app.storeSessionDetail(server.SessionDetailResponse{Session: server.SessionDetailDTO{
 		SessionSummaryDTO: server.SessionSummaryDTO{
 			ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
@@ -5756,10 +5621,7 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 			{ID: "roadmap", RunNumber: 1, Phase: "plan", Path: roadmapPath, Size: 28, ContentAvailable: true},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	if view := stripANSI(app.View().Content); !strings.Contains(view, "Roadmap needs review") {
 		t.Fatalf("API app View() missing review hint before action:\n%s", view)
@@ -5851,10 +5713,7 @@ func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testin
 		}},
 		reviewAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	if view := stripANSI(app.View().Content); !strings.Contains(view, "Rewind to Plan needs review") {
 		t.Fatalf("API app View() missing rewind review hint:\n%s", view)
@@ -5936,10 +5795,7 @@ func TestAPIAppModelContextualActionRejectsStaleRewindReviewArtifact(t *testing.
 			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	updated := model.(APIAppModel)
@@ -5999,10 +5855,7 @@ func TestAPIAppModelContextualActionRejectsStaleNonRewindGateArtifact(t *testing
 			{ID: "inquire", RunNumber: 1, Phase: "inquire", Path: questionsPath, Size: 12, ContentAvailable: true},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	if view := stripANSI(app.View().Content); !strings.Contains(view, "Research needs review") {
 		t.Fatalf("API app View() should label the reviewed research artifact, not the design target:\n%s", view)
@@ -6067,10 +5920,7 @@ func TestAPIAppModelContextualActionRejectsDetachedStaleReviewAfterRewind(t *tes
 			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	stale := NewArtifactReviewModel(roadmapPath, "active", "plan", feature.PhasePlan, app.width, app.height, nil, "", nil)
 	stale.detached = true
 	app.artifactReview = &stale
@@ -6134,10 +5984,7 @@ func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *
 			{ID: "description-review", RunNumber: 2, Phase: "description", Path: descPath, Size: 27, ContentAvailable: true},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	delete(app.contents, "active")
 	app.rebuildPresentation("active")
 	initialArtifactListCalls := len(client.artifactListFeatureIDs)
@@ -6197,10 +6044,7 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 		},
 		startReviewCommentsAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 180, Height: 48})
 	app = model.(APIAppModel)
 
@@ -6349,10 +6193,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 		}},
 		startRefactorAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
 	if cmd != nil {
@@ -6446,10 +6287,7 @@ func TestAPIAppModelRefactorPromptShiftEnterAndTerminalPaste(t *testing.T) {
 			},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
 	refactor := model.(APIAppModel)
@@ -6495,10 +6333,7 @@ func TestAPIAppModelRefactorPromptTracksPastedImagesAndFiles(t *testing.T) {
 		}},
 		startRefactorAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
 	refactor := model.(APIAppModel)
@@ -6559,10 +6394,7 @@ func TestAPIAppModelRefactorRestartShortcutIsNotExposed(t *testing.T) {
 			},
 		}},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'f', Text: "f", Mod: tea.ModCtrl})
 	if cmd != nil {
@@ -6594,10 +6426,7 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 		}},
 		deleteAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	if cmd != nil {
@@ -6750,10 +6579,7 @@ func TestAPIAppModelDeleteEvictsFeatureBeforeRefresh(t *testing.T) {
 		},
 		deleteAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	if got := app.SelectedFeatureID(); got != "active" {
 		t.Fatalf("SelectedFeatureID() = %q, want active precondition", got)
 	}
@@ -6798,10 +6624,7 @@ func TestAPIAppModelIgnoresStaleDetailErrorForRemovedFeature(t *testing.T) {
 			Feature: active,
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
 		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{next}},
 	})
@@ -6850,10 +6673,7 @@ func TestAPIAppModelListRefreshClearsStalePublishedCycleDetail(t *testing.T) {
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{published}},
 		detail:   staleDetail,
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
 		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{published}},
@@ -6890,10 +6710,7 @@ func TestAPIAppModelPublishOpensReviewFlowBeforeRESTMutation(t *testing.T) {
 		publishDescriptionBody:  "AI generated commit summary with implementation details.",
 		publishAccepted:         apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	if cmd != nil {
@@ -7014,10 +6831,7 @@ func TestAPIAppModelPublishCommitsSingleRepoBeforeCommitLogPreview(t *testing.T)
 			Repos:   []server.ConfigRepoDTO{{Name: "api", Path: repo}},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	if cmd != nil {
@@ -7058,10 +6872,7 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 		}},
 		publishAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	if cmd != nil {
@@ -7186,10 +6997,7 @@ func TestAPIAppModelRebaseDoesNotOpenRepoSelector(t *testing.T) {
 	t.Parallel()
 
 	client := apiRepoSelectorClient("rebase", apiTestActionResponse{})
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
 	if cmd != nil {
@@ -7308,10 +7116,7 @@ func TestAPIAppModelRewindPhaseSelectorUsesChosenTarget(t *testing.T) {
 		}},
 		rewindAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
 	if cmd != nil {
@@ -7366,10 +7171,7 @@ func TestAPIAppModelRewindPipelineUpgradeUsesUpgradeRequest(t *testing.T) {
 		}},
 		rewindAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
 	if cmd != nil {
@@ -7419,10 +7221,7 @@ func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
 		}},
 		rewindAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
 	if view := stripANSI(model.(APIAppModel).View().Content); !strings.Contains(view, "Choose Implement roadmap phase") {
@@ -7480,10 +7279,7 @@ func TestAPIAppModelRewindSingleImplementTargetOpensRoadmapPhasePicker(t *testin
 		}},
 		rewindAccepted: apiTestActionResponse{},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl})
 	if cmd != nil {
@@ -7561,10 +7357,7 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 			"description-review": {ID: "description-review", Text: "new rewind review artifact", Size: 24},
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 	if got := app.snapshot.Content; got == nil || got.RunNumber != 1 || got.Artifact == nil || got.Artifact.ID != "old-plan" {
 		t.Fatalf("initial content = %+v, want run 1 old-plan", got)
 	}
@@ -7677,10 +7470,7 @@ func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
 			Feature: active,
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	for i := 0; i < 3; i++ {
 		model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -7735,10 +7525,7 @@ func TestAPIAppModelDashboardSectionCollapsePersistsThroughREST(t *testing.T) {
 			Feature: active,
 		},
 	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
+	app := newTestAPIAppModel(t, client)
 
 	for i := 0; i < 3; i++ {
 		model, _ := app.Update(tea.KeyPressMsg{Code: tea.KeyDown})

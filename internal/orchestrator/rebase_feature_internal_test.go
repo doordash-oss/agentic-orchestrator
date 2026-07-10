@@ -145,10 +145,28 @@ func countRebaseMockCalls(calls []mocks.MockCall, method string) int {
 	return count
 }
 
-func rebaseFinalReviewPassedResult() chan *agent.OrchestratorResult {
+func rebaseFinalReviewResult(result *agent.OrchestratorResult) chan *agent.OrchestratorResult {
 	ch := make(chan *agent.OrchestratorResult, 1)
-	ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+	ch <- result
 	return ch
+}
+
+func (f *featureRebaseHarnessFixture) setFinalReviewResult(result *agent.OrchestratorResult, before func()) *int {
+	f.t.Helper()
+	calls := 0
+	f.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		calls++
+		if before != nil {
+			before()
+		}
+		return rebaseFinalReviewResult(result), nil
+	})
+	return &calls
+}
+
+func (f *featureRebaseHarnessFixture) setFinalReviewPassed(before func()) *int {
+	f.t.Helper()
+	return f.setFinalReviewResult(&agent.OrchestratorResult{FinalStatus: "all_passed"}, before)
 }
 
 func forcePushCalls(calls []mocks.MockCall) []mocks.MockCall {
@@ -382,7 +400,6 @@ func TestStartFeatureRebaseHarnessMixedConflictAndFailurePreservesOperation(t *t
 func TestStartFeatureRebaseCleanChangeRunsFinalReviewBeforeAutoPush(t *testing.T) {
 	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusPublished, []string{"api", "web"})
 	apiPath := fixture.feature.Repos[0].WorktreePath
-	var finalReviewCalls int
 	fixture.rebaser.IsBehindRemoteFn = func(worktreePath, _ string) (bool, error) {
 		return worktreePath == apiPath, nil
 	}
@@ -399,12 +416,10 @@ func TestStartFeatureRebaseCleanChangeRunsFinalReviewBeforeAutoPush(t *testing.T
 		t.Fatal("smart rebase agent should not start for clean harness change")
 		return nil, nil
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		finalReviewCalls++
+	finalReviewCalls := fixture.setFinalReviewPassed(func() {
 		if got := countRebaseMockCalls(fixture.rebaser.Calls, "ForcePush"); got != 0 {
 			t.Fatalf("ForcePush calls before Final Review = %d, want 0", got)
 		}
-		return rebaseFinalReviewPassedResult(), nil
 	})
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
@@ -412,8 +427,8 @@ func TestStartFeatureRebaseCleanChangeRunsFinalReviewBeforeAutoPush(t *testing.T
 	}
 	fixture.wait()
 
-	if finalReviewCalls != 1 {
-		t.Fatalf("Final Review calls = %d, want 1", finalReviewCalls)
+	if *finalReviewCalls != 1 {
+		t.Fatalf("Final Review calls = %d, want 1", *finalReviewCalls)
 	}
 	pushes := forcePushCalls(fixture.rebaser.Calls)
 	if len(pushes) != 1 {
@@ -444,7 +459,6 @@ func TestStartFeatureRebaseManualPublishLeavesCodeReadyWithLocalChanges(t *testi
 	fixture := newFeatureRebaseHarnessFixture(t, feature.StatusCodeReady, []string{"api"})
 	fixture.feature.Checkpoints.ManualPublish = true
 	fixture.saveFeature()
-	var finalReviewCalls int
 	fixture.rebaser.IsBehindRemoteFn = func(string, string) (bool, error) { return true, nil }
 	fixture.rebaser.RebaseOntoFn = func(_, target string) ports.RebaseResult {
 		if target != "origin/main" {
@@ -456,18 +470,15 @@ func TestStartFeatureRebaseManualPublishLeavesCodeReadyWithLocalChanges(t *testi
 		t.Fatal("smart rebase agent should not start for changed harness outcome")
 		return nil, nil
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		finalReviewCalls++
-		return rebaseFinalReviewPassedResult(), nil
-	})
+	finalReviewCalls := fixture.setFinalReviewPassed(nil)
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
 		t.Fatalf("StartFeatureRebase: %v", err)
 	}
 	fixture.wait()
 
-	if finalReviewCalls != 1 {
-		t.Fatalf("Final Review calls = %d, want 1", finalReviewCalls)
+	if *finalReviewCalls != 1 {
+		t.Fatalf("Final Review calls = %d, want 1", *finalReviewCalls)
 	}
 	loaded := fixture.load()
 	if loaded.Status != feature.StatusCodeReady {
@@ -498,14 +509,10 @@ func TestStartFeatureRebaseUnsupportedFinalReviewPlanRevisionClearsTransientReba
 		}
 		return ports.RebaseResult{Outcome: ports.RebaseSuccess}
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		ch := make(chan *agent.OrchestratorResult, 1)
-		ch <- &agent.OrchestratorResult{
-			FinalStatus:          "plan_revision_required",
-			PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT behavioral: Cover the clean rebase plan revision path.",
-		}
-		return ch, nil
-	})
+	fixture.setFinalReviewResult(&agent.OrchestratorResult{
+		FinalStatus:          "plan_revision_required",
+		PlanRevisionFeedback: "MISSING_EVIDENCE_REQUIREMENT behavioral: Cover the clean rebase plan revision path.",
+	}, nil)
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
 		t.Fatalf("StartFeatureRebase: %v", err)
@@ -565,7 +572,7 @@ func TestStartFeatureRebaseInterruptedInFlightHarnessDoesNotRunFinalReviewOrPush
 	}
 	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
 		finalReviewCalled <- struct{}{}
-		return rebaseFinalReviewPassedResult(), nil
+		return rebaseFinalReviewResult(&agent.OrchestratorResult{FinalStatus: "all_passed"}), nil
 	})
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
@@ -647,9 +654,7 @@ func TestRunRebaseFinalReviewAndPublishPolicyInterruptedAfterFinalReviewDoesNotP
 		released: make(chan struct{}),
 	}
 	fixture.orch = New(Deps{Lifecycle: lifecycle, Store: fixture.store, Rebaser: fixture.rebaser}, Hooks{})
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		return rebaseFinalReviewPassedResult(), nil
-	})
+	fixture.setFinalReviewPassed(nil)
 
 	done := make(chan struct{})
 	go func() {
@@ -708,7 +713,6 @@ func TestStartFeatureRebaseWaitsForAllHarnessReposThenRunsOneSmartRebase(t *test
 	apiPath := fixture.feature.Repos[0].WorktreePath
 	workerPath := fixture.feature.Repos[2].WorktreePath
 	var smartCalls int
-	var finalReviewCalls int
 	var events []string
 
 	fixture.rebaser.IsBehindRemoteFn = func(worktreePath, _ string) (bool, error) {
@@ -757,13 +761,11 @@ func TestStartFeatureRebaseWaitsForAllHarnessReposThenRunsOneSmartRebase(t *test
 			Repos:       []string{"api"},
 		}, nil
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		finalReviewCalls++
+	finalReviewCalls := fixture.setFinalReviewPassed(func() {
 		events = append(events, "final-review")
 		if got := countRebaseMockCalls(fixture.rebaser.Calls, "ForcePush"); got != 0 {
 			t.Fatalf("ForcePush calls before Final Review = %d, want 0", got)
 		}
-		return rebaseFinalReviewPassedResult(), nil
 	})
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
@@ -774,8 +776,8 @@ func TestStartFeatureRebaseWaitsForAllHarnessReposThenRunsOneSmartRebase(t *test
 	if smartCalls != 1 {
 		t.Fatalf("smart rebase calls = %d, want 1", smartCalls)
 	}
-	if finalReviewCalls != 1 {
-		t.Fatalf("Final Review calls = %d, want 1", finalReviewCalls)
+	if *finalReviewCalls != 1 {
+		t.Fatalf("Final Review calls = %d, want 1", *finalReviewCalls)
 	}
 	if got, want := events, []string{"smart", "final-review"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("events = %v, want %v", got, want)
@@ -833,9 +835,7 @@ func TestStartFeatureRebaseSmartRebasePublishesEditedContextRepo(t *testing.T) {
 			Repos:       []string{"api"},
 		}, nil
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		return rebaseFinalReviewPassedResult(), nil
-	})
+	fixture.setFinalReviewPassed(nil)
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
 		t.Fatalf("StartFeatureRebase: %v", err)
@@ -872,24 +872,20 @@ func TestStartFeatureRebaseHarnessUnpublishableRepoRebasesAgainstLocalTarget(t *
 	fixture.saveFeature()
 
 	var rebaseTarget string
-	var finalReviewCalls int
 	fixture.rebaser.IsBehindLocalFn = func(string, string) (bool, error) { return true, nil }
 	fixture.rebaser.RebaseOntoFn = func(_, target string) ports.RebaseResult {
 		rebaseTarget = target
 		return ports.RebaseResult{Outcome: ports.RebaseSuccess}
 	}
-	fixture.orch.SetRunMultiRepoFinalReviewFn(func(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
-		finalReviewCalls++
-		return rebaseFinalReviewPassedResult(), nil
-	})
+	finalReviewCalls := fixture.setFinalReviewPassed(nil)
 
 	if err := fixture.orch.StartFeatureRebase(fixture.featureID); err != nil {
 		t.Fatalf("StartFeatureRebase: %v", err)
 	}
 	fixture.wait()
 
-	if finalReviewCalls != 1 {
-		t.Fatalf("Final Review calls = %d, want 1", finalReviewCalls)
+	if *finalReviewCalls != 1 {
+		t.Fatalf("Final Review calls = %d, want 1", *finalReviewCalls)
 	}
 	if rebaseTarget != "main" {
 		t.Fatalf("RebaseOnto target = %q, want main", rebaseTarget)

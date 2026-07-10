@@ -30,52 +30,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-// newRefactorTestFeature seeds a multi-repo feature whose RepoImpl entries
-// are at "pr_ready" (post-publish) — the precondition for the
-// unified refactor cycle.
 func newRefactorTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	store := feature.NewStore(stateDir)
-	repos := make([]feature.FeatureRepo, 0, len(repoNames))
-	repoPaths := make([]string, 0, len(repoNames))
-	repoImpl := map[string]*feature.RepoState{}
-	for _, name := range repoNames {
-		repoDir := filepath.Join(t.TempDir(), name)
-		if err := os.MkdirAll(repoDir, 0o755); err != nil {
-			t.Fatalf("mkdir repo %q: %v", name, err)
-		}
-		repos = append(repos, feature.FeatureRepo{
-			Name:       name,
-			Path:       repoDir,
-			BaseBranch: "main",
-		})
-		repoPaths = append(repoPaths, repoDir)
-		repoImpl[name] = &feature.RepoState{
-			Touched: true, PRURL: fmt.Sprintf("https://github.com/example/%s/pull/1", name),
-		}
-	}
-	f := &feature.Feature{
-		ID:             featureID,
+	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
 		Name:           "Refactor Loop Test",
 		Slug:           "refactor-loop-test",
 		Description:    "Feature-level refactor cycle test fixture",
-		Status:         feature.StatusPublished,
-		ActiveRun:      1,
-		RunCount:       1,
-		SchemaVersion:  feature.SchemaVersionCurrent,
-		Repos:          repos,
-		RepoStates:     repoImpl,
 		ExitCriteria:   "Refactor complete",
 		RefactorPrompt: "extract-shared-config",
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	loaded, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	return store, loaded, repoPaths
+	})
 }
 
 // stubRefactorPlanFn writes a synthetic refactor-plan.md with the supplied

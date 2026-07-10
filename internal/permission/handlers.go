@@ -120,30 +120,36 @@ func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.
 	return ports.PermissionDecision{}, nil
 }
 
-// TouchWithinRootsHandler auto-approves a plain, unflagged `touch <path>...`
-// Bash command when every target path falls within Roots, deferring to Inner
-// for everything else. `touch` can only create an empty file or bump an
-// existing one's mtime — the same effect Edit/Write already have when
-// AcceptEditsHandler approves them unconditionally — so this closes a gap
-// where the harness prompts for something like a `phase_complete` marker
-// while the equivalent empty Write to that exact path would go through
-// silently.
+// CreateWithinRootsHandler auto-approves a plain, conservatively-flagged
+// `touch <path>...` or `mkdir [-p] <path>...` Bash command when every target
+// path falls within Roots, deferring to Inner for everything else. Both
+// commands can only bring an empty file or directory into existence (or, for
+// touch, bump an existing file's mtime) — the same effect Edit/Write already
+// have when AcceptEditsHandler approves them unconditionally — so this closes
+// a gap where the harness prompts for something like a `phase_complete`
+// marker or a `mkdir -p` the harness itself already ran via os.MkdirAll
+// before the session started (see resolvePhaseArtifactDir/runInteractivePhase
+// and RunKnowledgeBaseForRepo), while the equivalent Write/directory-already-
+// exists case would go through silently.
 //
 // Unlike Edit/Write, OpenCode has no per-path scoping for Bash to fall back
 // on: its declarative permission map treats "bash" as a single ask/allow/deny
 // decision, never a per-path glob (see internal/llm/opencode/config.go). So
 // Roots here is the only boundary standing between an approval and letting a
-// shell command anywhere on disk through — a touch outside it always defers
-// to Inner rather than being approved by default.
-type TouchWithinRootsHandler struct {
+// shell command anywhere on disk through — a touch/mkdir outside it always
+// defers to Inner rather than being approved by default.
+type CreateWithinRootsHandler struct {
 	Inner ports.PermissionHandler
 	Roots []string
 }
 
-// CanUseTool approves an in-root touch; everything else defers to Inner.
-func (h *TouchWithinRootsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+// CanUseTool approves an in-root touch/mkdir; everything else defers to Inner.
+func (h *CreateWithinRootsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	if req.ToolName == "Bash" {
 		if targets, ok := touchCommandTargets(req.Input); ok && allPathsWithinRoots(targets, h.Roots) {
+			return ports.PermissionDecision{Behavior: "allow"}, nil
+		}
+		if targets, ok := mkdirCommandTargets(req.Input); ok && allPathsWithinRoots(targets, h.Roots) {
 			return ports.PermissionDecision{Behavior: "allow"}, nil
 		}
 	}
@@ -175,6 +181,36 @@ func touchCommandTargets(input string) ([]string, bool) {
 		}
 	}
 	return targets, true
+}
+
+// mkdirCommandTargets parses a Bash command as a plain `mkdir [-p] <path>...`
+// invocation with no chaining, redirection, or substitution, returning its
+// literal path arguments. Only -p (idempotent, create-parents) is recognized;
+// any other flag defers to Inner, since a mode/owner-changing flag is outside
+// what this narrow exception is meant to cover.
+func mkdirCommandTargets(input string) ([]string, bool) {
+	command := strings.TrimSpace(extractBashCommand(input))
+	if command == "" {
+		return nil, false
+	}
+	if strings.ContainsAny(command, "\n\r;`<>|&") || strings.Contains(command, "$(") {
+		return nil, false
+	}
+	fields := strings.Fields(command)
+	if len(fields) < 2 || filepath.Base(fields[0]) != "mkdir" {
+		return nil, false
+	}
+	var targets []string
+	for _, f := range fields[1:] {
+		if f == "-p" {
+			continue
+		}
+		if strings.HasPrefix(f, "-") {
+			return nil, false
+		}
+		targets = append(targets, f)
+	}
+	return targets, len(targets) > 0
 }
 
 // allPathsWithinRoots reports whether every path is exactly one of roots or a
@@ -212,19 +248,19 @@ func pathWithinRoots(path string, roots []string) bool {
 	return false
 }
 
-// WrapGeneralPhaseHandlerWithTouch wraps h in a TouchWithinRootsHandler when h
-// is one of the general accept-edits handlers permHandlerFor builds
+// WrapGeneralPhaseHandlerWithSafeCreate wraps h in a CreateWithinRootsHandler
+// when h is one of the general accept-edits handlers permHandlerFor builds
 // (AutoApproveHandler, AcceptEditsHandler, or CachingHandler over one of
 // those — optionally already wrapped in a SizeGuardHandler via Guarded).
 // Any other handler shape — bounded helpers, plan/rewind/review-feedback
 // sessions, chat's ReadOnlyHandler — is returned unchanged, since those exist
 // specifically to restrict writes below the general writable-root policy and
 // must not be loosened by this exception.
-func WrapGeneralPhaseHandlerWithTouch(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
+func WrapGeneralPhaseHandlerWithSafeCreate(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
 	if len(roots) == 0 || !isGeneralPhaseHandler(h) {
 		return h
 	}
-	return &TouchWithinRootsHandler{Inner: h, Roots: roots}
+	return &CreateWithinRootsHandler{Inner: h, Roots: roots}
 }
 
 // isGeneralPhaseHandler reports whether h is, optionally through a

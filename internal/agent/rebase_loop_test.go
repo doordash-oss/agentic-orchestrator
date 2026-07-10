@@ -16,7 +16,6 @@ package agent
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -56,53 +55,14 @@ func (s *rebaseLoopSessionManagerStub) Detach()                                 
 func (s *rebaseLoopSessionManagerStub) Shutdown()                                  {}
 func (s *rebaseLoopSessionManagerStub) IsShuttingDown() bool                       { return false }
 
-// newRebaseTestFeature seeds a multi-repo feature whose RepoImpl entries
-// are at "pr_ready" (post-publish) — the precondition for the
-// unified rebase cycle. The store is a real on-disk store so
-// AtomicPhaseStamp's transactional writes round-trip through Modify/Load.
 func newRebaseTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	store := feature.NewStore(stateDir)
-	repos := make([]feature.FeatureRepo, 0, len(repoNames))
-	repoPaths := make([]string, 0, len(repoNames))
-	repoImpl := map[string]*feature.RepoState{}
-	for _, name := range repoNames {
-		repoDir := filepath.Join(t.TempDir(), name)
-		if err := os.MkdirAll(repoDir, 0o755); err != nil {
-			t.Fatalf("mkdir repo %q: %v", name, err)
-		}
-		repos = append(repos, feature.FeatureRepo{
-			Name:       name,
-			Path:       repoDir,
-			BaseBranch: "main",
-		})
-		repoPaths = append(repoPaths, repoDir)
-		repoImpl[name] = &feature.RepoState{
-			Touched: true, PRURL: fmt.Sprintf("https://github.com/example/%s/pull/1", name),
-		}
-	}
-	f := &feature.Feature{
-		ID:            featureID,
-		Name:          "Rebase Loop Test",
-		Slug:          "rebase-loop-test",
-		Description:   "Feature-level rebase cycle test fixture",
-		Status:        feature.StatusPublished,
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         repos,
-		RepoStates:    repoImpl,
-		ExitCriteria:  "Rebase complete and force-pushed",
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	// Reload so f carries a Run and stable shadows.
-	loaded, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	return store, loaded, repoPaths
+	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
+		Name:         "Rebase Loop Test",
+		Slug:         "rebase-loop-test",
+		Description:  "Feature-level rebase cycle test fixture",
+		ExitCriteria: "Rebase complete and force-pushed",
+	})
 }
 
 // stubRunImplementFn returns a RunImplementFn that yields the given

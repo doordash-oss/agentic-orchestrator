@@ -338,22 +338,6 @@ type FeatureConfigDTO struct {
 	Pipeline    string             `json:"pipeline,omitempty"`
 }
 
-func FeatureConfigMutationFromDTO(dto FeatureConfigDTO) FeatureConfigMutationRequest {
-	return FeatureConfigMutationRequest{
-		Models:      dto.Models,
-		Inquireness: dto.Inquireness,
-		Checkpoints: feature.Checkpoints{
-			InquiryReview:   dto.Checkpoints.InquiryReview,
-			ResearchReview:  dto.Checkpoints.ResearchReview,
-			DesignReview:    dto.Checkpoints.DesignReview,
-			RoadmapReview:   dto.Checkpoints.RoadmapReview,
-			PhasePlanReview: dto.Checkpoints.PhasePlanReview,
-			ManualPublish:   dto.Checkpoints.ManualPublish,
-		},
-		Pipeline: feature.PipelineProfile(dto.Pipeline),
-	}
-}
-
 type CheckpointsDTO = serverapi.Checkpoints
 
 type PublishabilityDTO struct {

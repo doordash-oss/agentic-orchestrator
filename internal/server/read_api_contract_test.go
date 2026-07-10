@@ -777,7 +777,6 @@ func TestActionCatalogRebaseIsFeatureScoped(t *testing.T) {
 	handler := NewHandler(HandlerOptions{
 		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
 		Features:              store,
-		Mutations:             &fakeMutationTarget{},
 		DisableHostValidation: true,
 	})
 
@@ -791,34 +790,6 @@ func TestActionCatalogRebaseIsFeatureScoped(t *testing.T) {
 	}
 	assertActionScope(t, actionsByID["rebase"], "feature", "")
 	assertActionInputNames(t, actionsByID["rebase"])
-
-	for _, bodyJSON := range []string{
-		`{"repo":"api"}`,
-		`{"repo":""}`,
-		`{"rebase_target":""}`,
-		`{"conflict_files":null}`,
-		`{"conflict_files":[]}`,
-	} {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/features/"+f.ID+"/actions/rebase", strings.NewReader(bodyJSON))
-		req.Header.Set("X-Agentico-Client", "local")
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-		resp := w.Result()
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest {
-			data, _ := io.ReadAll(resp.Body)
-			t.Fatalf("rebase mutation %s status = %d; want 400; body: %s", bodyJSON, resp.StatusCode, data)
-		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			t.Fatalf("decode rebase error response for %s: %v", bodyJSON, err)
-		}
-		errDTO := body["error"].(map[string]any)
-		if errDTO["code"] != "bad_request" || !strings.Contains(errDTO["message"].(string), "rebase is feature-scoped") {
-			t.Fatalf("rebase mutation %s error = %+v, want feature-scoped bad_request", bodyJSON, errDTO)
-		}
-	}
 }
 
 func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
@@ -2205,15 +2176,16 @@ func writeFile(t *testing.T, path, data string) {
 }
 
 type fakeProvider struct {
-	name   string
-	models []string
+	name    string
+	models  []string
+	catalog []llm.ModelInfo
 }
 
 func (p fakeProvider) Name() string { return p.name }
 
 func (p fakeProvider) MatchesModel(model string) bool {
 	model = strings.TrimPrefix(model, p.name+":")
-	for _, candidate := range p.models {
+	for _, candidate := range p.AvailableModels() {
 		if candidate == model {
 			return true
 		}
@@ -2223,7 +2195,16 @@ func (p fakeProvider) MatchesModel(model string) bool {
 
 func (p fakeProvider) DetectCLI() bool { return true }
 
-func (p fakeProvider) AvailableModels() []string { return append([]string(nil), p.models...) }
+func (p fakeProvider) AvailableModels() []string {
+	if len(p.catalog) == 0 {
+		return append([]string(nil), p.models...)
+	}
+	models := make([]string, 0, len(p.catalog))
+	for _, info := range p.catalog {
+		models = append(models, info.ID)
+	}
+	return models
+}
 
 func (p fakeProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
 	return nil, nil, nil
@@ -2240,6 +2221,9 @@ func (p fakeProvider) MinVersion() [3]int { return [3]int{} }
 func (p fakeProvider) EnvVarsToExclude() []string { return nil }
 
 func (p fakeProvider) ModelCatalog() []llm.ModelInfo {
+	if len(p.catalog) > 0 {
+		return append([]llm.ModelInfo(nil), p.catalog...)
+	}
 	out := make([]llm.ModelInfo, 0, len(p.models))
 	for _, model := range p.models {
 		out = append(out, llm.ModelInfo{ID: model, DisplayName: model, ContextWindow: 200000, Category: "capable"})

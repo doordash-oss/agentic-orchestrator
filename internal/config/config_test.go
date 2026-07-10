@@ -258,62 +258,6 @@ func TestLoadModelConfigMigratesMissingInquiryFromResearch(t *testing.T) {
 	}
 }
 
-func TestDiscoverRepos(t *testing.T) {
-	dir := t.TempDir()
-
-	// Create some subdirs: two with .git (repos), one without, one hidden
-	for _, name := range []string{"repo-a", "repo-b", "not-a-repo", ".hidden-repo"} {
-		sub := filepath.Join(dir, name)
-		if err := os.MkdirAll(sub, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Add .git dirs to repo-a and repo-b
-	for _, name := range []string{"repo-a", "repo-b", ".hidden-repo"} {
-		if err := os.MkdirAll(filepath.Join(dir, name, ".git"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	cfg := NewDefault()
-
-	// Pre-add repo-a so it should NOT be re-added
-	cfg.Repos["repo-a"] = RepoConfig{Path: "/existing/path"}
-
-	added := DiscoverRepos(cfg, dir)
-	if added != 1 {
-		t.Errorf("expected 1 newly added repo, got %d", added)
-	}
-
-	// repo-b should be discovered
-	if _, ok := cfg.Repos["repo-b"]; !ok {
-		t.Error("expected repo-b to be discovered")
-	}
-
-	// repo-a should retain its original path
-	if cfg.Repos["repo-a"].Path != "/existing/path" {
-		t.Errorf("expected repo-a to keep existing path, got %s", cfg.Repos["repo-a"].Path)
-	}
-
-	// hidden repo should NOT be discovered
-	if _, ok := cfg.Repos[".hidden-repo"]; ok {
-		t.Error("hidden directories should not be discovered")
-	}
-
-	// not-a-repo should NOT be discovered
-	if _, ok := cfg.Repos["not-a-repo"]; ok {
-		t.Error("directories without .git should not be discovered")
-	}
-}
-
-func TestDiscoverReposNonExistentDir(t *testing.T) {
-	cfg := NewDefault()
-	added := DiscoverRepos(cfg, "/nonexistent/path/xyz")
-	if added != 0 {
-		t.Errorf("expected 0 repos from nonexistent dir, got %d", added)
-	}
-}
-
 func TestYAMLIgnoresUnknownAutoPublish(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
@@ -1155,20 +1099,6 @@ func TestDiscoverReposFromRootsAcceptsWorktreeGitFile(t *testing.T) {
 	}
 	if got := cfg.DiscoveredRepos["worktree-repo"].Path; got != repoPath {
 		t.Fatalf("discovered worktree path = %q, want %q", got, repoPath)
-	}
-}
-
-func TestDiscoverReposLegacyAcceptsWorktreeGitFile(t *testing.T) {
-	root := t.TempDir()
-	repoPath := createFakeGitWorktreeRepo(t, root, "legacy-worktree")
-
-	cfg := NewDefault()
-	n := DiscoverRepos(cfg, root)
-	if n != 1 {
-		t.Fatalf("expected 1 discovered repo, got %d", n)
-	}
-	if got := cfg.Repos["legacy-worktree"].Path; got != repoPath {
-		t.Fatalf("legacy worktree path = %q, want %q", got, repoPath)
 	}
 }
 

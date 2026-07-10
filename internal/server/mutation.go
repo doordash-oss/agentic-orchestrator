@@ -1194,31 +1194,6 @@ func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
 	return true
 }
 
-func validateSafeOptionalToken(w http.ResponseWriter, field, value string) bool {
-	if strings.TrimSpace(value) == "" {
-		return true
-	}
-	if !safeActionToken(value, true) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", field+" has invalid characters", nil)
-		return false
-	}
-	return true
-}
-
-func validateConflictFiles(w http.ResponseWriter, files []string) bool {
-	if len(files) > 100 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "too many conflict files", nil)
-		return false
-	}
-	for _, file := range files {
-		if !safeRelativePathToken(file) {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "conflict_files contains an invalid path", nil)
-			return false
-		}
-	}
-	return true
-}
-
 func validatePhaseName(w http.ResponseWriter, phase string) bool {
 	switch strings.ToLower(strings.TrimSpace(phase)) {
 	case "knowledge-base", "knowledgebase", "inquire", "research", "design", "plan", "implement", "review", "final-review", "publish":

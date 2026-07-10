@@ -28,53 +28,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// newReviewCommentsTestFeature seeds a multi-repo feature whose RepoImpl
-// entries are at "pr_ready" (post-publish) — the precondition for
-// the unified review-comments cycle. The store is a real on-disk store
-// so AtomicPhaseStamp's transactional writes round-trip through
-// Modify/Load.
 func newReviewCommentsTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	store := feature.NewStore(stateDir)
-	repos := make([]feature.FeatureRepo, 0, len(repoNames))
-	repoPaths := make([]string, 0, len(repoNames))
-	repoImpl := map[string]*feature.RepoState{}
-	for _, name := range repoNames {
-		repoDir := filepath.Join(t.TempDir(), name)
-		if err := os.MkdirAll(repoDir, 0o755); err != nil {
-			t.Fatalf("mkdir repo %q: %v", name, err)
-		}
-		repos = append(repos, feature.FeatureRepo{
-			Name:       name,
-			Path:       repoDir,
-			BaseBranch: "main",
-		})
-		repoPaths = append(repoPaths, repoDir)
-		repoImpl[name] = &feature.RepoState{
-			Touched: true, PRURL: fmt.Sprintf("https://github.com/example/%s/pull/1", name),
-		}
-	}
-	f := &feature.Feature{
-		ID:            featureID,
-		Name:          "Review Comments Loop Test",
-		Slug:          "review-comments-loop-test",
-		Description:   "Feature-level review-comments cycle test fixture",
-		Status:        feature.StatusPublished,
-		ActiveRun:     1,
-		RunCount:      1,
-		SchemaVersion: feature.SchemaVersionCurrent,
-		Repos:         repos,
-		RepoStates:    repoImpl,
-		ExitCriteria:  "Review comments addressed",
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	loaded, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("reload feature: %v", err)
-	}
-	return store, loaded, repoPaths
+	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
+		Name:         "Review Comments Loop Test",
+		Slug:         "review-comments-loop-test",
+		Description:  "Feature-level review-comments cycle test fixture",
+		ExitCriteria: "Review comments addressed",
+	})
 }
 
 // makeReviewCommentTarget is a builder for a per-repo target with N

@@ -126,32 +126,6 @@ func parseReviewCommentCreatedAt(value string) (time.Time, bool) {
 	return t, true
 }
 
-// prReview represents a top-level PR review (the body submitted with
-// approve/request-changes/comment). Used to parse the pulls/{n}/reviews endpoint.
-type prReview struct {
-	ID   int    `json:"id"`
-	Body string `json:"body"`
-	User struct {
-		Login string `json:"login"`
-	} `json:"user"`
-	State     string `json:"state"`
-	CreatedAt string `json:"submitted_at"`
-}
-
-// parsePaginatedReviews parses paginated output from the reviews endpoint.
-func parsePaginatedReviews(data []byte) ([]prReview, error) {
-	var reviews []prReview
-	dec := json.NewDecoder(bytes.NewReader(data))
-	for dec.More() {
-		var page []prReview
-		if err := dec.Decode(&page); err != nil {
-			return nil, fmt.Errorf("parsing PR reviews: %w", err)
-		}
-		reviews = append(reviews, page...)
-	}
-	return reviews, nil
-}
-
 // parsePaginatedComments parses output from gh api --paginate, which emits
 // one JSON array per page, concatenated (e.g. [{...}][{...}]).
 func parsePaginatedComments(data []byte) ([]ReviewComment, error) {

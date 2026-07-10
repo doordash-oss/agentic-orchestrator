@@ -102,8 +102,6 @@ type APIAppOptions struct {
 	LaunchPolicy               server.LaunchPolicy
 	OwnedServer                bool
 	EventOptions               server.EventSubscriptionOptions
-	SessionManager             *session.Manager
-	BuildSession               agent.BuildSessionFunc
 	WaitForOwnedServerShutdown func(context.Context) error
 	StopOwnedServer            func(context.Context) error
 }
@@ -191,23 +189,6 @@ type APIContentPresentation struct {
 	Artifact  *APIArtifactSnippetPresentation
 }
 
-type APIRecoveryPresentation struct {
-	SnapshotID string
-	Items      []APIRecoveryItemPresentation
-}
-
-type APIRecoveryItemPresentation struct {
-	Key            string
-	FeatureName    string
-	RepoName       string
-	Phase          string
-	Iteration      int
-	PID            int
-	ProcessAlive   bool
-	DefaultAction  string
-	SelectedAction string
-}
-
 type APITextSnippetPresentation struct {
 	ID        string
 	Offset    int64
@@ -269,8 +250,6 @@ type APIAppModel struct {
 	livePreviews               map[string]server.LivePreviewResponse
 	transcripts                map[string]server.TranscriptResponse
 	contents                   map[string]apiFeatureContentSnapshot
-	sessionManager             *session.Manager
-	buildSession               agent.BuildSessionFunc
 	recovery                   server.RecoverySnapshotResponse
 	launchPolicy               server.LaunchPolicy
 	snapshot                   APIAppSnapshot
@@ -595,8 +574,6 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 		transcripts:                map[string]server.TranscriptResponse{},
 		contents:                   map[string]apiFeatureContentSnapshot{},
 		transcriptBackfills:        map[string]bool{},
-		sessionManager:             opts.SessionManager,
-		buildSession:               opts.BuildSession,
 		width:                      100,
 		height:                     30,
 		spinner:                    newAPIAppSpinner(),
@@ -5164,7 +5141,7 @@ func (m APIAppModel) openAPIReviewModel(f *feature.Feature, artifact server.Arti
 		return m, nil
 	}
 	reviewMode, rewindPhase := apiReviewTarget(f)
-	model := NewArtifactReviewModel(artifact.Path, f.ID, reviewMode, rewindPhase, m.width, m.height, m.sessionManager, "", m.buildSession)
+	model := NewArtifactReviewModel(artifact.Path, f.ID, reviewMode, rewindPhase, m.width, m.height, nil, "", nil)
 	model.utilityModel = m.apiUtilityModelForFeature(f.ID)
 	m.artifactReview = &model
 	m.statusMessage = ""

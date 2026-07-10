@@ -13,8 +13,6 @@
 // limitations under the License.
 
 // Package orchestrator — rebase.go owns the per-repo rebase cycle lifecycle.
-// Public entry points: StartRebase, HandleRebaseResult, ForcePushAfterConflict.
-// All carry a repoName parameter.
 package orchestrator
 
 import (
@@ -24,17 +22,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
-
-// RebaseResultInput describes the outcome of a rebase step, typically fed
-// from the TUI after the user resolves conflicts or the auto-rebase finishes.
-type RebaseResultInput struct {
-	RepoName      string
-	HasConflict   bool
-	Aborted       bool
-	Err           error
-	RebaseTarget  string
-	ConflictFiles []string
-}
 
 type HarnessRebaseRepoOutcome struct {
 	RepoName      string
@@ -72,9 +59,6 @@ func (e *RebaseConflictError) Is(target error) bool {
 	_, ok := target.(*RebaseConflictError)
 	return ok
 }
-
-// ErrRebaseConflict is the sentinel used with errors.Is for rebase conflicts.
-var ErrRebaseConflict = &RebaseConflictError{}
 
 // ErrRebaseIncomplete is returned when CompleteRebase observes a worktree
 // still mid-rebase (rebase-merge / rebase-apply dir present). The caller
@@ -293,65 +277,5 @@ func (o *Orchestrator) StartRebase(featureID, repoName string) error {
 		return fmt.Errorf("rebase-repo onto %s failed", rebaseTarget)
 	}
 
-	return nil
-}
-
-// HandleRebaseResult dispatches a per-repo rebase outcome. Conflict outcomes
-// are no-ops here; the TUI's startRepoCycleImplementCmd handles the
-// per-repo conflict-fix loop. Fatal errors call FailRepoCycle.
-func (o *Orchestrator) HandleRebaseResult(featureID, repoName string, input RebaseResultInput) error {
-	if input.HasConflict {
-		// Per-repo conflict: the TUI's startRepoCycleImplementCmd handles the
-		// per-repo conflict-fix loop. Mirror that entry by ensuring the cycle
-		// is recorded; the concrete implementation loop dispatch remains with
-		// the caller (TUI), which knows how to wire the agent plan content.
-		return nil
-	}
-	if input.Aborted {
-		return nil
-	}
-	if input.Err != nil {
-		errMsg := "rebase-repo: " + input.Err.Error()
-		if err := o.deps.Lifecycle.FailRepoCycle(featureID, repoName, errMsg); err != nil {
-			return fmt.Errorf("fail repo cycle: %w", err)
-		}
-		return nil
-	}
-	return nil
-}
-
-// ForcePushAfterConflict force-pushes the feature branch of the given repo
-// after the user has resolved conflicts manually. Uses the RebaseOperator's
-// ForcePush method.
-func (o *Orchestrator) ForcePushAfterConflict(featureID, repoName string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("force-push load feature: %w", err)
-	}
-
-	var repo *feature.FeatureRepo
-	for i := range f.Repos {
-		if f.Repos[i].Name == repoName {
-			repo = &f.Repos[i]
-			break
-		}
-	}
-	if repo == nil {
-		return fmt.Errorf("repo %s not found", repoName)
-	}
-
-	worktreeDir := repo.WorktreePath
-	if worktreeDir == "" {
-		worktreeDir = repo.Path
-	}
-
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
-
-	if err := o.deps.Rebaser.ForcePush(worktreeDir, branch); err != nil {
-		return fmt.Errorf("force push: %w", err)
-	}
 	return nil
 }

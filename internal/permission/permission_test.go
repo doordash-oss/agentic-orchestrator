@@ -95,10 +95,10 @@ func requirePermissionDeferred(t *testing.T, handler ports.PermissionHandler, to
 	}
 }
 
-func TestTouchWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
+func TestCreateWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "phase_complete")
-	handler := &TouchWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionAllowed(t, handler, "Bash", `{"command":"touch `+marker+`"}`)
 	// Multiple targets, all inside a root, still qualify.
@@ -108,10 +108,10 @@ func TestTouchWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
 	requirePermissionDeferred(t, handler, "Bash", `{"command":"ls `+root+`"}`)
 }
 
-func TestTouchWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
+func TestCreateWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
-	handler := &TouchWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+filepath.Join(outside, "phase_complete")+`"}`)
 	// One target outside the root is enough to defer, even if another is inside.
@@ -119,10 +119,10 @@ func TestTouchWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
 		`{"command":"touch `+filepath.Join(root, "ok")+` `+filepath.Join(outside, "bad")+`"}`)
 }
 
-func TestTouchWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testing.T) {
+func TestCreateWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "phase_complete")
-	handler := &TouchWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
 	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch -r `+marker+` `+marker+`"}`)
 	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+marker+` && rm -rf /"}`)
@@ -133,7 +133,34 @@ func TestTouchWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testing
 	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch"}`)
 }
 
-func TestWrapGeneralPhaseHandlerWithTouch_WrapsAcceptEditsAndCaching(t *testing.T) {
+func TestCreateWithinRootsHandler_AllowsPlainMkdirInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	runDir := filepath.Join(root, "runs", "run-001", "research")
+	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"mkdir -p `+runDir+`"}`)
+	// Bare mkdir (no -p) on an in-root target still qualifies.
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"mkdir `+runDir+`"}`)
+	// Multiple targets, all inside a root, still qualify.
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"mkdir -p `+runDir+` `+filepath.Join(root, "other")+`"}`)
+}
+
+func TestCreateWithinRootsHandler_MkdirDefersOutsideRootOrOnOtherFlags(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	inRoot := filepath.Join(root, "runs", "run-001", "research")
+	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(outside, "research")+`"}`)
+	requirePermissionDeferred(t, handler, "Bash",
+		`{"command":"mkdir -p `+inRoot+` `+filepath.Join(outside, "bad")+`"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -m 0700 `+inRoot+`"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p `+inRoot+` && rm -rf /"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p -p"}`)
+}
+
+func TestWrapGeneralPhaseHandlerWithSafeCreate_WrapsAcceptEditsAndCaching(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "phase_complete")
 
@@ -143,12 +170,12 @@ func TestWrapGeneralPhaseHandlerWithTouch_WrapsAcceptEditsAndCaching(t *testing.
 		&CachingHandler{Inner: &AcceptEditsHandler{}, Cache: NewCache(nil)},
 		Guarded(&AcceptEditsHandler{}),
 	} {
-		wrapped := WrapGeneralPhaseHandlerWithTouch(inner, []string{root})
+		wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})
 		requirePermissionAllowed(t, wrapped, "Bash", `{"command":"touch `+marker+`"}`)
 	}
 }
 
-func TestWrapGeneralPhaseHandlerWithTouch_LeavesNarrowerHandlersUnwrapped(t *testing.T) {
+func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "phase_complete")
 
@@ -161,18 +188,18 @@ func TestWrapGeneralPhaseHandlerWithTouch_LeavesNarrowerHandlersUnwrapped(t *tes
 		"ReviewFeedbackHandler":               &ReviewFeedbackHandler{AllowedPath: marker},
 	} {
 		t.Run(name, func(t *testing.T) {
-			wrapped := WrapGeneralPhaseHandlerWithTouch(inner, []string{root})
+			wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})
 			if wrapped != inner {
-				t.Fatalf("WrapGeneralPhaseHandlerWithTouch(%s, roots) returned a new handler, want the original passed through unchanged", name)
+				t.Fatalf("WrapGeneralPhaseHandlerWithSafeCreate(%s, roots) returned a new handler, want the original passed through unchanged", name)
 			}
 		})
 	}
 }
 
-func TestWrapGeneralPhaseHandlerWithTouch_NoRootsIsNoop(t *testing.T) {
+func TestWrapGeneralPhaseHandlerWithSafeCreate_NoRootsIsNoop(t *testing.T) {
 	inner := &AcceptEditsHandler{}
-	if got := WrapGeneralPhaseHandlerWithTouch(inner, nil); got != inner {
-		t.Fatal("WrapGeneralPhaseHandlerWithTouch(inner, nil) should return inner unchanged")
+	if got := WrapGeneralPhaseHandlerWithSafeCreate(inner, nil); got != inner {
+		t.Fatal("WrapGeneralPhaseHandlerWithSafeCreate(inner, nil) should return inner unchanged")
 	}
 }
 

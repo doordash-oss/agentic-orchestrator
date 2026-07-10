@@ -259,7 +259,7 @@ func (b *eventBroker) appendReplayLocked(evt SSEEventDTO) {
 }
 
 func (b *eventBroker) replayAfterLocked(after uint64) ([]SSEEventDTO, bool) {
-	if after == 0 || len(b.ring) == 0 {
+	if len(b.ring) == 0 {
 		return nil, true
 	}
 	current := b.nextSeq

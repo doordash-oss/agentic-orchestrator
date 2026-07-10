@@ -68,13 +68,16 @@ func TestEventBrokerConcurrentPublishAssignsUniqueMonotonicSeqs(t *testing.T) {
 	if got := b.currentSeq(); got != want {
 		t.Fatalf("current seq = %d, want %d", got, want)
 	}
+	// after=0 with a full, unevicted ring now replays everything (seq 0 is
+	// a genuine low-water-mark, not just a "no cursor" sentinel) — the
+	// uniqueness/monotonicity check below is this test's actual point.
 	ch, replay, reset := b.subscribeAfter(0, "")
 	defer b.unsubscribe(ch)
 	if reset != nil {
 		t.Fatalf("initial subscribe reset = %+v, want none", *reset)
 	}
-	if len(replay) != 0 {
-		t.Fatalf("initial replay len = %d, want 0", len(replay))
+	if len(replay) != int(want) {
+		t.Fatalf("initial replay len = %d, want %d", len(replay), want)
 	}
 
 	b.mu.Lock()

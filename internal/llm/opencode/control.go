@@ -134,8 +134,14 @@ func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
 		}
 		return "Agent", inputObject("subagent_type", tc.Title)
 	case ToolKindOther:
+		if command := firstStringField(tc.RawInput, "", "command", "cmd", "script"); command != "" {
+			return "Bash", inputObject("command", command)
+		}
 		if tc.Title == "external_directory" {
 			return "ExternalDirectory", inputObject("path", firstStringField(tc.RawInput, tc.Title, "path", "filepath", "filePath", "directory", "dir", "parentDir"))
+		}
+		if parentDir := firstStringField(tc.RawInput, "", "parentDir", "directory", "dir"); parentDir != "" {
+			return "ExternalDirectory", inputObject("path", parentDir)
 		}
 		return unknownPermissionInput(tc)
 	default:

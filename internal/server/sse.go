@@ -467,6 +467,7 @@ func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
 			Resource:         ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()},
 			Revision:         revisionForAny(ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()}),
 			SnapshotRequired: false,
+			RecordCount:      ev.RecordCount,
 		}
 	case session.SessionDoneMsg:
 		return snapshotRequiredEventDTO("session.updated", ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})

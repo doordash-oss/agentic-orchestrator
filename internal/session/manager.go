@@ -42,6 +42,11 @@ type SDKEventMsg struct {
 	Phase     feature.Phase
 	StartedAt time.Time
 	Message   llm.SDKMessage
+	// RecordCount is the session's transcript record count
+	// (len(s.MessageLog().Messages())) at the moment this event was
+	// emitted — the same index space session_model.go's /output/stream and
+	// /transcript endpoints use.
+	RecordCount int
 }
 
 // SessionDoneMsg signals that a session has ended.
@@ -310,11 +315,12 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 	if m.eventCh != nil {
 		assertEmissionIdentity(id, featureID, phase)
 		sdkEvt := SDKEventMsg{
-			SessionID: id,
-			FeatureID: featureID,
-			Phase:     phase,
-			StartedAt: s.StartedAt(),
-			Message:   msg,
+			SessionID:   id,
+			FeatureID:   featureID,
+			Phase:       phase,
+			StartedAt:   s.StartedAt(),
+			Message:     msg,
+			RecordCount: s.MessageLog().Len(),
 		}
 		select {
 		case m.eventCh <- sdkEvt:

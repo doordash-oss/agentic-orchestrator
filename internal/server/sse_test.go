@@ -23,6 +23,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
@@ -477,4 +480,19 @@ func eventSeqs(events []SSEEventDTO) []uint64 {
 		seqs = append(seqs, evt.Seq)
 	}
 	return seqs
+}
+
+func TestSessionOutputActivityCarriesCurrentRecordCount(t *testing.T) {
+	t.Parallel()
+
+	msg := session.SDKEventMsg{
+		SessionID:   "sess-1",
+		FeatureID:   "feat-1",
+		RecordCount: 3,
+		Message:     llm.SDKMessage{Type: "assistant"},
+	}
+	evt := eventDTOFromRuntime(msg)
+	if evt.Kind != "session.output.activity" || evt.RecordCount != 3 {
+		t.Fatalf("eventDTOFromRuntime = %+v, want session.output.activity with RecordCount 3", evt)
+	}
 }

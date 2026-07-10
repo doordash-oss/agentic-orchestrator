@@ -966,6 +966,9 @@ type SSEEventDTO struct {
 	Revision         string      `json:"revision,omitempty"`
 	SnapshotRequired bool        `json:"snapshot_required"`
 	Summary          string      `json:"summary,omitempty"`
+	// RecordCount is the session's current transcript record count at the
+	// time of this session.output.activity event — see session.SDKEventMsg.
+	RecordCount int `json:"record_count,omitempty"`
 }
 
 type ResourceDTO struct {

@@ -967,6 +967,12 @@ components:
           type: boolean
         summary:
           type: string
+        record_count:
+          type: integer
+          description: >-
+            Session's current transcript record count at emission time — the
+            same index space /transcript and /output/stream use. Only set on
+            session.output.activity events.
     SessionOutputChunk:
       type: object
       required: [index]

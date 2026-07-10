@@ -660,17 +660,20 @@ type RuntimeConfigResponse = JSONResponse
 
 // SSEEvent defines model for SSEEvent.
 type SSEEvent struct {
-	APIVersion       string    `json:"api_version"`
-	At               time.Time `json:"at"`
-	Epoch            *string   `json:"epoch,omitempty"`
-	ID               string    `json:"id"`
-	Kind             string    `json:"kind"`
-	Resource         Resource  `json:"resource"`
-	ResourceVersion  *uint64   `json:"resource_version,omitempty"`
-	Revision         *string   `json:"revision,omitempty"`
-	Seq              *uint64   `json:"seq,omitempty"`
-	SnapshotRequired bool      `json:"snapshot_required"`
-	Summary          *string   `json:"summary,omitempty"`
+	APIVersion string    `json:"api_version"`
+	At         time.Time `json:"at"`
+	Epoch      *string   `json:"epoch,omitempty"`
+	ID         string    `json:"id"`
+	Kind       string    `json:"kind"`
+
+	// RecordCount Session's current transcript record count at emission time — the same index space /transcript and /output/stream use. Only set on session.output.activity events.
+	RecordCount      *int     `json:"record_count,omitempty"`
+	Resource         Resource `json:"resource"`
+	ResourceVersion  *uint64  `json:"resource_version,omitempty"`
+	Revision         *string  `json:"revision,omitempty"`
+	Seq              *uint64  `json:"seq,omitempty"`
+	SnapshotRequired bool     `json:"snapshot_required"`
+	Summary          *string  `json:"summary,omitempty"`
 }
 
 // SessionDetailResponse defines model for SessionDetailResponse.

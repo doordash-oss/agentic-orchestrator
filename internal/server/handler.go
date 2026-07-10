@@ -467,7 +467,13 @@ func (h *apiHandler) authorized(r *http.Request) bool {
 }
 
 func authRequiredPath(path string) bool {
-	return strings.HasPrefix(path, "/api/v1/")
+	// /api/v1/health is liveness-only (status, runtime identity, launch
+	// policy, start time, owner — no secrets) and must be reachable without
+	// a token: PrepareDiscovery probes it with the *discovery record's*
+	// token, and a stale/rotated token there must not make a genuinely
+	// healthy, running server look dead and invite a Replace attempt
+	// against it (see discoveryHealth in discovery.go).
+	return strings.HasPrefix(path, "/api/v1/") && path != "/api/v1/health"
 }
 
 // sseTokenFallbackAllowed reports whether the given path may authenticate via

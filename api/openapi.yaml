@@ -15,6 +15,12 @@ paths:
     get:
       operationId: getHealth
       summary: Read runtime health and launch metadata.
+      description: >-
+        Liveness-only endpoint (status, runtime identity, launch policy,
+        start time, owner — no secrets). Intentionally exempt from bearer
+        auth so that a stale discovery token can't make a live, healthy
+        server look dead to PrepareDiscovery.
+      security: []
       responses:
         "200":
           $ref: "#/components/responses/HealthResponse"

@@ -25,12 +25,12 @@ func TestBearerTokenRequiredForAPIReads(t *testing.T) {
 
 	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
 	if w.Result().StatusCode != http.StatusUnauthorized {
 		t.Fatalf("missing token status = %d, want 401", w.Result().StatusCode)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
 	req.Header.Set("Authorization", "Bearer test-token")
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -59,7 +59,7 @@ func TestAuthorizedRejectsBareTokenWithoutBearerPrefix(t *testing.T) {
 	t.Parallel()
 
 	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
 	req.Header.Set("Authorization", "test-token")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -91,11 +91,23 @@ func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
 	}
 }
 
-func TestSequenceHeaderNotSetForUnauthorizedRequest(t *testing.T) {
+func TestHealthDoesNotRequireAuth(t *testing.T) {
 	t.Parallel()
 
 	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusOK {
+		t.Fatalf("unauthenticated /health status = %d, want 200", w.Result().StatusCode)
+	}
+}
+
+func TestSequenceHeaderNotSetForUnauthorizedRequest(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusUnauthorized {

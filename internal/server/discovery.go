@@ -206,6 +206,11 @@ func discoveryHealthOK(ctx context.Context, client *http.Client, baseURL, token 
 	return ok
 }
 
+// discoveryHealth calls /api/v1/health, which does not require
+// authentication (see authRequiredPath) — this probe intentionally still
+// sends the discovery record's token for backward compatibility with older
+// servers, but a stale token here can no longer make a live server look
+// dead.
 func discoveryHealth(ctx context.Context, client *http.Client, baseURL, token string) (HealthResponse, bool, string) {
 	if client == nil {
 		client = &http.Client{Timeout: time.Second}

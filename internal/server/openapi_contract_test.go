@@ -109,7 +109,10 @@ func TestOpenAPISpecCoversServerRoutes(t *testing.T) {
 				t.Fatalf("operationId %q is reused by %s and %s %s", op.OperationID, prior, strings.ToUpper(method), path)
 			}
 			seenOperationIDs[op.OperationID] = strings.ToUpper(method) + " " + path
-			if !hasSecurity(effectiveSecurity(spec, op), "bearerAuth") {
+			// /api/v1/health is liveness-only and intentionally exempt from
+			// bearer auth (see authRequiredPath in handler.go) so that a
+			// stale discovery token can't make a live server look dead.
+			if path != "/api/v1/health" && !hasSecurity(effectiveSecurity(spec, op), "bearerAuth") {
 				t.Fatalf("%s %s does not require bearerAuth", strings.ToUpper(method), path)
 			}
 			if route.sse && !hasSecurity(effectiveSecurity(spec, op), "sseAccessToken") {
@@ -175,8 +178,8 @@ func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
 		{
 			name:        "missing token",
 			method:      http.MethodGet,
-			specPath:    "/api/v1/health",
-			requestPath: "/api/v1/health",
+			specPath:    "/api/v1/features",
+			requestPath: "/api/v1/features",
 			wantStatus:  http.StatusUnauthorized,
 			wantType:    "application/json",
 		},

@@ -112,7 +112,6 @@ func (h *apiHandler) routes() http.Handler {
 	mux.HandleFunc("/api/v1/shutdown", h.handleShutdownMutationRoute)
 	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.setSequenceHeader(w)
 		if h.rejectInvalidHost(w, r) {
 			return
 		}
@@ -125,6 +124,7 @@ func (h *apiHandler) routes() http.Handler {
 		if h.rejectUnauthorized(w, r) {
 			return
 		}
+		h.setSequenceHeader(w)
 		escaped := r.URL.EscapedPath()
 		if strings.HasPrefix(escaped, "/api/v1/features/") {
 			h.handleFeatureRoutes(w, r)

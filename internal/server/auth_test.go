@@ -90,3 +90,18 @@ func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
 		t.Fatalf("loopback Host status = %d, want 200", w.Result().StatusCode)
 	}
 }
+
+func TestSequenceHeaderNotSetForUnauthorizedRequest(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Result().StatusCode)
+	}
+	if seq := w.Header().Get("X-Agentico-Seq"); seq != "" {
+		t.Fatalf("X-Agentico-Seq = %q, want empty for unauthorized request", seq)
+	}
+}

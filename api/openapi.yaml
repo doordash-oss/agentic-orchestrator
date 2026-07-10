@@ -1024,9 +1024,11 @@ components:
     # JSONResponse is the untyped fallback for response schemas not yet
     # converted to a typed shape. Tracked remainder (convert opportunistically,
     # not required for any specific task):
-    #   FeatureConfigResponse, RuntimeConfigResponse, WorkspaceBrowseResponse,
-    #   ModelCatalogResponse, PromptSnapshotResponse, PermissionSnapshotResponse,
-    #   RecoverySnapshotResponse, TranscriptResponse.
+    #   ActionResponse, ArtifactListResponse, FeatureConfigResponse,
+    #   HealthResponse, LivePreviewResponse, ModelCatalogResponse,
+    #   PermissionSnapshotResponse, PromptSnapshotResponse,
+    #   RecoverySnapshotResponse, RuntimeConfigResponse, TextContentResponse,
+    #   TranscriptResponse, WorkspaceBrowseResponse.
     # FeatureListResponse, FeatureDetailResponse, SessionListResponse, and
     # SessionDetailResponse were converted 2026-07-09.
     JSONResponse:

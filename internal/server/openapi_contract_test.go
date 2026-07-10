@@ -227,6 +227,19 @@ func TestTopLevelRoutesCoverAllDocumentedPrefixes(t *testing.T) {
 			t.Errorf("documented route %s %s has no top-level mux registration for pattern %q", strings.ToUpper(route.method), route.path, prefix)
 		}
 	}
+
+	// Reverse direction: every registered top-level pattern must be reachable
+	// by at least one documented path — otherwise a route added to
+	// topLevelServerRoutes without a matching OpenAPI entry passes silently.
+	documentedPrefixes := map[string]bool{}
+	for _, route := range documentedServerRoutes() {
+		documentedPrefixes[topLevelPatternForPath(route.path)] = true
+	}
+	for _, r := range topLevelServerRoutes {
+		if !documentedPrefixes[r.pattern] {
+			t.Errorf("registered mux pattern %q has no documented OpenAPI route mapping to it", r.pattern)
+		}
+	}
 }
 
 // topLevelPatternForPath maps an expanded OpenAPI path to the mux pattern

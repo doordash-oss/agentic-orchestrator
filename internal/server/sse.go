@@ -186,9 +186,15 @@ func (b *eventBroker) pruneOutputActivityLocked(now time.Time) {
 			delete(b.lastOutputActivity, key)
 		}
 	}
-	for key := range b.lastOutputActivity {
+	// Hard-cap eviction only ever removes entries already outside the
+	// throttle window — evicting a fresh entry here would let an activity
+	// burst for that resource straight through shouldPublishEventLocked.
+	for key, at := range b.lastOutputActivity {
 		if len(b.lastOutputActivity) <= maxOutputActivityKeys/2 {
 			return
+		}
+		if now.Sub(at) < time.Second {
+			continue
 		}
 		delete(b.lastOutputActivity, key)
 	}

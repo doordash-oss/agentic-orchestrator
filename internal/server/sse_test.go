@@ -22,6 +22,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
@@ -447,6 +448,27 @@ func TestEventsConnectedSurvivesRingEvictionForCursorlessClient(t *testing.T) {
 
 	reader := bufio.NewReader(resp.Body)
 	readSSEBlock(t, reader, "connected")
+}
+
+func TestPruneOutputActivityNeverEvictsWithinThrottleWindow(t *testing.T) {
+	t.Parallel()
+
+	b := newEventBrokerForTest(eventBrokerOptions{})
+	now := time.Now().UTC()
+
+	// Fill past the hard cap with entries all inside the throttle window.
+	b.mu.Lock()
+	for i := 0; i < maxOutputActivityKeys+10; i++ {
+		key := fmt.Sprintf("session\x00sess-%d\x00feat\x00", i)
+		b.lastOutputActivity[key] = now
+	}
+	b.pruneOutputActivityLocked(now)
+	remaining := len(b.lastOutputActivity)
+	b.mu.Unlock()
+
+	if remaining != maxOutputActivityKeys+10 {
+		t.Fatalf("prune evicted %d fresh (within-window) entries; map size = %d, want %d untouched", (maxOutputActivityKeys+10)-remaining, remaining, maxOutputActivityKeys+10)
+	}
 }
 
 func eventSeqs(events []SSEEventDTO) []uint64 {

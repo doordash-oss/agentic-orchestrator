@@ -15,7 +15,11 @@
 package server
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 )
@@ -414,6 +418,35 @@ func TestSnapshotThenSubscribeConverges(t *testing.T) {
 		}
 		b.unsubscribe(ch)
 	}
+}
+
+// TestEventsConnectedSurvivesRingEvictionForCursorlessClient guards against a
+// regression from the after=0 fix above: a client with no cursor at all must
+// always get "connected" (full resync), never a "stream.reset" (Health-only
+// resync) — even once the broker's ring has evicted its earliest entries.
+func TestEventsConnectedSurvivesRingEvictionForCursorlessClient(t *testing.T) {
+	t.Parallel()
+
+	h := newAPIHandler(HandlerOptions{})
+	for i := 0; i < defaultEventReplayLimit+10; i++ {
+		h.broker.publish(SSEEventDTO{Kind: "lifecycle.updated", Resource: ResourceDTO{Type: "runtime"}})
+	}
+
+	srv := httptest.NewServer(h.routes())
+	defer srv.Close()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/events?heartbeat_ms=10", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer resp.Body.Close()
+
+	reader := bufio.NewReader(resp.Body)
+	readSSEBlock(t, reader, "connected")
 }
 
 func eventSeqs(events []SSEEventDTO) []uint64 {

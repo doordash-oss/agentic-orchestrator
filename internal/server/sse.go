@@ -322,28 +322,33 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	after, epoch := eventCursor(r)
+	after, epoch, hasCursor := eventCursor(r)
 	ch, replay, reset := h.broker.subscribeAfter(after, epoch)
 	defer h.broker.unsubscribe(ch)
 
-	if reset != nil {
+	if !hasCursor {
+		// No cursor at all: always a full resync. A client with no cursor
+		// wants a snapshot marker, not a replay/reset decision keyed off a
+		// wire value (after=0) that's indistinguishable from a genuine
+		// "I read as_of_seq=0" cursor — see subscribeAfter/replayAfterLocked,
+		// which now correctly treats after=0 as a real low-water-mark.
+		connected := h.broker.snapshotRequiredEvent("connected", ResourceDTO{Type: "runtime"})
+		if err := writeSSE(w, "connected", connected); err != nil {
+			return
+		}
+		flusher.Flush()
+	} else if reset != nil {
 		if err := writeSSE(w, reset.Kind, *reset); err != nil {
 			return
 		}
 		flusher.Flush()
-	} else if after > 0 {
+	} else {
 		for _, evt := range replay {
 			if err := writeSSE(w, evt.Kind, evt); err != nil {
 				return
 			}
 			flusher.Flush()
 		}
-	} else {
-		connected := h.broker.snapshotRequiredEvent("connected", ResourceDTO{Type: "runtime"})
-		if err := writeSSE(w, "connected", connected); err != nil {
-			return
-		}
-		flusher.Flush()
 	}
 
 	heartbeatEvery := heartbeatInterval(r)
@@ -380,13 +385,19 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func eventCursor(r *http.Request) (uint64, string) {
+func eventCursor(r *http.Request) (after uint64, epoch string, hasCursor bool) {
 	raw := r.URL.Query().Get("after")
 	if raw == "" {
 		raw = r.Header.Get("Last-Event-ID")
 	}
-	after, _ := strconv.ParseUint(raw, 10, 64)
-	return after, r.URL.Query().Get("epoch")
+	if raw == "" {
+		return 0, r.URL.Query().Get("epoch"), false
+	}
+	parsed, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, r.URL.Query().Get("epoch"), false
+	}
+	return parsed, r.URL.Query().Get("epoch"), true
 }
 
 func heartbeatInterval(r *http.Request) time.Duration {

@@ -62,7 +62,13 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		RequestShutdown: opts.RequestShutdown,
 	})
 	httpServer := &http.Server{
-		Handler:           handler.routes(),
+		Handler: handler.routes(),
+		// ReadHeaderTimeout (not ReadTimeout) is intentional: ReadTimeout
+		// would cap the whole connection lifetime, killing long-lived SSE
+		// streams (/api/v1/events, /sessions/{id}/output/stream). Mutation
+		// bodies are still bounded — decodeMutationJSON/decodeMutationObject
+		// wrap r.Body in http.MaxBytesReader(MaxMutationBodyBytes) — so an
+		// unbounded-body-read DoS isn't reintroduced by this tradeoff.
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0,
 		IdleTimeout:       30 * time.Second,

@@ -50,6 +50,62 @@ func TestNormalizePermissionInput_EditFilepathLowercase(t *testing.T) {
 	}
 }
 
+// TestNormalizePermissionInput_OtherExternalDirectory guards the observed
+// OpenCode shape for external-directory access: recent runs emitted
+// kind="other" with filepath/parentDir instead of kind="read" or title
+// "external_directory". That must still map to ExternalDirectory so safe reads
+// from mounted context roots are auto-approved and not displayed as opaque
+// "other" prompts.
+func TestNormalizePermissionInput_OtherExternalDirectory(t *testing.T) {
+	parent := "/Users/x/.agentic-workflow/knowledge-base/repo"
+	tc := PermissionToolCall{
+		Kind:     ToolKindOther,
+		Title:    parent,
+		RawInput: json.RawMessage(`{"filepath":"` + parent + `/index.md","parentDir":"` + parent + `"}`),
+	}
+
+	name, input := normalizePermissionInput(tc)
+	if name != "ExternalDirectory" {
+		t.Fatalf("toolName = %q, want ExternalDirectory", name)
+	}
+	var got struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(input, &got); err != nil {
+		t.Fatalf("unmarshal normalized input: %v", err)
+	}
+	if got.Path != parent {
+		t.Fatalf("path = %q, want %q", got.Path, parent)
+	}
+}
+
+// TestNormalizePermissionInput_OtherCommand guards the observed OpenCode shape
+// for command-level path permission checks: a shell command can arrive as
+// kind="other" with command/directories/patterns. It should normalize to Bash
+// so prompts are recognizable and remembered Bash rules can match them.
+func TestNormalizePermissionInput_OtherCommand(t *testing.T) {
+	command := "cd /repo && cat > /tmp/debug-test.ts << 'EOF'\nEOF\nnpx vitest run"
+	tc := PermissionToolCall{
+		Kind:     ToolKindOther,
+		Title:    command,
+		RawInput: json.RawMessage(`{"command":"` + strings.ReplaceAll(command, "\n", `\n`) + `","directories":["/repo","/tmp"],"patterns":["/repo/*","/tmp/*"]}`),
+	}
+
+	name, input := normalizePermissionInput(tc)
+	if name != "Bash" {
+		t.Fatalf("toolName = %q, want Bash", name)
+	}
+	var got struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(input, &got); err != nil {
+		t.Fatalf("unmarshal normalized input: %v", err)
+	}
+	if got.Command != command {
+		t.Fatalf("command = %q, want %q", got.Command, command)
+	}
+}
+
 // permissionRequestLine builds a session/request_permission server request with
 // the given tool-call kind, raw input, and a standard allow/reject option set.
 func permissionRequestLine(t *testing.T, id int, kind, title string, rawInput map[string]any) []byte {

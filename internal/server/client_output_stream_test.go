@@ -22,19 +22,21 @@ import (
 	"time"
 )
 
-func TestSubscribeSessionOutputSplitsLinesAcrossFrames(t *testing.T) {
+func TestSubscribeSessionOutputDeliversIndexedRecords(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
-		frames := []string{
-			`{"api_version":"v1","session_id":"sess-1","offset":0,"next_offset":5,"data":"ab\nc"}`,
-			`{"api_version":"v1","session_id":"sess-1","offset":5,"next_offset":9,"data":"de\n"}`,
-			`{"api_version":"v1","session_id":"sess-1","offset":9,"next_offset":9,"data":"","done":true}`,
+		frames := []struct {
+			event string
+			data  string
+		}{
+			{"session.output", `{"api_version":"v1","session_id":"sess-1","index":0,"message":{"index":0,"role":"assistant","type":"text","text":"hi"}}`},
+			{"session.output.done", `{"api_version":"v1","session_id":"sess-1","index":0,"done":true}`},
 		}
 		for _, f := range frames {
-			_, _ = w.Write([]byte("event: session.output\ndata: " + f + "\n\n"))
+			_, _ = w.Write([]byte("event: " + f.event + "\ndata: " + f.data + "\n\n"))
 			flusher.Flush()
 		}
 	}))
@@ -44,49 +46,42 @@ func TestSubscribeSessionOutputSplitsLinesAcrossFrames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	lines, errs := c.SubscribeSessionOutput(context.Background(), "sess-1", SessionOutputStreamOptions{})
+	records, errs := c.SubscribeSessionOutput(context.Background(), "sess-1", SessionOutputStreamOptions{})
 
-	var got []string
-	timeout := time.After(2 * time.Second)
-	for len(got) < 2 {
-		select {
-		case line, ok := <-lines:
-			if !ok {
-				t.Fatalf("lines closed early, got %v", got)
-			}
-			got = append(got, line.Text)
-		case err, ok := <-errs:
-			if ok {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		case <-timeout:
-			t.Fatalf("timed out, got %v", got)
+	select {
+	case rec, ok := <-records:
+		if !ok || rec.Index != 0 || rec.Message.Text != "hi" {
+			t.Fatalf("record = (%+v, %v), want index 0 text hi", rec, ok)
 		}
+	case err := <-errs:
+		t.Fatalf("unexpected error: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for record")
 	}
-	want := []string{"ab", "cde"}
-	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("lines = %v, want %v", got, want)
+
+	// The stream must close cleanly after session.output.done, with no error.
+	select {
+	case _, ok := <-records:
+		if ok {
+			t.Fatal("expected records to close after session.output.done")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for records to close")
 	}
 }
 
-// TestSubscribeSessionOutputReadsPastFirstChunkOfFinishedSession guards
-// against terminating on resp.Done instead of the "session.output.done"
-// event name — the server sets Done true on every chunk of a finished
-// session, not just the last one (session_model.go passes
-// done=!sess.IsActive() into every call for that session).
-func TestSubscribeSessionOutputReadsPastFirstChunkOfFinishedSession(t *testing.T) {
+// TestSubscribeSessionOutputResumesFromAfterIndex confirms AfterIndex is sent
+// as the "from" query param — the resume position is now a transcript row
+// index, not a byte offset.
+func TestSubscribeSessionOutputResumesFromAfterIndex(t *testing.T) {
 	t.Parallel()
 
+	var gotFrom string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotFrom = r.URL.Query().Get("from")
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
-		// First chunk: Done=true (session already finished) but Truncated=true
-		// (more data remains) — event name is still "session.output", not
-		// "session.output.done".
-		_, _ = w.Write([]byte("event: session.output\ndata: " + `{"api_version":"v1","session_id":"sess-1","offset":0,"next_offset":3,"data":"one\n","truncated":true,"done":true}` + "\n\n"))
-		flusher.Flush()
-		// Second, terminal chunk.
-		_, _ = w.Write([]byte("event: session.output.done\ndata: " + `{"api_version":"v1","session_id":"sess-1","offset":4,"next_offset":8,"data":"two\n","truncated":false,"done":true}` + "\n\n"))
+		_, _ = w.Write([]byte("event: session.output.done\ndata: " + `{"api_version":"v1","session_id":"sess-1","index":4,"done":true}` + "\n\n"))
 		flusher.Flush()
 	}))
 	defer srv.Close()
@@ -95,41 +90,34 @@ func TestSubscribeSessionOutputReadsPastFirstChunkOfFinishedSession(t *testing.T
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	lines, errs := c.SubscribeSessionOutput(context.Background(), "sess-1", SessionOutputStreamOptions{})
+	records, errs := c.SubscribeSessionOutput(context.Background(), "sess-1", SessionOutputStreamOptions{AfterIndex: 5})
 
-	var got []string
-	timeout := time.After(2 * time.Second)
-	for len(got) < 2 {
-		select {
-		case line, ok := <-lines:
-			if !ok {
-				t.Fatalf("lines closed early, got %v", got)
-			}
-			got = append(got, line.Text)
-		case err, ok := <-errs:
-			if ok && err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		case <-timeout:
-			t.Fatalf("timed out, got %v", got)
+	select {
+	case _, ok := <-records:
+		if ok {
+			t.Fatal("expected no records before the done event")
 		}
+	case err, ok := <-errs:
+		if ok && err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for records to close")
 	}
-	want := []string{"one", "two"}
-	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("lines = %v, want %v (second chunk must not be dropped)", got, want)
+	if gotFrom != "5" {
+		t.Fatalf("from query param = %q, want %q", gotFrom, "5")
 	}
 }
 
 // TestSubscribeSessionOutputSurfacesStreamError confirms a
-// session.output.error frame reaches the caller on the error channel,
-// fulfilling SubscribeSessionOutput's documented reconnect-on-error contract.
+// session.output.error frame reaches the caller on the error channel.
 func TestSubscribeSessionOutputSurfacesStreamError(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
-		_, _ = w.Write([]byte("event: session.output.error\ndata: " + `{"api_version":"v1","session_id":"sess-1","offset":0,"next_offset":0,"done":false}` + "\n\n"))
+		_, _ = w.Write([]byte("event: session.output.error\ndata: " + `{"api_version":"v1","session_id":"sess-1","index":0}` + "\n\n"))
 		flusher.Flush()
 	}))
 	defer srv.Close()

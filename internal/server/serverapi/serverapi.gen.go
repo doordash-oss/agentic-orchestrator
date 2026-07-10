@@ -681,8 +681,14 @@ type SessionListResponse = JSONResponse
 
 // SessionOutputChunk defines model for SessionOutputChunk.
 type SessionOutputChunk struct {
-	Data   string `json:"data"`
-	Offset int64  `json:"offset"`
+	Done *bool `json:"done,omitempty"`
+
+	// Index Transcript row index — the same index space /transcript and session.output.activity's record_count use. Not a byte offset.
+	Index int `json:"index"`
+
+	// Message A TranscriptMessageDTO row (see the /transcript response).
+	Message   *map[string]interface{} `json:"message,omitempty"`
+	SessionID *string                 `json:"session_id,omitempty"`
 }
 
 // SessionOutputResponse defines model for SessionOutputResponse.
@@ -1026,6 +1032,7 @@ type GetSessionOutputParams struct {
 
 // StreamSessionOutputParams defines parameters for StreamSessionOutput.
 type StreamSessionOutputParams struct {
+	// From Resume position expressed as a transcript row index (the same index space `/transcript` uses), not a byte offset.
 	From *int64 `form:"from,omitempty" json:"from,omitempty"`
 }
 
@@ -1481,7 +1488,7 @@ type ServerInterface interface {
 	// Read a bounded byte slice from the append-only session output log.
 	// (GET /api/v1/sessions/{session_id}/output)
 	GetSessionOutput(w http.ResponseWriter, r *http.Request, sessionID SessionID, params GetSessionOutputParams)
-	// Stream append-only session output chunks as SSE.
+	// Stream indexed transcript records as SSE.
 	// (GET /api/v1/sessions/{session_id}/output/stream)
 	StreamSessionOutput(w http.ResponseWriter, r *http.Request, sessionID SessionID, params StreamSessionOutputParams)
 	// Read a bounded structured session transcript.
@@ -5497,7 +5504,7 @@ type StrictServerInterface interface {
 	// Read a bounded byte slice from the append-only session output log.
 	// (GET /api/v1/sessions/{session_id}/output)
 	GetSessionOutput(ctx context.Context, request GetSessionOutputRequestObject) (GetSessionOutputResponseObject, error)
-	// Stream append-only session output chunks as SSE.
+	// Stream indexed transcript records as SSE.
 	// (GET /api/v1/sessions/{session_id}/output/stream)
 	StreamSessionOutput(ctx context.Context, request StreamSessionOutputRequestObject) (StreamSessionOutputResponseObject, error)
 	// Read a bounded structured session transcript.

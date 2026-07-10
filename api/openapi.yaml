@@ -516,8 +516,11 @@ paths:
   /api/v1/sessions/{session_id}/output/stream:
     get:
       operationId: streamSessionOutput
-      summary: Stream append-only session output chunks as SSE.
-      description: Emits `session.output` events with byte offsets and a terminal `session.output.done` event.
+      summary: Stream indexed transcript records as SSE.
+      description: >-
+        Emits `session.output` events carrying structured `SessionOutputChunk`
+        records — the same transcript rows and index space `/transcript`
+        returns — and a terminal `session.output.done` event.
       security:
         - bearerAuth: []
         - sseAccessToken: []
@@ -526,6 +529,9 @@ paths:
         - name: from
           in: query
           required: false
+          description: >-
+            Resume position expressed as a transcript row index (the same
+            index space `/transcript` uses), not a byte offset.
           schema:
             type: integer
             format: int64
@@ -963,14 +969,20 @@ components:
           type: string
     SessionOutputChunk:
       type: object
-      required: [offset, data]
+      required: [index]
       properties:
-        offset:
-          type: integer
-          format: int64
-          minimum: 0
-        data:
+        session_id:
           type: string
+        index:
+          type: integer
+          description: >-
+            Transcript row index — the same index space /transcript and
+            session.output.activity's record_count use. Not a byte offset.
+        message:
+          type: object
+          description: A TranscriptMessageDTO row (see the /transcript response).
+        done:
+          type: boolean
     SessionOutputResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

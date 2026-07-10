@@ -2340,6 +2340,7 @@ type fakeSessionView struct {
 	workDir       string
 	logPath       string
 	messages      []llm.SDKMessage
+	log           ports.MessageLog
 	pending       []*llm.ControlRequestMessage
 }
 
@@ -2361,13 +2362,18 @@ func (s *fakeSessionView) StartedAt() time.Time {
 	}
 	return s.startedAt
 }
-func (s *fakeSessionView) InitialPrompt() string        { return s.initialPrompt }
-func (s *fakeSessionView) ProviderName() string         { return s.provider }
-func (s *fakeSessionView) Model() string                { return s.model }
-func (s *fakeSessionView) WorkDir() string              { return s.workDir }
-func (s *fakeSessionView) MessageLog() ports.MessageLog { return fakeMessageLog{messages: s.messages} }
-func (s *fakeSessionView) Cost() *llm.ResultMessage     { return nil }
-func (s *fakeSessionView) LatestUsage() *llm.Usage      { return nil }
+func (s *fakeSessionView) InitialPrompt() string { return s.initialPrompt }
+func (s *fakeSessionView) ProviderName() string  { return s.provider }
+func (s *fakeSessionView) Model() string         { return s.model }
+func (s *fakeSessionView) WorkDir() string       { return s.workDir }
+func (s *fakeSessionView) MessageLog() ports.MessageLog {
+	if s.log != nil {
+		return s.log
+	}
+	return fakeMessageLog{messages: s.messages}
+}
+func (s *fakeSessionView) Cost() *llm.ResultMessage { return nil }
+func (s *fakeSessionView) LatestUsage() *llm.Usage  { return nil }
 func (s *fakeSessionView) AccumulatedUsage() llm.Usage {
 	return llm.Usage{InputTokens: 10, OutputTokens: 5}
 }

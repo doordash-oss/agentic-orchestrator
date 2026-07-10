@@ -641,6 +641,18 @@ type SessionOutputResponse struct {
 	Done       bool         `json:"done,omitempty"`
 }
 
+// SessionOutputChunk is one record delivered over /output/stream — a single
+// row from the session's transcript (the same TranscriptMessageDTO shape and
+// index space handleTranscript and the client's snapshot-refresh
+// reconciliation use), not a raw log byte window.
+type SessionOutputChunk struct {
+	APIVersion string               `json:"api_version"`
+	SessionID  string               `json:"session_id"`
+	Index      int                  `json:"index"`
+	Message    TranscriptMessageDTO `json:"message"`
+	Done       bool                 `json:"done,omitempty"`
+}
+
 type TranscriptMessageDTO struct {
 	Index              int            `json:"index"`
 	BlockIndex         int            `json:"block_index,omitempty"`

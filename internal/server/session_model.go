@@ -142,16 +142,12 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
 		return
 	}
-	path := sess.LogFilePath()
-	if path == "" {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session output not found", map[string]any{"session_id": sessionID})
-		return
-	}
-	offset := sessionOutputStreamOffset(r)
-	if offset < 0 {
+	fromOffset := sessionOutputStreamOffset(r)
+	if fromOffset < 0 {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output offset", map[string]any{"session_id": sessionID})
 		return
 	}
+	from := int(fromOffset)
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -159,22 +155,31 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		resp, err := h.sessionOutputResponse(sessionID, path, offset, defaultTextLimit, !sess.IsActive())
-		if err != nil {
-			writeSessionOutputStreamError(w, sessionID, offset)
-			flusher.Flush()
-			return
+		messages := sess.MessageLog().Messages()
+		total := len(messages)
+		// Re-include the previously-sent tail index on every tick (not just
+		// strictly-new ones): UpdateLast/UpdateLastAssistantPartial can mutate
+		// the last message in place without growing Len(), so the tail may
+		// still be changing. Resending an unchanged row is harmless — the
+		// client's row-level dedup (shared with snapshot-refresh
+		// reconciliation) treats "same key, same signature" as a no-op.
+		tailStart := from
+		if tailStart > 0 {
+			tailStart--
 		}
-		if resp.Data != "" {
-			if err := writeSessionOutputSSE(w, "session.output", strconv.FormatInt(resp.NextOffset, 10), resp); err != nil {
-				return
+		if tailStart < total {
+			for _, row := range transcriptDTOs(messages[tailStart:], tailStart, sess.WorkDir()) {
+				chunk := SessionOutputChunk{APIVersion: APIVersion, SessionID: sessionID, Index: row.Index, Message: row}
+				if err := writeSessionOutputSSE(w, "session.output", strconv.Itoa(row.Index), chunk); err != nil {
+					return
+				}
+				flusher.Flush()
 			}
-			flusher.Flush()
-			offset = resp.NextOffset
+			from = total
 		}
-		if !sess.IsActive() && !resp.Truncated {
-			resp.Done = true
-			if err := writeSessionOutputSSE(w, "session.output.done", strconv.FormatInt(offset, 10), resp); err != nil {
+		if !sess.IsActive() {
+			done := SessionOutputChunk{APIVersion: APIVersion, SessionID: sessionID, Index: total - 1, Done: true}
+			if err := writeSessionOutputSSE(w, "session.output.done", strconv.Itoa(total-1), done); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -227,6 +232,9 @@ func (h *apiHandler) sessionOutputResponse(sessionID, path string, offset, limit
 	return resp, nil
 }
 
+// sessionOutputStreamOffset parses the /output/stream resume position from
+// the "from" query param or the "Last-Event-ID" header. This is a transcript
+// row index (the same index space handleTranscript uses), not a byte offset.
 func sessionOutputStreamOffset(r *http.Request) int64 {
 	raw := r.URL.Query().Get("from")
 	if raw == "" {
@@ -242,7 +250,7 @@ func sessionOutputStreamOffset(r *http.Request) int64 {
 	return offset
 }
 
-func writeSessionOutputSSE(w http.ResponseWriter, event, id string, data SessionOutputResponse) error {
+func writeSessionOutputSSE(w http.ResponseWriter, event, id string, data SessionOutputChunk) error {
 	payload, err := json.Marshal(data)
 	if err != nil {
 		return err
@@ -250,16 +258,6 @@ func writeSessionOutputSSE(w http.ResponseWriter, event, id string, data Session
 	setStreamWriteDeadline(w)
 	_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", id, event, payload)
 	return err
-}
-
-func writeSessionOutputStreamError(w http.ResponseWriter, sessionID string, offset int64) {
-	_ = writeSessionOutputSSE(w, "session.output.error", strconv.FormatInt(offset, 10), SessionOutputResponse{
-		APIVersion: APIVersion,
-		SessionID:  sessionID,
-		Offset:     offset,
-		NextOffset: offset,
-		Done:       false,
-	})
 }
 
 func (h *apiHandler) allSessions() []ports.SessionView {

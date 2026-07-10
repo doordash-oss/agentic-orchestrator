@@ -93,6 +93,7 @@ type APIClient interface {
 	Shutdown(context.Context) (server.ShutdownResponse, error)
 	SubscribeEvents(context.Context, server.EventSubscriptionOptions) (<-chan server.RefreshSignal, <-chan error)
 	FetchRefreshSnapshot(context.Context, server.RefreshSignal) (server.RefreshSnapshot, error)
+	SubscribeSessionOutput(context.Context, string, server.SessionOutputStreamOptions) (<-chan server.SessionOutputRecord, <-chan error)
 }
 
 type APIAppOptions struct {
@@ -342,10 +343,29 @@ type APIAppModel struct {
 	cancelEvents               context.CancelFunc
 	signals                    <-chan server.RefreshSignal
 	eventErrs                  <-chan error
+	liveOutputCancel           context.CancelFunc
+	liveOutputSessionID        string
+	liveOutputRecords          <-chan server.SessionOutputRecord
+	liveOutputErrs             <-chan error
 }
 
 type apiRefreshSignalMsg struct {
 	signal server.RefreshSignal
+}
+
+// apiSessionOutputLineMsg re-arms the live output listen loop (see
+// listenLiveSessionOutputCmd) after one record was reconciled through
+// applyTranscriptRow. The record itself has already been applied by the
+// time this is delivered — this msg carries no payload beyond which
+// session it's for.
+type apiSessionOutputLineMsg struct {
+	sessionID string
+}
+
+// apiSessionOutputDoneMsg signals that the live output feed for sessionID
+// ended (channel closed or a stream error) and should be stopped.
+type apiSessionOutputDoneMsg struct {
+	sessionID string
 }
 
 type apiRefreshSnapshotMsg struct {
@@ -1331,18 +1351,35 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.fetchFeatureDetailCmd(msg.FeatureID)
 		}
 		return m, nil
+	case apiSessionOutputLineMsg:
+		if msg.sessionID != m.liveOutputSessionID {
+			return m, nil
+		}
+		sess := m.attachedSessionView()
+		if sess == nil || sess.ID() != m.liveOutputSessionID {
+			m.stopLiveSessionOutput()
+			return m, nil
+		}
+		return m, m.listenLiveSessionOutputCmd(sess)
+	case apiSessionOutputDoneMsg:
+		if msg.sessionID == m.liveOutputSessionID {
+			m.stopLiveSessionOutput()
+		}
+		return m, nil
 	}
 
 	updated, cmd := m.attach.Update(msg)
 	m.attach = &updated
 	if updated.Detached() || updated.Done() {
 		m.attach = nil
+		m.stopLiveSessionOutput()
 		if m.selectedFeature != "" {
 			return m, tea.Batch(cmd, m.fetchFeatureDetailCmd(m.selectedFeature))
 		}
 		return m, cmd
 	}
-	return m, cmd
+	liveCmd := m.syncLiveSessionOutputForAttach()
+	return m, tea.Batch(cmd, liveCmd)
 }
 
 func apiArtifactReviewOwnsMsg(msg tea.Msg) bool {
@@ -3055,6 +3092,7 @@ func (m APIAppModel) rebuildAPIAttachTabs() (APIAppModel, tea.Cmd) {
 	if len(next) == 0 {
 		m.attach = nil
 		m.statusMessage = "No active sessions to watch."
+		m.stopLiveSessionOutput()
 		return m, nil
 	}
 	if !m.attach.rebuildTabs(next) {
@@ -3067,7 +3105,8 @@ func (m APIAppModel) rebuildAPIAttachTabs() (APIAppModel, tea.Cmd) {
 	var cmd tea.Cmd
 	updated, cmd := m.attach.switchToTab(idx)
 	m.attach = &updated
-	return m, cmd
+	liveCmd := m.syncLiveSessionOutputForAttach()
+	return m, tea.Batch(cmd, liveCmd)
 }
 
 func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot) (APIAppModel, tea.Cmd) {
@@ -3154,58 +3193,69 @@ func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO,
 		return nil
 	}
 	var messages []llm.SDKMessage
+	for _, row := range transcript.Messages {
+		if msg := s.applyTranscriptRow(row); msg != nil {
+			messages = append(messages, *msg)
+		}
+	}
+	return messages
+}
+
+// applyTranscriptRow reconciles one transcript row against the session's
+// message log using the same key/signature watermark applyAPISessionSnapshot
+// already tracked before this refactor. Returns the SDKMessage that was
+// appended or updated, or nil if the row was a no-op (already applied with
+// an identical signature, or a local-user-echo row). Shared by the
+// snapshot-refresh pull path and the live-stream push path so both use
+// exactly one dedup mechanism.
+func (s *apiSessionView) applyTranscriptRow(row server.TranscriptMessageDTO) *llm.SDKMessage {
+	if row.Index < s.lastTranscriptMessage {
+		return nil
+	}
 	if s.lastTranscriptRows == nil {
 		s.lastTranscriptRows = map[string]string{}
 	}
-	for _, row := range transcript.Messages {
-		if row.Index < s.lastTranscriptMessage {
-			continue
-		}
-		msg, ok := apiTranscriptRowToSDKMessage(row, s.id)
-		if !ok {
-			continue
-		}
-		key := apiTranscriptRowKey(row)
-		signature := apiTranscriptRowSignature(row)
-		if apiVisibleUserTranscriptRow(row) && apiHasLocalUserEcho(s.log, row.Text) {
-			if row.Index > s.lastTranscriptMessage {
-				s.lastTranscriptMessage = row.Index
-				s.lastTranscriptRows = map[string]string{}
-			}
-			if row.Index == s.lastTranscriptMessage {
-				s.lastTranscriptRows[key] = signature
-				s.lastTranscriptTailKey = key
-			}
-			continue
-		}
-		if row.Index > s.lastTranscriptMessage {
-			s.log.Append(msg)
-			messages = append(messages, msg)
-			s.lastTranscriptMessage = row.Index
-			s.lastTranscriptRows = map[string]string{key: signature}
-			s.lastTranscriptTailKey = key
-			continue
-		}
-		if previous, ok := s.lastTranscriptRows[key]; ok {
-			if previous == signature {
-				continue
-			}
-			if key == s.lastTranscriptTailKey && apiCanUpdateLastTranscriptLogMessage(s.log) {
-				s.log.UpdateLast(msg)
-			} else {
-				s.log.Append(msg)
-				s.lastTranscriptTailKey = key
-			}
-			s.lastTranscriptRows[key] = signature
-			messages = append(messages, msg)
-			continue
-		}
-		s.log.Append(msg)
-		messages = append(messages, msg)
-		s.lastTranscriptRows[key] = signature
-		s.lastTranscriptTailKey = key
+	msg, ok := apiTranscriptRowToSDKMessage(row, s.id)
+	if !ok {
+		return nil
 	}
-	return messages
+	key := apiTranscriptRowKey(row)
+	signature := apiTranscriptRowSignature(row)
+	if apiVisibleUserTranscriptRow(row) && apiHasLocalUserEcho(s.log, row.Text) {
+		if row.Index > s.lastTranscriptMessage {
+			s.lastTranscriptMessage = row.Index
+			s.lastTranscriptRows = map[string]string{}
+		}
+		if row.Index == s.lastTranscriptMessage {
+			s.lastTranscriptRows[key] = signature
+			s.lastTranscriptTailKey = key
+		}
+		return nil
+	}
+	if row.Index > s.lastTranscriptMessage {
+		s.log.Append(msg)
+		s.lastTranscriptMessage = row.Index
+		s.lastTranscriptRows = map[string]string{key: signature}
+		s.lastTranscriptTailKey = key
+		return &msg
+	}
+	if previous, ok := s.lastTranscriptRows[key]; ok {
+		if previous == signature {
+			return nil
+		}
+		if key == s.lastTranscriptTailKey && apiCanUpdateLastTranscriptLogMessage(s.log) {
+			s.log.UpdateLast(msg)
+		} else {
+			s.log.Append(msg)
+			s.lastTranscriptTailKey = key
+		}
+		s.lastTranscriptRows[key] = signature
+		return &msg
+	}
+	s.log.Append(msg)
+	s.lastTranscriptRows[key] = signature
+	s.lastTranscriptTailKey = key
+	return &msg
 }
 
 func (m APIAppModel) Close() {
@@ -4931,7 +4981,11 @@ func (m APIAppModel) openAPIAttachForFeature(featureID string) (tea.Model, tea.C
 	}
 	m.attach = &attach
 	m.statusMessage = ""
-	return m, attach.Init()
+	var liveCmd tea.Cmd
+	if sess, ok := tabs[initialIdx].sess.(*apiSessionView); ok {
+		liveCmd = m.startLiveSessionOutput(sess)
+	}
+	return m, tea.Batch(attach.Init(), liveCmd)
 }
 
 func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
@@ -6643,6 +6697,111 @@ func (m APIAppModel) listenForAPIEvents() tea.Cmd {
 			return nil
 		}
 	}
+}
+
+// startLiveSessionOutput begins tailing sess's structured transcript-record
+// stream, reconciling each record through sess.applyTranscriptRow — the
+// same per-row dedup the snapshot-refresh path uses — so the existing
+// AttachModel render loop (drainAndPollAttachChCmd/pollAttachCh) picks
+// applied messages up with no further wiring. Any previously running feed
+// is stopped first — only one session's output is tailed at a time,
+// matching the single visible attach tab.
+func (m *APIAppModel) startLiveSessionOutput(sess *apiSessionView) tea.Cmd {
+	m.stopLiveSessionOutput()
+	if sess == nil || m.client == nil || !sess.IsActive() {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.liveOutputCancel = cancel
+	m.liveOutputSessionID = sess.ID()
+	// Resume from the row after whatever the transcript snapshot already
+	// loaded (sess.lastTranscriptMessage), not from index 0 — avoids
+	// re-streaming the whole history apiSessionView already has. The
+	// sentinel value -1 (no rows applied yet) naturally resolves to 0 here.
+	m.liveOutputRecords, m.liveOutputErrs = m.client.SubscribeSessionOutput(ctx, sess.ID(), server.SessionOutputStreamOptions{AfterIndex: sess.lastTranscriptMessage + 1})
+	return m.listenLiveSessionOutputCmd(sess)
+}
+
+// stopLiveSessionOutput cancels any in-flight live output subscription and
+// clears its bookkeeping. Safe to call when no feed is running.
+func (m *APIAppModel) stopLiveSessionOutput() {
+	if m.liveOutputCancel != nil {
+		m.liveOutputCancel()
+	}
+	m.liveOutputCancel = nil
+	m.liveOutputSessionID = ""
+	m.liveOutputRecords = nil
+	m.liveOutputErrs = nil
+}
+
+// listenLiveSessionOutputCmd blocks for the next record or error on the
+// channels captured when the feed started, reconciles it through
+// sess.applyTranscriptRow, and forwards the resulting message (if any) onto
+// sess.attachCh — mirroring the non-blocking select/default pattern
+// session/manager.go uses for local sessions so a slow consumer can't stall
+// the reconciliation loop.
+func (m APIAppModel) listenLiveSessionOutputCmd(sess *apiSessionView) tea.Cmd {
+	records, errs := m.liveOutputRecords, m.liveOutputErrs
+	sessionID := sess.ID()
+	return func() tea.Msg {
+		select {
+		case rec, ok := <-records:
+			if !ok {
+				return apiSessionOutputDoneMsg{sessionID: sessionID}
+			}
+			if msg := sess.applyTranscriptRow(rec.Message); msg != nil {
+				select {
+				case sess.attachCh <- *msg:
+				default:
+				}
+			}
+			return apiSessionOutputLineMsg{sessionID: sessionID}
+		case _, ok := <-errs:
+			if !ok {
+				return apiSessionOutputDoneMsg{sessionID: sessionID}
+			}
+			// Reconnect-on-error is left to a future task; for now a stream
+			// error just ends this feed like a closed channel would.
+			return apiSessionOutputDoneMsg{sessionID: sessionID}
+		}
+	}
+}
+
+// attachedSessionView returns the *apiSessionView AttachModel is currently
+// polling — its sess field, the same pointer switchToTab installs and
+// drainAndPollAttachChCmd/pollAttachCh drain — or nil if there is no attach
+// view or its active session isn't a live API session.
+//
+// This is deliberately not repoTabs[activeTabIdx].sess: apiAttachTabsForFeature
+// rebuilds every repoTab's *apiSessionView (with a fresh, empty attachCh)
+// on every refresh snapshot, but AttachModel.sess only repoints at one of
+// those fresh objects when switchToTab actually runs (see
+// rebuildAPIAttachTabs). Writing to a repoTabs pointer that AttachModel
+// isn't (yet) polling would silently drop every applied message.
+func (m *APIAppModel) attachedSessionView() *apiSessionView {
+	if m.attach == nil {
+		return nil
+	}
+	sess, _ := m.attach.sess.(*apiSessionView)
+	return sess
+}
+
+// syncLiveSessionOutputForAttach reconciles the live output feed with
+// AttachModel's current sess: stopped if the attach view closed, restarted
+// against the new session if it changed. This is called after any point
+// where AttachModel's own Update (tab/shift+tab key handling) or
+// api_app.go's tab-rebuild logic may have repointed sess, since neither of
+// those call sites knows about the live feed.
+func (m *APIAppModel) syncLiveSessionOutputForAttach() tea.Cmd {
+	if m.attach == nil {
+		m.stopLiveSessionOutput()
+		return nil
+	}
+	sess := m.attachedSessionView()
+	if sess != nil && sess.ID() == m.liveOutputSessionID {
+		return nil
+	}
+	return m.startLiveSessionOutput(sess)
 }
 
 func (m APIAppModel) fetchRefreshSnapshotCmd(signal server.RefreshSignal) tea.Cmd {

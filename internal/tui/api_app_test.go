@@ -1224,6 +1224,221 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 	}
 }
 
+// TestApplyTranscriptRowStreamThenSnapshotDoesNotDuplicate is the property
+// this redesign exists to guarantee: the live-stream push path and the
+// snapshot-refresh pull path both funnel through applyTranscriptRow, which
+// tracks exactly one key/signature watermark. A row the stream already
+// applied must be a no-op when the snapshot refresh later sees the same
+// row (same index, same content) — while a different, newer row present
+// in that same snapshot must still get applied.
+func TestApplyTranscriptRowStreamThenSnapshotDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{}
+	sess := newAPIAttachSession(client, server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"},
+	}, server.TranscriptResponse{}, nil)
+
+	streamedRow := server.TranscriptMessageDTO{Index: 0, Role: "assistant", Type: "text", Text: "hello from the stream"}
+
+	// Apply the row via the live-stream push path.
+	if msg := sess.applyTranscriptRow(streamedRow); msg == nil {
+		t.Fatal("applyTranscriptRow(streamedRow) = nil, want the row applied on first sight")
+	}
+	if got := sess.MessageLog().Len(); got != 1 {
+		t.Fatalf("MessageLog().Len() = %d after stream apply, want 1", got)
+	}
+
+	newRow := server.TranscriptMessageDTO{Index: 1, Role: "assistant", Type: "text", Text: "a newer row in the same snapshot"}
+
+	// A snapshot refresh later observes both the already-streamed row and
+	// a genuinely new one.
+	messages := sess.applyAPISessionSnapshot(server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"},
+	}, &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{streamedRow, newRow}}, nil)
+
+	if got := sess.MessageLog().Len(); got != 2 {
+		t.Fatalf("MessageLog().Len() = %d after snapshot with one duplicate + one new row, want 2 (no duplication)", got)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("applyAPISessionSnapshot returned %d messages, want 1 (only the new row, duplicate is a no-op)", len(messages))
+	}
+	if messages[0].Assistant == nil || len(messages[0].Assistant.Message.Content) == 0 || messages[0].Assistant.Message.Content[0].Text != newRow.Text {
+		t.Fatalf("applyAPISessionSnapshot's returned message = %+v, want the new row's text %q", messages[0], newRow.Text)
+	}
+}
+
+// TestOpenAPIAttachStartsLiveOutputFeed proves attaching to a feature's
+// session starts the live output feed (SubscribeSessionOutput), and that
+// it resumes from index 0 for a freshly-loaded session with no transcript
+// history yet (lastTranscriptMessage's -1 sentinel).
+func TestOpenAPIAttachStartsLiveOutputFeed(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.openAPIAttachForFeature("feat-1")
+	updated := model.(APIAppModel)
+	if updated.liveOutputCancel == nil {
+		t.Fatal("openAPIAttachForFeature did not start a live output feed")
+	}
+	if updated.liveOutputSessionID != "sess-1" {
+		t.Fatalf("liveOutputSessionID = %q, want sess-1", updated.liveOutputSessionID)
+	}
+}
+
+// TestLiveSessionOutputFeedAppliesTranscriptRow proves the live output feed
+// actually grows the attached session's MessageLog through applyTranscriptRow
+// — not just that attachCh received something. Pushing onto attachCh alone
+// drives attach.go's attachMsgsMsg side effects (spinner, permission
+// prompts) but updateViewport renders from MessageLog(), so without
+// applying the row there the transcript text would never actually appear.
+func TestLiveSessionOutputFeedAppliesTranscriptRow(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
+		}},
+		subscribeSessionOutputRecords: []server.SessionOutputRecord{
+			{SessionID: "sess-1", Index: 0, Message: server.TranscriptMessageDTO{Index: 0, Role: "assistant", Type: "text", Text: "hi"}},
+			{SessionID: "sess-1", Index: 1, Message: server.TranscriptMessageDTO{Index: 1, Role: "assistant", Type: "text", Text: "there"}},
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.openAPIAttachForFeature("feat-1")
+	updated := model.(APIAppModel)
+	sess := updated.attachedSessionView()
+	if sess == nil {
+		t.Fatal("no attached *apiSessionView after openAPIAttachForFeature")
+	}
+	before := sess.MessageLog().Len()
+
+	// Drive the listen loop directly, feeding each returned message back
+	// through updateAPIAttach to get the re-armed command — the same
+	// request/response cycle the bubbletea runtime performs.
+	liveCmd := updated.listenLiveSessionOutputCmd(sess)
+	for i := range client.subscribeSessionOutputRecords {
+		msg := liveCmd()
+		lineMsg, ok := msg.(apiSessionOutputLineMsg)
+		if !ok {
+			t.Fatalf("iteration %d: got %T, want apiSessionOutputLineMsg", i, msg)
+		}
+		var cmd tea.Cmd
+		model, cmd = updated.updateAPIAttach(lineMsg)
+		updated = model.(APIAppModel)
+		if cmd == nil {
+			t.Fatalf("iteration %d: updateAPIAttach did not re-arm the listen loop", i)
+		}
+		liveCmd = cmd
+	}
+
+	want := len(client.subscribeSessionOutputRecords)
+	if got := sess.MessageLog().Len() - before; got != want {
+		t.Fatalf("MessageLog().Len() grew by %d, want %d", got, want)
+	}
+}
+
+// TestAPIAttachDetachStopsLiveOutputFeed proves detaching from the attach
+// view (esc) stops the live output feed, not just closes the attach panel.
+func TestAPIAttachDetachStopsLiveOutputFeed(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, _ := app.openAPIAttachForFeature("feat-1")
+	attached := model.(APIAppModel)
+	if attached.liveOutputCancel == nil {
+		t.Fatal("openAPIAttachForFeature did not start a live output feed")
+	}
+
+	model, _ = attached.updateAPIAttach(tea.KeyPressMsg{Code: tea.KeyEscape})
+	detached := model.(APIAppModel)
+	if detached.attach != nil {
+		t.Fatal("esc did not detach the attach view")
+	}
+	if detached.liveOutputCancel != nil || detached.liveOutputSessionID != "" {
+		t.Fatalf("live output feed still running after detach: cancel=%v sessionID=%q", detached.liveOutputCancel != nil, detached.liveOutputSessionID)
+	}
+}
+
+// TestAPIAttachTabSwitchResyncsLiveOutputFeed proves switching the visible
+// attach tab (tab key, multi-repo attach) restarts the live output feed
+// against the newly active session rather than leaving it tailing the
+// previous tab's session.
+func TestAPIAttachTabSwitchResyncsLiveOutputFeed(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "impl-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Running"},
+		}},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
+	}
+	attached := model.(APIAppModel)
+	if attached.attach == nil || len(attached.attach.repoTabs) != 2 {
+		t.Fatalf("attach tabs = %+v, want two tabs", attached.attach.repoTabs)
+	}
+	firstSessionID := attached.liveOutputSessionID
+	if firstSessionID == "" {
+		t.Fatal("openAPIAttachForFeature did not start a live output feed")
+	}
+
+	model, _ = attached.updateAPIAttach(tea.KeyPressMsg{Code: tea.KeyTab})
+	switched := model.(APIAppModel)
+	if switched.liveOutputSessionID == "" {
+		t.Fatal("live output feed stopped entirely after tab switch")
+	}
+	if switched.liveOutputSessionID == firstSessionID {
+		t.Fatalf("liveOutputSessionID unchanged after tab switch, still %q", firstSessionID)
+	}
+	sess := switched.attachedSessionView()
+	if sess == nil || sess.ID() != switched.liveOutputSessionID {
+		t.Fatalf("live output feed session %q does not match the now-attached session %+v", switched.liveOutputSessionID, sess)
+	}
+}
+
 func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 	t.Parallel()
 
@@ -7791,6 +8006,7 @@ type fakeTUIAPIClient struct {
 	transcriptsByID               map[string]server.TranscriptResponse
 	transcriptSessionIDs          []string
 	transcriptQueries             []server.CursorQuery
+	subscribeSessionOutputRecords []server.SessionOutputRecord
 	artifactList                  server.ArtifactListResponse
 	artifactListByRun             map[int]server.ArtifactListResponse
 	artifactListFeatureIDs        []string
@@ -8208,6 +8424,23 @@ func (f *fakeTUIAPIClient) SubscribeEvents(context.Context, server.EventSubscrip
 	close(signals)
 	close(errs)
 	return signals, errs
+}
+
+func (f *fakeTUIAPIClient) SubscribeSessionOutput(context.Context, string, server.SessionOutputStreamOptions) (<-chan server.SessionOutputRecord, <-chan error) {
+	records := make(chan server.SessionOutputRecord)
+	errs := make(chan error, 1)
+	// Feed configured records (if any) before closing, on a goroutine, so a
+	// test that wants to drain them one at a time via the returned tea.Cmd
+	// doesn't race an already-closed errs channel against unread buffered
+	// records — mirrors the real Client's goroutine-fed channel shape.
+	go func() {
+		defer close(records)
+		defer close(errs)
+		for _, rec := range f.subscribeSessionOutputRecords {
+			records <- rec
+		}
+	}()
+	return records, errs
 }
 
 func (f *fakeTUIAPIClient) FetchRefreshSnapshot(_ context.Context, signal server.RefreshSignal) (server.RefreshSnapshot, error) {

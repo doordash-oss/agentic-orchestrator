@@ -3208,7 +3208,17 @@ func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO,
 // an identical signature, or a local-user-echo row). Shared by the
 // snapshot-refresh pull path and the live-stream push path so both use
 // exactly one dedup mechanism.
+//
+// The snapshot-refresh path runs synchronously on bubbletea's main Update
+// goroutine, but the live-stream path runs inside listenLiveSessionOutputCmd's
+// returned closure — its own tea.Cmd goroutine — so the two callers are not
+// otherwise serialized against each other. s.mu (already used to guard
+// status/contextPct/pending) also guards the watermark fields mutated below.
+// s.log's own methods take their own internal mutex, so calling them while
+// holding s.mu is safe.
 func (s *apiSessionView) applyTranscriptRow(row server.TranscriptMessageDTO) *llm.SDKMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if row.Index < s.lastTranscriptMessage {
 		return nil
 	}

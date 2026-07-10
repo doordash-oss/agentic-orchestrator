@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,6 +26,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1266,6 +1268,34 @@ func TestApplyTranscriptRowStreamThenSnapshotDoesNotDuplicate(t *testing.T) {
 	if messages[0].Assistant == nil || len(messages[0].Assistant.Message.Content) == 0 || messages[0].Assistant.Message.Content[0].Text != newRow.Text {
 		t.Fatalf("applyAPISessionSnapshot's returned message = %+v, want the new row's text %q", messages[0], newRow.Text)
 	}
+}
+
+// TestApplyTranscriptRowIsRaceSafeAcrossConcurrentCallers exercises the two
+// real, unsynchronized callers of applyTranscriptRow: the snapshot-refresh
+// path runs on bubbletea's main Update goroutine, the live-stream path runs
+// on listenLiveSessionOutputCmd's own tea.Cmd goroutine. Without s.mu
+// guarding the watermark fields, concurrent calls with overlapping row
+// indices can race on lastTranscriptMessage or hit a concurrent write on
+// the lastTranscriptRows map (a plain map, so a genuine collision panics
+// the whole process rather than just corrupting a value). Run with -race.
+func TestApplyTranscriptRowIsRaceSafeAcrossConcurrentCallers(t *testing.T) {
+	t.Parallel()
+
+	sess := newAPIAttachSession(nil, server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{ID: "sess-1"}}, server.TranscriptResponse{}, nil)
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		row := server.TranscriptMessageDTO{Index: i, Role: "assistant", Type: "text", Text: fmt.Sprintf("msg-%d", i)}
+		wg.Add(2)
+		go func(r server.TranscriptMessageDTO) {
+			defer wg.Done()
+			sess.applyTranscriptRow(r)
+		}(row)
+		go func(r server.TranscriptMessageDTO) {
+			defer wg.Done()
+			sess.applyTranscriptRow(r)
+		}(row)
+	}
+	wg.Wait()
 }
 
 // TestOpenAPIAttachStartsLiveOutputFeed proves attaching to a feature's

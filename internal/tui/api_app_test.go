@@ -1224,91 +1224,6 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 	}
 }
 
-func TestOpenAPIAttachStartsLiveOutputFeed(t *testing.T) {
-	t.Parallel()
-
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
-		}},
-		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
-		}},
-	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
-
-	model, _ := app.openAPIAttachForFeature("feat-1")
-	updated := model.(APIAppModel)
-	if updated.liveOutputCancel == nil {
-		t.Fatal("openAPIAttachForFeature did not start a live output feed")
-	}
-	if updated.liveOutputSessionID != "sess-1" {
-		t.Fatalf("liveOutputSessionID = %q, want sess-1", updated.liveOutputSessionID)
-	}
-}
-
-// TestLiveSessionOutputFeedAppendsToMessageLog proves the live output feed
-// actually grows the attached session's MessageLog — not just that attachCh
-// received something. Pushing onto attachCh alone drives attach.go's
-// attachMsgsMsg side effects (spinner, permission prompts) but updateViewport
-// renders from MessageLog(), so without appending there the transcript text
-// would never actually appear.
-func TestLiveSessionOutputFeedAppendsToMessageLog(t *testing.T) {
-	t.Parallel()
-
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
-		}},
-		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
-		}},
-		subscribeSessionOutputLines: []server.SessionOutputLine{
-			{SessionID: "sess-1", Text: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}`},
-			{SessionID: "sess-1", Text: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"there"}]}}`},
-		},
-	}
-	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
-	if err != nil {
-		t.Fatalf("NewAPIAppModel() error = %v", err)
-	}
-
-	model, _ := app.openAPIAttachForFeature("feat-1")
-	updated := model.(APIAppModel)
-	sess := updated.attachedSessionView()
-	if sess == nil {
-		t.Fatal("no attached *apiSessionView after openAPIAttachForFeature")
-	}
-	before := sess.MessageLog().Len()
-
-	// Drive the listen loop directly, feeding each returned message back
-	// through updateAPIAttach to get the re-armed command — the same
-	// request/response cycle the bubbletea runtime performs.
-	liveCmd := updated.listenLiveSessionOutputCmd(sess, updated.liveOutputDecoder)
-	for i := range client.subscribeSessionOutputLines {
-		msg := liveCmd()
-		lineMsg, ok := msg.(apiSessionOutputLineMsg)
-		if !ok {
-			t.Fatalf("iteration %d: got %T, want apiSessionOutputLineMsg", i, msg)
-		}
-		var cmd tea.Cmd
-		model, cmd = updated.updateAPIAttach(lineMsg)
-		updated = model.(APIAppModel)
-		if cmd == nil {
-			t.Fatalf("iteration %d: updateAPIAttach did not re-arm the listen loop", i)
-		}
-		liveCmd = cmd
-	}
-
-	want := len(client.subscribeSessionOutputLines)
-	if got := sess.MessageLog().Len() - before; got != want {
-		t.Fatalf("MessageLog().Len() grew by %d, want %d", got, want)
-	}
-}
-
 func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 	t.Parallel()
 
@@ -7876,9 +7791,6 @@ type fakeTUIAPIClient struct {
 	transcriptsByID               map[string]server.TranscriptResponse
 	transcriptSessionIDs          []string
 	transcriptQueries             []server.CursorQuery
-	sessionOutput                 server.SessionOutputResponse
-	sessionOutputErr              error
-	subscribeSessionOutputLines   []server.SessionOutputLine
 	artifactList                  server.ArtifactListResponse
 	artifactListByRun             map[int]server.ArtifactListResponse
 	artifactListFeatureIDs        []string
@@ -8302,28 +8214,6 @@ func (f *fakeTUIAPIClient) FetchRefreshSnapshot(_ context.Context, signal server
 	f.calls = append(f.calls, "FetchRefreshSnapshot")
 	f.refreshSignals = append(f.refreshSignals, signal)
 	return f.refreshSnapshot, nil
-}
-
-func (f *fakeTUIAPIClient) SubscribeSessionOutput(context.Context, string, server.SessionOutputStreamOptions) (<-chan server.SessionOutputLine, <-chan error) {
-	lines := make(chan server.SessionOutputLine)
-	errs := make(chan error, 1)
-	// Feed configured lines (if any) before closing, on a goroutine, so a
-	// test that wants to drain them one at a time via the returned tea.Cmd
-	// doesn't race an already-closed errs channel against unread buffered
-	// lines — mirrors the real Client's goroutine-fed channel shape.
-	go func() {
-		defer close(lines)
-		defer close(errs)
-		for _, line := range f.subscribeSessionOutputLines {
-			lines <- line
-		}
-	}()
-	return lines, errs
-}
-
-func (f *fakeTUIAPIClient) SessionOutput(context.Context, string, server.OutputQuery) (server.SessionOutputResponse, error) {
-	f.calls = append(f.calls, "SessionOutput")
-	return f.sessionOutput, f.sessionOutputErr
 }
 
 func countString(values []string, needle string) int {

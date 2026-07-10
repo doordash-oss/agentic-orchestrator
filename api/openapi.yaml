@@ -1021,6 +1021,14 @@ components:
               type: boolean
             done:
               type: boolean
+    # JSONResponse is the untyped fallback for response schemas not yet
+    # converted to a typed shape. Tracked remainder (convert opportunistically,
+    # not required for any specific task):
+    #   FeatureConfigResponse, RuntimeConfigResponse, WorkspaceBrowseResponse,
+    #   ModelCatalogResponse, PromptSnapshotResponse, PermissionSnapshotResponse,
+    #   RecoverySnapshotResponse, TranscriptResponse.
+    # FeatureListResponse, FeatureDetailResponse, SessionListResponse, and
+    # SessionDetailResponse were converted 2026-07-09.
     JSONResponse:
       type: object
       required: [api_version]
@@ -1033,9 +1041,29 @@ components:
     HealthResponse:
       $ref: "#/components/schemas/JSONResponse"
     FeatureListResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [features]
+          additionalProperties: true
+          properties:
+            features:
+              type: array
+              items:
+                $ref: "#/components/schemas/FeatureSummary"
+            warnings:
+              type: array
+              items:
+                $ref: "#/components/schemas/Warning"
     FeatureDetailResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature]
+          additionalProperties: true
+          properties:
+            feature:
+              $ref: "#/components/schemas/FeatureDetail"
     FeatureConfigResponse:
       $ref: "#/components/schemas/JSONResponse"
     RuntimeConfigResponse:
@@ -1055,12 +1083,540 @@ components:
     LivePreviewResponse:
       $ref: "#/components/schemas/JSONResponse"
     SessionListResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [sessions]
+          additionalProperties: true
+          properties:
+            sessions:
+              type: array
+              items:
+                $ref: "#/components/schemas/SessionSummary"
     SessionDetailResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [session]
+          additionalProperties: true
+          properties:
+            session:
+              $ref: "#/components/schemas/SessionDetail"
     TranscriptResponse:
       $ref: "#/components/schemas/JSONResponse"
     RecoverySnapshotResponse:
       $ref: "#/components/schemas/JSONResponse"
     ActionResponse:
       $ref: "#/components/schemas/JSONResponse"
+
+    # --- Feature/session payload types backing FeatureListResponse,
+    # FeatureDetailResponse, SessionListResponse, SessionDetailResponse.
+    # Mirror internal/server/types.go field-for-field.
+    Warning:
+      type: object
+      additionalProperties: true
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        feature_id:
+          type: string
+        message:
+          type: string
+    Cycle:
+      type: object
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+        status:
+          type: string
+        count:
+          type: integer
+        iteration:
+          type: integer
+    Checkpoints:
+      type: object
+      additionalProperties: true
+      required:
+        - inquiry_review
+        - research_review
+        - design_review
+        - roadmap_review
+        - phase_plan_review
+        - manual_publish
+        - draft_publish
+      properties:
+        inquiry_review:
+          type: boolean
+        research_review:
+          type: boolean
+        design_review:
+          type: boolean
+        roadmap_review:
+          type: boolean
+        phase_plan_review:
+          type: boolean
+        manual_publish:
+          type: boolean
+        draft_publish:
+          type: boolean
+    FeatureProgress:
+      type: object
+      additionalProperties: true
+      properties:
+        current_iteration:
+          type: integer
+        current_roadmap_phase:
+          type: integer
+        total_roadmap_phases:
+          type: integer
+        current_phase_status:
+          type: string
+    FeatureSummary:
+      type: object
+      additionalProperties: true
+      required:
+        - id
+        - name
+        - slug
+        - status
+        - current_phase
+        - active_run
+        - run_count
+        - repos
+        - created_at
+        - checkpoints
+        - progress
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        status:
+          type: string
+        current_phase:
+          type: string
+        cycle:
+          $ref: "#/components/schemas/Cycle"
+        active_run:
+          type: integer
+        run_count:
+          type: integer
+        repos:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        checkpoints:
+          $ref: "#/components/schemas/Checkpoints"
+        progress:
+          $ref: "#/components/schemas/FeatureProgress"
+        warnings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Warning"
+    ModelDefaults:
+      type: object
+      additionalProperties: true
+      properties:
+        inquiry:
+          type: string
+        research:
+          type: string
+        planning:
+          type: string
+        implementation:
+          type: string
+        review:
+          type: string
+        utilities:
+          type: string
+        kb_build:
+          type: string
+    Timing:
+      type: object
+      additionalProperties: true
+      required: [total_seconds, by_phase]
+      properties:
+        total_seconds:
+          type: integer
+          format: int64
+        by_phase:
+          type: object
+          additionalProperties:
+            type: integer
+            format: int64
+    Cost:
+      type: object
+      additionalProperties: true
+      required: [total_usd, by_phase]
+      properties:
+        total_usd:
+          type: number
+          format: double
+        by_phase:
+          type: object
+          additionalProperties:
+            type: number
+            format: double
+    ReviewGate:
+      type: object
+      additionalProperties: true
+      required: [reviewing_gate, review_fixing, validating_plan]
+      properties:
+        reviewing_gate:
+          type: boolean
+        review_fixing:
+          type: boolean
+        validating_plan:
+          type: boolean
+        validator_statuses:
+          type: object
+          additionalProperties:
+            type: string
+    Failure:
+      type: object
+      additionalProperties: true
+      properties:
+        type:
+          type: string
+        message:
+          type: string
+    NeedUserInputGate:
+      type: object
+      additionalProperties: true
+      required: [open]
+      properties:
+        feature_id:
+          type: string
+        open:
+          type: boolean
+        scope:
+          type: string
+        iteration:
+          type: integer
+    RepoStatus:
+      type: object
+      additionalProperties: true
+      required: [name, touched, publishable]
+      properties:
+        name:
+          type: string
+        freshness:
+          type: string
+        rebase_status:
+          type: string
+        rebase_target:
+          type: string
+        conflict_files:
+          type: array
+          items:
+            type: string
+        touched:
+          type: boolean
+        pr_url:
+          type: string
+        last_error:
+          type: string
+        publishable:
+          type: boolean
+        cycle_type:
+          type: string
+        cycle_status:
+          type: string
+    RunSummary:
+      type: object
+      additionalProperties: true
+      required: [run_number, artifact_count]
+      properties:
+        run_number:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+        sealed_at:
+          type: string
+          format: date-time
+        seal_reason:
+          type: string
+        current_phase:
+          type: string
+        phase_status:
+          type: string
+        iteration:
+          type: integer
+        roadmap_phase:
+          type: integer
+        roadmap_total:
+          type: integer
+        pending_review_phase:
+          type: string
+        pending_rewind_review_roadmap_phase:
+          type: integer
+        is_rewind:
+          type: boolean
+        artifact_count:
+          type: integer
+        has_need_user_gate:
+          type: boolean
+        setup:
+          type: object
+          description: >-
+            SetupDTO — untyped for now (see the tracked JSONResponse
+            remainder note above; nested setup/task detail is not yet
+            typed).
+          additionalProperties: true
+    ActionScope:
+      type: object
+      additionalProperties: true
+      required: [type]
+      properties:
+        type:
+          type: string
+        repo_selection:
+          type: string
+        cycle_type:
+          type: string
+    ActionInput:
+      type: object
+      additionalProperties: true
+      required: [name, kind, required]
+      properties:
+        name:
+          type: string
+        kind:
+          type: string
+        required:
+          type: boolean
+        options:
+          type: array
+          items:
+            type: string
+        max_length:
+          type: integer
+    ActionDisabledReason:
+      type: object
+      additionalProperties: true
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+    Action:
+      type: object
+      additionalProperties: true
+      required: [id, enabled, scope, required_inputs]
+      properties:
+        id:
+          type: string
+        enabled:
+          type: boolean
+        scope:
+          $ref: "#/components/schemas/ActionScope"
+        required_inputs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActionInput"
+        disabled_reasons:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActionDisabledReason"
+    FeatureDetail:
+      allOf:
+        - $ref: "#/components/schemas/FeatureSummary"
+        - type: object
+          additionalProperties: true
+          required:
+            - models
+            - historical_runs
+            - repo_status
+            - timing
+            - cost
+            - review_gate
+            - actions
+            - revision
+            - cache_revalidate
+          properties:
+            description:
+              type: string
+            summary:
+              type: string
+            pipeline:
+              type: string
+            models:
+              $ref: "#/components/schemas/ModelDefaults"
+            active_run_detail:
+              $ref: "#/components/schemas/RunSummary"
+            historical_runs:
+              type: array
+              items:
+                $ref: "#/components/schemas/RunSummary"
+            repo_status:
+              type: array
+              items:
+                $ref: "#/components/schemas/RepoStatus"
+            cycle:
+              $ref: "#/components/schemas/Cycle"
+            timing:
+              $ref: "#/components/schemas/Timing"
+            cost:
+              $ref: "#/components/schemas/Cost"
+            review_gate:
+              $ref: "#/components/schemas/ReviewGate"
+            failure:
+              $ref: "#/components/schemas/Failure"
+            need_user_input:
+              $ref: "#/components/schemas/NeedUserInputGate"
+            actions:
+              type: array
+              items:
+                $ref: "#/components/schemas/Action"
+            revision:
+              type: string
+            cache_revalidate:
+              type: string
+    Usage:
+      type: object
+      additionalProperties: true
+      properties:
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        cost_usd:
+          type: number
+          format: double
+    SessionSummary:
+      type: object
+      additionalProperties: true
+      required:
+        - id
+        - feature_id
+        - phase
+        - kind
+        - status
+        - started_at
+        - usage
+      properties:
+        id:
+          type: string
+        feature_id:
+          type: string
+        phase:
+          type: string
+        repo:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        provider:
+          type: string
+        model:
+          type: string
+        status:
+          type: string
+        turn_state:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        iteration:
+          type: integer
+        context_percentage:
+          type: integer
+        usage:
+          $ref: "#/components/schemas/Usage"
+    Cursor:
+      type: object
+      additionalProperties: true
+      required: [total, start, end]
+      properties:
+        total:
+          type: integer
+        start:
+          type: integer
+        end:
+          type: integer
+    AskUserOption:
+      type: object
+      additionalProperties: true
+      properties:
+        label:
+          type: string
+        description:
+          type: string
+        confidence:
+          type: number
+          format: double
+    AskUserQuestion:
+      type: object
+      additionalProperties: true
+      properties:
+        question:
+          type: string
+        header:
+          type: string
+        multi_select:
+          type: boolean
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/AskUserOption"
+    ControlRequest:
+      type: object
+      additionalProperties: true
+      required: [request_id, tool_name, status]
+      properties:
+        request_id:
+          type: string
+        session_id:
+          type: string
+        feature_id:
+          type: string
+        phase:
+          type: string
+        tool_name:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AskUserQuestion"
+    SessionDetail:
+      allOf:
+        - $ref: "#/components/schemas/SessionSummary"
+        - type: object
+          additionalProperties: true
+          required:
+            - transcript_cursor
+            - pending_controls
+            - can_attach
+            - log_available
+          properties:
+            transcript_cursor:
+              $ref: "#/components/schemas/Cursor"
+            pending_controls:
+              type: array
+              items:
+                $ref: "#/components/schemas/ControlRequest"
+            initial_prompt:
+              type: string
+            can_attach:
+              type: boolean
+            log_available:
+              type: boolean
+            safe_error:
+              type: string

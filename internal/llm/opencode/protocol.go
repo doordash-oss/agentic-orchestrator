@@ -1076,8 +1076,8 @@ func (p *Protocol) estimatedUsageEmitStepLocked() int {
 	if step < 100 {
 		return 100
 	}
-	if step > 5000 {
-		return 5000
+	if step > 1500 {
+		return 1500
 	}
 	return step
 }

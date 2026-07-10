@@ -216,6 +216,60 @@ func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
 	}
 }
 
+func TestTopLevelRoutesCoverAllDocumentedPrefixes(t *testing.T) {
+	registered := map[string]bool{}
+	for _, r := range topLevelServerRoutes {
+		registered[r.pattern] = true
+	}
+	for _, route := range documentedServerRoutes() {
+		prefix := topLevelPatternForPath(route.path)
+		if !registered[prefix] {
+			t.Errorf("documented route %s %s has no top-level mux registration for pattern %q", strings.ToUpper(route.method), route.path, prefix)
+		}
+	}
+}
+
+// topLevelPatternForPath maps an expanded OpenAPI path to the mux pattern
+// that would serve it, mirroring routes()'s registration granularity.
+func topLevelPatternForPath(path string) string {
+	switch {
+	case path == "/api/v1/health":
+		return "/api/v1/health"
+	case path == "/api/v1/features":
+		return "/api/v1/features"
+	case strings.HasPrefix(path, "/api/v1/features/"):
+		return "/api/v1/features/"
+	case strings.HasPrefix(path, "/api/v1/config/runtime"):
+		return "/api/v1/config/runtime"
+	case path == "/api/v1/workspace/browse":
+		return "/api/v1/workspace/browse"
+	case path == "/api/v1/catalog/models":
+		return "/api/v1/catalog/models"
+	case path == "/api/v1/prompts":
+		return "/api/v1/prompts"
+	case strings.HasPrefix(path, "/api/v1/prompts/"):
+		return "/api/v1/prompts/"
+	case path == "/api/v1/permissions":
+		return "/api/v1/permissions"
+	case strings.HasPrefix(path, "/api/v1/permissions/"):
+		return "/api/v1/permissions/"
+	case path == "/api/v1/sessions":
+		return "/api/v1/sessions"
+	case strings.HasPrefix(path, "/api/v1/sessions/"):
+		return "/api/v1/sessions/"
+	case path == "/api/v1/recovery":
+		return "/api/v1/recovery"
+	case path == "/api/v1/recovery/actions":
+		return "/api/v1/recovery/actions"
+	case path == "/api/v1/shutdown":
+		return "/api/v1/shutdown"
+	case path == "/api/v1/events":
+		return "/api/v1/events"
+	default:
+		return path
+	}
+}
+
 func loadOpenAPISpec(t *testing.T) openAPISpec {
 	t.Helper()
 	data, err := osReadFile(filepath.Join("..", "..", "api", "openapi.yaml"))

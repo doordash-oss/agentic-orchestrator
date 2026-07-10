@@ -93,24 +93,40 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 	return handler
 }
 
+// topLevelRoute is one top-level mux registration. topLevelServerRoutes is
+// the single source of truth routes() builds the mux from — a route-parity
+// test (openapi_contract_test.go) reads this same slice so a pattern added
+// here without a matching OpenAPI path (or vice versa) fails a test instead
+// of silently drifting.
+type topLevelRoute struct {
+	pattern string
+	handler func(*apiHandler) http.HandlerFunc
+}
+
+var topLevelServerRoutes = []topLevelRoute{
+	{"/api/v1/health", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleHealth) }},
+	{"/api/v1/features", func(h *apiHandler) http.HandlerFunc { return h.handleFeaturesRoot }},
+	{"/api/v1/features/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
+	{"/api/v1/config/runtime", func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
+	{"/api/v1/workspace/browse", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleWorkspaceBrowse) }},
+	{"/api/v1/catalog/models", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleModelCatalog) }},
+	{"/api/v1/prompts", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handlePrompts) }},
+	{"/api/v1/prompts/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
+	{"/api/v1/permissions", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handlePermissions) }},
+	{"/api/v1/permissions/", func(h *apiHandler) http.HandlerFunc { return h.handlePermissionMutationRoutes }},
+	{"/api/v1/sessions", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleSessionList) }},
+	{"/api/v1/sessions/", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleSessionRoutes) }},
+	{"/api/v1/recovery", func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
+	{"/api/v1/recovery/actions", func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
+	{"/api/v1/shutdown", func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
+	{"/api/v1/events", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleEvents) }},
+}
+
 func (h *apiHandler) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/health", methodHandler(http.MethodGet, h.handleHealth))
-	mux.HandleFunc("/api/v1/features", h.handleFeaturesRoot)
-	mux.HandleFunc("/api/v1/features/", h.handleFeatureRoutes)
-	mux.HandleFunc("/api/v1/config/runtime", h.handleRuntimeConfigRoute)
-	mux.HandleFunc("/api/v1/workspace/browse", methodHandler(http.MethodGet, h.handleWorkspaceBrowse))
-	mux.HandleFunc("/api/v1/catalog/models", methodHandler(http.MethodGet, h.handleModelCatalog))
-	mux.HandleFunc("/api/v1/prompts", methodHandler(http.MethodGet, h.handlePrompts))
-	mux.HandleFunc("/api/v1/prompts/", h.handlePromptMutationRoutes)
-	mux.HandleFunc("/api/v1/permissions", methodHandler(http.MethodGet, h.handlePermissions))
-	mux.HandleFunc("/api/v1/permissions/", h.handlePermissionMutationRoutes)
-	mux.HandleFunc("/api/v1/sessions", methodHandler(http.MethodGet, h.handleSessionList))
-	mux.HandleFunc("/api/v1/sessions/", methodHandler(http.MethodGet, h.handleSessionRoutes))
-	mux.HandleFunc("/api/v1/recovery", h.handleRecoveryRoute)
-	mux.HandleFunc("/api/v1/recovery/actions", h.handleRecoveryActionRoute)
-	mux.HandleFunc("/api/v1/shutdown", h.handleShutdownMutationRoute)
-	mux.HandleFunc("/api/v1/events", methodHandler(http.MethodGet, h.handleEvents))
+	for _, route := range topLevelServerRoutes {
+		mux.HandleFunc(route.pattern, route.handler(h))
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h.rejectInvalidHost(w, r) {
 			return

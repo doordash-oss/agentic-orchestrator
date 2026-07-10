@@ -55,6 +55,19 @@ func TestBearerTokenAcceptedForSSEQueryFallback(t *testing.T) {
 	}
 }
 
+func TestAuthorizedRejectsBareTokenWithoutBearerPrefix(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Authorization", "test-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Result().StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bare-token status = %d, want 401", w.Result().StatusCode)
+	}
+}
+
 func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
 	t.Parallel()
 

@@ -455,8 +455,10 @@ func isAllowedLoopbackHost(raw string) bool {
 }
 
 func (h *apiHandler) authorized(r *http.Request) bool {
-	if bearer := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")); bearer != "" && constantTimeEqual(bearer, h.authToken) {
-		return true
+	if header := r.Header.Get("Authorization"); strings.HasPrefix(header, "Bearer ") {
+		if bearer := strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")); bearer != "" && constantTimeEqual(bearer, h.authToken) {
+			return true
+		}
 	}
 	if sseTokenFallbackAllowed(r.URL.EscapedPath()) {
 		return constantTimeEqual(r.URL.Query().Get("access_token"), h.authToken)

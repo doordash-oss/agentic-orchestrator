@@ -336,6 +336,83 @@ func TestEventBrokerCoalescedOverflowDeliversReset(t *testing.T) {
 	}
 }
 
+// TestSnapshotThenSubscribeConverges interleaves broker publishes with the
+// exact snapshot->subscribe bootstrap real clients perform (GET a revisioned
+// resource to learn as_of_seq, then subscribe with after=as_of_seq) and
+// asserts the subscriber never misses an event published in the gap between
+// the two calls. Run with -race to catch broker locking regressions too.
+func TestSnapshotThenSubscribeConverges(t *testing.T) {
+	t.Parallel()
+	const iterations = 200
+
+	for i := 0; i < iterations; i++ {
+		b := newEventBrokerForTest(eventBrokerOptions{})
+
+		// A baseline subscriber attached before any publishing starts —
+		// the ground truth for "every event this broker ever emits". It's
+		// drained continuously by a goroutine (rather than read after the
+		// fact) so it never overflows its buffer into the coalescing path,
+		// and stopped via b.unsubscribe (not a bare close) so the channel
+		// is only closed once it's already removed from b.subs under the
+		// broker's lock — a bare close here would race a concurrent
+		// publish still holding the lock and iterating b.subs to send.
+		baseline := b.subscribe()
+		var baselineEvents []SSEEventDTO
+		baselineDone := make(chan struct{})
+		go func() {
+			defer close(baselineDone)
+			for evt := range baseline {
+				baselineEvents = append(baselineEvents, evt)
+			}
+		}()
+
+		// Simulate concurrent mutation traffic racing the snapshot read.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 5; n++ {
+				b.publish(SSEEventDTO{Kind: "lifecycle.updated", Resource: ResourceDTO{Type: "runtime"}})
+			}
+		}()
+
+		// The "GET snapshot" half of the race: read as_of_seq concurrently
+		// with the publishes above.
+		asOfSeq := b.currentSeq()
+
+		wg.Wait()
+
+		// The "subscribe(after)" half: bootstrap from exactly the seq the
+		// snapshot read observed.
+		ch, replay, reset := b.subscribeAfter(asOfSeq, b.currentEpoch())
+		if reset != nil {
+			t.Fatalf("iteration %d: unexpected stream reset: %+v", i, reset)
+		}
+
+		b.unsubscribe(baseline)
+		<-baselineDone
+
+		// Compare replay against the baseline's full history filtered to
+		// events after asOfSeq: every such event must be present, in
+		// order, with none skipped or duplicated.
+		var baselineAfter []SSEEventDTO
+		for _, evt := range baselineEvents {
+			if evt.Seq > asOfSeq {
+				baselineAfter = append(baselineAfter, evt)
+			}
+		}
+		if len(replay) != len(baselineAfter) {
+			t.Fatalf("iteration %d: replay len = %d, want %d (asOfSeq=%d)", i, len(replay), len(baselineAfter), asOfSeq)
+		}
+		for j := range replay {
+			if replay[j].Seq != baselineAfter[j].Seq {
+				t.Fatalf("iteration %d: replay[%d].Seq = %d, want %d", i, j, replay[j].Seq, baselineAfter[j].Seq)
+			}
+		}
+		b.unsubscribe(ch)
+	}
+}
+
 func eventSeqs(events []SSEEventDTO) []uint64 {
 	seqs := make([]uint64, 0, len(events))
 	for _, evt := range events {

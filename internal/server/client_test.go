@@ -561,6 +561,7 @@ func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
 			id: "sess-1", featureID: "feat-1", messages: messages,
 		}}},
+		DisableHostValidation: true,
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)

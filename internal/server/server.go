@@ -50,7 +50,6 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		StartedAt:       startedAt,
 		Owner:           opts.Owner,
 		AuthToken:       opts.AuthToken,
-		ValidateHost:    true,
 		Features:        opts.Features,
 		FeatureStore:    opts.FeatureStore,
 		Freshness:       opts.Freshness,

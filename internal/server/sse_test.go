@@ -427,7 +427,7 @@ func TestSnapshotThenSubscribeConverges(t *testing.T) {
 func TestEventsConnectedSurvivesRingEvictionForCursorlessClient(t *testing.T) {
 	t.Parallel()
 
-	h := newAPIHandler(HandlerOptions{})
+	h := newAPIHandler(HandlerOptions{DisableHostValidation: true})
 	for i := 0; i < defaultEventReplayLimit+10; i++ {
 		h.broker.publish(SSEEventDTO{Kind: "lifecycle.updated", Resource: ResourceDTO{Type: "runtime"}})
 	}

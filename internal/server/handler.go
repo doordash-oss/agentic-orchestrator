@@ -38,21 +38,21 @@ func NewHandler(opts HandlerOptions) http.Handler {
 }
 
 type apiHandler struct {
-	runtime         RuntimeIdentity
-	policy          LaunchPolicy
-	startedAt       time.Time
-	owner           instancelock.Owner
-	authToken       string
-	features        FeatureLister
-	store           FeatureReader
-	freshness       RepoFreshnessProvider
-	cfg             *config.Config
-	registry        *llm.Registry
-	sessions        ports.SessionManager
-	broker          *eventBroker
-	mutations       MutationTarget
-	requestShutdown func()
-	validateHost    bool
+	runtime               RuntimeIdentity
+	policy                LaunchPolicy
+	startedAt             time.Time
+	owner                 instancelock.Owner
+	authToken             string
+	features              FeatureLister
+	store                 FeatureReader
+	freshness             RepoFreshnessProvider
+	cfg                   *config.Config
+	registry              *llm.Registry
+	sessions              ports.SessionManager
+	broker                *eventBroker
+	mutations             MutationTarget
+	requestShutdown       func()
+	disableHostValidation bool
 
 	recoveryMu        sync.Mutex
 	recoverySnapshots map[string][]ports.RecoveryItem
@@ -74,21 +74,21 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		features = store
 	}
 	handler := &apiHandler{
-		runtime:         opts.Runtime,
-		policy:          opts.LaunchPolicy,
-		startedAt:       startedAt,
-		owner:           opts.Owner,
-		authToken:       opts.AuthToken,
-		features:        features,
-		store:           store,
-		freshness:       opts.Freshness,
-		cfg:             opts.Config,
-		registry:        opts.Registry,
-		sessions:        opts.Sessions,
-		broker:          newEventBroker(opts.Events, opts.DomainEvents),
-		mutations:       opts.Mutations,
-		requestShutdown: opts.RequestShutdown,
-		validateHost:    opts.ValidateHost,
+		runtime:               opts.Runtime,
+		policy:                opts.LaunchPolicy,
+		startedAt:             startedAt,
+		owner:                 opts.Owner,
+		authToken:             opts.AuthToken,
+		features:              features,
+		store:                 store,
+		freshness:             opts.Freshness,
+		cfg:                   opts.Config,
+		registry:              opts.Registry,
+		sessions:              opts.Sessions,
+		broker:                newEventBroker(opts.Events, opts.DomainEvents),
+		mutations:             opts.Mutations,
+		requestShutdown:       opts.RequestShutdown,
+		disableHostValidation: opts.DisableHostValidation,
 	}
 	return handler
 }
@@ -422,7 +422,7 @@ func (h *apiHandler) rejectUnauthorized(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *apiHandler) rejectInvalidHost(w http.ResponseWriter, r *http.Request) bool {
-	if h == nil || !h.validateHost {
+	if h == nil || h.disableHostValidation {
 		return false
 	}
 	if isAllowedLoopbackHost(r.Host) {

@@ -65,22 +65,25 @@ type Options struct {
 }
 
 type HandlerOptions struct {
-	Runtime         RuntimeIdentity
-	LaunchPolicy    LaunchPolicy
-	StartedAt       time.Time
-	Owner           instancelock.Owner
-	AuthToken       string
-	ValidateHost    bool
-	Features        FeatureLister
-	FeatureStore    FeatureReader
-	Freshness       RepoFreshnessProvider
-	Config          *config.Config
-	Registry        *llm.Registry
-	Sessions        ports.SessionManager
-	Events          <-chan interface{}
-	DomainEvents    <-chan ports.Event
-	Mutations       MutationTarget
-	RequestShutdown func()
+	Runtime      RuntimeIdentity
+	LaunchPolicy LaunchPolicy
+	StartedAt    time.Time
+	Owner        instancelock.Owner
+	AuthToken    string
+	// DisableHostValidation turns off the loopback Host-header check. Host
+	// validation defaults to ON — only tests exercising something other
+	// than host validation itself should set this to true.
+	DisableHostValidation bool
+	Features              FeatureLister
+	FeatureStore          FeatureReader
+	Freshness             RepoFreshnessProvider
+	Config                *config.Config
+	Registry              *llm.Registry
+	Sessions              ports.SessionManager
+	Events                <-chan interface{}
+	DomainEvents          <-chan ports.Event
+	Mutations             MutationTarget
+	RequestShutdown       func()
 }
 
 type FeatureLister interface {

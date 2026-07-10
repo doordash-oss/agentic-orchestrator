@@ -23,7 +23,7 @@ import (
 func TestBearerTokenRequiredForAPIReads(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token"})
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
 	if w.Result().StatusCode != http.StatusUnauthorized {
@@ -42,7 +42,7 @@ func TestBearerTokenRequiredForAPIReads(t *testing.T) {
 func TestBearerTokenAcceptedForSSEQueryFallback(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token"})
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/v1/events?access_token=test-token&heartbeat_ms=1000")
@@ -58,7 +58,7 @@ func TestBearerTokenAcceptedForSSEQueryFallback(t *testing.T) {
 func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token", ValidateHost: true})
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token"})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	req.Host = "attacker.example"
 	req.Header.Set("Authorization", "Bearer test-token")

@@ -144,7 +144,7 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 
 func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
 	spec := loadOpenAPISpec(t)
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token"})
+	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
 	cases := []struct {
 		name        string
 		method      string

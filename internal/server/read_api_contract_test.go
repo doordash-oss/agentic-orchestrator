@@ -41,8 +41,9 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features: store,
+		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:              store,
+		DisableHostValidation: true,
 	})
 
 	dashboard := getJSONMap(t, handler, "/api/v1/features")
@@ -122,7 +123,7 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save feature: %v", err)
 	}
-	handler := NewHandler(HandlerOptions{Features: store})
+	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureBody := detail["feature"].(map[string]any)
@@ -159,8 +160,9 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 		t.Fatalf("Modify() error = %v", err)
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
-		Features: store,
+		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(store.BaseDir), StateDir: store.BaseDir, Config: filepath.Join(filepath.Dir(store.BaseDir), "config.yaml")},
+		Features:              store,
+		DisableHostValidation: true,
 	})
 
 	list := getJSONMap(t, handler, "/api/v1/features")
@@ -213,6 +215,7 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 			"api": RepoFreshnessLocalChanges,
 			"web": RepoFreshnessInSync,
 		}),
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/features/feat-rebase")
@@ -316,8 +319,9 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 			Repos:          map[string]config.RepoConfig{"agentic-orchestrator": {Path: "/repo/path"}},
 			WorkspaceRoots: []string{"/workspace"},
 		},
-		Registry: registry,
-		Sessions: sessions,
+		Registry:              registry,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	for _, path := range []string{
@@ -415,9 +419,10 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	prompts := getJSONMap(t, handler, "/api/v1/prompts")
@@ -511,9 +516,10 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	prompts := getJSONMap(t, handler, "/api/v1/prompts")
@@ -555,7 +561,7 @@ func TestRuntimeConfigDiscoversWorkspaceRootReposOnRead(t *testing.T) {
 		Repos:          map[string]config.RepoConfig{"explicit": {Path: "/explicit"}},
 		WorkspaceRoots: []string{root},
 	}
-	handler := NewHandler(HandlerOptions{Config: cfg})
+	handler := NewHandler(HandlerOptions{Config: cfg, DisableHostValidation: true})
 
 	body := getJSONMap(t, handler, "/api/v1/config/runtime")
 	repos := body["repos"].([]any)
@@ -589,7 +595,7 @@ func TestRuntimeConfigUsesDiscoveredPathForBlankExplicitRepo(t *testing.T) {
 		},
 		WorkspaceRoots: []string{root},
 	}
-	handler := NewHandler(HandlerOptions{Config: cfg})
+	handler := NewHandler(HandlerOptions{Config: cfg, DisableHostValidation: true})
 
 	body := getJSONMap(t, handler, "/api/v1/config/runtime")
 	repos := body["repos"].([]any)
@@ -615,7 +621,7 @@ func TestWorkspaceBrowseProjectsRepoMetadata(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "group", "nested", ".git"), 0o755); err != nil {
 		t.Fatalf("mkdir nested repo: %v", err)
 	}
-	handler := NewHandler(HandlerOptions{})
+	handler := NewHandler(HandlerOptions{DisableHostValidation: true})
 
 	body := getJSONMap(t, handler, "/api/v1/workspace/browse?path="+url.QueryEscape(root))
 	if body["api_version"] != APIVersion {
@@ -659,8 +665,9 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		t.Fatalf("Modify() error = %v", err)
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		DisableHostValidation: true,
 	})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
@@ -768,9 +775,10 @@ func TestActionCatalogRebaseIsFeatureScoped(t *testing.T) {
 		t.Fatalf("Modify() error = %v", err)
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:   RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features:  store,
-		Mutations: &fakeMutationTarget{},
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Mutations:             &fakeMutationTarget{},
+		DisableHostValidation: true,
 	})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
@@ -1052,9 +1060,10 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	prompts := getJSONMap(t, handler, "/api/v1/prompts")
@@ -1086,9 +1095,10 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	prompts := getJSONMap(t, handler, "/api/v1/prompts")
@@ -1112,9 +1122,10 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	permissions := getJSONMap(t, handler, "/api/v1/permissions")
@@ -1139,8 +1150,9 @@ func TestFeatureDetailLoadsBoundedHistoricalRuns(t *testing.T) {
 	f.RunCount = 25
 	reader := &countingFeatureReader{feature: f}
 	handler := NewHandler(HandlerOptions{
-		Runtime:      RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/state", Config: "/runtime/config.yaml"},
-		FeatureStore: reader,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/state", Config: "/runtime/config.yaml"},
+		FeatureStore:          reader,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
@@ -1181,9 +1193,10 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions")
@@ -1227,9 +1240,10 @@ func TestSessionListExposesChatSessionKind(t *testing.T) {
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions")
@@ -1274,9 +1288,10 @@ func TestSessionListUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	var featureSessionCalls int
 	sessions := fakeSessionManager{views: views, featureSessionsCalls: &featureSessionCalls}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions")
@@ -1316,9 +1331,10 @@ func TestSessionDetailAndTranscriptDoNotScanFeatureSessionsOnLookupMiss(t *testi
 		featureSessionsCalls: &featureSessionCalls,
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	requestJSONMap(t, handler, http.MethodGet, "/api/v1/sessions/sess-historical", nil, http.StatusNotFound)
@@ -1353,9 +1369,10 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 		}},
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-local-echo/transcript")
@@ -1397,9 +1414,10 @@ func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
 		}},
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-chat-long-answer/transcript")
@@ -1432,9 +1450,10 @@ func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 		recentSessionLimits:  &recentSessionLimits,
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
@@ -1481,9 +1500,10 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	preview := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
@@ -1528,9 +1548,10 @@ func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
@@ -1571,9 +1592,10 @@ func TestSessionTranscriptIncludesStructuredCodexFileChangeDiffRows(t *testing.T
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
@@ -1626,9 +1648,10 @@ func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
@@ -1674,9 +1697,10 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 		initialPrompt: "private-token initial prompt",
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
-		Sessions: sessions,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		Sessions:              sessions,
+		DisableHostValidation: true,
 	})
 
 	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
@@ -1724,8 +1748,9 @@ func TestArtifactReadsAllowAbsolutePathsWithinSameRun(t *testing.T) {
 	}
 
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		DisableHostValidation: true,
 	})
 
 	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
@@ -1763,8 +1788,9 @@ func TestRewindDescriptionReviewArtifactAndStateExposed(t *testing.T) {
 	writeFile(t, filepath.Join(store.BaseDir, f.ID, "description-review.md"), "initial prompt")
 
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
-		Features: store,
+		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Features:              store,
+		DisableHostValidation: true,
 	})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
@@ -1794,7 +1820,7 @@ func TestRewindDescriptionReviewArtifactAndStateExposed(t *testing.T) {
 func TestSSEEmitsMetadataOnlyEventsAndHeartbeat(t *testing.T) {
 	t.Parallel()
 	eventCh := make(chan interface{}, 4)
-	handler := NewHandler(HandlerOptions{Events: eventCh})
+	handler := NewHandler(HandlerOptions{Events: eventCh, DisableHostValidation: true})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
@@ -1832,7 +1858,7 @@ func TestSSEEmitsMetadataOnlyEventsAndHeartbeat(t *testing.T) {
 func TestSSEEmitsShutdownFromDomainEvents(t *testing.T) {
 	t.Parallel()
 	domainCh := make(chan ports.Event, 1)
-	handler := NewHandler(HandlerOptions{DomainEvents: domainCh})
+	handler := NewHandler(HandlerOptions{DomainEvents: domainCh, DisableHostValidation: true})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 

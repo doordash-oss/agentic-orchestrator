@@ -56,6 +56,7 @@ func TestSessionOutputBackfillReadsFromByteOffset(t *testing.T) {
 			logPath: logPath,
 			status:  ports.SessionRunning,
 		}}},
+		DisableHostValidation: true,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sess-1/output?from=6&limit=6", nil)
@@ -86,7 +87,8 @@ func TestSessionOutputStreamEmitsIndexedTranscriptRecordsAndTerminates(t *testin
 		Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}},
 	}})
 	handler := NewHandler(HandlerOptions{
-		Sessions: fakeSessionManager{views: []ports.SessionView{sess}},
+		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
+		DisableHostValidation: true,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sess-1/output/stream?from=0", nil)
@@ -128,7 +130,8 @@ func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 	sess.log = log
 	sess.active.Store(true)
 	handler := NewHandler(HandlerOptions{
-		Sessions: fakeSessionManager{views: []ports.SessionView{sess}},
+		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
+		DisableHostValidation: true,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sess-1/output/stream?from=0", nil)
@@ -175,6 +178,7 @@ func TestSessionOutputStreamErrorIsRetriableForActiveSession(t *testing.T) {
 			id:     "sess-1",
 			status: ports.SessionRunning,
 		}}},
+		DisableHostValidation: true,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sess-1/output/stream?from=-1", nil)

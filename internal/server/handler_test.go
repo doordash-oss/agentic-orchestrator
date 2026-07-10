@@ -55,7 +55,8 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return []*feature.Feature{f}, nil
 		}),
-		StartedAt: created,
+		StartedAt:             created,
+		DisableHostValidation: true,
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
@@ -112,6 +113,7 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return nil, nil
 		}),
+		DisableHostValidation: true,
 	})
 	handler.broker.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "feat-1"}})
 
@@ -139,6 +141,7 @@ func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return nil, nil
 		}),
+		DisableHostValidation: true,
 	})
 
 	w := httptest.NewRecorder()
@@ -162,6 +165,7 @@ func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return []*feature.Feature{{ID: "good-001", Name: "Good", Slug: "good", Status: feature.StatusCreated, ActiveRun: 1, RunCount: 1}}, partial
 		}),
+		DisableHostValidation: true,
 	})
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
@@ -210,8 +214,9 @@ func TestFeatureListDoesNotMutateStorageSchemas(t *testing.T) {
 	}
 
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: filepath.Dir(dir), StateDir: dir, Config: filepath.Join(filepath.Dir(dir), "config.yaml")},
-		Features: store,
+		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(dir), StateDir: dir, Config: filepath.Join(filepath.Dir(dir), "config.yaml")},
+		Features:              store,
+		DisableHostValidation: true,
 	})
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
@@ -245,7 +250,7 @@ func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
 			{ID: "gpt-5.4-mini", Category: "balanced"},
 		},
 	})
-	handler := NewHandler(HandlerOptions{Registry: reg})
+	handler := NewHandler(HandlerOptions{Registry: reg, DisableHostValidation: true})
 
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/catalog/models", nil))

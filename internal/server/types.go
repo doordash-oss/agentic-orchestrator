@@ -962,10 +962,15 @@ type SSEEventDTO struct {
 	Kind             string      `json:"kind"`
 	At               time.Time   `json:"at"`
 	Resource         ResourceDTO `json:"resource"`
-	ResourceVersion  uint64      `json:"resource_version,omitempty"`
-	Revision         string      `json:"revision,omitempty"`
-	SnapshotRequired bool        `json:"snapshot_required"`
-	Summary          string      `json:"summary,omitempty"`
+	// ResourceVersion is a per-resource monotonic counter, distinct from
+	// Revision (a content hash used for ETag/If-None-Match). Nothing in this
+	// codebase reads it today, but it is a deliberately kept, permanent part
+	// of the public SSEEvent contract (decided 2026-07-09) — do not remove
+	// it as dead code in a future cleanup.
+	ResourceVersion uint64 `json:"resource_version,omitempty"`
+	Revision        string `json:"revision,omitempty"`
+	SnapshotRequired bool   `json:"snapshot_required"`
+	Summary          string `json:"summary,omitempty"`
 	// RecordCount is the session's current transcript record count at the
 	// time of this session.output.activity event — see session.SDKEventMsg.
 	RecordCount int `json:"record_count,omitempty"`

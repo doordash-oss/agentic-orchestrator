@@ -131,6 +131,14 @@ func (h *apiHandler) handleSessionOutput(w http.ResponseWriter, r *http.Request,
 	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
 }
 
+// handleSessionOutputStream tails a session's raw provider log over SSE, in
+// byte windows that do not align with the structured transcript's record
+// indexing (see handleTranscript). This is a deliberate, accepted deviation
+// (decided 2026-07-09): clients that want live output decode these raw
+// provider lines themselves using the same per-provider llm.Protocol.ParseLine
+// the server uses — see internal/tui/api_output_decode.go for the TUI's
+// consumer. Revisit this split only if a client needs live output without
+// linking the provider packages that decoder depends on.
 func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Request, sessionID string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {

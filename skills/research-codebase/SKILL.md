@@ -64,17 +64,17 @@ You are tasked with conducting comprehensive research across the codebase to ans
    - Remind agents they are documenting, not evaluating or improving
    - **Text-only output**: every sub-agent prompt MUST instruct the agent to return its findings as its text response and to NOT write or edit any file — sub-agents have no output artifact of their own. You are the sole writer; only you create the research document (step 5).
 
-4. **Wait for all sub-agents to complete and synthesize findings:**
+4. **Checkpoint each sub-agent's findings as it returns:**
+   - Write each completed sub-agent's findings to `{phase_dir}/findings/<slug>.md` before synthesizing. These survive an interrupted session and are never re-run. (The `findings/` subdir is scratch, not the artifact.)
    - IMPORTANT: Wait for ALL sub-agent tasks to complete before proceeding
-   - Compile all sub-agent results
+
+5. **Synthesize and write the research document incrementally:**
+   - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`) at the root of `{phase_dir}`.
+   - Synthesize by reading the `findings/` files, not from accumulated context
    - Connect findings across different components
    - Include specific file paths and line numbers for reference
    - Highlight patterns, connections, and architectural decisions
    - Answer the user's specific questions with concrete evidence
-
-5. **Write the research document to the output directory:**
-   - Name it `YYYY-MM-DD-research.md` (e.g., `2025-01-08-research.md`)
-   - Structure the document as follows:
 
      ```markdown
      # Research: [Topic]
@@ -132,5 +132,5 @@ You are tasked with conducting comprehensive research across the codebase to ans
 - **File reading**: Always read mentioned files FULLY (no limit/offset) before spawning sub-tasks
 - **Critical ordering**: Follow the numbered steps exactly
   - ALWAYS read mentioned files first before spawning sub-tasks (step 1)
-  - ALWAYS wait for all sub-agents to complete before synthesizing (step 4)
+  - ALWAYS wait for all sub-agents to complete before synthesizing (step 5)
   - NEVER write the research document with placeholder values

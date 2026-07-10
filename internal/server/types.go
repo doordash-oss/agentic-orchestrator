@@ -22,6 +22,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/instancelock"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/server/serverapi"
 )
 
 const APIVersion = "v1"
@@ -97,24 +98,11 @@ type FeatureReader interface {
 	RunDir(featureID string, runNumber int) string
 }
 
-type ResponseMeta struct {
-	Revision    string    `json:"revision"`
-	GeneratedAt time.Time `json:"generated_at"`
-	CacheHit    bool      `json:"cache_hit,omitempty"`
-	AsOfSeq     uint64    `json:"as_of_seq,omitempty"`
-}
+type ResponseMeta = serverapi.ResponseMeta
 
-type ErrorResponse struct {
-	APIVersion string   `json:"api_version"`
-	Error      ErrorDTO `json:"error"`
-}
+type ErrorResponse = serverapi.ErrorResponse
 
-type ErrorDTO struct {
-	Code    string         `json:"code"`
-	Message string         `json:"message"`
-	Status  int            `json:"status"`
-	Target  map[string]any `json:"target,omitempty"`
-}
+type ErrorDTO = serverapi.Error
 
 // OwnerDTO is the public process-owner metadata safe to expose through REST and
 // discovery records.
@@ -146,41 +134,13 @@ type HealthResponse struct {
 	ServerTime   time.Time       `json:"server_time"`
 }
 
-type FeatureListResponse struct {
-	APIVersion string           `json:"api_version"`
-	Meta       ResponseMeta     `json:"meta"`
-	Features   []FeatureSummary `json:"features"`
-	Warnings   []WarningDTO     `json:"warnings,omitempty"`
-}
+type FeatureListResponse = serverapi.FeatureListResponse
 
-type FeatureSummary struct {
-	ID           string          `json:"id"`
-	Name         string          `json:"name"`
-	Slug         string          `json:"slug"`
-	Status       string          `json:"status"`
-	CurrentPhase string          `json:"current_phase"`
-	Cycle        *CycleDTO       `json:"cycle,omitempty"`
-	ActiveRun    int             `json:"active_run"`
-	RunCount     int             `json:"run_count"`
-	Repos        []string        `json:"repos"`
-	CreatedAt    time.Time       `json:"created_at"`
-	Checkpoints  CheckpointsDTO  `json:"checkpoints"`
-	Progress     FeatureProgress `json:"progress"`
-	Warnings     []WarningDTO    `json:"warnings,omitempty"`
-}
+type FeatureSummary = serverapi.FeatureSummary
 
-type FeatureProgress struct {
-	CurrentIteration    int    `json:"current_iteration,omitempty"`
-	CurrentRoadmapPhase int    `json:"current_roadmap_phase,omitempty"`
-	TotalRoadmapPhases  int    `json:"total_roadmap_phases,omitempty"`
-	CurrentPhaseStatus  string `json:"current_phase_status,omitempty"`
-}
+type FeatureProgress = serverapi.FeatureProgress
 
-type WarningDTO struct {
-	Code      string `json:"code"`
-	FeatureID string `json:"feature_id,omitempty"`
-	Message   string `json:"message"`
-}
+type WarningDTO = serverapi.Warning
 
 type FeatureDetailResponse struct {
 	APIVersion string           `json:"api_version"`
@@ -208,32 +168,13 @@ type FeatureDetailDTO struct {
 	CacheRevalidate string             `json:"cache_revalidate"`
 }
 
-type ActionDTO struct {
-	ID              string                    `json:"id"`
-	Enabled         bool                      `json:"enabled"`
-	Scope           ActionScopeDTO            `json:"scope"`
-	RequiredInputs  []ActionInputDTO          `json:"required_inputs"`
-	DisabledReasons []ActionDisabledReasonDTO `json:"disabled_reasons,omitempty"`
-}
+type ActionDTO = serverapi.Action
 
-type ActionScopeDTO struct {
-	Type          string `json:"type"`
-	RepoSelection string `json:"repo_selection,omitempty"`
-	CycleType     string `json:"cycle_type,omitempty"`
-}
+type ActionScopeDTO = serverapi.ActionScope
 
-type ActionInputDTO struct {
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"`
-	Required  bool     `json:"required"`
-	Options   []string `json:"options,omitempty"`
-	MaxLength int      `json:"max_length,omitempty"`
-}
+type ActionInputDTO = serverapi.ActionInput
 
-type ActionDisabledReasonDTO struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
+type ActionDisabledReasonDTO = serverapi.ActionDisabledReason
 
 type RunSummaryDTO struct {
 	RunNumber                       int        `json:"run_number"`
@@ -281,55 +222,19 @@ type SetupTaskDTO struct {
 	LastError        string     `json:"last_error,omitempty"`
 }
 
-type RepoStatusDTO struct {
-	Name          string   `json:"name"`
-	Freshness     string   `json:"freshness,omitempty"`
-	RebaseStatus  string   `json:"rebase_status,omitempty"`
-	RebaseTarget  string   `json:"rebase_target,omitempty"`
-	ConflictFiles []string `json:"conflict_files,omitempty"`
-	Touched       bool     `json:"touched"`
-	PRURL         string   `json:"pr_url,omitempty"`
-	LastError     string   `json:"last_error,omitempty"`
-	Publishable   bool     `json:"publishable"`
-	CycleType     string   `json:"cycle_type,omitempty"`
-	CycleStatus   string   `json:"cycle_status,omitempty"`
-}
+type RepoStatusDTO = serverapi.RepoStatus
 
-type CycleDTO struct {
-	Type      string `json:"type,omitempty"`
-	Status    string `json:"status,omitempty"`
-	Count     int    `json:"count,omitempty"`
-	Iteration int    `json:"iteration,omitempty"`
-}
+type CycleDTO = serverapi.Cycle
 
-type TimingDTO struct {
-	TotalSeconds int64            `json:"total_seconds"`
-	ByPhase      map[string]int64 `json:"by_phase"`
-}
+type TimingDTO = serverapi.Timing
 
-type CostDTO struct {
-	TotalUSD float64            `json:"total_usd"`
-	ByPhase  map[string]float64 `json:"by_phase"`
-}
+type CostDTO = serverapi.Cost
 
-type ReviewGateDTO struct {
-	ReviewingGate     bool              `json:"reviewing_gate"`
-	ReviewFixing      bool              `json:"review_fixing"`
-	ValidatingPlan    bool              `json:"validating_plan"`
-	ValidatorStatuses map[string]string `json:"validator_statuses,omitempty"`
-}
+type ReviewGateDTO = serverapi.ReviewGate
 
-type FailureDTO struct {
-	Type    string `json:"type,omitempty"`
-	Message string `json:"message,omitempty"`
-}
+type FailureDTO = serverapi.Failure
 
-type NeedInputGateDTO struct {
-	FeatureID string `json:"feature_id,omitempty"`
-	Open      bool   `json:"open"`
-	Scope     string `json:"scope,omitempty"`
-	Iteration int    `json:"iteration,omitempty"`
-}
+type NeedInputGateDTO = serverapi.NeedUserInputGate
 
 type RecoverySnapshotResponse struct {
 	APIVersion string            `json:"api_version"`
@@ -449,15 +354,7 @@ func FeatureConfigMutationFromDTO(dto FeatureConfigDTO) FeatureConfigMutationReq
 	}
 }
 
-type CheckpointsDTO struct {
-	InquiryReview   bool `json:"inquiry_review"`
-	ResearchReview  bool `json:"research_review"`
-	DesignReview    bool `json:"design_review"`
-	RoadmapReview   bool `json:"roadmap_review"`
-	PhasePlanReview bool `json:"phase_plan_review"`
-	ManualPublish   bool `json:"manual_publish"`
-	DraftPublish    bool `json:"draft_publish"`
-}
+type CheckpointsDTO = serverapi.Checkpoints
 
 type PublishabilityDTO struct {
 	ManualPublish bool            `json:"manual_publish"`
@@ -495,30 +392,11 @@ type PermissionSnapshotResponse struct {
 	Requests   []ControlRequestDTO `json:"requests"`
 }
 
-type ControlRequestDTO struct {
-	RequestID string               `json:"request_id"`
-	SessionID string               `json:"session_id,omitempty"`
-	FeatureID string               `json:"feature_id,omitempty"`
-	Phase     string               `json:"phase,omitempty"`
-	ToolName  string               `json:"tool_name"`
-	Status    string               `json:"status"`
-	Summary   string               `json:"summary,omitempty"`
-	Input     map[string]any       `json:"input,omitempty"`
-	Questions []AskUserQuestionDTO `json:"questions,omitempty"`
-}
+type ControlRequestDTO = serverapi.ControlRequest
 
-type AskUserQuestionDTO struct {
-	Question    string             `json:"question,omitempty"`
-	Header      string             `json:"header,omitempty"`
-	MultiSelect bool               `json:"multi_select,omitempty"`
-	Options     []AskUserOptionDTO `json:"options,omitempty"`
-}
+type AskUserQuestionDTO = serverapi.AskUserQuestion
 
-type AskUserOptionDTO struct {
-	Label       string   `json:"label,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Confidence  *float64 `json:"confidence,omitempty"`
-}
+type AskUserOptionDTO = serverapi.AskUserOption
 
 type HelpQueueDTO struct {
 	FeatureID string    `json:"feature_id"`
@@ -574,11 +452,7 @@ type ContextDTO struct {
 	Percentage int `json:"percentage"`
 }
 
-type SessionListResponse struct {
-	APIVersion string              `json:"api_version"`
-	Meta       ResponseMeta        `json:"meta"`
-	Sessions   []SessionSummaryDTO `json:"sessions"`
-}
+type SessionListResponse = serverapi.SessionListResponse
 
 type SessionDetailResponse struct {
 	APIVersion string           `json:"api_version"`
@@ -586,22 +460,7 @@ type SessionDetailResponse struct {
 	Session    SessionDetailDTO `json:"session"`
 }
 
-type SessionSummaryDTO struct {
-	ID         string    `json:"id"`
-	FeatureID  string    `json:"feature_id"`
-	Phase      string    `json:"phase"`
-	Repo       string    `json:"repo,omitempty"`
-	Kind       string    `json:"kind"`
-	Label      string    `json:"label,omitempty"`
-	Provider   string    `json:"provider,omitempty"`
-	Model      string    `json:"model,omitempty"`
-	Status     string    `json:"status"`
-	TurnState  string    `json:"turn_state,omitempty"`
-	StartedAt  time.Time `json:"started_at"`
-	Iteration  int       `json:"iteration,omitempty"`
-	ContextPct int       `json:"context_percentage,omitempty"`
-	Usage      UsageDTO  `json:"usage"`
-}
+type SessionSummaryDTO = serverapi.SessionSummary
 
 type SessionDetailDTO struct {
 	SessionSummaryDTO
@@ -613,17 +472,9 @@ type SessionDetailDTO struct {
 	SafeError        string              `json:"safe_error,omitempty"`
 }
 
-type CursorDTO struct {
-	Total int `json:"total"`
-	Start int `json:"start"`
-	End   int `json:"end"`
-}
+type CursorDTO = serverapi.Cursor
 
-type UsageDTO struct {
-	InputTokens  int     `json:"input_tokens,omitempty"`
-	OutputTokens int     `json:"output_tokens,omitempty"`
-	CostUSD      float64 `json:"cost_usd,omitempty"`
-}
+type UsageDTO = serverapi.Usage
 
 type TranscriptResponse struct {
 	APIVersion string                 `json:"api_version"`
@@ -632,17 +483,7 @@ type TranscriptResponse struct {
 	Messages   []TranscriptMessageDTO `json:"messages"`
 }
 
-type SessionOutputResponse struct {
-	APIVersion string       `json:"api_version"`
-	Meta       ResponseMeta `json:"meta"`
-	SessionID  string       `json:"session_id"`
-	Offset     int64        `json:"offset"`
-	NextOffset int64        `json:"next_offset"`
-	Size       int64        `json:"size"`
-	Data       string       `json:"data"`
-	Truncated  bool         `json:"truncated"`
-	Done       bool         `json:"done,omitempty"`
-}
+type SessionOutputResponse = serverapi.SessionOutputResponse
 
 // SessionOutputChunk is one record delivered over /output/stream — a single
 // row from the session's transcript (the same TranscriptMessageDTO shape and
@@ -954,34 +795,9 @@ type ShutdownResponse struct {
 	Result string `json:"result"`
 }
 
-type SSEEventDTO struct {
-	APIVersion       string      `json:"api_version"`
-	ID               string      `json:"id"`
-	Seq              uint64      `json:"seq,omitempty"`
-	Epoch            string      `json:"epoch,omitempty"`
-	Kind             string      `json:"kind"`
-	At               time.Time   `json:"at"`
-	Resource         ResourceDTO `json:"resource"`
-	// ResourceVersion is a per-resource monotonic counter, distinct from
-	// Revision (a content hash used for ETag/If-None-Match). Nothing in this
-	// codebase reads it today, but it is a deliberately kept, permanent part
-	// of the public SSEEvent contract (decided 2026-07-09) — do not remove
-	// it as dead code in a future cleanup.
-	ResourceVersion uint64 `json:"resource_version,omitempty"`
-	Revision        string `json:"revision,omitempty"`
-	SnapshotRequired bool   `json:"snapshot_required"`
-	Summary          string `json:"summary,omitempty"`
-	// RecordCount is the session's current transcript record count at the
-	// time of this session.output.activity event — see session.SDKEventMsg.
-	RecordCount int `json:"record_count,omitempty"`
-}
+type SSEEventDTO = serverapi.SSEEvent
 
-type ResourceDTO struct {
-	Type      string `json:"type"`
-	ID        string `json:"id,omitempty"`
-	FeatureID string `json:"feature_id,omitempty"`
-	Phase     string `json:"phase,omitempty"`
-}
+type ResourceDTO = serverapi.Resource
 
 type DiscoveryRecord struct {
 	SchemaVersion int             `json:"schema_version"`

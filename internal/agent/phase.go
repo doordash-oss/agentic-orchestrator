@@ -1399,8 +1399,13 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	})
 
 	sessOpts = &ports.SessionOpts{
-		PIDDir:            opts.PIDDir,
-		PermHandler:       opts.PermHandler,
+		PIDDir: opts.PIDDir,
+		// commandWritableRoots is the same boundary just computed for the
+		// provider's own writable-root config, so a plain `touch` inside it
+		// (e.g. the phase_complete marker) can be trusted the same way
+		// AcceptEditsHandler already trusts an equivalent empty Write —
+		// see permission.WrapGeneralPhaseHandlerWithTouch.
+		PermHandler:       permission.WrapGeneralPhaseHandlerWithTouch(opts.PermHandler, commandWritableRoots),
 		InitialPrompt:     opts.Prompt,
 		ContextWindow:     contextWindow,
 		RepoName:          opts.RepoName,

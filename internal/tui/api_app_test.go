@@ -2537,6 +2537,31 @@ func TestMergeLivePreviewTranscriptReplacesUpdatedStreamingRow(t *testing.T) {
 	}
 }
 
+func TestAPIAppStoreTranscriptMergesFirstPageBackfillWithExistingTail(t *testing.T) {
+	t.Parallel()
+
+	app := APIAppModel{}
+	app.storeTranscript("sess-1", server.TranscriptResponse{
+		Cursor:   server.CursorDTO{Total: 100, Start: 50, End: 100},
+		Messages: apiTestTranscriptRows(50, 100),
+	})
+	app.storeTranscript("sess-1", server.TranscriptResponse{
+		Cursor:   server.CursorDTO{Total: 100, Start: 0, End: 50},
+		Messages: apiTestTranscriptRows(0, 50),
+	})
+
+	got := app.transcripts["sess-1"]
+	if got.Cursor.Start != 0 || got.Cursor.End != 100 || got.Cursor.Total != 100 {
+		t.Fatalf("merged cursor = %+v, want total 100 start 0 end 100", got.Cursor)
+	}
+	if len(got.Messages) != 100 {
+		t.Fatalf("merged transcript len = %d, want 100", len(got.Messages))
+	}
+	if got.Messages[0].Text != "transcript row 000" || got.Messages[99].Text != "transcript row 099" {
+		t.Fatalf("merged transcript endpoints = %q / %q", got.Messages[0].Text, got.Messages[99].Text)
+	}
+}
+
 func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -5461,6 +5486,92 @@ func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
 	if count := strings.Count(view, partialText); count != 1 {
 		t.Fatalf("attach view rendered repeated transcript row %d times, want 1:\n%s", count, view)
 	}
+}
+
+func TestAPIAppModelAttachBackfillsOlderTranscriptOnScrollTop(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+		}},
+		transcript: server.TranscriptResponse{
+			Cursor:   server.CursorDTO{Total: 100, Start: 0, End: 50},
+			Messages: apiTestTranscriptRows(0, 50),
+		},
+	}
+	app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
+	if err != nil {
+		t.Fatalf("NewAPIAppModel() error = %v", err)
+	}
+	app.storeSessionDetail(server.SessionDetailResponse{Session: server.SessionDetailDTO{
+		SessionSummaryDTO: server.SessionSummaryDTO{
+			ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+		},
+		TranscriptCursor: server.CursorDTO{Total: 100, Start: 0, End: 100},
+		CanAttach:        true,
+	}})
+	app.storeTranscript("sess-1", server.TranscriptResponse{
+		Cursor:   server.CursorDTO{Total: 100, Start: 50, End: 100},
+		Messages: apiTestTranscriptRows(50, 100),
+	})
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init command")
+	}
+	attached := model.(APIAppModel)
+	if attached.attach == nil {
+		t.Fatal("attach view was not opened")
+	}
+	attached.attach.viewport.GotoTop()
+
+	model, cmd = attached.Update(tea.MouseWheelMsg(tea.Mouse{Button: tea.MouseWheelUp}))
+	if cmd == nil {
+		t.Fatal("scrolling at the top returned nil command, want transcript backfill command")
+	}
+	msg := cmd()
+	model, _ = model.(APIAppModel).Update(msg)
+	backfilled := model.(APIAppModel)
+
+	if len(client.transcriptQueries) == 0 {
+		t.Fatal("scrolling at top did not fetch older transcript rows")
+	}
+	gotQuery := client.transcriptQueries[len(client.transcriptQueries)-1]
+	if gotQuery.Cursor != 0 || gotQuery.Limit != apiTranscriptPageLimit {
+		t.Fatalf("backfill query = %+v, want cursor 0 limit %d", gotQuery, apiTranscriptPageLimit)
+	}
+	view := stripANSI(backfilled.View().Content)
+	if !strings.Contains(view, "transcript row 000") {
+		t.Fatalf("attach view missing backfilled transcript rows:\n%s", view)
+	}
+	sess, ok := backfilled.attach.sess.(*apiSessionView)
+	if !ok {
+		t.Fatalf("attached session = %T, want *apiSessionView", backfilled.attach.sess)
+	}
+	text := sess.MessageLog().Text()
+	if !strings.Contains(text, "transcript row 000") || !strings.Contains(text, "transcript row 050") {
+		t.Fatalf("session log missing backfilled or original transcript rows:\n%s", text)
+	}
+	if strings.Index(text, "transcript row 000") > strings.Index(text, "transcript row 050") {
+		t.Fatalf("backfilled transcript rows stored after existing rows:\n%s", text)
+	}
+}
+
+func apiTestTranscriptRows(start, end int) []server.TranscriptMessageDTO {
+	rows := make([]server.TranscriptMessageDTO, 0, end-start)
+	for i := start; i < end; i++ {
+		rows = append(rows, server.TranscriptMessageDTO{
+			Index: i,
+			Role:  "assistant",
+			Type:  "text",
+			Text:  fmt.Sprintf("transcript row %03d", i),
+		})
+	}
+	return rows
 }
 
 func TestAPIAppModelAttachRendersSessionInitialPrompt(t *testing.T) {

@@ -120,6 +120,127 @@ func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.
 	return ports.PermissionDecision{}, nil
 }
 
+// TouchWithinRootsHandler auto-approves a plain, unflagged `touch <path>...`
+// Bash command when every target path falls within Roots, deferring to Inner
+// for everything else. `touch` can only create an empty file or bump an
+// existing one's mtime — the same effect Edit/Write already have when
+// AcceptEditsHandler approves them unconditionally — so this closes a gap
+// where the harness prompts for something like a `phase_complete` marker
+// while the equivalent empty Write to that exact path would go through
+// silently.
+//
+// Unlike Edit/Write, OpenCode has no per-path scoping for Bash to fall back
+// on: its declarative permission map treats "bash" as a single ask/allow/deny
+// decision, never a per-path glob (see internal/llm/opencode/config.go). So
+// Roots here is the only boundary standing between an approval and letting a
+// shell command anywhere on disk through — a touch outside it always defers
+// to Inner rather than being approved by default.
+type TouchWithinRootsHandler struct {
+	Inner ports.PermissionHandler
+	Roots []string
+}
+
+// CanUseTool approves an in-root touch; everything else defers to Inner.
+func (h *TouchWithinRootsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if req.ToolName == "Bash" {
+		if targets, ok := touchCommandTargets(req.Input); ok && allPathsWithinRoots(targets, h.Roots) {
+			return ports.PermissionDecision{Behavior: "allow"}, nil
+		}
+	}
+	return h.Inner.CanUseTool(req)
+}
+
+// touchCommandTargets parses a Bash command as a plain `touch <path>...`
+// invocation with no flags, chaining, redirection, or substitution, returning
+// its literal path arguments. Returns ok=false for anything else, including a
+// touch with flags: options like -r/-t change what the command does to files
+// outside its argument list, which is outside what this narrow exception is
+// meant to cover.
+func touchCommandTargets(input string) ([]string, bool) {
+	command := strings.TrimSpace(extractBashCommand(input))
+	if command == "" {
+		return nil, false
+	}
+	if strings.ContainsAny(command, "\n\r;`<>|&") || strings.Contains(command, "$(") {
+		return nil, false
+	}
+	fields := strings.Fields(command)
+	if len(fields) < 2 || filepath.Base(fields[0]) != "touch" {
+		return nil, false
+	}
+	targets := fields[1:]
+	for _, t := range targets {
+		if strings.HasPrefix(t, "-") {
+			return nil, false
+		}
+	}
+	return targets, true
+}
+
+// allPathsWithinRoots reports whether every path is exactly one of roots or a
+// descendant of one. Returns false for an empty paths list so a touch with no
+// targets never matches.
+func allPathsWithinRoots(paths, roots []string) bool {
+	if len(paths) == 0 {
+		return false
+	}
+	for _, p := range paths {
+		if !pathWithinRoots(p, roots) {
+			return false
+		}
+	}
+	return true
+}
+
+// pathWithinRoots reports whether path is exactly one of roots or a
+// descendant of one, comparing absolute forms so a root supplied as a
+// relative path still matches consistently.
+func pathWithinRoots(path string, roots []string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	for _, root := range roots {
+		rootAbs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		if abs == rootAbs || strings.HasPrefix(abs, rootAbs+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// WrapGeneralPhaseHandlerWithTouch wraps h in a TouchWithinRootsHandler when h
+// is one of the general accept-edits handlers permHandlerFor builds
+// (AutoApproveHandler, AcceptEditsHandler, or CachingHandler over one of
+// those — optionally already wrapped in a SizeGuardHandler via Guarded).
+// Any other handler shape — bounded helpers, plan/rewind/review-feedback
+// sessions, chat's ReadOnlyHandler — is returned unchanged, since those exist
+// specifically to restrict writes below the general writable-root policy and
+// must not be loosened by this exception.
+func WrapGeneralPhaseHandlerWithTouch(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
+	if len(roots) == 0 || !isGeneralPhaseHandler(h) {
+		return h
+	}
+	return &TouchWithinRootsHandler{Inner: h, Roots: roots}
+}
+
+// isGeneralPhaseHandler reports whether h is, optionally through a
+// SizeGuardHandler, one of the handler types permHandlerFor builds.
+func isGeneralPhaseHandler(h ports.PermissionHandler) bool {
+	if guard, ok := h.(*SizeGuardHandler); ok {
+		h = guard.Inner
+	}
+	switch h.(type) {
+	case *AutoApproveHandler, *AcceptEditsHandler, *CachingHandler:
+		return true
+	default:
+		return false
+	}
+}
+
 // PlanReviewHandler auto-approves read-only tools and file edits ONLY to the
 // specified plan file path. All other write operations are hard-denied.
 type PlanReviewHandler struct {

@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -347,6 +348,7 @@ type APIAppModel struct {
 	liveOutputSessionID        string
 	liveOutputRecords          <-chan server.SessionOutputRecord
 	liveOutputErrs             <-chan error
+	transcriptBackfills        map[string]bool
 }
 
 type apiRefreshSignalMsg struct {
@@ -366,6 +368,13 @@ type apiSessionOutputLineMsg struct {
 // ended (channel closed or a stream error) and should be stopped.
 type apiSessionOutputDoneMsg struct {
 	sessionID string
+}
+
+type apiTranscriptBackfillMsg struct {
+	sessionID  string
+	before     int
+	transcript server.TranscriptResponse
+	err        error
 }
 
 type apiRefreshSnapshotMsg struct {
@@ -585,6 +594,7 @@ func NewAPIAppModel(ctx context.Context, client APIClient, opts APIAppOptions) (
 		livePreviews:               map[string]server.LivePreviewResponse{},
 		transcripts:                map[string]server.TranscriptResponse{},
 		contents:                   map[string]apiFeatureContentSnapshot{},
+		transcriptBackfills:        map[string]bool{},
 		sessionManager:             opts.SessionManager,
 		buildSession:               opts.BuildSession,
 		width:                      100,
@@ -1366,6 +1376,31 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.stopLiveSessionOutput()
 		}
 		return m, nil
+	case apiTranscriptBackfillMsg:
+		if m.transcriptBackfills != nil {
+			delete(m.transcriptBackfills, msg.sessionID)
+		}
+		if msg.err != nil {
+			return m, nil
+		}
+		m.storeTranscript(msg.sessionID, msg.transcript)
+		active := m.attachedSessionView()
+		if active == nil || active.ID() != msg.sessionID || m.attach == nil {
+			return m, nil
+		}
+		wasAtTop := m.attach.viewport.AtTop()
+		oldOffset := m.attach.viewport.YOffset()
+		oldTotal := m.attach.viewport.TotalLineCount()
+		if len(active.applyTranscriptBackfill(msg.transcript)) == 0 {
+			return m, nil
+		}
+		m.attach.updateViewport()
+		if wasAtTop {
+			m.attach.viewport.GotoTop()
+		} else if delta := m.attach.viewport.TotalLineCount() - oldTotal; delta > 0 {
+			m.attach.viewport.SetYOffset(oldOffset + delta)
+		}
+		return m, nil
 	}
 
 	updated, cmd := m.attach.Update(msg)
@@ -1379,7 +1414,8 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	liveCmd := m.syncLiveSessionOutputForAttach()
-	return m, tea.Batch(cmd, liveCmd)
+	backfillCmd := m.maybeStartAttachTranscriptBackfill(msg)
+	return m, tea.Batch(cmd, liveCmd, backfillCmd)
 }
 
 func apiArtifactReviewOwnsMsg(msg tea.Msg) bool {
@@ -2029,10 +2065,10 @@ func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureS
 	if !overlay.CreatedAt.IsZero() {
 		base.CreatedAt = overlay.CreatedAt
 	}
-	if overlay.Checkpoints != (server.CheckpointsDTO{}) {
+	if !reflect.DeepEqual(overlay.Checkpoints, server.CheckpointsDTO{}) {
 		base.Checkpoints = overlay.Checkpoints
 	}
-	if overlay.Progress != (server.FeatureProgress{}) {
+	if !reflect.DeepEqual(overlay.Progress, server.FeatureProgress{}) {
 		base.Progress = overlay.Progress
 	}
 	if len(overlay.Warnings) > 0 {
@@ -2164,31 +2200,32 @@ func (m *DashboardModel) selectSection(section string) bool {
 }
 
 type apiSessionView struct {
-	id                    string
-	featureID             string
-	phase                 feature.Phase
-	repo                  string
-	kind                  ports.SessionKind
-	label                 string
-	status                ports.SessionStatus
-	startedAt             time.Time
-	iteration             int
-	provider              string
-	model                 string
-	workDir               string
-	initialPrompt         string
-	contextPct            int
-	log                   ports.MessageLog
-	cost                  *llm.ResultMessage
-	client                APIClient
-	statusCh              chan string
-	attachCh              chan llm.SDKMessage
-	doneCh                chan struct{}
-	pending               []*llm.ControlRequestMessage
-	lastTranscriptMessage int
-	lastTranscriptRows    map[string]string
-	lastTranscriptTailKey string
-	mu                    sync.Mutex
+	id                     string
+	featureID              string
+	phase                  feature.Phase
+	repo                   string
+	kind                   ports.SessionKind
+	label                  string
+	status                 ports.SessionStatus
+	startedAt              time.Time
+	iteration              int
+	provider               string
+	model                  string
+	workDir                string
+	initialPrompt          string
+	contextPct             int
+	log                    *session.MessageLog
+	cost                   *llm.ResultMessage
+	client                 APIClient
+	statusCh               chan string
+	attachCh               chan llm.SDKMessage
+	doneCh                 chan struct{}
+	pending                []*llm.ControlRequestMessage
+	lastTranscriptMessage  int
+	firstTranscriptMessage int
+	lastTranscriptRows     map[string]string
+	lastTranscriptTailKey  string
+	mu                     sync.Mutex
 }
 
 func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionView {
@@ -2196,10 +2233,18 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 		return nil
 	}
 	log := session.NewMessageLog()
+	firstIndex := -1
+	lastIndex := -1
 	if len(preview.TranscriptRows) > 0 {
 		for _, row := range preview.TranscriptRows {
 			if msg, ok := apiTranscriptRowToSDKMessage(row, preview.SessionID); ok {
 				log.Append(msg)
+				if firstIndex == -1 || row.Index < firstIndex {
+					firstIndex = row.Index
+				}
+				if row.Index > lastIndex {
+					lastIndex = row.Index
+				}
 			}
 		}
 	} else {
@@ -2213,22 +2258,23 @@ func newAPILivePreviewSession(preview APILivePreviewPresentation) ports.SessionV
 		cost = &llm.ResultMessage{TotalCostUSD: preview.CostUSD}
 	}
 	return &apiSessionView{
-		id:                    preview.SessionID,
-		featureID:             preview.FeatureID,
-		phase:                 apiLivePreviewPhase(preview.Phase),
-		kind:                  apiSessionKind(preview.Kind),
-		label:                 firstNonEmpty(preview.Label, "Live Preview"),
-		status:                ports.SessionRunning,
-		provider:              preview.Provider,
-		model:                 preview.Model,
-		contextPct:            preview.ContextPct,
-		log:                   log,
-		cost:                  cost,
-		statusCh:              make(chan string, 8),
-		attachCh:              make(chan llm.SDKMessage, 64),
-		doneCh:                make(chan struct{}),
-		lastTranscriptMessage: -1,
-		lastTranscriptRows:    map[string]string{},
+		id:                     preview.SessionID,
+		featureID:              preview.FeatureID,
+		phase:                  apiLivePreviewPhase(preview.Phase),
+		kind:                   apiSessionKind(preview.Kind),
+		label:                  firstNonEmpty(preview.Label, "Live Preview"),
+		status:                 ports.SessionRunning,
+		provider:               preview.Provider,
+		model:                  preview.Model,
+		contextPct:             preview.ContextPct,
+		log:                    log,
+		cost:                   cost,
+		statusCh:               make(chan string, 8),
+		attachCh:               make(chan llm.SDKMessage, 64),
+		doneCh:                 make(chan struct{}),
+		lastTranscriptMessage:  lastIndex,
+		firstTranscriptMessage: firstIndex,
+		lastTranscriptRows:     map[string]string{},
 	}
 }
 
@@ -2590,12 +2636,16 @@ func apiAttachTabStatus(sess session.SessionView) presentationStatus {
 
 func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, transcript server.TranscriptResponse, controls []server.ControlRequestDTO, workDir ...string) *apiSessionView {
 	log := session.NewMessageLog()
+	firstIndex := -1
 	lastIndex := -1
 	lastRows := map[string]string{}
 	lastTailKey := ""
 	for _, row := range transcript.Messages {
 		if msg, ok := apiTranscriptRowToSDKMessage(row, detail.ID); ok {
 			log.Append(msg)
+			if firstIndex == -1 || row.Index < firstIndex {
+				firstIndex = row.Index
+			}
 			if row.Index > lastIndex {
 				lastIndex = row.Index
 				lastRows = map[string]string{}
@@ -2617,49 +2667,51 @@ func newAPIAttachSession(client APIClient, detail server.SessionDetailDTO, trans
 		}
 	}
 	return &apiSessionView{
-		id:                    detail.ID,
-		featureID:             detail.FeatureID,
-		phase:                 apiFeaturePhase(detail.Phase),
-		repo:                  detail.Repo,
-		kind:                  apiSessionKind(detail.Kind),
-		label:                 detail.Label,
-		status:                status,
-		startedAt:             detail.StartedAt,
-		iteration:             detail.Iteration,
-		provider:              detail.Provider,
-		model:                 detail.Model,
-		workDir:               firstNonEmpty(workDir...),
-		initialPrompt:         detail.InitialPrompt,
-		contextPct:            detail.ContextPct,
-		log:                   log,
-		cost:                  &llm.ResultMessage{TotalCostUSD: detail.Usage.CostUSD},
-		client:                client,
-		statusCh:              make(chan string, 8),
-		attachCh:              make(chan llm.SDKMessage, 64),
-		doneCh:                make(chan struct{}),
-		pending:               pending,
-		lastTranscriptMessage: lastIndex,
-		lastTranscriptRows:    lastRows,
-		lastTranscriptTailKey: lastTailKey,
+		id:                     detail.ID,
+		featureID:              detail.FeatureID,
+		phase:                  apiFeaturePhase(detail.Phase),
+		repo:                   detail.Repo,
+		kind:                   apiSessionKind(detail.Kind),
+		label:                  detail.Label,
+		status:                 status,
+		startedAt:              detail.StartedAt,
+		iteration:              detail.Iteration,
+		provider:               detail.Provider,
+		model:                  detail.Model,
+		workDir:                firstNonEmpty(workDir...),
+		initialPrompt:          detail.InitialPrompt,
+		contextPct:             detail.ContextPct,
+		log:                    log,
+		cost:                   &llm.ResultMessage{TotalCostUSD: detail.Usage.CostUSD},
+		client:                 client,
+		statusCh:               make(chan string, 8),
+		attachCh:               make(chan llm.SDKMessage, 64),
+		doneCh:                 make(chan struct{}),
+		pending:                pending,
+		lastTranscriptMessage:  lastIndex,
+		firstTranscriptMessage: firstIndex,
+		lastTranscriptRows:     lastRows,
+		lastTranscriptTailKey:  lastTailKey,
 	}
 }
 
 func newAPIChatSession(client APIClient, sessionID string) *apiSessionView {
 	return &apiSessionView{
-		id:                    sessionID,
-		featureID:             chatSessionID,
-		phase:                 feature.PhaseResearch,
-		kind:                  ports.KindChat,
-		label:                 "chat",
-		status:                ports.SessionRunning,
-		startedAt:             time.Now(),
-		log:                   session.NewMessageLog(),
-		client:                client,
-		statusCh:              make(chan string, 8),
-		attachCh:              make(chan llm.SDKMessage, 64),
-		doneCh:                make(chan struct{}),
-		lastTranscriptMessage: -1,
-		lastTranscriptRows:    map[string]string{},
+		id:                     sessionID,
+		featureID:              chatSessionID,
+		phase:                  feature.PhaseResearch,
+		kind:                   ports.KindChat,
+		label:                  "chat",
+		status:                 ports.SessionRunning,
+		startedAt:              time.Now(),
+		log:                    session.NewMessageLog(),
+		client:                 client,
+		statusCh:               make(chan string, 8),
+		attachCh:               make(chan llm.SDKMessage, 64),
+		doneCh:                 make(chan struct{}),
+		lastTranscriptMessage:  -1,
+		firstTranscriptMessage: -1,
+		lastTranscriptRows:     map[string]string{},
 	}
 }
 
@@ -3244,6 +3296,9 @@ func (s *apiSessionView) applyTranscriptRow(row server.TranscriptMessageDTO) *ll
 	}
 	if row.Index > s.lastTranscriptMessage {
 		s.log.Append(msg)
+		if s.firstTranscriptMessage == -1 || row.Index < s.firstTranscriptMessage {
+			s.firstTranscriptMessage = row.Index
+		}
 		s.lastTranscriptMessage = row.Index
 		s.lastTranscriptRows = map[string]string{key: signature}
 		s.lastTranscriptTailKey = key
@@ -3263,9 +3318,53 @@ func (s *apiSessionView) applyTranscriptRow(row server.TranscriptMessageDTO) *ll
 		return &msg
 	}
 	s.log.Append(msg)
+	if s.firstTranscriptMessage == -1 || row.Index < s.firstTranscriptMessage {
+		s.firstTranscriptMessage = row.Index
+	}
 	s.lastTranscriptRows[key] = signature
 	s.lastTranscriptTailKey = key
 	return &msg
+}
+
+func (s *apiSessionView) firstLoadedTranscriptIndex() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.firstTranscriptMessage
+}
+
+func (s *apiSessionView) applyTranscriptBackfill(transcript server.TranscriptResponse) []llm.SDKMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.log == nil {
+		s.log = session.NewMessageLog()
+	}
+	limit := s.firstTranscriptMessage
+	if limit < 0 {
+		limit = transcript.Cursor.End
+	}
+	var messages []llm.SDKMessage
+	firstLoaded := s.firstTranscriptMessage
+	for _, row := range transcript.Messages {
+		if limit >= 0 && row.Index >= limit {
+			continue
+		}
+		msg, ok := apiTranscriptRowToSDKMessage(row, s.id)
+		if !ok {
+			continue
+		}
+		messages = append(messages, msg)
+		if firstLoaded == -1 || row.Index < firstLoaded {
+			firstLoaded = row.Index
+		}
+	}
+	if len(messages) > 0 {
+		s.log.Prepend(messages)
+	}
+	if transcript.Cursor.Start >= 0 && (firstLoaded == -1 || transcript.Cursor.Start < firstLoaded) {
+		firstLoaded = transcript.Cursor.Start
+	}
+	s.firstTranscriptMessage = firstLoaded
+	return messages
 }
 
 func (m APIAppModel) Close() {
@@ -3521,7 +3620,7 @@ func (m *APIAppModel) storeTranscript(sessionID string, transcript server.Transc
 		m.transcripts = map[string]server.TranscriptResponse{}
 	}
 	existing, ok := m.transcripts[sessionID]
-	if !ok || transcript.Cursor.Start == 0 || transcript.Cursor.Start > existing.Cursor.End {
+	if !ok || transcriptResponseCoversFullRange(transcript) || transcript.Cursor.Start > existing.Cursor.End {
 		m.transcripts[sessionID] = transcript
 		return
 	}
@@ -3550,6 +3649,10 @@ func (m *APIAppModel) storeTranscript(sessionID string, transcript server.Transc
 	}
 	transcript.Messages = merged
 	m.transcripts[sessionID] = transcript
+}
+
+func transcriptResponseCoversFullRange(transcript server.TranscriptResponse) bool {
+	return transcript.Cursor.Start == 0 && transcript.Cursor.Total > 0 && transcript.Cursor.End >= transcript.Cursor.Total
 }
 
 func (m *APIAppModel) storeContent(content apiFeatureContentSnapshot) {
@@ -6812,6 +6915,60 @@ func (m *APIAppModel) syncLiveSessionOutputForAttach() tea.Cmd {
 		return nil
 	}
 	return m.startLiveSessionOutput(sess)
+}
+
+func apiAttachBackfillScrollTrigger(msg tea.Msg) bool {
+	switch msg := msg.(type) {
+	case tea.MouseWheelMsg:
+		return msg.Mouse().Button == tea.MouseWheelUp
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "up", "pgup":
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func (m *APIAppModel) maybeStartAttachTranscriptBackfill(msg tea.Msg) tea.Cmd {
+	if !apiAttachBackfillScrollTrigger(msg) || m.attach == nil || !m.attach.viewport.AtTop() || m.client == nil {
+		return nil
+	}
+	sess := m.attachedSessionView()
+	if sess == nil {
+		return nil
+	}
+	before := sess.firstLoadedTranscriptIndex()
+	if before <= 0 {
+		return nil
+	}
+	if m.transcriptBackfills == nil {
+		m.transcriptBackfills = map[string]bool{}
+	}
+	if m.transcriptBackfills[sess.ID()] {
+		return nil
+	}
+	m.transcriptBackfills[sess.ID()] = true
+	return m.fetchAttachTranscriptBackfillCmd(sess.ID(), before)
+}
+
+func (m APIAppModel) fetchAttachTranscriptBackfillCmd(sessionID string, before int) tea.Cmd {
+	start := max(0, before-apiTranscriptPageLimit)
+	limit := before - start
+	if sessionID == "" || limit <= 0 || m.client == nil {
+		return nil
+	}
+	ctx := context.Background()
+	if m.eventCtx != nil {
+		ctx = m.eventCtx
+	}
+	return func() tea.Msg {
+		transcript, err := m.client.Transcript(ctx, sessionID, server.CursorQuery{Cursor: start, Limit: limit})
+		return apiTranscriptBackfillMsg{sessionID: sessionID, before: before, transcript: transcript, err: err}
+	}
 }
 
 func (m APIAppModel) fetchRefreshSnapshotCmd(signal server.RefreshSignal) tea.Cmd {

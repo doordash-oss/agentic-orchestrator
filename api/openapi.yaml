@@ -873,13 +873,13 @@ components:
       content:
         text/event-stream:
           schema:
-            type: string
+            $ref: "#/components/schemas/SSEEvent"
     SessionOutputStream:
       description: Session output SSE stream carrying `SessionOutputChunk` JSON payloads.
       content:
         text/event-stream:
           schema:
-            type: string
+            $ref: "#/components/schemas/SessionOutputChunk"
 
   headers:
     Sequence:
@@ -1047,7 +1047,6 @@ components:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
           required: [features]
-          additionalProperties: true
           properties:
             features:
               type: array
@@ -1062,7 +1061,6 @@ components:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
           required: [feature]
-          additionalProperties: true
           properties:
             feature:
               $ref: "#/components/schemas/FeatureDetail"
@@ -1089,7 +1087,6 @@ components:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
           required: [sessions]
-          additionalProperties: true
           properties:
             sessions:
               type: array
@@ -1100,7 +1097,6 @@ components:
         - $ref: "#/components/schemas/JSONResponse"
         - type: object
           required: [session]
-          additionalProperties: true
           properties:
             session:
               $ref: "#/components/schemas/SessionDetail"
@@ -1116,7 +1112,6 @@ components:
     # Mirror internal/server/types.go field-for-field.
     Warning:
       type: object
-      additionalProperties: true
       required: [code, message]
       properties:
         code:
@@ -1127,7 +1122,6 @@ components:
           type: string
     Cycle:
       type: object
-      additionalProperties: true
       properties:
         type:
           type: string
@@ -1139,7 +1133,6 @@ components:
           type: integer
     Checkpoints:
       type: object
-      additionalProperties: true
       required:
         - inquiry_review
         - research_review
@@ -1165,7 +1158,6 @@ components:
           type: boolean
     FeatureProgress:
       type: object
-      additionalProperties: true
       properties:
         current_iteration:
           type: integer
@@ -1177,7 +1169,6 @@ components:
           type: string
     FeatureSummary:
       type: object
-      additionalProperties: true
       required:
         - id
         - name
@@ -1203,6 +1194,7 @@ components:
           type: string
         cycle:
           $ref: "#/components/schemas/Cycle"
+          x-go-type-skip-optional-pointer: false
         active_run:
           type: integer
         run_count:
@@ -1224,7 +1216,6 @@ components:
             $ref: "#/components/schemas/Warning"
     ModelDefaults:
       type: object
-      additionalProperties: true
       properties:
         inquiry:
           type: string
@@ -1242,7 +1233,6 @@ components:
           type: string
     Timing:
       type: object
-      additionalProperties: true
       required: [total_seconds, by_phase]
       properties:
         total_seconds:
@@ -1255,12 +1245,12 @@ components:
             format: int64
     Cost:
       type: object
-      additionalProperties: true
       required: [total_usd, by_phase]
       properties:
         total_usd:
           type: number
           format: double
+          x-go-name: TotalUSD
         by_phase:
           type: object
           additionalProperties:
@@ -1268,7 +1258,6 @@ components:
             format: double
     ReviewGate:
       type: object
-      additionalProperties: true
       required: [reviewing_gate, review_fixing, validating_plan]
       properties:
         reviewing_gate:
@@ -1283,7 +1272,6 @@ components:
             type: string
     Failure:
       type: object
-      additionalProperties: true
       properties:
         type:
           type: string
@@ -1291,7 +1279,6 @@ components:
           type: string
     NeedUserInputGate:
       type: object
-      additionalProperties: true
       required: [open]
       properties:
         feature_id:
@@ -1304,7 +1291,6 @@ components:
           type: integer
     RepoStatus:
       type: object
-      additionalProperties: true
       required: [name, touched, publishable]
       properties:
         name:
@@ -1323,6 +1309,7 @@ components:
           type: boolean
         pr_url:
           type: string
+          x-go-name: PRURL
         last_error:
           type: string
         publishable:
@@ -1333,7 +1320,6 @@ components:
           type: string
     RunSummary:
       type: object
-      additionalProperties: true
       required: [run_number, artifact_count]
       properties:
         run_number:
@@ -1375,7 +1361,6 @@ components:
           additionalProperties: true
     ActionScope:
       type: object
-      additionalProperties: true
       required: [type]
       properties:
         type:
@@ -1386,7 +1371,6 @@ components:
           type: string
     ActionInput:
       type: object
-      additionalProperties: true
       required: [name, kind, required]
       properties:
         name:
@@ -1403,7 +1387,6 @@ components:
           type: integer
     ActionDisabledReason:
       type: object
-      additionalProperties: true
       required: [code, message]
       properties:
         code:
@@ -1412,7 +1395,6 @@ components:
           type: string
     Action:
       type: object
-      additionalProperties: true
       required: [id, enabled, scope, required_inputs]
       properties:
         id:
@@ -1433,7 +1415,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/FeatureSummary"
         - type: object
-          additionalProperties: true
           required:
             - models
             - historical_runs
@@ -1485,7 +1466,6 @@ components:
               type: string
     Usage:
       type: object
-      additionalProperties: true
       properties:
         input_tokens:
           type: integer
@@ -1494,9 +1474,9 @@ components:
         cost_usd:
           type: number
           format: double
+          x-go-name: CostUSD
     SessionSummary:
       type: object
-      additionalProperties: true
       required:
         - id
         - feature_id
@@ -1533,11 +1513,11 @@ components:
           type: integer
         context_percentage:
           type: integer
+          x-go-name: ContextPct
         usage:
           $ref: "#/components/schemas/Usage"
     Cursor:
       type: object
-      additionalProperties: true
       required: [total, start, end]
       properties:
         total:
@@ -1548,7 +1528,6 @@ components:
           type: integer
     AskUserOption:
       type: object
-      additionalProperties: true
       properties:
         label:
           type: string
@@ -1557,9 +1536,9 @@ components:
         confidence:
           type: number
           format: double
+          x-go-type-skip-optional-pointer: false
     AskUserQuestion:
       type: object
-      additionalProperties: true
       properties:
         question:
           type: string
@@ -1573,7 +1552,6 @@ components:
             $ref: "#/components/schemas/AskUserOption"
     ControlRequest:
       type: object
-      additionalProperties: true
       required: [request_id, tool_name, status]
       properties:
         request_id:
@@ -1601,7 +1579,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/SessionSummary"
         - type: object
-          additionalProperties: true
           required:
             - transcript_cursor
             - pending_controls

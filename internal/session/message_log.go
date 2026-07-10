@@ -40,6 +40,19 @@ func (l *MessageLog) Append(msg llm.SDKMessage) {
 	l.messages = append(l.messages, msg)
 }
 
+// Prepend adds messages before the existing log entries.
+func (l *MessageLog) Prepend(msgs []llm.SDKMessage) {
+	if len(msgs) == 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	prepended := make([]llm.SDKMessage, 0, len(msgs)+len(l.messages))
+	prepended = append(prepended, msgs...)
+	prepended = append(prepended, l.messages...)
+	l.messages = prepended
+}
+
 // UpdateLast replaces the last message in the log. Used for partial message streaming.
 // If the log is empty, the message is appended instead.
 func (l *MessageLog) UpdateLast(msg llm.SDKMessage) {

@@ -84,6 +84,98 @@ func TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell(t *testing.T) {
 	requirePermissionDenied(t, strict, "Bash", analysis)
 }
 
+func requirePermissionDeferred(t *testing.T, handler ports.PermissionHandler, toolName, input string) {
+	t.Helper()
+	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolName, Input: input})
+	if err != nil {
+		t.Fatalf("CanUseTool(%q, %q) error = %v", toolName, input, err)
+	}
+	if decision.Behavior != "" {
+		t.Fatalf("CanUseTool(%q, %q).Behavior = %q, want empty (deferred)", toolName, input, decision.Behavior)
+	}
+}
+
+func TestTouchWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "phase_complete")
+	handler := &TouchWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"touch `+marker+`"}`)
+	// Multiple targets, all inside a root, still qualify.
+	requirePermissionAllowed(t, handler, "Bash", `{"command":"touch `+marker+` `+filepath.Join(root, "other")+`"}`)
+	// Non-Bash tools and non-touch Bash still fall through to Inner unchanged.
+	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+marker+`"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"ls `+root+`"}`)
+}
+
+func TestTouchWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	handler := &TouchWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+filepath.Join(outside, "phase_complete")+`"}`)
+	// One target outside the root is enough to defer, even if another is inside.
+	requirePermissionDeferred(t, handler, "Bash",
+		`{"command":"touch `+filepath.Join(root, "ok")+` `+filepath.Join(outside, "bad")+`"}`)
+}
+
+func TestTouchWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "phase_complete")
+	handler := &TouchWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
+
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch -r `+marker+` `+marker+`"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+marker+` && rm -rf /"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+marker+`; echo done"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch $(echo `+marker+`)"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+marker+` > /dev/null"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"nottouch `+marker+`"}`)
+	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch"}`)
+}
+
+func TestWrapGeneralPhaseHandlerWithTouch_WrapsAcceptEditsAndCaching(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "phase_complete")
+
+	for _, inner := range []ports.PermissionHandler{
+		&AutoApproveHandler{},
+		&AcceptEditsHandler{},
+		&CachingHandler{Inner: &AcceptEditsHandler{}, Cache: NewCache(nil)},
+		Guarded(&AcceptEditsHandler{}),
+	} {
+		wrapped := WrapGeneralPhaseHandlerWithTouch(inner, []string{root})
+		requirePermissionAllowed(t, wrapped, "Bash", `{"command":"touch `+marker+`"}`)
+	}
+}
+
+func TestWrapGeneralPhaseHandlerWithTouch_LeavesNarrowerHandlersUnwrapped(t *testing.T) {
+	root := t.TempDir()
+	marker := filepath.Join(root, "phase_complete")
+
+	for name, inner := range map[string]ports.PermissionHandler{
+		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{marker}},
+		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{marker}}),
+		"ReadOnlyHandler":                     &ReadOnlyHandler{},
+		"PlanReviewHandler":                   &PlanReviewHandler{AllowedPath: marker},
+		"RewindReviewHandler":                 &RewindReviewHandler{AllowedPath: marker},
+		"ReviewFeedbackHandler":               &ReviewFeedbackHandler{AllowedPath: marker},
+	} {
+		t.Run(name, func(t *testing.T) {
+			wrapped := WrapGeneralPhaseHandlerWithTouch(inner, []string{root})
+			if wrapped != inner {
+				t.Fatalf("WrapGeneralPhaseHandlerWithTouch(%s, roots) returned a new handler, want the original passed through unchanged", name)
+			}
+		})
+	}
+}
+
+func TestWrapGeneralPhaseHandlerWithTouch_NoRootsIsNoop(t *testing.T) {
+	inner := &AcceptEditsHandler{}
+	if got := WrapGeneralPhaseHandlerWithTouch(inner, nil); got != inner {
+		t.Fatal("WrapGeneralPhaseHandlerWithTouch(inner, nil) should return inner unchanged")
+	}
+}
+
 func requirePermissionAllowed(t *testing.T, handler ports.PermissionHandler, toolName, input string) {
 	t.Helper()
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolName, Input: input})

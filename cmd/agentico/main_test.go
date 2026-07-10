@@ -796,6 +796,58 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 	}
 }
 
+// TestCanonicalizeStateDir_ResolvesSymlink guards the macOS /var ->
+// /private/var (and /tmp -> /private/tmp) class of bug: every path Agentico
+// derives from stateDir — worktrees, the knowledge-base tree, skills/
+// guidelines mounts — gets handed to providers as a workdir or a writable/
+// read root, and OpenCode's permission engine matches those paths
+// inconsistently against their raw and symlink-resolved forms (upstream
+// opencode#14473, opencode#20045). Resolving stateDir once up front avoids
+// that ambiguity regardless of which form a given provider ends up matching
+// against.
+func TestCanonicalizeStateDir_ResolvesSymlink(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	stateDir := filepath.Join(link, "features")
+	got := canonicalizeStateDir(stateDir)
+
+	want, err := filepath.EvalSymlinks(filepath.Join(real, "features"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", filepath.Join(real, "features"), err)
+	}
+	if got != want {
+		t.Errorf("canonicalizeStateDir(%q) = %q, want %q", stateDir, got, want)
+	}
+	if info, err := os.Stat(stateDir); err != nil || !info.IsDir() {
+		t.Errorf("canonicalizeStateDir(%q) did not create the directory: %v", stateDir, err)
+	}
+}
+
+// TestCanonicalizeStateDir_FallsBackWhenUnresolvable guards the fail-open
+// contract: a stateDir that can't be created or resolved (e.g. a parent that
+// is itself a file, not a directory) must return unchanged rather than
+// turning a cosmetic path-canonicalization step into a hard launch failure.
+func TestCanonicalizeStateDir_FallsBackWhenUnresolvable(t *testing.T) {
+	base := t.TempDir()
+	blocker := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blocker, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDir := filepath.Join(blocker, "features")
+	if got := canonicalizeStateDir(stateDir); got != stateDir {
+		t.Errorf("canonicalizeStateDir(%q) = %q, want unchanged %q", stateDir, got, stateDir)
+	}
+}
+
 func TestRunArgsLaunchesClientServerByDefault(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var launched bool
@@ -1051,8 +1103,25 @@ func TestRuntimeLaunchPolicyUsesActiveDetectedProviders(t *testing.T) {
 	}
 }
 
+// canonicalTempDir returns a fresh temp directory already resolved via
+// filepath.EvalSymlinks, mirroring what canonicalizeStateDir does to a real
+// stateDir. t.TempDir() itself can traverse a symlink (e.g. macOS's own /var
+// -> /private/var), and launchDefaultClientServer now canonicalizes
+// req.StateDir before computing its RuntimeIdentity, so a test that builds an
+// "expected" identity from the raw t.TempDir() value would otherwise never
+// match.
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	}
+	return resolved
+}
+
 func TestDefaultLaunchAttachesToHealthyDiscoveredServer(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
@@ -1109,7 +1178,7 @@ func TestDefaultLaunchAttachesToHealthyDiscoveredServer(t *testing.T) {
 }
 
 func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
@@ -1193,7 +1262,7 @@ func TestDefaultLaunchStartsChildServerWhenDiscoveryIsStale(t *testing.T) {
 }
 
 func TestDefaultLaunchReportsServerReadinessTimeout(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	policy := serverruntime.NewLaunchPolicy([]string{"codex"}, false)
@@ -1232,7 +1301,7 @@ func TestDefaultLaunchReportsServerReadinessTimeout(t *testing.T) {
 }
 
 func TestDefaultLaunchReadinessTimeoutCoversCatalogDiscoveryBudget(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
@@ -1270,7 +1339,7 @@ func TestDefaultLaunchReadinessTimeoutCoversCatalogDiscoveryBudget(t *testing.T)
 }
 
 func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
@@ -1326,7 +1395,7 @@ func TestDefaultLaunchRetainsOwnershipWhenReadyDiscoveryMatchesChildPID(t *testi
 }
 
 func TestDefaultLaunchTreatsReadinessFromDifferentPIDAsAttached(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
@@ -1382,7 +1451,7 @@ func TestDefaultLaunchTreatsReadinessFromDifferentPIDAsAttached(t *testing.T) {
 }
 
 func TestDefaultLaunchConvergesAfterLiveOwnerLockContention(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
@@ -1450,7 +1519,7 @@ func TestDefaultLaunchConcurrentColdStartStartsOneOwnedServer(t *testing.T) {
 
 func testDefaultLaunchConcurrentConvergence(t *testing.T, initialReason, baseURL string) {
 	t.Helper()
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	identity := serverruntime.RuntimeIdentity{RuntimeDir: runtimeDir, StateDir: stateDir, Config: configPath}
@@ -1624,7 +1693,7 @@ func TestHelperProcessIgnoreInterrupt(t *testing.T) {
 }
 
 func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {
-	runtimeDir := t.TempDir()
+	runtimeDir := canonicalTempDir(t)
 	stateDir := filepath.Join(runtimeDir, "features")
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	lock, acquired, _, err := instancelock.Acquire(runtimeDir, stateDir, configPath, "test")

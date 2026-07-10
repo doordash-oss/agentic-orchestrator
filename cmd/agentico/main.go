@@ -173,6 +173,33 @@ func runArgs(args []string, stdout, stderr io.Writer, launch defaultLauncher, la
 	}
 }
 
+// canonicalizeStateDir resolves stateDir to its real, symlink-free path,
+// creating it first if necessary. macOS routes common runtime parents through
+// symlinks (e.g. /var -> /private/var, /tmp -> /private/tmp), and every path
+// Agentico later derives from stateDir — worktrees, the knowledge-base tree,
+// skills/guidelines mounts — gets handed to providers as a workdir or a
+// writable/read root. OpenCode in particular matches a tool call's path
+// against permission globs inconsistently, sometimes against the raw cwd and
+// sometimes against a symlink-resolved worktree root (upstream opencode#14473,
+// opencode#20045), so an unresolved stateDir can make an otherwise-correct
+// "allow" rule silently never match. Resolving once here, before any of those
+// derived paths are computed, means they are all already canonical — no
+// downstream string comparison can be fooled by a symlink. Falls back to the
+// original (unresolved) path when the directory can't be created or resolved,
+// so this never turns into a hard failure. Called from bootstrapRuntime
+// (rather than at CLI-flag-dispatch time) so pure argument-parsing/dispatch
+// tests never touch the real filesystem.
+func canonicalizeStateDir(stateDir string) string {
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return stateDir
+	}
+	resolved, err := filepath.EvalSymlinks(stateDir)
+	if err != nil {
+		return stateDir
+	}
+	return resolved
+}
+
 func parseLaunchArgs(args []string) (launchOptions, error) {
 	opts := defaultLaunchOptions()
 	// `update` is a standalone subcommand recognized only as the first
@@ -2111,6 +2138,7 @@ func parseServerPhase(in string) feature.Phase {
 }
 
 func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stdin io.Reader, stderr io.Writer) (*runtimeBootstrap, error) {
+	stateDir = canonicalizeStateDir(stateDir)
 	runtimeDir := filepath.Dir(stateDir)
 	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, tui.GetVersion())
 	if err != nil {
@@ -2359,6 +2387,15 @@ func launchDefaultClientServer(ctx context.Context, req defaultLaunchRequest, de
 	if deps.LaunchClient == nil {
 		return errors.New("client TUI launcher is required")
 	}
+	// Canonicalize before computing identity, and before it's forwarded to the
+	// spawned server child (which independently canonicalizes the same value
+	// in bootstrapRuntime): the discovery/health handshake below compares this
+	// client's identity against the one the server reports back by exact
+	// struct equality (internal/server/discovery.go's "mismatched discovery
+	// runtime" check), so client and server must resolve stateDir identically
+	// or a symlinked runtime parent (e.g. macOS's /var -> /private/var) makes
+	// every discovery attempt look like a foreign server and time out.
+	req.StateDir = canonicalizeStateDir(req.StateDir)
 	runtimeDir := filepath.Dir(req.StateDir)
 	identity := serverruntime.RuntimeIdentity{
 		RuntimeDir: runtimeDir,

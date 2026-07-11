@@ -39,42 +39,6 @@ func TestBuildReviewCommentsPlan(t *testing.T) {
 		}
 	})
 
-	t.Run("issue comment shows PR conversation", func(t *testing.T) {
-		mixed := []git.ReviewComment{
-			{ID: 1, Path: "main.go", Line: 10, Body: "inline feedback", Type: git.CommentTypeReview, User: struct {
-				Login string `json:"login"`
-			}{Login: "reviewer"}},
-			{ID: 2, Body: "general feedback", Type: git.CommentTypeIssue, User: struct {
-				Login string `json:"login"`
-			}{Login: "reviewer"}},
-		}
-		plan := BuildReviewCommentsPlan(mixed, "https://github.com/o/r/pull/1", "auto", "/tmp/res.json")
-		if !strings.Contains(plan, "**Location**: PR conversation") {
-			t.Error("expected 'PR conversation' for issue comment")
-		}
-		if !strings.Contains(plan, "**File**: `main.go`:10") {
-			t.Error("expected file path for review comment")
-		}
-		if !strings.Contains(plan, "Comment 1 (ID: 1)") {
-			t.Error("expected first comment")
-		}
-		if !strings.Contains(plan, "Comment 2 (ID: 2)") {
-			t.Error("expected second comment")
-		}
-	})
-
-	t.Run("review body comment shows PR review location", func(t *testing.T) {
-		comments := []git.ReviewComment{
-			{ID: 1, Body: "review body feedback", Type: git.CommentTypeReviewBody, User: struct {
-				Login string `json:"login"`
-			}{Login: "reviewer"}},
-		}
-		plan := BuildReviewCommentsPlan(comments, "https://github.com/o/r/pull/1", "auto", "/tmp/res.json")
-		if !strings.Contains(plan, "**Location**: PR review") {
-			t.Error("expected 'PR review' for review body comment")
-		}
-	})
-
 	t.Run("uses generic verification commands and review artifact context", func(t *testing.T) {
 		plan := BuildReviewCommentsPlan(comments, "https://github.com/o/r/pull/1", "auto", "/tmp/review-resolutions.json")
 

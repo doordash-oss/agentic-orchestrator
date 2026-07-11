@@ -15,7 +15,6 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -62,13 +61,9 @@ func (c *Client) consumeSessionOutput(ctx context.Context, sessionID string, opt
 	if opts.AfterIndex > 0 {
 		query.Set("from", strconv.Itoa(opts.AfterIndex))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/api/v1/sessions/"+pathSegment(sessionID)+"/output/stream", query), nil)
+	req, err := c.newSSERequest(ctx, "/api/v1/sessions/"+pathSegment(sessionID)+"/output/stream", query)
 	if err != nil {
 		return fmt.Errorf("build session output request: %w", err)
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -79,25 +74,9 @@ func (c *Client) consumeSessionOutput(ctx context.Context, sessionID string, opt
 		return decodeAPIError(resp, http.MethodGet, "/api/v1/sessions/"+sessionID+"/output/stream")
 	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	var block sseBlock
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			done, err := dispatchSessionOutputBlock(block, records, ctx)
-			if err != nil {
-				return err
-			}
-			block = sseBlock{}
-			if done {
-				return nil
-			}
-			continue
-		}
-		block.addLine(line)
-	}
-	return scanner.Err()
+	return scanSSEBlocks(resp.Body, func(block sseBlock) (bool, error) {
+		return dispatchSessionOutputBlock(block, records, ctx)
+	})
 }
 
 func dispatchSessionOutputBlock(block sseBlock, records chan<- SessionOutputRecord, ctx context.Context) (bool, error) {

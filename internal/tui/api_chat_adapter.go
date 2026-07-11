@@ -76,30 +76,7 @@ func apiChatEventsFromSnapshot(in apiChatSnapshotInput) []chatEvent {
 }
 
 func (s *apiSessionView) applyAPIChatSessionState(detail server.SessionDetailDTO, controls []server.ControlRequestDTO) {
-	pending := apiControlRequestMessages(controls)
-	hasAskUser := false
-	for _, req := range pending {
-		if req != nil && req.Request.ToolName == toolNameAskUserQuestion {
-			hasAskUser = true
-			break
-		}
-	}
-	s.mu.Lock()
-	s.status = apiSessionStatus(detail.Status)
-	if status, ok := apiSessionStatusFromTurnState(detail.TurnState); ok {
-		s.status = status
-	}
-	s.contextPct = detail.ContextPct
-	s.initialPrompt = detail.InitialPrompt
-	s.pending = pending
-	if len(s.pending) > 0 {
-		if hasAskUser {
-			s.status = ports.SessionWaitingHelp
-		} else {
-			s.status = ports.SessionWaitingPermission
-		}
-	}
-	s.mu.Unlock()
+	s.applyAPISessionState(detail, controls, apiSessionStateUpdate{useTurnState: true, forceInitialPrompt: true})
 }
 
 func (s *apiSessionView) apiChatTranscriptEvents(transcript *server.TranscriptResponse) []chatEvent {

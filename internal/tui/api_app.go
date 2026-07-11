@@ -34,6 +34,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"charm.land/lipgloss/v2/compat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -557,6 +558,13 @@ type apiRefreshSnapshotMsg struct {
 	err      error
 }
 
+type apiAttachSessionsSnapshotMsg struct {
+	featureID    string
+	sessions     server.SessionListResponse
+	err          error
+	openIfClosed bool
+}
+
 type apiContentSelectionMsg struct {
 	featureID string
 	content   apiFeatureContentSnapshot
@@ -966,6 +974,8 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m = m.applyAPIChatRefreshSnapshot(msg.snapshot)
 		return m, m.apiChatRecoveryCmdIfResponding()
+	case apiAttachSessionsSnapshotMsg:
+		return m.applyAPIAttachSessionsSnapshot(msg)
 	case apiContentSelectionMsg:
 		if msg.err != nil {
 			m.statusMessage = "Content load failed: " + firstLine(msg.err.Error())
@@ -1000,7 +1010,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.storeFeatureDetail(msg.detail)
-		m.upsertFeatureSummary(apiFeatureSummaryFromDetail(msg.detail.Feature))
+		m.upsertFeatureSummary(apiFeatureDetailSummary(msg.detail.Feature))
 		if msg.livePreview != nil {
 			m.storeLivePreview(msg.featureID, *msg.livePreview)
 			m.upsertFeatureSummary(msg.livePreview.Feature)
@@ -1025,7 +1035,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.storeFeatureDetail(msg.detail)
-		summary := apiFeatureSummaryFromDetail(msg.detail.Feature)
+		summary := apiFeatureDetailSummary(msg.detail.Feature)
 		m.upsertFeatureSummary(summary)
 		f := m.apiDashboardFeature(summary, msg.detail.Feature, true)
 		m.rebuildPresentation(msg.featureID)
@@ -1531,6 +1541,8 @@ func (m APIAppModel) updateAPIAttach(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m, cmd = m.applyAPIAttachRefreshSnapshot(msg.snapshot)
 		return m, cmd
+	case apiAttachSessionsSnapshotMsg:
+		return m.applyAPIAttachSessionsSnapshot(msg)
 	case apiEventErrorMsg:
 		return m, nil
 	case HelpResolvedMsg:
@@ -2177,10 +2189,6 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	return f
 }
 
-func apiFeatureSummaryFromDetail(detail server.FeatureDetailDTO) server.FeatureSummary {
-	return apiFeatureDetailSummary(detail)
-}
-
 func apiSetupState(dto *server.SetupDTO) *feature.SetupState {
 	if dto == nil {
 		return nil
@@ -2332,7 +2340,7 @@ func (m APIAppModel) apiFeatureSummary(featureID string) (server.FeatureSummary,
 		}
 	}
 	if detail, ok := m.featureDetails[featureID]; ok && detail.Feature.ID != "" {
-		return apiFeatureSummaryFromDetail(detail.Feature), true
+		return apiFeatureDetailSummary(detail.Feature), true
 	}
 	return server.FeatureSummary{}, false
 }
@@ -2369,13 +2377,9 @@ func (m APIAppModel) applyAPIAttention(f *feature.Feature) {
 	}
 }
 
-func (m *DashboardModel) selectFeature(featureID string) bool {
-	if featureID == "" {
-		m.syncPreview()
-		return false
-	}
+func (m *DashboardModel) findAndSelect(predicate func(listItem) bool) bool {
 	for i, item := range m.visibleItems {
-		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
+		if predicate(item) {
 			m.cursor = i
 			m.computeCursorLine()
 			m.updateScrollState(0)
@@ -2387,22 +2391,24 @@ func (m *DashboardModel) selectFeature(featureID string) bool {
 	return false
 }
 
+func (m *DashboardModel) selectFeature(featureID string) bool {
+	if featureID == "" {
+		m.syncPreview()
+		return false
+	}
+	return m.findAndSelect(func(item listItem) bool {
+		return item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID
+	})
+}
+
 func (m *DashboardModel) selectSection(section string) bool {
 	if section == "" {
 		m.syncPreview()
 		return false
 	}
-	for i, item := range m.visibleItems {
-		if item.kind == listItemSectionHeader && item.section == section {
-			m.cursor = i
-			m.computeCursorLine()
-			m.updateScrollState(0)
-			m.syncPreview()
-			return true
-		}
-	}
-	m.syncPreview()
-	return false
+	return m.findAndSelect(func(item listItem) bool {
+		return item.kind == listItemSectionHeader && item.section == section
+	})
 }
 
 type apiSessionView struct {
@@ -3440,6 +3446,25 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 	return m, tea.Batch(cmds...)
 }
 
+func (m APIAppModel) applyAPIAttachSessionsSnapshot(msg apiAttachSessionsSnapshotMsg) (APIAppModel, tea.Cmd) {
+	if msg.err != nil {
+		m.statusMessage = "Session refresh failed: " + firstLine(msg.err.Error())
+		return m, nil
+	}
+	m.ApplyRefreshSnapshot(server.RefreshSnapshot{Sessions: &msg.sessions})
+	if m.attach != nil && m.attach.featureID == msg.featureID {
+		return m.rebuildAPIAttachTabs()
+	}
+	if msg.openIfClosed {
+		model, cmd := m.openAPIAttachForFeatureFromCache(msg.featureID, false)
+		if updated, ok := model.(APIAppModel); ok {
+			return updated, cmd
+		}
+		return m, cmd
+	}
+	return m, nil
+}
+
 // applyAPIActiveAttachUpdate applies a refreshed session detail/transcript to the
 // active attach session, updating attach messages, pending questions/permissions,
 // and the viewport as needed.
@@ -3553,7 +3578,26 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 	return m
 }
 
-func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO, transcript *server.TranscriptResponse, controls []server.ControlRequestDTO) []llm.SDKMessage {
+// apiSessionStateUpdate captures the caller-specific deltas layered on top of
+// applyAPISessionState's shared status/contextPct/pending handling.
+type apiSessionStateUpdate struct {
+	// useTurnState allows detail.TurnState to override the status derived
+	// from detail.Status. Used by the live-chat-adapter path only.
+	useTurnState bool
+	// forceInitialPrompt applies detail.InitialPrompt unconditionally, even
+	// when empty. Used by the live-chat-adapter path; the REST snapshot path
+	// only applies InitialPrompt when it is non-empty.
+	forceInitialPrompt bool
+	// setRememberPreviews applies apiRememberPreviewsByRequest(controls).
+	// Used by the REST snapshot path only.
+	setRememberPreviews bool
+}
+
+// applyAPISessionState updates status, contextPct, initialPrompt, and pending
+// controls shared by the REST snapshot-refresh path (applyAPISessionSnapshot)
+// and the live-chat-adapter path (applyAPIChatSessionState). opt controls the
+// small behavioral differences between the two callers.
+func (s *apiSessionView) applyAPISessionState(detail server.SessionDetailDTO, controls []server.ControlRequestDTO, opt apiSessionStateUpdate) {
 	pending := apiControlRequestMessages(controls)
 	hasAskUser := false
 	for _, req := range pending {
@@ -3564,12 +3608,19 @@ func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO,
 	}
 	s.mu.Lock()
 	s.status = apiSessionStatus(detail.Status)
+	if opt.useTurnState {
+		if status, ok := apiSessionStatusFromTurnState(detail.TurnState); ok {
+			s.status = status
+		}
+	}
 	s.contextPct = detail.ContextPct
-	if detail.InitialPrompt != "" {
+	if opt.forceInitialPrompt || detail.InitialPrompt != "" {
 		s.initialPrompt = detail.InitialPrompt
 	}
 	s.pending = pending
-	s.rememberPreviews = apiRememberPreviewsByRequest(controls)
+	if opt.setRememberPreviews {
+		s.rememberPreviews = apiRememberPreviewsByRequest(controls)
+	}
 	if len(s.pending) > 0 {
 		if hasAskUser {
 			s.status = ports.SessionWaitingHelp
@@ -3578,6 +3629,10 @@ func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO,
 		}
 	}
 	s.mu.Unlock()
+}
+
+func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO, transcript *server.TranscriptResponse, controls []server.ControlRequestDTO) []llm.SDKMessage {
+	s.applyAPISessionState(detail, controls, apiSessionStateUpdate{setRememberPreviews: true})
 	if transcript == nil {
 		return nil
 	}
@@ -3734,7 +3789,7 @@ func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	}
 	if snapshot.Feature != nil {
 		m.storeFeatureDetail(*snapshot.Feature)
-		m.upsertFeatureSummary(apiFeatureSummaryFromDetail(snapshot.Feature.Feature))
+		m.upsertFeatureSummary(apiFeatureDetailSummary(snapshot.Feature.Feature))
 	}
 	if snapshot.Session != nil {
 		m.storeSessionDetail(*snapshot.Session)
@@ -4072,6 +4127,14 @@ func mergeAPIRecoveryPanel(existing *apiRecoveryPanel, snapshot server.RecoveryS
 	return panel
 }
 
+// moveCursor shifts *cursor by delta, clamped to [0, length).
+func moveCursor(cursor *int, delta, length int) {
+	next := *cursor + delta
+	if next >= 0 && next < length {
+		*cursor = next
+	}
+}
+
 func (m APIAppModel) handleAPIRecoveryKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	panel := m.recoveryPanel
 	if panel == nil {
@@ -4090,14 +4153,10 @@ func (m APIAppModel) handleAPIRecoveryKey(msg tea.KeyPressMsg) (tea.Model, tea.C
 	}
 	switch msg.Code {
 	case tea.KeyUp:
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.items))
 		return m, nil
 	case tea.KeyDown:
-		if panel.cursor < len(panel.items)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.items))
 		return m, nil
 	case tea.KeyEnter:
 		return m, m.executeRecoveryCmd(*panel)
@@ -4631,19 +4690,21 @@ func (m APIAppModel) updateAPIWorkspaceManager(msg tea.Msg) (tea.Model, tea.Cmd)
 	return m, tea.Batch(cmds...)
 }
 
-func (m APIAppModel) persistRuntimeWorkspaceRootsCmd(roots []string, createdRepoPath string) tea.Cmd {
-	roots = append([]string(nil), roots...)
+func (m APIAppModel) apiCtx() context.Context {
+	ctx := context.Background()
+	if m.eventCtx != nil {
+		ctx = m.eventCtx
+	}
+	return ctx
+}
+
+func (m APIAppModel) persistRuntimeConfigCmd(req server.RuntimeConfigMutationRequest, createdRepoPath string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 
-		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
-			WorkspaceRoots: &roots,
-		})
+		_, err := m.client.UpdateRuntimeConfig(ctx, req)
 		if err != nil {
 			return apiRuntimeConfigMutationMsg{kind: mutationKindRuntimeConfigUpdate, createdRepoPath: createdRepoPath, err: err}
 		}
@@ -4657,28 +4718,13 @@ func (m APIAppModel) persistRuntimeWorkspaceRootsCmd(roots []string, createdRepo
 	}
 }
 
-func (m APIAppModel) persistRuntimeUICmd(ui config.UIConfig) tea.Cmd {
-	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
-		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		defer cancel()
+func (m APIAppModel) persistRuntimeWorkspaceRootsCmd(roots []string, createdRepoPath string) tea.Cmd {
+	roots = append([]string(nil), roots...)
+	return m.persistRuntimeConfigCmd(server.RuntimeConfigMutationRequest{WorkspaceRoots: &roots}, createdRepoPath)
+}
 
-		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
-			UI: &ui,
-		})
-		if err != nil {
-			return apiRuntimeConfigMutationMsg{kind: mutationKindRuntimeConfigUpdate, err: err}
-		}
-		cfg, err := m.client.RuntimeConfig(ctx)
-		return apiRuntimeConfigMutationMsg{
-			kind:   mutationKindRuntimeConfigUpdate,
-			config: cfg,
-			err:    err,
-		}
-	}
+func (m APIAppModel) persistRuntimeUICmd(ui config.UIConfig) tea.Cmd {
+	return m.persistRuntimeConfigCmd(server.RuntimeConfigMutationRequest{UI: &ui}, "")
 }
 
 func apiWizardDefaults(runtime server.RuntimeConfigResponse) config.DefaultsConfig {
@@ -5002,10 +5048,7 @@ func apiFeatureResumeAllKind(status string) string {
 
 func (m APIAppModel) resumeAllCmd(featureIDs []string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		statusByFeature := map[string]string{}
 		for _, summary := range m.featureList.Features {
 			statusByFeature[summary.ID] = summary.Status
@@ -5035,10 +5078,7 @@ func (m APIAppModel) resumeAllCmd(featureIDs []string) tea.Cmd {
 
 func (m APIAppModel) toggleAPIInputNotificationsCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		_, err := m.client.ToggleInputNotifications(ctx, featureID)
 		return apiMutationResultMsg{
 			kind:      "feature.input_notifications.toggle",
@@ -5155,8 +5195,8 @@ func apiMergeSavedPublishFeature(base, saved *feature.Feature) *feature.Feature 
 	}
 	merged := *base
 	merged.Repos = append([]feature.FeatureRepo(nil), base.Repos...)
-	merged.RepoStates = copyFeatureRepoStates(base.RepoStates)
-	merged.RepoCycles = copyFeatureRepoCycles(base.RepoCycles)
+	merged.RepoStates = copyPointerMap(base.RepoStates)
+	merged.RepoCycles = copyPointerMap(base.RepoCycles)
 	if saved == nil {
 		return &merged
 	}
@@ -5170,7 +5210,7 @@ func apiMergeSavedPublishFeature(base, saved *feature.Feature) *feature.Feature 
 		merged.Models = saved.Models
 	}
 	if len(saved.Artifacts) > 0 {
-		merged.Artifacts = copyStringMap(saved.Artifacts)
+		merged.Artifacts = copyStringMapValues(saved.Artifacts)
 	}
 	if len(merged.Repos) == 0 {
 		merged.Repos = append([]feature.FeatureRepo(nil), saved.Repos...)
@@ -5182,7 +5222,7 @@ func apiMergeSavedPublishFeature(base, saved *feature.Feature) *feature.Feature 
 		}
 	}
 	if len(saved.RepoStates) > 0 {
-		merged.RepoStates = copyFeatureRepoStates(saved.RepoStates)
+		merged.RepoStates = copyPointerMap(saved.RepoStates)
 	}
 	return &merged
 }
@@ -5277,43 +5317,17 @@ func apiPublishPRContext(f *feature.Feature, worktreeDir, baseBranch, planText s
 	return prCtx
 }
 
-func copyFeatureRepoStates(in map[string]*feature.RepoState) map[string]*feature.RepoState {
+func copyPointerMap[T any](in map[string]*T) map[string]*T {
 	if len(in) == 0 {
-		return map[string]*feature.RepoState{}
+		return map[string]*T{}
 	}
-	out := make(map[string]*feature.RepoState, len(in))
+	out := make(map[string]*T, len(in))
 	for name, state := range in {
 		if state == nil {
 			continue
 		}
 		copyState := *state
 		out[name] = &copyState
-	}
-	return out
-}
-
-func copyFeatureRepoCycles(in map[string]*feature.RepoCycleState) map[string]*feature.RepoCycleState {
-	if len(in) == 0 {
-		return map[string]*feature.RepoCycleState{}
-	}
-	out := make(map[string]*feature.RepoCycleState, len(in))
-	for name, state := range in {
-		if state == nil {
-			continue
-		}
-		copyState := *state
-		out[name] = &copyState
-	}
-	return out
-}
-
-func copyStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
 	}
 	return out
 }
@@ -5323,8 +5337,16 @@ func (m APIAppModel) hasAPIAttachableSession(featureID string) bool {
 }
 
 func (m APIAppModel) openAPIAttachForFeature(featureID string) (tea.Model, tea.Cmd) {
+	return m.openAPIAttachForFeatureFromCache(featureID, true)
+}
+
+func (m APIAppModel) openAPIAttachForFeatureFromCache(featureID string, refreshSessions bool) (tea.Model, tea.Cmd) {
 	tabs := m.apiAttachTabsForFeature(featureID)
 	if len(tabs) == 0 {
+		if refreshSessions {
+			m.statusMessage = "Refreshing sessions..."
+			return m, m.fetchAttachSessionsCmd(featureID, true)
+		}
 		m.statusMessage = statusMsgNoActiveSessions
 		return m, nil
 	}
@@ -5346,7 +5368,11 @@ func (m APIAppModel) openAPIAttachForFeature(featureID string) (tea.Model, tea.C
 		liveCmd = m.startLiveSessionOutput(sess)
 		detailCmd = m.fetchAttachSessionDetailCmd(sess.ID())
 	}
-	return m, tea.Batch(attach.Init(), liveCmd, detailCmd)
+	var sessionsCmd tea.Cmd
+	if refreshSessions {
+		sessionsCmd = m.fetchAttachSessionsCmd(featureID, false)
+	}
+	return m, tea.Batch(sessionsCmd, attach.Init(), liveCmd, detailCmd)
 }
 
 func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
@@ -5837,18 +5863,23 @@ func (m APIAppModel) selectedRepoActionOptions(kind string) []apiRepoActionOptio
 	return options
 }
 
+func findActionInput(action server.ActionDTO, name string) (server.ActionInputDTO, bool) {
+	for _, input := range action.RequiredInputs {
+		if input.Name == name {
+			return input, true
+		}
+	}
+	return server.ActionInputDTO{}, false
+}
+
 func (m APIAppModel) selectedReviewCommentsDefaults() (string, string, []string, bool) {
 	action, ok := m.selectedRawAction(mutationKindFeatureReviewComments)
 	if !ok || !action.Enabled {
 		return "", "", nil, false
 	}
 	repoRequired := false
-	if ok {
-		for _, input := range action.RequiredInputs {
-			if input.Name == actionInputNameRepo {
-				repoRequired = input.Required
-			}
-		}
+	if input, found := findActionInput(action, actionInputNameRepo); found {
+		repoRequired = input.Required
 	}
 	repo := m.selectedReviewCommentsRepo()
 	if repo == "" && repoRequired {
@@ -5861,13 +5892,9 @@ func (m APIAppModel) selectedReviewCommentsDefaults() (string, string, []string,
 
 func (m APIAppModel) selectedReviewCommentsModeDefaults() (string, []string) {
 	modes := apiReviewCommentModes(nil)
-	action, ok := m.selectedRawAction(mutationKindFeatureReviewComments)
-	if ok {
-		for _, input := range action.RequiredInputs {
-			if input.Name == actionInputNameMode {
-				modes = apiReviewCommentModes(input.Options)
-				break
-			}
+	if action, ok := m.selectedRawAction(mutationKindFeatureReviewComments); ok {
+		if input, found := findActionInput(action, actionInputNameMode); found {
+			modes = apiReviewCommentModes(input.Options)
 		}
 	}
 	return modes[0], modes
@@ -5879,11 +5906,8 @@ func (m APIAppModel) selectedRefactorPipelines(kind string) ([]feature.PipelineP
 		return nil, false
 	}
 	pipelines := apiRefactorPipelines(nil)
-	for _, input := range action.RequiredInputs {
-		if input.Name == actionInputNamePipeline {
-			pipelines = apiRefactorPipelines(input.Options)
-			break
-		}
+	if input, found := findActionInput(action, actionInputNamePipeline); found {
+		pipelines = apiRefactorPipelines(input.Options)
 	}
 	return pipelines, true
 }
@@ -5969,30 +5993,17 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 	case mutationKindFeatureResume:
 		status, ok := m.selectedFeatureStatus(m.selectedFeature)
 		return ok && (status == feature.StatusInterrupted || status == feature.StatusNeedUserInput)
-	case mutationKindFeaturePublish:
-		return m.selectedFeature != ""
-	case mutationKindFeatureMerge:
-		return m.selectedFeature != ""
-	case mutationKindFeatureRestart:
+	case mutationKindFeaturePublish, mutationKindFeatureMerge, mutationKindFeatureRestart,
+		mutationKindFeatureMarkDone, mutationKindFeatureRebase, mutationKindFeatureCleanup,
+		mutationKindFeatureTweakStart, mutationKindFeatureRefactorStart, mutationKindFeatureRefactorRestart,
+		mutationKindFeatureDelete:
 		return m.selectedFeature != ""
 	case mutationKindFeatureRetry:
 		status, ok := m.selectedFeatureStatus(m.selectedFeature)
 		return ok && status == feature.StatusFailed
-	case mutationKindFeatureMarkDone:
-		return m.selectedFeature != ""
-	case mutationKindFeatureRebase:
-		return m.selectedFeature != ""
-	case mutationKindFeatureCleanup:
-		return m.selectedFeature != ""
 	case mutationKindFeatureReviewComments:
 		action, ok := m.selectedRawAction(kind)
 		return ok && action.Enabled
-	case mutationKindFeatureTweakStart:
-		return m.selectedFeature != ""
-	case mutationKindFeatureRefactorStart:
-		return m.selectedFeature != ""
-	case mutationKindFeatureRefactorRestart:
-		return m.selectedFeature != ""
 	case mutationKindFeatureRewind:
 		return m.selectedFeatureCurrentPhase(m.selectedFeature) != ""
 	case mutationKindFeatureStop:
@@ -6001,8 +6012,6 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 				return apiFeatureCanStop(f.Status)
 			}
 		}
-	case mutationKindFeatureDelete:
-		return m.selectedFeature != ""
 	}
 	return false
 }
@@ -6188,11 +6197,17 @@ func (m APIAppModel) renderOwnedServerQuitPrompt() string {
 	b.WriteString("        " + MutedStyle.Render("detach this TUI only") + "\n\n")
 	b.WriteString("        " + footerStyle.Render("esc cancel"))
 
-	box := panelStyle(true).
-		Width(58).
-		BorderForeground(colorWarning).
-		Render(b.String())
+	box := renderBoxPanel(58, colorWarning, b.String())
 	return renderBorderTitle(box, "Session Exit", WarningStyle)
+}
+
+// renderBoxPanel wraps body in an active-styled panel of the given width and
+// border color.
+func renderBoxPanel(width int, color compat.AdaptiveColor, body string) string {
+	return panelStyle(true).
+		Width(width).
+		BorderForeground(color).
+		Render(body)
 }
 
 func (m APIAppModel) renderFeatureActionConfirm() string {
@@ -6216,56 +6231,29 @@ func (m APIAppModel) renderFeatureActionConfirm() string {
 	if m.actionConfirmArgs.TargetPhase != "" {
 		b.WriteString("  Target phase: " + apiRewindPhaseLabel(m.actionConfirmArgs.TargetPhase) + "\n\n")
 	}
-	switch m.actionConfirmKind {
-	case mutationKindFeaturePublish:
-		b.WriteString(WarningStyle.Render("  This will publish the selected feature."))
+	if lines, ok := apiFeatureActionConfirmWarnings[m.actionConfirmKind]; ok {
+		b.WriteString(WarningStyle.Render("  " + lines[0]))
 		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Review the server result before continuing."))
-	case mutationKindFeatureMerge:
-		b.WriteString(WarningStyle.Render("  This will merge the selected feature to the base branch."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Review the server result before continuing."))
-	case mutationKindFeatureRestart:
-		b.WriteString(WarningStyle.Render("  This will restart the selected feature phase."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Any active work for that phase will be replaced."))
-	case mutationKindFeatureRetry:
-		b.WriteString(WarningStyle.Render("  This will retry the failed feature phase."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Existing failure state will be replaced by the retry."))
-	case mutationKindFeatureMarkDone:
-		b.WriteString(WarningStyle.Render("  This will mark the selected feature as done."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Review the feature status before continuing."))
-	case mutationKindFeatureCleanup:
-		b.WriteString(WarningStyle.Render("  This will clean the selected feature worktrees."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Feature state and repo-cycle history will be preserved."))
-	case mutationKindFeatureRebase:
-		b.WriteString(WarningStyle.Render("  This will start a rebase cycle for the selected feature."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Conflict handling and push results will be reported by the server."))
-	case mutationKindFeatureTweakStart:
-		b.WriteString(WarningStyle.Render("  This will start an interactive tweak session for the selected feature."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  Finish and review decisions will be handled by the server."))
-	case mutationKindFeatureStop:
-		b.WriteString(WarningStyle.Render("  This will interrupt the current phase."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  You can restart it later."))
-	case mutationKindFeatureDelete:
-		b.WriteString(WarningStyle.Render("  This will remove all artifacts and worktrees."))
-		b.WriteString("\n")
-		b.WriteString(WarningStyle.Render("  This cannot be undone."))
-	default:
+		b.WriteString(WarningStyle.Render("  " + lines[1]))
+	} else {
 		b.WriteString(WarningStyle.Render("  This will send the selected API request."))
 	}
 	b.WriteString("\n\n")
 	b.WriteString(KeyHelpStyle.Render(" [y] Confirm   [any key] Cancel"))
-	return panelStyle(true).
-		Width(58).
-		BorderForeground(colorWarning).
-		Render(b.String())
+	return renderBoxPanel(58, colorWarning, b.String())
+}
+
+var apiFeatureActionConfirmWarnings = map[string][2]string{
+	mutationKindFeaturePublish:    {"This will publish the selected feature.", "Review the server result before continuing."},
+	mutationKindFeatureMerge:      {"This will merge the selected feature to the base branch.", "Review the server result before continuing."},
+	mutationKindFeatureRestart:    {"This will restart the selected feature phase.", "Any active work for that phase will be replaced."},
+	mutationKindFeatureRetry:      {"This will retry the failed feature phase.", "Existing failure state will be replaced by the retry."},
+	mutationKindFeatureMarkDone:   {"This will mark the selected feature as done.", "Review the feature status before continuing."},
+	mutationKindFeatureCleanup:    {"This will clean the selected feature worktrees.", "Feature state and repo-cycle history will be preserved."},
+	mutationKindFeatureRebase:     {"This will start a rebase cycle for the selected feature.", "Conflict handling and push results will be reported by the server."},
+	mutationKindFeatureTweakStart: {"This will start an interactive tweak session for the selected feature.", "Finish and review decisions will be handled by the server."},
+	mutationKindFeatureStop:       {"This will interrupt the current phase.", "You can restart it later."},
+	mutationKindFeatureDelete:     {"This will remove all artifacts and worktrees.", "This cannot be undone."},
 }
 
 func (m APIAppModel) renderAPIRewindConfirm() string {
@@ -6314,10 +6302,7 @@ func (m APIAppModel) renderAPIRewindConfirm() string {
 		c.WriteString(WarningStyle.Render("  " + line))
 		c.WriteString("\n")
 	}
-	contentBox := panelStyle(true).
-		Width(60).
-		BorderForeground(colorWarning).
-		Render(c.String())
+	contentBox := renderBoxPanel(60, colorWarning, c.String())
 	contentBox = renderBorderTitle(contentBox, "Rewind Confirmation", WarningStyle)
 	return contentBox + "\n" + KeyHelpStyle.Render(" [y] Confirm   [any key] Cancel")
 }
@@ -6359,10 +6344,7 @@ func (m APIAppModel) renderAPIResumeAllConfirm() string {
 		b.WriteString("\n")
 	}
 	panelWidth := 56
-	contentBox := panelStyle(true).
-		Width(panelWidth).
-		BorderForeground(colorInfo).
-		Render(b.String())
+	contentBox := renderBoxPanel(panelWidth, colorInfo, b.String())
 	contentBox = renderBorderTitle(contentBox, "Resume All", lipgloss.NewStyle().Foreground(colorInfo))
 	return contentBox + "\n" + KeyHelpStyle.Render(" [y] Confirm   [any key] Cancel")
 }
@@ -6386,10 +6368,7 @@ func (m APIAppModel) renderTweakReviewModal() string {
 	b.WriteByte('\n')
 	b.WriteByte('\n')
 	b.WriteString(KeyHelpStyle.Render("y to review | n to skip | Esc to cancel"))
-	return panelStyle(true).
-		Width(58).
-		BorderForeground(colorBrand).
-		Render(b.String())
+	return renderBoxPanel(58, colorBrand, b.String())
 }
 
 func (m APIAppModel) renderAPIReviewCommentsPanel(width int) string {
@@ -6431,10 +6410,7 @@ func (m APIAppModel) renderAPIRepoActionPanel(width int) string {
 		footer = " [space] Toggle   [enter] Confirm   [esc] Cancel"
 	}
 	b.WriteString(KeyHelpStyle.Render(footer))
-	return panelStyle(true).
-		Width(width).
-		BorderForeground(colorBrand).
-		Render(b.String())
+	return renderBoxPanel(width, colorBrand, b.String())
 }
 
 // apiRepoActionLine renders a single repo row for the repo action panel,
@@ -6516,10 +6492,7 @@ func (m APIAppModel) renderAPIRewindPanel(width int) string {
 	}
 	b.WriteByte('\n')
 	b.WriteString(KeyHelpStyle.Render("Enter to select \u00b7 Esc to cancel"))
-	return panelStyle(true).
-		Width(width).
-		BorderForeground(colorBrand).
-		Render(b.String())
+	return renderBoxPanel(width, colorBrand, b.String())
 }
 
 func (m APIAppModel) renderAPIRoadmapRewindPanel(width int) string {
@@ -6556,10 +6529,7 @@ func (m APIAppModel) renderAPIRoadmapRewindPanel(width int) string {
 	}
 	b.WriteByte('\n')
 	b.WriteString(KeyHelpStyle.Render("Enter to continue \u00b7 Esc to return"))
-	return panelStyle(true).
-		Width(width).
-		BorderForeground(colorBrand).
-		Render(b.String())
+	return renderBoxPanel(width, colorBrand, b.String())
 }
 
 func apiRewindChoiceLabel(phase string) string {
@@ -6655,10 +6625,7 @@ func (m APIAppModel) renderNeedInputPrompt() string {
 	b.WriteString(WarningStyle.Render("  Abort marks the paused gate as failed."))
 	b.WriteString("\n\n")
 	b.WriteString(KeyHelpStyle.Render(" [r] Resume   [a] Abort   [esc] Cancel"))
-	return panelStyle(true).
-		Width(58).
-		BorderForeground(colorWarning).
-		Render(b.String())
+	return renderBoxPanel(58, colorWarning, b.String())
 }
 
 func (m APIAppModel) renderPermissionPrompt() string {
@@ -6700,10 +6667,7 @@ func (m APIAppModel) renderPermissionPrompt() string {
 	} else {
 		b.WriteString(KeyHelpStyle.Render(" [a] Allow Once   [d] Deny   [esc] Cancel"))
 	}
-	return panelStyle(true).
-		Width(58).
-		BorderForeground(colorWarning).
-		Render(b.String())
+	return renderBoxPanel(58, colorWarning, b.String())
 }
 
 func (m APIAppModel) renderHelpPrompt() string {
@@ -6721,10 +6685,7 @@ func (m APIAppModel) renderHelpPrompt() string {
 	b.WriteString("  Answer: " + m.helpAnswerDraft + "\n")
 	b.WriteString("\n")
 	b.WriteString(KeyHelpStyle.Render(" [enter] Send   [esc] Cancel"))
-	return panelStyle(true).
-		Width(58).
-		BorderForeground(colorWarning).
-		Render(b.String())
+	return renderBoxPanel(58, colorWarning, b.String())
 }
 
 func (m APIAppModel) renderAskUserPrompt() string {
@@ -6767,10 +6728,7 @@ func (m APIAppModel) renderAskUserPrompt() string {
 		footer = " [up/down] Option   [enter] Send   [esc] Cancel"
 	}
 	b.WriteString(KeyHelpStyle.Render(footer))
-	return panelStyle(true).
-		Width(58).
-		BorderForeground(colorWarning).
-		Render(b.String())
+	return renderBoxPanel(58, colorWarning, b.String())
 }
 
 func (m APIAppModel) listenForAPIEvents() tea.Cmd {
@@ -6944,10 +6902,7 @@ func (m APIAppModel) fetchAttachTranscriptBackfillCmd(sessionID string, before i
 	if sessionID == "" || limit <= 0 || m.client == nil {
 		return nil
 	}
-	ctx := context.Background()
-	if m.eventCtx != nil {
-		ctx = m.eventCtx
-	}
+	ctx := m.apiCtx()
 	return func() tea.Msg {
 		transcript, err := m.client.Transcript(ctx, sessionID, server.CursorQuery{Cursor: start, Limit: limit})
 		return apiTranscriptBackfillMsg{sessionID: sessionID, before: before, transcript: transcript, err: err}
@@ -6956,10 +6911,7 @@ func (m APIAppModel) fetchAttachTranscriptBackfillCmd(sessionID string, before i
 
 func (m APIAppModel) fetchRefreshSnapshotCmd(signal server.RefreshSignal) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		snapshot, err := m.client.FetchRefreshSnapshot(ctx, signal)
 		if err != nil {
 			return apiRefreshSnapshotMsg{snapshot: snapshot, err: err}
@@ -6984,15 +6936,28 @@ func (m APIAppModel) fetchRefreshSnapshotCmd(signal server.RefreshSignal) tea.Cm
 	}
 }
 
+func (m APIAppModel) fetchAttachSessionsCmd(featureID string, openIfClosed bool) tea.Cmd {
+	if featureID == "" || m.client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx := m.apiCtx()
+		sessions, err := m.client.Sessions(ctx)
+		return apiAttachSessionsSnapshotMsg{
+			featureID:    featureID,
+			sessions:     sessions,
+			err:          err,
+			openIfClosed: openIfClosed,
+		}
+	}
+}
+
 func (m APIAppModel) fetchAttachSessionDetailCmd(sessionID string) tea.Cmd {
 	if sessionID == "" || m.client == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		session, transcript, err := loadAPITranscriptTail(ctx, m.client, sessionID)
 		if err != nil {
 			return apiRefreshSnapshotMsg{err: err}
@@ -7006,10 +6971,7 @@ func (m APIAppModel) fetchAttachSessionDetailCmd(sessionID string) tea.Cmd {
 
 func (m APIAppModel) fetchFeatureDetailCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		detail, err := m.client.FeatureDetail(ctx, featureID)
 		if err != nil {
 			return apiFeatureDetailMsg{featureID: featureID, err: err}
@@ -7038,10 +7000,7 @@ func (m APIAppModel) fetchFeatureDetailCmd(featureID string) tea.Cmd {
 
 func (m APIAppModel) fetchReviewArtifactCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		detail, err := m.client.FeatureDetail(ctx, featureID)
 		if err != nil {
 			return apiReviewArtifactMsg{featureID: featureID, err: err}
@@ -7054,7 +7013,7 @@ func (m APIAppModel) fetchReviewArtifactCmd(featureID string) tea.Cmd {
 		if err != nil {
 			return apiReviewArtifactMsg{featureID: featureID, err: err}
 		}
-		f := m.apiDashboardFeature(apiFeatureSummaryFromDetail(detail.Feature), detail.Feature, true)
+		f := m.apiDashboardFeature(apiFeatureDetailSummary(detail.Feature), detail.Feature, true)
 		artifact, ok, reason := selectReviewArtifact(f, artifacts)
 		if !ok {
 			if reason == "" {
@@ -7068,10 +7027,7 @@ func (m APIAppModel) fetchReviewArtifactCmd(featureID string) tea.Cmd {
 
 func (m APIAppModel) fetchArtifactContentCmd(content apiFeatureContentSnapshot, artifact server.ArtifactDTO) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		query := server.TextQuery{Offset: apiContentTailOffset(artifact.Size), Limit: apiContentTailLimit}
 		resp, err := m.client.ArtifactContent(ctx, content.FeatureID, content.RunNumber, artifact.ID, query)
 		if err != nil {
@@ -7092,10 +7048,7 @@ func (m APIAppModel) fetchArtifactContentCmd(content apiFeatureContentSnapshot, 
 
 func (m APIAppModel) fetchNextLogContentCmd(content apiFeatureContentSnapshot) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		logIDs := cycleLogIDs(content.LogID)
 		var lastErr error
 		sawMissingLog := false
@@ -7165,10 +7118,7 @@ func (m APIAppModel) shouldRefreshSelectedContent(signal server.RefreshSignal) b
 
 func (m APIAppModel) fetchFeatureConfigCmd(featureID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		cfg, err := m.client.FeatureConfig(ctx, featureID)
 		return apiFeatureConfigMsg{featureID: featureID, config: cfg, err: err}
 	}
@@ -7176,10 +7126,7 @@ func (m APIAppModel) fetchFeatureConfigCmd(featureID string) tea.Cmd {
 
 func (m APIAppModel) fetchReviewCommentsCmd(featureID, featureName, repo, mode string, modes []string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		resp, err := m.client.FetchReviewComments(ctx, featureID, server.ReviewCommentsFetchRequest{Repo: repo})
 		return apiReviewCommentsFetchedMsg{
 			featureID:   featureID,
@@ -7195,10 +7142,7 @@ func (m APIAppModel) fetchReviewCommentsCmd(featureID, featureName, repo, mode s
 
 func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		projection := result.Pipeline.ProjectGates(result.Checkpoints, true)
 		req := server.CreateFeatureRequest{
 			Name:                    strings.TrimSpace(result.Name),
@@ -7314,10 +7258,7 @@ func (m *APIAppModel) consumeAPIWizardRuntimeConfigSideEffect() tea.Cmd {
 
 func (m APIAppModel) primarySelectedFeatureActionCmd(kind, featureID string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		var err error
 		switch kind {
 		case mutationKindFeatureResume:
@@ -7337,10 +7278,7 @@ func (m APIAppModel) primarySelectedFeatureActionCmd(kind, featureID string) tea
 
 func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ...apiFeatureActionArgs) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		args := apiFeatureActionArgs{}
 		if len(argsOpt) > 0 {
 			args = argsOpt[0]
@@ -7398,10 +7336,7 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 
 func (m APIAppModel) finishTweakDecisionCmd(featureID, decision string, hadChanges bool) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		_, err := m.client.FinishTweak(ctx, featureID, server.TweakFinishRequest{
 			Decision:   decision,
 			HadChanges: hadChanges,
@@ -7435,14 +7370,10 @@ func (m APIAppModel) handleAPIRepoActionKey(msg tea.KeyPressMsg) (tea.Model, tea
 		m.statusMessage = ""
 		return m, nil
 	case tea.KeyUp:
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.repos))
 		return m, nil
 	case tea.KeyDown:
-		if panel.cursor < len(panel.repos)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.repos))
 		return m, nil
 	case tea.KeySpace:
 		if panel.multi && panel.cursor >= 0 && panel.cursor < len(panel.repos) {
@@ -7458,13 +7389,9 @@ func (m APIAppModel) handleAPIRepoActionKey(msg tea.KeyPressMsg) (tea.Model, tea
 	}
 	switch strings.ToLower(msg.Text) {
 	case "j":
-		if panel.cursor < len(panel.repos)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.repos))
 	case "k":
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.repos))
 	case " ":
 		if panel.multi && panel.cursor >= 0 && panel.cursor < len(panel.repos) {
 			name := panel.repos[panel.cursor].Name
@@ -7526,14 +7453,10 @@ func (m APIAppModel) handleAPIRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 		m.statusMessage = ""
 		return m, nil
 	case tea.KeyUp:
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.choices))
 		return m, nil
 	case tea.KeyDown:
-		if panel.cursor < len(panel.choices)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.choices))
 		return m, nil
 	case tea.KeyEnter:
 		if len(panel.choices) == 0 {
@@ -7558,13 +7481,9 @@ func (m APIAppModel) handleAPIRewindKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 	}
 	switch strings.ToLower(msg.Text) {
 	case "j":
-		if panel.cursor < len(panel.choices)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.choices))
 	case "k":
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.choices))
 	}
 	return m, nil
 }
@@ -7580,14 +7499,10 @@ func (m APIAppModel) handleAPIRoadmapRewindKey(msg tea.KeyPressMsg) (tea.Model, 
 		m.statusMessage = ""
 		return m, nil
 	case tea.KeyUp:
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.rows))
 		return m, nil
 	case tea.KeyDown:
-		if panel.cursor < len(panel.rows)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.rows))
 		return m, nil
 	case tea.KeyEnter:
 		if len(panel.rows) == 0 {
@@ -7605,13 +7520,9 @@ func (m APIAppModel) handleAPIRoadmapRewindKey(msg tea.KeyPressMsg) (tea.Model, 
 	}
 	switch strings.ToLower(msg.Text) {
 	case "j":
-		if panel.cursor < len(panel.rows)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.rows))
 	case "k":
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.rows))
 	}
 	return m, nil
 }
@@ -7795,14 +7706,10 @@ func (m APIAppModel) handleAPIRefactorPipelineKey(msg tea.KeyPressMsg) (tea.Mode
 		m.statusMessage = ""
 		return m, nil
 	case tea.KeyLeft:
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.pipelines))
 		return m, nil
 	case tea.KeyRight:
-		if panel.cursor < len(panel.pipelines)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.pipelines))
 		return m, nil
 	case tea.KeyEnter:
 		m.refactorPipeline = nil
@@ -7810,13 +7717,9 @@ func (m APIAppModel) handleAPIRefactorPipelineKey(msg tea.KeyPressMsg) (tea.Mode
 	}
 	switch strings.ToLower(msg.Text) {
 	case "h":
-		if panel.cursor > 0 {
-			panel.cursor--
-		}
+		moveCursor(&panel.cursor, -1, len(panel.pipelines))
 	case "l":
-		if panel.cursor < len(panel.pipelines)-1 {
-			panel.cursor++
-		}
+		moveCursor(&panel.cursor, 1, len(panel.pipelines))
 	}
 	return m, nil
 }
@@ -7871,6 +7774,15 @@ func (m APIAppModel) handleAPIConfigEditorKey(msg tea.KeyPressMsg) (tea.Model, t
 	}
 }
 
+// backspaceRune removes the last rune from s, if any.
+func backspaceRune(s string) string {
+	runes := []rune(s)
+	if len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes)
+}
+
 func (m APIAppModel) handleAPIHelpPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.Code {
 	case tea.KeyEscape:
@@ -7884,10 +7796,7 @@ func (m APIAppModel) handleAPIHelpPromptKey(msg tea.KeyPressMsg) (tea.Model, tea
 		}
 		return m, m.helpAnswerCmd(m.helpFeatureID, answer)
 	case tea.KeyBackspace:
-		runes := []rune(m.helpAnswerDraft)
-		if len(runes) > 0 {
-			m.helpAnswerDraft = string(runes[:len(runes)-1])
-		}
+		m.helpAnswerDraft = backspaceRune(m.helpAnswerDraft)
 		return m, nil
 	}
 	if msg.Text != "" && !msg.Mod.Contains(tea.ModCtrl) && !msg.Mod.Contains(tea.ModAlt) {
@@ -7926,10 +7835,7 @@ func (m APIAppModel) handleAPIAskUserPromptKey(msg tea.KeyPressMsg) (tea.Model, 
 		questionKey := apiAskUserAnswerQuestionKey(m.askUserRequest, m.askUserQuestion)
 		return m, m.askUserAnswerCmd(m.askUserRequest, questionKey, answer)
 	case tea.KeyBackspace:
-		runes := []rune(m.askUserAnswerDraft)
-		if len(runes) > 0 {
-			m.askUserAnswerDraft = string(runes[:len(runes)-1])
-		}
+		m.askUserAnswerDraft = backspaceRune(m.askUserAnswerDraft)
 		return m, nil
 	}
 	if hasOptions {
@@ -7975,10 +7881,7 @@ func (m APIAppModel) handleAPIAskUserOptionShortcut(msg tea.KeyPressMsg, questio
 
 func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
 		_, err := m.client.UpdateFeatureConfig(ctx, editor.featureID, server.FeatureConfigMutationRequest{
 			Models:      snap.Models,
@@ -7996,10 +7899,7 @@ func (m APIAppModel) saveFeatureConfigCmd(editor EditConfigModel) tea.Cmd {
 
 func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		snap := editor.editor.Snapshot()
 		_, err := m.client.UpdateRuntimeConfig(ctx, server.RuntimeConfigMutationRequest{
 			Defaults: config.DefaultsConfig{
@@ -8019,10 +7919,7 @@ func (m APIAppModel) saveWorkspaceConfigCmd(editor EditConfigModel) tea.Cmd {
 
 func (m APIAppModel) startReviewCommentsCmd(panel apiReviewCommentsPanel) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		_, err := m.client.StartReviewComments(ctx, panel.featureID, server.ReviewCommentsActionRequest{
 			Repo:     panel.repo,
 			Mode:     panel.mode,
@@ -8038,10 +7935,7 @@ func (m APIAppModel) startReviewCommentsCmd(panel apiReviewCommentsPanel) tea.Cm
 
 func (m APIAppModel) startRefactorCmd(panel apiRefactorPipelinePanel) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		pipeline := feature.PipelineLarge
 		if len(panel.pipelines) > 0 && panel.cursor >= 0 && panel.cursor < len(panel.pipelines) {
 			pipeline = panel.pipelines[panel.cursor]
@@ -8071,10 +7965,7 @@ func (m APIAppModel) startRefactorCmd(panel apiRefactorPipelinePanel) tea.Cmd {
 
 func (m APIAppModel) needUserInputDecisionCmd(featureID, decision string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		_, err := m.client.NeedUserInputDecision(ctx, featureID, server.NeedUserInputDecisionRequest{Decision: decision})
 		return apiMutationResultMsg{
 			kind:      mutationKindFeatureNeedUserInputDecision,
@@ -8086,10 +7977,7 @@ func (m APIAppModel) needUserInputDecisionCmd(featureID, decision string) tea.Cm
 
 func (m APIAppModel) reviewDecisionCmd(featureID string, req server.ReviewDecisionRequest) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		_, err := m.client.ReviewDecision(ctx, featureID, req)
 		return apiMutationResultMsg{
 			kind:      "feature.review_decision",
@@ -8101,10 +7989,7 @@ func (m APIAppModel) reviewDecisionCmd(featureID string, req server.ReviewDecisi
 
 func (m APIAppModel) permissionAnswerCmd(req server.ControlRequestDTO, decision string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		answer := server.PermissionAnswerRequest{
 			RequestID: req.RequestID,
 			SessionID: req.SessionID,
@@ -8127,10 +8012,7 @@ func (m APIAppModel) permissionAnswerCmd(req server.ControlRequestDTO, decision 
 
 func (m APIAppModel) helpAnswerCmd(featureID, answer string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		_, err := m.client.SendHelp(ctx, server.HelpAnswerRequest{
 			FeatureID: featureID,
 			Message:   answer,
@@ -8145,10 +8027,7 @@ func (m APIAppModel) helpAnswerCmd(featureID, answer string) tea.Cmd {
 
 func (m APIAppModel) askUserAnswerCmd(req server.ControlRequestDTO, question, answer string) tea.Cmd {
 	return func() tea.Msg {
-		ctx := context.Background()
-		if m.eventCtx != nil {
-			ctx = m.eventCtx
-		}
+		ctx := m.apiCtx()
 		_, err := m.client.AnswerAskUser(ctx, server.AskUserAnswerRequest{
 			RequestID: req.RequestID,
 			SessionID: req.SessionID,

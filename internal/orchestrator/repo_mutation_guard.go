@@ -22,22 +22,31 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-func (o *Orchestrator) artifactReadOnlyGuardDir(f *feature.Feature, phaseKey string) string {
-	baseDir := o.stateDir()
-	if f == nil || baseDir == "" || phaseKey == "" {
-		return ""
-	}
-	return filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix(), phaseKey)
-}
-
-func (o *Orchestrator) planReadOnlyGuardDir(f *feature.Feature) string {
+// readOnlyGuardDir joins the active run dir + refactor prefix with a
+// caller-supplied tail, returning "" when the feature or state dir is
+// unresolved. suffix is only invoked once the base path is known to be
+// valid.
+func (o *Orchestrator) readOnlyGuardDir(f *feature.Feature, suffix func() string) string {
 	baseDir := o.stateDir()
 	if f == nil || baseDir == "" {
 		return ""
 	}
 	base := filepath.Join(agent.ActiveRunDir(baseDir, f), f.RefactorPrefix())
-	if f.CurrentRoadmapPhase > 0 {
-		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "plan")
+	return filepath.Join(base, suffix())
+}
+
+func (o *Orchestrator) artifactReadOnlyGuardDir(f *feature.Feature, phaseKey string) string {
+	if phaseKey == "" {
+		return ""
 	}
-	return filepath.Join(base, "roadmap")
+	return o.readOnlyGuardDir(f, func() string { return phaseKey })
+}
+
+func (o *Orchestrator) planReadOnlyGuardDir(f *feature.Feature) string {
+	return o.readOnlyGuardDir(f, func() string {
+		if f.CurrentRoadmapPhase > 0 {
+			return filepath.Join(fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "plan")
+		}
+		return "roadmap"
+	})
 }

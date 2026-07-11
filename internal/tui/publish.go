@@ -645,11 +645,9 @@ func (m PublishModel) View() string {
 
 	case publishStepDiff:
 		title = diffReviewTitle
-		content = m.viewport.View()
 
 	case publishStepCommits:
 		title = "Commit Log"
-		content = m.viewport.View()
 
 	case publishStepPRDesc:
 		title = "PR Description"
@@ -697,11 +695,11 @@ func (m PublishModel) View() string {
 		}
 	}
 
-	box := panelStyle(true).Width(boxWidth).Render(content)
+	var box string
 	if m.step == publishStepDiff || m.step == publishStepCommits {
 		box = renderReviewViewportBox(boxWidth, title, m.viewport)
 	} else {
-		box = renderBorderTitle(box, title, TitleStyle)
+		box = renderBorderTitle(panelStyle(true).Width(boxWidth).Render(content), title, TitleStyle)
 	}
 	b.WriteString(" " + strings.ReplaceAll(box, "\n", "\n "))
 

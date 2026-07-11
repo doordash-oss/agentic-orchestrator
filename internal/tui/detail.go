@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -1343,28 +1342,6 @@ func (m DetailModel) FeatureID() string {
 		return m.feature.ID
 	}
 	return ""
-}
-
-func (m DetailModel) HasAction(msg tea.KeyPressMsg) bool {
-	return key.Matches(msg, keys.Attach) ||
-		key.Matches(msg, keys.Approve) ||
-		key.Matches(msg, keys.Help) ||
-		key.Matches(msg, keys.ToggleInputNotify) ||
-		key.Matches(msg, keys.Publish) ||
-		key.Matches(msg, keys.ManualPublish) ||
-		key.Matches(msg, keys.Rewind) ||
-		key.Matches(msg, keys.Delete) ||
-		key.Matches(msg, keys.ViewDiff) ||
-		key.Matches(msg, keys.CleanWorktree) ||
-		key.Matches(msg, keys.Rebase) ||
-		key.Matches(msg, keys.Tweak) ||
-		key.Matches(msg, keys.Refactor) ||
-		key.Matches(msg, keys.MarkDone) ||
-		key.Matches(msg, keys.ReviewComments) ||
-		key.Matches(msg, keys.ViewLogs) ||
-		key.Matches(msg, keys.RetryPhase) ||
-		key.Matches(msg, keys.Back) ||
-		key.Matches(msg, keys.PanelLeft)
 }
 
 func inputAlertModeLabel(f *feature.Feature) string {

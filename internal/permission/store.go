@@ -201,6 +201,24 @@ func (s *Store) Save(scope string, rules []Rule) error {
 	return nil
 }
 
+// ruleExists reports whether rules already contains a rule matching pattern
+// and effect. If repoName is provided, the match also requires RepoName to be
+// equal; otherwise RepoName is ignored (callers checking within a single
+// scope file, where every rule already shares the same RepoName, don't need
+// it).
+func ruleExists(rules []Rule, pattern, effect string, repoName ...string) bool {
+	for _, r := range rules {
+		if r.ToolPattern != pattern || r.Effect != effect {
+			continue
+		}
+		if len(repoName) > 0 && r.RepoName != repoName[0] {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // EnsureGlobalDefaults ensures every rule in defaultGlobalRules() exists in
 // the on-disk global.json. Missing defaults are appended; user-added rules
 // are preserved. On first run the file is created from scratch.
@@ -215,17 +233,10 @@ func (s *Store) EnsureGlobalDefaults() error {
 		return fmt.Errorf("loading global permissions: %w", err)
 	}
 
-	// Build a set of existing patterns+effects for fast lookup.
-	type key struct{ pattern, effect string }
-	seen := make(map[key]struct{}, len(existing))
-	for _, r := range existing {
-		seen[key{r.ToolPattern, r.Effect}] = struct{}{}
-	}
-
 	// Append any missing defaults.
 	merged := existing
 	for _, d := range defaults {
-		if _, ok := seen[key{d.ToolPattern, d.Effect}]; !ok {
+		if !ruleExists(existing, d.ToolPattern, d.Effect) {
 			merged = append(merged, d)
 		}
 	}
@@ -250,10 +261,8 @@ func (s *Store) AppendRule(scope string, rule Rule) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, r := range existing {
-		if r.ToolPattern == rule.ToolPattern && r.Effect == rule.Effect {
-			return false, nil // already exists
-		}
+	if ruleExists(existing, rule.ToolPattern, rule.Effect) {
+		return false, nil // already exists
 	}
 	existing = append(existing, rule)
 	if err := s.Save(scope, existing); err != nil {

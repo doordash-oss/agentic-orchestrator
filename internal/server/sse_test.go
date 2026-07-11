@@ -43,7 +43,7 @@ const testEventKindFeatureState = "feature.state"
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
@@ -64,7 +64,7 @@ func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 }
 
 func TestEventBrokerConcurrentPublishAssignsUniqueMonotonicSeqs(t *testing.T) {
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 512})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 512})
 
 	const publishers = 16
 	const perPublisher = 32
@@ -113,7 +113,7 @@ func TestEventBrokerConcurrentPublishAssignsUniqueMonotonicSeqs(t *testing.T) {
 func TestEventBrokerReplayFromCursor(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
 	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: "F-2"}})
 	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: "F-3"}})
@@ -134,7 +134,7 @@ func TestEventBrokerReplayFromCursor(t *testing.T) {
 func TestEventBrokerStaleCursorReturnsReset(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 2})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 2})
 	for i := 0; i < 4; i++ {
 		b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 	}
@@ -155,7 +155,7 @@ func TestEventBrokerStaleCursorReturnsReset(t *testing.T) {
 func TestEventBrokerReplayRingBoundaries(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 3})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 3})
 	for i := 1; i <= 5; i++ {
 		b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fmt.Sprintf("F-%d", i)}})
 	}
@@ -185,7 +185,7 @@ func TestEventBrokerReplayRingBoundaries(t *testing.T) {
 func TestEventBrokerCursorWithoutEpochReturnsReset(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
 	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 
 	ch, replay, reset := b.subscribeAfter(1, "")
@@ -204,7 +204,7 @@ func TestEventBrokerCursorWithoutEpochReturnsReset(t *testing.T) {
 func TestEventBrokerEpochMismatchReturnsReset(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-new", ReplayLimit: 4})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: "epoch-new", ReplayLimit: 4})
 	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 
 	ch, replay, reset := b.subscribeAfter(1, "epoch-old")
@@ -220,7 +220,7 @@ func TestEventBrokerEpochMismatchReturnsReset(t *testing.T) {
 func TestEventBrokerThrottlesSessionOutputActivity(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 8})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 8})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
@@ -253,7 +253,7 @@ func TestEventBrokerThrottlesSessionOutputActivity(t *testing.T) {
 func TestEventBrokerCoalescedMarkerCarriesTriggeringResource(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 64})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 64})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
@@ -294,7 +294,7 @@ drained:
 func TestEventBrokerSlowSubscriberReceivesNewestTerminalState(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 128})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 128})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
@@ -333,7 +333,7 @@ func TestEventBrokerSlowSubscriberReceivesNewestTerminalState(t *testing.T) {
 func TestEventBrokerCoalescedOverflowDeliversReset(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 2048})
+	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 2048})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
@@ -368,7 +368,7 @@ func TestSnapshotThenSubscribeConverges(t *testing.T) {
 	const iterations = 200
 
 	for i := 0; i < iterations; i++ {
-		b := newEventBrokerForTest(eventBrokerOptions{})
+		b := newEventBrokerWithOptions(eventBrokerOptions{})
 
 		// A baseline subscriber attached before any publishing starts —
 		// the ground truth for "every event this broker ever emits". It's
@@ -467,7 +467,7 @@ func TestEventsConnectedSurvivesRingEvictionForCursorlessClient(t *testing.T) {
 func TestPruneOutputActivityNeverEvictsWithinThrottleWindow(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{})
+	b := newEventBrokerWithOptions(eventBrokerOptions{})
 	now := time.Now().UTC()
 
 	// Fill past the hard cap with entries all inside the throttle window.

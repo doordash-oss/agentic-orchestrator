@@ -537,6 +537,19 @@ func resolveValidatorModel(cfg PlanLoopConfig) string {
 	return model
 }
 
+// sessionStartFunc matches the SessionStartFunc override field on
+// PlanLoopConfig/ImplementConfig and the ports.SessionManager.StartSession
+// method signature.
+type sessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
+
+// resolveSessionStartFunc returns override when set, otherwise sm.StartSession.
+func resolveSessionStartFunc(override sessionStartFunc, sm ports.SessionManager) sessionStartFunc {
+	if override != nil {
+		return override
+	}
+	return sm.StartSession
+}
+
 func roadmapPlannerRoleForAttempt(attempt int) Role {
 	if attempt <= 1 {
 		return RolePlanRoadmapPlanner
@@ -1534,10 +1547,7 @@ roadmapAttemptLoop:
 						0,
 					)
 				}
-				startSession := cfg.SessionStartFunc
-				if startSession == nil {
-					startSession = sm.StartSession
-				}
+				startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 				sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
 				if err != nil {
 					if errors.Is(err, ports.ErrSessionShuttingDown) {
@@ -1918,10 +1928,7 @@ phasePlanAttemptLoop:
 						0,
 					)
 				}
-				startSession := cfg.SessionStartFunc
-				if startSession == nil {
-					startSession = sm.StartSession
-				}
+				startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 				sess, err := startSession(sessionID, cfg.Feature.ID, feature.PhasePlan, cmd, cfg.WorkDir, env, sessOpts)
 				if err != nil {
 					if errors.Is(err, ports.ErrSessionShuttingDown) {

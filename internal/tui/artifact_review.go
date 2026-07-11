@@ -50,18 +50,8 @@ type ArtifactReviewModel struct {
 	artifactPath string
 
 	// Review mode
-	reviewMode string // "plan" | "rewind" | "gate" | "need_user_input"
-	featureID  string
-	// repoName is non-empty when this review is repo-scoped — used for
-	// need_user_input gates in multi-repo runs (mainline implement and
-	// post-publish cycles) so the orchestrator decision message can target
-	// the right repo.
-	repoName string
-	// cycleType is the post-publish cycle this gate belongs to, when the
-	// review targets a cycle-scoped need-user-input pause. Empty for
-	// feature- or repo-scoped (mainline) gates and for non-need-user-input
-	// review modes.
-	cycleType   feature.RepoCycleType
+	reviewMode  string // "plan" | "rewind" | "gate"
+	featureID   string
 	rewindPhase feature.Phase // only for rewind review
 
 	// Working directory for agent session (feature worktree or repo path).
@@ -112,12 +102,6 @@ type ArtifactReviewModel struct {
 
 	detached bool
 	decided  bool // true after a menu decision has been emitted
-
-	// nuiForm is the questionnaire body rendered when reviewMode ==
-	// reviewModeNeedUserInput. It replaces the editor + chat panels
-	// for the need-user-input gate while keeping the same attach /
-	// detach / Ctrl+D-menu shell.
-	nuiForm *needUserInputForm
 }
 
 const (
@@ -163,15 +147,6 @@ func NewArtifactReviewModel(artifactPath, featureID, reviewMode string, rewindPh
 		sessionMgr:   sessionMgr,
 		sessionID:    featureID + "-artifact-review",
 		buildSession: buildSession,
-	}
-
-	// Need-user-input mode swaps the editor + chat body for a structured
-	// questionnaire. The shell (header / footer / Ctrl+D menu / detach)
-	// is identical to review-gate modes so attach reattach behavior
-	// matches what the user already knows.
-	if reviewMode == reviewModeNeedUserInput {
-		m.nuiForm = newNeedUserInputForm(artifactPath, width)
-		return m
 	}
 
 	m.chatInput = NewSimpleTextarea()
@@ -221,18 +196,10 @@ func (m ArtifactReviewModel) Update(msg tea.Msg) (ArtifactReviewModel, tea.Cmd) 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		if m.nuiForm != nil {
-			m.nuiForm.SetWidth(msg.Width)
-			return m, nil
-		}
 		m.recalcLayout()
 		return m, nil
 
 	case tea.PasteMsg:
-		if m.nuiForm != nil {
-			cmd := m.nuiForm.Forward(msg)
-			return m, cmd
-		}
 		if m.chatFocused {
 			var cmd tea.Cmd
 			m.chatInput, cmd = m.chatInput.Update(msg)
@@ -290,12 +257,6 @@ func (m ArtifactReviewModel) Update(msg tea.Msg) (ArtifactReviewModel, tea.Cmd) 
 		return m, nil
 
 	default:
-		// Forward non-key messages to the questionnaire form when in
-		// need-user-input mode (cursor blink etc. for textinputs).
-		if m.nuiForm != nil {
-			cmd := m.nuiForm.Forward(msg)
-			return m, cmd
-		}
 		var cmds []tea.Cmd
 		var cmd tea.Cmd
 		m.editor, cmd = m.editor.Update(msg)
@@ -315,21 +276,6 @@ func (m ArtifactReviewModel) Update(msg tea.Msg) (ArtifactReviewModel, tea.Cmd) 
 func (m ArtifactReviewModel) handleKey(msg tea.KeyPressMsg) (ArtifactReviewModel, tea.Cmd) {
 	if m.showMenu {
 		return m.handleMenuKey(msg)
-	}
-
-	// Need-user-input mode short-circuits the editor / chat key routing
-	// because there is no editor or chat — only the questionnaire form
-	// and the same Ctrl+D action menu the artifact-review shell uses.
-	if m.nuiForm != nil {
-		switch msg.String() {
-		case "ctrl+d", "ctrl+]", "esc":
-			_ = m.nuiForm.Persist()
-			m.showMenu = true
-			m.menuChoice = 0
-			return m, nil
-		}
-		cmd := m.nuiForm.HandleKey(msg)
-		return m, cmd
 	}
 
 	if m.pendingPermRequestID != "" {
@@ -811,17 +757,6 @@ func (m ArtifactReviewModel) handleMenuKey(msg tea.KeyPressMsg) (ArtifactReviewM
 			m.showMenu = false
 			return m, nil
 		}
-		// Need-user-input mode blocks resume until every answer has been
-		// filled in. Keep the menu open so the user sees that the choice
-		// did not commit.
-		if m.nuiForm != nil && decision == "resume" && !m.nuiForm.AllAnswered() {
-			return m, nil
-		}
-		// Persist the latest draft answers before the orchestrator reads
-		// them (Resume) or before the gate is closed (Abort).
-		if m.nuiForm != nil {
-			_ = m.nuiForm.Persist()
-		}
 		m.detached = true
 		m.decided = true
 		return m, m.emitDecision(decision)
@@ -858,19 +793,6 @@ func (m ArtifactReviewModel) menuItems() []menuItem {
 			{label: "Proceed to next phase", decision: "proceed"},
 			{label: "Return to dashboard", decision: "detach"},
 		}
-	case reviewModeNeedUserInput:
-		// Surface the gating reason directly in the label so the user
-		// understands why "Resume" did nothing if they pressed enter
-		// before filling answers.
-		resumeLabel := "Resume implementation"
-		if m.nuiForm != nil && !m.nuiForm.AllAnswered() {
-			resumeLabel += " (answer all questions to enable)"
-		}
-		return []menuItem{
-			{label: resumeLabel, decision: "resume"},
-			{label: "Abort", decision: "abort"},
-			{label: "Return to dashboard", decision: "detach"},
-		}
 	default: // "rewind"
 		return []menuItem{
 			{label: "Proceed with rewind", decision: "proceed"},
@@ -891,13 +813,6 @@ func (m ArtifactReviewModel) emitDecision(decision string) tea.Cmd {
 		phase := m.rewindPhase // reuse this field for the target phase
 		return func() tea.Msg {
 			return GateReviewDecisionMsg{FeatureID: fid, Phase: phase, Decision: decision}
-		}
-	case reviewModeNeedUserInput:
-		fid := m.featureID
-		repo := m.repoName
-		cycle := m.cycleType
-		return func() tea.Msg {
-			return NeedUserInputDecisionMsg{FeatureID: fid, RepoName: repo, CycleType: cycle, Decision: decision}
 		}
 	default: // "rewind"
 		fid := m.featureID
@@ -928,34 +843,6 @@ func (m ArtifactReviewModel) ReviewMode() string {
 	return m.reviewMode
 }
 
-// RepoName returns the repo identifier for repo-scoped reviews. Empty for
-// feature-scoped reviews and non-need-user-input modes.
-func (m ArtifactReviewModel) RepoName() string {
-	return m.repoName
-}
-
-// SetRepoName attaches a repo identifier to this review. Used by the TUI
-// attach handler to route repo-scoped need-user-input gates so the
-// emitted NeedUserInputDecisionMsg carries the correct repo target.
-func (m ArtifactReviewModel) SetRepoName(repoName string) ArtifactReviewModel {
-	m.repoName = repoName
-	return m
-}
-
-// CycleType returns the cycle this need-user-input review targets. Empty
-// for feature/repo-scoped reviews and non-need-user-input modes.
-func (m ArtifactReviewModel) CycleType() feature.RepoCycleType {
-	return m.cycleType
-}
-
-// SetCycleType attaches a cycle identifier to this review. Used by the
-// TUI attach handler so the emitted NeedUserInputDecisionMsg routes
-// through the cycle-scoped resume/abort path.
-func (m ArtifactReviewModel) SetCycleType(cycleType feature.RepoCycleType) ArtifactReviewModel {
-	m.cycleType = cycleType
-	return m
-}
-
 // Decided returns true if the user has already made a menu decision (proceed/iterate).
 // A decided review must not be reattached.
 func (m ArtifactReviewModel) Decided() bool {
@@ -965,83 +852,11 @@ func (m ArtifactReviewModel) Decided() bool {
 // Reattach resets the detached state so the model can be re-shown.
 func (m *ArtifactReviewModel) Reattach() tea.Cmd {
 	m.detached = false
-	if m.nuiForm != nil {
-		m.showMenu = false
-		return m.nuiForm.Focus()
-	}
 	return m.editor.Focus()
-}
-
-// WithDecisionError records an error returned by the orchestrator's
-// HandleNeedUserInputDecision call so the user can see what went wrong
-// and retry / abort from the same questionnaire. Only meaningful when
-// reviewMode == reviewModeNeedUserInput; for other review modes it is
-// a no-op so callers can route uniformly.
-func (m ArtifactReviewModel) WithDecisionError(err error) ArtifactReviewModel {
-	if m.nuiForm == nil {
-		return m
-	}
-	m.nuiForm.decisionErr = err
-	m.detached = false
-	m.decided = false
-	m.showMenu = false
-	_ = m.nuiForm.Focus()
-	return m
-}
-
-// DecisionError returns the last orchestrator decision error surfaced
-// on the questionnaire, if any. Returns nil for review modes that do
-// not use this surface.
-func (m ArtifactReviewModel) DecisionError() error {
-	if m.nuiForm == nil {
-		return nil
-	}
-	return m.nuiForm.decisionErr
-}
-
-// AllAnswered reports whether every question in the need-user-input
-// gate has a non-empty answer. Returns false for non-questionnaire
-// review modes so callers can guard uniformly.
-func (m ArtifactReviewModel) AllAnswered() bool {
-	if m.nuiForm == nil {
-		return false
-	}
-	return m.nuiForm.AllAnswered()
-}
-
-// GatePath returns the gate artifact path (== artifactPath) when in
-// need-user-input mode, otherwise empty.
-func (m ArtifactReviewModel) GatePath() string {
-	if m.nuiForm == nil {
-		return ""
-	}
-	return m.nuiForm.gatePath
-}
-
-// SetAnswer is a test seam that fills the i-th questionnaire input.
-// Returns the model unchanged for non-questionnaire modes.
-func (m ArtifactReviewModel) SetAnswer(i int, answer string) ArtifactReviewModel {
-	if m.nuiForm == nil {
-		return m
-	}
-	m.nuiForm.SetAnswer(i, answer)
-	return m
 }
 
 // MenuOpen reports whether the Ctrl+D action menu overlay is active.
 func (m ArtifactReviewModel) MenuOpen() bool { return m.showMenu }
-
-// MenuItemLabels returns the menu's labels in render order. Used by
-// tests to verify the resume label gates on AllAnswered in need-user-
-// input mode.
-func (m ArtifactReviewModel) MenuItemLabels() []string {
-	items := m.menuItems()
-	out := make([]string, 0, len(items))
-	for _, it := range items {
-		out = append(out, it.label)
-	}
-	return out
-}
 
 // StopSession stops the lazy chat session if one was started (or is still
 // starting). Call this for terminal review decisions, explicit cancellation,
@@ -1104,9 +919,6 @@ func (m *ArtifactReviewModel) recalcLayout() {
 
 // View renders the artifact review model.
 func (m ArtifactReviewModel) View() string {
-	if m.nuiForm != nil {
-		return m.renderNeedUserInputView()
-	}
 	var sb strings.Builder
 
 	sb.WriteString(m.renderHeader())
@@ -1279,11 +1091,6 @@ func (m ArtifactReviewModel) renderMenuOverlay(bg string) string {
 			prefix = "▸ "
 			style = style.Bold(true).Foreground(colorBrand)
 		}
-		// Visually dim Resume in need-user-input mode while answers are
-		// still incomplete so the gating reason is obvious to the user.
-		if m.nuiForm != nil && item.decision == "resume" && !m.nuiForm.AllAnswered() {
-			style = style.Foreground(lipgloss.Color("240"))
-		}
 		menuLines = append(menuLines, style.Render(prefix+item.label))
 	}
 
@@ -1300,28 +1107,4 @@ func (m ArtifactReviewModel) renderMenuOverlay(bg string) string {
 		Render(menuContent)
 
 	return overlayModal(bg, menuBox, m.width, m.height)
-}
-
-// renderNeedUserInputView renders the questionnaire-mode body wrapped
-// in the same artifact-review header / footer / menu chrome the user
-// already knows from review gates.
-func (m ArtifactReviewModel) renderNeedUserInputView() string {
-	var sb strings.Builder
-	sb.WriteString(m.renderHeader())
-
-	panelW := max(m.width-2, 20)
-	body := m.nuiForm.View()
-	box := panelStyle(true).Width(panelW).Render(body)
-	titleStyle := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
-	box = renderBorderTitle(box, " Need User Input ", titleStyle)
-	sb.WriteString(box)
-	sb.WriteString("\n")
-
-	hintStyle := lipgloss.NewStyle().Foreground(colorSubtext)
-	sb.WriteString(hintStyle.Render("Tab/Shift+Tab: navigate │ Ctrl+D: actions menu │ Esc: actions menu"))
-
-	if m.showMenu {
-		return m.renderMenuOverlay(sb.String())
-	}
-	return sb.String()
 }

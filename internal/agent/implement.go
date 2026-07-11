@@ -407,10 +407,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				sessionID = cfg.Feature.ID + "-impl"
 			}
 			sessionID += fmt.Sprintf("-%02d", i)
-			startSession := cfg.SessionStartFunc
-			if startSession == nil {
-				startSession = sm.StartSession
-			}
+			startSession := resolveSessionStartFunc(cfg.SessionStartFunc, sm)
 			sess, err = startSession(
 				sessionID,
 				cfg.Feature.ID,

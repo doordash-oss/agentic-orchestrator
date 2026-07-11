@@ -188,12 +188,7 @@ func isLoopbackBaseURL(raw string) bool {
 	if err != nil || u.Scheme != "http" || u.Host == "" {
 		return false
 	}
-	host := u.Hostname()
-	if host == hostLocalhost {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	return isLoopbackHost(u)
 }
 
 func isLoopbackOrigin(raw string) bool {
@@ -201,6 +196,12 @@ func isLoopbackOrigin(raw string) bool {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return false
 	}
+	return isLoopbackHost(u)
+}
+
+// isLoopbackHost reports whether u's hostname is localhost or a loopback IP.
+// Callers first apply their own scheme/host guard.
+func isLoopbackHost(u *url.URL) bool {
 	host := u.Hostname()
 	if host == hostLocalhost {
 		return true

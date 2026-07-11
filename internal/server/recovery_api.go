@@ -16,6 +16,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -24,9 +25,7 @@ import (
 )
 
 func (h *apiHandler) handleRecoveryRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
 	if h.mutations == nil {
@@ -53,9 +52,7 @@ func (h *apiHandler) handleRecoveryRoute(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *apiHandler) handleRecoveryActionRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if !h.requireTrustedMutation(w, r) {
@@ -167,17 +164,13 @@ func decodeRecoveryActions(items []ports.RecoveryItem, raw map[string]string) (m
 	for key, action := range raw {
 		itemAllowed, ok := allowed[key]
 		if !ok {
-			return nil, errBadRecoveryAction("unknown recovery item " + key)
+			return nil, errors.New("unknown recovery item " + key)
 		}
 		parsed, ok := itemAllowed[strings.ToLower(strings.TrimSpace(action))]
 		if !ok {
-			return nil, errBadRecoveryAction("invalid recovery action for " + key)
+			return nil, errors.New("invalid recovery action for " + key)
 		}
 		actions[key] = parsed
 	}
 	return actions, nil
 }
-
-type errBadRecoveryAction string
-
-func (e errBadRecoveryAction) Error() string { return string(e) }

@@ -41,7 +41,7 @@ func TestChatModelApplyEventsFinalizesAssistantTurn(t *testing.T) {
 		t.Fatal("assistant turn remained in progress after completed event")
 	}
 	for _, want := range []string{testAssistantTextFirstParagraph, testAssistantTextSecondParagraph} {
-		if !containsPlainText(m.turns[0].Text, want) {
+		if !strings.Contains(m.turns[0].Text, want) {
 			t.Fatalf("assistant turn missing %q: %q", want, m.turns[0].Text)
 		}
 	}
@@ -70,8 +70,4 @@ func TestChatModelApplyEventsActivatesPendingQuestion(t *testing.T) {
 	if !m.hasActiveQuestion() || m.pendingAskRequestID != testAskRequestID {
 		t.Fatalf("pending question was not activated: requestID=%q questions=%+v", m.pendingAskRequestID, m.questions)
 	}
-}
-
-func containsPlainText(haystack, needle string) bool {
-	return strings.Contains(haystack, needle)
 }

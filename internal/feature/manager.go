@@ -1274,10 +1274,10 @@ func phaseBeforeTarget(target Phase) Phase {
 	}
 }
 
-// RewindablePhases returns the phases a feature can rewind to, based on current status.
-func RewindablePhases(f *Feature) []Phase {
-	// Determine what phases have been completed based on status
-	var completedUpTo Phase
+// completedPhaseFor determines the furthest phase completed by f based on its
+// current status. ok is false when the status has no completed phase (e.g.
+// StatusCreated, StatusBuildingKB).
+func completedPhaseFor(f *Feature) (completedUpTo Phase, ok bool) {
 	switch f.Status {
 	case StatusInquiring, StatusInquireReady, StatusPromptNeedsReview:
 		completedUpTo = PhaseInquire
@@ -1303,7 +1303,16 @@ func RewindablePhases(f *Feature) []Phase {
 			completedUpTo = PhaseImplement
 		}
 	default:
-		return nil // StatusCreated, StatusBuildingKB, etc.
+		return 0, false // StatusCreated, StatusBuildingKB, etc.
+	}
+	return completedUpTo, true
+}
+
+// RewindablePhases returns the phases a feature can rewind to, based on current status.
+func RewindablePhases(f *Feature) []Phase {
+	completedUpTo, ok := completedPhaseFor(f)
+	if !ok {
+		return nil
 	}
 
 	allPhases := []Phase{PhaseInquire, PhaseResearch, PhaseDesign, PhasePlan, PhaseImplement}
@@ -1329,31 +1338,8 @@ type RewindChoice struct {
 // Pipeline upgrades are handled separately via UpgradePipeline.
 func RewindChoicesForFeature(f *Feature) []RewindChoice {
 	// Determine completedUpTo using the same logic as RewindablePhases
-	var completedUpTo Phase
-	switch f.Status {
-	case StatusInquiring, StatusInquireReady, StatusPromptNeedsReview:
-		completedUpTo = PhaseInquire
-	case StatusResearching, StatusDesignReady, StatusInquiryNeedsReview:
-		completedUpTo = PhaseResearch
-	case StatusDesigning, StatusPlanReady, StatusResearchNeedsReview:
-		completedUpTo = PhaseDesign
-	case StatusDesignNeedsReview:
-		completedUpTo = PhaseDesign
-	case StatusPlanNeedsReview:
-		completedUpTo = PhasePlan
-		if f.PendingReviewPhase != nil && f.IsRewind && *f.PendingReviewPhase == PhaseImplement {
-			completedUpTo = PhaseImplement
-		}
-	case StatusPlanning, StatusImplementReady:
-		completedUpTo = PhasePlan
-	case StatusImplementing, StatusReviewPassed, StatusCodeReady, StatusPublished, StatusDone:
-		completedUpTo = PhaseImplement
-	case StatusFailed, StatusInterrupted:
-		completedUpTo = f.CurrentPhase
-		if completedUpTo == PhaseReview {
-			completedUpTo = PhaseImplement
-		}
-	default:
+	completedUpTo, ok := completedPhaseFor(f)
+	if !ok {
 		return nil
 	}
 

@@ -78,9 +78,9 @@ type EditConfigModel struct {
 	discardConfirm bool
 	// isWorkspace is true when this overlay edits config.Defaults (built via
 	// NewWorkspaceEditConfigModel) rather than a specific feature's config.
-	// Consulted in exactly one place: AppModel.Update's edit-config save
+	// Consulted in APIAppModel.handleAPIConfigEditorKey's edit-config save
 	// dispatch, which branches to saveWorkspaceConfigCmd instead of
-	// saveConfigCmd.
+	// saveFeatureConfigCmd.
 	isWorkspace bool
 }
 

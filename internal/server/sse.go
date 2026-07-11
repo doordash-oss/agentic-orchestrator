@@ -126,10 +126,6 @@ func newEventBrokerWithOptions(opts eventBrokerOptions) *eventBroker {
 	}
 }
 
-func newEventBrokerForTest(opts eventBrokerOptions) *eventBroker {
-	return newEventBrokerWithOptions(opts)
-}
-
 func (b *eventBroker) subscribe() chan SSEEventDTO {
 	ch, _, _ := b.subscribeAfter(0, "")
 	return ch
@@ -465,17 +461,13 @@ func setStreamWriteDeadline(w http.ResponseWriter) {
 }
 
 func (b *eventBroker) snapshotRequiredEvent(kind string, resource ResourceDTO) SSEEventDTO {
-	return b.prepareControlEvent(kind, resource, true)
-}
-
-func (b *eventBroker) prepareControlEvent(kind string, resource ResourceDTO, snapshotRequired bool) SSEEventDTO {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.assignEnvelopeLocked(SSEEventDTO{
 		APIVersion:       APIVersion,
 		Kind:             kind,
 		Resource:         resource,
-		SnapshotRequired: snapshotRequired,
+		SnapshotRequired: true,
 	})
 }
 
@@ -484,19 +476,20 @@ func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
 	case ports.Event:
 		return eventDTOFromDomain(ev)
 	case session.SDKEventMsg:
+		resource := ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()}
 		if ev.Message.ControlRequest != nil {
+			kind := "permission.updated"
 			if ev.Message.ControlRequest.Request.ToolName == toolNameAskUserQuestion {
-				return snapshotRequiredEventDTO("prompt.updated", ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
-			} else {
-				return snapshotRequiredEventDTO("permission.updated", ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
+				kind = "prompt.updated"
 			}
+			return snapshotRequiredEventDTO(kind, resource)
 		}
 		return SSEEventDTO{
 			APIVersion:       APIVersion,
 			Kind:             sseEventSessionOutputActivity,
 			At:               time.Now().UTC(),
-			Resource:         ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()},
-			Revision:         revisionForAny(ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()}),
+			Resource:         resource,
+			Revision:         revisionForAny(resource),
 			SnapshotRequired: false,
 			RecordCount:      ev.RecordCount,
 		}

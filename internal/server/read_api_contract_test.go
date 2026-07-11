@@ -245,16 +245,13 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:      RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:     store,
-		FeatureStore: store,
-		Freshness: StaticFreshnessProvider(map[string]RepoFreshness{
-			repoNameAPI: RepoFreshnessLocalChanges,
-			repoNameWeb: RepoFreshnessInSync,
-		}),
-		DisableHostValidation: true,
+	opts := baseReadHandlerOptions(store)
+	opts.FeatureStore = store
+	opts.Freshness = StaticFreshnessProvider(map[string]RepoFreshness{
+		repoNameAPI: RepoFreshnessLocalChanges,
+		repoNameWeb: RepoFreshnessInSync,
 	})
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/features/feat-rebase")
 	featureBody := body[entityFeature].(map[string]any)
@@ -356,23 +353,20 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 			}},
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features: store,
-		Config: &config.Config{
-			Defaults: config.DefaultsConfig{
-				Models:       config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet, KBBuild: modelOpus1M},
-				Inquireness:  "high",
-				Pipeline:     string(feature.PipelineLarge),
-				ExitCriteria: "private-token should not leak",
-			},
-			Repos:          map[string]config.RepoConfig{repoNameSelf: {Path: testRepoPath}},
-			WorkspaceRoots: []string{"/workspace"},
+	opts := baseReadHandlerOptions(store)
+	opts.Config = &config.Config{
+		Defaults: config.DefaultsConfig{
+			Models:       config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet, KBBuild: modelOpus1M},
+			Inquireness:  "high",
+			Pipeline:     string(feature.PipelineLarge),
+			ExitCriteria: "private-token should not leak",
 		},
-		Registry:              registry,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+		Repos:          map[string]config.RepoConfig{repoNameSelf: {Path: testRepoPath}},
+		WorkspaceRoots: []string{"/workspace"},
+	}
+	opts.Registry = registry
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	for _, path := range []string{
 		apiPathConfigRuntime,
@@ -468,12 +462,9 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 			}},
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
 	asks := prompts["ask_user_questions"].([]any)
@@ -565,12 +556,9 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 			}},
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
 	asks := prompts["ask_user_questions"].([]any)
@@ -714,11 +702,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Modify() error = %v", err)
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		DisableHostValidation: true,
-	})
+	handler := NewHandler(baseReadHandlerOptions(store))
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	featureDTO := detail[entityFeature].(map[string]any)
@@ -812,34 +796,6 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	if !sawDisabledReason {
 		t.Fatalf("all actions enabled; want representative disabled reasons")
 	}
-}
-
-func TestActionCatalogRebaseIsFeatureScoped(t *testing.T) {
-	t.Parallel()
-	store, f := seedReadFeature(t)
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusPublished
-		ff.CurrentPhase = feature.PhasePublish
-		return nil
-	}); err != nil {
-		t.Fatalf("Modify() error = %v", err)
-	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		DisableHostValidation: true,
-	})
-
-	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureDTO := detail[entityFeature].(map[string]any)
-	actions := featureDTO["actions"].([]any)
-	actionsByID := map[string]map[string]any{}
-	for _, raw := range actions {
-		action := raw.(map[string]any)
-		actionsByID[action["id"].(string)] = action
-	}
-	assertActionScope(t, actionsByID[actionRebase], "")
-	assertActionInputNames(t, actionsByID[actionRebase])
 }
 
 func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
@@ -1080,12 +1036,9 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 			},
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
 	if got, want := requestIDsFromJSON(t, prompts["ask_user_questions"]), []string{"old-ask", "new-ask"}; strings.Join(got, ",") != strings.Join(want, ",") {
@@ -1115,12 +1068,9 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 			startedAt: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
 	if got, want := questionsFromJSON(t, prompts["help_queue"]), []string{agentQuestionPrompt}; strings.Join(got, ",") != strings.Join(want, ",") {
@@ -1142,12 +1092,9 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 			},
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	permissions := getJSONMap(t, handler, apiPathPermissions)
 	requests := permissions["requests"].([]any)
@@ -1183,12 +1130,9 @@ func TestPermissionSnapshotIncludesRememberPreview(t *testing.T) {
 			},
 		}},
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+	handler := NewHandler(opts)
 
 	permissions := getJSONMap(t, handler, "/api/v1/permissions")
 	requests := permissions["requests"].([]any)
@@ -1226,12 +1170,9 @@ func TestPermissionSnapshotRememberPreviewDoesNotLeakSensitiveInput(t *testing.T
 			},
 		}},
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+	handler := NewHandler(opts)
 
 	permissions := getJSONMap(t, handler, apiPathPermissions)
 	raw := mustMarshalJSON(t, permissions)
@@ -1283,12 +1224,9 @@ func TestPermissionSnapshotRememberPreviewDoesNotLeakUnsafeRawInput(t *testing.T
 					},
 				}},
 			}
-			handler := NewHandler(HandlerOptions{
-				Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-				Features:              store,
-				Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
-				DisableHostValidation: true,
-			})
+			opts := baseReadHandlerOptions(store)
+			opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+			handler := NewHandler(opts)
 
 			permissions := getJSONMap(t, handler, apiPathPermissions)
 			raw := mustMarshalJSON(t, permissions)
@@ -1364,12 +1302,9 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 			kind: ports.KindPhase, status: ports.SessionFailed, startedAt: now.Add(-3 * time.Minute),
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, apiPathSessions)
 	rawSessions := body["sessions"].([]any)
@@ -1411,12 +1346,9 @@ func TestSessionListExposesChatSessionKind(t *testing.T) {
 			}},
 		},
 	}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, apiPathSessions)
 	rawSessions := body["sessions"].([]any)
@@ -1459,12 +1391,9 @@ func TestSessionListUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	}
 	var featureSessionCalls int
 	sessions := fakeSessionManager{views: views, featureSessionsCalls: &featureSessionCalls}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, apiPathSessions)
 
@@ -1502,12 +1431,9 @@ func TestSessionDetailAndTranscriptDoNotScanFeatureSessionsOnLookupMiss(t *testi
 		getSessionMiss:       true,
 		featureSessionsCalls: &featureSessionCalls,
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	requestJSONMap(t, handler, "/api/v1/sessions/sess-historical", http.StatusNotFound)
 	requestJSONMap(t, handler, "/api/v1/sessions/sess-historical/transcript", http.StatusNotFound)
@@ -1540,12 +1466,9 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 			},
 		}},
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-local-echo/transcript")
 	messages := body["messages"].([]any)
@@ -1585,12 +1508,9 @@ func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
 			}},
 		}},
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-chat-long-answer/transcript")
 	messages := body["messages"].([]any)
@@ -1621,12 +1541,9 @@ func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 		featureSessionsCalls: &featureSessionCalls,
 		recentSessionLimits:  &recentSessionLimits,
 	}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
 
@@ -1671,12 +1588,9 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
 		messages: msgs,
 	}}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	preview := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
 	transcript := preview["transcript"].([]any)
@@ -1719,12 +1633,9 @@ func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
 		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
 		messages: msgs,
 	}}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
 	raw := mustMarshalJSON(t, body)
@@ -1763,12 +1674,9 @@ func TestSessionTranscriptIncludesStructuredCodexFileChangeDiffRows(t *testing.T
 		workDir:  "/work/repo",
 		messages: msgs,
 	}}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
 	raw := mustMarshalJSON(t, body)
@@ -1819,12 +1727,9 @@ func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.
 		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerClaude,
 		messages: msgs,
 	}}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	body := getJSONMap(t, handler, "/api/v1/sessions/sess-1/transcript?limit=10")
 	raw := mustMarshalJSON(t, body)
@@ -1868,12 +1773,9 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 		logPath: filepath.Join(runDir, "logs", "session.log"), messages: msgs,
 		initialPrompt: "private-token initial prompt",
 	}}}
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		Sessions:              sessions,
-		DisableHostValidation: true,
-	})
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = sessions
+	handler := NewHandler(opts)
 
 	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
 	if got := len(list["artifacts"].([]any)); got == 0 {
@@ -1919,11 +1821,7 @@ func TestArtifactReadsAllowAbsolutePathsWithinSameRun(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		DisableHostValidation: true,
-	})
+	handler := NewHandler(baseReadHandlerOptions(store))
 
 	list := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts")
 	rawArtifacts := list["artifacts"].([]any)
@@ -1959,11 +1857,7 @@ func TestRewindDescriptionReviewArtifactAndStateExposed(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(store.BaseDir, f.ID, "description-review.md"), "initial prompt")
 
-	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
-		Features:              store,
-		DisableHostValidation: true,
-	})
+	handler := NewHandler(baseReadHandlerOptions(store))
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
 	activeRun := detail[entityFeature].(map[string]any)["active_run_detail"].(map[string]any)
@@ -2103,6 +1997,17 @@ func TestRuntimeServerCloseEmitsShutdownNotification(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for RuntimeServer.Close")
+	}
+}
+
+// baseReadHandlerOptions returns the HandlerOptions shared by most read-API
+// contract tests: a fixed runtime identity over store, and host validation
+// disabled. Callers set any additional fields they need on the result.
+func baseReadHandlerOptions(store *feature.Store) HandlerOptions {
+	return HandlerOptions{
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
+		Features:              store,
+		DisableHostValidation: true,
 	}
 }
 

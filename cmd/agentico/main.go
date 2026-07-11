@@ -657,17 +657,8 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 	models, err := discoverModelCatalog(discoveryCtx, discoverer, reportModel)
 	cancel()
 	if err != nil {
-		if refreshModels && cacheRoot != "" && version != "" {
-			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
-				enricher.SetModelCatalog(cached.Models)
-				warnings = append(warnings, fmt.Sprintf(
-					"Warning: could not refresh %s model catalog; using stale cache from %s: %v",
-					providerName,
-					cached.DiscoveredAt.Format(time.RFC3339),
-					err,
-				))
-				return warnings
-			}
+		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, err.Error()); ok {
+			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: could not discover %s model catalog; using built-in fallback: %v",
@@ -677,16 +668,8 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		return warnings
 	}
 	if len(models) == 0 {
-		if refreshModels && cacheRoot != "" && version != "" {
-			if cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version); cerr == nil {
-				enricher.SetModelCatalog(cached.Models)
-				warnings = append(warnings, fmt.Sprintf(
-					"Warning: could not refresh %s model catalog; discovered empty catalog; using stale cache from %s",
-					providerName,
-					cached.DiscoveredAt.Format(time.RFC3339),
-				))
-				return warnings
-			}
+		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, "discovered empty catalog"); ok {
+			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, fmt.Sprintf(
 			"Warning: discovered empty %s model catalog; using built-in fallback",
@@ -705,6 +688,26 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		}
 	}
 	return warnings
+}
+
+// tryStaleCacheFallback serves a previously cached catalog when a refresh
+// failed (reason); ok is false if no cache fallback applies.
+func tryStaleCacheFallback(enricher llm.CatalogEnricher, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]string, bool) {
+	if !refreshModels || cacheRoot == "" || version == "" {
+		return nil, false
+	}
+	cached, cerr := loadProviderCatalogCacheFile(cacheRoot, providerName, version)
+	if cerr != nil {
+		return nil, false
+	}
+	enricher.SetModelCatalog(cached.Models)
+	warning := fmt.Sprintf(
+		"Warning: could not refresh %s model catalog; %s; using stale cache from %s",
+		providerName,
+		reason,
+		cached.DiscoveredAt.Format(time.RFC3339),
+	)
+	return []string{warning}, true
 }
 
 func discoverModelCatalog(ctx context.Context, discoverer llm.CatalogDiscoverer, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
@@ -1998,36 +2001,28 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch config.Defau
 			changed = true
 		}
 	}
-	if patch.ExitCriteria != "" && patch.ExitCriteria != dst.ExitCriteria {
-		dst.ExitCriteria = patch.ExitCriteria
+	if patch.ExitCriteria != "" && setIfChanged(&dst.ExitCriteria, patch.ExitCriteria) {
 		changed = true
 	}
-	if patch.Inquireness != "" && patch.Inquireness != dst.Inquireness {
-		dst.Inquireness = patch.Inquireness
+	if patch.Inquireness != "" && setIfChanged(&dst.Inquireness, patch.Inquireness) {
 		changed = true
 	}
-	if patch.Pipeline != "" && patch.Pipeline != dst.Pipeline {
-		dst.Pipeline = patch.Pipeline
+	if patch.Pipeline != "" && setIfChanged(&dst.Pipeline, patch.Pipeline) {
 		changed = true
 	}
-	if patch.MaxIterations > 0 && patch.MaxIterations != dst.MaxIterations {
-		dst.MaxIterations = patch.MaxIterations
+	if patch.MaxIterations > 0 && setIfChanged(&dst.MaxIterations, patch.MaxIterations) {
 		changed = true
 	}
-	if patch.MaxConsecutiveFailures > 0 && patch.MaxConsecutiveFailures != dst.MaxConsecutiveFailures {
-		dst.MaxConsecutiveFailures = patch.MaxConsecutiveFailures
+	if patch.MaxConsecutiveFailures > 0 && setIfChanged(&dst.MaxConsecutiveFailures, patch.MaxConsecutiveFailures) {
 		changed = true
 	}
-	if patch.MaxConsecutiveNoProgress > 0 && patch.MaxConsecutiveNoProgress != dst.MaxConsecutiveNoProgress {
-		dst.MaxConsecutiveNoProgress = patch.MaxConsecutiveNoProgress
+	if patch.MaxConsecutiveNoProgress > 0 && setIfChanged(&dst.MaxConsecutiveNoProgress, patch.MaxConsecutiveNoProgress) {
 		changed = true
 	}
-	if patch.MaxPhasePlanIterations > 0 && patch.MaxPhasePlanIterations != dst.MaxPhasePlanIterations {
-		dst.MaxPhasePlanIterations = patch.MaxPhasePlanIterations
+	if patch.MaxPhasePlanIterations > 0 && setIfChanged(&dst.MaxPhasePlanIterations, patch.MaxPhasePlanIterations) {
 		changed = true
 	}
-	if patch.Checkpoints != (config.Checkpoints{}) && patch.Checkpoints != dst.Checkpoints {
-		dst.Checkpoints = patch.Checkpoints
+	if patch.Checkpoints != (config.Checkpoints{}) && setIfChanged(&dst.Checkpoints, patch.Checkpoints) {
 		changed = true
 	}
 	if len(patch.PipelinePreferences) > 0 {
@@ -2035,6 +2030,15 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch config.Defau
 		changed = true
 	}
 	return changed
+}
+
+// setIfChanged assigns val to *dst and reports true if that changed dst's value.
+func setIfChanged[T comparable](dst *T, val T) bool {
+	if val == *dst {
+		return false
+	}
+	*dst = val
+	return true
 }
 
 func sameStringSlice(a, b []string) bool {
@@ -2115,28 +2119,11 @@ func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeli
 }
 
 func parseServerPhase(in string) feature.Phase {
-	switch strings.ToLower(strings.TrimSpace(in)) {
-	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
-		return feature.PhaseKnowledgeBase
-	case phaseNameInquire:
-		return feature.PhaseInquire
-	case phaseNameResearch:
-		return feature.PhaseResearch
-	case "design":
-		return feature.PhaseDesign
-	case phaseNamePlan:
-		return feature.PhasePlan
-	case phaseNameImplement:
-		return feature.PhaseImplement
-	case phaseNameReview:
-		return feature.PhaseReview
-	case phaseNameFinalReview, "final review":
-		return feature.PhaseFinalReview
-	case phaseNamePublish:
-		return feature.PhasePublish
-	default:
+	phase, err := parseServerPhaseStrict(in)
+	if err != nil {
 		return feature.Phase(0)
 	}
+	return phase
 }
 
 func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stderr io.Writer) (*runtimeBootstrap, error) {
@@ -2631,42 +2618,58 @@ func resolveDefaultLaunchPolicy(ctx context.Context, req defaultLaunchRequest) (
 	return runtimeLaunchPolicy(registry, req.DangerouslySkipPermissions), nil
 }
 
+// knownProviderNames is the fixed set of names accepted by --providers.
+func knownProviderNames() []string {
+	return []string{providerNameClaude, providerNameCodex, providerNameOpencode}
+}
+
+// normalizeProviderNames validates/trims enabled against knownProviderNames,
+// defaulting to all of them when enabled is nil and reporting unknowns via
+// warn. warnBlank preserves each caller's differing blank-name behavior.
+func normalizeProviderNames(enabled []string, warnBlank bool, warn func(name string)) []string {
+	if enabled == nil {
+		return knownProviderNames()
+	}
+	known := make(map[string]bool)
+	for _, name := range knownProviderNames() {
+		known[name] = true
+	}
+	var valid []string
+	for _, name := range enabled {
+		name = strings.TrimSpace(name)
+		if name == "" && !warnBlank {
+			continue
+		}
+		if known[name] {
+			valid = append(valid, name)
+			continue
+		}
+		if warn != nil {
+			warn(name)
+		}
+	}
+	return valid
+}
+
 func newLaunchPolicyRegistry(enabled []string, stderr io.Writer) (*llm.Registry, error) {
+	names := normalizeProviderNames(enabled, false, func(name string) {
+		if stderr != nil {
+			fmt.Fprintf(stderr, "Warning: unknown provider %q, skipping\n", name)
+		}
+	})
+	if len(names) == 0 {
+		return nil, errors.New("no valid providers specified in --providers flag")
+	}
 	registry := llm.NewRegistry()
-	register := func(name string) bool {
-		switch strings.TrimSpace(name) {
+	for _, name := range names {
+		switch name {
 		case providerNameClaude:
 			registry.Register(&claude.Provider{})
-			return true
 		case providerNameCodex:
 			registry.Register(&codex.Provider{})
-			return true
 		case providerNameOpencode:
 			registry.Register(&opencode.Provider{})
-			return true
-		case "":
-			return false
-		default:
-			if stderr != nil {
-				fmt.Fprintf(stderr, "Warning: unknown provider %q, skipping\n", strings.TrimSpace(name))
-			}
-			return false
 		}
-	}
-	if enabled == nil {
-		register(providerNameClaude)
-		register(providerNameCodex)
-		register(providerNameOpencode)
-		return registry, nil
-	}
-	valid := 0
-	for _, name := range enabled {
-		if register(name) {
-			valid++
-		}
-	}
-	if valid == 0 {
-		return nil, errors.New("no valid providers specified in --providers flag")
 	}
 	return registry, nil
 }
@@ -3136,23 +3139,18 @@ func providerFxModules(enabled []string) []fx.Option {
 		providerNameOpencode: opencode.Module,
 	}
 
-	if enabled == nil {
-		return []fx.Option{claude.Module, codex.Module, opencode.Module}
-	}
+	names := normalizeProviderNames(enabled, true, func(name string) {
+		fmt.Fprintf(os.Stderr, "Warning: unknown provider %q, skipping\n", name)
+	})
 
-	var modules []fx.Option
-	for _, name := range enabled {
-		name = strings.TrimSpace(name)
-		if mod, ok := all[name]; ok {
-			modules = append(modules, mod)
-		} else {
-			fmt.Fprintf(os.Stderr, "Warning: unknown provider %q, skipping\n", name)
-		}
-	}
-
-	if len(modules) == 0 {
+	if len(names) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: no valid providers specified in --providers flag")
 		os.Exit(1)
+	}
+
+	modules := make([]fx.Option, 0, len(names))
+	for _, name := range names {
+		modules = append(modules, all[name])
 	}
 
 	return modules

@@ -94,28 +94,11 @@ func (p *Provider) AvailableModels() []string {
 	return ids
 }
 
-// MapEffortLevel maps a provider-agnostic EffortLevel to Codex's model_reasoning_effort value.
-// Codex accepts: low, medium, high, xhigh.
-func MapEffortLevel(level llm.EffortLevel) string {
-	switch level {
-	case llm.EffortLow:
-		return "low"
-	case llm.EffortMedium:
-		return "medium"
-	case llm.EffortHigh:
-		return "high"
-	case llm.EffortMax:
-		return "xhigh"
-	default:
-		return "high" // safe default
-	}
-}
-
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	// Interactive: app-server mode. Model/prompt delivered via JSON-RPC.
 	args := []string{p.cliBinary(), "app-server"}
 	if opts.EffortLevel != "" {
-		args = append(args, "-c", "model_reasoning_effort="+MapEffortLevel(opts.EffortLevel))
+		args = append(args, "-c", "model_reasoning_effort="+llm.MapStandardEffortLevel(opts.EffortLevel))
 	}
 	if window := p.contextWindowOverrideForModel(opts.Model); window > 0 {
 		args = append(args, "-c", fmt.Sprintf("model_context_window=%d", window))

@@ -476,18 +476,11 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 		for _, c := range t.Comments {
 			commentIdx++
 			b.WriteString(fmt.Sprintf("#### Comment %d (ID: %d) — `repo: %s`\n", commentIdx, c.ID, t.RepoName))
-			switch c.Type {
-			case ports.CommentTypeIssue:
-				b.WriteString("**Location**: PR conversation\n")
-			case ports.CommentTypeReviewBody:
-				b.WriteString("**Location**: PR review\n")
-			default:
-				b.WriteString(fmt.Sprintf("**File**: `%s`", c.Path))
-				if c.Line > 0 {
-					b.WriteString(fmt.Sprintf(":%d", c.Line))
-				}
-				b.WriteString("\n")
+			b.WriteString(fmt.Sprintf("**File**: `%s`", c.Path))
+			if c.Line > 0 {
+				b.WriteString(fmt.Sprintf(":%d", c.Line))
 			}
+			b.WriteString("\n")
 			b.WriteString(fmt.Sprintf("**Author**: @%s\n", c.User.Login))
 			if c.DiffHunk != "" {
 				b.WriteString(fmt.Sprintf("**Context**:\n```diff\n%s\n```\n", c.DiffHunk))

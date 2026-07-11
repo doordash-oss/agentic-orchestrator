@@ -137,7 +137,7 @@ func TestSortReviewCommentsChronologically(t *testing.T) {
 		{ID: 2, CreatedAt: "2026-07-07T11:00:00Z"},
 	}
 
-	sortReviewCommentsChronologically(comments)
+	SortReviewCommentsChronologically(comments)
 
 	for i, wantID := range []int{1, 2, 3} {
 		if comments[i].ID != wantID {

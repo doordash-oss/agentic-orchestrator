@@ -157,10 +157,6 @@ func (a *ReviewCommentAdapter) ReplyToPRComment(repoPath, prURL string, commentI
 	return ReplyToPRComment(repoPath, prURL, commentID, body)
 }
 
-func (a *ReviewCommentAdapter) ReplyToIssueComment(repoPath, prURL string, body string) error {
-	return ReplyToIssueComment(repoPath, prURL, body)
-}
-
 func (a *ReviewCommentAdapter) FetchReviewThreadMap(repoPath, prURL string) (map[int]string, error) {
 	return FetchReviewThreadMap(repoPath, prURL)
 }

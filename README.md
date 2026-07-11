@@ -301,7 +301,7 @@ extended coverage remains available.
 | Fast suite | `make test-fast` | 23s, target <=30s | Everyday all-package short-mode check before handoff. |
 | E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Builds the binary and checks CLI flags plus embedded skill layout. |
 | Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Lifecycle, state-machine, and protocol-violation coverage. |
-| E2E Go (TUI / teatest) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Full TUI and teatest behavior with the race detector. |
+| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Full TUI and process-launch behavior with the race detector. |
 | TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Observer-backed TUI event and feature-span integration coverage. |
 | Race regression | `go test ./... -count=1 -race` | 158.82s | Extended all-package race/regression sweep. |
 | Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Live skill/guideline discovery against real LLM CLIs. |

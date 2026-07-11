@@ -251,22 +251,6 @@ func (m DashboardModel) shouldRenderLivePreview(f *feature.Feature) bool {
 		isLivePreviewEligible(f)
 }
 
-func (m *DashboardModel) ShowOverview() bool {
-	if !isLivePreviewEligible(m.SelectedFeature()) {
-		return false
-	}
-	m.rightPanelMode = dashboardRightPanelOverview
-	return true
-}
-
-func (m *DashboardModel) ShowLivePreview() bool {
-	if !isLivePreviewEligible(m.SelectedFeature()) {
-		return false
-	}
-	m.rightPanelMode = dashboardRightPanelLivePreview
-	return true
-}
-
 func (m DashboardModel) showingOverviewForLiveFeature() bool {
 	return m.rightPanelMode == dashboardRightPanelOverview && isLivePreviewEligible(m.SelectedFeature())
 }

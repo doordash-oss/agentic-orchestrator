@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -513,13 +514,7 @@ func jsonResponse(v any) (*http.Response, error) {
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
-		Body:       ioNopCloser{Reader: bytes.NewReader(body.Bytes())},
+		Body:       io.NopCloser(bytes.NewReader(body.Bytes())),
 		Header:     make(http.Header),
 	}, nil
 }
-
-type ioNopCloser struct {
-	*bytes.Reader
-}
-
-func (ioNopCloser) Close() error { return nil }

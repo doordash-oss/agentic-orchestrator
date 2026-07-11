@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -29,7 +30,6 @@ import (
 type EventSubscriptionOptions struct {
 	HeartbeatInterval time.Duration
 	ReconnectDelay    time.Duration
-	MaxReconnects     int
 	AfterSeq          uint64
 	Epoch             string
 }
@@ -41,11 +41,9 @@ type RefreshSignal struct {
 }
 
 type RefreshSnapshot struct {
-	Health        *HealthResponse
 	Features      *FeatureListResponse
 	Feature       *FeatureDetailResponse
 	RuntimeConfig *RuntimeConfigResponse
-	FeatureConfig *FeatureConfigResponse
 	Prompts       *PromptSnapshotResponse
 	Permissions   *PermissionSnapshotResponse
 	Recovery      *RecoverySnapshotResponse
@@ -56,11 +54,6 @@ type RefreshSnapshot struct {
 }
 
 const refreshTranscriptLimit = 50
-const chatUtilityFeatureID = ChatSessionID
-
-func isUtilityFeatureID(featureID string) bool {
-	return featureID == chatUtilityFeatureID
-}
 
 func (c *Client) SubscribeEvents(ctx context.Context, opts EventSubscriptionOptions) (<-chan RefreshSignal, <-chan error) {
 	signals := make(chan RefreshSignal, 16)
@@ -81,21 +74,13 @@ func (c *Client) eventLoop(ctx context.Context, opts EventSubscriptionOptions, s
 		reconnectDelay = 250 * time.Millisecond
 	}
 	cursor := eventStreamCursor{seq: opts.AfterSeq, epoch: opts.Epoch}
-	reconnects := 0
 	for {
 		if ctx.Err() != nil {
 			return nil //nolint:nilerr // caller-requested cancellation is expected termination, not a failure
 		}
-		err := c.consumeEvents(ctx, opts, signals, &cursor)
+		_ = c.consumeEvents(ctx, opts, signals, &cursor)
 		if ctx.Err() != nil {
 			return nil //nolint:nilerr // caller-requested cancellation is expected termination, not a failure
-		}
-		reconnects++
-		if opts.MaxReconnects > 0 && reconnects > opts.MaxReconnects {
-			if err != nil {
-				return fmt.Errorf("event stream reconnect limit reached: %w", err)
-			}
-			return fmt.Errorf("event stream reconnect limit reached")
 		}
 		timer := time.NewTimer(reconnectDelay)
 		select {
@@ -123,13 +108,9 @@ func (c *Client) consumeEvents(ctx context.Context, opts EventSubscriptionOption
 			query.Set("epoch", cursor.epoch)
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/api/v1/events", query), nil)
+	req, err := c.newSSERequest(ctx, "/api/v1/events", query)
 	if err != nil {
 		return fmt.Errorf("build event request: %w", err)
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -139,24 +120,52 @@ func (c *Client) consumeEvents(ctx context.Context, opts EventSubscriptionOption
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return decodeAPIError(resp, http.MethodGet, "/api/v1/events")
 	}
-	scanner := bufio.NewScanner(resp.Body)
+	return scanSSEBlocks(resp.Body, func(block sseBlock) (bool, error) {
+		if err := c.dispatchSSEBlock(ctx, block, signals, cursor); err != nil {
+			return false, err
+		}
+		return false, nil
+	})
+}
+
+// newSSERequest builds a GET request against path with the SSE Accept header
+// and, if configured, the client's bearer token — the shared shape of both
+// the event stream and session output stream requests.
+func (c *Client) newSSERequest(ctx context.Context, path string, query url.Values) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint(path, query), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	return req, nil
+}
+
+// scanSSEBlocks reads Server-Sent Events from body, accumulating lines into
+// blocks separated by blank lines, and invokes dispatch on each complete
+// block. It stops early if dispatch reports done or returns an error.
+func scanSSEBlocks(body io.Reader, dispatch func(sseBlock) (done bool, err error)) error {
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var block sseBlock
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
-			if err := c.dispatchSSEBlock(ctx, block, signals, cursor); err != nil {
+			done, err := dispatch(block)
+			if err != nil {
 				return err
 			}
 			block = sseBlock{}
+			if done {
+				return nil
+			}
 			continue
 		}
 		block.addLine(line)
 	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read event stream: %w", err)
-	}
-	return nil
+	return scanner.Err()
 }
 
 func (c *Client) dispatchSSEBlock(ctx context.Context, block sseBlock, signals chan<- RefreshSignal, cursor *eventStreamCursor) error {
@@ -246,10 +255,6 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	}
 	switch {
 	case evt.Kind == sseEventConfigUpdated:
-		if resource.FeatureID != "" {
-			cfg, err := c.FeatureConfig(ctx, resource.FeatureID)
-			return RefreshSnapshot{FeatureConfig: &cfg}, err
-		}
 		cfg, err := c.RuntimeConfig(ctx)
 		return RefreshSnapshot{RuntimeConfig: &cfg}, err
 	case evt.Kind == "prompt.updated":
@@ -265,20 +270,23 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		snapshot := RefreshSnapshot{}
 		featureID := resource.FeatureID
 		refreshFeatureDetail := false
+		refreshSessions := resource.ID == ""
 		if resource.ID != "" {
 			terminal, err := c.hydrateSessionRefreshSnapshot(ctx, &snapshot, resource.ID, &featureID)
 			if err != nil {
 				return snapshot, err
 			}
 			refreshFeatureDetail = terminal
-		} else {
+			refreshSessions = featureID != "" && featureID != ChatSessionID
+		}
+		if refreshSessions {
 			sessions, err := c.Sessions(ctx)
 			if err != nil {
 				return snapshot, err
 			}
 			snapshot.Sessions = &sessions
 		}
-		if featureID == "" || isUtilityFeatureID(featureID) {
+		if featureID == "" || featureID == ChatSessionID {
 			return snapshot, nil
 		}
 		prompts, err := c.Prompts(ctx)
@@ -317,15 +325,10 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 		}
 		return RefreshSnapshot{Feature: &feature, LivePreview: &preview}, nil
 	case evt.Kind == sseEventRecoveryUpdated:
-		health, err := c.Health(ctx)
-		if err != nil {
-			return RefreshSnapshot{Health: &health}, err
-		}
 		recovery, err := c.Recovery(ctx)
-		return RefreshSnapshot{Health: &health, Recovery: &recovery}, err
+		return RefreshSnapshot{Recovery: &recovery}, err
 	case resource.Type == resourceTypeRuntime || evt.Kind == sseEventShutdownUpdated:
-		health, err := c.Health(ctx)
-		return RefreshSnapshot{Health: &health}, err
+		return RefreshSnapshot{}, nil
 	default:
 		features, err := c.Features(ctx)
 		return RefreshSnapshot{Features: &features}, err
@@ -338,28 +341,23 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 // not subscribed — most notably a session resumed into WaitingHelp whose
 // pending question is otherwise never announced via an event.
 func (c *Client) fetchFullSnapshot(ctx context.Context) (RefreshSnapshot, error) {
-	health, err := c.Health(ctx)
+	features, err := c.Features(ctx)
 	if err != nil {
 		return RefreshSnapshot{}, err
 	}
-	features, err := c.Features(ctx)
-	if err != nil {
-		return RefreshSnapshot{Health: &health}, err
-	}
 	prompts, err := c.Prompts(ctx)
 	if err != nil {
-		return RefreshSnapshot{Health: &health, Features: &features}, err
+		return RefreshSnapshot{Features: &features}, err
 	}
 	permissions, err := c.Permissions(ctx)
 	if err != nil {
-		return RefreshSnapshot{Health: &health, Features: &features, Prompts: &prompts}, err
+		return RefreshSnapshot{Features: &features, Prompts: &prompts}, err
 	}
 	sessions, err := c.Sessions(ctx)
 	if err != nil {
-		return RefreshSnapshot{Health: &health, Features: &features, Prompts: &prompts, Permissions: &permissions}, err
+		return RefreshSnapshot{Features: &features, Prompts: &prompts, Permissions: &permissions}, err
 	}
 	return RefreshSnapshot{
-		Health:      &health,
 		Features:    &features,
 		Prompts:     &prompts,
 		Permissions: &permissions,
@@ -392,10 +390,5 @@ func (c *Client) hydrateSessionRefreshSnapshot(ctx context.Context, snapshot *Re
 }
 
 func isTerminalSessionStatus(status string) bool {
-	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(status), "-", "_")) {
-	case "done", turnStateCompleted, "success", turnStateFailed, "error":
-		return true
-	default:
-		return false
-	}
+	return status == "Done" || status == "Failed"
 }

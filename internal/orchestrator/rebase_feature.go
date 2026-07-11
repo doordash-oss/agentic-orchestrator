@@ -319,34 +319,38 @@ func (o *Orchestrator) smartRebaseContextChangedOutcomes(
 	return changed
 }
 
+// repoWorkDir returns repo's worktree path, falling back to its base path.
+func repoWorkDir(repo feature.FeatureRepo) string {
+	if repo.WorktreePath != "" {
+		return repo.WorktreePath
+	}
+	return repo.Path
+}
+
+// repoBranch returns repo's branch, falling back to "feature/<slug>".
+func repoBranch(f *feature.Feature, repo feature.FeatureRepo) string {
+	if repo.Branch != "" {
+		return repo.Branch
+	}
+	return "feature/" + f.Slug
+}
+
 func (o *Orchestrator) harnessRebaseOutcomeForRepo(f *feature.Feature, repo feature.FeatureRepo) HarnessRebaseRepoOutcome {
-	worktreeDir := repo.WorktreePath
-	if worktreeDir == "" {
-		worktreeDir = repo.Path
-	}
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
 	return HarnessRebaseRepoOutcome{
 		RepoName:     repo.Name,
 		RebaseTarget: o.resolveRebaseTarget(f, &repo),
 		Publishable:  repo.Publishable == nil || *repo.Publishable,
-		WorktreePath: worktreeDir,
-		Branch:       branch,
+		WorktreePath: repoWorkDir(repo),
+		Branch:       repoBranch(f, repo),
 	}
 }
 
 func (o *Orchestrator) rebaseWorktreeFingerprint(repo feature.FeatureRepo) string {
-	worktreeDir := repo.WorktreePath
-	if worktreeDir == "" {
-		worktreeDir = repo.Path
-	}
 	fn := o.worktreeFingerprintFn
 	if fn == nil {
 		fn = gitWorktreeFingerprint
 	}
-	fingerprint, err := fn(worktreeDir)
+	fingerprint, err := fn(repoWorkDir(repo))
 	if err != nil {
 		return "error:" + err.Error()
 	}
@@ -938,10 +942,7 @@ func (o *Orchestrator) resolveBehindSubset(
 
 	for i := range f.Repos {
 		repo := &f.Repos[i]
-		worktreeDir := repo.WorktreePath
-		if worktreeDir == "" {
-			worktreeDir = repo.Path
-		}
+		worktreeDir := repoWorkDir(*repo)
 
 		isHintRepo := repo.Name == hintRepoName
 		hasConflictContext := isHintRepo && (hintRebaseTarget != "" || len(hintConflictFiles) > 0)
@@ -994,6 +995,77 @@ func (o *Orchestrator) resolveBehindSubset(
 	return out
 }
 
+// handleFeatureCycleDone implements the routing shared by
+// handleFeatureRebaseDone, handleFeatureRefactorDone, and
+// handleFeatureReviewCommentsDone: the three unified-cycle loops share the
+// same FinalStatus vocabulary and non-success handling. The caller reduces
+// its concrete *XLoopResult to the primitive fields below; errPrefix labels
+// failure messages (e.g. "rebase"). onPassed/onNeedUserInput/onFailure carry
+// the logic that genuinely differs per cycle type (success finalisation,
+// which repos get a need-user-input gate and how, extra cleanup on
+// failure); onNeedUserInput always receives a gate with Iterations set.
+func (o *Orchestrator) handleFeatureCycleDone(
+	featureID string,
+	repoNames []string,
+	errPrefix string,
+	dispatchFailed bool,
+	dispatchErr error,
+	finalStatus string,
+	iterations int,
+	lastError string,
+	needUserInputPath string,
+	onPassed func(),
+	onNeedUserInput func(gate *agent.LoopResult),
+	onFailure func(),
+) {
+	if dispatchFailed {
+		errMsg := errPrefix + ": dispatch failed"
+		if dispatchErr != nil {
+			errMsg = errPrefix + ": " + dispatchErr.Error()
+		}
+		for _, name := range repoNames {
+			_ = o.deps.Lifecycle.FailRepoCycle(featureID, name, errMsg)
+		}
+		if onFailure != nil {
+			onFailure()
+		}
+		return
+	}
+
+	switch finalStatus {
+	case reviewStatusPassed:
+		onPassed()
+
+	case finalStatusInterrupted, finalStatusNoOp:
+		// Interrupted: persisted state preserved for restart. No-op:
+		// nothing to do. Either way, leave the per-repo cycle entries
+		// in place; the harness recovery / next user action handles
+		// them.
+
+	case finalStatusNeedUserInput:
+		onNeedUserInput(&agent.LoopResult{
+			FinalStatus:       finalStatusNeedUserInput,
+			Iterations:        iterations,
+			LastError:         lastError,
+			NeedUserInputPath: needUserInputPath,
+		})
+
+	default:
+		// max_iterations / safety_rail / failed: surface error per repo
+		// so the TUI can present the failed cycle.
+		errMsg := errPrefix + ": " + finalStatus
+		if lastError != "" {
+			errMsg = errPrefix + ": " + lastError
+		}
+		for _, name := range repoNames {
+			_ = o.deps.Lifecycle.FailRepoCycle(featureID, name, errMsg)
+		}
+		if onFailure != nil {
+			onFailure()
+		}
+	}
+}
+
 // handleFeatureRebaseDone routes the unified rebase loop's result back
 // into the per-repo legacy plumbing so the TUI's existing event chain
 // (RebaseRepoCycleResultMsg, RepoCycleLoopDoneMsg, etc.) keeps working.
@@ -1005,81 +1077,59 @@ func (o *Orchestrator) handleFeatureRebaseDone(
 	result *agent.RebaseLoopResult,
 	loopErr error,
 ) {
-	// Dispatch error or no-result → fail every staged repo with the
-	// dispatch error.
-	if loopErr != nil || result == nil {
-		errMsg := "rebase: dispatch failed"
-		if loopErr != nil {
-			errMsg = "rebase: " + loopErr.Error()
-		}
-		for _, t := range behind {
-			_ = o.deps.Lifecycle.FailRepoCycle(featureID, t.RepoName, errMsg)
-		}
-		return
+	repoNames := make([]string, 0, len(behind))
+	for _, t := range behind {
+		repoNames = append(repoNames, t.RepoName)
 	}
 
-	switch result.FinalStatus {
-	case reviewStatusPassed:
-		// Cycle complete: clear any stale LastError on each rebased repo
-		// and clear each per-repo cycle entry. Feature-level harness
-		// conflicts route smart-rebase success through
-		// runRebaseFinalReviewAndPublishPolicy before reaching publish.
-		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			for _, t := range behind {
-				if st, ok := ff.RepoStates[t.RepoName]; ok && st != nil {
-					st.LastError = ""
+	dispatchFailed := loopErr != nil || result == nil
+	var finalStatus, lastError, needUserInputPath string
+	var iterations int
+	if result != nil {
+		finalStatus = result.FinalStatus
+		iterations = result.Iterations
+		lastError = result.LastError
+		needUserInputPath = result.NeedUserInputPath
+	}
+
+	o.handleFeatureCycleDone(featureID, repoNames, "rebase", dispatchFailed, loopErr,
+		finalStatus, iterations, lastError, needUserInputPath,
+		func() {
+			// Cycle complete: clear any stale LastError on each rebased repo
+			// and clear each per-repo cycle entry. Feature-level harness
+			// conflicts route smart-rebase success through
+			// runRebaseFinalReviewAndPublishPolicy before reaching publish.
+			_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+				for _, name := range repoNames {
+					if st, ok := ff.RepoStates[name]; ok && st != nil {
+						st.LastError = ""
+					}
+				}
+				return nil
+			})
+			for _, name := range repoNames {
+				_ = o.deps.Lifecycle.CompleteRepoCycle(featureID, name)
+			}
+			o.resumePublishAfterPrePRRebase(featureID)
+		},
+		func(gate *agent.LoopResult) {
+			for _, name := range repoNames {
+				o.recordRepoCycleNeedUserInput(featureID, name, feature.CycleRebase, gate)
+			}
+			if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
+				if f.PendingNeedUserInputPath == gate.NeedUserInputPath {
+					f.PendingNeedUserInputPath = ""
+				}
+				return nil
+			}); err != nil {
+				for _, name := range repoNames {
+					o.failRepoCycleGatePersistence(featureID, name,
+						fmt.Errorf("rebase: clear stale feature-level need-user-input gate: %w", err))
 				}
 			}
-			return nil
-		})
-		for _, t := range behind {
-			_ = o.deps.Lifecycle.CompleteRepoCycle(featureID, t.RepoName)
-		}
-		o.resumePublishAfterPrePRRebase(featureID)
-		return
-
-	case finalStatusInterrupted, finalStatusNoOp:
-		// Interrupted: persisted state preserved for restart. No-op:
-		// nothing to do. Either way, leave the per-repo cycle entries
-		// in place; the harness recovery / next user action handles
-		// them.
-		return
-
-	case finalStatusNeedUserInput:
-		gate := &agent.LoopResult{
-			FinalStatus:       finalStatusNeedUserInput,
-			Iterations:        result.Iterations,
-			LastError:         result.LastError,
-			NeedUserInputPath: result.NeedUserInputPath,
-		}
-		for _, t := range behind {
-			o.recordRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleRebase, gate)
-		}
-		if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-			if f.PendingNeedUserInputPath == result.NeedUserInputPath {
-				f.PendingNeedUserInputPath = ""
-			}
-			return nil
-		}); err != nil {
-			for _, t := range behind {
-				o.failRepoCycleGatePersistence(featureID, t.RepoName,
-					fmt.Errorf("rebase: clear stale feature-level need-user-input gate: %w", err))
-			}
-		}
-		return
-
-	default:
-		// max_iterations / safety_rail / failed: surface conflict per
-		// repo so the TUI can present the failed cycle.
-		errMsg := "rebase: " + result.FinalStatus
-		if result.LastError != "" {
-			errMsg = "rebase: " + result.LastError
-		}
-		for _, t := range behind {
-			_ = o.deps.Lifecycle.FailRepoCycle(featureID, t.RepoName, errMsg)
-		}
-		return
-	}
+		},
+		nil,
+	)
 }
 
 func activeRepoCycleOfType(f *feature.Feature, repoName string, cycleType feature.RepoCycleType) bool {

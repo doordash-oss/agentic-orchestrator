@@ -274,99 +274,72 @@ func (o *Orchestrator) handleFeatureRefactorDone(
 	result *agent.RefactorFeatureLoopResult,
 	loopErr error,
 ) {
-	if loopErr != nil || result == nil {
-		errMsg := "refactor: dispatch failed"
-		if loopErr != nil {
-			errMsg = "refactor: " + loopErr.Error()
-		}
-		for _, name := range repoNames {
-			_ = o.deps.Lifecycle.FailRepoCycle(featureID, name, errMsg)
-		}
-		// Clear the refactor prompt on failure so a follow-up refactor
-		// doesn't re-trigger the same broken plan.
-		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			ff.RefactorPrompt = ""
-			return nil
-		})
-		return
+	dispatchFailed := loopErr != nil || result == nil
+	var finalStatus, lastError, needUserInputPath string
+	var iterations int
+	var stagedRepos []string
+	if result != nil {
+		finalStatus = result.FinalStatus
+		iterations = result.Iterations
+		lastError = result.LastError
+		needUserInputPath = result.NeedUserInputPath
+		stagedRepos = result.Repos
+	}
+	stagedSet := make(map[string]bool, len(stagedRepos))
+	for _, n := range stagedRepos {
+		stagedSet[n] = true
 	}
 
-	switch result.FinalStatus {
-	case reviewStatusPassed:
-		// Cycle complete: every staged repo's Touched flag was already set
-		// by AtomicPhaseStamp. Run the per-repo completion finalisation
-		// (commit+push) then clear each per-repo cycle entry.
-		stagedSet := make(map[string]bool, len(result.Repos))
-		for _, n := range result.Repos {
-			stagedSet[n] = true
-		}
-		// Clear any stale LastError on the staged subset and reset the
-		// refactor prompt. Repos NOT in the staged subset (the plan didn't
-		// touch them) just get their per-repo cycle entry cleared below.
-		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			for _, name := range result.Repos {
-				if st, ok := ff.RepoStates[name]; ok && st != nil {
-					st.LastError = ""
-				}
-			}
-			ff.RefactorPrompt = ""
-			return nil
-		})
-		for _, name := range repoNames {
-			if stagedSet[name] {
-				if err := o.completeRefactorRepoFinalize(featureID, name); err != nil {
-					_ = o.deps.Lifecycle.FailRepoCycle(featureID, name, err.Error())
-					continue
-				}
-			}
-			_ = o.deps.Lifecycle.CompleteRepoCycle(featureID, name)
-		}
-		return
-
-	case finalStatusInterrupted, finalStatusNoOp:
-		// Persisted state preserved for restart. Leave per-repo cycle
-		// entries in place; the harness recovery / next user action
-		// handles them.
-		return
-
-	case finalStatusNeedUserInput:
-		// Surface the gate via the legacy per-repo NEED_USER_INPUT
-		// pathway for the staged subset. Repos outside the staged subset
-		// stay as RepoCycleRunning until the gate resolves.
-		stagedSet := make(map[string]bool, len(result.Repos))
-		for _, n := range result.Repos {
-			stagedSet[n] = true
-		}
-		gate := &agent.LoopResult{
-			FinalStatus:       finalStatusNeedUserInput,
-			LastError:         result.LastError,
-			NeedUserInputPath: result.NeedUserInputPath,
-		}
-		for _, name := range repoNames {
-			if stagedSet[name] {
-				_ = o.onRepoCycleNeedUserInput(featureID, name, feature.CycleRefactor, gate)
-			}
-		}
-		return
-
-	default:
-		// max_iterations / safety_rail / failed: surface error per repo
-		// so the TUI can present the failed cycle.
-		errMsg := "refactor: " + result.FinalStatus
-		if result.LastError != "" {
-			errMsg = "refactor: " + result.LastError
-		}
-		for _, name := range repoNames {
-			_ = o.deps.Lifecycle.FailRepoCycle(featureID, name, errMsg)
-		}
-		// Clear the refactor prompt on failure so a follow-up refactor
-		// doesn't re-trigger the same broken plan.
+	// Clear the refactor prompt on failure (dispatch or default branch) so a
+	// follow-up refactor doesn't re-trigger the same broken plan.
+	clearRefactorPrompt := func() {
 		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 			ff.RefactorPrompt = ""
 			return nil
 		})
-		return
 	}
+
+	o.handleFeatureCycleDone(featureID, repoNames, "refactor", dispatchFailed, loopErr,
+		finalStatus, iterations, lastError, needUserInputPath,
+		func() {
+			// Cycle complete: every staged repo's Touched flag was already
+			// set by AtomicPhaseStamp. Run the per-repo completion
+			// finalisation (commit+push) then clear each per-repo cycle
+			// entry. Clear any stale LastError on the staged subset and
+			// reset the refactor prompt. Repos NOT in the staged subset
+			// (the plan didn't touch them) just get their per-repo cycle
+			// entry cleared below.
+			_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+				for _, name := range stagedRepos {
+					if st, ok := ff.RepoStates[name]; ok && st != nil {
+						st.LastError = ""
+					}
+				}
+				ff.RefactorPrompt = ""
+				return nil
+			})
+			for _, name := range repoNames {
+				if stagedSet[name] {
+					if err := o.completeRefactorRepoFinalize(featureID, name); err != nil {
+						_ = o.deps.Lifecycle.FailRepoCycle(featureID, name, err.Error())
+						continue
+					}
+				}
+				_ = o.deps.Lifecycle.CompleteRepoCycle(featureID, name)
+			}
+		},
+		func(gate *agent.LoopResult) {
+			// Surface the gate via the legacy per-repo NEED_USER_INPUT
+			// pathway for the staged subset. Repos outside the staged
+			// subset stay as RepoCycleRunning until the gate resolves.
+			for _, name := range repoNames {
+				if stagedSet[name] {
+					_ = o.onRepoCycleNeedUserInput(featureID, name, feature.CycleRefactor, gate)
+				}
+			}
+		},
+		clearRefactorPrompt,
+	)
 }
 
 // completeRefactorRepoFinalize runs the post-loop finalisation for a
@@ -390,14 +363,8 @@ func (o *Orchestrator) completeRefactorRepoFinalize(featureID, repoName string) 
 		return fmt.Errorf("repo %q not found in feature", repoName)
 	}
 
-	workDir := repo.WorktreePath
-	if workDir == "" {
-		workDir = repo.Path
-	}
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
+	workDir := repoWorkDir(*repo)
+	branch := repoBranch(f, *repo)
 
 	if o.deps.Publisher != nil {
 		_ = o.deps.Publisher.CommitAll(workDir, "Apply refactor changes")

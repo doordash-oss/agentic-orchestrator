@@ -350,13 +350,13 @@ func (c *Client) FinishTweak(ctx context.Context, featureID string, req TweakFin
 
 func (c *Client) StartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorStartResponse, error) {
 	var out RefactorStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "refactor"), nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) RestartRefactor(ctx context.Context, featureID string, req RefactorActionRequest) (RefactorRestartResponse, error) {
 	var out RefactorRestartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "refactor")+"/restart", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor)+"/restart", nil, req, &out, true)
 	return out, err
 }
 

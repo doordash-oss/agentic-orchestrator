@@ -66,14 +66,8 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 		return "", fmt.Errorf("repo %q not found in feature %s", repoName, featureID)
 	}
 
-	workDir := repo.WorktreePath
-	if workDir == "" {
-		workDir = repo.Path
-	}
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
+	workDir := repoWorkDir(repo)
+	branch := repoBranch(f, repo)
 
 	// Commit any uncommitted changes.
 	hasChanges, err := o.deps.Publisher.HasUncommittedChanges(workDir)

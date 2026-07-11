@@ -38,7 +38,7 @@ area you touched, and always record the tier names in the PR description.
 | Fast suite | `make test-fast` | 23s, target <=30s | Run before every handoff; this is the everyday all-package short-mode check. |
 | E2E smoke shell | `bash test/e2e/smoke.sh` | 48.53s | Run when touching launch behavior, embedded skills, or release packaging. |
 | Isolated integration | `go test ./test/integration/... -count=1` | 323.06s | Run when touching lifecycle, state-machine, runs layout, or protocol-violation behavior. |
-| E2E Go (TUI / teatest) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Run when touching TUI, Bubble Tea model behavior, or session lifecycle. |
+| E2E Go (process-launch / API-driven) | `go test ./test/e2e/... -count=1 -race` | 41.51s | Run when touching TUI, Bubble Tea model behavior, or session lifecycle. |
 | TUI observability | `go test -tags tui_observe ./internal/tui -run 'Observed|Emits' -count=1` | 15.14s | Run when touching TUI observer wiring, emitted observability events, or feature-span propagation. |
 | Race regression | `go test ./... -count=1 -race` | 158.82s | Run before merging high-risk changes or concurrency-sensitive work. |
 | Eval | `AGENTIC_EVAL=1 go test ./test/eval/... -count=1` | gated; not measured | Run only when validating live skill/guideline discovery against real LLM CLIs. |
@@ -60,8 +60,8 @@ timing report lives at `docs/testing-baseline.md`.
 TUI package tests in `internal/tui` are part of the fast suite and must stay at
 the model layer: drive `APIAppModel.Init`, `Update`, `View`, subcomponent
 reducers, keyboard handlers, and event translators directly. Full Bubble Tea
-program drivers, `teatest`, and terminal-lifecycle smoke flows belong in the
-extended `test/e2e` gate with `testing.Short` guards.
+program drivers, process-launch, and terminal-lifecycle smoke flows belong in
+the extended `test/e2e` gate with `testing.Short` guards.
 
 ## Test isolation and parallelism
 

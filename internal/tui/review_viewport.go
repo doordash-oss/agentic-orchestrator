@@ -55,14 +55,6 @@ func (m *reviewViewportModel) Resize(width, height int) {
 	m.viewport.SetHeight(reviewViewportHeight(height))
 }
 
-func (m *reviewViewportModel) SetWidth(width int) {
-	m.viewport.SetWidth(width)
-}
-
-func (m *reviewViewportModel) SetHeight(height int) {
-	m.viewport.SetHeight(height)
-}
-
 func (m *reviewViewportModel) SetContent(content string) {
 	m.viewport.SetContent(content)
 }

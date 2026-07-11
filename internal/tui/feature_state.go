@@ -73,13 +73,6 @@ func hasActiveRepoCycles(f *feature.Feature) bool {
 	return f != nil && f.HasActiveRepoCycles()
 }
 
-func isFeatureQuiescent(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	return !f.Status.IsRunning() && !f.HasActiveRepoCycles() && !f.Status.IsNeedsReview()
-}
-
 // canEditFeatureConfig reports whether feature-level config editing should be
 // offered. Runtime changes are persisted immediately; running work observes
 // them at the next phase boundary or restart.

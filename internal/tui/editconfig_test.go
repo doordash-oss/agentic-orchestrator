@@ -69,38 +69,6 @@ func TestEditConfigBehaviorPane_InquirenessCopyDescribesHarnessSurfacing(t *test
 	}
 }
 
-func TestIsFeatureQuiescent(t *testing.T) {
-	tests := []struct {
-		name string
-		f    *feature.Feature
-		want bool
-	}{
-		{"nil", nil, false},
-		{"failed", &feature.Feature{Status: feature.StatusFailed}, true},
-		{"created", &feature.Feature{Status: feature.StatusCreated}, true},
-		{"code-ready", &feature.Feature{Status: feature.StatusCodeReady}, true},
-		{"implementing", &feature.Feature{Status: feature.StatusImplementing}, false}, //nolint:goconst // test case label coincidentally matches an unrelated presentationStatus value
-		{"plan-needs-review", &feature.Feature{Status: feature.StatusPlanNeedsReview}, false},
-		{
-			"active repo cycle",
-			&feature.Feature{
-				Status: feature.StatusPublished,
-				RepoCycles: map[string]*feature.RepoCycleState{
-					"a": {Status: feature.RepoCycleRunning},
-				},
-			},
-			false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isFeatureQuiescent(tt.f); got != tt.want {
-				t.Errorf("isFeatureQuiescent = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestEditConfig_DiffSummaryFooter(t *testing.T) {
 	cases := []struct {
 		name   string

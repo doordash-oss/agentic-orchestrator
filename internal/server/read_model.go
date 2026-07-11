@@ -842,7 +842,8 @@ func (h *apiHandler) pendingControls() ([]ControlRequestDTO, []ControlRequestDTO
 	}
 	sortOrderedControlRequests(asks)
 	sortOrderedControlRequests(perms)
-	return controlRequestDTOs(asks), controlRequestDTOs(perms)
+	dto := func(w orderedControlRequest) ControlRequestDTO { return w.dto }
+	return dtosOf(asks, dto), dtosOf(perms, dto)
 }
 
 func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
@@ -893,7 +894,8 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 	}
 	sortOrderedHelpQueue(help)
 	sortOrderedNeedInputGates(gates)
-	return helpQueueDTOs(help), needInputGateDTOs(gates)
+	return dtosOf(help, func(w orderedHelpQueue) HelpQueueDTO { return w.dto }),
+		dtosOf(gates, func(w orderedNeedInputGate) NeedInputGateDTO { return w.dto })
 }
 
 func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
@@ -933,14 +935,6 @@ func sortOrderedControlRequests(items []orderedControlRequest) {
 	})
 }
 
-func controlRequestDTOs(items []orderedControlRequest) []ControlRequestDTO {
-	out := make([]ControlRequestDTO, 0, len(items))
-	for _, item := range items {
-		out = append(out, item.dto)
-	}
-	return out
-}
-
 type orderedHelpQueue struct {
 	dto       HelpQueueDTO
 	featureID string
@@ -963,14 +957,6 @@ func sortOrderedHelpQueue(items []orderedHelpQueue) {
 		}
 		return items[i].dto.Question < items[j].dto.Question
 	})
-}
-
-func helpQueueDTOs(items []orderedHelpQueue) []HelpQueueDTO {
-	out := make([]HelpQueueDTO, 0, len(items))
-	for _, item := range items {
-		out = append(out, item.dto)
-	}
-	return out
 }
 
 type orderedNeedInputGate struct {
@@ -1001,10 +987,10 @@ func sortOrderedNeedInputGates(items []orderedNeedInputGate) {
 	})
 }
 
-func needInputGateDTOs(items []orderedNeedInputGate) []NeedInputGateDTO {
-	out := make([]NeedInputGateDTO, 0, len(items))
+func dtosOf[W any, D any](items []W, get func(W) D) []D {
+	out := make([]D, 0, len(items))
 	for _, item := range items {
-		out = append(out, item.dto)
+		out = append(out, get(item))
 	}
 	return out
 }

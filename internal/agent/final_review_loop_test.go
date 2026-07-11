@@ -38,44 +38,18 @@ import (
 // transactional writes round-trip through Modify/Load.
 func newFRTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
-	store := feature.NewStore(stateDir)
-	repos := make([]feature.FeatureRepo, 0, len(repoNames))
-	repoPaths := make([]string, 0, len(repoNames))
-	repoStates := map[string]*feature.RepoState{}
-	for _, name := range repoNames {
-		repoDir := filepath.Join(t.TempDir(), name)
-		if err := os.MkdirAll(repoDir, 0o755); err != nil {
-			t.Fatalf("mkdir repo %q: %v", name, err)
-		}
-		repos = append(repos, feature.FeatureRepo{
-			Name:       name,
-			Path:       repoDir,
-			BaseBranch: defaultTestBranch,
-		})
-		repoPaths = append(repoPaths, repoDir)
-		// Touched=true so the FR loop's TouchedRepos reader sees this
-		// repo as part of the staged subset.
-		repoStates[name] = &feature.RepoState{Touched: true}
-	}
-	f := &feature.Feature{
-		ID:                  featureID,
+	// Touched=true (via OmitPRURL, no PR URL needed) so the FR loop's
+	// TouchedRepos reader sees each repo as part of the staged subset.
+	return newLoopTestFeature(t, stateDir, featureID, repoNames, loopTestFeatureOptions{
 		Name:                "Final Review Loop Test",
 		Slug:                "fr-loop-test",
 		Description:         "Feature-level Final Review test fixture",
+		ExitCriteria:        "Relevant tests pass",
 		Status:              feature.StatusFinalReviewing,
 		CurrentPhase:        feature.PhaseReview,
-		ActiveRun:           1,
-		RunCount:            1,
-		SchemaVersion:       feature.SchemaVersionCurrent,
-		Repos:               repos,
-		RepoStates:          repoStates,
-		ExitCriteria:        "Relevant tests pass",
 		CurrentRoadmapPhase: 1,
-	}
-	if err := store.Save(f); err != nil {
-		t.Fatalf("save feature: %v", err)
-	}
-	return store, f, repoPaths
+		OmitPRURL:           true,
+	})
 }
 
 // frLoopTestEnv encapsulates the per-test directory layout the new loop

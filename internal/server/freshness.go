@@ -28,12 +28,3 @@ const (
 type RepoFreshnessProvider interface {
 	Freshness(f *feature.Feature, repo feature.FeatureRepo) RepoFreshness
 }
-
-type StaticFreshnessProvider map[string]RepoFreshness
-
-func (p StaticFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) RepoFreshness {
-	if status, ok := p[repo.Name]; ok {
-		return status
-	}
-	return RepoFreshnessUnknown
-}

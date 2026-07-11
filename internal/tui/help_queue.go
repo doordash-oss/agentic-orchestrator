@@ -48,22 +48,6 @@ func sameManagedHelpMessage(got, want string) bool {
 	return normalizeManagedHelpQuestion(got) == normalizeManagedHelpQuestion(want)
 }
 
-func normalizeManagedHelpQueue(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	changed := false
-	for i := range f.HelpQueue {
-		normalized := normalizeManagedHelpQuestion(f.HelpQueue[i].Question)
-		if normalized == f.HelpQueue[i].Question {
-			continue
-		}
-		f.HelpQueue[i].Question = normalized
-		changed = true
-	}
-	return changed
-}
-
 func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
 	if f == nil {
 		return false

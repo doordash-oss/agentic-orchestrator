@@ -27,16 +27,10 @@ import (
 var expectedTUISmokeTests = []string{
 	"TestConcurrentPlainAgenticoColdStart",
 	"TestConcurrentPlainAgenticoStaleDiscoveryRepair",
-	"TestDefaultCommandLaunchesAPIBackedTUI",
 	"TestLauncherFailureClassification",
 	"TestPlainAgenticoCLIRouting",
 	"TestPlainAgenticoReusePolicyMismatch",
 	"TestPreCutoverRuntimeCompatibility",
-	"TestTUIReconnectSnapshotRecovery",
-}
-
-func TestDefaultCommandLaunchesAPIBackedTUI(t *testing.T) {
-	runRepoGoTest(t, "./cmd/agentico", "^TestRunArgsLaunchesClientServerByDefault$")
 }
 
 func TestConcurrentPlainAgenticoColdStart(t *testing.T) {
@@ -53,10 +47,6 @@ func TestLauncherFailureClassification(t *testing.T) {
 
 func TestPlainAgenticoReusePolicyMismatch(t *testing.T) {
 	runRepoGoTest(t, "./internal/server", "^TestPrepareDiscoveryRequiresPolicyEquivalentHealthyServer$")
-}
-
-func TestTUIReconnectSnapshotRecovery(t *testing.T) {
-	runRepoGoTest(t, "./internal/tui", "^TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection$")
 }
 
 func TestPlainAgenticoCLIRouting(t *testing.T) {
@@ -84,23 +74,16 @@ func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 		}
 	}
 
-	targets := e2eSmokeRunTargets(t, script)
 	for _, want := range []string{
-		"TestDefaultCommandLaunchesAPIBackedTUI",
-		"TestTUIReconnectSnapshotRecovery",
+		"go test ./cmd/agentico -run '^TestRunArgsLaunchesClientServerByDefault$'",
+		"go test ./internal/tui -run '^TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection$'",
 	} {
-		if !targets[want] {
-			t.Fatalf("smoke.sh must run %s", want)
+		if !strings.Contains(script, want) {
+			t.Fatalf("smoke.sh must run %q", want)
 		}
 	}
 
 	existing := e2eTestNames(t)
-	for target := range targets {
-		if !existing[target] {
-			t.Fatalf("smoke.sh runs %s, but no such e2e test exists", target)
-		}
-	}
-
 	for _, want := range expectedTUISmokeTests {
 		if !existing[want] {
 			t.Fatalf("TUI smoke inventory missing %s", want)
@@ -119,20 +102,6 @@ func TestSmokeScriptDoesNotUseRemovedFeatureCommands(t *testing.T) {
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("TUI smoke inventory drift\n got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-}
-
-func e2eSmokeRunTargets(t *testing.T, script string) map[string]bool {
-	t.Helper()
-	re := regexp.MustCompile(`go test \./test/e2e -run '\^([A-Za-z0-9_]+)\$'`)
-	matches := re.FindAllStringSubmatch(script, -1)
-	if len(matches) == 0 {
-		t.Fatal("smoke.sh must run at least one exact e2e Go test")
-	}
-	targets := make(map[string]bool, len(matches))
-	for _, match := range matches {
-		targets[match[1]] = true
-	}
-	return targets
 }
 
 func runRepoGoTest(t *testing.T, pkg, run string) {

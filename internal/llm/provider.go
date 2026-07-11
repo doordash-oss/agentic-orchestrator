@@ -274,6 +274,24 @@ const (
 	EffortMax    EffortLevel = "max"
 )
 
+// MapStandardEffortLevel maps a provider-agnostic EffortLevel to the CLI
+// --effort/model_reasoning_effort value shared by Claude and Codex: low,
+// medium, high, xhigh, defaulting to high for unrecognized levels.
+func MapStandardEffortLevel(level EffortLevel) string {
+	switch level {
+	case EffortLow:
+		return "low"
+	case EffortMedium:
+		return "medium"
+	case EffortHigh:
+		return "high"
+	case EffortMax:
+		return "xhigh"
+	default:
+		return "high" // safe default
+	}
+}
+
 // ErrNotSupported is returned when a provider doesn't support an operation.
 var ErrNotSupported = fmt.Errorf("operation not supported by this provider")
 

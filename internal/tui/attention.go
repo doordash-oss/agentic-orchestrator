@@ -180,17 +180,6 @@ func (a featureAttention) FooterHint() string {
 	return "[a] " + a.CTALabel
 }
 
-// InBoxCTA returns the prominent in-box call-to-action phrase, e.g.
-// "press [a] to Answer". Footer hints stay terse via FooterHint(); this
-// verbose form is reserved for the Live Preview attention box, where there
-// is room for an inviting phrasing.
-func (a featureAttention) InBoxCTA() string {
-	if !a.HasCTA() || a.CTALabel == "" {
-		return ""
-	}
-	return "press [a] to " + a.CTALabel
-}
-
 // IsQuestionTone reports whether the attention represents a user-input
 // request — a question from the agent or an input gate. These get an
 // info-blue, friendlier presentation rather than the warning-yellow

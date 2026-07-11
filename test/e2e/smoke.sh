@@ -69,13 +69,13 @@ fi
 echo "PASS: commands/ directory correctly removed"
 
 # 8. Default launch smoke: plain agentico starts the API-backed TUI path.
-go test ./test/e2e -run '^TestDefaultCommandLaunchesAPIBackedTUI$' -race -timeout 120s
-echo "PASS: default API-backed TUI launch (TestDefaultCommandLaunchesAPIBackedTUI)"
+go test ./cmd/agentico -run '^TestRunArgsLaunchesClientServerByDefault$' -race -timeout 120s
+echo "PASS: default API-backed TUI launch (TestRunArgsLaunchesClientServerByDefault)"
 
 # 9. TUI reconnect smoke: APIAppModel preserves selected recovery state after
 # snapshot reconnect.
-go test ./test/e2e -run '^TestTUIReconnectSnapshotRecovery$' -race -timeout 120s
-echo "PASS: API-backed TUI reconnect recovery (TestTUIReconnectSnapshotRecovery)"
+go test ./internal/tui -run '^TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection$' -race -timeout 120s
+echo "PASS: API-backed TUI reconnect recovery (TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection)"
 
 echo ""
 echo "PASS: all smoke tests passed"

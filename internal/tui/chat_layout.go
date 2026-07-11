@@ -100,15 +100,17 @@ func (m ChatModel) currentInputHeight() int {
 	return h
 }
 
-func (m ChatModel) minimumPanelHeight() int {
-	bottomPanelHeight := chatBottomPanelHeight(m.currentInputHeight())
+func (m ChatModel) panelHeightFor(bottomPanelHeight int) int {
 	return chatBorderHeight + chatMinViewportHeight + bottomPanelHeight + m.desiredTranscriptInputGapRows()
+}
+
+func (m ChatModel) minimumPanelHeight() int {
+	return m.panelHeightFor(chatBottomPanelHeight(m.currentInputHeight()))
 }
 
 func (m ChatModel) minimumQuestionPanelHeight() int {
 	contentWidth := chatBottomPanelContentWidth(m.chatContentWidth())
-	bottomPanelHeight := chatBottomPanelHeight(m.minimumQuestionBodyHeight(contentWidth))
-	return chatBorderHeight + chatMinViewportHeight + bottomPanelHeight + m.desiredTranscriptInputGapRows()
+	return m.panelHeightFor(chatBottomPanelHeight(m.minimumQuestionBodyHeight(contentWidth)))
 }
 
 func (m ChatModel) minimumQuestionBodyHeight(contentWidth int) int {

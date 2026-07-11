@@ -163,18 +163,7 @@ func (h *apiHandler) descriptionReviewArtifactPath(f *feature.Feature, run *feat
 	}
 	featureDir := filepath.Dir(filepath.Dir(h.store.RunDir(f.ID, run.RunNumber)))
 	path := filepath.Join(featureDir, "description-review.md")
-	cleanBase, err := filepath.Abs(featureDir)
-	if err != nil {
-		return "", false
-	}
-	cleanPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", false
-	}
-	if cleanPath != cleanBase && !strings.HasPrefix(cleanPath, cleanBase+string(os.PathSeparator)) {
-		return "", false
-	}
-	return cleanPath, true
+	return safePathUnderBase(featureDir, path)
 }
 
 func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, featureID string, runNumber int, logID string) {

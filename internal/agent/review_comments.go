@@ -187,18 +187,11 @@ func BuildReviewCommentsPlan(comments []ports.ReviewComment, prURL, mode, resolu
 	b.WriteString("## Review Comments\n\n")
 	for i, c := range ordered {
 		b.WriteString(fmt.Sprintf("### Comment %d (ID: %d)\n", i+1, c.ID))
-		switch c.Type {
-		case ports.CommentTypeIssue:
-			b.WriteString("**Location**: PR conversation\n")
-		case ports.CommentTypeReviewBody:
-			b.WriteString("**Location**: PR review\n")
-		default:
-			b.WriteString(fmt.Sprintf("**File**: `%s`", c.Path))
-			if c.Line > 0 {
-				b.WriteString(fmt.Sprintf(":%d", c.Line))
-			}
-			b.WriteString("\n")
+		b.WriteString(fmt.Sprintf("**File**: `%s`", c.Path))
+		if c.Line > 0 {
+			b.WriteString(fmt.Sprintf(":%d", c.Line))
 		}
+		b.WriteString("\n")
 		b.WriteString(fmt.Sprintf("**Author**: @%s\n", c.User.Login))
 		if c.DiffHunk != "" {
 			b.WriteString(fmt.Sprintf("**Context**:\n```diff\n%s\n```\n", c.DiffHunk))

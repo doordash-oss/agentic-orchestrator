@@ -20,6 +20,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -288,72 +289,27 @@ func writeActionJSON(w http.ResponseWriter, status int, resp any) {
 	writeJSON(w, status, resp)
 }
 
+// setActionAPIVersion defaults the APIVersion field of any action response
+// struct via reflection, replacing a per-type switch.
 func setActionAPIVersion(resp any) {
-	switch r := resp.(type) {
-	case *CreateFeatureResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *FeatureStartResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *FeatureStopResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *FeatureRestartResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *ReviewDecisionResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *FeatureConfigUpdateResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *NeedUserInputDecisionResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *NeedUserInputDraftResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *InputNotificationsToggleResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *PermissionAnswerResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *AskUserAnswerResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *HelpSendResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *ChatStartResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *RuntimeConfigUpdateResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *PublishFeatureResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *PublishDescriptionResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *MergeFeatureResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *RewindFeatureResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *RetryFeatureResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *RebaseStartResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *ReviewCommentsStartResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *TweakStartResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *TweakFinishResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *RefactorStartResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *MarkDoneResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *CleanupFeatureResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *DeleteFeatureResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *RecoveryActionResponse:
-		setStringIfEmpty(&r.APIVersion)
-	case *ShutdownResponse:
-		setStringIfEmpty(&r.APIVersion)
-	}
+	setStringFieldIfEmpty(resp, "APIVersion", APIVersion)
 }
 
-func setStringIfEmpty(target *string) {
-	if *target == "" {
-		*target = APIVersion
+// defaultActionFields defaults the FeatureID and Result fields of an action
+// response struct, replacing the repeated double-if blocks in the mutation
+// route handlers. Types without one of these fields are left untouched.
+func defaultActionFields(resp any, featureID, result string) {
+	setStringFieldIfEmpty(resp, "FeatureID", featureID)
+	setStringFieldIfEmpty(resp, "Result", result)
+}
+
+// setStringFieldIfEmpty sets the named string field on resp (a pointer to a
+// struct) to value, but only if the field exists, is a string, and is
+// currently empty.
+func setStringFieldIfEmpty(resp any, name, value string) {
+	f := reflect.ValueOf(resp).Elem().FieldByName(name)
+	if f.IsValid() && f.Kind() == reflect.String && f.String() == "" {
+		f.SetString(value)
 	}
 }
 
@@ -507,10 +463,6 @@ func (h *apiHandler) handleFeaturesRoot(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.Request) {
-	if r.ContentLength > MaxMutationBodyBytes {
-		writeAPIError(w, http.StatusRequestEntityTooLarge, "request_too_large", "mutation body is too large", nil)
-		return
-	}
 	var req CreateFeatureRequest
 	if !decodeMutationJSON(w, r, &req) {
 		return
@@ -531,9 +483,7 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		writeMutationError(w, err)
 		return
 	}
-	if resp.Result == "" {
-		resp.Result = resultCreated
-	}
+	defaultActionFields(&resp, "", resultCreated)
 	writeActionJSON(w, http.StatusCreated, &resp)
 }
 
@@ -568,12 +518,7 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "submitted"
-		}
+		defaultActionFields(&resp, featureID, "submitted")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case routeSegmentConfig:
 		var req FeatureConfigMutationRequest
@@ -588,12 +533,7 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = resultUpdated
-		}
+		defaultActionFields(&resp, featureID, resultUpdated)
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "need-user-input":
 		var req NeedUserInputDecisionRequest
@@ -609,12 +549,7 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "decided"
-		}
+		defaultActionFields(&resp, featureID, "decided")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "need-user-input-draft":
 		var req NeedUserInputDraftRequest
@@ -630,12 +565,7 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "drafted"
-		}
+		defaultActionFields(&resp, featureID, "drafted")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "input-notifications":
 		h.handleToggleInputNotifications(w, r, featureID)
@@ -688,12 +618,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 				writeMutationError(w, err)
 				return true
 			}
-			if resp.FeatureID == "" {
-				resp.FeatureID = featureID
-			}
-			if resp.Result == "" {
-				resp.Result = resultGenerated
-			}
+			defaultActionFields(&resp, featureID, resultGenerated)
 			writeActionJSON(w, http.StatusOK, &resp)
 			return true
 		}
@@ -709,14 +634,9 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "published"
-		}
+		defaultActionFields(&resp, featureID, "published")
 		writeActionJSON(w, http.StatusOK, &resp)
-	case actionMerge:
+	case actionMerge, actionRetry, actionMarkDone, actionDelete:
 		if subaction != "" {
 			return false
 		}
@@ -724,18 +644,29 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) {
 			return true
 		}
-		resp, err := h.mutations.MergeFeature(featureID)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
+		noArgActions := []struct {
+			action        string
+			defaultResult string
+			call          func(string) (any, error)
+		}{
+			{actionMerge, "merged", func(id string) (any, error) { r, err := h.mutations.MergeFeature(id); return &r, err }},
+			{actionRetry, "retried", func(id string) (any, error) { r, err := h.mutations.RetryFeature(id); return &r, err }},
+			{actionMarkDone, "done", func(id string) (any, error) { r, err := h.mutations.MarkDone(id); return &r, err }},
+			{actionDelete, "deleted", func(id string) (any, error) { r, err := h.mutations.DeleteFeature(id); return &r, err }},
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
+		for _, entry := range noArgActions {
+			if entry.action != action {
+				continue
+			}
+			resp, err := entry.call(featureID)
+			if err != nil {
+				writeMutationError(w, err)
+				return true
+			}
+			defaultActionFields(resp, featureID, entry.defaultResult)
+			writeActionJSON(w, http.StatusOK, resp)
+			break
 		}
-		if resp.Result == "" {
-			resp.Result = "merged"
-		}
-		writeActionJSON(w, http.StatusOK, &resp)
 	case actionRewind:
 		if subaction != "" {
 			return false
@@ -752,32 +683,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = resultRewound
-		}
-		writeActionJSON(w, http.StatusOK, &resp)
-	case actionRetry:
-		if subaction != "" {
-			return false
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.RetryFeature(featureID)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "retried"
-		}
+		defaultActionFields(&resp, featureID, resultRewound)
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionRebase:
 		if subaction != "" {
@@ -797,12 +703,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = resultStarted
-		}
+		defaultActionFields(&resp, featureID, resultStarted)
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionReviewComments:
 		return h.handleReviewCommentsAction(w, r, featureID, subaction)
@@ -810,26 +711,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		return h.handleTweakAction(w, r, featureID, subaction)
 	case actionRefactor:
 		return h.handleRefactorAction(w, r, featureID, subaction)
-	case actionMarkDone:
-		if subaction != "" {
-			return false
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.MarkDone(featureID)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "done"
-		}
-		writeActionJSON(w, http.StatusOK, &resp)
 	case actionCleanup:
 		if subaction != "" {
 			return false
@@ -843,32 +724,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "cleaned"
-		}
-		writeActionJSON(w, http.StatusOK, &resp)
-	case actionDelete:
-		if subaction != "" {
-			return false
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.DeleteFeature(featureID)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "deleted"
-		}
+		defaultActionFields(&resp, featureID, "cleaned")
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		return false
@@ -893,9 +749,7 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 			writeMutationError(w, err)
 			return
 		}
-		if resp.Result == "" {
-			resp.Result = resultUpdated
-		}
+		defaultActionFields(&resp, "", resultUpdated)
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		w.Header().Set("Allow", "GET, PATCH, PUT")
@@ -904,9 +758,7 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 }
 
 func (h *apiHandler) handleShutdownMutationRoute(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+	if !requireMethod(w, r, http.MethodPost) {
 		return
 	}
 	if !h.requireTrustedMutation(w, r) {
@@ -959,9 +811,7 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		writeMutationError(w, err)
 		return
 	}
-	if resp.Result == "" {
-		resp.Result = resultAnswered
-	}
+	defaultActionFields(&resp, "", resultAnswered)
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
@@ -994,9 +844,7 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeMutationError(w, err)
 			return
 		}
-		if resp.Result == "" {
-			resp.Result = resultAnswered
-		}
+		defaultActionFields(&resp, "", resultAnswered)
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "help/send":
 		var req HelpAnswerRequest
@@ -1016,9 +864,7 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeMutationError(w, err)
 			return
 		}
-		if resp.Result == "" {
-			resp.Result = "sent"
-		}
+		defaultActionFields(&resp, "", "sent")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case "chat/start":
 		var req ChatStartRequest
@@ -1034,9 +880,7 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeMutationError(w, err)
 			return
 		}
-		if resp.Result == "" {
-			resp.Result = resultStarted
-		}
+		defaultActionFields(&resp, "", resultStarted)
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		writeAPIError(w, http.StatusNotFound, "not_found", "endpoint not found", nil)
@@ -1060,12 +904,7 @@ func (h *apiHandler) handleStartFeatureMutationTrusted(w http.ResponseWriter, r 
 		writeMutationError(w, err)
 		return
 	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Result == "" {
-		resp.Result = resultStarted
-	}
+	defaultActionFields(&resp, featureID, resultStarted)
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
@@ -1086,12 +925,7 @@ func (h *apiHandler) handleStopFeatureMutationTrusted(w http.ResponseWriter, r *
 		writeMutationError(w, err)
 		return
 	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Result == "" {
-		resp.Result = "stopped"
-	}
+	defaultActionFields(&resp, featureID, "stopped")
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
@@ -1108,12 +942,7 @@ func (h *apiHandler) handleToggleInputNotifications(w http.ResponseWriter, r *ht
 		writeMutationError(w, err)
 		return
 	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Result == "" {
-		resp.Result = resultUpdated
-	}
+	defaultActionFields(&resp, featureID, resultUpdated)
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
@@ -1123,12 +952,7 @@ func (h *apiHandler) writeRestartFeature(w http.ResponseWriter, featureID string
 		writeMutationError(w, err)
 		return
 	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Result == "" {
-		resp.Result = "restarted"
-	}
+	defaultActionFields(&resp, featureID, "restarted")
 	writeActionJSON(w, http.StatusOK, &resp)
 }
 
@@ -1149,12 +973,7 @@ func (h *apiHandler) handleReviewCommentsAction(w http.ResponseWriter, r *http.R
 		writeMutationError(w, err)
 		return true
 	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Result == "" {
-		resp.Result = resultStarted
-	}
+	defaultActionFields(&resp, featureID, resultStarted)
 	writeActionJSON(w, http.StatusOK, &resp)
 	return true
 }
@@ -1194,12 +1013,7 @@ func (h *apiHandler) handleTweakAction(w http.ResponseWriter, r *http.Request, f
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "finished"
-		}
+		defaultActionFields(&resp, featureID, "finished")
 		writeActionJSON(w, http.StatusOK, &resp)
 		return true
 	}
@@ -1215,12 +1029,7 @@ func (h *apiHandler) handleTweakAction(w http.ResponseWriter, r *http.Request, f
 		writeMutationError(w, err)
 		return true
 	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Result == "" {
-		resp.Result = resultStarted
-	}
+	defaultActionFields(&resp, featureID, resultStarted)
 	writeActionJSON(w, http.StatusOK, &resp)
 	return true
 }
@@ -1236,12 +1045,7 @@ func (h *apiHandler) handleRefactorAction(w http.ResponseWriter, r *http.Request
 			writeMutationError(w, err)
 			return true
 		}
-		if resp.FeatureID == "" {
-			resp.FeatureID = featureID
-		}
-		if resp.Result == "" {
-			resp.Result = "restarted"
-		}
+		defaultActionFields(&resp, featureID, "restarted")
 		writeActionJSON(w, http.StatusOK, &resp)
 		return true
 	}
@@ -1253,12 +1057,7 @@ func (h *apiHandler) handleRefactorAction(w http.ResponseWriter, r *http.Request
 		writeMutationError(w, err)
 		return true
 	}
-	if resp.FeatureID == "" {
-		resp.FeatureID = featureID
-	}
-	if resp.Result == "" {
-		resp.Result = resultStarted
-	}
+	defaultActionFields(&resp, featureID, resultStarted)
 	writeActionJSON(w, http.StatusOK, &resp)
 	return true
 }
@@ -1427,24 +1226,31 @@ func (h *apiHandler) requireTrustedMutation(w http.ResponseWriter, r *http.Reque
 	return true
 }
 
+// classifyDecodeError maps a JSON decode error to the (status, code,
+// message) triple used by decodeMutationJSON and decodeMutationObject.
+func classifyDecodeError(err error) (status int, code, message string) {
+	status = http.StatusBadRequest
+	code = errCodeBadRequest
+	message = "invalid JSON request"
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		message = "truncated JSON request"
+	}
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		status = http.StatusRequestEntityTooLarge
+		code = "request_too_large"
+		message = "mutation body is too large"
+	}
+	return status, code, message
+}
+
 func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 	limited := http.MaxBytesReader(w, r.Body, MaxMutationBodyBytes)
 	defer limited.Close()
 	dec := json.NewDecoder(limited)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
-		status := http.StatusBadRequest
-		code := errCodeBadRequest
-		message := "invalid JSON request"
-		if errors.Is(err, io.ErrUnexpectedEOF) {
-			message = "truncated JSON request"
-		}
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			status = http.StatusRequestEntityTooLarge
-			code = "request_too_large"
-			message = "mutation body is too large"
-		}
+		status, code, message := classifyDecodeError(err)
 		writeAPIError(w, status, code, message, nil)
 		return false
 	}
@@ -1462,18 +1268,7 @@ func decodeMutationObject(w http.ResponseWriter, r *http.Request) (map[string]js
 	dec := json.NewDecoder(limited)
 	var fields map[string]json.RawMessage
 	if err := dec.Decode(&fields); err != nil {
-		status := http.StatusBadRequest
-		code := errCodeBadRequest
-		message := "invalid JSON request"
-		if errors.Is(err, io.ErrUnexpectedEOF) {
-			message = "truncated JSON request"
-		}
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			status = http.StatusRequestEntityTooLarge
-			code = "request_too_large"
-			message = "mutation body is too large"
-		}
+		status, code, message := classifyDecodeError(err)
 		writeAPIError(w, status, code, message, nil)
 		return nil, false
 	}

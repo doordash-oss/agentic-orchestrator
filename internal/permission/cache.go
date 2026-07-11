@@ -169,10 +169,5 @@ func (c *Cache) LoadAndMergeScope(repoName string) {
 
 // hasRuleLocked checks if a rule already exists in the cache. Must be called with mu held.
 func (c *Cache) hasRuleLocked(r Rule) bool {
-	for _, existing := range c.rules {
-		if existing.ToolPattern == r.ToolPattern && existing.Effect == r.Effect && existing.RepoName == r.RepoName {
-			return true
-		}
-	}
-	return false
+	return ruleExists(c.rules, r.ToolPattern, r.Effect, r.RepoName)
 }

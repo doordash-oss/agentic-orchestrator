@@ -334,6 +334,18 @@ func methodHandler(fn http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requireMethod writes a 405 and returns false if r.Method doesn't match
+// method, mirroring methodHandler for single-branch call sites that can't
+// use the wrapper form.
+func requireMethod(w http.ResponseWriter, r *http.Request, method string) bool {
+	if r.Method == method {
+		return true
+	}
+	w.Header().Set("Allow", method)
+	writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
+	return false
+}
+
 func listFeatures(lister FeatureLister) ([]*feature.Feature, []WarningDTO, error) {
 	if lister == nil {
 		return nil, nil, nil

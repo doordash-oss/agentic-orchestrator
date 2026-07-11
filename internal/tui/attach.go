@@ -3065,75 +3065,50 @@ func (m *AttachModel) executePermChoice() tea.Cmd {
 
 	switch choice {
 	case 0: // Allow
-		return func() tea.Msg {
-			var err error
-			if responder, ok := m.sess.(explicitPermissionResponder); ok {
-				err = responder.RespondToPermissionDecision(reqID, permission.DecisionAllowOnce, "", "")
-			} else {
-				_, err = permission.NewAnswerService(m.permCache, nil).Answer(permission.AnswerRequest{
-					RequestID: reqID,
-					Decision:  permission.DecisionAllowOnce,
-				}, func(requestID string, allow bool, reason string) error {
-					return m.sess.RespondToControl(requestID, allow, reason)
-				})
-			}
-			if err != nil {
-				return fail(err)
-			}
-			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
-		}
+		return m.resolvePermChoiceCmd(reqID, toolName, toolInput, permission.DecisionAllowOnce, "", "", featureID, fail)
 	case 1: // Allow & Remember
-		return func() tea.Msg {
-			var err error
-			if responder, ok := m.sess.(explicitPermissionResponder); ok {
-				err = responder.RespondToPermissionDecision(reqID, permission.DecisionAllowRemember, pattern, repoName)
-			} else {
-				var audit *permission.AuditSink
-				if m.permCache != nil && m.permCache.StoreRef() != nil {
-					audit = permission.NewAuditSink(m.permCache.StoreRef().BaseDir)
-				}
-				_, err = permission.NewAnswerService(m.permCache, audit).Answer(permission.AnswerRequest{
-					RequestID:        reqID,
-					SessionID:        m.sess.ID(),
-					FeatureID:        m.sess.FeatureID(),
-					ToolName:         toolName,
-					ToolInput:        toolInput,
-					Decision:         permission.DecisionAllowRemember,
-					RememberPattern:  pattern,
-					RememberScope:    repoName,
-					RememberScopeSet: true,
-				}, func(requestID string, allow bool, reason string) error {
-					return m.sess.RespondToControl(requestID, allow, reason)
-				})
-			}
-			if err != nil {
-				return fail(err)
-			}
-			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
-		}
+		return m.resolvePermChoiceCmd(reqID, toolName, toolInput, permission.DecisionAllowRemember, pattern, repoName, featureID, fail)
 	case 2: // Deny
-		return func() tea.Msg {
-			var err error
-			if responder, ok := m.sess.(explicitPermissionResponder); ok {
-				err = responder.RespondToPermissionDecision(reqID, permission.DecisionDeny, "", "")
-			} else {
-				_, err = permission.NewAnswerService(m.permCache, nil).Answer(permission.AnswerRequest{
-					RequestID: reqID,
-					Decision:  permission.DecisionDeny,
-				}, func(requestID string, allow bool, reason string) error {
-					return m.sess.RespondToControl(requestID, allow, reason)
-				})
-			}
-			if err != nil {
-				return fail(err)
-			}
-			m.sess.ResetWaitingStatus()
-			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
-		}
+		return m.resolvePermChoiceCmd(reqID, toolName, toolInput, permission.DecisionDeny, "", "", featureID, fail)
 	}
 	return nil
+}
+
+// resolvePermChoiceCmd dispatches a single permission decision through the
+// session's explicit responder when available, otherwise through
+// permission.NewAnswerService. pattern and repoName are only meaningful for
+// DecisionAllowRemember; they are ignored (and safe to pass empty) for the
+// other decisions. Shared by all three executePermChoice cases.
+func (m *AttachModel) resolvePermChoiceCmd(reqID, toolName, toolInput, decision, pattern, repoName, featureID string, fail func(error) tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if responder, ok := m.sess.(explicitPermissionResponder); ok {
+			err = responder.RespondToPermissionDecision(reqID, decision, pattern, repoName)
+		} else {
+			var audit *permission.AuditSink
+			if decision == permission.DecisionAllowRemember && m.permCache != nil && m.permCache.StoreRef() != nil {
+				audit = permission.NewAuditSink(m.permCache.StoreRef().BaseDir)
+			}
+			_, err = permission.NewAnswerService(m.permCache, audit).Answer(permission.AnswerRequest{
+				RequestID:        reqID,
+				SessionID:        m.sess.ID(),
+				FeatureID:        featureID,
+				ToolName:         toolName,
+				ToolInput:        toolInput,
+				Decision:         decision,
+				RememberPattern:  pattern,
+				RememberScope:    repoName,
+				RememberScopeSet: decision == permission.DecisionAllowRemember,
+			}, func(requestID string, allow bool, reason string) error {
+				return m.sess.RespondToControl(requestID, allow, reason)
+			})
+		}
+		if err != nil {
+			return fail(err)
+		}
+		m.sess.ResetWaitingStatus()
+		return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
+	}
 }
 
 // findNextActiveTab returns the index of the next tab with an active session

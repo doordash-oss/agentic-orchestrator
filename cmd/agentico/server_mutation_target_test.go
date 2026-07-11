@@ -780,12 +780,7 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	}
 	store := feature.NewStore(stateDir)
 	manager := feature.NewManager(store, cfg)
-	target := serverMutationTarget{
-		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
-		cfg:        cfg,
-		configPath: configPath,
-		store:      store,
-	}
+	target := newRESTCreateFeatureTarget(store, manager, cfg, configPath)
 	attachment := filepath.Join(t.TempDir(), "spec.md")
 	if err := os.WriteFile(attachment, []byte("rest attachment"), 0o644); err != nil {
 		t.Fatalf("WriteFile attachment: %v", err)
@@ -895,12 +890,7 @@ func TestServerMutationTargetCreateFeatureResolvesBlankExplicitRepoFromWorkspace
 	}
 	store := feature.NewStore(stateDir)
 	manager := feature.NewManager(store, cfg)
-	target := serverMutationTarget{
-		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
-		cfg:        cfg,
-		configPath: configPath,
-		store:      store,
-	}
+	target := newRESTCreateFeatureTarget(store, manager, cfg, configPath)
 
 	result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
 		Name:     "Cassandra Probe",
@@ -936,12 +926,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 		return "", errors.New("worktree creation should be deferred to setup")
 	}
 	manager.Worktrees = worktrees
-	target := serverMutationTarget{
-		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
-		cfg:        cfg,
-		configPath: configPath,
-		store:      store,
-	}
+	target := newRESTCreateFeatureTarget(store, manager, cfg, configPath)
 
 	result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
 		Name:     "REST queued setup",
@@ -1219,20 +1204,10 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 }
 
 func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testing.T) {
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("rewind via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	store, manager, _, f := newMutationTestFeature(t, "rewind via REST", feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
-	})
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
+	}, feature.StatusCodeReady, feature.PhasePublish)
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusCodeReady
-		ff.CurrentPhase = feature.PhasePublish
 		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true}}
 		return nil
 	}); err != nil {
@@ -1261,24 +1236,9 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 }
 
 func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T) {
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("rewind stops sessions", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	store, manager, _, f := newMutationTestFeature(t, "rewind stops sessions", feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
-	})
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusImplementing
-		ff.CurrentPhase = feature.PhaseImplement
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
+	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
 		sessions: []ports.SessionView{&mutationTargetSessionView{
 			id:        "session-rewind",
@@ -1314,24 +1274,9 @@ func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T)
 }
 
 func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("upgrade rewind via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	store, manager, _, f := newMutationTestFeature(t, "upgrade rewind via REST", feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
-	})
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusImplementing
-		ff.CurrentPhase = feature.PhaseImplement
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
+	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
 		sessions: []ports.SessionView{&mutationTargetSessionView{
 			id:        "session-upgrade-rewind",
@@ -1370,24 +1315,9 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 }
 
 func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testing.T) {
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("failed upgrade rewind via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	store, manager, _, f := newMutationTestFeature(t, "failed upgrade rewind via REST", feature.CreateOptions{
 		Pipeline: feature.PipelineMoonshot,
-	})
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusImplementing
-		ff.CurrentPhase = feature.PhaseImplement
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
+	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
 		sessions: []ports.SessionView{&mutationTargetSessionView{
 			id:        "session-failed-upgrade",
@@ -1483,25 +1413,11 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 }
 
 func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testing.T) {
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("refactor with evidence", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusPublished
-		ff.CurrentPhase = feature.PhasePublish
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
+	store, manager, _, f := newMutationTestFeature(t, "refactor with evidence", feature.CreateOptions{}, feature.StatusPublished, feature.PhasePublish)
 
-	img := filepath.Join(runtimeDir, "clip.png")
-	doc := filepath.Join(runtimeDir, "spec.pdf")
+	attachDir := t.TempDir()
+	img := filepath.Join(attachDir, "clip.png")
+	doc := filepath.Join(attachDir, "spec.pdf")
 	if err := os.WriteFile(img, []byte("image bytes"), 0o644); err != nil {
 		t.Fatalf("write image: %v", err)
 	}
@@ -1556,26 +1472,11 @@ func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testin
 }
 
 func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *testing.T) {
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("moonshot refactor", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	store, manager, _, f := newMutationTestFeature(t, "moonshot refactor", feature.CreateOptions{
 		Pipeline:    feature.PipelineMoonshot,
 		Checkpoints: feature.DefaultCheckpointsForProfile(feature.PipelineMoonshot),
-	})
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
+	}, feature.StatusPublished, feature.PhasePublish)
 	originalCheckpoints := f.Checkpoints
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusPublished
-		ff.CurrentPhase = feature.PhasePublish
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
 
 	orch := orchestrator.New(orchestrator.Deps{
 		Lifecycle: manager,
@@ -1611,24 +1512,9 @@ func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *tes
 }
 
 func TestServerMutationTargetStartRefactorUsesRequestedPipelineEffort(t *testing.T) {
-	runtimeDir := t.TempDir()
-	cfg := config.NewDefault()
-	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
-	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
-	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("moonshot feature", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	store, manager, _, f := newMutationTestFeature(t, "moonshot feature", feature.CreateOptions{
 		Pipeline: feature.PipelineMoonshot,
-	})
-	if err != nil {
-		t.Fatalf("Create feature: %v", err)
-	}
-	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
-		ff.Status = feature.StatusPublished
-		ff.CurrentPhase = feature.PhasePublish
-		return nil
-	}); err != nil {
-		t.Fatalf("prepare feature: %v", err)
-	}
+	}, feature.StatusPublished, feature.PhasePublish)
 
 	effortCh := make(chan llm.EffortLevel, 1)
 	orch := orchestrator.New(orchestrator.Deps{
@@ -1820,6 +1706,40 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 			t.Fatalf("Load deleted feature error = nil; want missing feature")
 		}
 	})
+}
+
+// newMutationTestFeature builds a store/manager with testRepoAName registered,
+// creates a feature with createOpts, and sets its status/phase via store.Modify.
+func newMutationTestFeature(t *testing.T, name string, createOpts feature.CreateOptions, status feature.Status, phase feature.Phase) (*feature.Store, *feature.Manager, *config.Config, *feature.Feature) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create(name, "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, createOpts)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = status
+		ff.CurrentPhase = phase
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	return store, manager, cfg, f
+}
+
+// newRESTCreateFeatureTarget builds the serverMutationTarget shared by the
+// CreateFeature-via-REST tests.
+func newRESTCreateFeatureTarget(store *feature.Store, manager *feature.Manager, cfg *config.Config, configPath string) serverMutationTarget {
+	return serverMutationTarget{
+		orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{}),
+		cfg:        cfg,
+		configPath: configPath,
+		store:      store,
+	}
 }
 
 func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manager, *feature.Store, *feature.Feature) {

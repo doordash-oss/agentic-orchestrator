@@ -87,6 +87,20 @@ type loopTestFeatureOptions struct {
 	Description    string
 	ExitCriteria   string
 	RefactorPrompt string
+
+	// Status overrides the feature's lifecycle status. Defaults to
+	// feature.StatusPublished when zero.
+	Status feature.Status
+
+	// CurrentPhase and CurrentRoadmapPhase set the feature's in-flight
+	// phase/roadmap-phase tracking. Zero values match a feature with no
+	// active roadmap phase.
+	CurrentPhase        feature.Phase
+	CurrentRoadmapPhase int
+
+	// OmitPRURL, when true, leaves RepoState.PRURL unset (Touched still
+	// set true) instead of the default synthetic PR URL.
+	OmitPRURL bool
 }
 
 func newLoopTestFeature(t *testing.T, stateDir, featureID string, repoNames []string, opts loopTestFeatureOptions) (*feature.Store, *feature.Feature, []string) {
@@ -107,25 +121,33 @@ func newLoopTestFeature(t *testing.T, stateDir, featureID string, repoNames []st
 			BaseBranch: defaultTestBranch,
 		})
 		repoPaths = append(repoPaths, repoDir)
-		repoStates[name] = &feature.RepoState{
-			Touched: true,
-			PRURL:   fmt.Sprintf("https://github.com/example/%s/pull/1", name),
+		repoState := &feature.RepoState{Touched: true}
+		if !opts.OmitPRURL {
+			repoState.PRURL = fmt.Sprintf("https://github.com/example/%s/pull/1", name)
 		}
+		repoStates[name] = repoState
+	}
+
+	status := opts.Status
+	if status == 0 {
+		status = feature.StatusPublished
 	}
 
 	f := &feature.Feature{
-		ID:             featureID,
-		Name:           opts.Name,
-		Slug:           opts.Slug,
-		Description:    opts.Description,
-		Status:         feature.StatusPublished,
-		ActiveRun:      1,
-		RunCount:       1,
-		SchemaVersion:  feature.SchemaVersionCurrent,
-		Repos:          repos,
-		RepoStates:     repoStates,
-		ExitCriteria:   opts.ExitCriteria,
-		RefactorPrompt: opts.RefactorPrompt,
+		ID:                  featureID,
+		Name:                opts.Name,
+		Slug:                opts.Slug,
+		Description:         opts.Description,
+		Status:              status,
+		CurrentPhase:        opts.CurrentPhase,
+		CurrentRoadmapPhase: opts.CurrentRoadmapPhase,
+		ActiveRun:           1,
+		RunCount:            1,
+		SchemaVersion:       feature.SchemaVersionCurrent,
+		Repos:               repos,
+		RepoStates:          repoStates,
+		ExitCriteria:        opts.ExitCriteria,
+		RefactorPrompt:      opts.RefactorPrompt,
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)

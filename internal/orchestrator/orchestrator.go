@@ -874,6 +874,43 @@ func (o *Orchestrator) finalizeKBForSkip(f *feature.Feature) error {
 	return nil
 }
 
+// runSingleShotArtifactPhase implements the shared shape of the single-shot
+// artifact-phase starters (Inquire/Research/Design): supervise an already-
+// active session if present; otherwise run resolve (if non-nil) to
+// validate/derive inputs, record the read-only repo baseline under
+// phaseKey, launch via run, and supervise the resulting session. No-ops
+// when PhaseRunner is nil.
+func (o *Orchestrator) runSingleShotArtifactPhase(
+	featureID string,
+	f *feature.Feature,
+	phase feature.Phase,
+	phaseKey string,
+	resolve func() error,
+	run func() (string, error),
+) (PhaseStartResult, error) {
+	if o.deps.PhaseRunner == nil {
+		return PhaseStartResult{Outcome: PhaseStarted}, nil
+	}
+	if sessionID := o.activePhaseSessionID(featureID, phase); sessionID != "" {
+		o.superviseSingleShotPhaseSession(featureID, sessionID, phase)
+		return PhaseStartResult{Outcome: PhaseStarted}, nil
+	}
+	if resolve != nil {
+		if err := resolve(); err != nil {
+			return PhaseStartResult{}, err
+		}
+	}
+	if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, phaseKey)); err != nil {
+		return PhaseStartResult{}, fmt.Errorf("record %s read-only repo baseline: %w", phaseKey, err)
+	}
+	sessionID, err := run()
+	if err != nil {
+		return PhaseStartResult{}, err
+	}
+	o.superviseSingleShotPhaseSession(featureID, sessionID, phase)
+	return PhaseStartResult{Outcome: PhaseStarted}, nil
+}
+
 // startInquire starts the Inquire phase. Idempotent for recovery resume: when
 // the feature is already StatusInquiring, StartInquire is skipped because the
 // StatusInquiring → StatusInquiring self-transition is invalid
@@ -889,21 +926,13 @@ func (o *Orchestrator) startInquire(featureID string) (PhaseStartResult, error) 
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		if sessionID := o.activePhaseSessionID(featureID, feature.PhaseInquire); sessionID != "" {
-			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseInquire)
-			return PhaseStartResult{Outcome: PhaseStarted}, nil
-		}
-		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, "inquire")); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("record inquire read-only repo baseline: %w", err)
-		}
+	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseInquire, "inquire", nil, func() (string, error) {
 		sessionID, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...)
 		if err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run inquire: %w", err)
+			return "", fmt.Errorf("run inquire: %w", err)
 		}
-		o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseInquire)
-	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+		return sessionID, nil
+	})
 }
 
 // startResearch starts the Research phase. Research is always driven by
@@ -926,25 +955,22 @@ func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error)
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		if sessionID := o.activePhaseSessionID(featureID, feature.PhaseResearch); sessionID != "" {
-			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseResearch)
-			return PhaseStartResult{Outcome: PhaseStarted}, nil
-		}
-		questionsPath := o.resolveArtifactPath(f, "inquire")
-		if questionsPath == "" {
-			return PhaseStartResult{}, errors.New("no inquire artifact found; cannot proceed to research")
-		}
-		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, "research")); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("record research read-only repo baseline: %w", err)
-		}
-		sessionID, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...)
-		if err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run research from questions: %w", err)
-		}
-		o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseResearch)
-	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+	var questionsPath string
+	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseResearch, "research",
+		func() error {
+			questionsPath = o.resolveArtifactPath(f, "inquire")
+			if questionsPath == "" {
+				return errors.New("no inquire artifact found; cannot proceed to research")
+			}
+			return nil
+		},
+		func() (string, error) {
+			sessionID, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...)
+			if err != nil {
+				return "", fmt.Errorf("run research from questions: %w", err)
+			}
+			return sessionID, nil
+		})
 }
 
 // startDesign starts the Design phase. Fails if the research
@@ -982,21 +1008,13 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 		}
 	}
 	kbInfos := o.computeKBInfos(f)
-	if o.deps.PhaseRunner != nil {
-		if sessionID := o.activePhaseSessionID(featureID, feature.PhaseDesign); sessionID != "" {
-			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseDesign)
-			return PhaseStartResult{Outcome: PhaseStarted}, nil
-		}
-		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, "design")); err != nil {
-			return PhaseStartResult{}, fmt.Errorf("record design read-only repo baseline: %w", err)
-		}
+	return o.runSingleShotArtifactPhase(featureID, f, feature.PhaseDesign, "design", nil, func() (string, error) {
 		sessionID, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...)
 		if err != nil {
-			return PhaseStartResult{}, fmt.Errorf("run design: %w", err)
+			return "", fmt.Errorf("run design: %w", err)
 		}
-		o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseDesign)
-	}
-	return PhaseStartResult{Outcome: PhaseStarted}, nil
+		return sessionID, nil
+	})
 }
 
 // startPlan starts the Plan phase. Delegates to startRoadmapPhasePlan when
@@ -1984,11 +2002,6 @@ func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions)
 		o.hooks.OnPublishStarted(featureID)
 	}
 
-	publishRepo := o.publishRepoFn
-	if publishRepo == nil {
-		publishRepo = o.publishRepo
-	}
-
 	prURLs := make(map[string]string)
 	var firstErr error
 	var conflictErr *PublishConflictError
@@ -2018,7 +2031,7 @@ func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions)
 		var prURL string
 		var repoErr error
 		if o.publishRepoFn != nil {
-			prURL, repoErr = publishRepo(featureID, repo.Name)
+			prURL, repoErr = o.publishRepoFn(featureID, repo.Name)
 		} else {
 			prURL, repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
 		}

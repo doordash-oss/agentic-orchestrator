@@ -30,7 +30,7 @@ import (
 // Serial / parallel-ineligible until their global or external-state ownership
 // is narrowed:
 //   - artifact_review_test.go, attach_test.go, attach_askuser_test.go,
-//     chat_test.go, editconfig_test.go, help_test.go, need_user_input_test.go,
+//     chat_test.go, editconfig_test.go, help_test.go,
 //     publish_test.go, recovery_test.go, welcome_test.go, wizard_test.go,
 //     wizard_delegation_test.go: use temp files, session fakes, callback
 //     behavior, real-git coverage, or runtime fakes that need a Phase 10 audit
@@ -86,7 +86,6 @@ var tuiParallelIneligibleTestFiles = []string{
 	"live_preview_markdown_test.go",
 	"markdown/markdown_test.go",
 	"markdown_editor_test.go",
-	"need_user_input_test.go",
 	"notify_test.go",
 	"publish_test.go",
 	"recovery_test.go",

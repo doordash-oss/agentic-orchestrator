@@ -219,7 +219,7 @@ func (m *ChatModel) updateChatQuestionScrollOffset() {
 		return
 	}
 
-	contentWidth := max(m.width-6, 40)
+	contentWidth := m.chatContentWidth()
 	totalLines := 0
 	for i, o := range q.Options {
 		totalLines += questionOptionLineCount(o, i, contentWidth)

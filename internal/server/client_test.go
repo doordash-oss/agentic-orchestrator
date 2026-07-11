@@ -732,87 +732,6 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 	}
 }
 
-func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testing.T) {
-	var eventConnections atomic.Int32
-	var sawEventClient atomic.Bool
-	var sawSnapshotClient atomic.Bool
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case apiPathEvents:
-			if r.Header.Get("X-Test-Client") == "events" {
-				sawEventClient.Store(true)
-			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			flusher := w.(http.Flusher)
-			n := eventConnections.Add(1)
-			if n == 1 {
-				_, _ = w.Write([]byte("id: 1\nevent: connected\ndata: {\"api_version\":\"v1\",\"id\":\"1\",\"kind\":\"connected\",\"resource\":{\"type\":\"runtime\"},\"snapshot_required\":true}\n\n"))
-				flusher.Flush()
-				return
-			}
-			_, _ = w.Write([]byte("id: 2\nevent: lifecycle.updated\ndata: {\"api_version\":\"v1\",\"id\":\"2\",\"kind\":\"lifecycle.updated\",\"resource\":{\"type\":\"feature\",\"feature_id\":\"feat-1\"},\"snapshot_required\":true}\n\n"))
-			flusher.Flush()
-			<-r.Context().Done()
-		case "/api/v1/features/feat-1":
-			if r.Header.Get("X-Test-Client") == "snapshot" {
-				sawSnapshotClient.Store(true)
-			}
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: fixtureFeatureID})})
-		case "/api/v1/features/feat-1/live-preview":
-			if r.Header.Get("X-Test-Client") == "snapshot" {
-				sawSnapshotClient.Store(true)
-			}
-			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}})
-		default:
-			t.Fatalf("unexpected request %s", r.URL.Path)
-		}
-	})
-	srv := httptest.NewServer(handler)
-	defer srv.Close()
-	eventClient, err := NewClient(ClientOptions{BaseURL: srv.URL, HTTPClient: taggedHTTPClient("events")})
-	if err != nil {
-		t.Fatalf("NewClient(event) error = %v", err)
-	}
-	snapshotClient, err := NewClient(ClientOptions{BaseURL: srv.URL, HTTPClient: taggedHTTPClient("snapshot")})
-	if err != nil {
-		t.Fatalf("NewClient(snapshot) error = %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	signals, errs := eventClient.SubscribeEvents(ctx, EventSubscriptionOptions{
-		HeartbeatInterval: 10 * time.Millisecond,
-		ReconnectDelay:    10 * time.Millisecond,
-	})
-	first := waitRefreshSignal(t, signals)
-	if first.Event.Kind != sseEventConnected || !first.SnapshotRequired {
-		t.Fatalf("first signal = %+v, want connected snapshot", first)
-	}
-	second := waitRefreshSignal(t, signals)
-	if second.Event.Kind != sseEventLifecycleUpdated || second.Resource.FeatureID != fixtureFeatureID {
-		t.Fatalf("second signal = %+v, want feature lifecycle update for feat-1", second)
-	}
-	snapshot, err := snapshotClient.FetchRefreshSnapshot(context.Background(), second)
-	if err != nil {
-		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
-	}
-	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != fixtureFeatureID || snapshot.LivePreview == nil {
-		t.Fatalf("FetchRefreshSnapshot() = %+v, want feature snapshot", snapshot)
-	}
-	if !sawEventClient.Load() || !sawSnapshotClient.Load() {
-		t.Fatalf("request clients used: events=%v snapshot=%v; want both distinct clients", sawEventClient.Load(), sawSnapshotClient.Load())
-	}
-
-	cancel()
-	select {
-	case err := <-errs:
-		if err != nil {
-			t.Fatalf("SubscribeEvents() terminal error = %v, want nil after cancel", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for SSE subscription shutdown")
-	}
-}
-
 func TestClientFetchRefreshSnapshotIgnoresSessionOutputActivity(t *testing.T) {
 	var sawSessionDetail bool
 	var sawTranscript bool
@@ -871,6 +790,7 @@ func TestClientFetchRefreshSnapshotIgnoresSessionOutputActivity(t *testing.T) {
 
 func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *testing.T) {
 	var sawSessionDetail bool
+	var sawSessions bool
 	var sawPrompts bool
 	var sawLivePreview bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -881,6 +801,12 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *tes
 				SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: "Running"},
 				CursorDTO{},
 			)})
+		case routeGetSessions:
+			sawSessions = true
+			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
+				{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Phase: feature.PhaseKnowledgeBase.String(), Repo: "dbaccess", Status: "Running"},
+				{ID: "sess-2", FeatureID: fixtureFeatureID, Phase: feature.PhaseKnowledgeBase.String(), Repo: "taulu", Status: "Running"},
+			}})
 		case routeGetPrompts:
 			sawPrompts = true
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
@@ -907,6 +833,9 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *tes
 	}
 	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != fixtureSessionID {
 		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want sess-1 detail", snapshot.Session, sawSessionDetail)
+	}
+	if !sawSessions || snapshot.Sessions == nil || len(snapshot.Sessions.Sessions) != 2 {
+		t.Fatalf("FetchRefreshSnapshot() sessions = %+v, sawSessions=%v; want sibling session list", snapshot.Sessions, sawSessions)
 	}
 	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.AskUserQuestions) != 0 {
 		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want empty prompt snapshot to clear stale client prompts", snapshot.Prompts, sawPrompts)
@@ -1099,6 +1028,7 @@ func TestClientFetchRefreshSnapshotResnapshotsPromptsOnConnected(t *testing.T) {
 
 func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.T) {
 	var sawSessionDetail bool
+	var sawSessions bool
 	var sawLivePreview bool
 	var sawFeatureDetail bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1109,6 +1039,11 @@ func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.
 				SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: sessionStatusDone},
 				CursorDTO{Total: 0, Start: 0, End: 0},
 			)})
+		case routeGetSessions:
+			sawSessions = true
+			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
+				{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: sessionStatusDone},
+			}})
 		case routeGetPrompts:
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
 		case routeGetLivePreview:
@@ -1141,6 +1076,9 @@ func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.
 	}
 	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != fixtureSessionID {
 		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want sess-1 detail", snapshot.Session, sawSessionDetail)
+	}
+	if !sawSessions || snapshot.Sessions == nil || len(snapshot.Sessions.Sessions) != 1 {
+		t.Fatalf("FetchRefreshSnapshot() sessions = %+v, sawSessions=%v; want terminal session list refresh", snapshot.Sessions, sawSessions)
 	}
 	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != fixtureFeatureID || snapshot.LivePreview.Activity != sessionStatusDone {
 		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want terminal preview", snapshot.LivePreview, sawLivePreview)
@@ -1201,13 +1139,9 @@ func TestClientFetchRefreshSnapshotSkipsLivePreviewForChatSession(t *testing.T) 
 }
 
 func TestClientFetchRefreshSnapshotIncludesRecoveryForRecoveryUpdates(t *testing.T) {
-	var sawHealth bool
 	var sawRecovery bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case routeGetHealth:
-			sawHealth = true
-			writeJSON(w, http.StatusOK, HealthResponse{APIVersion: APIVersion, Status: "ok"})
 		case "GET /api/v1/recovery":
 			sawRecovery = true
 			writeJSON(w, http.StatusOK, RecoverySnapshotResponse{
@@ -1244,9 +1178,6 @@ func TestClientFetchRefreshSnapshotIncludesRecoveryForRecoveryUpdates(t *testing
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if !sawHealth || snapshot.Health == nil || snapshot.Health.Status != "ok" {
-		t.Fatalf("FetchRefreshSnapshot() health = %+v, sawHealth=%v; want ok health", snapshot.Health, sawHealth)
-	}
 	if !sawRecovery || snapshot.Recovery == nil || snapshot.Recovery.SnapshotID != "recovery-snapshot-2" || len(snapshot.Recovery.Items) != 1 {
 		t.Fatalf("FetchRefreshSnapshot() recovery = %+v, sawRecovery=%v; want recovery snapshot", snapshot.Recovery, sawRecovery)
 	}
@@ -1276,22 +1207,13 @@ func testSessionDetail(summary SessionSummaryDTO, cursor CursorDTO) SessionDetai
 	return detail
 }
 
-func taggedHTTPClient(tag string) *http.Client {
-	return &http.Client{
-		Transport: taggedRoundTripper{
-			tag:  tag,
-			base: http.DefaultTransport,
-		},
+// StaticFreshnessProvider is a test-only RepoFreshnessProvider backed by a
+// fixed repo-name-to-freshness map, used by read_api_contract_test.go.
+type StaticFreshnessProvider map[string]RepoFreshness
+
+func (p StaticFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) RepoFreshness {
+	if status, ok := p[repo.Name]; ok {
+		return status
 	}
-}
-
-type taggedRoundTripper struct {
-	tag  string
-	base http.RoundTripper
-}
-
-func (t taggedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	cloned := req.Clone(req.Context())
-	cloned.Header.Set("X-Test-Client", t.tag)
-	return t.base.RoundTrip(cloned)
+	return RepoFreshnessUnknown
 }

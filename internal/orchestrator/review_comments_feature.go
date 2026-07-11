@@ -216,77 +216,58 @@ func (o *Orchestrator) handleFeatureReviewCommentsDone(
 	result *agent.ReviewCommentsLoopResult,
 	loopErr error,
 ) {
-	if loopErr != nil || result == nil {
-		errMsg := "review-comments: dispatch failed"
-		if loopErr != nil {
-			errMsg = "review-comments: " + loopErr.Error()
-		}
-		for _, t := range targets {
-			_ = o.deps.Lifecycle.FailRepoCycle(featureID, t.RepoName, errMsg)
-		}
-		return
+	repoNames := make([]string, 0, len(targets))
+	for _, t := range targets {
+		repoNames = append(repoNames, t.RepoName)
 	}
 
-	switch result.FinalStatus {
-	case reviewStatusPassed:
-		// Cycle complete: commit + push each touched repo's branch,
-		// then walk the aggregated resolutions and dispatch per-PR
-		// replies. The legacy per-repo CompleteRepoCycle path runs
-		// the same chain (commitAll + pullRebase + push +
-		// replyToSavedReviewComments); under the unified flow we
-		// invoke that completion per staged repo so the existing
-		// per-PR reply path stays intact.
-		for _, t := range targets {
-			if err := o.completeReviewCommentsRepoFinalize(featureID, t.RepoName); err != nil {
-				_ = o.deps.Lifecycle.FailRepoCycle(featureID, t.RepoName, err.Error())
-				continue
-			}
-		}
-		// Clear any stale LastError on each repo whose comments were
-		// addressed; PR URLs and Touched flags are unchanged.
-		_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-			for _, t := range targets {
-				if st, ok := ff.RepoStates[t.RepoName]; ok && st != nil {
-					st.LastError = ""
+	dispatchFailed := loopErr != nil || result == nil
+	var finalStatus, lastError, needUserInputPath string
+	var iterations int
+	if result != nil {
+		finalStatus = result.FinalStatus
+		iterations = result.Iterations
+		lastError = result.LastError
+		needUserInputPath = result.NeedUserInputPath
+	}
+
+	o.handleFeatureCycleDone(featureID, repoNames, "review-comments", dispatchFailed, loopErr,
+		finalStatus, iterations, lastError, needUserInputPath,
+		func() {
+			// Cycle complete: commit + push each touched repo's branch,
+			// then walk the aggregated resolutions and dispatch per-PR
+			// replies. The legacy per-repo CompleteRepoCycle path runs
+			// the same chain (commitAll + pullRebase + push +
+			// replyToSavedReviewComments); under the unified flow we
+			// invoke that completion per staged repo so the existing
+			// per-PR reply path stays intact.
+			for _, name := range repoNames {
+				if err := o.completeReviewCommentsRepoFinalize(featureID, name); err != nil {
+					_ = o.deps.Lifecycle.FailRepoCycle(featureID, name, err.Error())
+					continue
 				}
 			}
-			return nil
-		})
-		for _, t := range targets {
-			_ = o.deps.Lifecycle.CompleteRepoCycle(featureID, t.RepoName)
-		}
-		return
-
-	case finalStatusInterrupted, finalStatusNoOp:
-		// Persisted state preserved for restart. Leave per-repo
-		// cycle entries in place; the harness recovery / next user
-		// action handles them.
-		return
-
-	case finalStatusNeedUserInput:
-		gate := &agent.LoopResult{
-			FinalStatus:       finalStatusNeedUserInput,
-			Iterations:        result.Iterations,
-			LastError:         result.LastError,
-			NeedUserInputPath: result.NeedUserInputPath,
-		}
-		for _, t := range targets {
-			o.recordRepoCycleNeedUserInput(featureID, t.RepoName, feature.CycleReviewComments, gate)
-		}
-		return
-
-	default:
-		// max_iterations / safety_rail / failed: surface error per
-		// repo so the TUI can present the failed cycle.
-		errMsg := "review-comments: " + result.FinalStatus
-		if result.LastError != "" {
-			errMsg = "review-comments: " + result.LastError
-		}
-		for _, t := range targets {
-			_ = o.deps.Lifecycle.FailRepoCycle(featureID, t.RepoName, errMsg)
-		}
-		return
-	}
+			// Clear any stale LastError on each repo whose comments were
+			// addressed; PR URLs and Touched flags are unchanged.
+			_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+				for _, name := range repoNames {
+					if st, ok := ff.RepoStates[name]; ok && st != nil {
+						st.LastError = ""
+					}
+				}
+				return nil
+			})
+			for _, name := range repoNames {
+				_ = o.deps.Lifecycle.CompleteRepoCycle(featureID, name)
+			}
+		},
+		func(gate *agent.LoopResult) {
+			for _, name := range repoNames {
+				o.recordRepoCycleNeedUserInput(featureID, name, feature.CycleReviewComments, gate)
+			}
+		},
+		nil,
+	)
 }
 
 // completeReviewCommentsRepoFinalize runs the post-loop finalisation
@@ -311,14 +292,8 @@ func (o *Orchestrator) completeReviewCommentsRepoFinalize(featureID, repoName st
 		return fmt.Errorf("repo %q not found in feature", repoName)
 	}
 
-	workDir := repo.WorktreePath
-	if workDir == "" {
-		workDir = repo.Path
-	}
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
+	workDir := repoWorkDir(*repo)
+	branch := repoBranch(f, *repo)
 
 	if o.deps.Publisher != nil {
 		_ = o.deps.Publisher.CommitAll(workDir, "Address review comments")

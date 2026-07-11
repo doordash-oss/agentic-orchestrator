@@ -1441,7 +1441,7 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 // Claude Agent SDK `annotations` field of `updatedInput`.
 func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
 	s.captureAskUserResponse(requestID, questions, answers, annotations, nil)
-	s.appendManualAskUserMessages(questions, answers)
+	s.appendAskUserMessages(questions, answers, nil)
 
 	if s.protocol != nil {
 		return s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
@@ -1458,49 +1458,43 @@ func (s *Session) respondToAskUserAutoPicked(requestID string, questions json.Ra
 		return err
 	}
 	s.captureAskUserResponse(requestID, questions, answers, nil, confidenceByQuestion)
-	s.appendAutoPickedAskUserMessages(questions, answers, confidenceByQuestion)
+	s.appendAskUserMessages(questions, answers, confidenceByQuestion)
 	return nil
 }
 
-func (s *Session) appendAutoPickedAskUserMessages(questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) {
-	if len(answers) == 0 || len(confidenceByQuestion) == 0 {
-		return
-	}
-	for _, q := range askUserAnswerKeysInPresentedOrder(questions, answers) {
-		confidence, ok := confidenceByQuestion[q]
-		if !ok || answers[q] == "" {
-			continue
+// appendAskUserMessages appends locally-recorded AskUserQuestion answers to the
+// message log, in presented order. confidenceByQuestion is non-nil for the
+// auto-picked path (answers get tagged with auto-pick metadata) and nil for
+// the manual path.
+func (s *Session) appendAskUserMessages(questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) {
+	autoPicked := confidenceByQuestion != nil
+	if autoPicked {
+		if len(answers) == 0 || len(confidenceByQuestion) == 0 {
+			return
 		}
-		s.messageLog.Append(llm.SDKMessage{
-			Type:               "user",
-			LocallyAppended:    true,
-			AutoPicked:         true,
-			AutoPickQuestion:   q,
-			AutoPickConfidence: confidence,
-			User: &llm.UserMessage{
-				Message: llm.ConversationMsg{
-					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: answers[q]}},
-				},
-			},
-		})
+	} else if len(answers) == 0 || s.messageLog == nil {
+		return
 	}
-}
 
-func (s *Session) appendManualAskUserMessages(questions json.RawMessage, answers map[string]string) {
-	if len(answers) == 0 || s.messageLog == nil {
-		return
-	}
 	keys := askUserAnswerKeysInPresentedOrder(questions, answers)
-	if len(keys) == 0 || s.hasTrailingManualAskUserMessages(keys, answers) {
+	if !autoPicked && (len(keys) == 0 || s.hasTrailingManualAskUserMessages(keys, answers)) {
 		return
 	}
+
 	for _, q := range keys {
 		answer := answers[q]
-		if answer == "" {
+		var confidence float64
+		if autoPicked {
+			c, ok := confidenceByQuestion[q]
+			if !ok || answer == "" {
+				continue
+			}
+			confidence = c
+		} else if answer == "" {
 			continue
 		}
-		s.messageLog.Append(llm.SDKMessage{
+
+		msg := llm.SDKMessage{
 			Type:            "user",
 			LocallyAppended: true,
 			User: &llm.UserMessage{
@@ -1509,7 +1503,13 @@ func (s *Session) appendManualAskUserMessages(questions json.RawMessage, answers
 					Content: []llm.ContentBlock{{Type: "text", Text: answer}},
 				},
 			},
-		})
+		}
+		if autoPicked {
+			msg.AutoPicked = true
+			msg.AutoPickQuestion = q
+			msg.AutoPickConfidence = confidence
+		}
+		s.messageLog.Append(msg)
 	}
 }
 

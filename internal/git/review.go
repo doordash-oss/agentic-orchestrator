@@ -86,7 +86,7 @@ func FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
 		}
 	}
 
-	sortReviewCommentsChronologically(result)
+	SortReviewCommentsChronologically(result)
 	return result, nil
 }
 
@@ -94,10 +94,6 @@ func FetchPRComments(repoPath, prURL string) ([]ReviewComment, error) {
 // time in ascending order. Comments without a parseable timestamp are placed
 // after dated comments, with ID as a deterministic tie-breaker.
 func SortReviewCommentsChronologically(comments []ReviewComment) {
-	sortReviewCommentsChronologically(comments)
-}
-
-func sortReviewCommentsChronologically(comments []ReviewComment) {
 	sort.SliceStable(comments, func(i, j int) bool {
 		ti, iok := parseReviewCommentCreatedAt(comments[i].CreatedAt)
 		tj, jok := parseReviewCommentCreatedAt(comments[j].CreatedAt)
@@ -157,26 +153,6 @@ func ReplyToPRComment(repoPath, prURL string, commentID int, body string) error 
 	if err != nil {
 		return fmt.Errorf("replying to comment %d: %s: %w",
 			commentID, strings.TrimSpace(string(out)), err)
-	}
-	return nil
-}
-
-// ReplyToIssueComment posts a new issue comment on the PR thread.
-// Unlike review comments, issue comments don't support threaded replies,
-// so this creates a new top-level comment on the PR.
-func ReplyToIssueComment(repoPath, prURL string, body string) error {
-	body = InjectPRSignature(body)
-	owner, repo, number, err := ParsePRURL(prURL)
-	if err != nil {
-		return err
-	}
-
-	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
-	cmd := exec.Command("gh", "api", endpoint, "-f", "body="+body)
-	cmd.Dir = repoPath
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("posting issue comment: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

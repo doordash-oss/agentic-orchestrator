@@ -246,9 +246,6 @@ func (m ConfigEditorModel) Snapshot() feature.ConfigSnapshot {
 	}
 }
 
-// Original returns the seed snapshot captured at construction time.
-func (m ConfigEditorModel) Original() feature.ConfigSnapshot { return m.original }
-
 // HasChanges reports whether the current snapshot differs from the original
 // along any of the three axes.
 func (m ConfigEditorModel) HasChanges() bool {

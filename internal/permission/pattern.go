@@ -61,6 +61,7 @@ func normalizeBashCommand(input string) string {
 // For Bash commands, extracts binary + subcommand and appends a wildcard:
 //   - "npm test --coverage" → "Bash(npm test *)"
 //   - "ls -la"              → "Bash(ls *)"      (flag, not subcommand)
+//   - "rm /tmp/file"        → "Bash(rm /tmp/file)" (destructive file command)
 //   - "cd /path && npm test" → "Bash(npm test *)" (strips cd chain prefix)
 //   - ""                    → "Bash(*)"
 //
@@ -85,6 +86,10 @@ func InferBashPattern(toolName, toolInput string) string {
 
 	binary := tokens[0]
 
+	if rememberBashCommandExactly(binary) {
+		return "Bash(" + input + ")"
+	}
+
 	// Single token: "ls" → "Bash(ls *)"
 	if len(tokens) == 1 {
 		return "Bash(" + binary + " *)"
@@ -99,4 +104,13 @@ func InferBashPattern(toolName, toolInput string) string {
 	// Second token is a subcommand → "binary subcommand *"
 	// e.g. "npm test --coverage" → "Bash(npm test *)"
 	return "Bash(" + binary + " " + tokens[1] + " *)"
+}
+
+func rememberBashCommandExactly(binary string) bool {
+	switch binary {
+	case "rm", "rmdir", "unlink":
+		return true
+	default:
+		return false
+	}
 }

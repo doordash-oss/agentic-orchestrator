@@ -25,35 +25,8 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
-
-type rebaseLoopSessionManagerStub struct {
-	startCalls int
-}
-
-func (s *rebaseLoopSessionManagerStub) StartSession(
-	string,
-	string,
-	feature.Phase,
-	[]string,
-	string,
-	[]string,
-	...*ports.SessionOpts,
-) (ports.SessionHandle, error) {
-	s.startCalls++
-	return nil, errors.New("unexpected session start")
-}
-
-func (s *rebaseLoopSessionManagerStub) StopSession(string) error                   { return nil }
-func (s *rebaseLoopSessionManagerStub) GetSession(string) ports.SessionView        { return nil }
-func (s *rebaseLoopSessionManagerStub) ActiveSessions() []ports.SessionView        { return nil }
-func (s *rebaseLoopSessionManagerStub) RecentSessions(int) []ports.SessionView     { return nil }
-func (s *rebaseLoopSessionManagerStub) FeatureSessions(string) []ports.SessionView { return nil }
-func (s *rebaseLoopSessionManagerStub) SendInput(string, []byte) error             { return nil }
-func (s *rebaseLoopSessionManagerStub) Attach(string) (ports.SessionView, error)   { return nil, nil }
-func (s *rebaseLoopSessionManagerStub) Detach()                                    {}
-func (s *rebaseLoopSessionManagerStub) Shutdown()                                  {}
-func (s *rebaseLoopSessionManagerStub) IsShuttingDown() bool                       { return false }
 
 func newRebaseTestFeature(t *testing.T, stateDir, featureID string, repoNames []string) (*feature.Store, *feature.Feature, []string) {
 	t.Helper()
@@ -578,7 +551,8 @@ func TestRunRebaseLoop_SessionStartFuncRejectsInterruptedFeature(t *testing.T) {
 	stateDir := t.TempDir()
 	store, f, _ := newRebaseTestFeature(t, stateDir, "rebase-session-start-interrupted", []string{testRepoNameAPI})
 	captureFn, captured := capturingRunImplementFn(&LoopResult{FinalStatus: finalStatusReviewPassed, Iterations: 1})
-	sm := &rebaseLoopSessionManagerStub{}
+	sm := mocks.NewMockSessionManager()
+	sm.DefaultError = errors.New("unexpected session start")
 
 	cfg := RebaseLoopConfig{
 		Feature:        f,
@@ -611,8 +585,8 @@ func TestRunRebaseLoop_SessionStartFuncRejectsInterruptedFeature(t *testing.T) {
 	if !errors.Is(err, ports.ErrSessionShuttingDown) {
 		t.Fatalf("SessionStartFunc error = %v, want ErrSessionShuttingDown", err)
 	}
-	if sm.startCalls != 0 {
-		t.Fatalf("StartSession calls = %d, want 0 after interrupted guard", sm.startCalls)
+	if len(sm.StartSessionCalls) != 0 {
+		t.Fatalf("StartSession calls = %d, want 0 after interrupted guard", len(sm.StartSessionCalls))
 	}
 }
 

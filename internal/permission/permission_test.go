@@ -234,27 +234,6 @@ func requirePermissionDenied(t *testing.T, handler ports.PermissionHandler, tool
 // Rule tests
 // ---------------------------------------------------------------------------
 
-func TestRule_Match_Exact(t *testing.T) {
-	r := Rule{ToolPattern: patternBashLSExact, Effect: DecisionAllow}
-	if !r.Match(toolNameBash, testLsLa) {
-		t.Errorf("expected rule to match tool=Bash input='ls -la'")
-	}
-}
-
-func TestRule_Match_NoMatch(t *testing.T) {
-	r := Rule{ToolPattern: patternBashLSExact, Effect: DecisionAllow}
-	if r.Match(toolNameBash, testRmRfRoot) {
-		t.Errorf("expected rule NOT to match tool=Bash input='rm -rf /'")
-	}
-}
-
-func TestRule_Match_DifferentTool(t *testing.T) {
-	r := Rule{ToolPattern: patternBashLSExact, Effect: DecisionAllow}
-	if r.Match(toolNameEdit, testLsLa) {
-		t.Errorf("expected rule NOT to match tool=Edit input='ls -la'")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Rule.Match() comprehensive tests
 // ---------------------------------------------------------------------------
@@ -480,8 +459,9 @@ func TestInferBashPattern(t *testing.T) {
 
 		// Binary with flags only (second token is flag → binary *)
 		{"ls with flags", toolNameBash, "ls -la /tmp", patternBashLS},
-		{"rm with flags", toolNameBash, "rm -rf /tmp/foo", patternBashRm},
+		{"rm with flags stays exact", toolNameBash, "rm -rf /tmp/foo", "Bash(rm -rf /tmp/foo)"},
 		{"grep with flags", toolNameBash, "grep -rn 'pattern' .", "Bash(grep *)"},
+		{"rm absolute path stays exact", toolNameBash, "rm /private/var/tmp/agentico/knowledge-base/dbaccess/verification/build-and-lint.md", "Bash(rm /private/var/tmp/agentico/knowledge-base/dbaccess/verification/build-and-lint.md)"},
 
 		// Chained commands: cd && ...
 		{"cd then npm test", toolNameBash, "cd /path && npm test --coverage", patternBashNpmTest},

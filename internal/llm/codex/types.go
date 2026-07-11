@@ -309,7 +309,6 @@ type ItemStartedParams struct {
 type ItemUnion struct {
 	ID               string          `json:"id"`
 	Type             string          `json:"type"`
-	Status           string          `json:"status,omitempty"`
 	Phase            string          `json:"phase,omitempty"`
 	Text             string          `json:"text,omitempty"`
 	AggregatedOutput string          `json:"aggregatedOutput,omitempty"`

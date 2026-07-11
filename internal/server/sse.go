@@ -60,7 +60,7 @@ type subscriberState struct {
 }
 
 func newEventBroker(input <-chan interface{}, domain <-chan ports.Event) *eventBroker {
-	b := newEventBrokerWithOptions(input, domain, eventBrokerOptions{})
+	b := newEventBrokerWithOptions(eventBrokerOptions{})
 	if input != nil {
 		go func() {
 			for msg := range input {
@@ -78,7 +78,7 @@ func newEventBroker(input <-chan interface{}, domain <-chan ports.Event) *eventB
 	return b
 }
 
-func newEventBrokerWithOptions(input <-chan interface{}, domain <-chan ports.Event, opts eventBrokerOptions) *eventBroker {
+func newEventBrokerWithOptions(opts eventBrokerOptions) *eventBroker {
 	epoch := opts.Epoch
 	if epoch == "" {
 		epoch = newEventEpoch()
@@ -97,7 +97,7 @@ func newEventBrokerWithOptions(input <-chan interface{}, domain <-chan ports.Eve
 }
 
 func newEventBrokerForTest(opts eventBrokerOptions) *eventBroker {
-	return newEventBrokerWithOptions(nil, nil, opts)
+	return newEventBrokerWithOptions(opts)
 }
 
 func (b *eventBroker) subscribe() chan SSEEventDTO {

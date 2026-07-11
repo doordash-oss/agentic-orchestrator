@@ -156,14 +156,14 @@ func (m *ChatModel) restoreQuestionState(idx int) {
 // current question first when snapshot is true (mirrors
 // AttachModel.advanceQuestionOpts — pass snapshot=false when the caller,
 // e.g. commitAnswer, has already written authoritative state).
-func (m *ChatModel) advanceQuestionOpts(delta int, snapshot bool) bool {
+func (m *ChatModel) advanceQuestionOpts(delta int, snapshot bool) {
 	if len(m.questions) == 0 {
-		return false
+		return
 	}
 	newIdx := m.currentQuestionIdx + delta
 	maxIdx := len(m.questions)
 	if newIdx < 0 || newIdx > maxIdx || newIdx == m.currentQuestionIdx {
-		return false
+		return
 	}
 	if snapshot && m.onQuestionSlot() && m.currentQuestionIdx < len(m.questionStates) {
 		st := &m.questionStates[m.currentQuestionIdx]
@@ -183,14 +183,13 @@ func (m *ChatModel) advanceQuestionOpts(delta int, snapshot bool) bool {
 		m.typingCustom = false
 		m.input.Reset()
 		m.syncChatInputHeight()
-		return true
+		return
 	}
 	m.restoreQuestionState(newIdx)
 	if newIdx < len(m.questionStates) {
 		m.questionStates[newIdx].askedEmitted = true
 	}
 	m.syncChatInputHeight()
-	return true
 }
 
 // updateChatQuestionScrollOffset adjusts questionScrollOffset so that
@@ -321,7 +320,7 @@ func (m ChatModel) renderQuestionPicker() (body, footer string) {
 		b.WriteString("\n\n")
 		for _, q := range m.questions {
 			if a, ok := m.collectedAnswers[q.Question]; ok {
-				b.WriteString(fmt.Sprintf("  %s → %s\n", q.Question, a))
+				fmt.Fprintf(&b, "  %s → %s\n", q.Question, a)
 			}
 		}
 		return b.String(), KeyHelpStyle.Render("[enter] Submit · [←] back · [esc] close")

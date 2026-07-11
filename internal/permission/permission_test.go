@@ -84,8 +84,9 @@ func TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell(t *testing.T) {
 	requirePermissionDenied(t, strict, "Bash", analysis)
 }
 
-func requirePermissionDeferred(t *testing.T, handler ports.PermissionHandler, toolName, input string) {
+func requirePermissionDeferred(t *testing.T, handler ports.PermissionHandler, input string) {
 	t.Helper()
+	const toolName = "Bash"
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolName, Input: input})
 	if err != nil {
 		t.Fatalf("CanUseTool(%q, %q) error = %v", toolName, input, err)
@@ -105,7 +106,7 @@ func TestCreateWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
 	requirePermissionAllowed(t, handler, "Bash", `{"command":"touch `+marker+` `+filepath.Join(root, "other")+`"}`)
 	// Non-Bash tools and non-touch Bash still fall through to Inner unchanged.
 	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+marker+`"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"ls `+root+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"ls `+root+`"}`)
 }
 
 func TestCreateWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
@@ -113,9 +114,9 @@ func TestCreateWithinRootsHandler_DefersOutsideRoot(t *testing.T) {
 	outside := t.TempDir()
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+filepath.Join(outside, "phase_complete")+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+filepath.Join(outside, "phase_complete")+`"}`)
 	// One target outside the root is enough to defer, even if another is inside.
-	requirePermissionDeferred(t, handler, "Bash",
+	requirePermissionDeferred(t, handler,
 		`{"command":"touch `+filepath.Join(root, "ok")+` `+filepath.Join(outside, "bad")+`"}`)
 }
 
@@ -124,13 +125,13 @@ func TestCreateWithinRootsHandler_DefersOnFlagsChainingAndSubstitution(t *testin
 	marker := filepath.Join(root, "phase_complete")
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch -r `+marker+` `+marker+`"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+marker+` && rm -rf /"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+marker+`; echo done"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch $(echo `+marker+`)"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch `+marker+` > /dev/null"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"nottouch `+marker+`"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"touch"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch -r `+marker+` `+marker+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+` && rm -rf /"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+`; echo done"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch $(echo `+marker+`)"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch `+marker+` > /dev/null"}`)
+	requirePermissionDeferred(t, handler, `{"command":"nottouch `+marker+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"touch"}`)
 }
 
 func TestCreateWithinRootsHandler_AllowsPlainMkdirInsideRoot(t *testing.T) {
@@ -151,13 +152,13 @@ func TestCreateWithinRootsHandler_MkdirDefersOutsideRootOrOnOtherFlags(t *testin
 	inRoot := filepath.Join(root, "runs", "run-001", "research")
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(outside, "research")+`"}`)
-	requirePermissionDeferred(t, handler, "Bash",
+	requirePermissionDeferred(t, handler, `{"command":"mkdir -p `+filepath.Join(outside, "research")+`"}`)
+	requirePermissionDeferred(t, handler,
 		`{"command":"mkdir -p `+inRoot+` `+filepath.Join(outside, "bad")+`"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -m 0700 `+inRoot+`"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p `+inRoot+` && rm -rf /"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p"}`)
-	requirePermissionDeferred(t, handler, "Bash", `{"command":"mkdir -p -p"}`)
+	requirePermissionDeferred(t, handler, `{"command":"mkdir -m 0700 `+inRoot+`"}`)
+	requirePermissionDeferred(t, handler, `{"command":"mkdir -p `+inRoot+` && rm -rf /"}`)
+	requirePermissionDeferred(t, handler, `{"command":"mkdir -p"}`)
+	requirePermissionDeferred(t, handler, `{"command":"mkdir -p -p"}`)
 }
 
 func TestWrapGeneralPhaseHandlerWithSafeCreate_WrapsAcceptEditsAndCaching(t *testing.T) {

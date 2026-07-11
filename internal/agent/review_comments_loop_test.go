@@ -858,7 +858,7 @@ func TestBuildAggregatedReviewCommentsPlanSortsCommentsByCreatedAt(t *testing.T)
 	if idxEarly < 0 || idxMiddle < 0 || idxLate < 0 {
 		t.Fatalf("plan missing expected comment IDs:\n%s", plan)
 	}
-	if !(idxEarly < idxMiddle && idxMiddle < idxLate) {
+	if idxEarly >= idxMiddle || idxMiddle >= idxLate {
 		t.Fatalf("comment order indexes = early:%d middle:%d late:%d, want chronological", idxEarly, idxMiddle, idxLate)
 	}
 }

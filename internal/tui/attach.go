@@ -1032,7 +1032,7 @@ func (m *AttachModel) restoreThinkingLine() {
 // a newline is inserted. This prevents the textarea viewport from scrolling
 // prior lines out of view at the old (smaller) height.
 func (m *AttachModel) preExpandInput() {
-	h := growTextareaHeight(m.inputHeight, maxInputLines)
+	h := growTextareaHeight(m.inputHeight)
 	if h != m.inputHeight {
 		m.inputHeight = h
 		m.input.SetHeight(h)

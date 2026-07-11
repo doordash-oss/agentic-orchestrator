@@ -760,11 +760,7 @@ func (m APIAppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.rebuildPresentation(m.selectedFeature)
 			m.syncAPIContentViewport()
 		}
-		var cmd tea.Cmd
-		m, cmd = m.applyAPIChatRefreshSnapshot(msg.snapshot)
-		if cmd != nil {
-			return m, cmd
-		}
+		m = m.applyAPIChatRefreshSnapshot(msg.snapshot)
 		return m, m.apiChatRecoveryCmdIfResponding()
 	case apiContentSelectionMsg:
 		if msg.err != nil {
@@ -1738,8 +1734,12 @@ func (m APIAppModel) apiDashboardFeatures() []*feature.Feature {
 }
 
 func (m APIAppModel) selectedAPIDashboardFeature() *feature.Feature {
+	return m.apiDashboardFeatureByID(m.selectedFeature)
+}
+
+func (m APIAppModel) apiDashboardFeatureByID(featureID string) *feature.Feature {
 	for _, f := range m.apiDashboardFeatures() {
-		if f.ID == m.selectedFeature {
+		if f.ID == featureID {
 			return f
 		}
 	}
@@ -2509,8 +2509,15 @@ func (m APIAppModel) apiAttachTabsForFeature(featureID string) []repoTab {
 		}
 	}
 	if len(order) == 0 {
-		if preview, ok := m.livePreviews[featureID]; ok && preview.Session != nil {
-			addSummary(*preview.Session)
+		if preview, ok := m.livePreviews[featureID]; ok {
+			if preview.Session != nil {
+				addSummary(*preview.Session)
+			}
+			if len(order) == 0 && isLivePreviewEligible(m.apiDashboardFeatureByID(featureID)) {
+				if tab, ok := apiLivePreviewFallbackTab(featureID, preview); ok {
+					return []repoTab{tab}
+				}
+			}
 		}
 	}
 
@@ -2546,6 +2553,22 @@ func (m APIAppModel) apiAttachTabsForFeature(featureID string) []repoTab {
 		})
 	}
 	return tabs
+}
+
+func apiLivePreviewFallbackTab(featureID string, preview server.LivePreviewResponse) (repoTab, bool) {
+	presentation := apiLivePreviewPresentation(featureID, preview)
+	sess := newAPILivePreviewSession(presentation)
+	if sess == nil {
+		return repoTab{}, false
+	}
+	repoName := firstNonEmpty(sess.RepoName(), sess.Label(), sess.ID(), "live-preview")
+	return repoTab{
+		repoName: repoName,
+		label:    sess.Label(),
+		kind:     sess.Kind(),
+		sess:     sess,
+		status:   apiAttachTabStatus(sess),
+	}, true
 }
 
 func (m APIAppModel) apiPendingControlsBySession(featureID string) map[string][]server.ControlRequestDTO {
@@ -3134,26 +3157,26 @@ func (m APIAppModel) rebuildAPIAttachTabs() (APIAppModel, tea.Cmd) {
 	return m, tea.Batch(cmd, liveCmd)
 }
 
-func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot) (APIAppModel, tea.Cmd) {
+func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot) APIAppModel {
 	if !m.chatReady || m.chat.sess == nil {
-		return m, nil
+		return m
 	}
 	active, ok := m.chat.sess.(*apiSessionView)
 	if !ok || active == nil {
-		return m, nil
+		return m
 	}
 	var detail server.SessionDetailDTO
 	var transcript *server.TranscriptResponse
 	if snapshot.Session != nil {
 		if snapshot.Session.Session.ID != active.ID() {
-			return m, nil
+			return m
 		}
 		detail = snapshot.Session.Session
 		transcript = snapshot.Transcript
 	} else {
 		controls := m.apiPendingControlsBySession(active.FeatureID())[active.ID()]
 		if len(controls) == 0 {
-			return m, nil
+			return m
 		}
 		detail = server.SessionDetailDTO{
 			SessionSummaryDTO: server.SessionSummaryDTO{
@@ -3181,7 +3204,7 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 		HasInProgressAgentText: m.chat.hasInProgressAgentText(),
 	})
 	if len(events) == 0 {
-		return m, nil
+		return m
 	}
 	m.chat = m.chat.ApplyEvents(events)
 	if m.chat.fullscreen {
@@ -3189,7 +3212,7 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 	} else {
 		m.chat = m.chat.resize(m.width, m.chat.chatPanelHeight(m.height))
 	}
-	return m, nil
+	return m
 }
 
 func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO, transcript *server.TranscriptResponse, controls []server.ControlRequestDTO) []llm.SDKMessage {
@@ -4010,27 +4033,6 @@ func (m *APIAppModel) upsertSessionSummary(summary server.SessionSummaryDTO) {
 		}
 	}
 	m.sessionList.Sessions = append([]server.SessionSummaryDTO{summary}, m.sessionList.Sessions...)
-}
-
-func (m *APIAppModel) moveSelection(delta int) {
-	if delta == 0 || len(m.snapshot.Features) == 0 {
-		return
-	}
-	idx := 0
-	for i, f := range m.snapshot.Features {
-		if f.ID == m.selectedFeature {
-			idx = i
-			break
-		}
-	}
-	idx += delta
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(m.snapshot.Features) {
-		idx = len(m.snapshot.Features) - 1
-	}
-	m.selectedFeature = m.snapshot.Features[idx].ID
 }
 
 func (m APIAppModel) handleAPIDashboardListKey(msg tea.KeyPressMsg) (APIAppModel, tea.Cmd) {
@@ -5403,10 +5405,6 @@ func (m APIAppModel) openRefactorPrompt() APIAppModel {
 	return m.openRefactorPromptFor(false)
 }
 
-func (m APIAppModel) openRefactorRestartPrompt() APIAppModel {
-	return m.openRefactorPromptFor(true)
-}
-
 func (m APIAppModel) openRefactorPromptFor(restart bool) APIAppModel {
 	if m.selectedFeature == "" {
 		m.statusMessage = "No feature selected"
@@ -5661,27 +5659,6 @@ func (m APIAppModel) selectedReviewCommentsRepo() string {
 	return ""
 }
 
-func (m APIAppModel) selectedRefactorRepo() string {
-	if detail, ok := m.featureDetails[m.selectedFeature]; ok {
-		for _, repo := range detail.Feature.RepoStatus {
-			if strings.TrimSpace(repo.Name) != "" {
-				return repo.Name
-			}
-		}
-	}
-	for _, feature := range m.featureList.Features {
-		if feature.ID == m.selectedFeature && len(feature.Repos) > 0 {
-			return feature.Repos[0]
-		}
-	}
-	for _, feature := range m.snapshot.Features {
-		if feature.ID == m.selectedFeature && len(feature.Repos) > 0 {
-			return feature.Repos[0]
-		}
-	}
-	return ""
-}
-
 func (m APIAppModel) selectedFeatureName() string {
 	return m.featureNameByID(m.selectedFeature)
 }
@@ -5711,15 +5688,10 @@ func (m APIAppModel) selectedActionReady(kind string) bool {
 		return m.selectedFeatureHasTweakCycle(m.selectedFeature)
 	}
 	if m.snapshot.Detail != nil {
-		sawAction := false
 		for _, action := range m.snapshot.Detail.Actions {
 			if apiActionMatchesMutationKind(action.ID, kind) {
-				sawAction = true
 				return action.Status == "" || action.Status == "ready"
 			}
-		}
-		if sawAction {
-			return false
 		}
 	}
 	switch kind {
@@ -5880,13 +5852,13 @@ func (m APIAppModel) renderAPIContentBody() string {
 	}
 	var b strings.Builder
 	if content.RunNumber > 0 {
-		b.WriteString(fmt.Sprintf("  Run: %d\n", content.RunNumber))
+		fmt.Fprintf(&b, "  Run: %d\n", content.RunNumber)
 	}
 	if content.Log != nil {
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("  Log %s", content.Log.ID))
+		fmt.Fprintf(&b, "  Log %s", content.Log.ID)
 		if content.Log.Size > 0 {
-			b.WriteString(fmt.Sprintf("  bytes %d-%d of %d", content.Log.Offset, min(content.Log.Offset+content.Log.Limit, content.Log.Size), content.Log.Size))
+			fmt.Fprintf(&b, "  bytes %d-%d of %d", content.Log.Offset, min(content.Log.Offset+content.Log.Limit, content.Log.Size), content.Log.Size)
 		}
 		if content.Log.Truncated {
 			b.WriteString("  truncated")
@@ -5896,12 +5868,12 @@ func (m APIAppModel) renderAPIContentBody() string {
 	}
 	if content.Artifact != nil {
 		b.WriteString("\n")
-		b.WriteString(fmt.Sprintf("  Artifact %s", content.Artifact.ID))
+		fmt.Fprintf(&b, "  Artifact %s", content.Artifact.ID)
 		if content.Artifact.Phase != "" {
 			b.WriteString("  " + content.Artifact.Phase)
 		}
 		if content.Artifact.Size > 0 {
-			b.WriteString(fmt.Sprintf("  bytes %d-%d of %d", content.Artifact.Offset, min(content.Artifact.Offset+content.Artifact.Limit, content.Artifact.Size), content.Artifact.Size))
+			fmt.Fprintf(&b, "  bytes %d-%d of %d", content.Artifact.Offset, min(content.Artifact.Offset+content.Artifact.Limit, content.Artifact.Size), content.Artifact.Size)
 		}
 		if content.Artifact.Truncated {
 			b.WriteString("  truncated")
@@ -6112,7 +6084,7 @@ func (m APIAppModel) renderAPIResumeAllConfirm() string {
 	var b strings.Builder
 	b.WriteString("\n")
 	if len(m.resumeAllFeatureIDs) > 0 {
-		b.WriteString(fmt.Sprintf("  %d interrupted/failed feature(s) will be resumed.\n", len(m.resumeAllFeatureIDs)))
+		fmt.Fprintf(&b, "  %d interrupted/failed feature(s) will be resumed.\n", len(m.resumeAllFeatureIDs))
 	} else {
 		b.WriteString(MutedStyle.Render("  No interrupted or failed features to resume."))
 		b.WriteString("\n")
@@ -6213,10 +6185,6 @@ func (m APIAppModel) renderAPIRepoActionPanel(width int) string {
 		Width(width).
 		BorderForeground(colorBrand).
 		Render(b.String())
-}
-
-func apiRepoActionStatus(repo apiRepoActionOption) string {
-	return apiRepoActionStatusForKind("", repo)
 }
 
 func apiRepoActionStatusForKind(kind string, repo apiRepoActionOption) string {
@@ -6356,52 +6324,6 @@ func apiRewindPhaseLabel(phase string) string {
 	}
 }
 
-func (m APIAppModel) renderAPIRefactorPrompt(width int) string {
-	prompt := m.refactorPrompt
-	if prompt == nil {
-		return ""
-	}
-	if width < 48 {
-		width = 48
-	}
-	name := prompt.featureName
-	if name == "" {
-		name = prompt.featureID
-	}
-	title := "Refactor"
-	if prompt.restart {
-		title = "Restart refactor"
-	}
-	var b strings.Builder
-	b.WriteString(title + "\n\n")
-	b.WriteString("  Feature: " + name + "\n")
-	if prompt.repo != "" {
-		b.WriteString("  Repo: " + prompt.repo + "\n")
-	}
-	b.WriteString("\n")
-	draft := prompt.draft
-	if draft == "" {
-		draft = " "
-	}
-	b.WriteString(panelStyle(false).Width(width - 4).Render(draft))
-	b.WriteString("\n\n")
-	b.WriteString(KeyHelpStyle.Render(" [ctrl+s] Submit   [esc] Cancel"))
-	return panelStyle(true).
-		Width(width).
-		BorderForeground(colorBrand).
-		Render(b.String())
-}
-
-func (m APIAppModel) renderAPIRefactorPipeline(width int) string {
-	if width < 48 {
-		width = 48
-	}
-	return panelStyle(true).
-		Width(width).
-		BorderForeground(colorBrand).
-		Render(m.renderAPIRefactorPipelineSelector())
-}
-
 func (m APIAppModel) renderAPIRefactorPipelineSelector() string {
 	panel := m.refactorPipeline
 	if panel == nil {
@@ -6449,7 +6371,7 @@ func (m APIAppModel) renderNeedInputPrompt() string {
 		b.WriteString("  Scope: " + m.needInputGate.Scope + "\n")
 	}
 	if m.needInputGate.Iteration > 0 {
-		b.WriteString(fmt.Sprintf("  Iteration: %d\n", m.needInputGate.Iteration))
+		fmt.Fprintf(&b, "  Iteration: %d\n", m.needInputGate.Iteration)
 	}
 	if m.needInputGate.Scope != "" || m.needInputGate.Iteration > 0 {
 		b.WriteByte('\n')
@@ -6600,7 +6522,7 @@ func (m APIAppModel) listenForAPIEvents() tea.Cmd {
 // matching the single visible attach tab.
 func (m *APIAppModel) startLiveSessionOutput(sess *apiSessionView) tea.Cmd {
 	m.stopLiveSessionOutput()
-	if sess == nil || m.client == nil || !sess.IsActive() {
+	if sess == nil || m.client == nil || !sess.IsActive() || strings.TrimSpace(sess.ID()) == "" {
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -6951,8 +6873,8 @@ func (m APIAppModel) shouldRefreshSelectedContent(signal server.RefreshSignal) b
 	if resource.FeatureID != "" && resource.FeatureID != m.selectedFeature {
 		return false
 	}
-	switch {
-	case resource.Type == "log" || resource.Type == "artifact":
+	switch resource.Type {
+	case "log", "artifact":
 		return true
 	default:
 		return false
@@ -6987,13 +6909,6 @@ func (m APIAppModel) fetchReviewCommentsCmd(featureID, featureName, repo, mode s
 			err:         err,
 		}
 	}
-}
-
-func (m APIAppModel) selectedPrimaryFeatureActionKind() string {
-	if m.selectedActionReady("feature.resume") {
-		return "feature.resume"
-	}
-	return "feature.start"
 }
 
 func (m APIAppModel) createFeatureCmd(result *WizardResult) tea.Cmd {
@@ -8182,13 +8097,6 @@ func apiFeatureConfigPublishable(publish server.PublishabilityDTO) bool {
 	return true
 }
 
-func apiConfigModelSummary(value string) string {
-	if value == "" {
-		return "(default)"
-	}
-	return value
-}
-
 func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 	cat := PhaseModelCatalog{
 		Fields:              append([]string(nil), globalModelFields...),
@@ -8235,9 +8143,7 @@ func apiPhaseModelCatalog(resp server.ModelCatalogResponse) PhaseModelCatalog {
 		missingOrder = append(missingOrder, provider)
 	}
 	sort.Strings(missingOrder)
-	for _, provider := range missingOrder {
-		cat.ProviderOrder = append(cat.ProviderOrder, provider)
-	}
+	cat.ProviderOrder = append(cat.ProviderOrder, missingOrder...)
 	return cat
 }
 
@@ -8292,16 +8198,6 @@ func apiReviewCommentModes(values []string) []string {
 	return modes
 }
 
-func apiNextReviewCommentMode(current string, modes []string) string {
-	modes = apiReviewCommentModes(modes)
-	for i, mode := range modes {
-		if mode == current {
-			return modes[(i+1)%len(modes)]
-		}
-	}
-	return modes[0]
-}
-
 func apiRefactorPipelines(values []string) []feature.PipelineProfile {
 	pipelines := make([]feature.PipelineProfile, 0, len(values))
 	for _, value := range values {
@@ -8342,23 +8238,6 @@ func pipelineSliceContains(values []feature.PipelineProfile, needle feature.Pipe
 		}
 	}
 	return false
-}
-
-func apiReviewCommentLocation(comment server.ReviewCommentDTO) string {
-	if comment.Path != "" {
-		if comment.Line > 0 {
-			return fmt.Sprintf("%s:%d", comment.Path, comment.Line)
-		}
-		return comment.Path
-	}
-	switch strings.ToLower(strings.TrimSpace(comment.Type)) {
-	case "issue":
-		return "PR conversation"
-	case "review":
-		return "PR review"
-	default:
-		return strings.TrimSpace(comment.Type)
-	}
 }
 
 func (m APIAppModel) selectedFeatureCurrentPhase(featureID string) string {
@@ -8744,15 +8623,6 @@ func apiFeatureCanStop(status string) bool {
 	}
 }
 
-func apiFeatureCanResume(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "interrupted", "needuserinput":
-		return true
-	default:
-		return false
-	}
-}
-
 func apiFeatureDetailPresentation(dto server.FeatureDetailDTO) APIFeatureDetailPresentation {
 	name := dto.Name
 	if name == "" {
@@ -8930,11 +8800,6 @@ func apiContentTailOffset(size int64) int64 {
 		return 0
 	}
 	return size - apiContentTailLimit
-}
-
-func firstAvailableTextArtifact(resp server.ArtifactListResponse) (server.ArtifactDTO, bool) {
-	artifact, ok := selectedAvailableTextArtifact(resp, "")
-	return artifact, ok
 }
 
 func selectedAvailableTextArtifact(resp server.ArtifactListResponse, artifactID string) (server.ArtifactDTO, bool) {
@@ -9207,17 +9072,4 @@ func apiMutationRefreshesFeatureDetail(kind string) bool {
 	default:
 		return false
 	}
-}
-
-func truncatePlain(s string, maxWidth int) string {
-	if maxWidth <= 0 {
-		return ""
-	}
-	if len(s) <= maxWidth {
-		return s
-	}
-	if maxWidth == 1 {
-		return s[:1]
-	}
-	return s[:maxWidth-1] + "..."
 }

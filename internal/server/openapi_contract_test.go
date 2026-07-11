@@ -198,7 +198,7 @@ func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
 			}
 			op := lookupOpenAPIOperation(t, spec, tc.method, tc.specPath)
-			declared := declaredOpenAPIResponse(t, spec, op, strconv.Itoa(tc.wantStatus))
+			declared := declaredOpenAPIResponse(t, op, strconv.Itoa(tc.wantStatus))
 			if len(responseContentTypes(spec, declared)) > 0 && !declaresContentType(spec, declared, tc.wantType) {
 				t.Fatalf("%s %s status %d does not declare %s content", tc.method, tc.specPath, tc.wantStatus, tc.wantType)
 			}
@@ -403,7 +403,7 @@ func lookupOpenAPIOperation(t *testing.T, spec openAPISpec, method, path string)
 	return op
 }
 
-func declaredOpenAPIResponse(t *testing.T, spec openAPISpec, op openAPIOperation, status string) openAPIResponse {
+func declaredOpenAPIResponse(t *testing.T, op openAPIOperation, status string) openAPIResponse {
 	t.Helper()
 	resp, ok := op.Responses[status]
 	if !ok {

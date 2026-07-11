@@ -26,11 +26,11 @@ import (
 var shiftEnterKey = key.NewBinding(key.WithKeys("shift+enter"))
 
 // growTextareaHeight returns the textarea height after growing by one line
-// (capped at maxLines). Call this BEFORE inserting a newline so the
+// (capped at 6). Call this BEFORE inserting a newline so the
 // textarea grows before the content does — otherwise the viewport scrolls
 // prior lines out of view at the old (smaller) height for one frame.
-func growTextareaHeight(current, maxLines int) int {
-	return min(current+1, maxLines)
+func growTextareaHeight(current int) int {
+	return min(current+1, 6)
 }
 
 // syncTextareaHeight recalculates textarea height from content line count,

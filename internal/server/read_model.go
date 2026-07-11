@@ -505,7 +505,7 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) handleWorkspaceBrowse(w http.ResponseWriter, r *http.Request) {
@@ -531,7 +531,7 @@ func (h *apiHandler) handleWorkspaceBrowse(w http.ResponseWriter, r *http.Reques
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func parseBoolQuery(raw string) bool {
@@ -546,7 +546,7 @@ func parseBoolQuery(raw string) bool {
 func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request, featureID string) {
 	f, err := h.loadFeature(featureID)
 	if err != nil {
-		writeStoreError(w, err, "feature", featureID)
+		writeStoreError(w, err, featureID)
 		return
 	}
 	cfg := h.configOrDefault()
@@ -570,7 +570,7 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) {
@@ -603,7 +603,7 @@ func (h *apiHandler) handleModelCatalog(w http.ResponseWriter, r *http.Request) 
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
@@ -618,7 +618,7 @@ func (h *apiHandler) handlePrompts(w http.ResponseWriter, r *http.Request) {
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) handlePermissions(w http.ResponseWriter, r *http.Request) {
@@ -626,7 +626,7 @@ func (h *apiHandler) handlePermissions(w http.ResponseWriter, r *http.Request) {
 	resp := PermissionSnapshotResponse{APIVersion: APIVersion, Requests: perms}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) configOrDefault() *config.Config {

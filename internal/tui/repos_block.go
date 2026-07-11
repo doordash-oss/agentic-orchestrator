@@ -87,7 +87,7 @@ func renderReposBlock(f *feature.Feature) []string {
 			}
 		}
 		if suffix := freshnessSuffix(freshness); suffix != "" &&
-			!(rebaseSuffix != "" && strings.TrimSpace(freshness) == "in sync") {
+			(rebaseSuffix == "" || strings.TrimSpace(freshness) != "in sync") {
 			tail = strings.TrimRight(tail, " ") + "  " + suffix
 		}
 

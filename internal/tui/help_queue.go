@@ -64,18 +64,6 @@ func normalizeManagedHelpQueue(f *feature.Feature) bool {
 	return changed
 }
 
-func hasHelpRequestMessage(f *feature.Feature, question string) bool {
-	if f == nil {
-		return false
-	}
-	for _, h := range f.HelpQueue {
-		if sameManagedHelpMessage(h.Question, question) {
-			return true
-		}
-	}
-	return false
-}
-
 func hasPendingHelpRequestMessage(f *feature.Feature, question string) bool {
 	if f == nil {
 		return false

@@ -1684,41 +1684,6 @@ func actionConflictError(err error) error {
 	return nil
 }
 
-func (t *serverMutationTarget) ensureWholeFeatureRepoSelection(featureID string, repos []string, action string) error {
-	requested := normalizedStringSet(repos)
-	if len(requested) == 0 {
-		return nil
-	}
-	if t.store == nil {
-		return fmt.Errorf("%s repo selection requires feature store", action)
-	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		return err
-	}
-	featureRepos := featureRepoNames(f)
-	if len(requested) != len(featureRepos) {
-		return fmt.Errorf("%s for selected repos is not supported by the orchestrator adapter", action)
-	}
-	for _, repo := range featureRepos {
-		if !requested[repo] {
-			return fmt.Errorf("%s for selected repos is not supported by the orchestrator adapter", action)
-		}
-	}
-	return nil
-}
-
-func normalizedStringSet(values []string) map[string]bool {
-	out := map[string]bool{}
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			out[value] = true
-		}
-	}
-	return out
-}
-
 func (t *serverMutationTarget) startRefactorAction(featureID string, req serverruntime.RefactorActionRequest, restart bool) (serverruntime.RefactorStartResponse, error) {
 	resp := serverruntime.RefactorStartResponse{
 		FeatureID: featureID,
@@ -1759,22 +1724,6 @@ func (t *serverMutationTarget) startRefactorAction(featureID string, req serverr
 		resp.Result = "started"
 	}
 	return resp, nil
-}
-
-func (t *serverMutationTarget) updateSavedReviewCommentsMode(featureID, repoName, mode string) error {
-	if t.store == nil {
-		return errors.New("feature store is not available")
-	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		return err
-	}
-	data, err := agent.LoadReviewCommentsForRepo(t.store.BaseDir, f, repoName)
-	if err != nil {
-		return err
-	}
-	data.Mode = mode
-	return agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, repoName, *data)
 }
 
 func reviewCommentDTOs(repoName string, comments []ports.ReviewComment) []serverruntime.ReviewCommentDTO {
@@ -2137,7 +2086,7 @@ func parseServerPhase(in string) feature.Phase {
 	}
 }
 
-func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stdin io.Reader, stderr io.Writer) (*runtimeBootstrap, error) {
+func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, stderr io.Writer) (*runtimeBootstrap, error) {
 	stateDir = canonicalizeStateDir(stateDir)
 	runtimeDir := filepath.Dir(stateDir)
 	lock, acquired, owner, err := instancelock.Acquire(runtimeDir, stateDir, configPath, tui.GetVersion())
@@ -2303,9 +2252,7 @@ func scanStartupRecovery(ctx context.Context, orch *orchestrator.Orchestrator, s
 		return nil, false
 	}
 	recoveryItems := make([]session.RecoveryItem, len(items))
-	for i, item := range items {
-		recoveryItems[i] = item
-	}
+	copy(recoveryItems, items)
 	return recoveryItems, true
 }
 
@@ -2797,7 +2744,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	runtimeCtx, requestShutdown := context.WithCancel(ctx)
 	defer requestShutdown()
 
-	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stdin, os.Stderr)
+	boot, err := bootstrapRuntime(ctx, configPath, stateDir, dangerouslySkipPerms, enabledProviders, refreshModels, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1

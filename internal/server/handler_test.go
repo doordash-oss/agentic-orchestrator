@@ -277,13 +277,13 @@ func (f featureListerFunc) List() ([]*feature.Feature, error) {
 	return f()
 }
 
-func jsonResponse(status int, v any) (*http.Response, error) {
+func jsonResponse(v any) (*http.Response, error) {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(v); err != nil {
 		return nil, err
 	}
 	return &http.Response{
-		StatusCode: status,
+		StatusCode: http.StatusOK,
 		Body:       ioNopCloser{Reader: bytes.NewReader(body.Bytes())},
 		Header:     make(http.Header),
 	}, nil

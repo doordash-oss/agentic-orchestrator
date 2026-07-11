@@ -84,7 +84,7 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 		}
 	}
 
-	errResp := requestJSONMap(t, handler, http.MethodGet, "/api/v1/features/../bad", nil, http.StatusBadRequest)
+	errResp := requestJSONMap(t, handler, "/api/v1/features/../bad", http.StatusBadRequest)
 	errDTO := errResp["error"].(map[string]any)
 	if errDTO["code"] != "bad_request" || errDTO["status"].(float64) != http.StatusBadRequest {
 		t.Fatalf("error DTO = %+v; want stable bad_request", errDTO)
@@ -712,27 +712,27 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		action := rawAction.(map[string]any)
 		actionsByID[action["id"].(string)] = action
 	}
-	assertActionScope(t, actionsByID["publish"], "feature", "")
+	assertActionScope(t, actionsByID["publish"], "")
 	assertActionInputNames(t, actionsByID["publish"])
-	assertActionScope(t, actionsByID["merge"], "feature", "")
+	assertActionScope(t, actionsByID["merge"], "")
 	assertActionInputNames(t, actionsByID["merge"])
 	assertActionInputNames(t, actionsByID["rewind"], "target_phase", "roadmap_phase", "upgrade_pipeline")
 	assertActionInputRequired(t, actionsByID["rewind"], "target_phase", true)
 	assertActionInputRequired(t, actionsByID["rewind"], "roadmap_phase", false)
 	assertActionInputRequired(t, actionsByID["rewind"], "upgrade_pipeline", false)
-	assertActionScope(t, actionsByID["rebase"], "feature", "")
+	assertActionScope(t, actionsByID["rebase"], "")
 	assertActionInputNames(t, actionsByID["rebase"])
-	assertActionScope(t, actionsByID["review-comments"], "feature", "required")
+	assertActionScope(t, actionsByID["review-comments"], "required")
 	assertActionInputNames(t, actionsByID["review-comments"], "repo", "mode")
 	assertActionInputRequired(t, actionsByID["review-comments"], "repo", true)
 	assertActionInputRequired(t, actionsByID["review-comments"], "mode", true)
-	assertActionScope(t, actionsByID["refactor"], "feature", "optional")
+	assertActionScope(t, actionsByID["refactor"], "optional")
 	assertActionInputNames(t, actionsByID["refactor"], "repo", "prompt", "pipeline")
 	assertActionInputRequired(t, actionsByID["refactor"], "repo", false)
 	assertActionInputRequired(t, actionsByID["refactor"], "prompt", true)
-	assertActionScope(t, actionsByID["cleanup"], "feature", "")
+	assertActionScope(t, actionsByID["cleanup"], "")
 	assertActionInputNames(t, actionsByID["cleanup"], "target")
-	assertActionScope(t, actionsByID["delete"], "feature", "")
+	assertActionScope(t, actionsByID["delete"], "")
 	refactorPrompt := actionInputByName(t, actionsByID["refactor"], "prompt")
 	if got := int(refactorPrompt["max_length"].(float64)); got != MaxActionTextBytes {
 		t.Fatalf("refactor prompt max_length = %d; want %d", got, MaxActionTextBytes)
@@ -788,7 +788,7 @@ func TestActionCatalogRebaseIsFeatureScoped(t *testing.T) {
 		action := raw.(map[string]any)
 		actionsByID[action["id"].(string)] = action
 	}
-	assertActionScope(t, actionsByID["rebase"], "feature", "")
+	assertActionScope(t, actionsByID["rebase"], "")
 	assertActionInputNames(t, actionsByID["rebase"])
 }
 
@@ -1308,8 +1308,8 @@ func TestSessionDetailAndTranscriptDoNotScanFeatureSessionsOnLookupMiss(t *testi
 		DisableHostValidation: true,
 	})
 
-	requestJSONMap(t, handler, http.MethodGet, "/api/v1/sessions/sess-historical", nil, http.StatusNotFound)
-	requestJSONMap(t, handler, http.MethodGet, "/api/v1/sessions/sess-historical/transcript", nil, http.StatusNotFound)
+	requestJSONMap(t, handler, "/api/v1/sessions/sess-historical", http.StatusNotFound)
+	requestJSONMap(t, handler, "/api/v1/sessions/sess-historical/transcript", http.StatusNotFound)
 	if featureSessionCalls != 0 {
 		t.Fatalf("FeatureSessions calls = %d; want 0 for addressed session lookup miss", featureSessionCalls)
 	}
@@ -1682,7 +1682,7 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	if content["text"] != "artifact" {
 		t.Fatalf("artifact text slice = %q; want artifact", content["text"])
 	}
-	requestJSONMap(t, handler, http.MethodGet, "/api/v1/features/"+f.ID+"/runs/1/artifacts/..%2Ffeature.yaml", nil, http.StatusBadRequest)
+	requestJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/..%2Ffeature.yaml", http.StatusBadRequest)
 
 	logBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs/session?offset=6&limit=6")
 	if logBody["text"] != "second" {
@@ -1968,19 +1968,19 @@ func pendingReadControl(requestID, toolName, input string) *llm.ControlRequestMe
 
 func getJSONMap(t *testing.T, handler http.Handler, path string) map[string]any {
 	t.Helper()
-	return requestJSONMap(t, handler, http.MethodGet, path, nil, http.StatusOK)
+	return requestJSONMap(t, handler, path, http.StatusOK)
 }
 
-func requestJSONMap(t *testing.T, handler http.Handler, method, path string, body io.Reader, wantStatus int) map[string]any {
+func requestJSONMap(t *testing.T, handler http.Handler, path string, wantStatus int) map[string]any {
 	t.Helper()
-	req := httptest.NewRequest(method, path, body)
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	resp := w.Result()
 	defer resp.Body.Close()
 	if resp.StatusCode != wantStatus {
 		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("%s %s status = %d; want %d; body: %s", method, path, resp.StatusCode, wantStatus, data)
+		t.Fatalf("%s %s status = %d; want %d; body: %s", http.MethodGet, path, resp.StatusCode, wantStatus, data)
 	}
 	var out map[string]any
 	if resp.StatusCode == http.StatusNotModified {
@@ -2026,11 +2026,11 @@ func mustMarshalJSON(t *testing.T, v any) string {
 	return string(data)
 }
 
-func assertActionScope(t *testing.T, action map[string]any, wantType, wantRepoSelection string) {
+func assertActionScope(t *testing.T, action map[string]any, wantRepoSelection string) {
 	t.Helper()
 	scope := action["scope"].(map[string]any)
-	if scope["type"] != wantType {
-		t.Fatalf("action %s scope type = %v; want %s", action["id"], scope["type"], wantType)
+	if scope["type"] != "feature" {
+		t.Fatalf("action %s scope type = %v; want %s", action["id"], scope["type"], "feature")
 	}
 	if got := stringValue(scope["repo_selection"]); got != wantRepoSelection {
 		t.Fatalf("action %s repo_selection = %q; want %q", action["id"], got, wantRepoSelection)

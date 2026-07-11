@@ -211,10 +211,11 @@ func (s RoleSpec) Contract() RoleContract {
 			contract.Required = append(contract.Required, s.requiredArtifact(artifact))
 		case ArtifactOptional:
 			contract.Optional = append(contract.Optional, OptionalArtifact{
-				Name:        artifact.Name,
-				DisplayPath: artifact.DisplayPath,
-				ResolvePath: s.artifactPathResolver(artifact),
-				Validate:    validatorForRoleArtifact(artifact),
+				Name:          artifact.Name,
+				DisplayPath:   artifact.DisplayPath,
+				HideFromSkill: artifact.HideFromSkill,
+				ResolvePath:   s.artifactPathResolver(artifact),
+				Validate:      validatorForRoleArtifact(artifact),
 			})
 		case ArtifactConditional:
 			contract.Conditional = append(contract.Conditional, ConditionalArtifact{
@@ -229,10 +230,11 @@ func (s RoleSpec) Contract() RoleContract {
 
 func (s RoleSpec) requiredArtifact(artifact RoleArtifactSpec) RequiredArtifact {
 	return RequiredArtifact{
-		Name:        artifact.Name,
-		DisplayPath: artifact.DisplayPath,
-		ResolvePath: s.artifactPathResolver(artifact),
-		Validate:    validatorForRoleArtifact(artifact),
+		Name:          artifact.Name,
+		DisplayPath:   artifact.DisplayPath,
+		HideFromSkill: artifact.HideFromSkill,
+		ResolvePath:   s.artifactPathResolver(artifact),
+		Validate:      validatorForRoleArtifact(artifact),
 	}
 }
 

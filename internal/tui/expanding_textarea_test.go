@@ -18,11 +18,11 @@ import "testing"
 
 func TestGrowTextareaHeight(t *testing.T) {
 	t.Parallel()
-	if got := growTextareaHeight(1, 6); got != 2 {
-		t.Errorf("growTextareaHeight(1, 6) = %d, want 2", got)
+	if got := growTextareaHeight(1); got != 2 {
+		t.Errorf("growTextareaHeight(1) = %d, want 2", got)
 	}
-	if got := growTextareaHeight(6, 6); got != 6 {
-		t.Errorf("growTextareaHeight(6, 6) = %d, want 6 (capped)", got)
+	if got := growTextareaHeight(6); got != 6 {
+		t.Errorf("growTextareaHeight(6) = %d, want 6 (capped)", got)
 	}
 }
 

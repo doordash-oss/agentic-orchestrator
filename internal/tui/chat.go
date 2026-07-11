@@ -207,7 +207,7 @@ func NewAPIChatModel(width, height int, client APIClient) ChatModel {
 	m.startSession = func(initialQuestion string) tea.Msg {
 		resp, err := client.StartChat(context.Background(), server.ChatStartRequest{Message: initialQuestion})
 		if err != nil {
-			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}
+			return chatSendErrorMsg{err: fmt.Errorf("error starting session: %w", err)}
 		}
 		return chatSessionStartedMsg{sess: newAPIChatSession(client, resp.SessionID)}
 	}
@@ -435,7 +435,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		if m.hasActiveQuestion() && m.typingCustom {
 			switch {
 			case key.Matches(msg, shiftEnterKey):
-				m.inputHeight = growTextareaHeight(m.inputHeight, 6)
+				m.inputHeight = growTextareaHeight(m.inputHeight)
 				m.input.SetHeight(m.inputHeight)
 				var cmd tea.Cmd
 				m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -467,7 +467,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "shift+enter":
-			m.inputHeight = growTextareaHeight(m.inputHeight, 6)
+			m.inputHeight = growTextareaHeight(m.inputHeight)
 			m.input.SetHeight(m.inputHeight)
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -744,14 +744,14 @@ func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 			EffortLevel:     llm.EffortLow,
 		})
 		if err != nil {
-			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}
+			return chatSendErrorMsg{err: fmt.Errorf("error starting session: %w", err)}
 		}
 		sessOpts.Kind = ports.KindChat
 		sessOpts.Label = "chat"
 		sessOpts.InitialPrompt = prompt
 		sess, err := m.sessionMgr.StartSession(chatSessionID, "", feature.PhaseResearch, cmd, m.workDir, env, sessOpts)
 		if err != nil {
-			return chatSendErrorMsg{err: fmt.Errorf("Error starting session: %w", err)}
+			return chatSendErrorMsg{err: fmt.Errorf("error starting session: %w", err)}
 		}
 		return chatSessionStartedMsg{sess: sess}
 	}

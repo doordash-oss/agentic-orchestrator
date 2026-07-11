@@ -104,22 +104,22 @@ type topLevelRoute struct {
 }
 
 var topLevelServerRoutes = []topLevelRoute{
-	{"/api/v1/health", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleHealth) }},
+	{"/api/v1/health", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleHealth) }},
 	{"/api/v1/features", func(h *apiHandler) http.HandlerFunc { return h.handleFeaturesRoot }},
 	{"/api/v1/features/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{"/api/v1/config/runtime", func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
-	{"/api/v1/workspace/browse", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleWorkspaceBrowse) }},
-	{"/api/v1/catalog/models", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleModelCatalog) }},
-	{"/api/v1/prompts", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handlePrompts) }},
+	{"/api/v1/workspace/browse", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleWorkspaceBrowse) }},
+	{"/api/v1/catalog/models", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
+	{"/api/v1/prompts", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
 	{"/api/v1/prompts/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
-	{"/api/v1/permissions", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handlePermissions) }},
+	{"/api/v1/permissions", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},
 	{"/api/v1/permissions/", func(h *apiHandler) http.HandlerFunc { return h.handlePermissionMutationRoutes }},
-	{"/api/v1/sessions", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleSessionList) }},
-	{"/api/v1/sessions/", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleSessionRoutes) }},
+	{"/api/v1/sessions", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionList) }},
+	{"/api/v1/sessions/", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionRoutes) }},
 	{"/api/v1/recovery", func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
 	{"/api/v1/recovery/actions", func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
 	{"/api/v1/shutdown", func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
-	{"/api/v1/events", func(h *apiHandler) http.HandlerFunc { return methodHandler(http.MethodGet, h.handleEvents) }},
+	{"/api/v1/events", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
 }
 
 func (h *apiHandler) routes() http.Handler {
@@ -147,7 +147,7 @@ func (h *apiHandler) routes() http.Handler {
 			return
 		}
 		if strings.HasPrefix(escaped, "/api/v1/sessions/") {
-			methodHandler(http.MethodGet, h.handleSessionRoutes)(w, r)
+			methodHandler(h.handleSessionRoutes)(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
@@ -180,7 +180,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 		Features []FeatureSummary
 		Warnings []WarningDTO
 	}{Features: summaries, Warnings: warnings})
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, FeatureListResponse{
+	h.writeRevisionedJSON(w, r, revision, FeatureListResponse{
 		APIVersion: APIVersion,
 		Meta:       h.responseMeta(revision),
 		Features:   summaries,
@@ -238,14 +238,14 @@ func (h *apiHandler) handleRunRoute(w http.ResponseWriter, r *http.Request, feat
 func (h *apiHandler) handleFeatureDetail(w http.ResponseWriter, r *http.Request, featureID string) {
 	f, err := h.loadFeature(featureID)
 	if err != nil {
-		writeStoreError(w, err, "feature", featureID)
+		writeStoreError(w, err, featureID)
 		return
 	}
 	detail := h.featureDetailDTO(f)
 	revision := revisionForAny(detail)
 	detail.Revision = revision
 	detail.CacheRevalidate = "etag"
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, FeatureDetailResponse{
+	h.writeRevisionedJSON(w, r, revision, FeatureDetailResponse{
 		APIVersion: APIVersion,
 		Meta:       h.responseMeta(revision),
 		Feature:    detail,
@@ -291,10 +291,10 @@ func (h *apiHandler) featureAndRun(featureID string, runNumber int) (*feature.Fe
 	return f, run, nil
 }
 
-func methodHandler(method string, fn http.HandlerFunc) http.HandlerFunc {
+func methodHandler(fn http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != method {
-			w.Header().Set("Allow", method)
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", nil)
 			return
 		}
@@ -389,7 +389,8 @@ func validEntityID(id string) bool {
 	return true
 }
 
-func writeStoreError(w http.ResponseWriter, err error, entity, id string) {
+func writeStoreError(w http.ResponseWriter, err error, id string) {
+	const entity = "feature"
 	target := map[string]any{entity + "_id": id}
 	if errors.Is(err, os.ErrNotExist) {
 		writeAPIError(w, http.StatusNotFound, "not_found", entity+" not found", target)
@@ -403,7 +404,7 @@ func (h *apiHandler) responseMeta(revision string) ResponseMeta {
 	return ResponseMeta{Revision: revision, GeneratedAt: time.Now().UTC(), AsOfSeq: asOfSeq}
 }
 
-func (h *apiHandler) writeRevisionedJSON(w http.ResponseWriter, r *http.Request, status int, revision string, v any) {
+func (h *apiHandler) writeRevisionedJSON(w http.ResponseWriter, r *http.Request, revision string, v any) {
 	h.setSequenceHeader(w)
 	if revision != "" {
 		w.Header().Set("ETag", `"`+revision+`"`)
@@ -412,7 +413,7 @@ func (h *apiHandler) writeRevisionedJSON(w http.ResponseWriter, r *http.Request,
 			return
 		}
 	}
-	writeJSON(w, status, v)
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (h *apiHandler) setSequenceHeader(w http.ResponseWriter) {

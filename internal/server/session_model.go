@@ -44,7 +44,7 @@ func (h *apiHandler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 		summaries = append(summaries, sessionSummaryDTO(sess))
 	}
 	revision := revisionForAny(summaries)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, SessionListResponse{
+	h.writeRevisionedJSON(w, r, revision, SessionListResponse{
 		APIVersion: APIVersion,
 		Meta:       h.responseMeta(revision),
 		Sessions:   summaries,
@@ -71,7 +71,7 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 		SafeError:       safeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240),
 	}
 	revision := revisionForAny(detail)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, SessionDetailResponse{
+	h.writeRevisionedJSON(w, r, revision, SessionDetailResponse{
 		APIVersion: APIVersion,
 		Meta:       h.responseMeta(revision),
 		Session:    detail,
@@ -103,7 +103,7 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) handleSessionOutput(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -128,7 +128,7 @@ func (h *apiHandler) handleSessionOutput(w http.ResponseWriter, r *http.Request,
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 // handleSessionOutputStream tails a session's transcript live over SSE,

@@ -37,7 +37,7 @@ const (
 func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
 	f, run, err := h.featureAndRun(featureID, runNumber)
 	if err != nil {
-		writeStoreError(w, err, "feature", featureID)
+		writeStoreError(w, err, featureID)
 		return
 	}
 	runDir := h.store.RunDir(featureID, runNumber)
@@ -65,7 +65,7 @@ func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, 
 		artifacts = append(artifacts, dto)
 	}
 	revision := revisionForAny(artifacts)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, ArtifactListResponse{
+	h.writeRevisionedJSON(w, r, revision, ArtifactListResponse{
 		APIVersion: APIVersion,
 		Meta:       h.responseMeta(revision),
 		Artifacts:  artifacts,
@@ -79,7 +79,7 @@ func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Reques
 	}
 	f, run, err := h.featureAndRun(featureID, runNumber)
 	if err != nil {
-		writeStoreError(w, err, "feature", featureID)
+		writeStoreError(w, err, featureID)
 		return
 	}
 	if artifactID == descriptionReviewArtifact {
@@ -163,7 +163,7 @@ func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, fe
 		return
 	}
 	if _, _, err := h.featureAndRun(featureID, runNumber); err != nil {
-		writeStoreError(w, err, "feature", featureID)
+		writeStoreError(w, err, featureID)
 		return
 	}
 	logs := map[string]string{
@@ -236,13 +236,13 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, featureID string) {
 	f, err := h.loadFeature(featureID)
 	if err != nil {
-		writeStoreError(w, err, "feature", featureID)
+		writeStoreError(w, err, featureID)
 		return
 	}
 	sess := h.sessionForFeature(featureID)
@@ -266,7 +266,7 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, http.StatusOK, revision, resp)
+	h.writeRevisionedJSON(w, r, revision, resp)
 }
 
 func (h *apiHandler) sessionForFeature(featureID string) ports.SessionView {

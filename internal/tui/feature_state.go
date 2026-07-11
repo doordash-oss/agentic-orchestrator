@@ -54,13 +54,6 @@ func isRunningFeature(f *feature.Feature) bool {
 	return false
 }
 
-func isCompletedFeature(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	return f.Status == feature.StatusPublished || f.Status == feature.StatusDone
-}
-
 func hasTweakCycle(f *feature.Feature) bool {
 	if f == nil {
 		return false
@@ -76,40 +69,8 @@ func hasTweakCycle(f *feature.Feature) bool {
 	return false
 }
 
-func hasRunningRefactorCycle(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	for _, rc := range f.RepoCycles {
-		if rc != nil && rc.Type == feature.CycleRefactor && (rc.Status == "running" || rc.Status == "reviewing") {
-			return true
-		}
-	}
-	return false
-}
-
 func hasActiveRepoCycles(f *feature.Feature) bool {
 	return f != nil && f.HasActiveRepoCycles()
-}
-
-func hasInterruptibleRepoCycles(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	for _, rc := range f.RepoCycles {
-		if rc == nil {
-			continue
-		}
-		switch rc.Type {
-		case feature.CycleRebase, feature.CycleReviewComments, feature.CycleRefactor:
-		default:
-			continue
-		}
-		if rc.Status == feature.RepoCycleRunning || rc.Status == feature.RepoCycleReviewing {
-			return true
-		}
-	}
-	return false
 }
 
 func isFeatureQuiescent(f *feature.Feature) bool {

@@ -1301,6 +1301,45 @@ func TestOpenAPIAttachStartsLiveOutputFeed(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelContextualAAttachesFromOverviewAndLivePreviewWithoutSessionSummary(t *testing.T) {
+	t.Parallel()
+
+	summary := server.FeatureSummary{
+		ID:           "active",
+		Name:         "Active work",
+		Slug:         "active-work",
+		Status:       "Planning",
+		CurrentPhase: "plan",
+		CreatedAt:    time.Now(),
+	}
+
+	for _, mode := range []dashboardRightPanelMode{dashboardRightPanelOverview, dashboardRightPanelLivePreview} {
+		t.Run(fmt.Sprintf("mode-%d", mode), func(t *testing.T) {
+			client := &fakeTUIAPIClient{
+				features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
+				livePreview: server.LivePreviewResponse{
+					Feature:  summary,
+					Activity: "Planning",
+				},
+			}
+			app := newTestAPIAppModel(t, client)
+			app.rightPanelMode = mode
+
+			model, _ := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+			attached := model.(APIAppModel)
+			if attached.attach == nil {
+				t.Fatalf("Update(a) did not open attach view from mode %d", mode)
+			}
+			if attached.liveOutputSessionID != "" {
+				t.Fatalf("liveOutputSessionID = %q, want no stream without a concrete session ID", attached.liveOutputSessionID)
+			}
+			if attached.statusMessage == "Live preview is already visible" {
+				t.Fatal("Update(a) reported live preview visibility instead of attaching")
+			}
+		})
+	}
+}
+
 // TestLiveSessionOutputFeedAppliesTranscriptRow proves the live output feed
 // actually grows the attached session's MessageLog through applyTranscriptRow
 // — not just that attachCh received something. Pushing onto attachCh alone
@@ -2926,7 +2965,7 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 		t.Fatalf("rightPanelMode after o = %v, want overview", overview.rightPanelMode)
 	}
 
-	model, cmd = overview.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	model, _ = overview.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	chatting := model.(APIAppModel)
 	if !chatting.chatOpen {
 		t.Fatal("Update(/) did not open AMA chat")
@@ -3034,7 +3073,7 @@ func TestAPIAppModelChatStartErrorStopsRespondingAndRendersError(t *testing.T) {
 		t.Fatal("chat remained responding after start error")
 	}
 	view := stripANSI(failed.View().Content)
-	if !strings.Contains(view, "Error starting session: monthly spend limit") {
+	if !strings.Contains(view, "error starting session: monthly spend limit") {
 		t.Fatalf("chat view missing start error:\n%s", view)
 	}
 	if strings.Contains(view, "Thinking") || strings.Contains(view, "[esc] Background") {
@@ -3142,7 +3181,7 @@ func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want follow-up send command")
 	}
-	model, _ = model.(APIAppModel).Update(cmd())
+	_, _ = model.(APIAppModel).Update(cmd())
 	if got := client.helpRequests; len(got) != 1 || got[0].SessionID != chatSessionID || got[0].Message != "take two" {
 		t.Fatalf("SendHelp requests = %+v, want chat follow-up message", got)
 	}
@@ -3338,7 +3377,7 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Update(enter) on recap slot returned nil command, want AskUser answer command")
 	}
-	model, _ = model.(APIAppModel).Update(cmd())
+	_, _ = model.(APIAppModel).Update(cmd())
 	if len(client.helpRequests) != 0 {
 		t.Fatalf("SendHelp requests = %+v, want none for AskUser answer", client.helpRequests)
 	}
@@ -4417,7 +4456,7 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 		t.Fatal("Update(enter) returned nil command, want runtime config update command")
 	}
 	msg := cmd()
-	model, _ = model.(APIAppModel).Update(msg)
+	_, _ = model.(APIAppModel).Update(msg)
 
 	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Utilities != "codex:gpt-5.5-mini" {
 		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited utilities default model", got)
@@ -4697,7 +4736,7 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 	}
 
 	for _, ch := range "PostgreSQL" {
-		model, cmd = prompting.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
+		model, _ = prompting.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
 		prompting = model.(APIAppModel)
 	}
 	model, cmd = prompting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -5063,13 +5102,14 @@ func TestAPIAppModelAskUserAnswerUsesFullInputQuestionKey(t *testing.T) {
 	}
 	app := newTestAPIAppModel(t, client)
 
-	model, cmd := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
+	model, _ := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
 	prompting := model.(APIAppModel)
 	if !prompting.ShowingAskUserPrompt() {
 		t.Fatal("Update(u) did not enter API ask-user prompt")
 	}
+	var cmd tea.Cmd
 	for _, ch := range "Use the full input" {
-		model, cmd = prompting.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
+		model, _ = prompting.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
 		prompting = model.(APIAppModel)
 	}
 	model, cmd = prompting.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -5733,7 +5773,7 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("review decision message returned nil REST command")
 	}
-	model, _ = model.(APIAppModel).Update(cmd())
+	_, _ = model.(APIAppModel).Update(cmd())
 
 	wantReq := server.ReviewDecisionRequest{Decision: "proceed", Roadmap: true}
 	if len(client.reviewRequests) != 1 || client.reviewRequests[0] != wantReq {
@@ -5817,11 +5857,51 @@ func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testin
 	if cmd == nil {
 		t.Fatal("rewind review decision message returned nil REST command")
 	}
-	model, _ = model.(APIAppModel).Update(cmd())
+	_, _ = model.(APIAppModel).Update(cmd())
 
 	wantReq := server.ReviewDecisionRequest{Decision: "proceed", Phase: "plan", IsRewind: true}
 	if len(client.reviewRequests) != 1 || client.reviewRequests[0] != wantReq {
 		t.Fatalf("reviewRequests = %+v, want %+v", client.reviewRequests, wantReq)
+	}
+}
+
+// newStaleRewindReviewClient builds a fakeTUIAPIClient for a feature awaiting
+// rewind review, varying only status/phase/pipeline and the pending artifact.
+func newStaleRewindReviewClient(status, phase, pipeline, pendingReviewPhase string, artifact server.ArtifactDTO) *fakeTUIAPIClient {
+	return &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       status,
+				CurrentPhase: phase,
+				ActiveRun:    2,
+				RunCount:     2,
+				CreatedAt:    time.Now(),
+			},
+		}},
+		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
+			FeatureSummary: server.FeatureSummary{
+				ID:           "active",
+				Name:         "Translate README",
+				Slug:         "translate-readme",
+				Status:       status,
+				CurrentPhase: phase,
+				ActiveRun:    2,
+				RunCount:     2,
+			},
+			Pipeline: pipeline,
+			ActiveRun: &server.RunSummaryDTO{
+				RunNumber:          2,
+				CurrentPhase:       phase,
+				PendingReviewPhase: pendingReviewPhase,
+				IsRewind:           true,
+				ArtifactCount:      1,
+			},
+			Models: config.ModelConfig{Utilities: "test-utility"},
+		}},
+		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{artifact}},
 	}
 }
 
@@ -5834,43 +5914,8 @@ func TestAPIAppModelContextualActionRejectsStaleRewindReviewArtifact(t *testing.
 		t.Fatalf("write stale roadmap artifact: %v", err)
 	}
 
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "PromptNeedsReview",
-				CurrentPhase: "knowledge-base",
-				ActiveRun:    2,
-				RunCount:     2,
-				CreatedAt:    time.Now(),
-			},
-		}},
-		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "PromptNeedsReview",
-				CurrentPhase: "knowledge-base",
-				ActiveRun:    2,
-				RunCount:     2,
-			},
-			Pipeline: "large",
-			ActiveRun: &server.RunSummaryDTO{
-				RunNumber:          2,
-				CurrentPhase:       "knowledge-base",
-				PendingReviewPhase: "inquire",
-				IsRewind:           true,
-				ArtifactCount:      1,
-			},
-			Models: config.ModelConfig{Utilities: "test-utility"},
-		}},
-		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true},
-		}},
-	}
+	client := newStaleRewindReviewClient("PromptNeedsReview", "knowledge-base", "large", "inquire",
+		server.ArtifactDTO{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true})
 	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
@@ -5959,43 +6004,8 @@ func TestAPIAppModelContextualActionRejectsDetachedStaleReviewAfterRewind(t *tes
 		t.Fatalf("write stale roadmap artifact: %v", err)
 	}
 
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "PromptNeedsReview",
-				CurrentPhase: "knowledge-base",
-				ActiveRun:    2,
-				RunCount:     2,
-				CreatedAt:    time.Now(),
-			},
-		}},
-		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "PromptNeedsReview",
-				CurrentPhase: "knowledge-base",
-				ActiveRun:    2,
-				RunCount:     2,
-			},
-			Pipeline: "large",
-			ActiveRun: &server.RunSummaryDTO{
-				RunNumber:          2,
-				CurrentPhase:       "knowledge-base",
-				PendingReviewPhase: "inquire",
-				IsRewind:           true,
-				ArtifactCount:      1,
-			},
-			Models: config.ModelConfig{Utilities: "test-utility"},
-		}},
-		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true},
-		}},
-	}
+	client := newStaleRewindReviewClient("PromptNeedsReview", "knowledge-base", "large", "inquire",
+		server.ArtifactDTO{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true})
 	app := newTestAPIAppModel(t, client)
 	stale := NewArtifactReviewModel(roadmapPath, "active", "plan", feature.PhasePlan, app.width, app.height, nil, "", nil)
 	stale.detached = true
@@ -6023,43 +6033,8 @@ func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *
 		t.Fatalf("write description review: %v", err)
 	}
 
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "DesignNeedsReview",
-				CurrentPhase: "design",
-				ActiveRun:    2,
-				RunCount:     2,
-				CreatedAt:    time.Now(),
-			},
-		}},
-		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "DesignNeedsReview",
-				CurrentPhase: "design",
-				ActiveRun:    2,
-				RunCount:     2,
-			},
-			Pipeline: "medium",
-			ActiveRun: &server.RunSummaryDTO{
-				RunNumber:          2,
-				CurrentPhase:       "design",
-				PendingReviewPhase: "plan",
-				IsRewind:           true,
-				ArtifactCount:      1,
-			},
-			Models: config.ModelConfig{Utilities: "test-utility"},
-		}},
-		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "description-review", RunNumber: 2, Phase: "description", Path: descPath, Size: 27, ContentAvailable: true},
-		}},
-	}
+	client := newStaleRewindReviewClient("DesignNeedsReview", "design", "medium", "plan",
+		server.ArtifactDTO{ID: "description-review", RunNumber: 2, Phase: "description", Path: descPath, Size: 27, ContentAvailable: true})
 	app := newTestAPIAppModel(t, client)
 	delete(app.contents, "active")
 	app.rebuildPresentation("active")
@@ -6242,10 +6217,10 @@ func maxPlainLineWidth(s string) int {
 	return maxWidth
 }
 
-func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testing.T) {
-	t.Parallel()
-
-	client := &fakeTUIAPIClient{
+// newRefactorActionClient builds a fakeTUIAPIClient exposing an enabled
+// feature-scoped "refactor" action on an otherwise-published feature.
+func newRefactorActionClient() *fakeTUIAPIClient {
+	return &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
 		}},
@@ -6269,6 +6244,12 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 		}},
 		startRefactorAccepted: apiTestActionResponse{},
 	}
+}
+
+func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testing.T) {
+	t.Parallel()
+
+	client := newRefactorActionClient()
 	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
@@ -6284,7 +6265,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	}
 
 	for _, r := range "extract transport boundary" {
-		model, cmd = refactor.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		model, _ = refactor.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 		refactor = model.(APIAppModel)
 	}
 	model, cmd = refactor.Update(tea.KeyPressMsg{Code: 's', Text: "s", Mod: tea.ModCtrl})
@@ -6340,29 +6321,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 func TestAPIAppModelRefactorPromptShiftEnterAndTerminalPaste(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
-		}},
-		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish"},
-			RepoStatus: []server.RepoStatusDTO{
-				{Name: "agentic-orchestrator", Publishable: true},
-			},
-			Actions: []server.ActionDTO{
-				{
-					ID:      "refactor",
-					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
-					RequiredInputs: []server.ActionInputDTO{
-						{Name: "repo", Kind: "string", Required: false},
-						{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
-						{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
-					},
-				},
-			},
-		}},
-	}
+	client := newRefactorActionClient()
 	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
@@ -6385,30 +6344,7 @@ func TestAPIAppModelRefactorPromptShiftEnterAndTerminalPaste(t *testing.T) {
 func TestAPIAppModelRefactorPromptTracksPastedImagesAndFiles(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
-		}},
-		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish"},
-			RepoStatus: []server.RepoStatusDTO{
-				{Name: "agentic-orchestrator", Publishable: true},
-			},
-			Actions: []server.ActionDTO{
-				{
-					ID:      "refactor",
-					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
-					RequiredInputs: []server.ActionInputDTO{
-						{Name: "repo", Kind: "string", Required: false},
-						{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
-						{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
-					},
-				},
-			},
-		}},
-		startRefactorAccepted: apiTestActionResponse{},
-	}
+	client := newRefactorActionClient()
 	app := newTestAPIAppModel(t, client)
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
@@ -6432,7 +6368,7 @@ func TestAPIAppModelRefactorPromptTracksPastedImagesAndFiles(t *testing.T) {
 		t.Fatal("Update(ctrl+s) returned command before pipeline selection")
 	}
 	refactor = model.(APIAppModel)
-	model, cmd = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	_, cmd = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("Update(enter) returned nil command, want refactor start mutation")
 	}
@@ -6447,29 +6383,7 @@ func TestAPIAppModelRefactorPromptTracksPastedImagesAndFiles(t *testing.T) {
 func TestAPIAppModelRefactorRestartShortcutIsNotExposed(t *testing.T) {
 	t.Parallel()
 
-	client := &fakeTUIAPIClient{
-		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
-		}},
-		detail: server.FeatureDetailResponse{Feature: server.FeatureDetailDTO{
-			FeatureSummary: server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish"},
-			RepoStatus: []server.RepoStatusDTO{
-				{Name: "agentic-orchestrator", Publishable: true},
-			},
-			Actions: []server.ActionDTO{
-				{
-					ID:      "refactor",
-					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
-					RequiredInputs: []server.ActionInputDTO{
-						{Name: "repo", Kind: "string", Required: false},
-						{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
-						{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
-					},
-				},
-			},
-		}},
-	}
+	client := newRefactorActionClient()
 	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'f', Text: "f", Mod: tea.ModCtrl})
@@ -6993,7 +6907,7 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Update(enter on final confirmation) returned nil command, want publish mutation")
 	}
-	model, _ = model.(APIAppModel).Update(cmd())
+	_, _ = model.(APIAppModel).Update(cmd())
 	if got := client.publishRequests; len(got) != 1 || !slices.Equal(got[0].Repos, []string{"web"}) {
 		t.Fatalf("PublishFeature requests = %+v, want repos [web]", got)
 	}
@@ -7792,7 +7706,7 @@ func TestAPIAppModelOwnedServerShutdownSuppressesRefreshNoise(t *testing.T) {
 		t.Fatalf("statusMessage = %q, want shutdown noise suppressed", updated.statusMessage)
 	}
 
-	model, cmd = updated.Update(shutdownCmd())
+	_, cmd = updated.Update(shutdownCmd())
 	if cmd == nil {
 		t.Fatal("owned shutdown completion did not return quit command")
 	}

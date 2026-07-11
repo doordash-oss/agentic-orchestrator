@@ -599,13 +599,12 @@ func (o *Orchestrator) commitRebaseOutcomeIfDirty(outcome HarnessRebaseRepoOutco
 
 func (o *Orchestrator) runDeferredFinalReviewForRebase(featureID string) error {
 	var (
-		f        *feature.Feature
 		resultCh chan *agent.OrchestratorResult
 		err      error
 	)
 
 	err = o.runFeatureRebaseStateMutation(featureID, func() error {
-		f, resultCh, err = o.startDeferredFinalReview(featureID)
+		resultCh, err = o.startDeferredFinalReview(featureID)
 		return err
 	})
 	if err != nil {
@@ -614,7 +613,7 @@ func (o *Orchestrator) runDeferredFinalReviewForRebase(featureID string) error {
 
 	res, ok := <-resultCh
 	return o.runFeatureRebaseStateMutation(featureID, func() error {
-		return o.finishDeferredFinalReviewResult(featureID, f, res, ok)
+		return o.finishDeferredFinalReviewResult(featureID, res, ok)
 	})
 }
 

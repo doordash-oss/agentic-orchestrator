@@ -1706,7 +1706,7 @@ func TestServerBootstrapRejectsHeldInstanceLock(t *testing.T) {
 	t.Cleanup(func() { _ = lock.Close() })
 
 	var stderr bytes.Buffer
-	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, false, []string{"codex"}, false, strings.NewReader(""), &stderr)
+	boot, err := bootstrapRuntime(context.Background(), configPath, stateDir, false, []string{"codex"}, false, &stderr)
 	if err == nil {
 		if boot != nil {
 			_ = boot.Close(context.Background())

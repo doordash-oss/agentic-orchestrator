@@ -567,13 +567,13 @@ func (m reviewCommentsBrowserModel) renderDetail() string {
 	}
 	width := max(m.detail.Width(), 20)
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%s %s\n", LabelStyle.Render("Location"), reviewCommentLocation(item)))
+	fmt.Fprintf(&b, "%s %s\n", LabelStyle.Render("Location"), reviewCommentLocation(item))
 	if item.Author != "" {
-		b.WriteString(fmt.Sprintf("%s @%s\n", LabelStyle.Render("Author"), item.Author))
+		fmt.Fprintf(&b, "%s @%s\n", LabelStyle.Render("Author"), item.Author)
 	}
-	b.WriteString(fmt.Sprintf("%s %s\n", LabelStyle.Render("Type"), reviewCommentTypeLabel(item.Type)))
+	fmt.Fprintf(&b, "%s %s\n", LabelStyle.Render("Type"), reviewCommentTypeLabel(item.Type))
 	if item.CreatedAt != "" {
-		b.WriteString(fmt.Sprintf("%s %s\n", LabelStyle.Render("Created"), item.CreatedAt))
+		fmt.Fprintf(&b, "%s %s\n", LabelStyle.Render("Created"), item.CreatedAt)
 	}
 	b.WriteString("\n")
 	if strings.TrimSpace(item.Body) != "" {

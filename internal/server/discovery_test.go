@@ -339,7 +339,7 @@ func TestPrepareDiscoveryClassifiesHealthyMatchingServer(t *testing.T) {
 		if got := req.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Fatalf("discovery health Authorization = %q, want bearer token", got)
 		}
-		return jsonResponse(http.StatusOK, HealthResponse{
+		return jsonResponse(HealthResponse{
 			APIVersion:   APIVersion,
 			Status:       "ok",
 			Runtime:      identity,
@@ -380,7 +380,7 @@ func TestPrepareDiscoveryRequiresHealthStartedAtToMatchRecord(t *testing.T) {
 		t.Fatalf("PublishDiscovery() error = %v", err)
 	}
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(http.StatusOK, HealthResponse{
+		return jsonResponse(HealthResponse{
 			APIVersion:   APIVersion,
 			Status:       "ok",
 			Runtime:      identity,
@@ -436,7 +436,7 @@ func TestPrepareDiscoveryRequiresHealthOwnerToMatchRecord(t *testing.T) {
 		t.Fatalf("PublishDiscovery() error = %v", err)
 	}
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(http.StatusOK, struct {
+		return jsonResponse(struct {
 			APIVersion   string          `json:"api_version"`
 			Status       string          `json:"status"`
 			Runtime      RuntimeIdentity `json:"runtime"`
@@ -532,7 +532,7 @@ func TestPrepareDiscoveryRequiresPolicyEquivalentHealthyServer(t *testing.T) {
 				t.Fatalf("PublishDiscovery() error = %v", err)
 			}
 			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return jsonResponse(http.StatusOK, HealthResponse{
+				return jsonResponse(HealthResponse{
 					APIVersion:   APIVersion,
 					Status:       "ok",
 					Runtime:      identity,
@@ -577,7 +577,7 @@ func TestPrepareDiscoveryReplacesHealthyWrongRuntime(t *testing.T) {
 	otherRuntime := identity
 	otherRuntime.StateDir = filepath.Join(runtimeDir, "other-features")
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return jsonResponse(http.StatusOK, HealthResponse{
+		return jsonResponse(HealthResponse{
 			APIVersion:   APIVersion,
 			Status:       "ok",
 			Runtime:      otherRuntime,

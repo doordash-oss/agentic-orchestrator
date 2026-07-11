@@ -1289,14 +1289,6 @@ func safeActionToken(value string, allowSlash bool) bool {
 	return true
 }
 
-func safeRelativePathToken(value string) bool {
-	value = strings.TrimSpace(value)
-	if value == "" || len(value) > 512 || strings.Contains(value, "..") || strings.ContainsAny(value, "\\\x00\r\n") {
-		return false
-	}
-	return !strings.HasPrefix(value, "/")
-}
-
 func (h *apiHandler) requireTrustedMutation(w http.ResponseWriter, r *http.Request) bool {
 	if h.mutations == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, "unavailable", "mutation service unavailable", nil)

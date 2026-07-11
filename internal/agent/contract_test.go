@@ -110,6 +110,22 @@ func TestContractRegistryPlanRoadmapPlannerReportsMissingMeta(t *testing.T) {
 	}
 }
 
+func TestValidateArtifactsPreflightPlanRoadmapPlannerSkipsHarnessMeta(t *testing.T) {
+	attemptDir := writeRoadmapPlannerAttempt(t, validRoadmapText(), "")
+
+	out, violations, err := ValidateArtifactsPreflight(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+	}
+	got := JoinProtocolViolations(violations)
+	if strings.Contains(got, "meta.yaml") {
+		t.Fatalf("JoinProtocolViolations() = %q, want no meta.yaml violation", got)
+	}
+	if !out.OK || len(violations) != 0 {
+		t.Fatalf("ValidateArtifactsPreflight() = (%+v, %v), want OK without harness meta.yaml", out, violations)
+	}
+}
+
 func TestContractRegistryPlanRoadmapPlannerReportsMalformedMeta(t *testing.T) {
 	attemptDir := writeRoadmapPlannerAttempt(t, validRoadmapText(), ":\n  :")
 

@@ -337,7 +337,7 @@ func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 
 	runtimeDir := t.TempDir()
 	stateDir := filepath.Join(runtimeDir, "features")
-	workDir := filepath.Join(runtimeDir, "worktrees", "translate-readme-in-sicilian", "agentic-orchestrator")
+	workDir := filepath.Join(runtimeDir, "worktrees", feature.WorkspaceSlug("translate-readme-in-sicilian", "active"), "agentic-orchestrator")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("create workdir: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 		t.Fatalf("dashboard repo WorktreePath = %q, want %q", got, workDir)
 	}
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"WorkDir", "worktrees/translate-readme-", "in-sicilian/agentic-orchestrator"} {
+	for _, want := range []string{"WorkDir", "worktrees/translate-readme-", "in-sicilian-active/agentic-orchestrator"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API dashboard View() missing %q in:\n%s", want, view)
 		}

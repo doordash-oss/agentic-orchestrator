@@ -1862,13 +1862,13 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		}
 	}
 	for _, repoName := range summary.Repos {
-		f.Repos = append(f.Repos, m.apiDashboardRepo(repoName, repoStatuses[repoName], hasDetail, f.Slug))
+		f.Repos = append(f.Repos, m.apiDashboardRepo(repoName, repoStatuses[repoName], hasDetail, f.Slug, f.ID))
 	}
 	for _, repo := range detail.RepoStatus {
 		if repo.Name == "" || apiHasRepo(f.Repos, repo.Name) {
 			continue
 		}
-		f.Repos = append(f.Repos, m.apiDashboardRepo(repo.Name, repo, true, f.Slug))
+		f.Repos = append(f.Repos, m.apiDashboardRepo(repo.Name, repo, true, f.Slug, f.ID))
 	}
 	for _, repo := range f.Repos {
 		dto := repoStatuses[repo.Name]
@@ -2044,7 +2044,7 @@ func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureS
 	return base
 }
 
-func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, hasDetail bool, featureSlug string) feature.FeatureRepo {
+func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, hasDetail bool, featureSlug, featureID string) feature.FeatureRepo {
 	repo := feature.FeatureRepo{Name: name}
 	for _, cfgRepo := range m.runtimeConfig.Repos {
 		if cfgRepo.Name == name {
@@ -2052,7 +2052,7 @@ func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, 
 			break
 		}
 	}
-	repo.WorktreePath = m.apiDashboardWorktreePath(featureSlug, name)
+	repo.WorktreePath = m.apiDashboardWorktreePath(featureSlug, featureID, name)
 	if hasDetail {
 		publishable := status.Publishable
 		repo.Publishable = &publishable
@@ -2060,16 +2060,18 @@ func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, 
 	return repo
 }
 
-func (m APIAppModel) apiDashboardWorktreePath(featureSlug, repoName string) string {
+func (m APIAppModel) apiDashboardWorktreePath(featureSlug, featureID, repoName string) string {
 	if featureSlug == "" || repoName == "" || m.runtimeConfig.Runtime.StateDir == "" {
 		return ""
 	}
-	candidate := filepath.Join(filepath.Dir(m.runtimeConfig.Runtime.StateDir), "worktrees", featureSlug, repoName)
-	info, err := os.Stat(candidate)
-	if err != nil || !info.IsDir() {
-		return ""
+	for _, slug := range []string{feature.WorkspaceSlug(featureSlug, featureID), featureSlug} {
+		candidate := filepath.Join(filepath.Dir(m.runtimeConfig.Runtime.StateDir), "worktrees", slug, repoName)
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
+			return candidate
+		}
 	}
-	return candidate
+	return ""
 }
 
 func (m APIAppModel) apiSessionWorkDir(featureID, repoName string) string {
@@ -2083,7 +2085,7 @@ func (m APIAppModel) apiSessionWorkDir(featureID, repoName string) string {
 	if repoName == "" {
 		return ""
 	}
-	return m.apiDashboardWorktreePath(summary.Slug, repoName)
+	return m.apiDashboardWorktreePath(summary.Slug, summary.ID, repoName)
 }
 
 func (m APIAppModel) apiFeatureSummary(featureID string) (server.FeatureSummary, bool) {

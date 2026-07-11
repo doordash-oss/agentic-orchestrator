@@ -2744,17 +2744,6 @@ func renderReviewEditorBox(title string, width int, content string) string {
 	return renderBorderTitle(box, title, lipgloss.NewStyle().Foreground(colorBrand))
 }
 
-// renderCheckpointsEditor is a thin back-compat shim over the shared
-// ConfigEditorModel's Checkpoints renderer. Kept so existing wizard tests
-// (TestWizardCheckpointHidingReviewEditor, TestWizardCheckpointVisibleWhenPublishable)
-// continue to exercise the wizard's Review-view checkpoint rendering. New
-// code paths call renderReviewEditorBox("Gates", …) directly.
-func (m *WizardModel) renderCheckpointsEditor(width int) string {
-	m.syncConfigEditorFromWizard()
-	content := m.configEditor.renderCheckpointsBox(reviewEditorContentWidth(width))
-	return renderReviewEditorBox("Gates", width, content)
-}
-
 func (m *WizardModel) renderExitCriteriaEditor(width int) string {
 	return renderReviewEditorBox("Exit Criteria", width, m.exitInput.View())
 }

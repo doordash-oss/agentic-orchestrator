@@ -108,6 +108,46 @@ func defaultBranchName(slug string) string {
 	return "feature/" + slug
 }
 
+func (m *Manager) branchName(slug string) string {
+	if m.Branches != nil {
+		return m.Branches.BranchName(slug)
+	}
+	return defaultBranchName(slug)
+}
+
+func branchSlug(branch string) string {
+	return strings.TrimPrefix(branch, "feature/")
+}
+
+func repoWorkspaceSlug(f *Feature, repo FeatureRepo) string {
+	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
+		return slug
+	}
+	if f == nil {
+		return ""
+	}
+	return f.WorkspaceSlug()
+}
+
+func setupWorkspaceSlug(f *Feature, repo FeatureRepo, task SetupTask) (string, string) {
+	if f == nil {
+		return "", task.Branch
+	}
+	qualified := f.WorkspaceSlug()
+	qualifiedBranch := defaultBranchName(qualified)
+	legacyBranch := defaultBranchName(f.Slug)
+	if task.Branch == "" || task.Branch == legacyBranch {
+		return qualified, qualifiedBranch
+	}
+	if slug := branchSlug(task.Branch); slug != "" && slug != task.Branch {
+		return slug, task.Branch
+	}
+	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
+		return slug, repo.Branch
+	}
+	return qualified, qualifiedBranch
+}
+
 // CreateOptions holds optional parameters for feature creation.
 type CreateOptions struct {
 	// UseCurrentBranch, when true, creates worktrees from the repo's current
@@ -150,6 +190,7 @@ type CreateOptions struct {
 func (m *Manager) Create(name, description string, repos []string, models config.ModelConfig, exitCriteria, inquireness string, images []string, opts ...CreateOptions) (*Feature, error) {
 	id := generateID()
 	slug := Slugify(name)
+	workspaceSlug := WorkspaceSlug(slug, id)
 
 	if existingName, err := m.SlugExists(slug); err != nil {
 		return nil, fmt.Errorf("checking for duplicates: %w", err)
@@ -209,7 +250,8 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	if (opt.QueueSetup || m.Worktrees != nil) && m.Branches != nil {
 		baseSlug := slug
 		for attempt := 0; attempt < 5; attempt++ {
-			branch := m.Branches.BranchName(slug)
+			workspaceSlug = WorkspaceSlug(slug, id)
+			branch := m.Branches.BranchName(workspaceSlug)
 			conflict := false
 			for _, fr := range featureRepos {
 				if fr.Publishable != nil && !*fr.Publishable {
@@ -226,15 +268,12 @@ func (m *Manager) Create(name, description string, repos []string, models config
 			}
 			slug = baseSlug + "-" + randomSuffix()
 		}
+		workspaceSlug = WorkspaceSlug(slug, id)
 	}
 
 	if opt.QueueSetup || m.Worktrees != nil {
 		for i := range featureRepos {
-			if m.Branches != nil {
-				featureRepos[i].Branch = m.Branches.BranchName(slug)
-			} else {
-				featureRepos[i].Branch = defaultBranchName(slug)
-			}
+			featureRepos[i].Branch = m.branchName(workspaceSlug)
 		}
 	}
 
@@ -311,7 +350,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 			if useCurrent {
 				startPoint = "" // empty → HEAD in worktree.Create
 			}
-			wtPath, err := m.Worktrees.Create(fr.Path, slug, fr.Name, startPoint)
+			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Name, startPoint)
 			if err != nil {
 				return nil, fmt.Errorf("creating worktree for %s: %w", fr.Name, err)
 			}
@@ -1112,7 +1151,7 @@ func (m *Manager) RecreateWorktree(featureID string) error {
 			if repo.Branch == "" {
 				return fmt.Errorf("repo %s has no branch to recreate from", repo.Name)
 			}
-			wtPath, err := m.Worktrees.Create(repo.Path, f.Slug, repo.Name, repo.Branch)
+			wtPath, err := m.Worktrees.Create(repo.Path, repoWorkspaceSlug(f, repo), repo.Name, repo.Branch)
 			if err != nil {
 				return fmt.Errorf("recreating worktree for %s: %w", repo.Name, err)
 			}
@@ -1792,11 +1831,15 @@ func (m *Manager) EnsureWorktree(featureID string) error {
 		if startPoint == "" {
 			startPoint = "HEAD"
 		}
-		wtPath, err := m.Worktrees.Create(repo.Path, f.Slug, repo.Name, startPoint)
+		workspaceSlug := repoWorkspaceSlug(f, repo)
+		wtPath, err := m.Worktrees.Create(repo.Path, workspaceSlug, repo.Name, startPoint)
 		if err != nil {
 			return fmt.Errorf("creating worktree: %w", err)
 		}
 		f.Repos[0].WorktreePath = wtPath
+		if f.Repos[0].Branch == "" {
+			f.Repos[0].Branch = m.branchName(workspaceSlug)
+		}
 		return nil
 	})
 }

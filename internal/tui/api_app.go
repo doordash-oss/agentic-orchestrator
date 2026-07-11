@@ -1525,27 +1525,19 @@ func (m APIAppModel) transitionToAPIChat() (tea.Model, tea.Cmd) {
 
 func (m APIAppModel) View() tea.View {
 	if m.artifactReview != nil && !m.artifactReview.Detached() {
-		v := tea.NewView(m.artifactReview.View())
-		v.AltScreen = true
-		return v
+		return apiAltView(m.artifactReview.View())
 	}
 	if m.attach != nil {
-		v := tea.NewView(m.attach.View())
-		v.AltScreen = true
-		return v
+		return apiAltView(m.attach.View())
 	}
 	if m.welcome != nil {
-		v := tea.NewView(m.welcome.View())
-		v.AltScreen = true
-		return v
+		return apiAltView(m.welcome.View())
 	}
 	if m.publish != nil {
-		v := tea.NewView(m.publish.View())
-		v.AltScreen = true
-		return v
+		return apiAltView(m.publish.View())
 	}
 	if m.diffReview != nil {
-		v := tea.NewView(renderReviewViewportScreen(
+		return apiAltView(renderReviewViewportScreen(
 			m.width,
 			"Diff Review",
 			"",
@@ -1553,8 +1545,6 @@ func (m APIAppModel) View() tea.View {
 			*m.diffReview,
 			" [esc] Close   [↑/↓] Scroll",
 		))
-		v.AltScreen = true
-		return v
 	}
 	if m.reviewComments != nil {
 		view := m.renderAPIReviewCommentsPanel(max(m.width-2, 80))
@@ -1563,9 +1553,7 @@ func (m APIAppModel) View() tea.View {
 			h := max(m.height, 24)
 			view = overlayModal(view, m.helpOverlay.View(), w, h)
 		}
-		v := tea.NewView(view)
-		v.AltScreen = true
-		return v
+		return apiAltView(view)
 	}
 	if m.contentPanelActive && m.snapshot.Content != nil {
 		view := m.renderAPIContentScreen()
@@ -1574,9 +1562,7 @@ func (m APIAppModel) View() tea.View {
 			h := max(m.height, 24)
 			view = overlayModal(view, m.helpOverlay.View(), w, h)
 		}
-		v := tea.NewView(view)
-		v.AltScreen = true
-		return v
+		return apiAltView(view)
 	}
 	var view string
 	if m.chatOpen && m.chat.fullscreen {
@@ -1651,7 +1637,11 @@ func (m APIAppModel) View() tea.View {
 	if m.askUserPromptActive {
 		view = overlayModal(view, m.renderAskUserPrompt(), w, h)
 	}
-	v := tea.NewView(view)
+	return apiAltView(view)
+}
+
+func apiAltView(content string) tea.View {
+	v := tea.NewView(content)
 	v.AltScreen = true
 	return v
 }
@@ -3089,7 +3079,9 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 				controls = bySession[active.ID()]
 			}
 		}
+		initialPromptBefore := active.InitialPrompt()
 		newMessages := active.applyAPISessionSnapshot(detail, transcript, controls)
+		initialPromptChanged := active.InitialPrompt() != initialPromptBefore
 		if len(newMessages) > 0 {
 			updated, updateCmd := m.attach.Update(attachMsgsMsg{generation: m.attach.tabGeneration, messages: newMessages})
 			m.attach = &updated
@@ -3102,6 +3094,8 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 			if !m.attach.HasActiveQuestion() {
 				m.attach.restorePendingPermission(active)
 			}
+			m.attach.updateViewport()
+		} else if initialPromptChanged {
 			m.attach.updateViewport()
 		}
 	}
@@ -3208,7 +3202,9 @@ func (s *apiSessionView) applyAPISessionSnapshot(detail server.SessionDetailDTO,
 	s.mu.Lock()
 	s.status = apiSessionStatus(detail.Status)
 	s.contextPct = detail.ContextPct
-	s.initialPrompt = detail.InitialPrompt
+	if detail.InitialPrompt != "" {
+		s.initialPrompt = detail.InitialPrompt
+	}
 	s.pending = pending
 	if len(s.pending) > 0 {
 		if hasAskUser {
@@ -5072,10 +5068,12 @@ func (m APIAppModel) openAPIAttachForFeature(featureID string) (tea.Model, tea.C
 	m.attach = &attach
 	m.statusMessage = ""
 	var liveCmd tea.Cmd
+	var detailCmd tea.Cmd
 	if sess, ok := tabs[initialIdx].sess.(*apiSessionView); ok {
 		liveCmd = m.startLiveSessionOutput(sess)
+		detailCmd = m.fetchAttachSessionDetailCmd(sess.ID())
 	}
-	return m, tea.Batch(attach.Init(), liveCmd)
+	return m, tea.Batch(attach.Init(), liveCmd, detailCmd)
 }
 
 func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
@@ -5845,204 +5843,6 @@ func apiActionMatchesMutationKind(actionID, kind string) bool {
 	default:
 		return false
 	}
-}
-
-func (m APIAppModel) renderAPIRuntimeLine() string {
-	providers := "none"
-	if len(m.snapshot.Runtime.Providers) > 0 {
-		providers = strings.Join(m.snapshot.Runtime.Providers, ", ")
-	}
-	ownership := "attached"
-	if m.snapshot.Runtime.OwnedServer {
-		ownership = "owned server"
-	}
-	return fmt.Sprintf("Runtime: %s   Providers: %s", ownership, providers)
-}
-
-func (m APIAppModel) renderAPIWorkspaceSummary() string {
-	if len(m.runtimeConfig.Repos) == 0 {
-		return MutedStyle.Render("Workspace: no configured repos")
-	}
-	names := make([]string, 0, len(m.runtimeConfig.Repos))
-	for _, repo := range m.runtimeConfig.Repos {
-		if repo.Name != "" {
-			names = append(names, repo.Name)
-		}
-	}
-	if len(names) == 0 {
-		return MutedStyle.Render("Workspace: no configured repos")
-	}
-	if len(names) > 4 {
-		names = append(names[:4], fmt.Sprintf("+%d more", len(names)-4))
-	}
-	return MutedStyle.Render("Workspace: " + strings.Join(names, ", "))
-}
-
-func (m APIAppModel) renderAPIFeatureList() string {
-	if len(m.snapshot.Features) == 0 {
-		return MutedStyle.Render("No features")
-	}
-	var b strings.Builder
-	b.WriteString("Features\n")
-	for _, f := range m.snapshot.Features {
-		cursor := "  "
-		if f.ID == m.selectedFeature {
-			cursor = "> "
-		}
-		name := f.Name
-		if name == "" {
-			name = f.Slug
-		}
-		row := fmt.Sprintf("%s%-28s %-15s %-10s", cursor, truncatePlain(name, 28), f.Status, f.CurrentPhase)
-		if f.AttentionCount > 0 {
-			row += fmt.Sprintf("  %d attention", f.AttentionCount)
-		}
-		if f.ActiveRun > 0 || f.RunCount > 0 {
-			row += fmt.Sprintf("  run %d/%d", f.ActiveRun, max(f.RunCount, f.ActiveRun))
-		}
-		b.WriteString(row)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func (m APIAppModel) renderAPIFeatureDetail() string {
-	detail := m.snapshot.Detail
-	if detail == nil {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\nSelected detail\n")
-	if detail.Description != "" {
-		b.WriteString("  Description: " + detail.Description + "\n")
-	}
-	if detail.Summary != "" {
-		b.WriteString("  Summary: " + detail.Summary + "\n")
-	}
-	if detail.Pipeline != "" {
-		b.WriteString("  Pipeline: " + detail.Pipeline + "\n")
-	}
-	if len(detail.Repos) > 0 {
-		repos := make([]string, 0, len(detail.Repos))
-		for _, repo := range detail.Repos {
-			label := repo.Name
-			if repo.State != "" {
-				label += " " + repo.State
-			}
-			repos = append(repos, label)
-		}
-		b.WriteString("  Repos: " + strings.Join(repos, ", ") + "\n")
-	}
-	if len(detail.Actions) > 0 {
-		actions := make([]string, 0, len(detail.Actions))
-		for _, action := range detail.Actions {
-			label := strings.TrimSpace(action.ID + " " + action.Status)
-			if action.Reason != "" {
-				label += ": " + action.Reason
-			}
-			actions = append(actions, label)
-		}
-		b.WriteString("  Actions: " + strings.Join(actions, ", ") + "\n")
-	}
-	if detail.TotalCostUSD > 0 {
-		b.WriteString(fmt.Sprintf("  Cost: $%.2f\n", detail.TotalCostUSD))
-	}
-	if detail.NeedUserInputLabel != "" {
-		b.WriteString("  " + detail.NeedUserInputLabel + "\n")
-	}
-	if detail.Failure != "" {
-		b.WriteString("  Failure: " + detail.Failure + "\n")
-	}
-	return b.String()
-}
-
-func (m APIAppModel) renderAPISessions() string {
-	var b strings.Builder
-	b.WriteString("Sessions\n")
-	for _, sess := range m.snapshot.Sessions {
-		label := firstNonEmpty(sess.Label, sess.Kind, "session")
-		b.WriteString(fmt.Sprintf("  %s  %s  %s", sess.ID, label, sess.Status))
-		if sess.Phase != "" {
-			b.WriteString("  " + sess.Phase)
-		}
-		if sess.Repo != "" {
-			b.WriteString("  " + sess.Repo)
-		}
-		if sess.ContextPct > 0 {
-			b.WriteString(fmt.Sprintf("  %d%%", sess.ContextPct))
-		}
-		if sess.Provider != "" || sess.Model != "" {
-			b.WriteString("  " + strings.TrimSpace(sess.Provider+" "+sess.Model))
-		}
-		var flags []string
-		if sess.CanAttach {
-			flags = append(flags, "attach")
-		}
-		if sess.LogAvailable {
-			flags = append(flags, "log")
-		}
-		if len(flags) > 0 {
-			b.WriteString("  " + strings.Join(flags, ","))
-		}
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func (m APIAppModel) renderAPILivePreview() string {
-	preview := m.snapshot.LivePreview
-	if preview == nil {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("Attach / Live Preview\n")
-	if preview.Activity != "" {
-		b.WriteString("  Activity: " + preview.Activity + "\n")
-	}
-	if preview.SessionID != "" {
-		b.WriteString("  Session: " + preview.SessionID + "\n")
-	}
-	if preview.ContextPct >= 0 {
-		b.WriteString(fmt.Sprintf("  Context: %d%%\n", preview.ContextPct))
-	}
-	if preview.CostUSD > 0 {
-		b.WriteString(fmt.Sprintf("  Cost: $%.2f\n", preview.CostUSD))
-	}
-	for _, attention := range preview.Attention {
-		b.WriteString("  " + attention + "\n")
-	}
-	for _, line := range preview.TranscriptTail {
-		b.WriteString("  " + line + "\n")
-	}
-	return b.String()
-}
-
-func (m APIAppModel) renderAPITranscript() string {
-	transcript := m.snapshot.Transcript
-	if transcript == nil {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("Attach Transcript\n")
-	if transcript.SessionID != "" {
-		b.WriteString("  Session: " + transcript.SessionID + "\n")
-	}
-	if transcript.Total > 0 {
-		b.WriteString(fmt.Sprintf("  Messages: %d-%d of %d\n", transcript.Start, transcript.End, transcript.Total))
-	}
-	for _, line := range transcript.Lines {
-		b.WriteString("  " + line + "\n")
-	}
-	return b.String()
-}
-
-func (m APIAppModel) renderAPIContent() string {
-	var b strings.Builder
-	b.WriteString("Run Content\n")
-	b.WriteString(m.renderAPIContentBody())
-	b.WriteByte('\n')
-	b.WriteString(KeyHelpStyle.Render(apiContentFooter()))
-	return b.String()
 }
 
 func (m APIAppModel) renderAPIContentScreen() string {
@@ -6975,6 +6775,26 @@ func (m APIAppModel) fetchRefreshSnapshotCmd(signal server.RefreshSignal) tea.Cm
 			}
 		}
 		return apiRefreshSnapshotMsg{snapshot: snapshot, content: content}
+	}
+}
+
+func (m APIAppModel) fetchAttachSessionDetailCmd(sessionID string) tea.Cmd {
+	if sessionID == "" || m.client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx := context.Background()
+		if m.eventCtx != nil {
+			ctx = m.eventCtx
+		}
+		session, transcript, err := loadAPITranscriptTail(ctx, m.client, sessionID)
+		if err != nil {
+			return apiRefreshSnapshotMsg{err: err}
+		}
+		return apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+			Session:    &session,
+			Transcript: &transcript,
+		}}
 	}
 }
 

@@ -147,12 +147,12 @@ func TestDashboardViewRenders(t *testing.T) {
 	}
 
 	// Should contain version in header
-	if !containsString(view, GetVersion()) {
+	if !strings.Contains(view, GetVersion()) {
 		t.Error("expected version in header")
 	}
 
 	// Should contain feature slug
-	if !containsString(view, "test-feature") {
+	if !strings.Contains(view, "test-feature") {
 		t.Error("expected feature slug in view")
 	}
 }
@@ -225,10 +225,10 @@ func TestDashboardEmpty(t *testing.T) {
 	view := m.View()
 
 	// Ghost CTA should appear instead of the old "No features yet" text
-	if !containsString(view, "Create your first feature") {
+	if !strings.Contains(view, "Create your first feature") {
 		t.Error("expected ghost CTA text in empty state")
 	}
-	if containsString(view, "No features yet") {
+	if strings.Contains(view, "No features yet") {
 		t.Error("old empty state message should be removed")
 	}
 }
@@ -240,13 +240,13 @@ func TestGhostCTAWelcomePanel(t *testing.T) {
 	m.height = 30
 	view := m.View()
 
-	if !containsString(view, "What does Agentic Orchestrator do?") {
+	if !strings.Contains(view, "What does Agentic Orchestrator do?") {
 		t.Error("expected welcome panel title")
 	}
-	if !containsString(view, "Examples:") {
+	if !strings.Contains(view, "Examples:") {
 		t.Error("expected Examples heading")
 	}
-	if !containsString(view, "Press  n  to start.") {
+	if !strings.Contains(view, "Press  n  to start.") {
 		t.Error("expected hint text")
 	}
 }
@@ -286,7 +286,7 @@ func TestGhostCTADisappearsWithFeatures(t *testing.T) {
 
 	// Verify ghost CTA is present
 	view := m.View()
-	if !containsString(view, "Create your first feature") {
+	if !strings.Contains(view, "Create your first feature") {
 		t.Error("expected ghost CTA in empty state")
 	}
 
@@ -295,10 +295,10 @@ func TestGhostCTADisappearsWithFeatures(t *testing.T) {
 		{ID: "feat-1", Name: "test", Slug: "test-feature", Status: feature.StatusImplementing, Created: time.Now()},
 	})
 	view = m.View()
-	if containsString(view, "Create your first feature") {
+	if strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should disappear when features exist")
 	}
-	if !containsString(view, "test-feature") {
+	if !strings.Contains(view, "test-feature") {
 		t.Error("expected feature slug in view")
 	}
 }
@@ -403,14 +403,14 @@ func TestGhostCTAReappearsAfterDeletion(t *testing.T) {
 
 	// Verify no ghost CTA with features
 	view := m.View()
-	if containsString(view, "Create your first feature") {
+	if strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should not appear when features exist")
 	}
 
 	// Remove all features
 	m.SetFeatures([]*feature.Feature{})
 	view = m.View()
-	if !containsString(view, "Create your first feature") {
+	if !strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should reappear after all features are deleted")
 	}
 }
@@ -587,22 +587,9 @@ func TestDashboardAttentionBadgeNotShownForResolved(t *testing.T) {
 	m := NewDashboardModel(features, "")
 	view := m.View()
 	// Should NOT show attention badge since all help items are resolved
-	if containsString(view, "need attention") {
+	if strings.Contains(view, "need attention") {
 		t.Error("should not show attention badge when all items are resolved")
 	}
-}
-
-func containsString(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestDashboardFooterHintsLeftPanel(t *testing.T) {
@@ -615,13 +602,13 @@ func TestDashboardFooterHintsLeftPanel(t *testing.T) {
 	m.focusPanel = 0 // left panel
 
 	footer := m.renderFooter()
-	if !containsString(footer, "["+ChatKeyHint()+"] Ask") {
+	if !strings.Contains(footer, "["+ChatKeyHint()+"] Ask") {
 		t.Error("expected [/] Ask hint in footer when left panel focused")
 	}
-	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
+	if !strings.Contains(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer when left panel focused")
 	}
-	if !containsString(footer, "[Shift+E] Workspace Config") {
+	if !strings.Contains(footer, "[Shift+E] Workspace Config") {
 		t.Error("expected [Shift+E] Workspace Config hint in footer when left panel focused")
 	}
 }
@@ -636,13 +623,13 @@ func TestDashboardFooterHintsRightPanel(t *testing.T) {
 	m.focusPanel = 1 // right panel
 
 	footer := m.renderFooter()
-	if !containsString(footer, "["+ChatKeyHint()+"] Ask") {
+	if !strings.Contains(footer, "["+ChatKeyHint()+"] Ask") {
 		t.Error("expected [/] Ask hint in footer when right panel focused")
 	}
-	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
+	if !strings.Contains(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer when right panel focused")
 	}
-	if !containsString(footer, "[Shift+E] Workspace Config") {
+	if !strings.Contains(footer, "[Shift+E] Workspace Config") {
 		t.Error("expected [Shift+E] Workspace Config hint in footer when right panel focused")
 	}
 }
@@ -714,7 +701,7 @@ func TestDashboardFooterHelpHint(t *testing.T) {
 	m.width = 80
 
 	footer := m.renderFooter()
-	if !containsString(footer, "["+HelpKeyHint()+"] Help") {
+	if !strings.Contains(footer, "["+HelpKeyHint()+"] Help") {
 		t.Error("expected [?] Help hint in footer")
 	}
 }
@@ -731,7 +718,7 @@ func TestFormatElapsedUsesTotalRuntime(t *testing.T) {
 	if elapsed == "" {
 		t.Error("expected non-empty elapsed for feature with timing data")
 	}
-	if !containsString(elapsed, "15m") {
+	if !strings.Contains(elapsed, "15m") {
 		t.Errorf("expected 15m in elapsed, got %q", elapsed)
 	}
 }
@@ -747,7 +734,7 @@ func TestFormatElapsedFrozenForDone(t *testing.T) {
 		},
 	}
 	elapsed := formatElapsed(f)
-	if !containsString(elapsed, "45m") {
+	if !strings.Contains(elapsed, "45m") {
 		t.Errorf("expected 45m frozen time, got %q", elapsed)
 	}
 }
@@ -811,10 +798,10 @@ func TestFormatElapsedWithTimeAndCost(t *testing.T) {
 	if elapsed == "" {
 		t.Error("expected non-empty elapsed")
 	}
-	if !containsString(elapsed, "15m") {
+	if !strings.Contains(elapsed, "15m") {
 		t.Errorf("expected time in elapsed, got %q", elapsed)
 	}
-	if !containsString(elapsed, "$1.75") {
+	if !strings.Contains(elapsed, "$1.75") {
 		t.Errorf("expected cost in elapsed, got %q", elapsed)
 	}
 }
@@ -827,7 +814,7 @@ func TestFormatElapsedCostOnlyNoCost(t *testing.T) {
 		},
 	}
 	elapsed := formatElapsed(f)
-	if containsString(elapsed, "$") {
+	if strings.Contains(elapsed, "$") {
 		t.Errorf("expected no cost in elapsed when PhaseCosts is nil, got %q", elapsed)
 	}
 }

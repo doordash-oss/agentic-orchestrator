@@ -17,6 +17,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -336,7 +337,7 @@ func TestFilePickerViewRendering(t *testing.T) {
 	if view == "" {
 		t.Error("expected non-empty view when active with matches")
 	}
-	if !containsString(view, "File completions") {
+	if !strings.Contains(view, "File completions") {
 		t.Error("expected header in view")
 	}
 }

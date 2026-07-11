@@ -671,6 +671,33 @@ type Feature struct {
 	run *Run `yaml:"-"`
 }
 
+// WorkspaceSlug is the stable slug used for generated feature branches and
+// worktree directories. It keeps the human-readable slug visible while
+// qualifying it with the persisted feature ID, avoiding local branch
+// collisions across separate state dirs or abandoned setup attempts.
+func (f *Feature) WorkspaceSlug() string {
+	if f == nil {
+		return ""
+	}
+	return WorkspaceSlug(f.Slug, f.ID)
+}
+
+// WorkspaceSlug joins a human-readable slug with the feature ID unless it is
+// already qualified.
+func WorkspaceSlug(slug, id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return slug
+	}
+	if slug == "" {
+		return id
+	}
+	if strings.HasSuffix(slug, "-"+id) {
+		return slug
+	}
+	return slug + "-" + id
+}
+
 // Run returns the feature's active run. Callers should treat the result as
 // always non-nil for a feature loaded via Store.Load. In tests that
 // construct a Feature directly without a run, Run lazily creates one mirrored

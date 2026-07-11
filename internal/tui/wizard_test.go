@@ -178,7 +178,7 @@ func TestWizardViewRenders(t *testing.T) {
 	if view == "" {
 		t.Error("expected non-empty view")
 	}
-	if !containsString(view, "New Feature") {
+	if !strings.Contains(view, "New Feature") {
 		t.Error("expected wizard title in view")
 	}
 }
@@ -216,7 +216,7 @@ func TestWizardImagePasteMsg(t *testing.T) {
 	if m.images[0] != "/tmp/image-1.png" {
 		t.Errorf("image path = %q, want %q", m.images[0], "/tmp/image-1.png")
 	}
-	if !containsString(m.descInput.Value(), "[Image #1]") {
+	if !strings.Contains(m.descInput.Value(), "[Image #1]") {
 		t.Errorf("expected '[Image #1]' in description, got %q", m.descInput.Value())
 	}
 
@@ -225,7 +225,7 @@ func TestWizardImagePasteMsg(t *testing.T) {
 	if len(m.images) != 2 {
 		t.Fatalf("expected 2 images, got %d", len(m.images))
 	}
-	if !containsString(m.descInput.Value(), "[Image #2]") {
+	if !strings.Contains(m.descInput.Value(), "[Image #2]") {
 		t.Errorf("expected '[Image #2]' in description, got %q", m.descInput.Value())
 	}
 
@@ -284,7 +284,7 @@ func TestWizardImageNumberingAfterFailedPaste(t *testing.T) {
 	if len(m.images) != 1 {
 		t.Fatalf("expected 1 image, got %d", len(m.images))
 	}
-	if !containsString(m.descInput.Value(), "[Image #1]") {
+	if !strings.Contains(m.descInput.Value(), "[Image #1]") {
 		t.Errorf("expected '[Image #1]' after failed-then-success, got %q", m.descInput.Value())
 	}
 
@@ -294,7 +294,7 @@ func TestWizardImageNumberingAfterFailedPaste(t *testing.T) {
 	if len(m.images) != 2 {
 		t.Fatalf("expected 2 images, got %d", len(m.images))
 	}
-	if !containsString(m.descInput.Value(), "[Image #2]") {
+	if !strings.Contains(m.descInput.Value(), "[Image #2]") {
 		t.Errorf("expected '[Image #2]' after second failed-then-success, got %q", m.descInput.Value())
 	}
 }
@@ -395,7 +395,7 @@ func TestWizardBackFooterHint(t *testing.T) {
 	// On first step (What), footer should NOT show shift+tab as "Back"
 	view := m.View()
 	// The What step footer says "[tab] Switch field   [enter] Next   [esc] Cancel"
-	if containsString(view, "shift+tab] Back") {
+	if strings.Contains(view, "shift+tab] Back") {
 		t.Error("footer should not show 'Back' hint on first step")
 	}
 
@@ -404,7 +404,7 @@ func TestWizardBackFooterHint(t *testing.T) {
 	m, _ = m.advance()
 
 	view = m.View()
-	if !containsString(view, "esc") || !containsString(view, "Back") {
+	if !strings.Contains(view, "esc") || !strings.Contains(view, "Back") {
 		t.Error("footer should show back hint after first step")
 	}
 }
@@ -708,7 +708,7 @@ func TestWizardFilePasteMsg(t *testing.T) {
 	if m.attachments[0] != "/tmp/spec.pdf" {
 		t.Errorf("attachment path = %q, want %q", m.attachments[0], "/tmp/spec.pdf")
 	}
-	if !containsString(m.descInput.Value(), "[spec.pdf]") {
+	if !strings.Contains(m.descInput.Value(), "[spec.pdf]") {
 		t.Errorf("expected '[spec.pdf]' in description, got %q", m.descInput.Value())
 	}
 
@@ -720,7 +720,7 @@ func TestWizardFilePasteMsg(t *testing.T) {
 	if len(m.attachments) != 2 {
 		t.Fatalf("expected 2 attachments, got %d", len(m.attachments))
 	}
-	if !containsString(m.descInput.Value(), "[design.txt]") {
+	if !strings.Contains(m.descInput.Value(), "[design.txt]") {
 		t.Errorf("expected '[design.txt]' in description, got %q", m.descInput.Value())
 	}
 }
@@ -775,10 +775,10 @@ func TestWizardMixedImagesAndAttachments(t *testing.T) {
 	}
 
 	desc := m.descInput.Value()
-	if !containsString(desc, "[Image #1]") {
+	if !strings.Contains(desc, "[Image #1]") {
 		t.Errorf("expected '[Image #1]' in description, got %q", desc)
 	}
-	if !containsString(desc, "[spec.pdf]") {
+	if !strings.Contains(desc, "[spec.pdf]") {
 		t.Errorf("expected '[spec.pdf]' in description, got %q", desc)
 	}
 }
@@ -1042,7 +1042,7 @@ func TestWizardAtInNameIsLiteral(t *testing.T) {
 	// Type "@proj" via KeyRunes
 	m, _ = m.Update(tea.KeyPressMsg{Text: "@proj"})
 
-	if !containsString(m.nameInput.Value(), "@proj") {
+	if !strings.Contains(m.nameInput.Value(), "@proj") {
 		t.Errorf("expected name input to contain '@proj', got %q", m.nameInput.Value())
 	}
 	if m.filePicker.IsActive() {
@@ -1128,10 +1128,10 @@ func TestWizardDescriptionHintWithPaste(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "@ files") {
+	if !strings.Contains(view, "@ files") {
 		t.Error("expected '@ files' in view when paste is supported")
 	}
-	if !containsString(view, "Ctrl+V paste") {
+	if !strings.Contains(view, "Ctrl+V paste") {
 		t.Error("expected 'Ctrl+V paste' in view when paste is supported")
 	}
 }
@@ -1151,10 +1151,10 @@ func TestWizardDescriptionHintWithoutPaste(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "@ for file paths") {
+	if !strings.Contains(view, "@ for file paths") {
 		t.Error("expected '@ for file paths' in view when paste is not supported")
 	}
-	if containsString(view, "Ctrl+V") {
+	if strings.Contains(view, "Ctrl+V") {
 		t.Error("expected NO 'Ctrl+V' in view when paste is not supported")
 	}
 }
@@ -1651,22 +1651,22 @@ func TestWizardBranchWarningView(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "Branch base") {
+	if !strings.Contains(view, "Branch base") {
 		t.Error("expected view title to contain 'Branch base'")
 	}
-	if !containsString(view, "Start from main") {
+	if !strings.Contains(view, "Start from main") {
 		t.Error("expected view to contain 'Start from main' (default-branch option)")
 	}
-	if !containsString(view, "Start from feature/xyz") {
+	if !strings.Contains(view, "Start from feature/xyz") {
 		t.Error("expected view to contain 'Start from feature/xyz' (current-branch option)")
 	}
-	if !containsString(view, "Recommended") {
+	if !strings.Contains(view, "Recommended") {
 		t.Error("expected view to identify the default branch as recommended")
 	}
-	if !containsString(view, "Include current branch commits") {
+	if !strings.Contains(view, "Include current branch commits") {
 		t.Error("expected view to explain the current-branch option")
 	}
-	if !containsString(view, "repo-a") {
+	if !strings.Contains(view, "repo-a") {
 		t.Error("expected view to contain 'repo-a'")
 	}
 }
@@ -1682,10 +1682,10 @@ func TestWizardBranchWarningFooter(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "Choose") {
+	if !strings.Contains(view, "Choose") {
 		t.Error("expected footer to contain 'Choose' (enter action label)")
 	}
-	if !containsString(view, "Switch") {
+	if !strings.Contains(view, "Switch") {
 		t.Error("expected footer to contain 'Switch' (toggle action label)")
 	}
 }
@@ -1704,14 +1704,14 @@ func TestWizardReviewShowsBranchChoice(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	if !containsString(view, "current branch") {
+	if !strings.Contains(view, "current branch") {
 		t.Error("expected review to show 'current branch'")
 	}
 
 	// Switch to default branch
 	m.branchChoices["repo-a"] = false
 	view = m.View()
-	if !containsString(view, "default branch") {
+	if !strings.Contains(view, "default branch") {
 		t.Error("expected review to show 'default branch'")
 	}
 }
@@ -2013,7 +2013,7 @@ func TestWizardSummaryCursorIndicatorInView(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	if !containsString(view, "\u25b8") {
+	if !strings.Contains(view, "\u25b8") {
 		t.Error("expected cursor indicator '\u25b8' in Review view")
 	}
 }
@@ -2041,14 +2041,14 @@ func TestWizardSummaryAutoDetectedLabelInView(t *testing.T) {
 
 	view := m.View()
 	// Only "(auto-detected)" should appear (for Risk). Other provenance labels removed.
-	if !containsString(view, "(auto-detected)") {
+	if !strings.Contains(view, "(auto-detected)") {
 		t.Error("expected '(auto-detected)' provenance label for risk with keyword match")
 	}
 	// "(from config)" and "(default)" should NOT appear
-	if containsString(view, "(from config)") {
+	if strings.Contains(view, "(from config)") {
 		t.Error("'(from config)' provenance labels should be removed")
 	}
-	if containsString(view, "(default)") {
+	if strings.Contains(view, "(default)") {
 		t.Error("'(default)' provenance labels should be removed")
 	}
 }
@@ -2075,10 +2075,10 @@ func TestWizardSummaryRiskNoAutoDetectedWhenDefault(t *testing.T) {
 
 	view := m.View()
 	// "test" has no risk keywords — no provenance labels should show
-	if containsString(view, "(auto-detected)") {
+	if strings.Contains(view, "(auto-detected)") {
 		t.Error("expected no '(auto-detected)' label when risk is default medium")
 	}
-	if containsString(view, "(default)") {
+	if strings.Contains(view, "(default)") {
 		t.Error("'(default)' provenance label should be removed")
 	}
 }
@@ -2104,7 +2104,7 @@ func TestWizardSummaryDividerInView(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	if !containsString(view, "\u2500\u2500\u2500\u2500\u2500") {
+	if !strings.Contains(view, "\u2500\u2500\u2500\u2500\u2500") {
 		t.Error("expected divider '\u2500\u2500\u2500\u2500\u2500' in Review view")
 	}
 }
@@ -2211,7 +2211,7 @@ func TestWizardSummaryFooterShowsNavigation(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	if !containsString(view, "\u2191\u2193") {
+	if !strings.Contains(view, "\u2191\u2193") {
 		t.Error("expected '\u2191\u2193' navigation hint in Review footer")
 	}
 }
@@ -2644,14 +2644,14 @@ func TestWizardSummaryRiskFocusShowsChangeHint(t *testing.T) {
 
 	// Risk is focused by default, but not yet editing.
 	view := m.View()
-	if !containsString(view, "Edit") {
+	if !strings.Contains(view, "Edit") {
 		t.Error("expected 'Edit' hint in footer when Risk is focused but not editing")
 	}
 
 	// Navigate to Models — footer remains edit-oriented.
 	m.summaryCursor = summaryFieldModels
 	view = m.View()
-	if !containsString(view, "Edit") {
+	if !strings.Contains(view, "Edit") {
 		t.Error("expected 'Edit' hint on Models when not editing")
 	}
 }
@@ -2677,13 +2677,13 @@ func TestWizardSummaryEditingFooter(t *testing.T) {
 
 	// Risk is focused — footer shows Edit hint until Enter opens editor.
 	view := m.View()
-	if !containsString(view, "Edit") {
+	if !strings.Contains(view, "Edit") {
 		t.Error("expected 'Edit' in footer when Risk is focused")
 	}
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view = m.View()
-	if !containsString(view, "Change") {
+	if !strings.Contains(view, "Change") {
 		t.Error("expected 'Change' in footer when Risk editor is open")
 	}
 
@@ -2693,7 +2693,7 @@ func TestWizardSummaryEditingFooter(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view = m.View()
 	for _, needle := range []string{"Panel", "Filter"} {
-		if !containsString(view, needle) {
+		if !strings.Contains(view, needle) {
 			t.Errorf("expected %q in footer during Models editing", needle)
 		}
 	}
@@ -2701,7 +2701,7 @@ func TestWizardSummaryEditingFooter(t *testing.T) {
 	// Exit editing
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	view = m.View()
-	if !containsString(view, "Navigate") {
+	if !strings.Contains(view, "Navigate") {
 		t.Error("expected 'Navigate' in footer after exiting editing")
 	}
 }
@@ -3179,7 +3179,7 @@ func TestWizardSummaryExitCriteriaTypingWorks(t *testing.T) {
 		m, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 
-	if !containsString(m.exitInput.Value(), "extra") {
+	if !strings.Contains(m.exitInput.Value(), "extra") {
 		t.Errorf("expected exitInput to contain 'extra', got %q", m.exitInput.Value())
 	}
 }
@@ -3339,19 +3339,19 @@ func TestWizardSummaryModelsExpandedViewShowsSubRows(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "Research") {
+	if !strings.Contains(view, "Research") {
 		t.Error("expected expanded Models view to contain 'Research'")
 	}
-	if !containsString(view, "Planning") {
+	if !strings.Contains(view, "Planning") {
 		t.Error("expected expanded Models view to contain 'Planning'")
 	}
-	if !containsString(view, "Implementation") {
+	if !strings.Contains(view, "Implementation") {
 		t.Error("expected expanded Models view to contain 'Implementation'")
 	}
-	if !containsString(view, "Review") {
+	if !strings.Contains(view, "Review") {
 		t.Error("expected expanded Models view to contain 'Review'")
 	}
-	if !containsString(view, "▸") {
+	if !strings.Contains(view, "▸") {
 		t.Error("expected expanded Models view to contain '▸' indicator")
 	}
 }
@@ -3378,12 +3378,12 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 
 	view := m.View()
 	for _, needle := range []string{"Model Selection", "Phases", "Agents", "Models for", "Research", "opus", "codex"} {
-		if !containsString(view, needle) {
+		if !strings.Contains(view, needle) {
 			t.Errorf("expected expanded Models view to contain %q", needle)
 		}
 	}
 	for _, forbidden := range []string{"Selection for Research", "Choices for Research", "Details agent"} {
-		if containsString(view, forbidden) {
+		if strings.Contains(view, forbidden) {
 			t.Errorf("expected expanded Models view to omit old model cascade copy %q", forbidden)
 		}
 	}
@@ -3401,10 +3401,10 @@ func TestWizardSummaryRiskAndInquiryUseEditorBoxes(t *testing.T) {
 
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view := m.View()
-	if !containsString(view, "Current:") {
+	if !strings.Contains(view, "Current:") {
 		t.Error("expected focused risk view to contain 'Current:'")
 	}
-	if !containsString(view, "Options") {
+	if !strings.Contains(view, "Options") {
 		t.Error("expected focused risk view to contain 'Options'")
 	}
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -3412,10 +3412,10 @@ func TestWizardSummaryRiskAndInquiryUseEditorBoxes(t *testing.T) {
 	m.summaryCursor = summaryFieldInquireness
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	view = m.View()
-	if !containsString(view, "Inquiry") {
+	if !strings.Contains(view, "Inquiry") {
 		t.Error("expected focused inquiry view to contain 'Inquiry'")
 	}
-	if !containsString(view, "Harness surfaces key planning questions") {
+	if !strings.Contains(view, "Harness surfaces key planning questions") {
 		t.Error("expected focused inquiry editor to contain the current harness-surfacing description")
 	}
 }
@@ -3434,10 +3434,10 @@ func TestWizardSummaryCheckpointsExpandedViewShowsToggleRows(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "Inquiry Review") {
+	if !strings.Contains(view, "Inquiry Review") {
 		t.Error("expected expanded Checkpoints view to contain 'Inquiry Review'")
 	}
-	if !containsString(view, "Manual Publish") {
+	if !strings.Contains(view, "Manual Publish") {
 		t.Error("expected expanded Checkpoints view to contain 'Manual Publish'")
 	}
 }
@@ -3454,10 +3454,10 @@ func TestWizardSummaryExitCriteriaExpandedViewShowsTextarea(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "done") {
+	if !strings.Contains(view, "done") {
 		t.Error("expected expanded ExitCriteria view to contain 'done'")
 	}
-	if !containsString(view, "cancel") {
+	if !strings.Contains(view, "cancel") {
 		t.Error("expected expanded ExitCriteria view to contain 'cancel'")
 	}
 }
@@ -3573,7 +3573,7 @@ func TestWizardSummaryEditedExitCriteriaInResult(t *testing.T) {
 	if r == nil {
 		t.Fatal("expected non-nil Result")
 	}
-	if !containsString(r.ExitCriteria, "custom") {
+	if !strings.Contains(r.ExitCriteria, "custom") {
 		t.Errorf("expected ExitCriteria to contain 'custom', got %q", r.ExitCriteria)
 	}
 }
@@ -3641,7 +3641,7 @@ func TestWizardSummaryModelsFooterShowsHint(t *testing.T) {
 
 	view := m.View()
 	for _, needle := range []string{"Panel", "Select", "Filter"} {
-		if !containsString(view, needle) {
+		if !strings.Contains(view, needle) {
 			t.Errorf("expected footer to contain %q hint when editing Models", needle)
 		}
 	}
@@ -3659,7 +3659,7 @@ func TestWizardSummaryCheckpointsFooterShowsHint(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "Toggle") {
+	if !strings.Contains(view, "Toggle") {
 		t.Error("expected footer to contain 'Toggle' hint when editing Checkpoints")
 	}
 }
@@ -3676,10 +3676,10 @@ func TestWizardSummaryExitCriteriaFooterShowsHint(t *testing.T) {
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	view := m.View()
-	if !containsString(view, "Done") {
+	if !strings.Contains(view, "Done") {
 		t.Error("expected footer to contain 'Done' hint when editing ExitCriteria")
 	}
-	if !containsString(view, "Back") {
+	if !strings.Contains(view, "Back") {
 		t.Error("expected footer to contain 'Back' hint when editing ExitCriteria")
 	}
 }
@@ -4275,10 +4275,10 @@ func TestWizardSummaryModelsReviewShowsKBBuild(t *testing.T) {
 	}
 
 	view := m.View()
-	if !containsString(view, "KB") {
+	if !strings.Contains(view, "KB") {
 		t.Error("expected 'KB' in model summary on Review step")
 	}
-	if !containsString(view, "opus[1m]") {
+	if !strings.Contains(view, "opus[1m]") {
 		t.Error("expected 'opus[1m]' (KB Build model value) in Review view")
 	}
 }
@@ -4862,7 +4862,8 @@ func TestWizardCheckpointHidingReviewEditor(t *testing.T) {
 	m.width = 200
 	m.height = 40
 
-	rendered := m.renderCheckpointsEditor(80)
+	m.syncConfigEditorFromWizard()
+	rendered := renderReviewEditorBox("Gates", 80, m.configEditor.renderCheckpointsBox(reviewEditorContentWidth(80)))
 	if strings.Contains(rendered, "Manual Publish") {
 		t.Error("Manual Publish should be hidden when provisionalPublishable=false")
 	}
@@ -4877,7 +4878,8 @@ func TestWizardCheckpointVisibleWhenPublishable(t *testing.T) {
 	m.width = 200
 	m.height = 40
 
-	rendered := m.renderCheckpointsEditor(80)
+	m.syncConfigEditorFromWizard()
+	rendered := renderReviewEditorBox("Gates", 80, m.configEditor.renderCheckpointsBox(reviewEditorContentWidth(80)))
 	if !strings.Contains(rendered, "Manual Publish") {
 		t.Error("Manual Publish should be visible when provisionalPublishable=true")
 	}

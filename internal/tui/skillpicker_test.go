@@ -17,6 +17,7 @@ package tui
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -392,10 +393,10 @@ func TestSkillPickerViewRendering(t *testing.T) {
 	if view == "" {
 		t.Error("expected non-empty view when active with matches")
 	}
-	if !containsString(view, "Skill completions") {
+	if !strings.Contains(view, "Skill completions") {
 		t.Error("expected header in view")
 	}
-	if !containsString(view, "/commit") {
+	if !strings.Contains(view, "/commit") {
 		t.Error("expected /commit in view")
 	}
 }
@@ -420,10 +421,10 @@ func TestSkillPickerMultiRepo(t *testing.T) {
 	sp.Activate("")
 	view := sp.View()
 	// Multi-repo display should include repo names
-	if !containsString(view, "repo-a") {
+	if !strings.Contains(view, "repo-a") {
 		t.Error("expected repo-a in multi-repo view")
 	}
-	if !containsString(view, "repo-b") {
+	if !strings.Contains(view, "repo-b") {
 		t.Error("expected repo-b in multi-repo view")
 	}
 }
@@ -442,7 +443,7 @@ func TestSkillPickerSingleRepo(t *testing.T) {
 	sp.Activate("")
 	view := sp.View()
 	// Single-repo display should NOT include repo name
-	if containsString(view, "repo-a ·") {
+	if strings.Contains(view, "repo-a ·") {
 		t.Error("expected no repo name prefix in single-repo view")
 	}
 }

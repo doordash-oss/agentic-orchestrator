@@ -28,6 +28,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 	"gopkg.in/yaml.v3"
 )
@@ -279,11 +280,11 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	if repo.Branch == "" {
 		t.Error("expected Branch to be set")
 	}
-	expectedBranch := git.BranchName(f.Slug)
+	expectedBranch := git.BranchName(f.WorkspaceSlug())
 	if repo.Branch != expectedBranch {
 		t.Errorf("branch = %q, want %q", repo.Branch, expectedBranch)
 	}
-	expectedWT := filepath.Join(wtDir, f.Slug, "test-repo")
+	expectedWT := filepath.Join(wtDir, f.WorkspaceSlug(), "test-repo")
 	if repo.WorktreePath != expectedWT {
 		t.Errorf("worktree path = %q, want %q", repo.WorktreePath, expectedWT)
 	}
@@ -325,7 +326,7 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 		t.Fatalf("persisted features = %d, want 1", len(features))
 	}
 	persisted := features[0]
-	wantBranch := git.BranchName(persisted.Slug)
+	wantBranch := git.BranchName(persisted.WorkspaceSlug())
 	if got := persisted.Repos[0].Branch; got != wantBranch {
 		t.Fatalf("persisted branch = %q, want %q", got, wantBranch)
 	}
@@ -358,8 +359,13 @@ func TestManagerCreateQueuedSetupDeduplicatesUpstreamBranchBeforeSave(t *testing
 
 	mgr := feature.NewManager(store, cfg)
 	branches := newMockBranches(true)
+	conflicted := false
 	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		return branch == "feature/upstream-conflict", nil
+		if !conflicted && strings.HasPrefix(branch, "feature/upstream-conflict-") {
+			conflicted = true
+			return true, nil
+		}
+		return false, nil
 	}
 	mgr.Branches = branches
 	worktrees := mocks.NewMockWorktreeOperator()
@@ -387,13 +393,56 @@ func TestManagerCreateQueuedSetupDeduplicatesUpstreamBranchBeforeSave(t *testing
 	if err != nil {
 		t.Fatalf("load persisted feature: %v", err)
 	}
-	wantBranch := git.BranchName(f.Slug)
+	wantBranch := git.BranchName(f.WorkspaceSlug())
 	if persisted.Repos[0].Branch != wantBranch {
 		t.Fatalf("persisted branch = %q, want %q", persisted.Repos[0].Branch, wantBranch)
 	}
 	task := persisted.Run().Setup.Tasks["worktree:test-repo"]
 	if task.Branch != wantBranch {
 		t.Fatalf("setup task branch = %q, want %q", task.Branch, wantBranch)
+	}
+}
+
+func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsCheckedOut(t *testing.T) {
+	repoDir := testutil.InitGitRepo(t)
+	occupiedBranch := "feature/setup-local-conflict"
+	occupiedPath := filepath.Join(t.TempDir(), "occupied")
+	cmd := exec.Command("git", "-C", repoDir, "worktree", "add", occupiedPath, "-b", occupiedBranch, "main")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("occupy plain slug branch: %s: %v", strings.TrimSpace(string(out)), err)
+	}
+
+	storeDir := t.TempDir()
+	store := feature.NewStore(storeDir)
+	cfg := config.NewDefault()
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: repoDir}
+	mgr := feature.NewManager(store, cfg)
+	mgr.Branches = &git.BranchAdapter{}
+	mgr.Worktrees = git.NewWorktreeManager(t.TempDir())
+	mgr.PRs = mocks.NewMockPublisher()
+
+	f, err := mgr.Create("Setup Local Conflict", "test", []string{"test-repo"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := mgr.RunSetup(f.ID); err != nil {
+		t.Fatalf("run setup: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load feature: %v", err)
+	}
+	gotBranch := loaded.Repos[0].Branch
+	if gotBranch == occupiedBranch {
+		t.Fatalf("branch = %q, want ID-qualified branch distinct from occupied plain slug branch", gotBranch)
+	}
+	wantBranch := git.BranchName(loaded.WorkspaceSlug())
+	if gotBranch != wantBranch {
+		t.Fatalf("branch = %q, want %q", gotBranch, wantBranch)
+	}
+	if _, err := os.Stat(loaded.Repos[0].WorktreePath); err != nil {
+		t.Fatalf("qualified worktree path missing: %v", err)
 	}
 }
 
@@ -462,12 +511,12 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 		}
 	}
 	for _, repo := range loaded.Repos {
-		wantPath := filepath.Join(wtDir, loaded.Slug, repo.Name)
+		wantPath := filepath.Join(wtDir, loaded.WorkspaceSlug(), repo.Name)
 		if repo.WorktreePath != wantPath {
 			t.Fatalf("%s worktree path = %q, want %q", repo.Name, repo.WorktreePath, wantPath)
 		}
-		if repo.Branch != git.BranchName(loaded.Slug) {
-			t.Fatalf("%s branch = %q, want %q", repo.Name, repo.Branch, git.BranchName(loaded.Slug))
+		if repo.Branch != git.BranchName(loaded.WorkspaceSlug()) {
+			t.Fatalf("%s branch = %q, want %q", repo.Name, repo.Branch, git.BranchName(loaded.WorkspaceSlug()))
 		}
 	}
 	if got, want := len(loaded.Images), 1; got != want {
@@ -781,7 +830,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	expectedBranch = git.BranchName(f.Slug)
+	expectedBranch = git.BranchName(f.WorkspaceSlug())
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		setup := ff.Run().Setup
 		setup.Status = feature.SetupStatusFailed
@@ -1655,8 +1704,13 @@ func TestManagerCreateDeduplicatesUpstreamBranch(t *testing.T) {
 		},
 	}
 	branches := newMockBranches(true)
+	conflicted := false
 	branches.BranchExistsOnRemoteFn = func(repoPath, branch string) (bool, error) {
-		return branch == "feature/upstream-conflict", nil
+		if !conflicted && strings.HasPrefix(branch, "feature/upstream-conflict-") {
+			conflicted = true
+			return true, nil
+		}
+		return false, nil
 	}
 	mgr.Branches = branches
 	mgr.PRs = mocks.NewMockPublisher()
@@ -1677,7 +1731,7 @@ func TestManagerCreateDeduplicatesUpstreamBranch(t *testing.T) {
 		t.Errorf("suffix length = %d, want 4 hex chars", len(suffix))
 	}
 
-	expectedBranch := git.BranchName(f.Slug)
+	expectedBranch := git.BranchName(f.WorkspaceSlug())
 	if f.Repos[0].Branch != expectedBranch {
 		t.Errorf("branch = %q, want %q", f.Repos[0].Branch, expectedBranch)
 	}

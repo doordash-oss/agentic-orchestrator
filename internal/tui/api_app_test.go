@@ -5477,6 +5477,82 @@ func TestAPIAppModelAttachRendersSessionInitialPrompt(t *testing.T) {
 	}
 }
 
+func TestAPIAppModelAttachBackfillsInitialPromptFromRefresh(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
+			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+		}},
+	}
+	app := newTestAPIAppModel(t, client)
+	app.selectedFeature = "active"
+
+	model, _ := app.openAPIAttachForFeature("active")
+	attached := model.(APIAppModel)
+	if attached.attach == nil {
+		t.Fatal("expected attach model to open")
+	}
+	if view := stripANSI(attached.View().Content); strings.Contains(view, "Repository Context") {
+		t.Fatalf("precondition failed: summary-only attach unexpectedly rendered prompt:\n%s", view)
+	}
+
+	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
+		Session: &server.SessionDetailResponse{Session: server.SessionDetailDTO{
+			SessionSummaryDTO: server.SessionSummaryDTO{
+				ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+			},
+			InitialPrompt: "# Repository Context\n\nBuild the repo knowledge base.",
+			CanAttach:     true,
+		}},
+	}})
+	view := stripANSI(model.(APIAppModel).View().Content)
+	if !strings.Contains(view, "# Repository Context") {
+		t.Fatalf("attach view did not backfill initial prompt from session detail refresh:\n%s", view)
+	}
+}
+
+func TestAPIAppModelFetchAttachSessionDetailCmdReturnsRefreshSnapshot(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeTUIAPIClient{
+		sessionDetailsByID: map[string]server.SessionDetailResponse{
+			"sess-1": {Session: server.SessionDetailDTO{
+				SessionSummaryDTO: server.SessionSummaryDTO{ID: "sess-1", FeatureID: "active", Phase: "implement", Status: "Running"},
+				InitialPrompt:     "# Repository Context\n\nBuild the repo knowledge base.",
+				TranscriptCursor:  server.CursorDTO{End: 2, Total: 2},
+			}},
+		},
+		transcriptsByID: map[string]server.TranscriptResponse{
+			"sess-1": {Messages: []server.TranscriptMessageDTO{
+				{Index: 1, Role: "assistant", Type: "text", Text: "Working on it."},
+			}},
+		},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	cmd := app.fetchAttachSessionDetailCmd("sess-1")
+	if cmd == nil {
+		t.Fatal("fetchAttachSessionDetailCmd returned nil")
+	}
+	msg, ok := cmd().(apiRefreshSnapshotMsg)
+	if !ok {
+		t.Fatalf("command returned %T, want apiRefreshSnapshotMsg", msg)
+	}
+	if msg.err != nil {
+		t.Fatalf("command returned error: %v", msg.err)
+	}
+	if msg.snapshot.Session == nil || msg.snapshot.Session.Session.InitialPrompt == "" {
+		t.Fatalf("snapshot missing session initial prompt: %#v", msg.snapshot.Session)
+	}
+	if msg.snapshot.Transcript == nil || len(msg.snapshot.Transcript.Messages) != 1 {
+		t.Fatalf("snapshot missing transcript tail: %#v", msg.snapshot.Transcript)
+	}
+}
+
 func TestAPIAppModelReviewDecisionsUseRESTMutation(t *testing.T) {
 	t.Parallel()
 

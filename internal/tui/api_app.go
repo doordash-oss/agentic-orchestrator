@@ -1750,7 +1750,7 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 	models := m.runtimeConfig.Defaults
 	summaryCycle := summary.Cycle
 	if hasDetail {
-		summary = mergeAPIFeatureSummary(summary, detail.FeatureSummary)
+		summary = mergeAPIFeatureSummary(summary, apiFeatureDetailSummary(detail))
 		summary.Cycle = summaryCycle
 		if detail.Models != (config.ModelConfig{}) {
 			models = detail.Models
@@ -1797,26 +1797,26 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		f.PhaseCosts = apiPhaseCosts(detail.Cost.ByPhase, detail.Cost.TotalUSD, f.CurrentPhase)
 		f.ValidatingPlan = detail.ReviewGate.ValidatingPlan
 		f.ValidatorStatuses = copyStringMapValues(detail.ReviewGate.ValidatorStatuses)
-		if detail.ActiveRun != nil {
-			if detail.ActiveRun.RunNumber > 0 {
-				f.ActiveRun = detail.ActiveRun.RunNumber
+		if detail.ActiveRunDetail != nil {
+			if detail.ActiveRunDetail.RunNumber > 0 {
+				f.ActiveRun = detail.ActiveRunDetail.RunNumber
 			}
-			f.CurrentIteration = firstNonZero(detail.ActiveRun.Iteration, f.CurrentIteration)
-			f.CurrentRoadmapPhase = firstNonZero(detail.ActiveRun.RoadmapPhase, f.CurrentRoadmapPhase)
-			f.TotalRoadmapPhases = firstNonZero(detail.ActiveRun.RoadmapTotal, f.TotalRoadmapPhases)
-			f.CurrentPhaseStatus = firstNonEmpty(detail.ActiveRun.PhaseStatus, f.CurrentPhaseStatus)
-			if detail.ActiveRun.CurrentPhase != "" {
-				f.CurrentPhase = apiFeaturePhase(detail.ActiveRun.CurrentPhase)
+			f.CurrentIteration = firstNonZero(detail.ActiveRunDetail.Iteration, f.CurrentIteration)
+			f.CurrentRoadmapPhase = firstNonZero(detail.ActiveRunDetail.RoadmapPhase, f.CurrentRoadmapPhase)
+			f.TotalRoadmapPhases = firstNonZero(detail.ActiveRunDetail.RoadmapTotal, f.TotalRoadmapPhases)
+			f.CurrentPhaseStatus = firstNonEmpty(detail.ActiveRunDetail.PhaseStatus, f.CurrentPhaseStatus)
+			if detail.ActiveRunDetail.CurrentPhase != "" {
+				f.CurrentPhase = apiFeaturePhase(detail.ActiveRunDetail.CurrentPhase)
 			}
-			if detail.ActiveRun.PendingReviewPhase != "" {
-				phase := apiFeaturePhase(detail.ActiveRun.PendingReviewPhase)
+			if detail.ActiveRunDetail.PendingReviewPhase != "" {
+				phase := apiFeaturePhase(detail.ActiveRunDetail.PendingReviewPhase)
 				f.PendingReviewPhase = &phase
 			}
-			if detail.ActiveRun.PendingRewindReviewRoadmapPhase > 0 {
-				roadmapPhase := detail.ActiveRun.PendingRewindReviewRoadmapPhase
+			if detail.ActiveRunDetail.PendingRewindReviewRoadmapPhase > 0 {
+				roadmapPhase := detail.ActiveRunDetail.PendingRewindReviewRoadmapPhase
 				f.PendingRewindReviewRoadmapPhase = &roadmapPhase
 			}
-			f.IsRewind = detail.ActiveRun.IsRewind
+			f.IsRewind = detail.ActiveRunDetail.IsRewind
 		}
 		if detail.Failure != nil {
 			f.FailureType = detail.Failure.Type
@@ -1923,8 +1923,8 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 		f.RepoCycles = nil
 	}
 	var setup *feature.SetupState
-	if hasDetail && detail.ActiveRun != nil {
-		setup = apiSetupState(detail.ActiveRun.Setup)
+	if hasDetail && detail.ActiveRunDetail != nil {
+		setup = apiSetupState(detail.ActiveRunDetail.Setup)
 	}
 	m.applyAPIAttention(f)
 	f.SetRun(&feature.Run{
@@ -1957,9 +1957,7 @@ func (m APIAppModel) apiDashboardFeature(summary server.FeatureSummary, detail s
 }
 
 func apiFeatureSummaryFromDetail(detail server.FeatureDetailDTO) server.FeatureSummary {
-	summary := detail.FeatureSummary
-	summary.Cycle = detail.Cycle
-	return summary
+	return apiFeatureDetailSummary(detail)
 }
 
 func apiSetupState(dto *server.SetupDTO) *feature.SetupState {
@@ -2044,6 +2042,24 @@ func mergeAPIFeatureSummary(base, overlay server.FeatureSummary) server.FeatureS
 	return base
 }
 
+func apiFeatureDetailSummary(detail server.FeatureDetailDTO) server.FeatureSummary {
+	return server.FeatureSummary{
+		ID:           detail.ID,
+		Name:         detail.Name,
+		Slug:         detail.Slug,
+		Status:       detail.Status,
+		CurrentPhase: detail.CurrentPhase,
+		Cycle:        detail.Cycle,
+		ActiveRun:    detail.ActiveRun,
+		RunCount:     detail.RunCount,
+		Repos:        append([]string(nil), detail.Repos...),
+		CreatedAt:    detail.CreatedAt,
+		Checkpoints:  detail.Checkpoints,
+		Progress:     detail.Progress,
+		Warnings:     append([]server.WarningDTO(nil), detail.Warnings...),
+	}
+}
+
 func (m APIAppModel) apiDashboardRepo(name string, status server.RepoStatusDTO, hasDetail bool, featureSlug, featureID string) feature.FeatureRepo {
 	repo := feature.FeatureRepo{Name: name}
 	for _, cfgRepo := range m.runtimeConfig.Repos {
@@ -2095,7 +2111,7 @@ func (m APIAppModel) apiFeatureSummary(featureID string) (server.FeatureSummary,
 		}
 	}
 	if detail, ok := m.featureDetails[featureID]; ok && detail.Feature.ID != "" {
-		return detail.Feature.FeatureSummary, true
+		return apiFeatureSummaryFromDetail(detail.Feature), true
 	}
 	return server.FeatureSummary{}, false
 }
@@ -2524,11 +2540,12 @@ func (m APIAppModel) apiAttachTabsForFeature(featureID string) []repoTab {
 	tabs := make([]repoTab, 0, len(order))
 	for _, sessionID := range order {
 		summary := summariesByID[sessionID]
-		detail := server.SessionDetailDTO{SessionSummaryDTO: summary, CanAttach: apiSessionDTOIsActive(summary)}
+		detail := apiSessionDetailFromSummary(summary)
+		detail.CanAttach = apiSessionDTOIsActive(summary)
 		if cached, ok := m.sessionDetails[sessionID]; ok {
 			detail = cached.Session
 			if detail.ID == "" {
-				detail.SessionSummaryDTO = summary
+				detail = apiSessionDetailFromSummary(summary)
 			}
 		}
 		transcript := server.TranscriptResponse{}
@@ -2724,6 +2741,44 @@ func apiSessionSummaryFromControl(featureID string, req server.ControlRequestDTO
 func apiSessionDTOIsActive(summary server.SessionSummaryDTO) bool {
 	status := apiSessionStatus(summary.Status)
 	return status == ports.SessionRunning || status == ports.SessionWaitingHelp || status == ports.SessionWaitingPermission
+}
+
+func apiSessionDetailFromSummary(summary server.SessionSummaryDTO) server.SessionDetailDTO {
+	return server.SessionDetailDTO{
+		ID:         summary.ID,
+		FeatureID:  summary.FeatureID,
+		Phase:      summary.Phase,
+		Repo:       summary.Repo,
+		Kind:       summary.Kind,
+		Label:      summary.Label,
+		Provider:   summary.Provider,
+		Model:      summary.Model,
+		Status:     summary.Status,
+		TurnState:  summary.TurnState,
+		StartedAt:  summary.StartedAt,
+		Iteration:  summary.Iteration,
+		ContextPct: summary.ContextPct,
+		Usage:      summary.Usage,
+	}
+}
+
+func apiSessionSummaryFromDetail(detail server.SessionDetailDTO) server.SessionSummaryDTO {
+	return server.SessionSummaryDTO{
+		ID:         detail.ID,
+		FeatureID:  detail.FeatureID,
+		Phase:      detail.Phase,
+		Repo:       detail.Repo,
+		Kind:       detail.Kind,
+		Label:      detail.Label,
+		Provider:   detail.Provider,
+		Model:      detail.Model,
+		Status:     detail.Status,
+		TurnState:  detail.TurnState,
+		StartedAt:  detail.StartedAt,
+		Iteration:  detail.Iteration,
+		ContextPct: detail.ContextPct,
+		Usage:      detail.Usage,
+	}
 }
 
 func apiSessionStatus(status string) ports.SessionStatus {
@@ -3075,7 +3130,7 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 		return m, nil
 	}
 	var cmds []tea.Cmd
-	detail := server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
+	detail := apiSessionDetailFromSummary(server.SessionSummaryDTO{
 		ID:         active.ID(),
 		FeatureID:  active.FeatureID(),
 		Phase:      active.Phase().String(),
@@ -3086,7 +3141,7 @@ func (m APIAppModel) applyAPIAttachRefreshSnapshot(snapshot server.RefreshSnapsh
 		StartedAt:  active.StartedAt(),
 		Iteration:  active.Iteration(),
 		ContextPct: active.ContextPercentage(),
-	}}
+	})
 	var transcript *server.TranscriptResponse
 	updateActive := true
 	if snapshot.Session != nil {
@@ -3178,15 +3233,13 @@ func (m APIAppModel) applyAPIChatRefreshSnapshot(snapshot server.RefreshSnapshot
 		if len(controls) == 0 {
 			return m
 		}
-		detail = server.SessionDetailDTO{
-			SessionSummaryDTO: server.SessionSummaryDTO{
-				ID:        active.ID(),
-				FeatureID: active.FeatureID(),
-				Phase:     active.Phase().String(),
-				Status:    active.Status().String(),
-			},
-			PendingControls: controls,
-		}
+		detail = apiSessionDetailFromSummary(server.SessionSummaryDTO{
+			ID:        active.ID(),
+			FeatureID: active.FeatureID(),
+			Phase:     active.Phase().String(),
+			Status:    active.Status().String(),
+		})
+		detail.PendingControls = controls
 	}
 	controls := detail.PendingControls
 	if len(controls) == 0 {
@@ -3371,86 +3424,6 @@ func (m APIAppModel) Close() {
 	}
 }
 
-func (m APIAppModel) Snapshot() APIAppSnapshot {
-	out := m.snapshot
-	out.Runtime.Providers = append([]string(nil), out.Runtime.Providers...)
-	out.Features = append([]APIFeaturePresentation(nil), out.Features...)
-	out.Sessions = append([]APISessionPresentation(nil), out.Sessions...)
-	if out.LivePreview != nil {
-		preview := *out.LivePreview
-		preview.Attention = append([]string(nil), preview.Attention...)
-		preview.TranscriptRows = append([]server.TranscriptMessageDTO(nil), preview.TranscriptRows...)
-		preview.TranscriptTail = append([]string(nil), preview.TranscriptTail...)
-		out.LivePreview = &preview
-	}
-	if out.Transcript != nil {
-		transcript := *out.Transcript
-		transcript.Lines = append([]string(nil), transcript.Lines...)
-		out.Transcript = &transcript
-	}
-	if out.Content != nil {
-		content := *out.Content
-		if content.Log != nil {
-			log := *content.Log
-			content.Log = &log
-		}
-		if content.Artifact != nil {
-			artifact := *content.Artifact
-			content.Artifact = &artifact
-		}
-		out.Content = &content
-	}
-	if out.Detail != nil {
-		detail := *out.Detail
-		detail.Repos = append([]APIRepoStatusPresentation(nil), detail.Repos...)
-		detail.Actions = append([]APIActionPresentation(nil), detail.Actions...)
-		out.Detail = &detail
-	}
-	return out
-}
-
-func (m APIAppModel) SelectedFeatureID() string {
-	return m.selectedFeature
-}
-
-func (m APIAppModel) ShowingOwnedServerQuitPrompt() bool {
-	return m.quitOwnedServerPrompt
-}
-
-func (m APIAppModel) ShowingFeatureActionConfirm() bool {
-	return m.actionConfirmActive
-}
-
-func (m APIAppModel) ShowingTweakReviewModal() bool {
-	return m.tweakReviewModalActive
-}
-
-func (m APIAppModel) ShowingNeedInputPrompt() bool {
-	return m.needInputPromptActive
-}
-
-func (m APIAppModel) ShowingPermissionPrompt() bool {
-	if m.attach != nil && m.attach.showPermMenu {
-		return true
-	}
-	return m.permissionPromptActive
-}
-
-func (m APIAppModel) ShowingHelpPrompt() bool {
-	return m.helpPromptActive
-}
-
-func (m APIAppModel) ShowingAskUserPrompt() bool {
-	if m.attach != nil && m.attach.HasActiveQuestion() {
-		return true
-	}
-	return m.askUserPromptActive
-}
-
-func (m APIAppModel) ShowingCreateFeaturePrompt() bool {
-	return m.wizard != nil
-}
-
 func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	selected := m.selectedFeature
 	if snapshot.Features != nil {
@@ -3479,7 +3452,7 @@ func (m *APIAppModel) ApplyRefreshSnapshot(snapshot server.RefreshSnapshot) {
 	}
 	if snapshot.Session != nil {
 		m.storeSessionDetail(*snapshot.Session)
-		m.upsertSessionSummary(snapshot.Session.Session.SessionSummaryDTO)
+		m.upsertSessionSummary(apiSessionSummaryFromDetail(snapshot.Session.Session))
 	}
 	if snapshot.Transcript != nil && snapshot.Session != nil {
 		m.storeTranscript(snapshot.Session.Session.ID, *snapshot.Transcript)
@@ -6772,7 +6745,7 @@ func (m APIAppModel) fetchReviewArtifactCmd(featureID string) tea.Cmd {
 		if err != nil {
 			return apiReviewArtifactMsg{featureID: featureID, err: err}
 		}
-		f := m.apiDashboardFeature(detail.Feature.FeatureSummary, detail.Feature, true)
+		f := m.apiDashboardFeature(apiFeatureSummaryFromDetail(detail.Feature), detail.Feature, true)
 		artifact, ok, reason := selectReviewArtifact(f, artifacts)
 		if !ok {
 			if reason == "" {
@@ -7082,7 +7055,7 @@ func (m APIAppModel) selectedFeatureActionCmd(kind, featureID string, argsOpt ..
 		case "feature.rebase":
 			_, err = m.client.StartRebase(ctx, featureID, server.RebaseActionRequest{})
 		case "feature.cleanup":
-			_, err = m.client.CleanupFeature(ctx, featureID, server.CleanupActionRequest{Target: "worktrees", Repo: args.Repo})
+			_, err = m.client.CleanupFeature(ctx, featureID, server.CleanupActionRequest{Target: "worktrees"})
 		case "feature.rewind":
 			targetPhase := args.TargetPhase
 			if targetPhase == "" {
@@ -8386,9 +8359,9 @@ func (m APIAppModel) selectedRoadmapProgress(featureID string) (int, int) {
 	if detail, ok := m.featureDetails[featureID]; ok {
 		current := detail.Feature.Progress.CurrentRoadmapPhase
 		total := detail.Feature.Progress.TotalRoadmapPhases
-		if detail.Feature.ActiveRun != nil {
-			current = firstNonZero(detail.Feature.ActiveRun.RoadmapPhase, current)
-			total = firstNonZero(detail.Feature.ActiveRun.RoadmapTotal, total)
+		if detail.Feature.ActiveRunDetail != nil {
+			current = firstNonZero(detail.Feature.ActiveRunDetail.RoadmapPhase, current)
+			total = firstNonZero(detail.Feature.ActiveRunDetail.RoadmapTotal, total)
 		}
 		return current, total
 	}
@@ -8789,10 +8762,10 @@ func loadAPISelectedContent(ctx context.Context, client APIClient, featureID str
 }
 
 func apiActiveRunNumber(dto server.FeatureDetailDTO) int {
-	if dto.ActiveRun != nil && dto.ActiveRun.RunNumber > 0 {
-		return dto.ActiveRun.RunNumber
+	if dto.ActiveRunDetail != nil && dto.ActiveRunDetail.RunNumber > 0 {
+		return dto.ActiveRunDetail.RunNumber
 	}
-	return dto.FeatureSummary.ActiveRun
+	return dto.ActiveRun
 }
 
 func apiContentTailOffset(size int64) int64 {

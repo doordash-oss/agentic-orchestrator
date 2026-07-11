@@ -706,7 +706,7 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 			}
 			if baseDir != "" {
 				kbDir := agent.KBStateDir(baseDir, repo.Name)
-				if err := o.recordReadOnlyRepoBaseline(context.Background(), f, kbDir, repo.Name); err != nil {
+				if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, kbDir, repo.Name); err != nil {
 					return PhaseStartResult{}, fmt.Errorf("record KB read-only repo baseline for %s: %w", repo.Name, err)
 				}
 			}
@@ -894,7 +894,7 @@ func (o *Orchestrator) startInquire(featureID string) (PhaseStartResult, error) 
 			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseInquire)
 			return PhaseStartResult{Outcome: PhaseStarted}, nil
 		}
-		if err := o.recordReadOnlyRepoBaseline(context.Background(), f, o.artifactReadOnlyGuardDir(f, "inquire")); err != nil {
+		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, "inquire")); err != nil {
 			return PhaseStartResult{}, fmt.Errorf("record inquire read-only repo baseline: %w", err)
 		}
 		sessionID, err := o.deps.PhaseRunner.RunInquire(f, kbInfos...)
@@ -935,7 +935,7 @@ func (o *Orchestrator) startResearch(featureID string) (PhaseStartResult, error)
 		if questionsPath == "" {
 			return PhaseStartResult{}, errors.New("no inquire artifact found; cannot proceed to research")
 		}
-		if err := o.recordReadOnlyRepoBaseline(context.Background(), f, o.artifactReadOnlyGuardDir(f, "research")); err != nil {
+		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, "research")); err != nil {
 			return PhaseStartResult{}, fmt.Errorf("record research read-only repo baseline: %w", err)
 		}
 		sessionID, err := o.deps.PhaseRunner.RunResearchFromQuestions(f, questionsPath, kbInfos...)
@@ -987,7 +987,7 @@ func (o *Orchestrator) startDesign(featureID string) (PhaseStartResult, error) {
 			o.superviseSingleShotPhaseSession(featureID, sessionID, feature.PhaseDesign)
 			return PhaseStartResult{Outcome: PhaseStarted}, nil
 		}
-		if err := o.recordReadOnlyRepoBaseline(context.Background(), f, o.artifactReadOnlyGuardDir(f, "design")); err != nil {
+		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.artifactReadOnlyGuardDir(f, "design")); err != nil {
 			return PhaseStartResult{}, fmt.Errorf("record design read-only repo baseline: %w", err)
 		}
 		sessionID, err := o.deps.PhaseRunner.RunDesign(f, researchPath, qaFilePaths, kbInfos...)
@@ -1031,7 +1031,7 @@ func (o *Orchestrator) startPlan(featureID string) (PhaseStartResult, error) {
 	qaFilePaths := o.collectQAFilePaths(f, f.RefactorPrefix())
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
-		if err := o.recordReadOnlyRepoBaseline(context.Background(), f, o.planReadOnlyGuardDir(f)); err != nil {
+		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
 			return PhaseStartResult{}, fmt.Errorf("record plan read-only repo baseline: %w", err)
 		}
 		resultCh, err := o.deps.PhaseRunner.RunPlanningWithValidation(f, inputArtifactPath, qaFilePaths, kbInfos...)
@@ -1096,7 +1096,7 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 
 	kbInfos := o.computeKBInfos(f)
 	if o.deps.PhaseRunner != nil {
-		if err := o.recordReadOnlyRepoBaseline(context.Background(), f, o.planReadOnlyGuardDir(f)); err != nil {
+		if err := agent.RecordReadOnlyRepoBaseline(context.Background(), o.deps.CmdRunner, f, o.planReadOnlyGuardDir(f)); err != nil {
 			return PhaseStartResult{}, fmt.Errorf("record phase plan read-only repo baseline: %w", err)
 		}
 		resultCh, err := o.deps.PhaseRunner.RunPhasePlanning(f, roadmapPath, currentPhase, qaFilePaths, priorPhasePlanPaths, kbInfos...)

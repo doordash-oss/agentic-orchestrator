@@ -26,12 +26,12 @@ func TestAPIChatEventsFromSnapshotNormalizesTranscriptAndCompletion(t *testing.T
 	t.Parallel()
 
 	active := newTestAPIChatSession()
-	detail := server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
+	detail := apiTestSessionDetail(server.SessionSummaryDTO{
 		ID:        chatSessionID,
 		FeatureID: chatSessionID,
 		Status:    "Running",
 		TurnState: "waiting_input",
-	}}
+	})
 	transcript := &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
 		{Index: 0, BlockIndex: 0, Role: "assistant", Type: "text", Text: "First paragraph."},
 		{Index: 0, BlockIndex: 1, Role: "assistant", Type: "text", Text: "Second paragraph."},
@@ -54,12 +54,12 @@ func TestAPIChatEventsFromSnapshotEmitsNoAnswerCompletion(t *testing.T) {
 	t.Parallel()
 
 	active := newTestAPIChatSession()
-	detail := server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
+	detail := apiTestSessionDetail(server.SessionSummaryDTO{
 		ID:        chatSessionID,
 		FeatureID: chatSessionID,
 		Status:    "Running",
 		TurnState: "waiting_input",
-	}}
+	})
 	transcript := &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
 		{Index: 0, Role: "system", Type: "tool_progress", Tool: "Read", Redacted: true},
 	}}
@@ -92,14 +92,15 @@ func TestAPIChatEventsFromSnapshotPendingAskUserSuppressesCompletion(t *testing.
 			Options:  []server.AskUserOptionDTO{{Label: "Alpha"}, {Label: "Beta"}},
 		}},
 	}
-	detail := server.SessionDetailDTO{
-		SessionSummaryDTO: server.SessionSummaryDTO{
+	detail := apiTestSessionDetailWith(
+		server.SessionSummaryDTO{
 			ID:        chatSessionID,
 			FeatureID: chatSessionID,
 			Status:    "WaitingHelp",
 		},
-		PendingControls: []server.ControlRequestDTO{askControl},
-	}
+		server.SessionDetailDTO{
+			PendingControls: []server.ControlRequestDTO{askControl},
+		})
 
 	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
 		Session:       active,
@@ -118,15 +119,16 @@ func TestAPIChatEventsFromSnapshotFailedWithoutTranscriptEmitsError(t *testing.T
 	t.Parallel()
 
 	active := newTestAPIChatSession()
-	detail := server.SessionDetailDTO{
-		SessionSummaryDTO: server.SessionSummaryDTO{
+	detail := apiTestSessionDetailWith(
+		server.SessionSummaryDTO{
 			ID:        chatSessionID,
 			FeatureID: chatSessionID,
 			Status:    "Failed",
 			TurnState: "failed",
 		},
-		SafeError: "process exited with code 1",
-	}
+		server.SessionDetailDTO{
+			SafeError: "process exited with code 1",
+		})
 
 	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
 		Session:       active,
@@ -156,11 +158,11 @@ func TestAPIChatAnswerEchoSuppressesLocalTranscriptEcho(t *testing.T) {
 
 	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
 		Session: active,
-		Detail: server.SessionDetailDTO{SessionSummaryDTO: server.SessionSummaryDTO{
+		Detail: apiTestSessionDetail(server.SessionSummaryDTO{
 			ID:        chatSessionID,
 			FeatureID: chatSessionID,
 			Status:    "Running",
-		}},
+		}),
 		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
 			{Index: 1, Role: "user", Type: "text", Text: "nothing", LocallyAppended: true},
 		}},

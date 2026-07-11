@@ -22,7 +22,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
@@ -60,122 +59,11 @@ const (
 	reviewCommentsFocusDetail
 )
 
-type ReviewCommentsActionMode string
-
 const (
-	ReviewCommentsActionAll      ReviewCommentsActionMode = "all"
-	ReviewCommentsActionIncluded ReviewCommentsActionMode = "included"
+	reviewCommentTypeReview     = "review"
+	reviewCommentTypeIssue      = "issue"
+	reviewCommentTypeReviewBody = "review_body"
 )
-
-type ReviewCommentsActionMsg struct {
-	FeatureID string
-	Mode      ReviewCommentsActionMode
-	Comments  []git.ReviewComment
-}
-
-// ReviewCommentsModel displays fetched PR review comments and lets the user
-// choose how to handle them.
-type ReviewCommentsModel struct {
-	featureID   string
-	featureSlug string
-	comments    []git.ReviewComment
-	browser     reviewCommentsBrowserModel
-	width       int
-	height      int
-}
-
-func NewReviewCommentsModel(featureID, slug string, comments []git.ReviewComment, width, height int) ReviewCommentsModel {
-	ordered := append([]git.ReviewComment(nil), comments...)
-	git.SortReviewCommentsChronologically(ordered)
-	browser := newReviewCommentsBrowserModel(slug, "", reviewCommentItemsFromGit(ordered), width, height)
-	return ReviewCommentsModel{
-		featureID:   featureID,
-		featureSlug: slug,
-		comments:    ordered,
-		browser:     browser,
-		width:       width,
-		height:      height,
-	}
-}
-
-func (m ReviewCommentsModel) Init() tea.Cmd {
-	return nil
-}
-
-func (m ReviewCommentsModel) Update(msg tea.Msg) (ReviewCommentsModel, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-		m.browser.resize(msg.Width, msg.Height)
-	case tea.KeyPressMsg:
-		switch {
-		case msg.Code == tea.KeyEnter:
-			included := m.includedComments()
-			if len(included) == 0 {
-				m.browser.status = "No comments included. Press space to include one, or Shift+A to address all."
-				return m, nil
-			}
-			return m, reviewCommentsActionCmd(m.featureID, ReviewCommentsActionIncluded, included)
-		case msg.Code == 'A' && msg.Text == "A":
-			return m, reviewCommentsActionCmd(m.featureID, ReviewCommentsActionAll, m.comments)
-		}
-		var cmd tea.Cmd
-		m.browser, cmd = m.browser.Update(msg)
-		return m, cmd
-	}
-	return m, nil
-}
-
-// WithSize returns a copy with updated dimensions.
-func (m ReviewCommentsModel) WithSize(width, height int) ReviewCommentsModel {
-	m.width = width
-	m.height = height
-	m.browser.resize(width, height)
-	return m
-}
-
-func (m ReviewCommentsModel) View() string {
-	return m.browser.View()
-}
-
-func (m ReviewCommentsModel) includedComments() []git.ReviewComment {
-	out := make([]git.ReviewComment, 0, len(m.comments))
-	for _, c := range m.comments {
-		if m.browser.included[c.ID] {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-func reviewCommentsActionCmd(featureID string, mode ReviewCommentsActionMode, comments []git.ReviewComment) tea.Cmd {
-	return func() tea.Msg {
-		return ReviewCommentsActionMsg{
-			FeatureID: featureID,
-			Mode:      mode,
-			Comments:  append([]git.ReviewComment(nil), comments...),
-		}
-	}
-}
-
-func reviewCommentItemsFromGit(comments []git.ReviewComment) []reviewCommentItem {
-	items := make([]reviewCommentItem, 0, len(comments))
-	for _, c := range comments {
-		items = append(items, reviewCommentItem{
-			ID:        c.ID,
-			Type:      c.Type,
-			RepoName:  c.RepoName,
-			Path:      c.Path,
-			Line:      c.Line,
-			Author:    c.User.Login,
-			Body:      c.Body,
-			DiffHunk:  c.DiffHunk,
-			CreatedAt: c.CreatedAt,
-		})
-	}
-	return items
-}
 
 func reviewCommentItemsFromDTO(comments []server.ReviewCommentDTO) []reviewCommentItem {
 	items := make([]reviewCommentItem, 0, len(comments))
@@ -721,9 +609,9 @@ func reviewCommentLocation(item reviewCommentItem) string {
 		return item.Path
 	}
 	switch item.Type {
-	case git.CommentTypeIssue:
+	case reviewCommentTypeIssue:
 		return "PR conversation"
-	case git.CommentTypeReviewBody:
+	case reviewCommentTypeReviewBody:
 		return "PR review"
 	default:
 		return strings.TrimSpace(item.Type)
@@ -732,11 +620,11 @@ func reviewCommentLocation(item reviewCommentItem) string {
 
 func reviewCommentTypeLabel(typ string) string {
 	switch typ {
-	case git.CommentTypeIssue:
+	case reviewCommentTypeIssue:
 		return "PR conversation"
-	case git.CommentTypeReviewBody:
+	case reviewCommentTypeReviewBody:
 		return "PR review"
-	case git.CommentTypeReview:
+	case reviewCommentTypeReview:
 		return "Inline review comment"
 	default:
 		if strings.TrimSpace(typ) == "" {

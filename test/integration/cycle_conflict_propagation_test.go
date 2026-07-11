@@ -45,9 +45,7 @@ import (
 //
 // Asserts: RepoB's cycle reaches `RepoCycles["repoB"]` removed (cycle
 // completed); RepoA's cycle is still present with `Status == "failed"` and a
-// non-empty error; `Feature.Status` stays StatusPublished (not StatusFailed);
-// `Orchestrator.StartRebase(featureID, "repoA")` then resumes the conflicting
-// repo through the rebase resume path.
+// non-empty error; `Feature.Status` stays StatusPublished (not StatusFailed).
 func TestCycleConflictPropagation_TweakConflict_OneRepoFailsAnotherSucceeds(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -226,23 +224,6 @@ func TestCycleConflictPropagation_TweakConflict_OneRepoFailsAnotherSucceeds(t *t
 		t.Errorf("RepoCycles[repoA].LastError empty — expected non-empty conflict error")
 	}
 
-	// 10. Confirm RepoA can be resumed via the existing rebase resume path:
-	// `Orchestrator.StartRebase(featureID, repoName)` is the renamed-in-Ring-6
-	// per-repo entry point and exists with the per-repo signature. The actual
-	// rebase will not complete cleanly without a human resolving the conflict
-	// in the worktree, but the entry-point signature must accept (featureID,
-	// repoName) and the call must dispatch (errors are acceptable here — what
-	// we are checking is that the resume path is reachable as a typed orchestrator
-	// call, not that the rebase itself succeeds without human intervention).
-	if err := orch.StartRebase(feat.ID, "repoA"); err == nil {
-		// Acceptable: orchestrator may treat the path as non-conflicting if
-		// fetch resolves it. We do not assert success/failure here — only
-		// that the per-repo entry point exists and is callable (the rename
-		// in Ring 6 from StartRebaseRepoCycle → StartRebase).
-		t.Logf("StartRebase repoA returned nil (rebase resume succeeded)")
-	} else {
-		t.Logf("StartRebase repoA returned err=%v (expected — manual conflict resolution required)", err)
-	}
 }
 
 // runGit runs `git <args>` in the given dir (or cwd if dir == ""). Fails the

@@ -19,11 +19,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -62,7 +61,7 @@ func SaveReviewCommentsForRepo(stateDir string, f *feature.Feature, repoName str
 		return fmt.Errorf("creating review-comments dir: %w", err)
 	}
 	data.Comments = append([]ports.ReviewComment(nil), data.Comments...)
-	sortReviewCommentsChronologically(data.Comments)
+	git.SortReviewCommentsChronologically(data.Comments)
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling review comments: %w", err)
@@ -170,7 +169,7 @@ func LoadAddressedIDsForRepo(stateDir string, f *feature.Feature, repoName strin
 // resolutionsPath is where the agent writes dispositions.
 func BuildReviewCommentsPlan(comments []ports.ReviewComment, prURL, mode, resolutionsPath string) string {
 	ordered := append([]ports.ReviewComment(nil), comments...)
-	sortReviewCommentsChronologically(ordered)
+	git.SortReviewCommentsChronologically(ordered)
 
 	var b strings.Builder
 
@@ -237,33 +236,4 @@ func BuildReviewCommentsPlan(comments []ports.ReviewComment, prURL, mode, resolu
 	b.WriteString("- Make targeted changes that directly address the feedback.\n")
 
 	return b.String()
-}
-
-func sortReviewCommentsChronologically(comments []ports.ReviewComment) {
-	sort.SliceStable(comments, func(i, j int) bool {
-		ti, iok := parseReviewCommentCreatedAt(comments[i].CreatedAt)
-		tj, jok := parseReviewCommentCreatedAt(comments[j].CreatedAt)
-		switch {
-		case iok && jok:
-			if !ti.Equal(tj) {
-				return ti.Before(tj)
-			}
-		case iok != jok:
-			return iok
-		case comments[i].CreatedAt != comments[j].CreatedAt:
-			return comments[i].CreatedAt < comments[j].CreatedAt
-		}
-		return comments[i].ID < comments[j].ID
-	})
-}
-
-func parseReviewCommentCreatedAt(value string) (time.Time, bool) {
-	if strings.TrimSpace(value) == "" {
-		return time.Time{}, false
-	}
-	t, err := time.Parse(time.RFC3339, value)
-	if err != nil {
-		return time.Time{}, false
-	}
-	return t, true
 }

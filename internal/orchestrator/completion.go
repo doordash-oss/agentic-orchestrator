@@ -211,7 +211,7 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 	if err != nil {
 		return err
 	}
-	repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, feature.PhaseKnowledgeBase, kbDir, repoName)
+	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhaseKnowledgeBase, kbDir, repoName)
 	if err != nil {
 		return fmt.Errorf("enforce knowledge base read-only repo guard: %w", err)
 	}
@@ -442,7 +442,7 @@ func (o *Orchestrator) onArtifactPhaseCompletedWithKey(
 	if err != nil {
 		return err
 	}
-	repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, input.Phase, phaseDir)
+	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, input.Phase, phaseDir)
 	if err != nil {
 		return fmt.Errorf("enforce %s read-only repo guard: %w", phaseKey, err)
 	}
@@ -625,7 +625,7 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 		return o.markFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	planDir := o.planReadOnlyGuardDir(f)
-	repoMutationViolations, err := o.enforceReadOnlyRepoMutations(context.Background(), f, feature.PhasePlan, planDir)
+	repoMutationViolations, err := agent.EnforceReadOnlyRepoMutations(context.Background(), o.deps.CmdRunner, f, feature.PhasePlan, planDir)
 	if err != nil {
 		return fmt.Errorf("enforce plan read-only repo guard: %w", err)
 	}
@@ -643,7 +643,7 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 	case "approved":
 		return o.onPlanApproved(featureID, f)
 	case "needs_human_review":
-		return o.onPlanNeedsReview(featureID, f)
+		return o.onPlanNeedsReview(featureID)
 	case "failed":
 		errMsg := result.LastError
 		if errMsg == "" {
@@ -784,9 +784,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 // explicit "I need a human" escalation should be honored. Failing the
 // feature here would discard a working plan over an exception path the
 // user can resolve in a few seconds.
-//
-// f is unused but retained for symmetry with the other completion handlers.
-func (o *Orchestrator) onPlanNeedsReview(featureID string, _ *feature.Feature) error {
+func (o *Orchestrator) onPlanNeedsReview(featureID string) error {
 	if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
 		return fmt.Errorf("mark needs plan review: %w", err)
 	}

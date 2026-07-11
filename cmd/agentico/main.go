@@ -1403,10 +1403,6 @@ func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.R
 	if starter == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
-	if req.Repo != "" || req.RebaseTarget != "" || req.ConflictFiles != nil {
-		resp.Result = "failed"
-		return resp, errors.New("rebase is feature-scoped")
-	}
 	if err := starter.StartFeatureRebase(featureID); err != nil {
 		resp.Result = "failed"
 		return resp, err
@@ -1613,10 +1609,6 @@ func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntim
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
-	if req.Repo != "" {
-		resp.Result = "unsupported"
-		return resp, errors.New("repo-scoped cleanup is not supported by the orchestrator adapter")
-	}
 	switch target {
 	case "worktrees":
 		if err := t.orch.CleanWorktree(featureID); err != nil {
@@ -1664,20 +1656,6 @@ func actionConflictError(err error) error {
 				"branch":         publishConflict.Branch,
 				"rebase_target":  publishConflict.RebaseTarget,
 				"conflict_files": []string{},
-			},
-		}
-	}
-	var rebaseConflict *orchestrator.RebaseConflictError
-	if errors.As(err, &rebaseConflict) {
-		return &serverruntime.ActionConflictError{
-			Err:     err,
-			Message: "rebase conflict",
-			Target: map[string]any{
-				"conflict":       "rebase",
-				"repo":           rebaseConflict.RepoName,
-				"branch":         rebaseConflict.Branch,
-				"rebase_target":  rebaseConflict.RebaseTarget,
-				"conflict_files": append([]string(nil), rebaseConflict.ConflictFiles...),
 			},
 		}
 	}

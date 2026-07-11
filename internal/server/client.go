@@ -76,11 +76,6 @@ type TextQuery struct {
 	Limit  int64 `json:"limit,omitempty"`
 }
 
-type OutputQuery struct {
-	From  int64 `json:"from,omitempty"`
-	Limit int64 `json:"limit,omitempty"`
-}
-
 func NewClient(opts ClientOptions) (*Client, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(opts.BaseURL), "/")
 	if baseURL == "" {
@@ -131,12 +126,6 @@ func (c *Client) RuntimeConfig(ctx context.Context) (RuntimeConfigResponse, erro
 	return out, err
 }
 
-func (c *Client) WorkspaceBrowse(ctx context.Context, query WorkspaceBrowseQuery) (WorkspaceBrowseResponse, error) {
-	var out WorkspaceBrowseResponse
-	err := c.getJSON(ctx, "/api/v1/workspace/browse", workspaceBrowseValues(query), &out)
-	return out, err
-}
-
 func (c *Client) FeatureConfig(ctx context.Context, featureID string) (FeatureConfigResponse, error) {
 	var out FeatureConfigResponse
 	err := c.getJSON(ctx, "/api/v1/features/"+pathSegment(featureID)+"/config", nil, &out)
@@ -176,12 +165,6 @@ func (c *Client) SessionDetail(ctx context.Context, sessionID string) (SessionDe
 func (c *Client) Transcript(ctx context.Context, sessionID string, query CursorQuery) (TranscriptResponse, error) {
 	var out TranscriptResponse
 	err := c.getJSON(ctx, "/api/v1/sessions/"+pathSegment(sessionID)+"/transcript", transcriptValues(query), &out)
-	return out, err
-}
-
-func (c *Client) SessionOutput(ctx context.Context, sessionID string, query OutputQuery) (SessionOutputResponse, error) {
-	var out SessionOutputResponse
-	err := c.getJSON(ctx, "/api/v1/sessions/"+pathSegment(sessionID)+"/output", outputValues(query), &out)
 	return out, err
 }
 
@@ -236,12 +219,6 @@ func (c *Client) ResumeFeature(ctx context.Context, featureID string) (FeatureSt
 func (c *Client) StopFeature(ctx context.Context, featureID string) (FeatureStopResponse, error) {
 	var out FeatureStopResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/stop", nil, map[string]any{}, &out, true)
-	return out, err
-}
-
-func (c *Client) InterruptFeature(ctx context.Context, featureID string) (FeatureStopResponse, error) {
-	var out FeatureStopResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/interrupt", nil, map[string]any{}, &out, true)
 	return out, err
 }
 
@@ -488,28 +465,6 @@ func transcriptValues(query CursorQuery) url.Values {
 	}
 	if query.Limit > 0 {
 		values.Set("limit", strconv.Itoa(query.Limit))
-	}
-	return values
-}
-
-func outputValues(query OutputQuery) url.Values {
-	values := url.Values{}
-	if query.From > 0 {
-		values.Set("from", strconv.FormatInt(query.From, 10))
-	}
-	if query.Limit > 0 {
-		values.Set("limit", strconv.FormatInt(query.Limit, 10))
-	}
-	return values
-}
-
-func workspaceBrowseValues(query WorkspaceBrowseQuery) url.Values {
-	values := url.Values{}
-	if query.Path != "" {
-		values.Set("path", query.Path)
-	}
-	if query.ShowHidden {
-		values.Set("show_hidden", "true")
 	}
 	return values
 }

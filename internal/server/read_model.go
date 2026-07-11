@@ -51,25 +51,23 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 			}
 		}
 	}
-	detail := FeatureDetailDTO{
-		FeatureSummary: summarizeFeature(f),
-		Description:    safeDisplayText(f.Description, 500),
-		Summary:        safeDisplayText(f.Summary, 500),
-		Pipeline:       string(f.Pipeline),
-		Models:         f.Models,
-		ActiveRun:      &active,
-		HistoricalRuns: history,
-		RepoStatus:     h.repoStatusDTOs(f),
-		Timing:         timingDTO(f),
-		Cost:           costDTO(f),
-		ReviewGate: ReviewGateDTO{
-			ReviewingGate:     f.ReviewingGate,
-			ReviewFixing:      f.ReviewFixing,
-			ValidatingPlan:    f.ValidatingPlan,
-			ValidatorStatuses: copyStringMap(f.ValidatorStatuses),
-		},
-		Actions: actionCatalogDTOs(f),
+	detail := featureDetailFromSummary(summarizeFeature(f))
+	detail.Description = safeDisplayText(f.Description, 500)
+	detail.Summary = safeDisplayText(f.Summary, 500)
+	detail.Pipeline = string(f.Pipeline)
+	detail.Models = f.Models
+	detail.ActiveRunDetail = &active
+	detail.HistoricalRuns = history
+	detail.RepoStatus = h.repoStatusDTOs(f)
+	detail.Timing = timingDTO(f)
+	detail.Cost = costDTO(f)
+	detail.ReviewGate = ReviewGateDTO{
+		ReviewingGate:     f.ReviewingGate,
+		ReviewFixing:      f.ReviewFixing,
+		ValidatingPlan:    f.ValidatingPlan,
+		ValidatorStatuses: copyStringMap(f.ValidatorStatuses),
 	}
+	detail.Actions = actionCatalogDTOs(f)
 	detail.Cycle = activeCycleDTO(f)
 	if f.HasTerminalFailure() {
 		detail.Failure = &FailureDTO{
@@ -81,6 +79,24 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		detail.NeedUserInput = &NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: "feature", Iteration: f.CurrentIteration}
 	}
 	return detail
+}
+
+func featureDetailFromSummary(summary FeatureSummary) FeatureDetailDTO {
+	return FeatureDetailDTO{
+		ID:           summary.ID,
+		Name:         summary.Name,
+		Slug:         summary.Slug,
+		Status:       summary.Status,
+		CurrentPhase: summary.CurrentPhase,
+		Cycle:        summary.Cycle,
+		ActiveRun:    summary.ActiveRun,
+		RunCount:     summary.RunCount,
+		Repos:        summary.Repos,
+		CreatedAt:    summary.CreatedAt,
+		Checkpoints:  summary.Checkpoints,
+		Progress:     summary.Progress,
+		Warnings:     summary.Warnings,
+	}
 }
 
 func activeCycleDTO(f *feature.Feature) *CycleDTO {

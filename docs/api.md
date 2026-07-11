@@ -43,9 +43,9 @@ Event envelopes include `seq`, `epoch`, `kind`, `resource`,
 
 Bulk agent output is not delivered through the global event stream.
 
-- Backfill with `GET /api/v1/sessions/{session_id}/output?from=<offset>`.
-- Tail with `GET /api/v1/sessions/{session_id}/output/stream?from=<offset>`.
+- Backfill with `GET /api/v1/sessions/{session_id}/output?from=<row_index>`.
+- Tail with `GET /api/v1/sessions/{session_id}/output/stream?from=<row_index>`.
 
-Output stream event IDs are byte offsets. Reconnect using `Last-Event-ID` or
-the next offset from the previous response. The global stream only emits
+Output stream event IDs are transcript row indexes. Reconnect using
+`Last-Event-ID` or the next row index from the previous response. The global stream only emits
 throttled `session.output.activity` signals for liveness and size.

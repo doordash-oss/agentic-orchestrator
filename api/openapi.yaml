@@ -981,8 +981,10 @@ components:
             session.output.activity events.
     SessionOutputChunk:
       type: object
-      required: [index]
+      required: [api_version, index]
       properties:
+        api_version:
+          type: string
         session_id:
           type: string
         index:
@@ -991,7 +993,7 @@ components:
             Transcript row index — the same index space /transcript and
             session.output.activity's record_count use. Not a byte offset.
         message:
-          type: object
+          $ref: "#/components/schemas/TranscriptMessage"
           description: A TranscriptMessageDTO row (see the /transcript response).
         done:
           type: boolean
@@ -1021,16 +1023,6 @@ components:
               type: boolean
             done:
               type: boolean
-    # JSONResponse is the untyped fallback for response schemas not yet
-    # converted to a typed shape. Tracked remainder (convert opportunistically,
-    # not required for any specific task):
-    #   ActionResponse, ArtifactListResponse, FeatureConfigResponse,
-    #   HealthResponse, LivePreviewResponse, ModelCatalogResponse,
-    #   PermissionSnapshotResponse, PromptSnapshotResponse,
-    #   RecoverySnapshotResponse, RuntimeConfigResponse, TextContentResponse,
-    #   TranscriptResponse, WorkspaceBrowseResponse.
-    # FeatureListResponse, FeatureDetailResponse, SessionListResponse, and
-    # SessionDetailResponse were converted 2026-07-09.
     JSONResponse:
       type: object
       required: [api_version]
@@ -1041,7 +1033,25 @@ components:
           $ref: "#/components/schemas/ResponseMeta"
       additionalProperties: true
     HealthResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [status, runtime, launch_policy, started_at, owner, server_time]
+          properties:
+            status:
+              type: string
+            runtime:
+              $ref: "#/components/schemas/RuntimeIdentity"
+            launch_policy:
+              $ref: "#/components/schemas/LaunchPolicy"
+            started_at:
+              type: string
+              format: date-time
+            owner:
+              $ref: "#/components/schemas/Owner"
+            server_time:
+              type: string
+              format: date-time
     FeatureListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1065,23 +1075,192 @@ components:
             feature:
               $ref: "#/components/schemas/FeatureDetail"
     FeatureConfigResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature_id, current, defaults, original, publishability]
+          properties:
+            feature_id:
+              type: string
+            current:
+              $ref: "#/components/schemas/FeatureConfig"
+            defaults:
+              $ref: "#/components/schemas/FeatureConfig"
+            original:
+              $ref: "#/components/schemas/FeatureConfig"
+            publishability:
+              $ref: "#/components/schemas/Publishability"
+              x-go-name: Publish
     RuntimeConfigResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required:
+            - runtime
+            - model_defaults
+            - feature_defaults
+            - repos
+            - ui
+            - notifications
+            - observability
+            - providers
+          properties:
+            runtime:
+              $ref: "#/components/schemas/RuntimeIdentity"
+            model_defaults:
+              $ref: "#/components/schemas/ModelDefaults"
+              x-go-name: Defaults
+            feature_defaults:
+              $ref: "#/components/schemas/FeatureDefaults"
+            repos:
+              type: array
+              items:
+                $ref: "#/components/schemas/ConfigRepo"
+            workspace_roots:
+              type: array
+              items:
+                type: string
+            ui:
+              x-go-type: config.UIConfig
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/config
+                name: config
+            notifications:
+              $ref: "#/components/schemas/NotificationConfig"
+            observability:
+              $ref: "#/components/schemas/Observability"
+            providers:
+              type: array
+              items:
+                type: string
     WorkspaceBrowseResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [path, is_git_repo, child_repo_count, entries]
+          properties:
+            path:
+              type: string
+            is_git_repo:
+              type: boolean
+            child_repo_count:
+              type: integer
+            entries:
+              type: array
+              items:
+                $ref: "#/components/schemas/WorkspaceBrowseEntry"
     ModelCatalogResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [provider_order, provider_models, phase_defaults, phase_provider_models]
+          properties:
+            provider_order:
+              type: array
+              items:
+                type: string
+            provider_models:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Model"
+            phase_defaults:
+              $ref: "#/components/schemas/ModelDefaults"
+            phase_provider_models:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties:
+                  type: array
+                  items:
+                    type: string
     PromptSnapshotResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [ask_user_questions, help_queue, need_user_inputs]
+          properties:
+            ask_user_questions:
+              type: array
+              items:
+                $ref: "#/components/schemas/ControlRequest"
+            help_queue:
+              type: array
+              items:
+                $ref: "#/components/schemas/HelpQueue"
+            need_user_inputs:
+              type: array
+              items:
+                $ref: "#/components/schemas/NeedUserInputGate"
     PermissionSnapshotResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [requests]
+          properties:
+            requests:
+              type: array
+              items:
+                $ref: "#/components/schemas/ControlRequest"
     ArtifactListResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [artifacts]
+          properties:
+            artifacts:
+              type: array
+              items:
+                $ref: "#/components/schemas/Artifact"
     TextContentResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [id, offset, limit, size, text, truncated]
+          properties:
+            id:
+              type: string
+            offset:
+              type: integer
+              format: int64
+            limit:
+              type: integer
+              format: int64
+            size:
+              type: integer
+              format: int64
+            text:
+              type: string
+            truncated:
+              type: boolean
     LivePreviewResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [feature, activity, context, timing, cost, transcript]
+          properties:
+            feature:
+              $ref: "#/components/schemas/FeatureSummary"
+            session:
+              $ref: "#/components/schemas/SessionSummary"
+              x-go-type-skip-optional-pointer: false
+            activity:
+              type: string
+            attention:
+              type: array
+              items:
+                $ref: "#/components/schemas/ControlRequest"
+            context:
+              $ref: "#/components/schemas/Context"
+            timing:
+              $ref: "#/components/schemas/Timing"
+            cost:
+              $ref: "#/components/schemas/Cost"
+            transcript:
+              type: array
+              items:
+                $ref: "#/components/schemas/TranscriptMessage"
     SessionListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -1101,11 +1280,781 @@ components:
             session:
               $ref: "#/components/schemas/SessionDetail"
     TranscriptResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [cursor, messages]
+          properties:
+            cursor:
+              $ref: "#/components/schemas/Cursor"
+            messages:
+              type: array
+              items:
+                $ref: "#/components/schemas/TranscriptMessage"
     RecoverySnapshotResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [snapshot_id, items]
+          properties:
+            snapshot_id:
+              type: string
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/RecoveryItem"
+    ActionBaseResponse:
       $ref: "#/components/schemas/JSONResponse"
     ActionResponse:
-      $ref: "#/components/schemas/JSONResponse"
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          properties:
+            create_feature_response:
+              $ref: "#/components/schemas/CreateFeatureResponse"
+            feature_start_response:
+              $ref: "#/components/schemas/FeatureStartResponse"
+            feature_stop_response:
+              $ref: "#/components/schemas/FeatureStopResponse"
+            feature_restart_response:
+              $ref: "#/components/schemas/FeatureRestartResponse"
+            review_decision_response:
+              $ref: "#/components/schemas/ReviewDecisionResponse"
+            feature_config_update_response:
+              $ref: "#/components/schemas/FeatureConfigUpdateResponse"
+            need_user_input_decision_response:
+              $ref: "#/components/schemas/NeedUserInputDecisionResponse"
+            need_user_input_draft_response:
+              $ref: "#/components/schemas/NeedUserInputDraftResponse"
+            input_notifications_toggle_response:
+              $ref: "#/components/schemas/InputNotificationsToggleResponse"
+            permission_answer_response:
+              $ref: "#/components/schemas/PermissionAnswerResponse"
+            ask_user_answer_response:
+              $ref: "#/components/schemas/AskUserAnswerResponse"
+            help_send_response:
+              $ref: "#/components/schemas/HelpSendResponse"
+            chat_start_response:
+              $ref: "#/components/schemas/ChatStartResponse"
+            runtime_config_update_response:
+              $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
+            publish_feature_response:
+              $ref: "#/components/schemas/PublishFeatureResponse"
+            publish_description_response:
+              $ref: "#/components/schemas/PublishDescriptionResponse"
+            merge_feature_response:
+              $ref: "#/components/schemas/MergeFeatureResponse"
+            rewind_feature_response:
+              $ref: "#/components/schemas/RewindFeatureResponse"
+            retry_feature_response:
+              $ref: "#/components/schemas/RetryFeatureResponse"
+            rebase_start_response:
+              $ref: "#/components/schemas/RebaseStartResponse"
+            review_comments_fetch_response:
+              $ref: "#/components/schemas/ReviewCommentsFetchResponse"
+            review_comments_start_response:
+              $ref: "#/components/schemas/ReviewCommentsStartResponse"
+            tweak_start_response:
+              $ref: "#/components/schemas/TweakStartResponse"
+            tweak_finish_response:
+              $ref: "#/components/schemas/TweakFinishResponse"
+            refactor_start_response:
+              $ref: "#/components/schemas/RefactorStartResponse"
+            refactor_restart_response:
+              $ref: "#/components/schemas/RefactorRestartResponse"
+            mark_done_response:
+              $ref: "#/components/schemas/MarkDoneResponse"
+            cleanup_feature_response:
+              $ref: "#/components/schemas/CleanupFeatureResponse"
+            delete_feature_response:
+              $ref: "#/components/schemas/DeleteFeatureResponse"
+            recovery_action_response:
+              $ref: "#/components/schemas/RecoveryActionResponse"
+            shutdown_response:
+              $ref: "#/components/schemas/ShutdownResponse"
+    CreateFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    FeatureStartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          properties:
+            phase:
+              type: string
+            session_ids:
+              type: array
+              x-go-name: SessionIDs
+              items:
+                type: string
+    FeatureStopResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    FeatureRestartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          properties:
+            phase:
+              type: string
+            dispatch:
+              type: string
+            repo_cycle_count:
+              type: integer
+            refactor_count:
+              type: integer
+            session_ids:
+              type: array
+              x-go-name: SessionIDs
+              items:
+                type: string
+    ReviewDecisionResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [decision]
+          properties:
+            decision:
+              type: string
+    FeatureConfigUpdateResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    NeedUserInputDecisionResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [decision]
+          properties:
+            decision:
+              type: string
+    NeedUserInputDraftResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    InputNotificationsToggleResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [muted]
+          properties:
+            muted:
+              type: boolean
+    PermissionAnswerResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [session_id, request_id, decision, result]
+          properties:
+            session_id:
+              type: string
+            request_id:
+              type: string
+            decision:
+              type: string
+            result:
+              type: string
+    AskUserAnswerResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [session_id, request_id, result]
+          properties:
+            session_id:
+              type: string
+            request_id:
+              type: string
+            result:
+              type: string
+    HelpSendResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [feature_id, session_id, result]
+          properties:
+            feature_id:
+              type: string
+            session_id:
+              type: string
+            result:
+              type: string
+    ChatStartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [session_id, result]
+          properties:
+            session_id:
+              type: string
+            result:
+              type: string
+    RuntimeConfigUpdateResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/ActionResult"
+    PublishFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    PublishDescriptionResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [title, body]
+          properties:
+            title:
+              type: string
+            body:
+              type: string
+    MergeFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    RewindFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          properties:
+            target_phase:
+              type: string
+            effective_phase:
+              type: string
+            roadmap_phase:
+              type: integer
+            warning_count:
+              type: integer
+            upgrade_pipeline:
+              type: string
+    RetryFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    RebaseStartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [cycle_type]
+          properties:
+            cycle_type:
+              type: string
+            session_id:
+              type: string
+    ReviewComment:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+        repo_name:
+          type: string
+        path:
+          type: string
+        line:
+          type: integer
+        body:
+          type: string
+        user_login:
+          type: string
+        created_at:
+          type: string
+        diff_hunk:
+          type: string
+        in_reply_to_id:
+          type: integer
+          x-go-name: InReplyTo
+    ReviewCommentsFetchResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - type: object
+          required: [feature_id, repo, comments]
+          properties:
+            feature_id:
+              type: string
+            repo:
+              type: string
+            mode:
+              type: string
+            comments:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReviewComment"
+    ReviewCommentsStartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [repo, mode, cycle_type]
+          properties:
+            repo:
+              type: string
+            mode:
+              type: string
+            cycle_type:
+              type: string
+            comment_count:
+              type: integer
+            session_id:
+              type: string
+            source:
+              type: string
+    TweakStartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [cycle_type]
+          properties:
+            cycle_type:
+              type: string
+            session_id:
+              type: string
+    TweakFinishResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [decision]
+          properties:
+            decision:
+              type: string
+            had_changes:
+              type: boolean
+    RefactorStartResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          required: [cycle_type]
+          properties:
+            repo:
+              type: string
+            cycle_type:
+              type: string
+            pipeline:
+              type: string
+            session_id:
+              type: string
+    RefactorRestartResponse:
+      allOf:
+        - $ref: "#/components/schemas/RefactorStartResponse"
+    MarkDoneResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    CleanupFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+        - type: object
+          properties:
+            target:
+              type: string
+    DeleteFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    RecoveryActionResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/ActionResult"
+    ShutdownResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/ActionResult"
+    ActionResult:
+      type: object
+      required: [result]
+      properties:
+        result:
+          type: string
+    FeatureActionResult:
+      allOf:
+        - $ref: "#/components/schemas/ActionResult"
+        - type: object
+          required: [feature_id]
+          properties:
+            feature_id:
+              type: string
+
+    RuntimeIdentity:
+      type: object
+      required: [runtime_dir, state_dir, config_path]
+      properties:
+        runtime_dir:
+          type: string
+        state_dir:
+          type: string
+        config_path:
+          type: string
+          x-go-name: Config
+    LaunchPolicy:
+      type: object
+      required: [resolved, providers, dangerously_skip_permissions]
+      properties:
+        resolved:
+          type: boolean
+        providers:
+          type: array
+          items:
+            type: string
+        dangerously_skip_permissions:
+          type: boolean
+    Owner:
+      type: object
+      required: [pid, started_at]
+      properties:
+        pid:
+          type: integer
+          x-go-name: PID
+        pgid:
+          type: integer
+          x-go-name: PGID
+        started_at:
+          type: string
+          format: date-time
+        version:
+          type: string
+    ConfigRepo:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        pipeline_gates:
+          type: object
+          additionalProperties:
+            x-go-type: config.Checkpoints
+            x-go-type-import:
+              path: github.com/doordash-oss/agentic-orchestrator/internal/config
+              name: config
+    FeatureDefaults:
+      type: object
+      required: [models, checkpoints]
+      properties:
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        pipeline_preferences:
+          type: object
+          additionalProperties:
+            x-go-type: config.PipelinePreference
+            x-go-type-import:
+              path: github.com/doordash-oss/agentic-orchestrator/internal/config
+              name: config
+        inquireness:
+          type: string
+        pipeline:
+          type: string
+        checkpoints:
+          x-go-type: config.Checkpoints
+          x-go-type-import:
+            path: github.com/doordash-oss/agentic-orchestrator/internal/config
+            name: config
+    NotificationConfig:
+      type: object
+      required: [mute_feature_input]
+      properties:
+        mute_feature_input:
+          type: boolean
+    Observability:
+      type: object
+      required: [events, otel_enabled]
+      properties:
+        events:
+          type: boolean
+        otel_enabled:
+          type: boolean
+          x-go-name: OTelEnabled
+        otel_service_name:
+          type: string
+          x-go-name: OTelServiceName
+    FeatureConfig:
+      type: object
+      required: [models, inquireness, checkpoints]
+      properties:
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        inquireness:
+          type: string
+        checkpoints:
+          $ref: "#/components/schemas/Checkpoints"
+        pipeline:
+          type: string
+    Publishability:
+      type: object
+      required: [manual_publish, repos]
+      properties:
+        manual_publish:
+          type: boolean
+        repos:
+          type: object
+          additionalProperties:
+            type: boolean
+    WorkspaceBrowseEntry:
+      type: object
+      required: [name, path, is_git_repo]
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        is_git_repo:
+          type: boolean
+        child_repo_count:
+          type: integer
+    Model:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          x-go-name: ID
+        display_name:
+          type: string
+        context_window:
+          type: integer
+        aliases:
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+    HelpQueue:
+      type: object
+      required: [feature_id, question, pending]
+      properties:
+        feature_id:
+          type: string
+        question:
+          type: string
+        pending:
+          type: boolean
+        time:
+          type: string
+          format: date-time
+    Artifact:
+      type: object
+      required: [id, type, category, run_number, content_available]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        category:
+          type: string
+        run_number:
+          type: integer
+        phase:
+          type: string
+        iteration:
+          type: integer
+        path:
+          type: string
+        size:
+          type: integer
+          format: int64
+        modified_at:
+          type: string
+          format: date-time
+        content_available:
+          type: boolean
+    Context:
+      type: object
+      required: [percentage]
+      properties:
+        percentage:
+          type: integer
+    RecoveryItem:
+      type: object
+      required: [key, feature_id, process_alive, default_action, allowed_actions]
+      properties:
+        key:
+          type: string
+        feature_id:
+          type: string
+        feature_name:
+          type: string
+        repo_name:
+          type: string
+        phase:
+          type: string
+        iteration:
+          type: integer
+        pid:
+          type: integer
+          x-go-name: PID
+        process_alive:
+          type: boolean
+        tweak:
+          type: boolean
+        default_action:
+          type: string
+        allowed_actions:
+          type: array
+          items:
+            type: string
+    Setup:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+        attempt:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        completed_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        latest_log_path:
+          type: string
+        tasks:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/SetupTask"
+        task_order:
+          type: array
+          items:
+            type: string
+        last_error:
+          type: string
+    SetupTask:
+      type: object
+      required: [key, kind, status]
+      properties:
+        key:
+          type: string
+        kind:
+          type: string
+        label:
+          type: string
+        repo:
+          type: string
+        status:
+          type: string
+        path:
+          type: string
+        source_path:
+          type: string
+        branch:
+          type: string
+        start_point:
+          type: string
+        use_current_branch:
+          type: boolean
+        attempt:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        ended_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+        last_error:
+          type: string
+    ToolCall:
+      type: object
+      properties:
+        summary:
+          type: string
+        prompt:
+          type: string
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+          x-go-name: ID
+        tool_use_id:
+          type: string
+          x-go-name: ToolUseID
+        description:
+          type: string
+        task_type:
+          type: string
+        prompt:
+          type: string
+        last_tool_name:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        output_file:
+          type: string
+    FileChange:
+      type: object
+      properties:
+        path:
+          type: string
+        old_path:
+          type: string
+        operation:
+          type: string
+        detail:
+          type: string
+        added_lines:
+          type: integer
+        removed_lines:
+          type: integer
+        has_diff_patch:
+          type: boolean
+    TranscriptMessage:
+      type: object
+      required: [index, role, type]
+      properties:
+        index:
+          type: integer
+        block_index:
+          type: integer
+        role:
+          type: string
+        type:
+          type: string
+        text:
+          type: string
+        tool:
+          type: string
+        status:
+          type: string
+        redacted:
+          type: boolean
+        locally_appended:
+          type: boolean
+        auto_picked:
+          type: boolean
+        auto_pick_question:
+          type: string
+        auto_pick_confidence:
+          type: number
+          format: double
+        file_change:
+          $ref: "#/components/schemas/FileChange"
+          x-go-type-skip-optional-pointer: false
+        tool_call:
+          $ref: "#/components/schemas/ToolCall"
+          x-go-type-skip-optional-pointer: false
+        task:
+          $ref: "#/components/schemas/Task"
+          x-go-type-skip-optional-pointer: false
 
     # --- Feature/session payload types backing FeatureListResponse,
     # FeatureDetailResponse, SessionListResponse, SessionDetailResponse.
@@ -1215,6 +2164,10 @@ components:
           items:
             $ref: "#/components/schemas/Warning"
     ModelDefaults:
+      x-go-type: config.ModelConfig
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/config
+        name: config
       type: object
       properties:
         inquiry:
@@ -1327,9 +2280,11 @@ components:
         started_at:
           type: string
           format: date-time
+          x-go-type-skip-optional-pointer: false
         sealed_at:
           type: string
           format: date-time
+          x-go-type-skip-optional-pointer: false
         seal_reason:
           type: string
         current_phase:
@@ -1353,12 +2308,8 @@ components:
         has_need_user_gate:
           type: boolean
         setup:
-          type: object
-          description: >-
-            SetupDTO — untyped for now (see the tracked JSONResponse
-            remainder note above; nested setup/task detail is not yet
-            typed).
-          additionalProperties: true
+          $ref: "#/components/schemas/Setup"
+          x-go-type-skip-optional-pointer: false
     ActionScope:
       type: object
       required: [type]
@@ -1436,6 +2387,7 @@ components:
               $ref: "#/components/schemas/ModelDefaults"
             active_run_detail:
               $ref: "#/components/schemas/RunSummary"
+              x-go-type-skip-optional-pointer: false
             historical_runs:
               type: array
               items:
@@ -1446,6 +2398,7 @@ components:
                 $ref: "#/components/schemas/RepoStatus"
             cycle:
               $ref: "#/components/schemas/Cycle"
+              x-go-type-skip-optional-pointer: false
             timing:
               $ref: "#/components/schemas/Timing"
             cost:
@@ -1454,8 +2407,10 @@ components:
               $ref: "#/components/schemas/ReviewGate"
             failure:
               $ref: "#/components/schemas/Failure"
+              x-go-type-skip-optional-pointer: false
             need_user_input:
               $ref: "#/components/schemas/NeedUserInputGate"
+              x-go-type-skip-optional-pointer: false
             actions:
               type: array
               items:

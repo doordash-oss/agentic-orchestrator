@@ -496,10 +496,9 @@ func authRequiredPath(path string) bool {
 // sseTokenFallbackAllowed reports whether the given path may authenticate via
 // the access_token query parameter instead of an Authorization header.
 //
-// Any request/access logging added to this server MUST call
-// redactedRequestURL before writing a URL for one of these paths — the
-// access_token query parameter is a bearer credential and must never be
-// persisted to a log, trace span, or crash report.
+// Any request/access logging added to this server must avoid writing raw URLs
+// for these paths because the access_token query parameter is a bearer
+// credential and must never be persisted to a log, trace span, or crash report.
 func sseTokenFallbackAllowed(path string) bool {
 	return path == "/api/v1/events" || strings.HasSuffix(path, "/output/stream")
 }

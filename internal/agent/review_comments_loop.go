@@ -56,6 +56,7 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -433,7 +434,7 @@ func BuildAggregatedReviewCommentsPlan(targets []ReviewCommentsRepoTarget, resol
 	sorted := append([]ReviewCommentsRepoTarget(nil), targets...)
 	for i := range sorted {
 		sorted[i].Comments = append([]ports.ReviewComment(nil), sorted[i].Comments...)
-		sortReviewCommentsChronologically(sorted[i].Comments)
+		git.SortReviewCommentsChronologically(sorted[i].Comments)
 	}
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].RepoName < sorted[j].RepoName })
 

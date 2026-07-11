@@ -189,11 +189,7 @@ type RewindFeatureRequest struct {
 	UpgradePipeline feature.PipelineProfile `json:"upgrade_pipeline,omitempty"`
 }
 
-type RebaseActionRequest struct {
-	Repo          string   `json:"repo,omitempty"`
-	RebaseTarget  string   `json:"rebase_target,omitempty"`
-	ConflictFiles []string `json:"conflict_files,omitempty"`
-}
+type RebaseActionRequest struct{}
 
 type ReviewCommentsFetchRequest struct {
 	Repo string `json:"repo"`
@@ -222,16 +218,80 @@ type RefactorActionRequest struct {
 
 type CleanupActionRequest struct {
 	Target string `json:"target,omitempty"`
-	Repo   string `json:"repo,omitempty"`
 }
 
-type actionResponse interface {
-	setAPIVersion()
-}
-
-func writeActionJSON(w http.ResponseWriter, status int, resp actionResponse) {
-	resp.setAPIVersion()
+func writeActionJSON(w http.ResponseWriter, status int, resp any) {
+	setActionAPIVersion(resp)
 	writeJSON(w, status, resp)
+}
+
+func setActionAPIVersion(resp any) {
+	switch r := resp.(type) {
+	case *CreateFeatureResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *FeatureStartResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *FeatureStopResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *FeatureRestartResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *ReviewDecisionResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *FeatureConfigUpdateResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *NeedUserInputDecisionResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *NeedUserInputDraftResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *InputNotificationsToggleResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *PermissionAnswerResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *AskUserAnswerResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *HelpSendResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *ChatStartResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *RuntimeConfigUpdateResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *PublishFeatureResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *PublishDescriptionResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *MergeFeatureResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *RewindFeatureResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *RetryFeatureResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *RebaseStartResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *ReviewCommentsStartResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *TweakStartResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *TweakFinishResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *RefactorStartResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *MarkDoneResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *CleanupFeatureResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *DeleteFeatureResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *RecoveryActionResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	case *ShutdownResponse:
+		setStringIfEmpty(&r.APIVersion, APIVersion)
+	}
+}
+
+func setStringIfEmpty(target *string, value string) {
+	if *target == "" {
+		*target = value
+	}
 }
 
 func writeMutationError(w http.ResponseWriter, err error) {
@@ -661,7 +721,12 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return false
 		}
 		var req RebaseActionRequest
-		if !decodeRebaseActionRequest(w, r, &req) {
+		fields, ok := decodeMutationObject(w, r)
+		if !ok {
+			return true
+		}
+		if len(fields) > 0 {
+			writeAPIError(w, http.StatusBadRequest, "bad_request", "rebase request body must be an empty object", nil)
 			return true
 		}
 		resp, err := h.mutations.StartRebase(featureID, req)
@@ -1159,25 +1224,6 @@ func validateRepoList(w http.ResponseWriter, repos []string, required bool) bool
 	return true
 }
 
-func decodeRebaseActionRequest(w http.ResponseWriter, r *http.Request, out *RebaseActionRequest) bool {
-	fields, ok := decodeMutationObject(w, r)
-	if !ok {
-		return false
-	}
-	for _, name := range []string{"repo", "rebase_target", "conflict_files"} {
-		if _, exists := fields[name]; exists {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "rebase is feature-scoped; repo and conflict inputs are internal state", nil)
-			return false
-		}
-	}
-	if len(fields) > 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid JSON request", nil)
-		return false
-	}
-	*out = RebaseActionRequest{}
-	return true
-}
-
 func validateRepoName(w http.ResponseWriter, repo string, required bool) bool {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
@@ -1249,13 +1295,6 @@ func validateRefactorRequest(w http.ResponseWriter, req RefactorActionRequest) b
 }
 
 func validateCleanupRequest(w http.ResponseWriter, req CleanupActionRequest) bool {
-	if !validateRepoName(w, req.Repo, false) {
-		return false
-	}
-	if strings.TrimSpace(req.Repo) != "" {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "repo-scoped cleanup is not supported", nil)
-		return false
-	}
 	switch strings.ToLower(strings.TrimSpace(req.Target)) {
 	case "", "worktrees", "cycles":
 		return true

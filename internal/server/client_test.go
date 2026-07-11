@@ -42,7 +42,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 		case "GET /api/v1/features":
 			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion, Features: []FeatureSummary{{ID: "feat-1", Name: "Client cutover"}}})
 		case "GET /api/v1/features/feat-1":
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: FeatureDetailDTO{FeatureSummary: FeatureSummary{ID: "feat-1", Name: "Client cutover"}}})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1", Name: "Client cutover"})})
 		case "GET /api/v1/config/runtime":
 			writeJSON(w, http.StatusOK, RuntimeConfigResponse{APIVersion: APIVersion, Runtime: RuntimeIdentity{StateDir: "/runtime/features"}})
 		case "GET /api/v1/features/feat-1/config":
@@ -56,7 +56,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 		case "GET /api/v1/sessions":
 			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{{ID: "sess-1", FeatureID: "feat-1"}}})
 		case "GET /api/v1/sessions/sess-1":
-			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1"}}})
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1"}, CursorDTO{})})
 		case "GET /api/v1/sessions/sess-1/transcript":
 			if got := r.URL.Query().Get("offset"); got != "2" {
 				t.Errorf("transcript offset = %q, want 2", got)
@@ -95,7 +95,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if req.Name != "New feature" {
 				t.Errorf("create request name = %q, want New feature", req.Name)
 			}
-			writeJSON(w, http.StatusCreated, CreateFeatureResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, FeatureID: "feat-created", Result: "created"})
+			writeJSON(w, http.StatusCreated, CreateFeatureResponse{APIVersion: APIVersion, FeatureID: "feat-created", Result: "created"})
 		case "POST /api/v1/features/feat-1/actions/resume":
 			sawResumeTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
 			var req map[string]any
@@ -105,7 +105,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if len(req) != 0 {
 				t.Errorf("resume request = %+v, want empty JSON object", req)
 			}
-			writeJSON(w, http.StatusOK, FeatureStartResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, FeatureID: "feat-1", Result: "started"})
+			writeJSON(w, http.StatusOK, FeatureStartResponse{APIVersion: APIVersion, FeatureID: "feat-1", Result: "started"})
 		case "POST /api/v1/recovery/actions":
 			sawRecoveryTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
 			var req RecoveryActionRequest
@@ -115,7 +115,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if req.SnapshotID != "recovery-snapshot-1" || req.Actions["feat-1:api"] != "resume" {
 				t.Errorf("recovery request = %+v, want snapshot action resume", req)
 			}
-			writeJSON(w, http.StatusOK, RecoveryActionResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, Result: "recovered"})
+			writeJSON(w, http.StatusOK, RecoveryActionResponse{APIVersion: APIVersion, Result: "recovered"})
 		case "POST /api/v1/prompts/chat/start":
 			sawChatTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
 			var req ChatStartRequest
@@ -125,7 +125,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if req.Message != "What is running?" {
 				t.Errorf("chat request message = %q, want prompt", req.Message)
 			}
-			writeJSON(w, http.StatusOK, ChatStartResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, SessionID: "chat-1", Result: "started"})
+			writeJSON(w, http.StatusOK, ChatStartResponse{APIVersion: APIVersion, SessionID: "chat-1", Result: "started"})
 		case "POST /api/v1/features/feat-1/actions/publish/description":
 			sawPublishDescriptionTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
 			var req PublishDescriptionRequest
@@ -135,7 +135,7 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if req.Model != "sonnet" || req.FeatureName != "Client cutover" {
 				t.Errorf("publish description request = %+v, want model and feature context", req)
 			}
-			writeJSON(w, http.StatusOK, PublishDescriptionResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, FeatureID: "feat-1", Title: "Client cutover", Body: "AI body", Result: "generated"})
+			writeJSON(w, http.StatusOK, PublishDescriptionResponse{APIVersion: APIVersion, FeatureID: "feat-1", Title: "Client cutover", Body: "AI body", Result: "generated"})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -298,9 +298,8 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 				t.Fatalf("update request = %+v, want inquireness always pipeline large", req)
 			}
 			writeJSON(w, http.StatusOK, FeatureConfigUpdateResponse{
-				ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
-				FeatureID:          "feat-1",
-				Result:             "updated",
+				APIVersion: APIVersion, FeatureID: "feat-1",
+				Result: "updated",
 			})
 		}))
 		defer srv.Close()
@@ -371,8 +370,7 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 			t.Fatalf("workspace roots request = %+v, want supplied roots", req.WorkspaceRoots)
 		}
 		writeJSON(w, http.StatusOK, RuntimeConfigUpdateResponse{
-			ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
-			Result:             "updated",
+			APIVersion: APIVersion, Result: "updated",
 		})
 	}))
 	defer srv.Close()
@@ -391,38 +389,6 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 	}
 }
 
-func TestClientWorkspaceBrowseSendsQuery(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/workspace/browse" {
-			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
-		}
-		if got := r.URL.Query().Get("path"); got != "/workspace" {
-			t.Fatalf("path query = %q, want /workspace", got)
-		}
-		if got := r.URL.Query().Get("show_hidden"); got != "true" {
-			t.Fatalf("show_hidden query = %q, want true", got)
-		}
-		writeJSON(w, http.StatusOK, WorkspaceBrowseResponse{
-			APIVersion: APIVersion,
-			Path:       "/workspace",
-			Entries:    []WorkspaceBrowseEntryDTO{{Name: "api", Path: "/workspace/api", IsGitRepo: true}},
-		})
-	}))
-	defer srv.Close()
-
-	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-	resp, err := client.WorkspaceBrowse(context.Background(), WorkspaceBrowseQuery{Path: "/workspace", ShowHidden: true})
-	if err != nil {
-		t.Fatalf("WorkspaceBrowse() error = %v", err)
-	}
-	if resp.Path != "/workspace" || len(resp.Entries) != 1 || resp.Entries[0].Name != "api" {
-		t.Fatalf("WorkspaceBrowse() = %+v, want workspace api entry", resp)
-	}
-}
-
 func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 	var sawTrustedHeader bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -438,12 +404,11 @@ func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 			t.Fatalf("rewind request = %+v, want inquire roadmap phase 2 large upgrade", req)
 		}
 		writeJSON(w, http.StatusOK, RewindFeatureResponse{
-			ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
-			FeatureID:          "feat-1",
-			Result:             "rewound",
-			TargetPhase:        "inquire",
-			RoadmapPhase:       2,
-			UpgradePipeline:    "large",
+			APIVersion: APIVersion, FeatureID: "feat-1",
+			Result:          "rewound",
+			TargetPhase:     "inquire",
+			RoadmapPhase:    2,
+			UpgradePipeline: "large",
 		})
 	}))
 	defer srv.Close()
@@ -483,8 +448,7 @@ func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
 			t.Fatalf("shutdown request = %+v, want empty JSON object", req)
 		}
 		writeJSON(w, http.StatusOK, ShutdownResponse{
-			ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion},
-			Result:             "shutdown_scheduled",
+			APIVersion: APIVersion, Result: "shutdown_scheduled",
 		})
 	}))
 	defer srv.Close()
@@ -586,32 +550,6 @@ func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 	}
 }
 
-func TestClientSessionOutputUsesFromOffset(t *testing.T) {
-	t.Parallel()
-
-	var sawFrom string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/sessions/sess-1/output" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		sawFrom = r.URL.Query().Get("from")
-		writeJSON(w, http.StatusOK, SessionOutputResponse{APIVersion: APIVersion, SessionID: "sess-1", Offset: 7, NextOffset: 12, Data: "hello"})
-	}))
-	defer srv.Close()
-	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
-	if err != nil {
-		t.Fatalf("NewClient() error = %v", err)
-	}
-
-	resp, err := client.SessionOutput(context.Background(), "sess-1", OutputQuery{From: 7, Limit: 5})
-	if err != nil {
-		t.Fatalf("SessionOutput() error = %v", err)
-	}
-	if sawFrom != "7" || resp.Data != "hello" || resp.NextOffset != 12 {
-		t.Fatalf("SessionOutput sawFrom=%q resp=%+v, want from 7 and hello chunk", sawFrom, resp)
-	}
-}
-
 func TestClientSendsBearerTokenOnReadsMutationsAndEvents(t *testing.T) {
 	var sawReadAuth, sawMutationAuth, sawEventAuth atomic.Bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -624,7 +562,7 @@ func TestClientSendsBearerTokenOnReadsMutationsAndEvents(t *testing.T) {
 			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion})
 		case "POST /api/v1/shutdown":
 			sawMutationAuth.Store(true)
-			writeJSON(w, http.StatusOK, ShutdownResponse{ActionResponseMeta: ActionResponseMeta{APIVersion: APIVersion}, Result: "ok"})
+			writeJSON(w, http.StatusOK, ShutdownResponse{APIVersion: APIVersion, Result: "ok"})
 		case "GET /api/v1/events":
 			sawEventAuth.Store(true)
 			w.Header().Set("Content-Type", "text/event-stream")
@@ -674,7 +612,7 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 			flusher.Flush()
 			<-r.Context().Done()
 		case "/api/v1/features/feat-1":
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: FeatureDetailDTO{FeatureSummary: FeatureSummary{ID: "feat-1"}}})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1"})})
 		case "/api/v1/features/feat-1/live-preview":
 			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}})
 		default:
@@ -746,7 +684,7 @@ func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testin
 			if r.Header.Get("X-Test-Client") == "snapshot" {
 				sawSnapshotClient.Store(true)
 			}
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: FeatureDetailDTO{FeatureSummary: FeatureSummary{ID: "feat-1"}}})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1"})})
 		case "/api/v1/features/feat-1/live-preview":
 			if r.Header.Get("X-Test-Client") == "snapshot" {
 				sawSnapshotClient.Store(true)
@@ -810,10 +748,10 @@ func TestClientFetchRefreshSnapshotIgnoresSessionOutputActivity(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/sessions/sess-1":
 			sawSessionDetail = true
-			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
-				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1"},
-				TranscriptCursor:  CursorDTO{Total: 53, Start: 0, End: 53},
-			}})
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
+				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1"},
+				CursorDTO{Total: 53, Start: 0, End: 53},
+			)})
 		case "GET /api/v1/sessions/sess-1/transcript":
 			sawTranscript = true
 			if got := r.URL.Query().Get("offset"); got != "3" {
@@ -866,9 +804,10 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *tes
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/sessions/sess-1":
 			sawSessionDetail = true
-			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
-				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"},
-			}})
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
+				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"},
+				CursorDTO{},
+			)})
 		case "GET /api/v1/prompts":
 			sawPrompts = true
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
@@ -978,10 +917,10 @@ func TestClientFetchRefreshSnapshotHydratesLivePreviewSessionForFeatureScopedSes
 			})
 		case "GET /api/v1/sessions/sess-1":
 			sawSessionDetail = true
-			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
-				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
-				TranscriptCursor:  CursorDTO{Total: 7, Start: 0, End: 7},
-			}})
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
+				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+				CursorDTO{Total: 7, Start: 0, End: 7},
+			)})
 		case "GET /api/v1/sessions/sess-1/transcript":
 			sawTranscript = true
 			writeJSON(w, http.StatusOK, TranscriptResponse{
@@ -1093,10 +1032,10 @@ func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/sessions/sess-1":
 			sawSessionDetail = true
-			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
-				SessionSummaryDTO: SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Done"},
-				TranscriptCursor:  CursorDTO{Total: 0, Start: 0, End: 0},
-			}})
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
+				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Done"},
+				CursorDTO{Total: 0, Start: 0, End: 0},
+			)})
 		case "GET /api/v1/prompts":
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
 		case "GET /api/v1/features/feat-1/live-preview":
@@ -1108,9 +1047,7 @@ func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.
 			})
 		case "GET /api/v1/features/feat-1":
 			sawFeatureDetail = true
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: FeatureDetailDTO{
-				FeatureSummary: FeatureSummary{ID: "feat-1", Status: "CodeReady", CurrentPhase: "publish"},
-			}})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1", Status: "CodeReady", CurrentPhase: "publish"})})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -1147,10 +1084,10 @@ func TestClientFetchRefreshSnapshotSkipsLivePreviewForChatSession(t *testing.T) 
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/sessions/__chat__":
 			sawSessionDetail = true
-			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: SessionDetailDTO{
-				SessionSummaryDTO: SessionSummaryDTO{ID: "__chat__", FeatureID: "__chat__"},
-				TranscriptCursor:  CursorDTO{Total: 2, Start: 0, End: 2},
-			}})
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
+				SessionSummaryDTO{ID: "__chat__", FeatureID: "__chat__"},
+				CursorDTO{Total: 2, Start: 0, End: 2},
+			)})
 		case "GET /api/v1/sessions/__chat__/transcript":
 			sawTranscript = true
 			writeJSON(w, http.StatusOK, TranscriptResponse{
@@ -1254,6 +1191,16 @@ func waitRefreshSignal(t *testing.T, signals <-chan RefreshSignal) RefreshSignal
 		t.Fatal("timed out waiting for refresh signal")
 	}
 	return RefreshSignal{}
+}
+
+func testFeatureDetail(summary FeatureSummary) FeatureDetailDTO {
+	return featureDetailFromSummary(summary)
+}
+
+func testSessionDetail(summary SessionSummaryDTO, cursor CursorDTO) SessionDetailDTO {
+	detail := sessionDetailFromSummary(summary)
+	detail.TranscriptCursor = cursor
+	return detail
 }
 
 func taggedHTTPClient(tag string) *http.Client {

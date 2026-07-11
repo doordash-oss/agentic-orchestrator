@@ -19,6 +19,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
 func repoRoot(t *testing.T) string {
@@ -47,6 +50,20 @@ func readFileOrFatal(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(b)
+}
+
+func attachModelFromSession(sess session.SessionView, width, height int) AttachModel {
+	repoName := sess.PermCacheScope()
+	if repoName == "" {
+		repoName = sess.RepoName()
+	}
+	tabs := []repoTab{{
+		repoName: repoName,
+		kind:     ports.KindPhase,
+		sess:     sess,
+		status:   statusPending,
+	}}
+	return NewAttachModel(tabs, 0, sess.FeatureID(), width, height)
 }
 
 type noopWriteCloser struct{}

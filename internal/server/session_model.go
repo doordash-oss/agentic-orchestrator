@@ -57,19 +57,17 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
 		return
 	}
-	detail := SessionDetailDTO{
-		SessionSummaryDTO: sessionSummaryDTO(sess),
-		TranscriptCursor: CursorDTO{
-			Total: sess.MessageLog().Len(),
-			Start: 0,
-			End:   sess.MessageLog().Len(),
-		},
-		PendingControls: pendingControlDTOs(sess),
-		InitialPrompt:   safeDisplayText(sess.InitialPrompt(), 2000),
-		CanAttach:       sess.IsActive(),
-		LogAvailable:    fileExists(sess.LogFilePath()),
-		SafeError:       safeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240),
+	detail := sessionDetailFromSummary(sessionSummaryDTO(sess))
+	detail.TranscriptCursor = CursorDTO{
+		Total: sess.MessageLog().Len(),
+		Start: 0,
+		End:   sess.MessageLog().Len(),
 	}
+	detail.PendingControls = pendingControlDTOs(sess)
+	detail.InitialPrompt = safeDisplayText(sess.InitialPrompt(), 2000)
+	detail.CanAttach = sess.IsActive()
+	detail.LogAvailable = fileExists(sess.LogFilePath())
+	detail.SafeError = safeDisplayText(firstNonEmpty(sess.ErrorDetail(), sess.ExitCodeDetail()), 240)
 	revision := revisionForAny(detail)
 	h.writeRevisionedJSON(w, r, revision, SessionDetailResponse{
 		APIVersion: APIVersion,
@@ -338,6 +336,25 @@ func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {
 			OutputTokens: usage.OutputTokens,
 			CostUSD:      cost,
 		},
+	}
+}
+
+func sessionDetailFromSummary(summary SessionSummaryDTO) SessionDetailDTO {
+	return SessionDetailDTO{
+		ID:         summary.ID,
+		FeatureID:  summary.FeatureID,
+		Phase:      summary.Phase,
+		Repo:       summary.Repo,
+		Kind:       summary.Kind,
+		Label:      summary.Label,
+		Provider:   summary.Provider,
+		Model:      summary.Model,
+		Status:     summary.Status,
+		TurnState:  summary.TurnState,
+		StartedAt:  summary.StartedAt,
+		Iteration:  summary.Iteration,
+		ContextPct: summary.ContextPct,
+		Usage:      summary.Usage,
 	}
 }
 

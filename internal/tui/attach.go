@@ -587,30 +587,10 @@ func NewScrollRateLimiter() func(tea.Model, tea.Msg) tea.Msg {
 	}
 }
 
-// attachModelFromSession builds a single-tab AttachModel from one session.
-// Used by callers that don't have a precomputed []repoTab list (e.g.,
-// the legacy attachToSession entry point and ~87 test fixtures). The
-// resulting model behaves identically to today's classic single-session
-// attach because renderTabBar collapses to "" when len(repoTabs) == 1.
-func attachModelFromSession(sess session.SessionView, width, height int) AttachModel {
-	repoName := sess.PermCacheScope()
-	if repoName == "" {
-		repoName = sess.RepoName()
-	}
-	tabs := []repoTab{{
-		repoName: repoName,
-		kind:     ports.KindPhase,
-		sess:     sess,
-		status:   statusPending,
-	}}
-	return NewAttachModel(tabs, 0, sess.FeatureID(), width, height)
-}
-
 // NewAttachModel creates an attach model with optional tab bar; renderTabBar
 // collapses to empty when len(tabs) <= 1, so a single-entry tabs slice produces
 // a model that renders byte-for-byte identical to the classic single-session
-// attach view. Callers without a precomputed []repoTab can use
-// attachModelFromSession to build a 1-tab list from a session.
+// attach view.
 func NewAttachModel(tabs []repoTab, initialIdx int, featureID string, width, height int) AttachModel {
 	activeSess := tabs[initialIdx].sess
 

@@ -35,31 +35,6 @@ type HarnessRebaseRepoOutcome struct {
 	Branch        string
 }
 
-// RebaseConflictError is returned when a rebase encounters a merge conflict
-// that needs interactive resolution. RebaseTarget carries the ref the rebase
-// was being applied onto (e.g. "master", "main") so the conflict-resolution
-// plan can name the correct base. ConflictFiles lists the files left with
-// unmerged state in the worktree.
-type RebaseConflictError struct {
-	FeatureID     string
-	RepoName      string
-	Branch        string
-	RebaseTarget  string
-	ConflictFiles []string
-}
-
-// Error formats the rebase-conflict sentinel.
-func (e *RebaseConflictError) Error() string {
-	return fmt.Sprintf("rebase: conflict in feature %s repo %s on branch %s",
-		e.FeatureID, e.RepoName, e.Branch)
-}
-
-// Is reports whether target is the rebase-conflict sentinel.
-func (e *RebaseConflictError) Is(target error) bool {
-	_, ok := target.(*RebaseConflictError)
-	return ok
-}
-
 // ErrRebaseIncomplete is returned when CompleteRebase observes a worktree
 // still mid-rebase (rebase-merge / rebase-apply dir present). The caller
 // must not transition the feature past the rebase cycle — the branch
@@ -93,23 +68,7 @@ func (o *Orchestrator) resolveRebaseTarget(f *feature.Feature, repo *feature.Fea
 }
 
 func (o *Orchestrator) runHarnessRebaseRepo(f *feature.Feature, repo feature.FeatureRepo) HarnessRebaseRepoOutcome {
-	worktreeDir := repo.WorktreePath
-	if worktreeDir == "" {
-		worktreeDir = repo.Path
-	}
-
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
-
-	out := HarnessRebaseRepoOutcome{
-		RepoName:     repo.Name,
-		RebaseTarget: o.resolveRebaseTarget(f, &repo),
-		Publishable:  repo.Publishable == nil || *repo.Publishable,
-		WorktreePath: worktreeDir,
-		Branch:       branch,
-	}
+	out := o.harnessRebaseOutcomeForRepo(f, repo)
 	if out.RebaseTarget == "" {
 		out.Status = feature.RebaseRepoStatusFailed
 		out.Err = errors.New("rebase target not found")
@@ -122,13 +81,13 @@ func (o *Orchestrator) runHarnessRebaseRepo(f *feature.Feature, repo feature.Fea
 	}
 
 	if out.Publishable {
-		if err := o.deps.Rebaser.Fetch(worktreeDir); err != nil {
+		if err := o.deps.Rebaser.Fetch(out.WorktreePath); err != nil {
 			out.Status = feature.RebaseRepoStatusFailed
 			out.Err = fmt.Errorf("fetch failed: %w", err)
 			return out
 		}
 
-		behind, err := o.deps.Rebaser.IsBehindRemote(worktreeDir, out.RebaseTarget)
+		behind, err := o.deps.Rebaser.IsBehindRemote(out.WorktreePath, out.RebaseTarget)
 		if err != nil {
 			out.Status = feature.RebaseRepoStatusFailed
 			out.Err = fmt.Errorf("behind remote check failed: %w", err)
@@ -139,10 +98,10 @@ func (o *Orchestrator) runHarnessRebaseRepo(f *feature.Feature, repo feature.Fea
 			return out
 		}
 
-		return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(worktreeDir, "origin/"+out.RebaseTarget))
+		return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(out.WorktreePath, "origin/"+out.RebaseTarget))
 	}
 
-	behind, err := o.deps.Rebaser.IsBehindLocal(worktreeDir, out.RebaseTarget)
+	behind, err := o.deps.Rebaser.IsBehindLocal(out.WorktreePath, out.RebaseTarget)
 	if err != nil {
 		out.Status = feature.RebaseRepoStatusFailed
 		out.Err = fmt.Errorf("behind local check failed: %w", err)
@@ -153,7 +112,7 @@ func (o *Orchestrator) runHarnessRebaseRepo(f *feature.Feature, repo feature.Fea
 		return out
 	}
 
-	return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(worktreeDir, out.RebaseTarget))
+	return harnessOutcomeFromRebaseResult(out, o.deps.Rebaser.RebaseOnto(out.WorktreePath, out.RebaseTarget))
 }
 
 func harnessOutcomeFromRebaseResult(out HarnessRebaseRepoOutcome, result ports.RebaseResult) HarnessRebaseRepoOutcome {
@@ -179,103 +138,4 @@ func harnessOutcomeFromRebaseResult(out HarnessRebaseRepoOutcome, result ports.R
 		out.Err = fmt.Errorf("unknown rebase outcome %d", result.Outcome)
 		return out
 	}
-}
-
-// StartRebase performs a per-repo rebase for a published feature. The
-// per-repo cycle is recorded via Lifecycle.StartRepoCycle elsewhere; this
-// method runs the fetch/rebase/push sequence scoped to one repo and returns
-// a *RebaseConflictError on merge conflict so callers can launch the
-// conflict-resolution loop.
-func (o *Orchestrator) StartRebase(featureID, repoName string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("rebase-repo load feature: %w", err)
-	}
-
-	var repo *feature.FeatureRepo
-	for i := range f.Repos {
-		if f.Repos[i].Name == repoName {
-			repo = &f.Repos[i]
-			break
-		}
-	}
-	if repo == nil {
-		return fmt.Errorf("repo %s not found", repoName)
-	}
-
-	worktreeDir := repo.WorktreePath
-	if worktreeDir == "" {
-		worktreeDir = repo.Path
-	}
-
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
-
-	if f.IsPublishable() {
-		// Remote rebase: fetch + rebase onto origin/<base> + force push.
-		if err := o.deps.Rebaser.Fetch(worktreeDir); err != nil {
-			return fmt.Errorf("rebase-repo fetch failed: %w", err)
-		}
-
-		rebaseTarget := o.resolveRebaseTarget(f, repo)
-
-		behind, _ := o.deps.Rebaser.IsBehindRemote(worktreeDir, rebaseTarget)
-		if !behind {
-			return fmt.Errorf("%s already up to date with %s", repoName, rebaseTarget)
-		}
-
-		result := o.deps.Rebaser.RebaseOnto(worktreeDir, "origin/"+rebaseTarget)
-		switch result.Outcome {
-		case ports.RebaseConflict:
-			return &RebaseConflictError{
-				FeatureID:     featureID,
-				RepoName:      repoName,
-				Branch:        branch,
-				RebaseTarget:  rebaseTarget,
-				ConflictFiles: result.ConflictFiles,
-			}
-		case ports.RebaseFailed:
-			if result.Err != nil {
-				return fmt.Errorf("rebase-repo onto origin/%s: %w", rebaseTarget, result.Err)
-			}
-			return fmt.Errorf("rebase-repo onto origin/%s failed", rebaseTarget)
-		}
-
-		if err := o.deps.Rebaser.ForcePush(worktreeDir, branch); err != nil {
-			return fmt.Errorf("rebase-repo force push failed: %w", err)
-		}
-		return nil
-	}
-
-	// Local rebase: rebase onto local base branch (no fetch/push).
-	rebaseTarget := repo.BaseBranch
-	if rebaseTarget == "" && o.deps.Branch != nil {
-		rebaseTarget, _ = o.deps.Branch.DefaultBranch(repo.Path)
-	}
-
-	behind, _ := o.deps.Rebaser.IsBehindLocal(worktreeDir, rebaseTarget)
-	if !behind {
-		return fmt.Errorf("%s already up to date with %s", repoName, rebaseTarget)
-	}
-
-	result := o.deps.Rebaser.RebaseOnto(worktreeDir, rebaseTarget)
-	switch result.Outcome {
-	case ports.RebaseConflict:
-		return &RebaseConflictError{
-			FeatureID:     featureID,
-			RepoName:      repoName,
-			Branch:        branch,
-			RebaseTarget:  rebaseTarget,
-			ConflictFiles: result.ConflictFiles,
-		}
-	case ports.RebaseFailed:
-		if result.Err != nil {
-			return fmt.Errorf("rebase-repo onto %s: %w", rebaseTarget, result.Err)
-		}
-		return fmt.Errorf("rebase-repo onto %s failed", rebaseTarget)
-	}
-
-	return nil
 }

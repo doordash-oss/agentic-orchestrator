@@ -15,21 +15,12 @@
 package orchestrator
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
-
-func (o *Orchestrator) recordReadOnlyRepoBaseline(ctx context.Context, f *feature.Feature, phaseDir string, repoNames ...string) error {
-	return agent.RecordReadOnlyRepoBaseline(ctx, o.deps.CmdRunner, f, phaseDir, repoNames...)
-}
-
-func (o *Orchestrator) enforceReadOnlyRepoMutations(ctx context.Context, f *feature.Feature, phase feature.Phase, phaseDir string, repoNames ...string) ([]agent.ProtocolViolation, error) {
-	return agent.EnforceReadOnlyRepoMutations(ctx, o.deps.CmdRunner, f, phase, phaseDir, repoNames...)
-}
 
 func (o *Orchestrator) artifactReadOnlyGuardDir(f *feature.Feature, phaseKey string) string {
 	baseDir := o.stateDir()

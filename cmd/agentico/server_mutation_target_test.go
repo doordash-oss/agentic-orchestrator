@@ -222,34 +222,11 @@ func TestServerMutationTargetStartRebaseStartsFeatureRebasePromptly(t *testing.T
 	if resp.FeatureID != "feat-rebase" || resp.Result != "started" || resp.CycleType != string(feature.CycleRebase) {
 		t.Fatalf("StartRebase response = %+v, want started feature rebase", resp)
 	}
-	if resp.Repo != "" || resp.RebaseTarget != "" || len(resp.ConflictFiles) != 0 || resp.SessionID != "" {
-		t.Fatalf("StartRebase response leaked repo/conflict fields: %+v", resp)
+	if resp.SessionID != "" {
+		t.Fatalf("StartRebase response leaked session field: %+v", resp)
 	}
 	if got := strings.Join(starter.featureIDs, ","); got != "feat-rebase" {
 		t.Fatalf("StartFeatureRebase calls = %q, want feat-rebase", got)
-	}
-}
-
-func TestServerMutationTargetStartRebaseRejectsInternalInputs(t *testing.T) {
-	for _, req := range []serverruntime.RebaseActionRequest{
-		{Repo: "agentic"},
-		{RebaseTarget: "main"},
-		{ConflictFiles: []string{"internal/server/mutation.go"}},
-		{ConflictFiles: []string{}},
-	} {
-		starter := &fakeFeatureRebaseStarter{}
-		target := serverMutationTarget{rebaseStarter: starter}
-
-		resp, err := target.StartRebase("feat-rebase", req)
-		if err == nil || !strings.Contains(err.Error(), "rebase is feature-scoped") {
-			t.Fatalf("StartRebase(%+v) error = %v, want feature-scoped rejection", req, err)
-		}
-		if resp.Result != "failed" {
-			t.Fatalf("StartRebase(%+v) result = %q, want failed", req, resp.Result)
-		}
-		if len(starter.featureIDs) != 0 {
-			t.Fatalf("StartFeatureRebase called for rejected request: %v", starter.featureIDs)
-		}
 	}
 }
 
@@ -1610,36 +1587,6 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 			t.Fatalf("Load deleted feature error = nil; want missing feature")
 		}
 	})
-}
-
-func TestServerMutationTargetActionConflictErrorWrapsRebaseFailure(t *testing.T) {
-	err := &orchestrator.RebaseConflictError{
-		FeatureID:     "feat-rebase",
-		RepoName:      "repo-a",
-		Branch:        "feature/rebase",
-		RebaseTarget:  "main",
-		ConflictFiles: []string{"a.go", "b.go"},
-	}
-	wrapped := actionConflictError(err)
-
-	var rebaseConflict *orchestrator.RebaseConflictError
-	if !errors.As(wrapped, &rebaseConflict) {
-		t.Fatalf("wrapped error = %T %v; want RebaseConflictError", wrapped, wrapped)
-	}
-	var actionConflict *serverruntime.ActionConflictError
-	if !errors.As(wrapped, &actionConflict) {
-		t.Fatalf("wrapped error = %T %v; want ActionConflictError", wrapped, wrapped)
-	}
-	assertTarget(t, actionConflict.Target, map[string]any{
-		"conflict":      "rebase",
-		"repo":          "repo-a",
-		"branch":        "feature/rebase",
-		"rebase_target": "main",
-	})
-	files, ok := actionConflict.Target["conflict_files"].([]string)
-	if !ok || !reflect.DeepEqual(files, []string{"a.go", "b.go"}) {
-		t.Fatalf("conflict_files = %#v; want a.go,b.go", actionConflict.Target["conflict_files"])
-	}
 }
 
 func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manager, *feature.Store, *feature.Feature) {

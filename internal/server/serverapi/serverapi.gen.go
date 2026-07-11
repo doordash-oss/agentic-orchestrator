@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	config "github.com/doordash-oss/agentic-orchestrator/internal/config"
 )
 
 const (
@@ -586,6 +588,9 @@ type Action struct {
 	Scope           ActionScope            `json:"scope"`
 }
 
+// ActionBaseResponse defines model for ActionBaseResponse.
+type ActionBaseResponse = JSONResponse
+
 // ActionDisabledReason defines model for ActionDisabledReason.
 type ActionDisabledReason struct {
 	Code    string `json:"code"`
@@ -602,7 +607,47 @@ type ActionInput struct {
 }
 
 // ActionResponse defines model for ActionResponse.
-type ActionResponse = JSONResponse
+type ActionResponse struct {
+	APIVersion                       string                           `json:"api_version"`
+	AskUserAnswerResponse            AskUserAnswerResponse            `json:"ask_user_answer_response,omitempty"`
+	ChatStartResponse                ChatStartResponse                `json:"chat_start_response,omitempty"`
+	CleanupFeatureResponse           CleanupFeatureResponse           `json:"cleanup_feature_response,omitempty"`
+	CreateFeatureResponse            CreateFeatureResponse            `json:"create_feature_response,omitempty"`
+	DeleteFeatureResponse            DeleteFeatureResponse            `json:"delete_feature_response,omitempty"`
+	FeatureConfigUpdateResponse      FeatureConfigUpdateResponse      `json:"feature_config_update_response,omitempty"`
+	FeatureRestartResponse           FeatureRestartResponse           `json:"feature_restart_response,omitempty"`
+	FeatureStartResponse             FeatureStartResponse             `json:"feature_start_response,omitempty"`
+	FeatureStopResponse              FeatureStopResponse              `json:"feature_stop_response,omitempty"`
+	HelpSendResponse                 HelpSendResponse                 `json:"help_send_response,omitempty"`
+	InputNotificationsToggleResponse InputNotificationsToggleResponse `json:"input_notifications_toggle_response,omitempty"`
+	MarkDoneResponse                 MarkDoneResponse                 `json:"mark_done_response,omitempty"`
+	MergeFeatureResponse             MergeFeatureResponse             `json:"merge_feature_response,omitempty"`
+	Meta                             ResponseMeta                     `json:"meta,omitempty"`
+	NeedUserInputDecisionResponse    NeedUserInputDecisionResponse    `json:"need_user_input_decision_response,omitempty"`
+	NeedUserInputDraftResponse       NeedUserInputDraftResponse       `json:"need_user_input_draft_response,omitempty"`
+	PermissionAnswerResponse         PermissionAnswerResponse         `json:"permission_answer_response,omitempty"`
+	PublishDescriptionResponse       PublishDescriptionResponse       `json:"publish_description_response,omitempty"`
+	PublishFeatureResponse           PublishFeatureResponse           `json:"publish_feature_response,omitempty"`
+	RebaseStartResponse              RebaseStartResponse              `json:"rebase_start_response,omitempty"`
+	RecoveryActionResponse           RecoveryActionResponse           `json:"recovery_action_response,omitempty"`
+	RefactorRestartResponse          RefactorRestartResponse          `json:"refactor_restart_response,omitempty"`
+	RefactorStartResponse            RefactorStartResponse            `json:"refactor_start_response,omitempty"`
+	RetryFeatureResponse             RetryFeatureResponse             `json:"retry_feature_response,omitempty"`
+	ReviewCommentsFetchResponse      ReviewCommentsFetchResponse      `json:"review_comments_fetch_response,omitempty"`
+	ReviewCommentsStartResponse      ReviewCommentsStartResponse      `json:"review_comments_start_response,omitempty"`
+	ReviewDecisionResponse           ReviewDecisionResponse           `json:"review_decision_response,omitempty"`
+	RewindFeatureResponse            RewindFeatureResponse            `json:"rewind_feature_response,omitempty"`
+	RuntimeConfigUpdateResponse      RuntimeConfigUpdateResponse      `json:"runtime_config_update_response,omitempty"`
+	ShutdownResponse                 ShutdownResponse                 `json:"shutdown_response,omitempty"`
+	TweakFinishResponse              TweakFinishResponse              `json:"tweak_finish_response,omitempty"`
+	TweakStartResponse               TweakStartResponse               `json:"tweak_start_response,omitempty"`
+	AdditionalProperties             map[string]interface{}           `json:"-"`
+}
+
+// ActionResult defines model for ActionResult.
+type ActionResult struct {
+	Result string `json:"result"`
+}
 
 // ActionScope defines model for ActionScope.
 type ActionScope struct {
@@ -611,8 +656,37 @@ type ActionScope struct {
 	Type          string `json:"type"`
 }
 
+// Artifact defines model for Artifact.
+type Artifact struct {
+	Category         string    `json:"category"`
+	ContentAvailable bool      `json:"content_available"`
+	ID               string    `json:"id"`
+	Iteration        int       `json:"iteration,omitempty"`
+	ModifiedAt       time.Time `json:"modified_at,omitempty"`
+	Path             string    `json:"path,omitempty"`
+	Phase            string    `json:"phase,omitempty"`
+	RunNumber        int       `json:"run_number"`
+	Size             int64     `json:"size,omitempty"`
+	Type             string    `json:"type"`
+}
+
 // ArtifactListResponse defines model for ArtifactListResponse.
-type ArtifactListResponse = JSONResponse
+type ArtifactListResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Artifacts            []Artifact             `json:"artifacts"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// AskUserAnswerResponse defines model for AskUserAnswerResponse.
+type AskUserAnswerResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	RequestID            string                 `json:"request_id"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // AskUserOption defines model for AskUserOption.
 type AskUserOption struct {
@@ -629,6 +703,15 @@ type AskUserQuestion struct {
 	Question    string          `json:"question,omitempty"`
 }
 
+// ChatStartResponse defines model for ChatStartResponse.
+type ChatStartResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
 // Checkpoints defines model for Checkpoints.
 type Checkpoints struct {
 	DesignReview    bool `json:"design_review"`
@@ -638,6 +721,28 @@ type Checkpoints struct {
 	PhasePlanReview bool `json:"phase_plan_review"`
 	ResearchReview  bool `json:"research_review"`
 	RoadmapReview   bool `json:"roadmap_review"`
+}
+
+// CleanupFeatureResponse defines model for CleanupFeatureResponse.
+type CleanupFeatureResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	Target               string                 `json:"target,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ConfigRepo defines model for ConfigRepo.
+type ConfigRepo struct {
+	Name          string                        `json:"name"`
+	Path          string                        `json:"path,omitempty"`
+	PipelineGates map[string]config.Checkpoints `json:"pipeline_gates,omitempty"`
+}
+
+// Context defines model for Context.
+type Context struct {
+	Percentage int `json:"percentage"`
 }
 
 // ControlRequest defines model for ControlRequest.
@@ -659,6 +764,15 @@ type Cost struct {
 	TotalUSD float64            `json:"total_usd"`
 }
 
+// CreateFeatureResponse defines model for CreateFeatureResponse.
+type CreateFeatureResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
 // Cursor defines model for Cursor.
 type Cursor struct {
 	End   int `json:"end"`
@@ -672,6 +786,15 @@ type Cycle struct {
 	Iteration int    `json:"iteration,omitempty"`
 	Status    string `json:"status,omitempty"`
 	Type      string `json:"type,omitempty"`
+}
+
+// DeleteFeatureResponse defines model for DeleteFeatureResponse.
+type DeleteFeatureResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // Error defines model for Error.
@@ -694,39 +817,80 @@ type Failure struct {
 	Type    string `json:"type,omitempty"`
 }
 
+// FeatureActionResult defines model for FeatureActionResult.
+type FeatureActionResult struct {
+	FeatureID string `json:"feature_id"`
+	Result    string `json:"result"`
+}
+
+// FeatureConfig defines model for FeatureConfig.
+type FeatureConfig struct {
+	Checkpoints Checkpoints   `json:"checkpoints"`
+	Inquireness string        `json:"inquireness"`
+	Models      ModelDefaults `json:"models"`
+	Pipeline    string        `json:"pipeline,omitempty"`
+}
+
 // FeatureConfigResponse defines model for FeatureConfigResponse.
-type FeatureConfigResponse = JSONResponse
+type FeatureConfigResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Current              FeatureConfig          `json:"current"`
+	Defaults             FeatureConfig          `json:"defaults"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Original             FeatureConfig          `json:"original"`
+	Publish              Publishability         `json:"publishability"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// FeatureConfigUpdateResponse defines model for FeatureConfigUpdateResponse.
+type FeatureConfigUpdateResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// FeatureDefaults defines model for FeatureDefaults.
+type FeatureDefaults struct {
+	Checkpoints         config.Checkpoints                   `json:"checkpoints"`
+	Inquireness         string                               `json:"inquireness,omitempty"`
+	Models              ModelDefaults                        `json:"models"`
+	Pipeline            string                               `json:"pipeline,omitempty"`
+	PipelinePreferences map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+}
 
 // FeatureDetail defines model for FeatureDetail.
 type FeatureDetail struct {
-	Actions         []Action          `json:"actions"`
-	ActiveRun       int               `json:"active_run"`
-	ActiveRunDetail RunSummary        `json:"active_run_detail,omitempty"`
-	CacheRevalidate string            `json:"cache_revalidate"`
-	Checkpoints     Checkpoints       `json:"checkpoints"`
-	Cost            Cost              `json:"cost"`
-	CreatedAt       time.Time         `json:"created_at"`
-	CurrentPhase    string            `json:"current_phase"`
-	Cycle           Cycle             `json:"cycle,omitempty"`
-	Description     string            `json:"description,omitempty"`
-	Failure         Failure           `json:"failure,omitempty"`
-	HistoricalRuns  []RunSummary      `json:"historical_runs"`
-	ID              string            `json:"id"`
-	Models          ModelDefaults     `json:"models"`
-	Name            string            `json:"name"`
-	NeedUserInput   NeedUserInputGate `json:"need_user_input,omitempty"`
-	Pipeline        string            `json:"pipeline,omitempty"`
-	Progress        FeatureProgress   `json:"progress"`
-	RepoStatus      []RepoStatus      `json:"repo_status"`
-	Repos           []string          `json:"repos"`
-	ReviewGate      ReviewGate        `json:"review_gate"`
-	Revision        string            `json:"revision"`
-	RunCount        int               `json:"run_count"`
-	Slug            string            `json:"slug"`
-	Status          string            `json:"status"`
-	Summary         string            `json:"summary,omitempty"`
-	Timing          Timing            `json:"timing"`
-	Warnings        []Warning         `json:"warnings,omitempty"`
+	Actions         []Action           `json:"actions"`
+	ActiveRun       int                `json:"active_run"`
+	ActiveRunDetail *RunSummary        `json:"active_run_detail,omitempty"`
+	CacheRevalidate string             `json:"cache_revalidate"`
+	Checkpoints     Checkpoints        `json:"checkpoints"`
+	Cost            Cost               `json:"cost"`
+	CreatedAt       time.Time          `json:"created_at"`
+	CurrentPhase    string             `json:"current_phase"`
+	Cycle           *Cycle             `json:"cycle,omitempty"`
+	Description     string             `json:"description,omitempty"`
+	Failure         *Failure           `json:"failure,omitempty"`
+	HistoricalRuns  []RunSummary       `json:"historical_runs"`
+	ID              string             `json:"id"`
+	Models          ModelDefaults      `json:"models"`
+	Name            string             `json:"name"`
+	NeedUserInput   *NeedUserInputGate `json:"need_user_input,omitempty"`
+	Pipeline        string             `json:"pipeline,omitempty"`
+	Progress        FeatureProgress    `json:"progress"`
+	RepoStatus      []RepoStatus       `json:"repo_status"`
+	Repos           []string           `json:"repos"`
+	ReviewGate      ReviewGate         `json:"review_gate"`
+	Revision        string             `json:"revision"`
+	RunCount        int                `json:"run_count"`
+	Slug            string             `json:"slug"`
+	Status          string             `json:"status"`
+	Summary         string             `json:"summary,omitempty"`
+	Timing          Timing             `json:"timing"`
+	Warnings        []Warning          `json:"warnings,omitempty"`
 }
 
 // FeatureDetailResponse defines model for FeatureDetailResponse.
@@ -754,6 +918,40 @@ type FeatureProgress struct {
 	TotalRoadmapPhases  int    `json:"total_roadmap_phases,omitempty"`
 }
 
+// FeatureRestartResponse defines model for FeatureRestartResponse.
+type FeatureRestartResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Dispatch             string                 `json:"dispatch,omitempty"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Phase                string                 `json:"phase,omitempty"`
+	RefactorCount        int                    `json:"refactor_count,omitempty"`
+	RepoCycleCount       int                    `json:"repo_cycle_count,omitempty"`
+	Result               string                 `json:"result"`
+	SessionIDs           []string               `json:"session_ids,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// FeatureStartResponse defines model for FeatureStartResponse.
+type FeatureStartResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Phase                string                 `json:"phase,omitempty"`
+	Result               string                 `json:"result"`
+	SessionIDs           []string               `json:"session_ids,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// FeatureStopResponse defines model for FeatureStopResponse.
+type FeatureStopResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
 // FeatureSummary defines model for FeatureSummary.
 type FeatureSummary struct {
 	ActiveRun    int             `json:"active_run"`
@@ -771,8 +969,57 @@ type FeatureSummary struct {
 	Warnings     []Warning       `json:"warnings,omitempty"`
 }
 
+// FileChange defines model for FileChange.
+type FileChange struct {
+	AddedLines   int    `json:"added_lines,omitempty"`
+	Detail       string `json:"detail,omitempty"`
+	HasDiffPatch bool   `json:"has_diff_patch,omitempty"`
+	OldPath      string `json:"old_path,omitempty"`
+	Operation    string `json:"operation,omitempty"`
+	Path         string `json:"path,omitempty"`
+	RemovedLines int    `json:"removed_lines,omitempty"`
+}
+
 // HealthResponse defines model for HealthResponse.
-type HealthResponse = JSONResponse
+type HealthResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	LaunchPolicy         LaunchPolicy           `json:"launch_policy"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Owner                Owner                  `json:"owner"`
+	Runtime              RuntimeIdentity        `json:"runtime"`
+	ServerTime           time.Time              `json:"server_time"`
+	StartedAt            time.Time              `json:"started_at"`
+	Status               string                 `json:"status"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// HelpQueue defines model for HelpQueue.
+type HelpQueue struct {
+	FeatureID string    `json:"feature_id"`
+	Pending   bool      `json:"pending"`
+	Question  string    `json:"question"`
+	Time      time.Time `json:"time,omitempty"`
+}
+
+// HelpSendResponse defines model for HelpSendResponse.
+type HelpSendResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// InputNotificationsToggleResponse defines model for InputNotificationsToggleResponse.
+type InputNotificationsToggleResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Muted                bool                   `json:"muted"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // JSONResponse defines model for JSONResponse.
 type JSONResponse struct {
@@ -781,21 +1028,86 @@ type JSONResponse struct {
 	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
+// LaunchPolicy defines model for LaunchPolicy.
+type LaunchPolicy struct {
+	DangerouslySkipPermissions bool     `json:"dangerously_skip_permissions"`
+	Providers                  []string `json:"providers"`
+	Resolved                   bool     `json:"resolved"`
+}
+
 // LivePreviewResponse defines model for LivePreviewResponse.
-type LivePreviewResponse = JSONResponse
+type LivePreviewResponse struct {
+	Activity             string                 `json:"activity"`
+	APIVersion           string                 `json:"api_version"`
+	Attention            []ControlRequest       `json:"attention,omitempty"`
+	Context              Context                `json:"context"`
+	Cost                 Cost                   `json:"cost"`
+	Feature              FeatureSummary         `json:"feature"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Session              *SessionSummary        `json:"session,omitempty"`
+	Timing               Timing                 `json:"timing"`
+	Transcript           []TranscriptMessage    `json:"transcript"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// MarkDoneResponse defines model for MarkDoneResponse.
+type MarkDoneResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// MergeFeatureResponse defines model for MergeFeatureResponse.
+type MergeFeatureResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// Model defines model for Model.
+type Model struct {
+	Aliases       []string `json:"aliases,omitempty"`
+	Category      string   `json:"category,omitempty"`
+	ContextWindow int      `json:"context_window,omitempty"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	ID            string   `json:"id"`
+}
 
 // ModelCatalogResponse defines model for ModelCatalogResponse.
-type ModelCatalogResponse = JSONResponse
+type ModelCatalogResponse struct {
+	APIVersion           string                         `json:"api_version"`
+	Meta                 ResponseMeta                   `json:"meta,omitempty"`
+	PhaseDefaults        ModelDefaults                  `json:"phase_defaults"`
+	PhaseProviderModels  map[string]map[string][]string `json:"phase_provider_models"`
+	ProviderModels       map[string][]Model             `json:"provider_models"`
+	ProviderOrder        []string                       `json:"provider_order"`
+	AdditionalProperties map[string]interface{}         `json:"-"`
+}
 
 // ModelDefaults defines model for ModelDefaults.
-type ModelDefaults struct {
-	Implementation string `json:"implementation,omitempty"`
-	Inquiry        string `json:"inquiry,omitempty"`
-	KbBuild        string `json:"kb_build,omitempty"`
-	Planning       string `json:"planning,omitempty"`
-	Research       string `json:"research,omitempty"`
-	Review         string `json:"review,omitempty"`
-	Utilities      string `json:"utilities,omitempty"`
+type ModelDefaults = config.ModelConfig
+
+// NeedUserInputDecisionResponse defines model for NeedUserInputDecisionResponse.
+type NeedUserInputDecisionResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Decision             string                 `json:"decision"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// NeedUserInputDraftResponse defines model for NeedUserInputDraftResponse.
+type NeedUserInputDraftResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
 }
 
 // NeedUserInputGate defines model for NeedUserInputGate.
@@ -806,14 +1118,139 @@ type NeedUserInputGate struct {
 	Scope     string `json:"scope,omitempty"`
 }
 
+// NotificationConfig defines model for NotificationConfig.
+type NotificationConfig struct {
+	MuteFeatureInput bool `json:"mute_feature_input"`
+}
+
+// Observability defines model for Observability.
+type Observability struct {
+	Events          bool   `json:"events"`
+	OTelEnabled     bool   `json:"otel_enabled"`
+	OTelServiceName string `json:"otel_service_name,omitempty"`
+}
+
+// Owner defines model for Owner.
+type Owner struct {
+	PGID      int       `json:"pgid,omitempty"`
+	PID       int       `json:"pid"`
+	StartedAt time.Time `json:"started_at"`
+	Version   string    `json:"version,omitempty"`
+}
+
+// PermissionAnswerResponse defines model for PermissionAnswerResponse.
+type PermissionAnswerResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Decision             string                 `json:"decision"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	RequestID            string                 `json:"request_id"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
 // PermissionSnapshotResponse defines model for PermissionSnapshotResponse.
-type PermissionSnapshotResponse = JSONResponse
+type PermissionSnapshotResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Requests             []ControlRequest       `json:"requests"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // PromptSnapshotResponse defines model for PromptSnapshotResponse.
-type PromptSnapshotResponse = JSONResponse
+type PromptSnapshotResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	AskUserQuestions     []ControlRequest       `json:"ask_user_questions"`
+	HelpQueue            []HelpQueue            `json:"help_queue"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	NeedUserInputs       []NeedUserInputGate    `json:"need_user_inputs"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// PublishDescriptionResponse defines model for PublishDescriptionResponse.
+type PublishDescriptionResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Body                 string                 `json:"body"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	Title                string                 `json:"title"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// PublishFeatureResponse defines model for PublishFeatureResponse.
+type PublishFeatureResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// Publishability defines model for Publishability.
+type Publishability struct {
+	ManualPublish bool            `json:"manual_publish"`
+	Repos         map[string]bool `json:"repos"`
+}
+
+// RebaseStartResponse defines model for RebaseStartResponse.
+type RebaseStartResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	CycleType            string                 `json:"cycle_type"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// RecoveryActionResponse defines model for RecoveryActionResponse.
+type RecoveryActionResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// RecoveryItem defines model for RecoveryItem.
+type RecoveryItem struct {
+	AllowedActions []string `json:"allowed_actions"`
+	DefaultAction  string   `json:"default_action"`
+	FeatureID      string   `json:"feature_id"`
+	FeatureName    string   `json:"feature_name,omitempty"`
+	Iteration      int      `json:"iteration,omitempty"`
+	Key            string   `json:"key"`
+	Phase          string   `json:"phase,omitempty"`
+	PID            int      `json:"pid,omitempty"`
+	ProcessAlive   bool     `json:"process_alive"`
+	RepoName       string   `json:"repo_name,omitempty"`
+	Tweak          bool     `json:"tweak,omitempty"`
+}
 
 // RecoverySnapshotResponse defines model for RecoverySnapshotResponse.
-type RecoverySnapshotResponse = JSONResponse
+type RecoverySnapshotResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Items                []RecoveryItem         `json:"items"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	SnapshotID           string                 `json:"snapshot_id"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// RefactorRestartResponse defines model for RefactorRestartResponse.
+type RefactorRestartResponse = RefactorStartResponse
+
+// RefactorStartResponse defines model for RefactorStartResponse.
+type RefactorStartResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	CycleType            string                 `json:"cycle_type"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Pipeline             string                 `json:"pipeline,omitempty"`
+	Repo                 string                 `json:"repo,omitempty"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // RepoStatus defines model for RepoStatus.
 type RepoStatus struct {
@@ -845,6 +1282,65 @@ type ResponseMeta struct {
 	Revision    string    `json:"revision"`
 }
 
+// RetryFeatureResponse defines model for RetryFeatureResponse.
+type RetryFeatureResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ReviewComment defines model for ReviewComment.
+type ReviewComment struct {
+	Body      string `json:"body,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+	DiffHunk  string `json:"diff_hunk,omitempty"`
+	ID        int    `json:"id"`
+	InReplyTo int    `json:"in_reply_to_id,omitempty"`
+	Line      int    `json:"line,omitempty"`
+	Path      string `json:"path,omitempty"`
+	RepoName  string `json:"repo_name,omitempty"`
+	Type      string `json:"type,omitempty"`
+	UserLogin string `json:"user_login,omitempty"`
+}
+
+// ReviewCommentsFetchResponse defines model for ReviewCommentsFetchResponse.
+type ReviewCommentsFetchResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Comments             []ReviewComment        `json:"comments"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Mode                 string                 `json:"mode,omitempty"`
+	Repo                 string                 `json:"repo"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ReviewCommentsStartResponse defines model for ReviewCommentsStartResponse.
+type ReviewCommentsStartResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	CommentCount         int                    `json:"comment_count,omitempty"`
+	CycleType            string                 `json:"cycle_type"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Mode                 string                 `json:"mode"`
+	Repo                 string                 `json:"repo"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id,omitempty"`
+	Source               string                 `json:"source,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ReviewDecisionResponse defines model for ReviewDecisionResponse.
+type ReviewDecisionResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Decision             string                 `json:"decision"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
 // ReviewGate defines model for ReviewGate.
 type ReviewGate struct {
 	ReviewFixing      bool              `json:"review_fixing"`
@@ -853,29 +1349,69 @@ type ReviewGate struct {
 	ValidatorStatuses map[string]string `json:"validator_statuses,omitempty"`
 }
 
+// RewindFeatureResponse defines model for RewindFeatureResponse.
+type RewindFeatureResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	EffectivePhase       string                 `json:"effective_phase,omitempty"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	RoadmapPhase         int                    `json:"roadmap_phase,omitempty"`
+	TargetPhase          string                 `json:"target_phase,omitempty"`
+	UpgradePipeline      string                 `json:"upgrade_pipeline,omitempty"`
+	WarningCount         int                    `json:"warning_count,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
 // RunSummary defines model for RunSummary.
 type RunSummary struct {
-	ArtifactCount                   int       `json:"artifact_count"`
-	CurrentPhase                    string    `json:"current_phase,omitempty"`
-	HasNeedUserGate                 bool      `json:"has_need_user_gate,omitempty"`
-	IsRewind                        bool      `json:"is_rewind,omitempty"`
-	Iteration                       int       `json:"iteration,omitempty"`
-	PendingReviewPhase              string    `json:"pending_review_phase,omitempty"`
-	PendingRewindReviewRoadmapPhase int       `json:"pending_rewind_review_roadmap_phase,omitempty"`
-	PhaseStatus                     string    `json:"phase_status,omitempty"`
-	RoadmapPhase                    int       `json:"roadmap_phase,omitempty"`
-	RoadmapTotal                    int       `json:"roadmap_total,omitempty"`
-	RunNumber                       int       `json:"run_number"`
-	SealReason                      string    `json:"seal_reason,omitempty"`
-	SealedAt                        time.Time `json:"sealed_at,omitempty"`
-
-	// Setup SetupDTO — untyped for now (see the tracked JSONResponse remainder note above; nested setup/task detail is not yet typed).
-	Setup     map[string]interface{} `json:"setup,omitempty"`
-	StartedAt time.Time              `json:"started_at,omitempty"`
+	ArtifactCount                   int        `json:"artifact_count"`
+	CurrentPhase                    string     `json:"current_phase,omitempty"`
+	HasNeedUserGate                 bool       `json:"has_need_user_gate,omitempty"`
+	IsRewind                        bool       `json:"is_rewind,omitempty"`
+	Iteration                       int        `json:"iteration,omitempty"`
+	PendingReviewPhase              string     `json:"pending_review_phase,omitempty"`
+	PendingRewindReviewRoadmapPhase int        `json:"pending_rewind_review_roadmap_phase,omitempty"`
+	PhaseStatus                     string     `json:"phase_status,omitempty"`
+	RoadmapPhase                    int        `json:"roadmap_phase,omitempty"`
+	RoadmapTotal                    int        `json:"roadmap_total,omitempty"`
+	RunNumber                       int        `json:"run_number"`
+	SealReason                      string     `json:"seal_reason,omitempty"`
+	SealedAt                        *time.Time `json:"sealed_at,omitempty"`
+	Setup                           *Setup     `json:"setup,omitempty"`
+	StartedAt                       *time.Time `json:"started_at,omitempty"`
 }
 
 // RuntimeConfigResponse defines model for RuntimeConfigResponse.
-type RuntimeConfigResponse = JSONResponse
+type RuntimeConfigResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	FeatureDefaults      FeatureDefaults        `json:"feature_defaults"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Defaults             ModelDefaults          `json:"model_defaults"`
+	Notifications        NotificationConfig     `json:"notifications"`
+	Observability        Observability          `json:"observability"`
+	Providers            []string               `json:"providers"`
+	Repos                []ConfigRepo           `json:"repos"`
+	Runtime              RuntimeIdentity        `json:"runtime"`
+	UI                   config.UIConfig        `json:"ui"`
+	WorkspaceRoots       []string               `json:"workspace_roots,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// RuntimeConfigUpdateResponse defines model for RuntimeConfigUpdateResponse.
+type RuntimeConfigUpdateResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// RuntimeIdentity defines model for RuntimeIdentity.
+type RuntimeIdentity struct {
+	Config     string `json:"config_path"`
+	RuntimeDir string `json:"runtime_dir"`
+	StateDir   string `json:"state_dir"`
+}
 
 // SSEEvent defines model for SSEEvent.
 type SSEEvent struct {
@@ -937,14 +1473,13 @@ type SessionListResponse struct {
 
 // SessionOutputChunk defines model for SessionOutputChunk.
 type SessionOutputChunk struct {
-	Done bool `json:"done,omitempty"`
+	APIVersion string `json:"api_version"`
+	Done       bool   `json:"done,omitempty"`
 
 	// Index Transcript row index — the same index space /transcript and session.output.activity's record_count use. Not a byte offset.
-	Index int `json:"index"`
-
-	// Message A TranscriptMessageDTO row (see the /transcript response).
-	Message   map[string]interface{} `json:"message,omitempty"`
-	SessionID string                 `json:"session_id,omitempty"`
+	Index     int               `json:"index"`
+	Message   TranscriptMessage `json:"message,omitempty"`
+	SessionID string            `json:"session_id,omitempty"`
 }
 
 // SessionOutputResponse defines model for SessionOutputResponse.
@@ -979,8 +1514,69 @@ type SessionSummary struct {
 	Usage      Usage     `json:"usage"`
 }
 
+// Setup defines model for Setup.
+type Setup struct {
+	Attempt       int                  `json:"attempt,omitempty"`
+	CompletedAt   *time.Time           `json:"completed_at,omitempty"`
+	LastError     string               `json:"last_error,omitempty"`
+	LatestLogPath string               `json:"latest_log_path,omitempty"`
+	StartedAt     *time.Time           `json:"started_at,omitempty"`
+	Status        string               `json:"status"`
+	TaskOrder     []string             `json:"task_order,omitempty"`
+	Tasks         map[string]SetupTask `json:"tasks,omitempty"`
+}
+
+// SetupTask defines model for SetupTask.
+type SetupTask struct {
+	Attempt          int        `json:"attempt,omitempty"`
+	Branch           string     `json:"branch,omitempty"`
+	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	Key              string     `json:"key"`
+	Kind             string     `json:"kind"`
+	Label            string     `json:"label,omitempty"`
+	LastError        string     `json:"last_error,omitempty"`
+	Path             string     `json:"path,omitempty"`
+	Repo             string     `json:"repo,omitempty"`
+	SourcePath       string     `json:"source_path,omitempty"`
+	StartPoint       string     `json:"start_point,omitempty"`
+	StartedAt        *time.Time `json:"started_at,omitempty"`
+	Status           string     `json:"status"`
+	UseCurrentBranch bool       `json:"use_current_branch,omitempty"`
+}
+
+// ShutdownResponse defines model for ShutdownResponse.
+type ShutdownResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// Task defines model for Task.
+type Task struct {
+	Description  string `json:"description,omitempty"`
+	ID           string `json:"id,omitempty"`
+	LastToolName string `json:"last_tool_name,omitempty"`
+	OutputFile   string `json:"output_file,omitempty"`
+	Prompt       string `json:"prompt,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	TaskType     string `json:"task_type,omitempty"`
+	ToolUseID    string `json:"tool_use_id,omitempty"`
+}
+
 // TextContentResponse defines model for TextContentResponse.
-type TextContentResponse = JSONResponse
+type TextContentResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	ID                   string                 `json:"id"`
+	Limit                int64                  `json:"limit"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Offset               int64                  `json:"offset"`
+	Size                 int64                  `json:"size"`
+	Text                 string                 `json:"text"`
+	Truncated            bool                   `json:"truncated"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // Timing defines model for Timing.
 type Timing struct {
@@ -988,8 +1584,61 @@ type Timing struct {
 	TotalSeconds int64            `json:"total_seconds"`
 }
 
+// ToolCall defines model for ToolCall.
+type ToolCall struct {
+	Prompt  string `json:"prompt,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// TranscriptMessage defines model for TranscriptMessage.
+type TranscriptMessage struct {
+	AutoPickConfidence float64     `json:"auto_pick_confidence,omitempty"`
+	AutoPickQuestion   string      `json:"auto_pick_question,omitempty"`
+	AutoPicked         bool        `json:"auto_picked,omitempty"`
+	BlockIndex         int         `json:"block_index,omitempty"`
+	FileChange         *FileChange `json:"file_change,omitempty"`
+	Index              int         `json:"index"`
+	LocallyAppended    bool        `json:"locally_appended,omitempty"`
+	Redacted           bool        `json:"redacted,omitempty"`
+	Role               string      `json:"role"`
+	Status             string      `json:"status,omitempty"`
+	Task               *Task       `json:"task,omitempty"`
+	Text               string      `json:"text,omitempty"`
+	Tool               string      `json:"tool,omitempty"`
+	ToolCall           *ToolCall   `json:"tool_call,omitempty"`
+	Type               string      `json:"type"`
+}
+
 // TranscriptResponse defines model for TranscriptResponse.
-type TranscriptResponse = JSONResponse
+type TranscriptResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Cursor               Cursor                 `json:"cursor"`
+	Messages             []TranscriptMessage    `json:"messages"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// TweakFinishResponse defines model for TweakFinishResponse.
+type TweakFinishResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	Decision             string                 `json:"decision"`
+	FeatureID            string                 `json:"feature_id"`
+	HadChanges           bool                   `json:"had_changes,omitempty"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// TweakStartResponse defines model for TweakStartResponse.
+type TweakStartResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	CycleType            string                 `json:"cycle_type"`
+	FeatureID            string                 `json:"feature_id"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Result               string                 `json:"result"`
+	SessionID            string                 `json:"session_id,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // Usage defines model for Usage.
 type Usage struct {
@@ -1005,8 +1654,24 @@ type Warning struct {
 	Message   string `json:"message"`
 }
 
+// WorkspaceBrowseEntry defines model for WorkspaceBrowseEntry.
+type WorkspaceBrowseEntry struct {
+	ChildRepoCount int    `json:"child_repo_count,omitempty"`
+	IsGitRepo      bool   `json:"is_git_repo"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+}
+
 // WorkspaceBrowseResponse defines model for WorkspaceBrowseResponse.
-type WorkspaceBrowseResponse = JSONResponse
+type WorkspaceBrowseResponse struct {
+	APIVersion           string                 `json:"api_version"`
+	ChildRepoCount       int                    `json:"child_repo_count"`
+	Entries              []WorkspaceBrowseEntry `json:"entries"`
+	IsGitRepo            bool                   `json:"is_git_repo"`
+	Meta                 ResponseMeta           `json:"meta,omitempty"`
+	Path                 string                 `json:"path"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
 
 // ArtifactID defines model for ArtifactID.
 type ArtifactID = string
@@ -1416,6 +2081,1382 @@ type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
 // ShutdownRuntimeJSONRequestBody defines body for ShutdownRuntime for application/json ContentType.
 type ShutdownRuntimeJSONRequestBody ShutdownRuntimeJSONBody
 
+// Getter for additional properties for ActionResponse. Returns the specified
+// element and whether it was found
+func (a ActionResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ActionResponse
+func (a *ActionResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ActionResponse to handle AdditionalProperties
+func (a *ActionResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["ask_user_answer_response"]; found {
+		err = json.Unmarshal(raw, &a.AskUserAnswerResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'ask_user_answer_response': %w", err)
+		}
+		delete(object, "ask_user_answer_response")
+	}
+
+	if raw, found := object["chat_start_response"]; found {
+		err = json.Unmarshal(raw, &a.ChatStartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'chat_start_response': %w", err)
+		}
+		delete(object, "chat_start_response")
+	}
+
+	if raw, found := object["cleanup_feature_response"]; found {
+		err = json.Unmarshal(raw, &a.CleanupFeatureResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'cleanup_feature_response': %w", err)
+		}
+		delete(object, "cleanup_feature_response")
+	}
+
+	if raw, found := object["create_feature_response"]; found {
+		err = json.Unmarshal(raw, &a.CreateFeatureResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'create_feature_response': %w", err)
+		}
+		delete(object, "create_feature_response")
+	}
+
+	if raw, found := object["delete_feature_response"]; found {
+		err = json.Unmarshal(raw, &a.DeleteFeatureResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'delete_feature_response': %w", err)
+		}
+		delete(object, "delete_feature_response")
+	}
+
+	if raw, found := object["feature_config_update_response"]; found {
+		err = json.Unmarshal(raw, &a.FeatureConfigUpdateResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_config_update_response': %w", err)
+		}
+		delete(object, "feature_config_update_response")
+	}
+
+	if raw, found := object["feature_restart_response"]; found {
+		err = json.Unmarshal(raw, &a.FeatureRestartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_restart_response': %w", err)
+		}
+		delete(object, "feature_restart_response")
+	}
+
+	if raw, found := object["feature_start_response"]; found {
+		err = json.Unmarshal(raw, &a.FeatureStartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_start_response': %w", err)
+		}
+		delete(object, "feature_start_response")
+	}
+
+	if raw, found := object["feature_stop_response"]; found {
+		err = json.Unmarshal(raw, &a.FeatureStopResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_stop_response': %w", err)
+		}
+		delete(object, "feature_stop_response")
+	}
+
+	if raw, found := object["help_send_response"]; found {
+		err = json.Unmarshal(raw, &a.HelpSendResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'help_send_response': %w", err)
+		}
+		delete(object, "help_send_response")
+	}
+
+	if raw, found := object["input_notifications_toggle_response"]; found {
+		err = json.Unmarshal(raw, &a.InputNotificationsToggleResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'input_notifications_toggle_response': %w", err)
+		}
+		delete(object, "input_notifications_toggle_response")
+	}
+
+	if raw, found := object["mark_done_response"]; found {
+		err = json.Unmarshal(raw, &a.MarkDoneResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'mark_done_response': %w", err)
+		}
+		delete(object, "mark_done_response")
+	}
+
+	if raw, found := object["merge_feature_response"]; found {
+		err = json.Unmarshal(raw, &a.MergeFeatureResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'merge_feature_response': %w", err)
+		}
+		delete(object, "merge_feature_response")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["need_user_input_decision_response"]; found {
+		err = json.Unmarshal(raw, &a.NeedUserInputDecisionResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'need_user_input_decision_response': %w", err)
+		}
+		delete(object, "need_user_input_decision_response")
+	}
+
+	if raw, found := object["need_user_input_draft_response"]; found {
+		err = json.Unmarshal(raw, &a.NeedUserInputDraftResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'need_user_input_draft_response': %w", err)
+		}
+		delete(object, "need_user_input_draft_response")
+	}
+
+	if raw, found := object["permission_answer_response"]; found {
+		err = json.Unmarshal(raw, &a.PermissionAnswerResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'permission_answer_response': %w", err)
+		}
+		delete(object, "permission_answer_response")
+	}
+
+	if raw, found := object["publish_description_response"]; found {
+		err = json.Unmarshal(raw, &a.PublishDescriptionResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'publish_description_response': %w", err)
+		}
+		delete(object, "publish_description_response")
+	}
+
+	if raw, found := object["publish_feature_response"]; found {
+		err = json.Unmarshal(raw, &a.PublishFeatureResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'publish_feature_response': %w", err)
+		}
+		delete(object, "publish_feature_response")
+	}
+
+	if raw, found := object["rebase_start_response"]; found {
+		err = json.Unmarshal(raw, &a.RebaseStartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'rebase_start_response': %w", err)
+		}
+		delete(object, "rebase_start_response")
+	}
+
+	if raw, found := object["recovery_action_response"]; found {
+		err = json.Unmarshal(raw, &a.RecoveryActionResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'recovery_action_response': %w", err)
+		}
+		delete(object, "recovery_action_response")
+	}
+
+	if raw, found := object["refactor_restart_response"]; found {
+		err = json.Unmarshal(raw, &a.RefactorRestartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'refactor_restart_response': %w", err)
+		}
+		delete(object, "refactor_restart_response")
+	}
+
+	if raw, found := object["refactor_start_response"]; found {
+		err = json.Unmarshal(raw, &a.RefactorStartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'refactor_start_response': %w", err)
+		}
+		delete(object, "refactor_start_response")
+	}
+
+	if raw, found := object["retry_feature_response"]; found {
+		err = json.Unmarshal(raw, &a.RetryFeatureResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'retry_feature_response': %w", err)
+		}
+		delete(object, "retry_feature_response")
+	}
+
+	if raw, found := object["review_comments_fetch_response"]; found {
+		err = json.Unmarshal(raw, &a.ReviewCommentsFetchResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'review_comments_fetch_response': %w", err)
+		}
+		delete(object, "review_comments_fetch_response")
+	}
+
+	if raw, found := object["review_comments_start_response"]; found {
+		err = json.Unmarshal(raw, &a.ReviewCommentsStartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'review_comments_start_response': %w", err)
+		}
+		delete(object, "review_comments_start_response")
+	}
+
+	if raw, found := object["review_decision_response"]; found {
+		err = json.Unmarshal(raw, &a.ReviewDecisionResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'review_decision_response': %w", err)
+		}
+		delete(object, "review_decision_response")
+	}
+
+	if raw, found := object["rewind_feature_response"]; found {
+		err = json.Unmarshal(raw, &a.RewindFeatureResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'rewind_feature_response': %w", err)
+		}
+		delete(object, "rewind_feature_response")
+	}
+
+	if raw, found := object["runtime_config_update_response"]; found {
+		err = json.Unmarshal(raw, &a.RuntimeConfigUpdateResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'runtime_config_update_response': %w", err)
+		}
+		delete(object, "runtime_config_update_response")
+	}
+
+	if raw, found := object["shutdown_response"]; found {
+		err = json.Unmarshal(raw, &a.ShutdownResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'shutdown_response': %w", err)
+		}
+		delete(object, "shutdown_response")
+	}
+
+	if raw, found := object["tweak_finish_response"]; found {
+		err = json.Unmarshal(raw, &a.TweakFinishResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'tweak_finish_response': %w", err)
+		}
+		delete(object, "tweak_finish_response")
+	}
+
+	if raw, found := object["tweak_start_response"]; found {
+		err = json.Unmarshal(raw, &a.TweakStartResponse)
+		if err != nil {
+			return fmt.Errorf("error reading 'tweak_start_response': %w", err)
+		}
+		delete(object, "tweak_start_response")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ActionResponse to handle AdditionalProperties
+func (a ActionResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["ask_user_answer_response"], err = json.Marshal(a.AskUserAnswerResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'ask_user_answer_response': %w", err)
+	}
+
+	object["chat_start_response"], err = json.Marshal(a.ChatStartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'chat_start_response': %w", err)
+	}
+
+	object["cleanup_feature_response"], err = json.Marshal(a.CleanupFeatureResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'cleanup_feature_response': %w", err)
+	}
+
+	object["create_feature_response"], err = json.Marshal(a.CreateFeatureResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'create_feature_response': %w", err)
+	}
+
+	object["delete_feature_response"], err = json.Marshal(a.DeleteFeatureResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'delete_feature_response': %w", err)
+	}
+
+	object["feature_config_update_response"], err = json.Marshal(a.FeatureConfigUpdateResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_config_update_response': %w", err)
+	}
+
+	object["feature_restart_response"], err = json.Marshal(a.FeatureRestartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_restart_response': %w", err)
+	}
+
+	object["feature_start_response"], err = json.Marshal(a.FeatureStartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_start_response': %w", err)
+	}
+
+	object["feature_stop_response"], err = json.Marshal(a.FeatureStopResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_stop_response': %w", err)
+	}
+
+	object["help_send_response"], err = json.Marshal(a.HelpSendResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'help_send_response': %w", err)
+	}
+
+	object["input_notifications_toggle_response"], err = json.Marshal(a.InputNotificationsToggleResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'input_notifications_toggle_response': %w", err)
+	}
+
+	object["mark_done_response"], err = json.Marshal(a.MarkDoneResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'mark_done_response': %w", err)
+	}
+
+	object["merge_feature_response"], err = json.Marshal(a.MergeFeatureResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'merge_feature_response': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["need_user_input_decision_response"], err = json.Marshal(a.NeedUserInputDecisionResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'need_user_input_decision_response': %w", err)
+	}
+
+	object["need_user_input_draft_response"], err = json.Marshal(a.NeedUserInputDraftResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'need_user_input_draft_response': %w", err)
+	}
+
+	object["permission_answer_response"], err = json.Marshal(a.PermissionAnswerResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'permission_answer_response': %w", err)
+	}
+
+	object["publish_description_response"], err = json.Marshal(a.PublishDescriptionResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'publish_description_response': %w", err)
+	}
+
+	object["publish_feature_response"], err = json.Marshal(a.PublishFeatureResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'publish_feature_response': %w", err)
+	}
+
+	object["rebase_start_response"], err = json.Marshal(a.RebaseStartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'rebase_start_response': %w", err)
+	}
+
+	object["recovery_action_response"], err = json.Marshal(a.RecoveryActionResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'recovery_action_response': %w", err)
+	}
+
+	object["refactor_restart_response"], err = json.Marshal(a.RefactorRestartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'refactor_restart_response': %w", err)
+	}
+
+	object["refactor_start_response"], err = json.Marshal(a.RefactorStartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'refactor_start_response': %w", err)
+	}
+
+	object["retry_feature_response"], err = json.Marshal(a.RetryFeatureResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'retry_feature_response': %w", err)
+	}
+
+	object["review_comments_fetch_response"], err = json.Marshal(a.ReviewCommentsFetchResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'review_comments_fetch_response': %w", err)
+	}
+
+	object["review_comments_start_response"], err = json.Marshal(a.ReviewCommentsStartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'review_comments_start_response': %w", err)
+	}
+
+	object["review_decision_response"], err = json.Marshal(a.ReviewDecisionResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'review_decision_response': %w", err)
+	}
+
+	object["rewind_feature_response"], err = json.Marshal(a.RewindFeatureResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'rewind_feature_response': %w", err)
+	}
+
+	object["runtime_config_update_response"], err = json.Marshal(a.RuntimeConfigUpdateResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'runtime_config_update_response': %w", err)
+	}
+
+	object["shutdown_response"], err = json.Marshal(a.ShutdownResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'shutdown_response': %w", err)
+	}
+
+	object["tweak_finish_response"], err = json.Marshal(a.TweakFinishResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'tweak_finish_response': %w", err)
+	}
+
+	object["tweak_start_response"], err = json.Marshal(a.TweakStartResponse)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'tweak_start_response': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ArtifactListResponse. Returns the specified
+// element and whether it was found
+func (a ArtifactListResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ArtifactListResponse
+func (a *ArtifactListResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ArtifactListResponse to handle AdditionalProperties
+func (a *ArtifactListResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["artifacts"]; found {
+		err = json.Unmarshal(raw, &a.Artifacts)
+		if err != nil {
+			return fmt.Errorf("error reading 'artifacts': %w", err)
+		}
+		delete(object, "artifacts")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ArtifactListResponse to handle AdditionalProperties
+func (a ArtifactListResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	if a.Artifacts != nil {
+		object["artifacts"], err = json.Marshal(a.Artifacts)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'artifacts': %w", err)
+		}
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for AskUserAnswerResponse. Returns the specified
+// element and whether it was found
+func (a AskUserAnswerResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for AskUserAnswerResponse
+func (a *AskUserAnswerResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for AskUserAnswerResponse to handle AdditionalProperties
+func (a *AskUserAnswerResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["request_id"]; found {
+		err = json.Unmarshal(raw, &a.RequestID)
+		if err != nil {
+			return fmt.Errorf("error reading 'request_id': %w", err)
+		}
+		delete(object, "request_id")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for AskUserAnswerResponse to handle AdditionalProperties
+func (a AskUserAnswerResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["request_id"], err = json.Marshal(a.RequestID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'request_id': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ChatStartResponse. Returns the specified
+// element and whether it was found
+func (a ChatStartResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ChatStartResponse
+func (a *ChatStartResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ChatStartResponse to handle AdditionalProperties
+func (a *ChatStartResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ChatStartResponse to handle AdditionalProperties
+func (a ChatStartResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for CleanupFeatureResponse. Returns the specified
+// element and whether it was found
+func (a CleanupFeatureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for CleanupFeatureResponse
+func (a *CleanupFeatureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for CleanupFeatureResponse to handle AdditionalProperties
+func (a *CleanupFeatureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["target"]; found {
+		err = json.Unmarshal(raw, &a.Target)
+		if err != nil {
+			return fmt.Errorf("error reading 'target': %w", err)
+		}
+		delete(object, "target")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for CleanupFeatureResponse to handle AdditionalProperties
+func (a CleanupFeatureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["target"], err = json.Marshal(a.Target)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'target': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for CreateFeatureResponse. Returns the specified
+// element and whether it was found
+func (a CreateFeatureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for CreateFeatureResponse
+func (a *CreateFeatureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for CreateFeatureResponse to handle AdditionalProperties
+func (a *CreateFeatureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for CreateFeatureResponse to handle AdditionalProperties
+func (a CreateFeatureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for DeleteFeatureResponse. Returns the specified
+// element and whether it was found
+func (a DeleteFeatureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for DeleteFeatureResponse
+func (a *DeleteFeatureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for DeleteFeatureResponse to handle AdditionalProperties
+func (a *DeleteFeatureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for DeleteFeatureResponse to handle AdditionalProperties
+func (a DeleteFeatureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for FeatureConfigResponse. Returns the specified
+// element and whether it was found
+func (a FeatureConfigResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for FeatureConfigResponse
+func (a *FeatureConfigResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for FeatureConfigResponse to handle AdditionalProperties
+func (a *FeatureConfigResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["current"]; found {
+		err = json.Unmarshal(raw, &a.Current)
+		if err != nil {
+			return fmt.Errorf("error reading 'current': %w", err)
+		}
+		delete(object, "current")
+	}
+
+	if raw, found := object["defaults"]; found {
+		err = json.Unmarshal(raw, &a.Defaults)
+		if err != nil {
+			return fmt.Errorf("error reading 'defaults': %w", err)
+		}
+		delete(object, "defaults")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["original"]; found {
+		err = json.Unmarshal(raw, &a.Original)
+		if err != nil {
+			return fmt.Errorf("error reading 'original': %w", err)
+		}
+		delete(object, "original")
+	}
+
+	if raw, found := object["publishability"]; found {
+		err = json.Unmarshal(raw, &a.Publish)
+		if err != nil {
+			return fmt.Errorf("error reading 'publishability': %w", err)
+		}
+		delete(object, "publishability")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for FeatureConfigResponse to handle AdditionalProperties
+func (a FeatureConfigResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["current"], err = json.Marshal(a.Current)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'current': %w", err)
+	}
+
+	object["defaults"], err = json.Marshal(a.Defaults)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'defaults': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["original"], err = json.Marshal(a.Original)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'original': %w", err)
+	}
+
+	object["publishability"], err = json.Marshal(a.Publish)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'publishability': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for FeatureConfigUpdateResponse. Returns the specified
+// element and whether it was found
+func (a FeatureConfigUpdateResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for FeatureConfigUpdateResponse
+func (a *FeatureConfigUpdateResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for FeatureConfigUpdateResponse to handle AdditionalProperties
+func (a *FeatureConfigUpdateResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for FeatureConfigUpdateResponse to handle AdditionalProperties
+func (a FeatureConfigUpdateResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
 // Getter for additional properties for FeatureDetailResponse. Returns the specified
 // element and whether it was found
 func (a FeatureDetailResponse) Get(fieldName string) (value interface{}, found bool) {
@@ -1617,6 +3658,809 @@ func (a FeatureListResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(object)
 }
 
+// Getter for additional properties for FeatureRestartResponse. Returns the specified
+// element and whether it was found
+func (a FeatureRestartResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for FeatureRestartResponse
+func (a *FeatureRestartResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for FeatureRestartResponse to handle AdditionalProperties
+func (a *FeatureRestartResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["dispatch"]; found {
+		err = json.Unmarshal(raw, &a.Dispatch)
+		if err != nil {
+			return fmt.Errorf("error reading 'dispatch': %w", err)
+		}
+		delete(object, "dispatch")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["phase"]; found {
+		err = json.Unmarshal(raw, &a.Phase)
+		if err != nil {
+			return fmt.Errorf("error reading 'phase': %w", err)
+		}
+		delete(object, "phase")
+	}
+
+	if raw, found := object["refactor_count"]; found {
+		err = json.Unmarshal(raw, &a.RefactorCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'refactor_count': %w", err)
+		}
+		delete(object, "refactor_count")
+	}
+
+	if raw, found := object["repo_cycle_count"]; found {
+		err = json.Unmarshal(raw, &a.RepoCycleCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'repo_cycle_count': %w", err)
+		}
+		delete(object, "repo_cycle_count")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_ids"]; found {
+		err = json.Unmarshal(raw, &a.SessionIDs)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_ids': %w", err)
+		}
+		delete(object, "session_ids")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for FeatureRestartResponse to handle AdditionalProperties
+func (a FeatureRestartResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["dispatch"], err = json.Marshal(a.Dispatch)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'dispatch': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["phase"], err = json.Marshal(a.Phase)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'phase': %w", err)
+	}
+
+	object["refactor_count"], err = json.Marshal(a.RefactorCount)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'refactor_count': %w", err)
+	}
+
+	object["repo_cycle_count"], err = json.Marshal(a.RepoCycleCount)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'repo_cycle_count': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	if a.SessionIDs != nil {
+		object["session_ids"], err = json.Marshal(a.SessionIDs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'session_ids': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for FeatureStartResponse. Returns the specified
+// element and whether it was found
+func (a FeatureStartResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for FeatureStartResponse
+func (a *FeatureStartResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for FeatureStartResponse to handle AdditionalProperties
+func (a *FeatureStartResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["phase"]; found {
+		err = json.Unmarshal(raw, &a.Phase)
+		if err != nil {
+			return fmt.Errorf("error reading 'phase': %w", err)
+		}
+		delete(object, "phase")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_ids"]; found {
+		err = json.Unmarshal(raw, &a.SessionIDs)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_ids': %w", err)
+		}
+		delete(object, "session_ids")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for FeatureStartResponse to handle AdditionalProperties
+func (a FeatureStartResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["phase"], err = json.Marshal(a.Phase)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'phase': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	if a.SessionIDs != nil {
+		object["session_ids"], err = json.Marshal(a.SessionIDs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'session_ids': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for FeatureStopResponse. Returns the specified
+// element and whether it was found
+func (a FeatureStopResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for FeatureStopResponse
+func (a *FeatureStopResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for FeatureStopResponse to handle AdditionalProperties
+func (a *FeatureStopResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for FeatureStopResponse to handle AdditionalProperties
+func (a FeatureStopResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for HealthResponse. Returns the specified
+// element and whether it was found
+func (a HealthResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for HealthResponse
+func (a *HealthResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for HealthResponse to handle AdditionalProperties
+func (a *HealthResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["launch_policy"]; found {
+		err = json.Unmarshal(raw, &a.LaunchPolicy)
+		if err != nil {
+			return fmt.Errorf("error reading 'launch_policy': %w", err)
+		}
+		delete(object, "launch_policy")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["owner"]; found {
+		err = json.Unmarshal(raw, &a.Owner)
+		if err != nil {
+			return fmt.Errorf("error reading 'owner': %w", err)
+		}
+		delete(object, "owner")
+	}
+
+	if raw, found := object["runtime"]; found {
+		err = json.Unmarshal(raw, &a.Runtime)
+		if err != nil {
+			return fmt.Errorf("error reading 'runtime': %w", err)
+		}
+		delete(object, "runtime")
+	}
+
+	if raw, found := object["server_time"]; found {
+		err = json.Unmarshal(raw, &a.ServerTime)
+		if err != nil {
+			return fmt.Errorf("error reading 'server_time': %w", err)
+		}
+		delete(object, "server_time")
+	}
+
+	if raw, found := object["started_at"]; found {
+		err = json.Unmarshal(raw, &a.StartedAt)
+		if err != nil {
+			return fmt.Errorf("error reading 'started_at': %w", err)
+		}
+		delete(object, "started_at")
+	}
+
+	if raw, found := object["status"]; found {
+		err = json.Unmarshal(raw, &a.Status)
+		if err != nil {
+			return fmt.Errorf("error reading 'status': %w", err)
+		}
+		delete(object, "status")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for HealthResponse to handle AdditionalProperties
+func (a HealthResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["launch_policy"], err = json.Marshal(a.LaunchPolicy)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'launch_policy': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["owner"], err = json.Marshal(a.Owner)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'owner': %w", err)
+	}
+
+	object["runtime"], err = json.Marshal(a.Runtime)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'runtime': %w", err)
+	}
+
+	object["server_time"], err = json.Marshal(a.ServerTime)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'server_time': %w", err)
+	}
+
+	object["started_at"], err = json.Marshal(a.StartedAt)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'started_at': %w", err)
+	}
+
+	object["status"], err = json.Marshal(a.Status)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'status': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for HelpSendResponse. Returns the specified
+// element and whether it was found
+func (a HelpSendResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for HelpSendResponse
+func (a *HelpSendResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for HelpSendResponse to handle AdditionalProperties
+func (a *HelpSendResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for HelpSendResponse to handle AdditionalProperties
+func (a HelpSendResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for InputNotificationsToggleResponse. Returns the specified
+// element and whether it was found
+func (a InputNotificationsToggleResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for InputNotificationsToggleResponse
+func (a *InputNotificationsToggleResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for InputNotificationsToggleResponse to handle AdditionalProperties
+func (a *InputNotificationsToggleResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["muted"]; found {
+		err = json.Unmarshal(raw, &a.Muted)
+		if err != nil {
+			return fmt.Errorf("error reading 'muted': %w", err)
+		}
+		delete(object, "muted")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for InputNotificationsToggleResponse to handle AdditionalProperties
+func (a InputNotificationsToggleResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["muted"], err = json.Marshal(a.Muted)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'muted': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
 // Getter for additional properties for JSONResponse. Returns the specified
 // element and whether it was found
 func (a JSONResponse) Get(fieldName string) (value interface{}, found bool) {
@@ -1685,6 +4529,2840 @@ func (a JSONResponse) MarshalJSON() ([]byte, error) {
 	object["meta"], err = json.Marshal(a.Meta)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for LivePreviewResponse. Returns the specified
+// element and whether it was found
+func (a LivePreviewResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for LivePreviewResponse
+func (a *LivePreviewResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for LivePreviewResponse to handle AdditionalProperties
+func (a *LivePreviewResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["activity"]; found {
+		err = json.Unmarshal(raw, &a.Activity)
+		if err != nil {
+			return fmt.Errorf("error reading 'activity': %w", err)
+		}
+		delete(object, "activity")
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["attention"]; found {
+		err = json.Unmarshal(raw, &a.Attention)
+		if err != nil {
+			return fmt.Errorf("error reading 'attention': %w", err)
+		}
+		delete(object, "attention")
+	}
+
+	if raw, found := object["context"]; found {
+		err = json.Unmarshal(raw, &a.Context)
+		if err != nil {
+			return fmt.Errorf("error reading 'context': %w", err)
+		}
+		delete(object, "context")
+	}
+
+	if raw, found := object["cost"]; found {
+		err = json.Unmarshal(raw, &a.Cost)
+		if err != nil {
+			return fmt.Errorf("error reading 'cost': %w", err)
+		}
+		delete(object, "cost")
+	}
+
+	if raw, found := object["feature"]; found {
+		err = json.Unmarshal(raw, &a.Feature)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature': %w", err)
+		}
+		delete(object, "feature")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["session"]; found {
+		err = json.Unmarshal(raw, &a.Session)
+		if err != nil {
+			return fmt.Errorf("error reading 'session': %w", err)
+		}
+		delete(object, "session")
+	}
+
+	if raw, found := object["timing"]; found {
+		err = json.Unmarshal(raw, &a.Timing)
+		if err != nil {
+			return fmt.Errorf("error reading 'timing': %w", err)
+		}
+		delete(object, "timing")
+	}
+
+	if raw, found := object["transcript"]; found {
+		err = json.Unmarshal(raw, &a.Transcript)
+		if err != nil {
+			return fmt.Errorf("error reading 'transcript': %w", err)
+		}
+		delete(object, "transcript")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for LivePreviewResponse to handle AdditionalProperties
+func (a LivePreviewResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["activity"], err = json.Marshal(a.Activity)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'activity': %w", err)
+	}
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	if a.Attention != nil {
+		object["attention"], err = json.Marshal(a.Attention)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'attention': %w", err)
+		}
+	}
+
+	object["context"], err = json.Marshal(a.Context)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'context': %w", err)
+	}
+
+	object["cost"], err = json.Marshal(a.Cost)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'cost': %w", err)
+	}
+
+	object["feature"], err = json.Marshal(a.Feature)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	if a.Session != nil {
+		object["session"], err = json.Marshal(a.Session)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'session': %w", err)
+		}
+	}
+
+	object["timing"], err = json.Marshal(a.Timing)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'timing': %w", err)
+	}
+
+	if a.Transcript != nil {
+		object["transcript"], err = json.Marshal(a.Transcript)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'transcript': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for MarkDoneResponse. Returns the specified
+// element and whether it was found
+func (a MarkDoneResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for MarkDoneResponse
+func (a *MarkDoneResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for MarkDoneResponse to handle AdditionalProperties
+func (a *MarkDoneResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for MarkDoneResponse to handle AdditionalProperties
+func (a MarkDoneResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for MergeFeatureResponse. Returns the specified
+// element and whether it was found
+func (a MergeFeatureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for MergeFeatureResponse
+func (a *MergeFeatureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for MergeFeatureResponse to handle AdditionalProperties
+func (a *MergeFeatureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for MergeFeatureResponse to handle AdditionalProperties
+func (a MergeFeatureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ModelCatalogResponse. Returns the specified
+// element and whether it was found
+func (a ModelCatalogResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ModelCatalogResponse
+func (a *ModelCatalogResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ModelCatalogResponse to handle AdditionalProperties
+func (a *ModelCatalogResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["phase_defaults"]; found {
+		err = json.Unmarshal(raw, &a.PhaseDefaults)
+		if err != nil {
+			return fmt.Errorf("error reading 'phase_defaults': %w", err)
+		}
+		delete(object, "phase_defaults")
+	}
+
+	if raw, found := object["phase_provider_models"]; found {
+		err = json.Unmarshal(raw, &a.PhaseProviderModels)
+		if err != nil {
+			return fmt.Errorf("error reading 'phase_provider_models': %w", err)
+		}
+		delete(object, "phase_provider_models")
+	}
+
+	if raw, found := object["provider_models"]; found {
+		err = json.Unmarshal(raw, &a.ProviderModels)
+		if err != nil {
+			return fmt.Errorf("error reading 'provider_models': %w", err)
+		}
+		delete(object, "provider_models")
+	}
+
+	if raw, found := object["provider_order"]; found {
+		err = json.Unmarshal(raw, &a.ProviderOrder)
+		if err != nil {
+			return fmt.Errorf("error reading 'provider_order': %w", err)
+		}
+		delete(object, "provider_order")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ModelCatalogResponse to handle AdditionalProperties
+func (a ModelCatalogResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["phase_defaults"], err = json.Marshal(a.PhaseDefaults)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'phase_defaults': %w", err)
+	}
+
+	if a.PhaseProviderModels != nil {
+		object["phase_provider_models"], err = json.Marshal(a.PhaseProviderModels)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'phase_provider_models': %w", err)
+		}
+	}
+
+	if a.ProviderModels != nil {
+		object["provider_models"], err = json.Marshal(a.ProviderModels)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'provider_models': %w", err)
+		}
+	}
+
+	if a.ProviderOrder != nil {
+		object["provider_order"], err = json.Marshal(a.ProviderOrder)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'provider_order': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for NeedUserInputDecisionResponse. Returns the specified
+// element and whether it was found
+func (a NeedUserInputDecisionResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for NeedUserInputDecisionResponse
+func (a *NeedUserInputDecisionResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for NeedUserInputDecisionResponse to handle AdditionalProperties
+func (a *NeedUserInputDecisionResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["decision"]; found {
+		err = json.Unmarshal(raw, &a.Decision)
+		if err != nil {
+			return fmt.Errorf("error reading 'decision': %w", err)
+		}
+		delete(object, "decision")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for NeedUserInputDecisionResponse to handle AdditionalProperties
+func (a NeedUserInputDecisionResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["decision"], err = json.Marshal(a.Decision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'decision': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for NeedUserInputDraftResponse. Returns the specified
+// element and whether it was found
+func (a NeedUserInputDraftResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for NeedUserInputDraftResponse
+func (a *NeedUserInputDraftResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for NeedUserInputDraftResponse to handle AdditionalProperties
+func (a *NeedUserInputDraftResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for NeedUserInputDraftResponse to handle AdditionalProperties
+func (a NeedUserInputDraftResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PermissionAnswerResponse. Returns the specified
+// element and whether it was found
+func (a PermissionAnswerResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PermissionAnswerResponse
+func (a *PermissionAnswerResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PermissionAnswerResponse to handle AdditionalProperties
+func (a *PermissionAnswerResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["decision"]; found {
+		err = json.Unmarshal(raw, &a.Decision)
+		if err != nil {
+			return fmt.Errorf("error reading 'decision': %w", err)
+		}
+		delete(object, "decision")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["request_id"]; found {
+		err = json.Unmarshal(raw, &a.RequestID)
+		if err != nil {
+			return fmt.Errorf("error reading 'request_id': %w", err)
+		}
+		delete(object, "request_id")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PermissionAnswerResponse to handle AdditionalProperties
+func (a PermissionAnswerResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["decision"], err = json.Marshal(a.Decision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'decision': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["request_id"], err = json.Marshal(a.RequestID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'request_id': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PermissionSnapshotResponse. Returns the specified
+// element and whether it was found
+func (a PermissionSnapshotResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PermissionSnapshotResponse
+func (a *PermissionSnapshotResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PermissionSnapshotResponse to handle AdditionalProperties
+func (a *PermissionSnapshotResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["requests"]; found {
+		err = json.Unmarshal(raw, &a.Requests)
+		if err != nil {
+			return fmt.Errorf("error reading 'requests': %w", err)
+		}
+		delete(object, "requests")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PermissionSnapshotResponse to handle AdditionalProperties
+func (a PermissionSnapshotResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	if a.Requests != nil {
+		object["requests"], err = json.Marshal(a.Requests)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'requests': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PromptSnapshotResponse. Returns the specified
+// element and whether it was found
+func (a PromptSnapshotResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PromptSnapshotResponse
+func (a *PromptSnapshotResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PromptSnapshotResponse to handle AdditionalProperties
+func (a *PromptSnapshotResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["ask_user_questions"]; found {
+		err = json.Unmarshal(raw, &a.AskUserQuestions)
+		if err != nil {
+			return fmt.Errorf("error reading 'ask_user_questions': %w", err)
+		}
+		delete(object, "ask_user_questions")
+	}
+
+	if raw, found := object["help_queue"]; found {
+		err = json.Unmarshal(raw, &a.HelpQueue)
+		if err != nil {
+			return fmt.Errorf("error reading 'help_queue': %w", err)
+		}
+		delete(object, "help_queue")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["need_user_inputs"]; found {
+		err = json.Unmarshal(raw, &a.NeedUserInputs)
+		if err != nil {
+			return fmt.Errorf("error reading 'need_user_inputs': %w", err)
+		}
+		delete(object, "need_user_inputs")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PromptSnapshotResponse to handle AdditionalProperties
+func (a PromptSnapshotResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	if a.AskUserQuestions != nil {
+		object["ask_user_questions"], err = json.Marshal(a.AskUserQuestions)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'ask_user_questions': %w", err)
+		}
+	}
+
+	if a.HelpQueue != nil {
+		object["help_queue"], err = json.Marshal(a.HelpQueue)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'help_queue': %w", err)
+		}
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	if a.NeedUserInputs != nil {
+		object["need_user_inputs"], err = json.Marshal(a.NeedUserInputs)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'need_user_inputs': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PublishDescriptionResponse. Returns the specified
+// element and whether it was found
+func (a PublishDescriptionResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PublishDescriptionResponse
+func (a *PublishDescriptionResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PublishDescriptionResponse to handle AdditionalProperties
+func (a *PublishDescriptionResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["body"]; found {
+		err = json.Unmarshal(raw, &a.Body)
+		if err != nil {
+			return fmt.Errorf("error reading 'body': %w", err)
+		}
+		delete(object, "body")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["title"]; found {
+		err = json.Unmarshal(raw, &a.Title)
+		if err != nil {
+			return fmt.Errorf("error reading 'title': %w", err)
+		}
+		delete(object, "title")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PublishDescriptionResponse to handle AdditionalProperties
+func (a PublishDescriptionResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["body"], err = json.Marshal(a.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'body': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["title"], err = json.Marshal(a.Title)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'title': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for PublishFeatureResponse. Returns the specified
+// element and whether it was found
+func (a PublishFeatureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for PublishFeatureResponse
+func (a *PublishFeatureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for PublishFeatureResponse to handle AdditionalProperties
+func (a *PublishFeatureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for PublishFeatureResponse to handle AdditionalProperties
+func (a PublishFeatureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RebaseStartResponse. Returns the specified
+// element and whether it was found
+func (a RebaseStartResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RebaseStartResponse
+func (a *RebaseStartResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RebaseStartResponse to handle AdditionalProperties
+func (a *RebaseStartResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["cycle_type"]; found {
+		err = json.Unmarshal(raw, &a.CycleType)
+		if err != nil {
+			return fmt.Errorf("error reading 'cycle_type': %w", err)
+		}
+		delete(object, "cycle_type")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RebaseStartResponse to handle AdditionalProperties
+func (a RebaseStartResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["cycle_type"], err = json.Marshal(a.CycleType)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'cycle_type': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RecoveryActionResponse. Returns the specified
+// element and whether it was found
+func (a RecoveryActionResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RecoveryActionResponse
+func (a *RecoveryActionResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RecoveryActionResponse to handle AdditionalProperties
+func (a *RecoveryActionResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RecoveryActionResponse to handle AdditionalProperties
+func (a RecoveryActionResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RecoverySnapshotResponse. Returns the specified
+// element and whether it was found
+func (a RecoverySnapshotResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RecoverySnapshotResponse
+func (a *RecoverySnapshotResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RecoverySnapshotResponse to handle AdditionalProperties
+func (a *RecoverySnapshotResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["items"]; found {
+		err = json.Unmarshal(raw, &a.Items)
+		if err != nil {
+			return fmt.Errorf("error reading 'items': %w", err)
+		}
+		delete(object, "items")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["snapshot_id"]; found {
+		err = json.Unmarshal(raw, &a.SnapshotID)
+		if err != nil {
+			return fmt.Errorf("error reading 'snapshot_id': %w", err)
+		}
+		delete(object, "snapshot_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RecoverySnapshotResponse to handle AdditionalProperties
+func (a RecoverySnapshotResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	if a.Items != nil {
+		object["items"], err = json.Marshal(a.Items)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'items': %w", err)
+		}
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["snapshot_id"], err = json.Marshal(a.SnapshotID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'snapshot_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RefactorStartResponse. Returns the specified
+// element and whether it was found
+func (a RefactorStartResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RefactorStartResponse
+func (a *RefactorStartResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RefactorStartResponse to handle AdditionalProperties
+func (a *RefactorStartResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["cycle_type"]; found {
+		err = json.Unmarshal(raw, &a.CycleType)
+		if err != nil {
+			return fmt.Errorf("error reading 'cycle_type': %w", err)
+		}
+		delete(object, "cycle_type")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["pipeline"]; found {
+		err = json.Unmarshal(raw, &a.Pipeline)
+		if err != nil {
+			return fmt.Errorf("error reading 'pipeline': %w", err)
+		}
+		delete(object, "pipeline")
+	}
+
+	if raw, found := object["repo"]; found {
+		err = json.Unmarshal(raw, &a.Repo)
+		if err != nil {
+			return fmt.Errorf("error reading 'repo': %w", err)
+		}
+		delete(object, "repo")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RefactorStartResponse to handle AdditionalProperties
+func (a RefactorStartResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["cycle_type"], err = json.Marshal(a.CycleType)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'cycle_type': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["pipeline"], err = json.Marshal(a.Pipeline)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'pipeline': %w", err)
+	}
+
+	object["repo"], err = json.Marshal(a.Repo)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'repo': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RetryFeatureResponse. Returns the specified
+// element and whether it was found
+func (a RetryFeatureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RetryFeatureResponse
+func (a *RetryFeatureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RetryFeatureResponse to handle AdditionalProperties
+func (a *RetryFeatureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RetryFeatureResponse to handle AdditionalProperties
+func (a RetryFeatureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ReviewCommentsFetchResponse. Returns the specified
+// element and whether it was found
+func (a ReviewCommentsFetchResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ReviewCommentsFetchResponse
+func (a *ReviewCommentsFetchResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ReviewCommentsFetchResponse to handle AdditionalProperties
+func (a *ReviewCommentsFetchResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["comments"]; found {
+		err = json.Unmarshal(raw, &a.Comments)
+		if err != nil {
+			return fmt.Errorf("error reading 'comments': %w", err)
+		}
+		delete(object, "comments")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["mode"]; found {
+		err = json.Unmarshal(raw, &a.Mode)
+		if err != nil {
+			return fmt.Errorf("error reading 'mode': %w", err)
+		}
+		delete(object, "mode")
+	}
+
+	if raw, found := object["repo"]; found {
+		err = json.Unmarshal(raw, &a.Repo)
+		if err != nil {
+			return fmt.Errorf("error reading 'repo': %w", err)
+		}
+		delete(object, "repo")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ReviewCommentsFetchResponse to handle AdditionalProperties
+func (a ReviewCommentsFetchResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	if a.Comments != nil {
+		object["comments"], err = json.Marshal(a.Comments)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'comments': %w", err)
+		}
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["mode"], err = json.Marshal(a.Mode)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'mode': %w", err)
+	}
+
+	object["repo"], err = json.Marshal(a.Repo)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'repo': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ReviewCommentsStartResponse. Returns the specified
+// element and whether it was found
+func (a ReviewCommentsStartResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ReviewCommentsStartResponse
+func (a *ReviewCommentsStartResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ReviewCommentsStartResponse to handle AdditionalProperties
+func (a *ReviewCommentsStartResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["comment_count"]; found {
+		err = json.Unmarshal(raw, &a.CommentCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'comment_count': %w", err)
+		}
+		delete(object, "comment_count")
+	}
+
+	if raw, found := object["cycle_type"]; found {
+		err = json.Unmarshal(raw, &a.CycleType)
+		if err != nil {
+			return fmt.Errorf("error reading 'cycle_type': %w", err)
+		}
+		delete(object, "cycle_type")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["mode"]; found {
+		err = json.Unmarshal(raw, &a.Mode)
+		if err != nil {
+			return fmt.Errorf("error reading 'mode': %w", err)
+		}
+		delete(object, "mode")
+	}
+
+	if raw, found := object["repo"]; found {
+		err = json.Unmarshal(raw, &a.Repo)
+		if err != nil {
+			return fmt.Errorf("error reading 'repo': %w", err)
+		}
+		delete(object, "repo")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if raw, found := object["source"]; found {
+		err = json.Unmarshal(raw, &a.Source)
+		if err != nil {
+			return fmt.Errorf("error reading 'source': %w", err)
+		}
+		delete(object, "source")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ReviewCommentsStartResponse to handle AdditionalProperties
+func (a ReviewCommentsStartResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["comment_count"], err = json.Marshal(a.CommentCount)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'comment_count': %w", err)
+	}
+
+	object["cycle_type"], err = json.Marshal(a.CycleType)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'cycle_type': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["mode"], err = json.Marshal(a.Mode)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'mode': %w", err)
+	}
+
+	object["repo"], err = json.Marshal(a.Repo)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'repo': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	object["source"], err = json.Marshal(a.Source)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'source': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ReviewDecisionResponse. Returns the specified
+// element and whether it was found
+func (a ReviewDecisionResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ReviewDecisionResponse
+func (a *ReviewDecisionResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ReviewDecisionResponse to handle AdditionalProperties
+func (a *ReviewDecisionResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["decision"]; found {
+		err = json.Unmarshal(raw, &a.Decision)
+		if err != nil {
+			return fmt.Errorf("error reading 'decision': %w", err)
+		}
+		delete(object, "decision")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ReviewDecisionResponse to handle AdditionalProperties
+func (a ReviewDecisionResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["decision"], err = json.Marshal(a.Decision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'decision': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RewindFeatureResponse. Returns the specified
+// element and whether it was found
+func (a RewindFeatureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RewindFeatureResponse
+func (a *RewindFeatureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RewindFeatureResponse to handle AdditionalProperties
+func (a *RewindFeatureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["effective_phase"]; found {
+		err = json.Unmarshal(raw, &a.EffectivePhase)
+		if err != nil {
+			return fmt.Errorf("error reading 'effective_phase': %w", err)
+		}
+		delete(object, "effective_phase")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["roadmap_phase"]; found {
+		err = json.Unmarshal(raw, &a.RoadmapPhase)
+		if err != nil {
+			return fmt.Errorf("error reading 'roadmap_phase': %w", err)
+		}
+		delete(object, "roadmap_phase")
+	}
+
+	if raw, found := object["target_phase"]; found {
+		err = json.Unmarshal(raw, &a.TargetPhase)
+		if err != nil {
+			return fmt.Errorf("error reading 'target_phase': %w", err)
+		}
+		delete(object, "target_phase")
+	}
+
+	if raw, found := object["upgrade_pipeline"]; found {
+		err = json.Unmarshal(raw, &a.UpgradePipeline)
+		if err != nil {
+			return fmt.Errorf("error reading 'upgrade_pipeline': %w", err)
+		}
+		delete(object, "upgrade_pipeline")
+	}
+
+	if raw, found := object["warning_count"]; found {
+		err = json.Unmarshal(raw, &a.WarningCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'warning_count': %w", err)
+		}
+		delete(object, "warning_count")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RewindFeatureResponse to handle AdditionalProperties
+func (a RewindFeatureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["effective_phase"], err = json.Marshal(a.EffectivePhase)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'effective_phase': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["roadmap_phase"], err = json.Marshal(a.RoadmapPhase)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'roadmap_phase': %w", err)
+	}
+
+	object["target_phase"], err = json.Marshal(a.TargetPhase)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'target_phase': %w", err)
+	}
+
+	object["upgrade_pipeline"], err = json.Marshal(a.UpgradePipeline)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'upgrade_pipeline': %w", err)
+	}
+
+	object["warning_count"], err = json.Marshal(a.WarningCount)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'warning_count': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RuntimeConfigResponse. Returns the specified
+// element and whether it was found
+func (a RuntimeConfigResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RuntimeConfigResponse
+func (a *RuntimeConfigResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RuntimeConfigResponse to handle AdditionalProperties
+func (a *RuntimeConfigResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["feature_defaults"]; found {
+		err = json.Unmarshal(raw, &a.FeatureDefaults)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_defaults': %w", err)
+		}
+		delete(object, "feature_defaults")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["model_defaults"]; found {
+		err = json.Unmarshal(raw, &a.Defaults)
+		if err != nil {
+			return fmt.Errorf("error reading 'model_defaults': %w", err)
+		}
+		delete(object, "model_defaults")
+	}
+
+	if raw, found := object["notifications"]; found {
+		err = json.Unmarshal(raw, &a.Notifications)
+		if err != nil {
+			return fmt.Errorf("error reading 'notifications': %w", err)
+		}
+		delete(object, "notifications")
+	}
+
+	if raw, found := object["observability"]; found {
+		err = json.Unmarshal(raw, &a.Observability)
+		if err != nil {
+			return fmt.Errorf("error reading 'observability': %w", err)
+		}
+		delete(object, "observability")
+	}
+
+	if raw, found := object["providers"]; found {
+		err = json.Unmarshal(raw, &a.Providers)
+		if err != nil {
+			return fmt.Errorf("error reading 'providers': %w", err)
+		}
+		delete(object, "providers")
+	}
+
+	if raw, found := object["repos"]; found {
+		err = json.Unmarshal(raw, &a.Repos)
+		if err != nil {
+			return fmt.Errorf("error reading 'repos': %w", err)
+		}
+		delete(object, "repos")
+	}
+
+	if raw, found := object["runtime"]; found {
+		err = json.Unmarshal(raw, &a.Runtime)
+		if err != nil {
+			return fmt.Errorf("error reading 'runtime': %w", err)
+		}
+		delete(object, "runtime")
+	}
+
+	if raw, found := object["ui"]; found {
+		err = json.Unmarshal(raw, &a.UI)
+		if err != nil {
+			return fmt.Errorf("error reading 'ui': %w", err)
+		}
+		delete(object, "ui")
+	}
+
+	if raw, found := object["workspace_roots"]; found {
+		err = json.Unmarshal(raw, &a.WorkspaceRoots)
+		if err != nil {
+			return fmt.Errorf("error reading 'workspace_roots': %w", err)
+		}
+		delete(object, "workspace_roots")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RuntimeConfigResponse to handle AdditionalProperties
+func (a RuntimeConfigResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["feature_defaults"], err = json.Marshal(a.FeatureDefaults)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_defaults': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["model_defaults"], err = json.Marshal(a.Defaults)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'model_defaults': %w", err)
+	}
+
+	object["notifications"], err = json.Marshal(a.Notifications)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'notifications': %w", err)
+	}
+
+	object["observability"], err = json.Marshal(a.Observability)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'observability': %w", err)
+	}
+
+	if a.Providers != nil {
+		object["providers"], err = json.Marshal(a.Providers)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'providers': %w", err)
+		}
+	}
+
+	if a.Repos != nil {
+		object["repos"], err = json.Marshal(a.Repos)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'repos': %w", err)
+		}
+	}
+
+	object["runtime"], err = json.Marshal(a.Runtime)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'runtime': %w", err)
+	}
+
+	object["ui"], err = json.Marshal(a.UI)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'ui': %w", err)
+	}
+
+	if a.WorkspaceRoots != nil {
+		object["workspace_roots"], err = json.Marshal(a.WorkspaceRoots)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'workspace_roots': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for RuntimeConfigUpdateResponse. Returns the specified
+// element and whether it was found
+func (a RuntimeConfigUpdateResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for RuntimeConfigUpdateResponse
+func (a *RuntimeConfigUpdateResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for RuntimeConfigUpdateResponse to handle AdditionalProperties
+func (a *RuntimeConfigUpdateResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for RuntimeConfigUpdateResponse to handle AdditionalProperties
+func (a RuntimeConfigUpdateResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {
@@ -2041,6 +7719,757 @@ func (a SessionOutputResponse) MarshalJSON() ([]byte, error) {
 	object["truncated"], err = json.Marshal(a.Truncated)
 	if err != nil {
 		return nil, fmt.Errorf("error marshaling 'truncated': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ShutdownResponse. Returns the specified
+// element and whether it was found
+func (a ShutdownResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ShutdownResponse
+func (a *ShutdownResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ShutdownResponse to handle AdditionalProperties
+func (a *ShutdownResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ShutdownResponse to handle AdditionalProperties
+func (a ShutdownResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TextContentResponse. Returns the specified
+// element and whether it was found
+func (a TextContentResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TextContentResponse
+func (a *TextContentResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TextContentResponse to handle AdditionalProperties
+func (a *TextContentResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["id"]; found {
+		err = json.Unmarshal(raw, &a.ID)
+		if err != nil {
+			return fmt.Errorf("error reading 'id': %w", err)
+		}
+		delete(object, "id")
+	}
+
+	if raw, found := object["limit"]; found {
+		err = json.Unmarshal(raw, &a.Limit)
+		if err != nil {
+			return fmt.Errorf("error reading 'limit': %w", err)
+		}
+		delete(object, "limit")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["offset"]; found {
+		err = json.Unmarshal(raw, &a.Offset)
+		if err != nil {
+			return fmt.Errorf("error reading 'offset': %w", err)
+		}
+		delete(object, "offset")
+	}
+
+	if raw, found := object["size"]; found {
+		err = json.Unmarshal(raw, &a.Size)
+		if err != nil {
+			return fmt.Errorf("error reading 'size': %w", err)
+		}
+		delete(object, "size")
+	}
+
+	if raw, found := object["text"]; found {
+		err = json.Unmarshal(raw, &a.Text)
+		if err != nil {
+			return fmt.Errorf("error reading 'text': %w", err)
+		}
+		delete(object, "text")
+	}
+
+	if raw, found := object["truncated"]; found {
+		err = json.Unmarshal(raw, &a.Truncated)
+		if err != nil {
+			return fmt.Errorf("error reading 'truncated': %w", err)
+		}
+		delete(object, "truncated")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TextContentResponse to handle AdditionalProperties
+func (a TextContentResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["id"], err = json.Marshal(a.ID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'id': %w", err)
+	}
+
+	object["limit"], err = json.Marshal(a.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'limit': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["offset"], err = json.Marshal(a.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'offset': %w", err)
+	}
+
+	object["size"], err = json.Marshal(a.Size)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'size': %w", err)
+	}
+
+	object["text"], err = json.Marshal(a.Text)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'text': %w", err)
+	}
+
+	object["truncated"], err = json.Marshal(a.Truncated)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'truncated': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TranscriptResponse. Returns the specified
+// element and whether it was found
+func (a TranscriptResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TranscriptResponse
+func (a *TranscriptResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TranscriptResponse to handle AdditionalProperties
+func (a *TranscriptResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["cursor"]; found {
+		err = json.Unmarshal(raw, &a.Cursor)
+		if err != nil {
+			return fmt.Errorf("error reading 'cursor': %w", err)
+		}
+		delete(object, "cursor")
+	}
+
+	if raw, found := object["messages"]; found {
+		err = json.Unmarshal(raw, &a.Messages)
+		if err != nil {
+			return fmt.Errorf("error reading 'messages': %w", err)
+		}
+		delete(object, "messages")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TranscriptResponse to handle AdditionalProperties
+func (a TranscriptResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["cursor"], err = json.Marshal(a.Cursor)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'cursor': %w", err)
+	}
+
+	if a.Messages != nil {
+		object["messages"], err = json.Marshal(a.Messages)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'messages': %w", err)
+		}
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TweakFinishResponse. Returns the specified
+// element and whether it was found
+func (a TweakFinishResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TweakFinishResponse
+func (a *TweakFinishResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TweakFinishResponse to handle AdditionalProperties
+func (a *TweakFinishResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["decision"]; found {
+		err = json.Unmarshal(raw, &a.Decision)
+		if err != nil {
+			return fmt.Errorf("error reading 'decision': %w", err)
+		}
+		delete(object, "decision")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["had_changes"]; found {
+		err = json.Unmarshal(raw, &a.HadChanges)
+		if err != nil {
+			return fmt.Errorf("error reading 'had_changes': %w", err)
+		}
+		delete(object, "had_changes")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TweakFinishResponse to handle AdditionalProperties
+func (a TweakFinishResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["decision"], err = json.Marshal(a.Decision)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'decision': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["had_changes"], err = json.Marshal(a.HadChanges)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'had_changes': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for TweakStartResponse. Returns the specified
+// element and whether it was found
+func (a TweakStartResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for TweakStartResponse
+func (a *TweakStartResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for TweakStartResponse to handle AdditionalProperties
+func (a *TweakStartResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["cycle_type"]; found {
+		err = json.Unmarshal(raw, &a.CycleType)
+		if err != nil {
+			return fmt.Errorf("error reading 'cycle_type': %w", err)
+		}
+		delete(object, "cycle_type")
+	}
+
+	if raw, found := object["feature_id"]; found {
+		err = json.Unmarshal(raw, &a.FeatureID)
+		if err != nil {
+			return fmt.Errorf("error reading 'feature_id': %w", err)
+		}
+		delete(object, "feature_id")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["result"]; found {
+		err = json.Unmarshal(raw, &a.Result)
+		if err != nil {
+			return fmt.Errorf("error reading 'result': %w", err)
+		}
+		delete(object, "result")
+	}
+
+	if raw, found := object["session_id"]; found {
+		err = json.Unmarshal(raw, &a.SessionID)
+		if err != nil {
+			return fmt.Errorf("error reading 'session_id': %w", err)
+		}
+		delete(object, "session_id")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for TweakStartResponse to handle AdditionalProperties
+func (a TweakStartResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["cycle_type"], err = json.Marshal(a.CycleType)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'cycle_type': %w", err)
+	}
+
+	object["feature_id"], err = json.Marshal(a.FeatureID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'feature_id': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["result"], err = json.Marshal(a.Result)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'result': %w", err)
+	}
+
+	object["session_id"], err = json.Marshal(a.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'session_id': %w", err)
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for WorkspaceBrowseResponse. Returns the specified
+// element and whether it was found
+func (a WorkspaceBrowseResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for WorkspaceBrowseResponse
+func (a *WorkspaceBrowseResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for WorkspaceBrowseResponse to handle AdditionalProperties
+func (a *WorkspaceBrowseResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["api_version"]; found {
+		err = json.Unmarshal(raw, &a.APIVersion)
+		if err != nil {
+			return fmt.Errorf("error reading 'api_version': %w", err)
+		}
+		delete(object, "api_version")
+	}
+
+	if raw, found := object["child_repo_count"]; found {
+		err = json.Unmarshal(raw, &a.ChildRepoCount)
+		if err != nil {
+			return fmt.Errorf("error reading 'child_repo_count': %w", err)
+		}
+		delete(object, "child_repo_count")
+	}
+
+	if raw, found := object["entries"]; found {
+		err = json.Unmarshal(raw, &a.Entries)
+		if err != nil {
+			return fmt.Errorf("error reading 'entries': %w", err)
+		}
+		delete(object, "entries")
+	}
+
+	if raw, found := object["is_git_repo"]; found {
+		err = json.Unmarshal(raw, &a.IsGitRepo)
+		if err != nil {
+			return fmt.Errorf("error reading 'is_git_repo': %w", err)
+		}
+		delete(object, "is_git_repo")
+	}
+
+	if raw, found := object["meta"]; found {
+		err = json.Unmarshal(raw, &a.Meta)
+		if err != nil {
+			return fmt.Errorf("error reading 'meta': %w", err)
+		}
+		delete(object, "meta")
+	}
+
+	if raw, found := object["path"]; found {
+		err = json.Unmarshal(raw, &a.Path)
+		if err != nil {
+			return fmt.Errorf("error reading 'path': %w", err)
+		}
+		delete(object, "path")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for WorkspaceBrowseResponse to handle AdditionalProperties
+func (a WorkspaceBrowseResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	object["api_version"], err = json.Marshal(a.APIVersion)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'api_version': %w", err)
+	}
+
+	object["child_repo_count"], err = json.Marshal(a.ChildRepoCount)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'child_repo_count': %w", err)
+	}
+
+	if a.Entries != nil {
+		object["entries"], err = json.Marshal(a.Entries)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'entries': %w", err)
+		}
+	}
+
+	object["is_git_repo"], err = json.Marshal(a.IsGitRepo)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'is_git_repo': %w", err)
+	}
+
+	object["meta"], err = json.Marshal(a.Meta)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'meta': %w", err)
+	}
+
+	object["path"], err = json.Marshal(a.Path)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'path': %w", err)
 	}
 
 	for fieldName, field := range a.AdditionalProperties {

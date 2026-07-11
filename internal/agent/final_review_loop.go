@@ -41,6 +41,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+// finalStatusReviewPassed is the FinalStatus value shared by every loop
+// result type in this package (FeatureFinalReviewResult, LoopResult,
+// PhaseImplementLoopResult, RebaseLoopResult, ReviewCommentsLoopResult,
+// RefactorFeatureLoopResult, ...) to signal that review approved the work.
+const finalStatusReviewPassed = "review_passed"
+
 // FeatureFinalReviewResult is the unified feature-level FR loop's outcome.
 //
 // FinalStatus values:
@@ -105,7 +111,7 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 		// Nothing to review — degenerate "all repos already past FR" case.
 		// Treat as a no-op success so the orchestrator can fall through to
 		// MarkCodeReady / auto-publish unchanged.
-		return &FeatureFinalReviewResult{FinalStatus: "review_passed"}, nil
+		return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed}, nil
 	}
 
 	// Build the cross-repo workspace. Cwd at the feature state dir, with
@@ -156,7 +162,7 @@ func RunFeatureFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionManager) 
 	}
 
 	switch result.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		// FR success: AtomicPhaseStamp records the outcome with no
 		// per-repo state mutation (feature-level Status carries the
 		// verdict); PR URL writes are mirrored when supplied.
@@ -226,7 +232,7 @@ func RunFeatureCycleFinalReviewLoop(cfg OrchestratorConfig, sm ports.SessionMana
 	sort.Strings(repos)
 	if len(repos) == 0 {
 		// Degenerate "no repos" case — nothing to review.
-		return &FeatureFinalReviewResult{FinalStatus: "review_passed"}, nil
+		return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed}, nil
 	}
 
 	// Build the cross-repo workspace. Cwd at the feature state dir, with
@@ -351,7 +357,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				s.writeIterationMetaWithAgent(iterDir, i, agentStatusProtocolViolation, "review_failed")
 				if consecutiveFailures >= maxConsecFails {
 					return &FeatureFinalReviewResult{
-						FinalStatus: "protocol_violation",
+						FinalStatus: BoundedHelperStatusProtocolViolation,
 						Iterations:  i,
 						LastError:   reviewErr.Error(),
 					}, nil
@@ -369,7 +375,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 		switch reviewStatus {
 		case ReviewApproved:
 			s.writeIterationMeta(iterDir, i, "approved")
-			return &FeatureFinalReviewResult{FinalStatus: "review_passed", Iterations: i}, nil
+			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: i}, nil
 
 		case ReviewChangesRequested:
 			if err := s.seedFixVerificationReport(iterDir); err != nil {
@@ -389,7 +395,7 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 				continue
 			}
 
-			if fixErr != nil || (fixStatus != "SUCCESS" && fixStatus != "") {
+			if fixErr != nil || (fixStatus != agentStatusSuccess && fixStatus != "") {
 				consecutiveFailures++
 				agentStatus := "FAILED"
 				if fixErr == nil {
@@ -714,7 +720,7 @@ func (s *featureFinalReviewLoopState) recordFixProtocolViolation(iterDir string,
 	s.writeIterationMetaWithAgent(iterDir, iteration, agentStatusProtocolViolation, "changes_requested")
 	if *consecutiveFailures >= s.maxConsecFails() {
 		return &FeatureFinalReviewResult{
-			FinalStatus: "protocol_violation",
+			FinalStatus: BoundedHelperStatusProtocolViolation,
 			Iterations:  iteration,
 			LastError:   lastErr,
 		}

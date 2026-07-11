@@ -209,7 +209,7 @@ func TestFormatGroundingPreCheckFeedback_Shape(t *testing.T) {
 }
 
 func TestFormatGroundingPreCheckFeedback_MissingSection(t *testing.T) {
-	out := FormatGroundingPreCheckFeedback(GroundingCheckResult{HasSection: false}, "abc", "main")
+	out := FormatGroundingPreCheckFeedback(GroundingCheckResult{HasSection: false}, "abc", defaultTestBranch)
 	if !strings.Contains(out, "no `## Grounding` section") {
 		t.Errorf("missing-section feedback should explain absence:\n%s", out)
 	}

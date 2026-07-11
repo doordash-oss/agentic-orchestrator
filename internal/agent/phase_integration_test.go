@@ -283,7 +283,7 @@ func TestPhaseRunnerResearchSuccess_MockProtocol(t *testing.T) {
 	// Set up MockProvider with MockProtocol
 	mockProto := mocks.NewMockProtocol(mocks.StandardSequence("Research complete")...)
 	mockProv := &mocks.MockProvider{
-		ProviderName: "mock",
+		ProviderName: testMockIdentifier,
 		Models:       []string{"test-model"},
 		CLIDetected:  true,
 		CommandArgs:  []string{"cat"}, // minimal subprocess that echoes stdin to stdout
@@ -556,7 +556,7 @@ func TestPhaseRunnerImplementationForwardsBuilders(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		if result.FinalStatus != "review_passed" {
+		if result.FinalStatus != finalStatusReviewPassed {
 			t.Errorf("expected review_passed, got %s (error: %s)", result.FinalStatus, result.LastError)
 		}
 	case <-time.After(15 * time.Second):
@@ -1008,7 +1008,7 @@ func TestRunTweakSession_EndToEnd_MockProtocol(t *testing.T) {
 	// Set up MockProvider with MockProtocol (init → assistant → success).
 	mockProto := mocks.NewMockProtocol(mocks.StandardSequence("Tweak applied")...)
 	mockProv := &mocks.MockProvider{
-		ProviderName: "mock",
+		ProviderName: testMockIdentifier,
 		Models:       []string{"test-impl-model"},
 		CLIDetected:  true,
 		CommandArgs:  []string{"cat"},

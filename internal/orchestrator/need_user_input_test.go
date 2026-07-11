@@ -63,7 +63,7 @@ func TestOrchestrator_HandlePhaseCompletion_NeedUserInput_PausesFeature(t *testi
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Pipeline:     feature.PipelineMoonshot,
-		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	lc := lifecycleForFeature(f)
 	lc.ClearAddressingReviewsFn = func(id string) error { return nil }
@@ -113,7 +113,7 @@ func TestHandleNeedUserInputDecision_StaleRepoNameRoutesToFeatureScope(t *testin
 	f := &feature.Feature{
 		ID:         "feat-mr-nui-no-repo",
 		Status:     feature.StatusImplementing,
-		Repos:      []feature.FeatureRepo{{Name: "repo-a"}},
+		Repos:      []feature.FeatureRepo{{Name: repoName}},
 		RepoStates: map[string]*feature.RepoState{},
 	}
 	lc := lifecycleForFeature(f)

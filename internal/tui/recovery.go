@@ -182,14 +182,20 @@ func isRecoveryTweakSession(item session.RecoveryItem) bool {
 	return false
 }
 
+const (
+	recoveryLabelResume = "[R]esume"
+	recoveryLabelKill   = "[K]ill"
+	recoveryLabelSkip   = "[S]kip"
+)
+
 func actionString(a session.RecoveryAction) string {
 	switch a {
 	case session.RecoveryResume:
-		return "[R]esume"
+		return recoveryLabelResume
 	case session.RecoveryKill:
-		return "[K]ill"
+		return recoveryLabelKill
 	case session.RecoverySkip:
-		return "[S]kip"
+		return recoveryLabelSkip
 	default:
 		return "Unknown"
 	}

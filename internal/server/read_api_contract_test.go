@@ -37,6 +37,44 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+// Fixture literals used repeatedly across this file's contract assertions.
+const (
+	// descriptionFieldKey, confidenceFieldKey, labelFieldKey, optionsFieldKey,
+	// headerFieldKey, questionsFieldKey and questionFieldKey are JSON field
+	// names reused across AskUserQuestion, rewind-option and
+	// publish-description test fixtures.
+	descriptionFieldKey = "description"
+	confidenceFieldKey  = "confidence"
+	labelFieldKey       = "label"
+	optionsFieldKey     = "options"
+	headerFieldKey      = "header"
+	questionsFieldKey   = "questions"
+	questionFieldKey    = "question"
+	// secretTokenLiteral is a fake secret value asserted to never leak into
+	// responses, alongside testRepoPath/worktreePathLiteral/secretBranchLiteral.
+	secretTokenLiteral = "private-token"
+	// chatLabel is the shared kind/label value for chat-prompt fixtures.
+	chatLabel = "chat"
+	// controlSubtypeCanUseTool is the llm.ControlRequest.Subtype value for a
+	// tool-permission control request.
+	controlSubtypeCanUseTool = "can_use_tool"
+	// gitWorktreeAddFailedMsg is the fake LastError value used across
+	// worktree-setup-failure fixtures.
+	gitWorktreeAddFailedMsg = "git worktree add failed"
+	// modelOpus1M is a fake extended-context model ID used across
+	// ModelConfig fixtures.
+	modelOpus1M = "opus[1m]"
+	// artifactIDRoadmap is the fake roadmap artifact/phase ID used across
+	// artifact-read fixtures in this file.
+	artifactIDRoadmap = "roadmap"
+	// fixtureAskSessionID is the fake AskUserQuestion session ID used across
+	// ask-user fixtures in this file.
+	fixtureAskSessionID = "sess-ask"
+	// fixtureTaskID is the fake llm task ID used across task-event fixtures
+	// in this file.
+	fixtureTaskID = "task-1"
+)
+
 func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
@@ -46,13 +84,13 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 		DisableHostValidation: true,
 	})
 
-	dashboard := getJSONMap(t, handler, "/api/v1/features")
+	dashboard := getJSONMap(t, handler, apiPathFeatures)
 	meta := dashboard["meta"].(map[string]any)
 	revision := meta["revision"].(string)
 	if revision == "" {
 		t.Fatal("dashboard revision is empty")
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
+	req := httptest.NewRequest(http.MethodGet, apiPathFeatures, nil)
 	req.Header.Set("If-None-Match", `"`+revision+`"`)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -60,7 +98,7 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 		t.Fatalf("revalidated dashboard status = %d; want 304", w.Result().StatusCode)
 	}
 	rawDashboard := mustMarshalJSON(t, dashboard)
-	for _, forbidden := range []string{"/repo/path", "/worktree/path", "feature/secret", "private-token", "permissions_queue"} {
+	for _, forbidden := range []string{testRepoPath, worktreePathLiteral, secretBranchLiteral, secretTokenLiteral, "permissions_queue"} {
 		if strings.Contains(rawDashboard, forbidden) {
 			t.Fatalf("dashboard leaks %q in %s", forbidden, rawDashboard)
 		}
@@ -70,15 +108,15 @@ func TestReadAPISnapshotsRevisionAndStructuredErrors(t *testing.T) {
 	if detail["api_version"] != APIVersion {
 		t.Fatalf("detail api_version = %v; want %s", detail["api_version"], APIVersion)
 	}
-	if detail["feature"].(map[string]any)["id"] != f.ID {
-		t.Fatalf("detail feature id = %v; want %s", detail["feature"], f.ID)
+	if detail[entityFeature].(map[string]any)["id"] != f.ID {
+		t.Fatalf("detail feature id = %v; want %s", detail[entityFeature], f.ID)
 	}
-	models := detail["feature"].(map[string]any)["models"].(map[string]any)
+	models := detail[entityFeature].(map[string]any)["models"].(map[string]any)
 	if models["implementation"] != f.Models.Implementation {
 		t.Fatalf("detail feature models.implementation = %v; want %s", models["implementation"], f.Models.Implementation)
 	}
 	rawDetail := mustMarshalJSON(t, detail)
-	for _, forbidden := range []string{"/repo/path", "/worktree/path", "feature/secret"} {
+	for _, forbidden := range []string{testRepoPath, worktreePathLiteral, secretBranchLiteral} {
 		if strings.Contains(rawDetail, forbidden) {
 			t.Fatalf("detail leaks storage/git field %q in %s", forbidden, rawDetail)
 		}
@@ -105,7 +143,7 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 		ActiveRun:     1,
 		RunCount:      1,
 		FailureType:   feature.FailureWorktreeSetup,
-		LastError:     "git worktree add failed",
+		LastError:     gitWorktreeAddFailedMsg,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos:         []feature.FeatureRepo{{Name: "repo-a", Branch: "feature/setup-failed"}},
 	}
@@ -113,11 +151,11 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	setup.Status = feature.SetupStatusFailed
 	setup.CompletedAt = &now
 	setup.LatestLogPath = "/tmp/agentico/setup.log"
-	setup.LastError = "git worktree add failed"
+	setup.LastError = gitWorktreeAddFailedMsg
 	task := setup.Tasks["worktree:repo-a"]
 	task.Status = feature.SetupStatusFailed
 	task.Path = "/tmp/worktrees/setup-failed/repo-a"
-	task.LastError = "git worktree add failed"
+	task.LastError = gitWorktreeAddFailedMsg
 	setup.Tasks[task.Key] = task
 	f.SetRun(&feature.Run{RunNumber: 1, Setup: setup, FailureType: feature.FailureWorktreeSetup})
 	if err := store.Save(f); err != nil {
@@ -126,18 +164,18 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 	handler := NewHandler(HandlerOptions{Features: store, DisableHostValidation: true})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureBody := detail["feature"].(map[string]any)
+	featureBody := detail[entityFeature].(map[string]any)
 	active := featureBody["active_run_detail"].(map[string]any)
 	setupBody, ok := active["setup"].(map[string]any)
 	if !ok {
 		t.Fatalf("active_run_detail = %+v, want setup object for durable setup failure", active)
 	}
-	if setupBody["status"] != "failed" || setupBody["last_error"] != "git worktree add failed" || setupBody["latest_log_path"] == "" {
+	if setupBody["status"] != string(feature.SetupStatusFailed) || setupBody["last_error"] != gitWorktreeAddFailedMsg || setupBody["latest_log_path"] == "" {
 		t.Fatalf("setup = %+v, want failed setup diagnostic", setupBody)
 	}
 	tasks := setupBody["tasks"].(map[string]any)
 	worktreeTask := tasks["worktree:repo-a"].(map[string]any)
-	if worktreeTask["status"] != "failed" || worktreeTask["last_error"] != "git worktree add failed" || worktreeTask["path"] == "" {
+	if worktreeTask["status"] != string(feature.SetupStatusFailed) || worktreeTask["last_error"] != gitWorktreeAddFailedMsg || worktreeTask["path"] == "" {
 		t.Fatalf("worktree task = %+v, want failed task diagnostic", worktreeTask)
 	}
 }
@@ -153,7 +191,7 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 		ff.ActiveCycle = nil
 		ff.SetActiveCycleType("")
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			"agentic-orchestrator": {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
+			repoNameSelf: {Type: feature.CycleRefactor, Status: feature.RepoCycleRunning},
 		}
 		return nil
 	}); err != nil {
@@ -165,7 +203,7 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 		DisableHostValidation: true,
 	})
 
-	list := getJSONMap(t, handler, "/api/v1/features")
+	list := getJSONMap(t, handler, apiPathFeatures)
 	summaries := list["features"].([]any)
 	if len(summaries) != 1 {
 		t.Fatalf("list features len = %d, want 1", len(summaries))
@@ -175,17 +213,17 @@ func TestFeatureDetailSynthesizesCycleFromRepoCycleState(t *testing.T) {
 	if !ok {
 		t.Fatalf("summary feature cycle missing in %+v", summaryDTO)
 	}
-	if summaryCycle["type"] != "refactor" || summaryCycle["status"] != "running" || summaryCycle["count"].(float64) != 1 {
+	if summaryCycle["type"] != actionRefactor || summaryCycle["status"] != feature.RepoCycleRunning || summaryCycle["count"].(float64) != 1 {
 		t.Fatalf("summary feature cycle = %+v, want running refactor #1", summaryCycle)
 	}
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureDTO := detail["feature"].(map[string]any)
+	featureDTO := detail[entityFeature].(map[string]any)
 	cycle, ok := featureDTO["cycle"].(map[string]any)
 	if !ok {
 		t.Fatalf("detail feature cycle missing in %+v", featureDTO)
 	}
-	if cycle["type"] != "refactor" || cycle["status"] != "running" || cycle["count"].(float64) != 1 {
+	if cycle["type"] != actionRefactor || cycle["status"] != feature.RepoCycleRunning || cycle["count"].(float64) != 1 {
 		t.Fatalf("detail feature cycle = %+v, want running refactor #1", cycle)
 	}
 }
@@ -194,34 +232,34 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 	store, f := seedReadFeature(t)
 	f.ID = "feat-rebase"
 	f.Status = feature.StatusCodeReady
-	f.Repos = []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}
+	f.Repos = []feature.FeatureRepo{{Name: repoNameAPI}, {Name: repoNameWeb}}
 	f.ActiveCycle = &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning, Count: 2}
 	f.SetActiveCycleType(feature.CycleRebase)
 	f.RebaseOperation = &feature.RebaseOperationState{
 		Stage: feature.RebaseStageHarness,
 		Repos: map[string]*feature.RebaseRepoProgress{
-			"api": {Status: feature.RebaseRepoStatusRebasing, RebaseTarget: "main"},
-			"web": {Status: feature.RebaseRepoStatusUpToDate, RebaseTarget: "main"},
+			repoNameAPI: {Status: feature.RebaseRepoStatusRebasing, RebaseTarget: "main"},
+			repoNameWeb: {Status: feature.RebaseRepoStatusUpToDate, RebaseTarget: "main"},
 		},
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:      RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:      RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:     store,
 		FeatureStore: store,
 		Freshness: StaticFreshnessProvider(map[string]RepoFreshness{
-			"api": RepoFreshnessLocalChanges,
-			"web": RepoFreshnessInSync,
+			repoNameAPI: RepoFreshnessLocalChanges,
+			repoNameWeb: RepoFreshnessInSync,
 		}),
 		DisableHostValidation: true,
 	})
 
 	body := getJSONMap(t, handler, "/api/v1/features/feat-rebase")
-	featureBody := body["feature"].(map[string]any)
+	featureBody := body[entityFeature].(map[string]any)
 	cycle := featureBody["cycle"].(map[string]any)
-	if cycle["type"] != "rebase" || cycle["status"] != "running" {
+	if cycle["type"] != actionRebase || cycle["status"] != feature.RepoCycleRunning {
 		t.Fatalf("cycle = %+v, want active rebase", cycle)
 	}
 	status := map[string]RepoStatusDTO{}
@@ -234,11 +272,11 @@ func TestFeatureDetailProjectsActiveFeatureRebaseOperation(t *testing.T) {
 			RebaseStatus: repo["rebase_status"].(string),
 		}
 	}
-	if status["api"].RebaseStatus != "rebasing" || status["api"].Freshness != "local changes" {
-		t.Fatalf("api status = %+v", status["api"])
+	if status[repoNameAPI].RebaseStatus != "rebasing" || status[repoNameAPI].Freshness != "local changes" {
+		t.Fatalf("api status = %+v", status[repoNameAPI])
 	}
-	if status["web"].RebaseStatus != "up_to_date" || status["web"].Freshness != "in sync" {
-		t.Fatalf("web status = %+v", status["web"])
+	if status[repoNameWeb].RebaseStatus != "up_to_date" || status[repoNameWeb].Freshness != "in sync" {
+		t.Fatalf("web status = %+v", status[repoNameWeb])
 	}
 }
 
@@ -246,12 +284,12 @@ func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	t.Parallel()
 
 	rows := transcriptDTOs([]llm.SDKMessage{{
-		Type: "assistant",
+		Type: roleAssistant,
 		Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-			Role: "assistant",
+			Role: roleAssistant,
 			Content: []llm.ContentBlock{
-				{Type: "text", Text: "first section"},
-				{Type: "text", Text: "second section"},
+				{Type: blockTypeText, Text: "first section"},
+				{Type: blockTypeText, Text: "second section"},
 			},
 		}},
 	}}, 7)
@@ -275,48 +313,60 @@ func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
-	f.PendingNeedUserInputPath = filepath.Join(store.RunDir(f.ID, 1), "phase-02", "implement", "need-user-input.yaml")
+	f.PendingNeedUserInputPath = filepath.Join(store.RunDir(f.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	f.Pipeline = feature.PipelineMedium
 	f.Checkpoints = feature.Checkpoints{InquiryReview: true, RoadmapReview: true, PhasePlanReview: true, ManualPublish: true, DraftPublish: true}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	registry := llm.NewRegistry()
-	registry.Register(fakeProvider{name: "codex", models: []string{"gpt-5.4", "gpt-5.4-mini"}})
+	registry.Register(fakeProvider{name: providerCodex, models: []string{modelGPT54, modelGPT54Mini}})
+	askInput, err := json.Marshal(map[string]any{
+		questionsFieldKey: []map[string]any{{
+			questionFieldKey: askUserQuestionSampleText,
+			optionsFieldKey: []map[string]any{{
+				labelFieldKey: "A",
+			}},
+		}},
+		"secret": secretTokenLiteral,
+	})
+	if err != nil {
+		t.Fatalf("Marshal AskUser input: %v", err)
+	}
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "sess-ask", featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingHelp,
+			id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingHelp,
 			initialPrompt: "raw initial prompt with private-token",
 			pending: []*llm.ControlRequestMessage{{
-				Type:      "control_request",
+				Type:      transcriptTypeControlRequest,
 				RequestID: "ask-1",
 				Request: llm.ControlRequest{
-					Subtype:  "can_use_tool",
-					ToolName: "AskUserQuestion",
-					Input:    json.RawMessage(`{"questions":[{"question":"Choose?","options":[{"label":"A"}]}],"secret":"private-token"}`),
+					Subtype:  controlSubtypeCanUseTool,
+					ToolName: toolNameAskUserQuestion,
+					Input:    askInput,
 				},
 			}},
 		},
 		&fakeSessionView{
 			id: "sess-perm", featureID: f.ID, phase: feature.PhasePlan, status: ports.SessionWaitingPermission,
 			pending: []*llm.ControlRequestMessage{{
-				Type:      "control_request",
-				RequestID: "perm-1",
-				Request:   llm.ControlRequest{Subtype: "can_use_tool", ToolName: "Bash", Input: json.RawMessage(`{"command":"echo private-token"}`)},
+				Type:      transcriptTypeControlRequest,
+				RequestID: fixturePermissionRequestID,
+				Request:   llm.ControlRequest{Subtype: controlSubtypeCanUseTool, ToolName: toolNameBash, Input: json.RawMessage(`{"command":"echo private-token"}`)},
 			}},
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:  RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:  RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features: store,
 		Config: &config.Config{
 			Defaults: config.DefaultsConfig{
-				Models:       config.ModelConfig{Research: "opus[1m]", Planning: "opus[1m]", Implementation: "opus[1m]", Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus[1m]"},
+				Models:       config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet, KBBuild: modelOpus1M},
 				Inquireness:  "high",
-				Pipeline:     "large",
+				Pipeline:     string(feature.PipelineLarge),
 				ExitCriteria: "private-token should not leak",
 			},
-			Repos:          map[string]config.RepoConfig{"agentic-orchestrator": {Path: "/repo/path"}},
+			Repos:          map[string]config.RepoConfig{repoNameSelf: {Path: testRepoPath}},
 			WorkspaceRoots: []string{"/workspace"},
 		},
 		Registry:              registry,
@@ -325,15 +375,15 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	})
 
 	for _, path := range []string{
-		"/api/v1/config/runtime",
+		apiPathConfigRuntime,
 		"/api/v1/features/" + f.ID + "/config",
-		"/api/v1/catalog/models",
-		"/api/v1/prompts",
-		"/api/v1/permissions",
+		apiPathCatalogModels,
+		apiPathPrompts,
+		apiPathPermissions,
 	} {
 		body := getJSONMap(t, handler, path)
 		raw := mustMarshalJSON(t, body)
-		if strings.Contains(raw, "private-token") || strings.Contains(raw, "raw initial prompt") {
+		if strings.Contains(raw, secretTokenLiteral) || strings.Contains(raw, "raw initial prompt") {
 			t.Fatalf("%s leaks sensitive data in %s", path, raw)
 		}
 		if body["api_version"] != APIVersion {
@@ -352,22 +402,22 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	if checkpoints["roadmap_review"] != true || checkpoints["phase_plan_review"] != true || checkpoints["draft_publish"] != true || checkpoints["inquiry_review"] == true {
 		t.Fatalf("feature config original checkpoints = %+v; want medium-normalized persisted checkpoints", checkpoints)
 	}
-	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	prompts := getJSONMap(t, handler, apiPathPrompts)
 	asks := prompts["ask_user_questions"].([]any)
 	if len(asks) != 1 {
 		t.Fatalf("ask_user_questions length = %d; want 1", len(asks))
 	}
 	ask := asks[0].(map[string]any)
-	questions := ask["questions"].([]any)
+	questions := ask[questionsFieldKey].([]any)
 	if len(questions) != 1 {
 		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
 	}
 	question := questions[0].(map[string]any)
-	if question["question"] != "Choose?" {
-		t.Fatalf("ask_user question = %v; want Choose?", question["question"])
+	if question[questionFieldKey] != askUserQuestionSampleText {
+		t.Fatalf("ask_user question = %v; want Choose?", question[questionFieldKey])
 	}
-	options := question["options"].([]any)
-	if len(options) != 1 || options[0].(map[string]any)["label"] != "A" {
+	options := question[optionsFieldKey].([]any)
+	if len(options) != 1 || options[0].(map[string]any)[labelFieldKey] != "A" {
 		t.Fatalf("ask_user options = %+v; want sanitized option A", options)
 	}
 	gates := prompts["need_user_inputs"].([]any)
@@ -379,7 +429,7 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 		t.Fatalf("need user input feature_id = %v; want %s", gate["feature_id"], f.ID)
 	}
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	detailGate := detail["feature"].(map[string]any)["need_user_input"].(map[string]any)
+	detailGate := detail[entityFeature].(map[string]any)["need_user_input"].(map[string]any)
 	if detailGate["feature_id"] != f.ID {
 		t.Fatalf("detail need user input feature_id = %v; want %s", detailGate["feature_id"], f.ID)
 	}
@@ -393,11 +443,11 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	longLabel := "Translate visible TUI labels too, including every status badge, button label, and action description that directly corresponds to on-screen text"
 	longDescription := "Translate all prose including TUI labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
 	input, err := json.Marshal(map[string]any{
-		"questions": []map[string]any{{
-			"question": longQuestion,
-			"options": []map[string]any{{
-				"label":       longLabel,
-				"description": longDescription,
+		questionsFieldKey: []map[string]any{{
+			questionFieldKey: longQuestion,
+			optionsFieldKey: []map[string]any{{
+				labelFieldKey:       longLabel,
+				descriptionFieldKey: longDescription,
 			}},
 		}},
 	})
@@ -406,26 +456,26 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "sess-ask", featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+			id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
 			pending: []*llm.ControlRequestMessage{{
-				Type:      "control_request",
+				Type:      transcriptTypeControlRequest,
 				RequestID: "ask-long",
 				Request: llm.ControlRequest{
-					Subtype:  "can_use_tool",
-					ToolName: "AskUserQuestion",
+					Subtype:  controlSubtypeCanUseTool,
+					ToolName: toolNameAskUserQuestion,
 					Input:    input,
 				},
 			}},
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	prompts := getJSONMap(t, handler, apiPathPrompts)
 	asks := prompts["ask_user_questions"].([]any)
 	if len(asks) != 1 {
 		t.Fatalf("ask_user_questions length = %d; want 1", len(asks))
@@ -434,23 +484,23 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	if _, ok := ask["input"]; ok {
 		t.Fatalf("AskUser prompt snapshot exposed raw input: %+v", ask["input"])
 	}
-	questions := ask["questions"].([]any)
+	questions := ask[questionsFieldKey].([]any)
 	if len(questions) != 1 {
 		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
 	}
 	question := questions[0].(map[string]any)
-	if got := question["question"]; got != longQuestion {
+	if got := question[questionFieldKey]; got != longQuestion {
 		t.Fatalf("ask_user question = %q; want full question %q", got, longQuestion)
 	}
-	options := question["options"].([]any)
+	options := question[optionsFieldKey].([]any)
 	if len(options) != 1 {
 		t.Fatalf("ask_user options length = %d; want 1", len(options))
 	}
 	option := options[0].(map[string]any)
-	if got := option["label"]; got != longLabel {
+	if got := option[labelFieldKey]; got != longLabel {
 		t.Fatalf("ask_user option label = %q; want full label %q", got, longLabel)
 	}
-	if got := option["description"]; got != longDescription {
+	if got := option[descriptionFieldKey]; got != longDescription {
 		t.Fatalf("ask_user option description = %q; want full description %q", got, longDescription)
 	}
 }
@@ -466,63 +516,63 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		"Use Historical-Literary conventions for prose but De Blasi & Montuori 2020 for technical terms.",
 	}
 	strippedInput := json.RawMessage(mustMarshalJSON(t, map[string]any{
-		"questions": []map[string]any{{
-			"question":    question,
-			"header":      "Orthography",
-			"multiSelect": false,
-			"options": []map[string]any{
-				{"label": "Historical-Literary (Recommended)", "description": optionDescriptions[0]},
-				{"label": "De Blasi & Montuori 2020", "description": optionDescriptions[1]},
-				{"label": "Hybrid", "description": optionDescriptions[2]},
+		questionsFieldKey: []map[string]any{{
+			questionFieldKey: question,
+			headerFieldKey:   "Orthography",
+			"multiSelect":    false,
+			optionsFieldKey: []map[string]any{
+				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0]},
+				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1]},
+				{labelFieldKey: "Hybrid", descriptionFieldKey: optionDescriptions[2]},
 			},
 		}},
 	}))
 	sourceInput := json.RawMessage(mustMarshalJSON(t, map[string]any{
-		"questions": []map[string]any{{
-			"question":    question,
-			"header":      "Orthography",
-			"multiSelect": false,
-			"options": []map[string]any{
-				{"label": "Historical-Literary (Recommended)", "description": optionDescriptions[0], "confidence": 0.72},
-				{"label": "De Blasi & Montuori 2020", "description": optionDescriptions[1], "confidence": 0.21},
-				{"label": "Hybrid", "description": optionDescriptions[2], "confidence": 0.07},
+		questionsFieldKey: []map[string]any{{
+			questionFieldKey: question,
+			headerFieldKey:   "Orthography",
+			"multiSelect":    false,
+			optionsFieldKey: []map[string]any{
+				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0], confidenceFieldKey: 0.72},
+				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1], confidenceFieldKey: 0.21},
+				{labelFieldKey: "Hybrid", descriptionFieldKey: optionDescriptions[2], confidenceFieldKey: 0.07},
 			},
 		}},
 	}))
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "sess-ask", featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+			id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
 			messages: []llm.SDKMessage{{
-				Type: "assistant",
+				Type: roleAssistant,
 				Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-					Role: "assistant",
+					Role: roleAssistant,
 					Content: []llm.ContentBlock{{
-						Type:  "tool_use",
+						Type:  blockTypeToolUse,
 						ID:    "toolu-ask-1",
-						Name:  "AskUserQuestion",
+						Name:  toolNameAskUserQuestion,
 						Input: sourceInput,
 					}},
 				}},
 			}},
 			pending: []*llm.ControlRequestMessage{{
-				Type:      "control_request",
+				Type:      transcriptTypeControlRequest,
 				RequestID: "ask-confidence",
 				Request: llm.ControlRequest{
-					Subtype:  "can_use_tool",
-					ToolName: "AskUserQuestion",
+					Subtype:  controlSubtypeCanUseTool,
+					ToolName: toolNameAskUserQuestion,
 					Input:    strippedInput,
 				},
 			}},
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	prompts := getJSONMap(t, handler, apiPathPrompts)
 	asks := prompts["ask_user_questions"].([]any)
 	if len(asks) != 1 {
 		t.Fatalf("ask_user_questions length = %d; want 1", len(asks))
@@ -531,18 +581,18 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 	if _, ok := ask["input"]; ok {
 		t.Fatalf("AskUser prompt snapshot exposed raw input: %+v", ask["input"])
 	}
-	questions := ask["questions"].([]any)
+	questions := ask[questionsFieldKey].([]any)
 	if len(questions) != 1 {
 		t.Fatalf("ask_user questions length = %d; want 1", len(questions))
 	}
-	options := questions[0].(map[string]any)["options"].([]any)
+	options := questions[0].(map[string]any)[optionsFieldKey].([]any)
 	want := []float64{0.72, 0.21, 0.07}
 	if len(options) != len(want) {
 		t.Fatalf("ask_user options length = %d; want %d", len(options), len(want))
 	}
 	for i, wantConfidence := range want {
 		option := options[i].(map[string]any)
-		if got := option["confidence"]; got != wantConfidence {
+		if got := option[confidenceFieldKey]; got != wantConfidence {
 			t.Fatalf("option[%d] confidence = %v; want %.2f in %+v", i, got, wantConfidence, options)
 		}
 	}
@@ -552,7 +602,7 @@ func TestRuntimeConfigDiscoversWorkspaceRootReposOnRead(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	for _, name := range []string{"api", "web", "worker"} {
+	for _, name := range []string{repoNameAPI, repoNameWeb, "worker"} {
 		if err := os.MkdirAll(filepath.Join(root, name, ".git"), 0o755); err != nil {
 			t.Fatalf("mkdir git repo %s: %v", name, err)
 		}
@@ -563,14 +613,14 @@ func TestRuntimeConfigDiscoversWorkspaceRootReposOnRead(t *testing.T) {
 	}
 	handler := NewHandler(HandlerOptions{Config: cfg, DisableHostValidation: true})
 
-	body := getJSONMap(t, handler, "/api/v1/config/runtime")
+	body := getJSONMap(t, handler, apiPathConfigRuntime)
 	repos := body["repos"].([]any)
 	names := make(map[string]bool, len(repos))
 	for _, item := range repos {
 		repo := item.(map[string]any)
 		names[repo["name"].(string)] = true
 	}
-	for _, want := range []string{"api", "web", "worker", "explicit"} {
+	for _, want := range []string{repoNameAPI, repoNameWeb, "worker", "explicit"} {
 		if !names[want] {
 			t.Fatalf("runtime config repos = %+v, want discovered repo %q", names, want)
 		}
@@ -589,7 +639,7 @@ func TestRuntimeConfigUsesDiscoveredPathForBlankExplicitRepo(t *testing.T) {
 		Repos: map[string]config.RepoConfig{
 			"bpfagent": {
 				PipelineGates: map[string]config.Checkpoints{
-					"medium": {ManualPublish: true},
+					string(feature.PipelineMedium): {ManualPublish: true},
 				},
 			},
 		},
@@ -597,7 +647,7 @@ func TestRuntimeConfigUsesDiscoveredPathForBlankExplicitRepo(t *testing.T) {
 	}
 	handler := NewHandler(HandlerOptions{Config: cfg, DisableHostValidation: true})
 
-	body := getJSONMap(t, handler, "/api/v1/config/runtime")
+	body := getJSONMap(t, handler, apiPathConfigRuntime)
 	repos := body["repos"].([]any)
 	for _, item := range repos {
 		repo := item.(map[string]any)
@@ -654,7 +704,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		ff.Status = feature.StatusPublished
 		ff.CurrentPhase = feature.PhasePublish
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			"agentic-orchestrator": {
+			repoNameSelf: {
 				Type:      feature.CycleReviewComments,
 				Status:    feature.RepoCycleFailed,
 				LastError: "private-token leaked in raw prompt payload",
@@ -665,13 +715,13 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		t.Fatalf("Modify() error = %v", err)
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		DisableHostValidation: true,
 	})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureDTO := detail["feature"].(map[string]any)
+	featureDTO := detail[entityFeature].(map[string]any)
 	rawActions, ok := featureDTO["actions"].([]any)
 	if !ok {
 		t.Fatalf("detail actions missing or wrong type in %+v", featureDTO)
@@ -680,7 +730,7 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	for _, raw := range rawActions {
 		action := raw.(map[string]any)
 		gotIDs = append(gotIDs, action["id"].(string))
-		if action["scope"].(map[string]any)["type"] != "feature" {
+		if action["scope"].(map[string]any)["type"] != entityFeature {
 			t.Fatalf("action scope = %+v; want feature scope", action["scope"])
 		}
 		if _, ok := action["required_inputs"].([]any); !ok {
@@ -689,20 +739,20 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 	}
 	wantIDs := []string{
 		"start",
-		"pause-stop",
-		"resume",
-		"restart",
-		"publish",
-		"merge",
-		"rewind",
-		"rebase",
-		"review-comments",
-		"tweak",
-		"refactor",
-		"retry",
-		"mark-done",
-		"cleanup",
-		"delete",
+		actionPauseStop,
+		actionResume,
+		actionRestart,
+		actionPublish,
+		actionMerge,
+		actionRewind,
+		actionRebase,
+		actionReviewComments,
+		actionTweak,
+		actionRefactor,
+		actionRetry,
+		actionMarkDone,
+		actionCleanup,
+		actionDelete,
 	}
 	if strings.Join(gotIDs, ",") != strings.Join(wantIDs, ",") {
 		t.Fatalf("action ids = %v; want %v", gotIDs, wantIDs)
@@ -712,33 +762,33 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		action := rawAction.(map[string]any)
 		actionsByID[action["id"].(string)] = action
 	}
-	assertActionScope(t, actionsByID["publish"], "")
-	assertActionInputNames(t, actionsByID["publish"])
-	assertActionScope(t, actionsByID["merge"], "")
-	assertActionInputNames(t, actionsByID["merge"])
-	assertActionInputNames(t, actionsByID["rewind"], "target_phase", "roadmap_phase", "upgrade_pipeline")
-	assertActionInputRequired(t, actionsByID["rewind"], "target_phase", true)
-	assertActionInputRequired(t, actionsByID["rewind"], "roadmap_phase", false)
-	assertActionInputRequired(t, actionsByID["rewind"], "upgrade_pipeline", false)
-	assertActionScope(t, actionsByID["rebase"], "")
-	assertActionInputNames(t, actionsByID["rebase"])
-	assertActionScope(t, actionsByID["review-comments"], "required")
-	assertActionInputNames(t, actionsByID["review-comments"], "repo", "mode")
-	assertActionInputRequired(t, actionsByID["review-comments"], "repo", true)
-	assertActionInputRequired(t, actionsByID["review-comments"], "mode", true)
-	assertActionScope(t, actionsByID["refactor"], "optional")
-	assertActionInputNames(t, actionsByID["refactor"], "repo", "prompt", "pipeline")
-	assertActionInputRequired(t, actionsByID["refactor"], "repo", false)
-	assertActionInputRequired(t, actionsByID["refactor"], "prompt", true)
-	assertActionScope(t, actionsByID["cleanup"], "")
-	assertActionInputNames(t, actionsByID["cleanup"], "target")
-	assertActionScope(t, actionsByID["delete"], "")
-	refactorPrompt := actionInputByName(t, actionsByID["refactor"], "prompt")
+	assertActionScope(t, actionsByID[actionPublish], "")
+	assertActionInputNames(t, actionsByID[actionPublish])
+	assertActionScope(t, actionsByID[actionMerge], "")
+	assertActionInputNames(t, actionsByID[actionMerge])
+	assertActionInputNames(t, actionsByID[actionRewind], "target_phase", "roadmap_phase", "upgrade_pipeline")
+	assertActionInputRequired(t, actionsByID[actionRewind], "target_phase", true)
+	assertActionInputRequired(t, actionsByID[actionRewind], "roadmap_phase", false)
+	assertActionInputRequired(t, actionsByID[actionRewind], "upgrade_pipeline", false)
+	assertActionScope(t, actionsByID[actionRebase], "")
+	assertActionInputNames(t, actionsByID[actionRebase])
+	assertActionScope(t, actionsByID[actionReviewComments], "required")
+	assertActionInputNames(t, actionsByID[actionReviewComments], "repo", "mode")
+	assertActionInputRequired(t, actionsByID[actionReviewComments], "repo", true)
+	assertActionInputRequired(t, actionsByID[actionReviewComments], "mode", true)
+	assertActionScope(t, actionsByID[actionRefactor], "optional")
+	assertActionInputNames(t, actionsByID[actionRefactor], "repo", "prompt", "pipeline")
+	assertActionInputRequired(t, actionsByID[actionRefactor], "repo", false)
+	assertActionInputRequired(t, actionsByID[actionRefactor], "prompt", true)
+	assertActionScope(t, actionsByID[actionCleanup], "")
+	assertActionInputNames(t, actionsByID[actionCleanup], "target")
+	assertActionScope(t, actionsByID[actionDelete], "")
+	refactorPrompt := actionInputByName(t, actionsByID[actionRefactor], "prompt")
 	if got := int(refactorPrompt["max_length"].(float64)); got != MaxActionTextBytes {
 		t.Fatalf("refactor prompt max_length = %d; want %d", got, MaxActionTextBytes)
 	}
 	raw := mustMarshalJSON(t, rawActions)
-	for _, forbidden := range []string{"private-token", "raw prompt", "/repo/path", "/worktree/path"} {
+	for _, forbidden := range []string{secretTokenLiteral, "raw prompt", testRepoPath, worktreePathLiteral} {
 		if strings.Contains(raw, forbidden) {
 			t.Fatalf("action catalog leaks %q in %s", forbidden, raw)
 		}
@@ -775,21 +825,21 @@ func TestActionCatalogRebaseIsFeatureScoped(t *testing.T) {
 		t.Fatalf("Modify() error = %v", err)
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		DisableHostValidation: true,
 	})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	featureDTO := detail["feature"].(map[string]any)
+	featureDTO := detail[entityFeature].(map[string]any)
 	actions := featureDTO["actions"].([]any)
 	actionsByID := map[string]map[string]any{}
 	for _, raw := range actions {
 		action := raw.(map[string]any)
 		actionsByID[action["id"].(string)] = action
 	}
-	assertActionScope(t, actionsByID["rebase"], "")
-	assertActionInputNames(t, actionsByID["rebase"])
+	assertActionScope(t, actionsByID[actionRebase], "")
+	assertActionInputNames(t, actionsByID[actionRebase])
 }
 
 func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
@@ -811,9 +861,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"publish":  {enabled: true},
-				"merge":    {disabledCode: "not_local_only"},
-				"refactor": {disabledCode: "status_not_allowed"},
+				actionPublish:  {enabled: true},
+				actionMerge:    {disabledCode: disabledNotLocalOnly},
+				actionRefactor: {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -823,9 +873,9 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"publish":   {disabledCode: "manual_publish_required"},
-				"refactor":  {enabled: true},
-				"mark-done": {enabled: true},
+				actionPublish:  {disabledCode: "manual_publish_required"},
+				actionRefactor: {enabled: true},
+				actionMarkDone: {enabled: true},
 			},
 		},
 		{
@@ -835,8 +885,8 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"publish": {disabledCode: "local_only"},
-				"merge":   {enabled: true},
+				actionPublish: {disabledCode: "local_only"},
+				actionMerge:   {enabled: true},
 			},
 		},
 		{
@@ -846,7 +896,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"merge": {disabledCode: "status_not_allowed"},
+				actionMerge: {disabledCode: disabledStatusNotAllowed},
 			},
 		},
 		{
@@ -860,7 +910,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"rewind": {disabledCode: "no_rewind_targets"},
+				actionRewind: {disabledCode: "no_rewind_targets"},
 			},
 		},
 		{
@@ -870,25 +920,25 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"publish":  {disabledCode: "already_published"},
-				"merge":    {disabledCode: "not_local_only"},
-				"refactor": {enabled: true},
-				"cleanup":  {enabled: true},
+				actionPublish:  {disabledCode: "already_published"},
+				actionMerge:    {disabledCode: disabledNotLocalOnly},
+				actionRefactor: {enabled: true},
+				actionCleanup:  {enabled: true},
 			},
 		},
 		{
 			name: "published active cycle",
 			f: actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
-				"agentic-orchestrator": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
+				repoNameSelf: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
 			}),
 			want: map[string]struct {
 				enabled      bool
 				disabledCode string
 			}{
-				"rebase":          {disabledCode: "cycle_active"},
-				"review-comments": {disabledCode: "cycle_active"},
-				"tweak":           {disabledCode: "cycle_active"},
-				"refactor":        {disabledCode: "cycle_active"},
+				actionRebase:         {disabledCode: disabledCycleActive},
+				actionReviewComments: {disabledCode: disabledCycleActive},
+				actionTweak:          {disabledCode: disabledCycleActive},
+				actionRefactor:       {disabledCode: disabledCycleActive},
 			},
 		},
 		{
@@ -898,8 +948,8 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"cleanup": {disabledCode: "running"},
-				"delete":  {disabledCode: "running"},
+				actionCleanup: {disabledCode: feature.RepoCycleRunning},
+				actionDelete:  {disabledCode: feature.RepoCycleRunning},
 			},
 		},
 		{
@@ -913,7 +963,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 				enabled      bool
 				disabledCode string
 			}{
-				"rewind": {enabled: true},
+				actionRewind: {enabled: true},
 			},
 		},
 	}
@@ -946,12 +996,12 @@ func TestFeatureDetailActionCatalogMediumPlanReviewAdvertisesPlanAndUpgradeTarge
 	f := actionCatalogTestFeature(feature.StatusPlanNeedsReview, feature.Checkpoints{}, &publishable, nil)
 	f.Pipeline = feature.PipelineMedium
 
-	rewind := actionDTOByID(t, actionCatalogDTOs(f), "rewind")
+	rewind := actionDTOByID(t, actionCatalogDTOs(f), actionRewind)
 	if !rewind.Enabled {
 		t.Fatalf("rewind enabled = false; want true")
 	}
 	targetOptions := actionInputDTOByName(t, rewind, "target_phase").Options
-	if got, want := strings.Join(targetOptions, ","), "plan"; got != want {
+	if got, want := strings.Join(targetOptions, ","), targetPhasePlan; got != want {
 		t.Fatalf("target_phase options = %q; want %q", got, want)
 	}
 	upgradeOptions := actionInputDTOByName(t, rewind, "upgrade_pipeline").Options
@@ -967,7 +1017,7 @@ func TestFeatureDetailActionCatalogDesignReviewExcludesUnstartedPlan(t *testing.
 	f.CurrentPhase = feature.PhaseDesign
 	f.Pipeline = feature.PipelineMoonshot
 
-	rewind := actionDTOByID(t, actionCatalogDTOs(f), "rewind")
+	rewind := actionDTOByID(t, actionCatalogDTOs(f), actionRewind)
 	if !rewind.Enabled {
 		t.Fatalf("rewind enabled = false; want true")
 	}
@@ -992,8 +1042,8 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 		Time:     time.Date(2026, 6, 13, 12, 5, 0, 0, time.UTC),
 		Pending:  true,
 	}}
-	oldGatePath := filepath.Join(store.RunDir(oldest.ID, 1), "phase-02", "implement", "need-user-input.yaml")
-	newGatePath := filepath.Join(store.RunDir(newest.ID, 1), "phase-02", "implement", "need-user-input.yaml")
+	oldGatePath := filepath.Join(store.RunDir(oldest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
+	newGatePath := filepath.Join(store.RunDir(newest.ID, 1), "phase-02", targetPhaseImplement, "need-user-input.yaml")
 	writeFile(t, oldGatePath, "questions: []\n")
 	writeFile(t, newGatePath, "questions: []\n")
 	oldGateTime := time.Date(2026, 6, 13, 12, 2, 0, 0, time.UTC)
@@ -1017,27 +1067,27 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 			id: "new-session", featureID: newest.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
 			startedAt: time.Date(2026, 6, 13, 12, 10, 0, 0, time.UTC),
 			pending: []*llm.ControlRequestMessage{
-				pendingReadControl("new-perm", "Bash", `{}`),
-				pendingReadControl("new-ask", "AskUserQuestion", `{"questions":[{"question":"new ask"}]}`),
+				pendingReadControl("new-perm", toolNameBash, `{}`),
+				pendingReadControl("new-ask", toolNameAskUserQuestion, `{"questions":[{"question":"new ask"}]}`),
 			},
 		},
 		&fakeSessionView{
 			id: "old-session", featureID: oldest.ID, phase: feature.PhasePlan, status: ports.SessionWaitingHelp,
 			startedAt: time.Date(2026, 6, 13, 12, 1, 0, 0, time.UTC),
 			pending: []*llm.ControlRequestMessage{
-				pendingReadControl("old-ask", "AskUserQuestion", `{"questions":[{"question":"old ask"}]}`),
-				pendingReadControl("old-perm", "Bash", `{}`),
+				pendingReadControl("old-ask", toolNameAskUserQuestion, `{"questions":[{"question":"old ask"}]}`),
+				pendingReadControl("old-perm", toolNameBash, `{}`),
 			},
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	prompts := getJSONMap(t, handler, "/api/v1/prompts")
+	prompts := getJSONMap(t, handler, apiPathPrompts)
 	if got, want := requestIDsFromJSON(t, prompts["ask_user_questions"]), []string{"old-ask", "new-ask"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt ask_user_questions order = %v; want %v", got, want)
 	}
@@ -1047,7 +1097,7 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	if got, want := featureIDsFromJSON(t, prompts["need_user_inputs"]), []string{oldest.ID, newest.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt need_user_inputs order = %v; want %v", got, want)
 	}
-	permissions := getJSONMap(t, handler, "/api/v1/permissions")
+	permissions := getJSONMap(t, handler, apiPathPermissions)
 	if got, want := requestIDsFromJSON(t, permissions["requests"]), []string{"old-perm", "new-perm"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("permissions requests order = %v; want %v", got, want)
 	}
@@ -1066,14 +1116,14 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	prompts := getJSONMap(t, handler, "/api/v1/prompts")
-	if got, want := questionsFromJSON(t, prompts["help_queue"]), []string{"Agent has a question"}; strings.Join(got, ",") != strings.Join(want, ",") {
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	if got, want := questionsFromJSON(t, prompts["help_queue"]), []string{agentQuestionPrompt}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt help_queue = %v; want %v for WaitingHelp session without control request", got, want)
 	}
 	if got := requestIDsFromJSON(t, prompts["ask_user_questions"]); len(got) != 0 {
@@ -1086,20 +1136,20 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 	store, f := seedReadFeature(t)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
+			id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, status: ports.SessionWaitingPermission,
 			pending: []*llm.ControlRequestMessage{
-				pendingReadControl("perm-1", "Bash", `{"command":"go test ./internal/tui"}`),
+				pendingReadControl(fixturePermissionRequestID, toolNameBash, `{"command":"go test ./internal/tui"}`),
 			},
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	permissions := getJSONMap(t, handler, "/api/v1/permissions")
+	permissions := getJSONMap(t, handler, apiPathPermissions)
 	requests := permissions["requests"].([]any)
 	if len(requests) != 1 {
 		t.Fatalf("permissions requests length = %d; want 1", len(requests))
@@ -1114,6 +1164,157 @@ func TestPermissionSnapshotIncludesToolInputAndActionableSummary(t *testing.T) {
 	}
 }
 
+func TestPermissionSnapshotIncludesRememberPreview(t *testing.T) {
+	t.Parallel()
+
+	input := json.RawMessage(`{"command":"go test ./internal/tui -run TestAPIApp"}`)
+	store, f := seedReadFeature(t)
+	sess := &fakeSessionView{
+		id: "sess-remember", featureID: f.ID, phase: feature.PhaseImplement,
+		status:         ports.SessionWaitingPermission,
+		permCacheScope: repoNameSelf,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      transcriptTypeControlRequest,
+			RequestID: "perm-remember",
+			Request: llm.ControlRequest{
+				Subtype:  controlSubtypeCanUseTool,
+				ToolName: "Bash",
+				Input:    input,
+			},
+		}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
+		Features:              store,
+		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
+		DisableHostValidation: true,
+	})
+
+	permissions := getJSONMap(t, handler, "/api/v1/permissions")
+	requests := permissions["requests"].([]any)
+	if len(requests) != 1 {
+		t.Fatalf("permissions requests length = %d, want 1", len(requests))
+	}
+	req := requests[0].(map[string]any)
+	remember := req["remember"].(map[string]any)
+	if got, want := remember["pattern"], testRememberPattern; got != want {
+		t.Fatalf("remember.pattern = %v, want %q", got, want)
+	}
+	if got, want := remember["scope"], repoNameSelf; got != want {
+		t.Fatalf("remember.scope = %v, want %q", got, want)
+	}
+	if got, want := remember["scope_display"], "repo: agentic-orchestrator"; got != want {
+		t.Fatalf("remember.scope_display = %v, want %q", got, want)
+	}
+}
+
+func TestPermissionSnapshotRememberPreviewDoesNotLeakSensitiveInput(t *testing.T) {
+	t.Parallel()
+
+	input := json.RawMessage(`{"command":"echo private-token"}`)
+	store, f := seedReadFeature(t)
+	sess := &fakeSessionView{
+		id: "sess-remember-secret", featureID: f.ID, phase: feature.PhaseImplement,
+		status: ports.SessionWaitingPermission,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      transcriptTypeControlRequest,
+			RequestID: "perm-remember-secret",
+			Request: llm.ControlRequest{
+				Subtype:  controlSubtypeCanUseTool,
+				ToolName: toolNameBash,
+				Input:    input,
+			},
+		}},
+	}
+	handler := NewHandler(HandlerOptions{
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
+		Features:              store,
+		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
+		DisableHostValidation: true,
+	})
+
+	permissions := getJSONMap(t, handler, apiPathPermissions)
+	raw := mustMarshalJSON(t, permissions)
+	if strings.Contains(raw, secretTokenLiteral) {
+		t.Fatalf("permissions snapshot leaks private-token in %s", raw)
+	}
+	requests := permissions["requests"].([]any)
+	if len(requests) != 1 {
+		t.Fatalf("permissions requests length = %d, want 1", len(requests))
+	}
+	req := requests[0].(map[string]any)
+	remember := req["remember"].(map[string]any)
+	pattern, ok := remember["pattern"].(string)
+	if !ok || pattern == "" {
+		t.Fatalf("remember.pattern = %v, want non-empty string", remember["pattern"])
+	}
+	if strings.Contains(pattern, secretTokenLiteral) {
+		t.Fatalf("remember.pattern leaks private-token: %q", pattern)
+	}
+	if got, want := pattern, "Bash(echo [redacted] *)"; got != want {
+		t.Fatalf("remember.pattern = %v, want %q", got, want)
+	}
+}
+
+func TestPermissionSnapshotRememberPreviewDoesNotLeakUnsafeRawInput(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		input json.RawMessage
+	}{
+		{name: "malformed_json", input: json.RawMessage(`{"command":"echo private-token"`)},
+		{name: "non_object_json", input: json.RawMessage(`"private-token"`)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store, f := seedReadFeature(t)
+			sess := &fakeSessionView{
+				id: "sess-remember-unsafe-" + tt.name, featureID: f.ID, phase: feature.PhaseImplement,
+				status: ports.SessionWaitingPermission,
+				pending: []*llm.ControlRequestMessage{{
+					Type:      transcriptTypeControlRequest,
+					RequestID: "perm-remember-unsafe-" + tt.name,
+					Request: llm.ControlRequest{
+						Subtype:  controlSubtypeCanUseTool,
+						ToolName: toolNameBash,
+						Input:    tt.input,
+					},
+				}},
+			}
+			handler := NewHandler(HandlerOptions{
+				Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
+				Features:              store,
+				Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
+				DisableHostValidation: true,
+			})
+
+			permissions := getJSONMap(t, handler, apiPathPermissions)
+			raw := mustMarshalJSON(t, permissions)
+			if strings.Contains(raw, secretTokenLiteral) {
+				t.Fatalf("permissions snapshot leaks private-token in %s", raw)
+			}
+			requests := permissions["requests"].([]any)
+			if len(requests) != 1 {
+				t.Fatalf("permissions requests length = %d, want 1", len(requests))
+			}
+			req := requests[0].(map[string]any)
+			remember := req["remember"].(map[string]any)
+			pattern, ok := remember["pattern"].(string)
+			if !ok || pattern == "" {
+				t.Fatalf("remember.pattern = %v, want non-empty string", remember["pattern"])
+			}
+			if strings.Contains(pattern, secretTokenLiteral) {
+				t.Fatalf("remember.pattern leaks private-token: %q", pattern)
+			}
+			if got, want := pattern, "Bash(*)"; got != want {
+				t.Fatalf("remember.pattern = %v, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestFeatureDetailLoadsBoundedHistoricalRuns(t *testing.T) {
 	t.Parallel()
 	_, f := seedReadFeature(t)
@@ -1121,7 +1322,7 @@ func TestFeatureDetailLoadsBoundedHistoricalRuns(t *testing.T) {
 	f.RunCount = 25
 	reader := &countingFeatureReader{feature: f}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/state", Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: "/state", Config: testRuntimeConfigPath},
 		FeatureStore:          reader,
 		DisableHostValidation: true,
 	})
@@ -1135,7 +1336,7 @@ func TestFeatureDetailLoadsBoundedHistoricalRuns(t *testing.T) {
 	if got, want := intsToCSV(reader.loadRunNumbers), "20,21,22,23,24"; got != want {
 		t.Fatalf("feature detail LoadRun calls = %s; want %s", got, want)
 	}
-	rawHistory := body["feature"].(map[string]any)["historical_runs"].([]any)
+	rawHistory := body[entityFeature].(map[string]any)["historical_runs"].([]any)
 	gotRuns := make([]int, 0, len(rawHistory))
 	for _, raw := range rawHistory {
 		gotRuns = append(gotRuns, int(raw.(map[string]any)["run_number"].(float64)))
@@ -1164,13 +1365,13 @@ func TestSessionListIncludesActiveAndRecentFeatureSessions(t *testing.T) {
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	body := getJSONMap(t, handler, "/api/v1/sessions")
+	body := getJSONMap(t, handler, apiPathSessions)
 	rawSessions := body["sessions"].([]any)
 	if len(rawSessions) != 3 {
 		t.Fatalf("sessions length = %d; want active plus recent completed/failed sessions", len(rawSessions))
@@ -1194,7 +1395,7 @@ func TestSessionListExposesChatSessionKind(t *testing.T) {
 			featureID: ChatSessionID,
 			phase:     feature.PhaseResearch,
 			kind:      ports.KindChat,
-			label:     "chat",
+			label:     chatLabel,
 			status:    ports.SessionWaitingHelp,
 		},
 		&fakeSessionView{
@@ -1202,22 +1403,22 @@ func TestSessionListExposesChatSessionKind(t *testing.T) {
 			featureID: ChatSessionID,
 			phase:     feature.PhaseResearch,
 			kind:      ports.KindChat,
-			label:     "chat",
+			label:     chatLabel,
 			status:    ports.SessionWaitingHelp,
 			pending: []*llm.ControlRequestMessage{{
 				RequestID: "ask-1",
-				Request:   llm.ControlRequest{ToolName: "AskUserQuestion"},
+				Request:   llm.ControlRequest{ToolName: toolNameAskUserQuestion},
 			}},
 		},
 	}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	body := getJSONMap(t, handler, "/api/v1/sessions")
+	body := getJSONMap(t, handler, apiPathSessions)
 	rawSessions := body["sessions"].([]any)
 	if len(rawSessions) != 2 {
 		t.Fatalf("sessions length = %d; want both chat sessions", len(rawSessions))
@@ -1231,8 +1432,8 @@ func TestSessionListExposesChatSessionKind(t *testing.T) {
 	if chat["id"] != ChatSessionID || chat["feature_id"] != ChatSessionID {
 		t.Fatalf("chat session identity = %+v; want stable chat identity", chat)
 	}
-	if chat["kind"] != "chat" || chat["label"] != "chat" {
-		t.Fatalf("chat session metadata = kind %v label %v; want chat/chat", chat["kind"], chat["label"])
+	if chat["kind"] != chatLabel || chat[labelFieldKey] != chatLabel {
+		t.Fatalf("chat session metadata = kind %v label %v; want chat/chat", chat["kind"], chat[labelFieldKey])
 	}
 	if chat["turn_state"] != "waiting_input" {
 		t.Fatalf("chat turn_state = %v; want waiting_input", chat["turn_state"])
@@ -1259,13 +1460,13 @@ func TestSessionListUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 	var featureSessionCalls int
 	sessions := fakeSessionManager{views: views, featureSessionsCalls: &featureSessionCalls}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
 	})
 
-	body := getJSONMap(t, handler, "/api/v1/sessions")
+	body := getJSONMap(t, handler, apiPathSessions)
 
 	if featureSessionCalls != 0 {
 		t.Fatalf("FeatureSessions calls = %d; want 0 for bounded session list", featureSessionCalls)
@@ -1302,7 +1503,7 @@ func TestSessionDetailAndTranscriptDoNotScanFeatureSessionsOnLookupMiss(t *testi
 		featureSessionsCalls: &featureSessionCalls,
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1324,23 +1525,23 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 			id: "sess-local-echo", featureID: f.ID, phase: feature.PhaseImplement,
 			kind: ports.KindPhase, status: ports.SessionRunning,
 			messages: []llm.SDKMessage{
-				{Type: "user", User: &llm.UserMessage{Message: llm.ConversationMsg{
-					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: protocolPrompt}},
+				{Type: roleUser, User: &llm.UserMessage{Message: llm.ConversationMsg{
+					Role:    roleUser,
+					Content: []llm.ContentBlock{{Type: blockTypeText, Text: protocolPrompt}},
 				}}},
-				{Type: "user", LocallyAppended: true, User: &llm.UserMessage{Message: llm.ConversationMsg{
-					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: "PostgreSQL"}},
+				{Type: roleUser, LocallyAppended: true, User: &llm.UserMessage{Message: llm.ConversationMsg{
+					Role:    roleUser,
+					Content: []llm.ContentBlock{{Type: blockTypeText, Text: "PostgreSQL"}},
 				}}},
-				{Type: "user", LocallyAppended: true, AutoPicked: true, AutoPickQuestion: "Which cache?", AutoPickConfidence: 0.72, User: &llm.UserMessage{Message: llm.ConversationMsg{
-					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: "Redis (Recommended)"}},
+				{Type: roleUser, LocallyAppended: true, AutoPicked: true, AutoPickQuestion: "Which cache?", AutoPickConfidence: 0.72, User: &llm.UserMessage{Message: llm.ConversationMsg{
+					Role:    roleUser,
+					Content: []llm.ContentBlock{{Type: blockTypeText, Text: "Redis (Recommended)"}},
 				}}},
 			},
 		}},
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1352,15 +1553,15 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 		t.Fatalf("messages length = %d, want protocol prompt, local echo, and auto-picked rows", len(messages))
 	}
 	protocol := messages[0].(map[string]any)
-	if protocol["text"] != protocolPrompt || protocol["redacted"] == true || protocol["locally_appended"] == true {
+	if protocol[blockTypeText] != protocolPrompt || protocol["redacted"] == true || protocol["locally_appended"] == true {
 		t.Fatalf("protocol user row = %+v, want visible non-local prompt", protocol)
 	}
 	local := messages[1].(map[string]any)
-	if local["text"] != "PostgreSQL" || local["redacted"] == true || local["locally_appended"] != true {
+	if local[blockTypeText] != "PostgreSQL" || local["redacted"] == true || local["locally_appended"] != true {
 		t.Fatalf("local user echo row = %+v, want visible locally-appended text", local)
 	}
 	autoPicked := messages[2].(map[string]any)
-	if autoPicked["text"] != "Redis (Recommended)" || autoPicked["locally_appended"] != true || autoPicked["auto_picked"] != true || autoPicked["auto_pick_confidence"] != 0.72 || autoPicked["auto_pick_question"] != "Which cache?" {
+	if autoPicked[blockTypeText] != "Redis (Recommended)" || autoPicked["locally_appended"] != true || autoPicked["auto_picked"] != true || autoPicked["auto_pick_confidence"] != 0.72 || autoPicked["auto_pick_question"] != "Which cache?" {
 		t.Fatalf("auto-picked user row = %+v, want visible auto-picked metadata", autoPicked)
 	}
 }
@@ -1376,16 +1577,16 @@ func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
 			id: "sess-chat-long-answer", featureID: f.ID, phase: feature.PhaseResearch,
 			kind: ports.KindChat, status: ports.SessionRunning,
 			messages: []llm.SDKMessage{{
-				Type: "assistant",
+				Type: roleAssistant,
 				Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-					Role:    "assistant",
-					Content: []llm.ContentBlock{{Type: "text", Text: longAnswer}},
+					Role:    roleAssistant,
+					Content: []llm.ContentBlock{{Type: blockTypeText, Text: longAnswer}},
 				}},
 			}},
 		}},
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1397,8 +1598,8 @@ func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
 		t.Fatalf("messages length = %d, want assistant row", len(messages))
 	}
 	row := messages[0].(map[string]any)
-	if row["text"] != longAnswer {
-		t.Fatalf("assistant transcript text was truncated:\ngot  %q\nwant %q", row["text"], longAnswer)
+	if row[blockTypeText] != longAnswer {
+		t.Fatalf("assistant transcript text was truncated:\ngot  %q\nwant %q", row[blockTypeText], longAnswer)
 	}
 }
 
@@ -1421,7 +1622,7 @@ func TestLivePreviewUsesBoundedRecentSessionsWithoutFeatureScan(t *testing.T) {
 		recentSessionLimits:  &recentSessionLimits,
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1448,30 +1649,30 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	msgs := []llm.SDKMessage{{
-		Type: "tool_progress",
+		Type: transcriptTypeToolProgress,
 		ToolProgress: &llm.ToolProgressMessage{
-			Type:      "tool_progress",
+			Type:      transcriptTypeToolProgress,
 			ToolUseID: "toolu-bash-1",
-			ToolName:  "Bash",
+			ToolName:  toolNameBash,
 			Data:      "private-token output must stay redacted",
 		},
 	}}
 	for i := 1; i <= 6; i++ {
 		msgs = append(msgs, llm.SDKMessage{
-			Type: "assistant",
+			Type: roleAssistant,
 			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-				Role:    "assistant",
-				Content: []llm.ContentBlock{{Type: "text", Text: "preview line " + twoDigit(i)}},
+				Role:    roleAssistant,
+				Content: []llm.ContentBlock{{Type: blockTypeText, Text: "preview line " + twoDigit(i)}},
 			}},
 		})
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
 		id: "sess-live", featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: "codex",
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1486,11 +1687,11 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 	if !strings.Contains(raw, "preview line 01") || !strings.Contains(raw, "preview line 06") {
 		t.Fatalf("live preview transcript did not include extended tail: %s", raw)
 	}
-	if strings.Contains(raw, "private-token") {
+	if strings.Contains(raw, secretTokenLiteral) {
 		t.Fatalf("live preview transcript leaked tool progress output: %s", raw)
 	}
 	tool := transcript[0].(map[string]any)
-	if tool["type"] != "tool_progress" || tool["tool"] != "Bash" || tool["redacted"] != true {
+	if tool["type"] != transcriptTypeToolProgress || tool["tool"] != toolNameBash || tool["redacted"] != true {
 		t.Fatalf("tool progress transcript row = %+v; want redacted Bash tool_progress row", tool)
 	}
 }
@@ -1499,27 +1700,27 @@ func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	msgs := []llm.SDKMessage{
-		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-			Role: "assistant",
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: roleAssistant,
 			Content: []llm.ContentBlock{{
-				Type:  "tool_use",
-				Name:  "Write",
+				Type:  blockTypeToolUse,
+				Name:  toolNameWrite,
 				Input: json.RawMessage(`{"file_path":"docs/provider-notes.md","content":"# Provider notes\n\nUpdated for all providers.\n"}`),
 			}},
 		}}},
-		{Type: "tool_progress", ToolProgress: &llm.ToolProgressMessage{
-			Type:     "tool_progress",
-			ToolName: "Bash",
+		{Type: transcriptTypeToolProgress, ToolProgress: &llm.ToolProgressMessage{
+			Type:     transcriptTypeToolProgress,
+			ToolName: toolNameBash,
 			Data:     "private-token output must stay redacted",
 		}},
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: "codex",
+		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1532,7 +1733,7 @@ func TestSessionTranscriptIncludesSanitizedFileChangeRows(t *testing.T) {
 			t.Fatalf("transcript missing sanitized file change %q in %s", want, raw)
 		}
 	}
-	if strings.Contains(raw, "private-token") {
+	if strings.Contains(raw, secretTokenLiteral) {
 		t.Fatalf("transcript leaked redacted tool progress output: %s", raw)
 	}
 }
@@ -1541,15 +1742,15 @@ func TestSessionTranscriptIncludesStructuredCodexFileChangeDiffRows(t *testing.T
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	msgs := []llm.SDKMessage{{
-		Type: "tool_progress",
+		Type: transcriptTypeToolProgress,
 		ToolProgress: &llm.ToolProgressMessage{
-			Type:      "tool_progress",
+			Type:      transcriptTypeToolProgress,
 			ToolUseID: "call_write",
-			ToolName:  "Write",
+			ToolName:  toolNameWrite,
 		},
 		FileChanges: []llm.FileChangeEvent{{
 			Path:         filepath.Join("/work/repo", "README.md"),
-			Operation:    "update",
+			Operation:    fileChangeOpUpdate,
 			Detail:       "@@ -1,2 +1,2 @@\n-old\n+new\n",
 			AddedLines:   1,
 			RemovedLines: 1,
@@ -1557,13 +1758,13 @@ func TestSessionTranscriptIncludesStructuredCodexFileChangeDiffRows(t *testing.T
 		}},
 	}}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: "codex",
+		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex,
 		workDir:  "/work/repo",
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1582,44 +1783,44 @@ func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	msgs := []llm.SDKMessage{
-		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
-			Role: "assistant",
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
+			Role: roleAssistant,
 			Content: []llm.ContentBlock{{
-				Type:  "tool_use",
+				Type:  blockTypeToolUse,
 				Name:  "Agent",
 				Input: json.RawMessage(`{"description":"Explore KB completion handler","prompt":"Inspect KB docs and return impacted categories with private-token omitted."}`),
 			}},
 		}}},
-		{Type: "system", Subtype: "task_started", TaskStarted: &llm.TaskStartedMessage{
-			Type:        "system",
-			Subtype:     "task_started",
-			TaskID:      "task-1",
+		{Type: roleSystem, Subtype: transcriptTypeTaskStarted, TaskStarted: &llm.TaskStartedMessage{
+			Type:        roleSystem,
+			Subtype:     transcriptTypeTaskStarted,
+			TaskID:      fixtureTaskID,
 			Description: "inspect provider docs",
 			TaskType:    "local_agent",
 			Prompt:      "Read the provider docs and report every attach-view metadata gap with private-token omitted.",
 		}},
-		{Type: "system", Subtype: "task_progress", TaskProgress: &llm.TaskProgressMessage{
-			Type:         "system",
-			Subtype:      "task_progress",
-			TaskID:       "task-1",
+		{Type: roleSystem, Subtype: transcriptTypeTaskProgress, TaskProgress: &llm.TaskProgressMessage{
+			Type:         roleSystem,
+			Subtype:      transcriptTypeTaskProgress,
+			TaskID:       fixtureTaskID,
 			Description:  "inspect provider docs",
 			LastToolName: "Read",
 		}},
-		{Type: "system", Subtype: "task_notification", TaskNotification: &llm.TaskNotificationMessage{
-			Type:    "system",
-			Subtype: "task_notification",
-			TaskID:  "task-1",
+		{Type: roleSystem, Subtype: transcriptTypeTaskNotification, TaskNotification: &llm.TaskNotificationMessage{
+			Type:    roleSystem,
+			Subtype: transcriptTypeTaskNotification,
+			TaskID:  fixtureTaskID,
 			Status:  "completed",
 			Summary: "found API transcript gaps",
 		}},
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement,
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: "claude",
+		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerClaude,
 		messages: msgs,
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1646,7 +1847,7 @@ func TestSessionTranscriptIncludesTaskLifecycleAndDelegationMetadata(t *testing.
 			t.Fatalf("transcript missing task/delegation metadata %q in %s", want, raw)
 		}
 	}
-	if strings.Contains(raw, "private-token") {
+	if strings.Contains(raw, secretTokenLiteral) {
 		t.Fatalf("transcript leaked unsanitized task/delegation prompt: %s", raw)
 	}
 }
@@ -1655,20 +1856,20 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	runDir := store.RunDir(f.ID, 1)
-	writeFile(t, filepath.Join(runDir, "plan", "phase-plan.md"), "hello artifact content")
+	writeFile(t, filepath.Join(runDir, targetPhasePlan, "phase-plan.md"), "hello artifact content")
 	writeFile(t, filepath.Join(runDir, "logs", "session.log"), "first\nsecond\nthird\n")
 	msgs := []llm.SDKMessage{
-		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "safe text"}, {Type: "tool_use", Name: "Bash", Input: json.RawMessage(`{"command":"echo private-token"}`)}}}}},
-		{Type: "user", User: &llm.UserMessage{Message: llm.ConversationMsg{Role: "user", Content: []llm.ContentBlock{{Type: "text", Text: "raw prompt private-token"}}}}},
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "safe text"}, {Type: blockTypeToolUse, Name: toolNameBash, Input: json.RawMessage(`{"command":"echo private-token"}`)}}}}},
+		{Type: roleUser, User: &llm.UserMessage{Message: llm.ConversationMsg{Role: roleUser, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "raw prompt private-token"}}}}},
 	}
 	sessions := fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id: "sess-1", featureID: f.ID, phase: feature.PhaseImplement, repoName: "agentic-orchestrator",
-		kind: ports.KindPhase, status: ports.SessionRunning, provider: "codex", model: "gpt-5.4",
+		id: fixtureSessionID, featureID: f.ID, phase: feature.PhaseImplement, repoName: repoNameSelf,
+		kind: ports.KindPhase, status: ports.SessionRunning, provider: providerCodex, model: modelGPT54,
 		logPath: filepath.Join(runDir, "logs", "session.log"), messages: msgs,
 		initialPrompt: "private-token initial prompt",
 	}}}
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		Sessions:              sessions,
 		DisableHostValidation: true,
@@ -1679,27 +1880,27 @@ func TestArtifactLogLivePreviewAndSessionReadsAreBoundedAndRedacted(t *testing.T
 		t.Fatal("artifact list is empty")
 	}
 	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/plan?offset=6&limit=8")
-	if content["text"] != "artifact" {
-		t.Fatalf("artifact text slice = %q; want artifact", content["text"])
+	if content[blockTypeText] != "artifact" {
+		t.Fatalf("artifact text slice = %q; want artifact", content[blockTypeText])
 	}
 	requestJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/..%2Ffeature.yaml", http.StatusBadRequest)
 
 	logBody := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/logs/session?offset=6&limit=6")
-	if logBody["text"] != "second" {
-		t.Fatalf("log text slice = %q; want second", logBody["text"])
+	if logBody[blockTypeText] != "second" {
+		t.Fatalf("log text slice = %q; want second", logBody[blockTypeText])
 	}
 	preview := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/live-preview")
-	if preview["feature"].(map[string]any)["id"] != f.ID {
-		t.Fatalf("live preview feature = %+v; want %s", preview["feature"], f.ID)
+	if preview[entityFeature].(map[string]any)["id"] != f.ID {
+		t.Fatalf("live preview feature = %+v; want %s", preview[entityFeature], f.ID)
 	}
 	detail := getJSONMap(t, handler, "/api/v1/sessions/sess-1")
 	if got, want := detail["session"].(map[string]any)["initial_prompt"], "[redacted] initial prompt"; got != want {
 		t.Fatalf("session detail initial_prompt = %q; want %q", got, want)
 	}
 
-	for _, path := range []string{"/api/v1/sessions", "/api/v1/sessions/sess-1", "/api/v1/sessions/sess-1/transcript?limit=10"} {
+	for _, path := range []string{apiPathSessions, "/api/v1/sessions/sess-1", "/api/v1/sessions/sess-1/transcript?limit=10"} {
 		raw := mustMarshalJSON(t, getJSONMap(t, handler, path))
-		if strings.Contains(raw, "private-token") {
+		if strings.Contains(raw, secretTokenLiteral) {
 			t.Fatalf("%s leaks redacted content in %s", path, raw)
 		}
 	}
@@ -1709,17 +1910,17 @@ func TestArtifactReadsAllowAbsolutePathsWithinSameRun(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
 	runDir := store.RunDir(f.ID, 1)
-	roadmapPath := filepath.Join(runDir, "roadmap", "roadmap.md")
+	roadmapPath := filepath.Join(runDir, artifactIDRoadmap, "roadmap.md")
 	writeFile(t, roadmapPath, "# Roadmap\n\nTranslate README.\n")
 	f.Status = feature.StatusPlanNeedsReview
 	f.CurrentPhase = feature.PhasePlan
-	f.Artifacts = map[string]string{"roadmap": roadmapPath}
+	f.Artifacts = map[string]string{artifactIDRoadmap: roadmapPath}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		DisableHostValidation: true,
 	})
@@ -1730,16 +1931,16 @@ func TestArtifactReadsAllowAbsolutePathsWithinSameRun(t *testing.T) {
 		t.Fatalf("artifacts len = %d; want 1 (%+v)", len(rawArtifacts), rawArtifacts)
 	}
 	artifact := rawArtifacts[0].(map[string]any)
-	if artifact["id"] != "roadmap" || artifact["path"] != roadmapPath || artifact["content_available"] != true {
+	if artifact["id"] != artifactIDRoadmap || artifact["path"] != roadmapPath || artifact["content_available"] != true {
 		t.Fatalf("roadmap artifact = %+v; want available roadmap with absolute path", artifact)
 	}
-	if artifact["phase"] != "roadmap" {
+	if artifact["phase"] != artifactIDRoadmap {
 		t.Fatalf("roadmap artifact phase = %v; want roadmap", artifact["phase"])
 	}
 
 	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/roadmap?offset=2&limit=7")
-	if content["text"] != "Roadmap" {
-		t.Fatalf("roadmap content = %q; want Roadmap", content["text"])
+	if content[blockTypeText] != "Roadmap" {
+		t.Fatalf("roadmap content = %q; want Roadmap", content[blockTypeText])
 	}
 }
 
@@ -1759,14 +1960,14 @@ func TestRewindDescriptionReviewArtifactAndStateExposed(t *testing.T) {
 	writeFile(t, filepath.Join(store.BaseDir, f.ID, "description-review.md"), "initial prompt")
 
 	handler := NewHandler(HandlerOptions{
-		Runtime:               RuntimeIdentity{RuntimeDir: "/runtime", StateDir: store.BaseDir, Config: "/runtime/config.yaml"},
+		Runtime:               RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: store.BaseDir, Config: testRuntimeConfigPath},
 		Features:              store,
 		DisableHostValidation: true,
 	})
 
 	detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
-	activeRun := detail["feature"].(map[string]any)["active_run_detail"].(map[string]any)
-	if activeRun["pending_review_phase"] != "plan" {
+	activeRun := detail[entityFeature].(map[string]any)["active_run_detail"].(map[string]any)
+	if activeRun["pending_review_phase"] != targetPhasePlan {
 		t.Fatalf("pending_review_phase = %v; want plan", activeRun["pending_review_phase"])
 	}
 	if activeRun["is_rewind"] != true {
@@ -1783,8 +1984,8 @@ func TestRewindDescriptionReviewArtifactAndStateExposed(t *testing.T) {
 		t.Fatalf("description review artifact = %+v; want available description-review", artifact)
 	}
 	content := getJSONMap(t, handler, "/api/v1/features/"+f.ID+"/runs/1/artifacts/description-review?offset=8&limit=6")
-	if content["text"] != "prompt" {
-		t.Fatalf("description-review content = %q; want prompt", content["text"])
+	if content[blockTypeText] != "prompt" {
+		t.Fatalf("description-review content = %q; want prompt", content[blockTypeText])
 	}
 }
 
@@ -1812,15 +2013,15 @@ func TestSSEEmitsMetadataOnlyEventsAndHeartbeat(t *testing.T) {
 	if !strings.Contains(connected, `"snapshot_required":true`) {
 		t.Fatalf("connected event = %s; want snapshot_required", connected)
 	}
-	eventCh <- ports.Event{Type: ports.PhaseCompleted, FeatureID: "feat-001", Phase: feature.PhaseImplement, Error: errors.New("private-token /tmp/path")}
-	updated := readSSEBlock(t, reader, "lifecycle.updated")
+	eventCh <- ports.Event{Type: ports.PhaseCompleted, FeatureID: fixtureFeatureIDAlt, Phase: feature.PhaseImplement, Error: errors.New("private-token /tmp/path")}
+	updated := readSSEBlock(t, reader, sseEventLifecycleUpdated)
 	if !strings.Contains(updated, `"feature_id":"feat-001"`) {
 		t.Fatalf("lifecycle event = %s; want feature id", updated)
 	}
-	if strings.Contains(updated, "private-token") || strings.Contains(updated, "/tmp/path") {
+	if strings.Contains(updated, secretTokenLiteral) || strings.Contains(updated, "/tmp/path") {
 		t.Fatalf("SSE event leaks unsafe detail: %s", updated)
 	}
-	heartbeat := readSSEBlock(t, reader, "heartbeat")
+	heartbeat := readSSEBlock(t, reader, sseEventHeartbeat)
 	if !strings.Contains(heartbeat, "event: heartbeat") {
 		t.Fatalf("heartbeat event = %s; want heartbeat", heartbeat)
 	}
@@ -1849,20 +2050,20 @@ func TestSSEEmitsShutdownFromDomainEvents(t *testing.T) {
 		Type:    ports.RuntimeShutdownStarted,
 		Message: "private-token /tmp/agentico-runtime/shutdown.log",
 	}
-	updated := readSSEBlock(t, reader, "shutdown.updated")
+	updated := readSSEBlock(t, reader, sseEventShutdownUpdated)
 	if !strings.Contains(updated, `"resource":{"type":"runtime"`) {
 		t.Fatalf("shutdown event = %s; want runtime resource", updated)
 	}
 	if !strings.Contains(updated, `"snapshot_required":true`) {
 		t.Fatalf("shutdown event = %s; want snapshot_required", updated)
 	}
-	if strings.Contains(updated, "private-token") || strings.Contains(updated, "/tmp/agentico-runtime") {
+	if strings.Contains(updated, secretTokenLiteral) || strings.Contains(updated, "/tmp/agentico-runtime") {
 		t.Fatalf("shutdown event leaks unsafe detail: %s", updated)
 	}
 }
 
 func TestRuntimeServerCloseEmitsShutdownNotification(t *testing.T) {
-	srv, err := Start(context.Background(), Options{AuthToken: "test-token"})
+	srv, err := Start(context.Background(), Options{AuthToken: testAuthToken})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1890,7 +2091,7 @@ func TestRuntimeServerCloseEmitsShutdownNotification(t *testing.T) {
 		defer cancel()
 		done <- srv.Close(ctx)
 	}()
-	updated := readSSEBlock(t, reader, "shutdown.updated")
+	updated := readSSEBlock(t, reader, sseEventShutdownUpdated)
 	if !strings.Contains(updated, `"resource":{"type":"runtime"`) {
 		t.Fatalf("shutdown event = %s; want runtime resource", updated)
 	}
@@ -1910,10 +2111,10 @@ func seedReadFeature(t *testing.T) (*feature.Store, *feature.Feature) {
 	store := feature.NewStore(t.TempDir())
 	now := time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
 	f := &feature.Feature{
-		ID: "feat-001", Name: "Read API", Slug: "read-api", Description: "private-token description",
+		ID: fixtureFeatureIDAlt, Name: "Read API", Slug: "read-api", Description: "private-token description",
 		Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, Created: now,
-		Repos:       []feature.FeatureRepo{{Name: "agentic-orchestrator", Path: "/repo/path", WorktreePath: "/worktree/path", Branch: "feature/secret"}},
-		Models:      config.ModelConfig{Research: "opus[1m]", Planning: "opus[1m]", Implementation: "opus[1m]", Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus[1m]"},
+		Repos:       []feature.FeatureRepo{{Name: repoNameSelf, Path: testRepoPath, WorktreePath: worktreePathLiteral, Branch: secretBranchLiteral}},
+		Models:      config.ModelConfig{Research: modelOpus1M, Planning: modelOpus1M, Implementation: modelOpus1M, Review: modelGPT54, Utilities: modelSonnet, KBBuild: modelOpus1M},
 		Inquireness: "high", ExitCriteria: "private-token exit criteria", ActiveRun: 1, RunCount: 1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
@@ -1921,8 +2122,8 @@ func seedReadFeature(t *testing.T) (*feature.Store, *feature.Feature) {
 	f.CurrentRoadmapPhase = 1
 	f.TotalRoadmapPhases = 3
 	f.CurrentPhaseStatus = "implementing"
-	f.Artifacts = map[string]string{"plan": "plan/phase-plan.md"}
-	f.RepoStates = map[string]*feature.RepoState{"agentic-orchestrator": {Touched: true, PRURL: "https://github.example/pr/1"}}
+	f.Artifacts = map[string]string{targetPhasePlan: "plan/phase-plan.md"}
+	f.RepoStates = map[string]*feature.RepoState{repoNameSelf: {Touched: true, PRURL: "https://github.example/pr/1"}}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -1946,8 +2147,8 @@ func cloneFeatureForReadTest(t *testing.T, store *feature.Store, base *feature.F
 	f.CurrentRoadmapPhase = base.CurrentRoadmapPhase
 	f.TotalRoadmapPhases = base.TotalRoadmapPhases
 	f.CurrentPhaseStatus = base.CurrentPhaseStatus
-	f.Artifacts = map[string]string{"plan": "plan/phase-plan.md"}
-	f.RepoStates = map[string]*feature.RepoState{"agentic-orchestrator": {Touched: true}}
+	f.Artifacts = map[string]string{targetPhasePlan: "plan/phase-plan.md"}
+	f.RepoStates = map[string]*feature.RepoState{repoNameSelf: {Touched: true}}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save(%s) error = %v", id, err)
 	}
@@ -1956,10 +2157,10 @@ func cloneFeatureForReadTest(t *testing.T, store *feature.Store, base *feature.F
 
 func pendingReadControl(requestID, toolName, input string) *llm.ControlRequestMessage {
 	return &llm.ControlRequestMessage{
-		Type:      "control_request",
+		Type:      transcriptTypeControlRequest,
 		RequestID: requestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
+			Subtype:  controlSubtypeCanUseTool,
 			ToolName: toolName,
 			Input:    json.RawMessage(input),
 		},
@@ -2029,8 +2230,8 @@ func mustMarshalJSON(t *testing.T, v any) string {
 func assertActionScope(t *testing.T, action map[string]any, wantRepoSelection string) {
 	t.Helper()
 	scope := action["scope"].(map[string]any)
-	if scope["type"] != "feature" {
-		t.Fatalf("action %s scope type = %v; want %s", action["id"], scope["type"], "feature")
+	if scope["type"] != entityFeature {
+		t.Fatalf("action %s scope type = %v; want %s", action["id"], scope["type"], entityFeature)
 	}
 	if got := stringValue(scope["repo_selection"]); got != wantRepoSelection {
 		t.Fatalf("action %s repo_selection = %q; want %q", action["id"], got, wantRepoSelection)
@@ -2093,7 +2294,7 @@ func actionCatalogTestFeature(status feature.Status, checkpoints feature.Checkpo
 		Status:      status,
 		Checkpoints: checkpoints,
 		Repos: []feature.FeatureRepo{{
-			Name:        "agentic-orchestrator",
+			Name:        repoNameSelf,
 			Publishable: publishable,
 		}},
 		RepoCycles: cycles,
@@ -2116,7 +2317,7 @@ func requestIDsFromJSON(t *testing.T, raw any) []string {
 	items := raw.([]any)
 	out := make([]string, 0, len(items))
 	for _, item := range items {
-		out = append(out, item.(map[string]any)["request_id"].(string))
+		out = append(out, item.(map[string]any)[requestIDKey].(string))
 	}
 	return out
 }
@@ -2126,7 +2327,7 @@ func questionsFromJSON(t *testing.T, raw any) []string {
 	items := raw.([]any)
 	out := make([]string, 0, len(items))
 	for _, item := range items {
-		out = append(out, item.(map[string]any)["question"].(string))
+		out = append(out, item.(map[string]any)[questionFieldKey].(string))
 	}
 	return out
 }
@@ -2335,30 +2536,31 @@ func (m fakeSessionManager) Shutdown() {}
 func (m fakeSessionManager) IsShuttingDown() bool { return false }
 
 type fakeSessionView struct {
-	id            string
-	featureID     string
-	phase         feature.Phase
-	repoName      string
-	kind          ports.SessionKind
-	label         string
-	status        ports.SessionStatus
-	startedAt     time.Time
-	iteration     int
-	initialPrompt string
-	provider      string
-	model         string
-	workDir       string
-	logPath       string
-	messages      []llm.SDKMessage
-	log           ports.MessageLog
-	pending       []*llm.ControlRequestMessage
+	id             string
+	featureID      string
+	phase          feature.Phase
+	repoName       string
+	kind           ports.SessionKind
+	label          string
+	status         ports.SessionStatus
+	startedAt      time.Time
+	iteration      int
+	initialPrompt  string
+	provider       string
+	model          string
+	workDir        string
+	logPath        string
+	messages       []llm.SDKMessage
+	log            ports.MessageLog
+	pending        []*llm.ControlRequestMessage
+	permCacheScope string
 }
 
 func (s *fakeSessionView) ID() string                  { return s.id }
 func (s *fakeSessionView) FeatureID() string           { return s.featureID }
 func (s *fakeSessionView) Phase() feature.Phase        { return s.phase }
 func (s *fakeSessionView) RepoName() string            { return s.repoName }
-func (s *fakeSessionView) PermCacheScope() string      { return "" }
+func (s *fakeSessionView) PermCacheScope() string      { return s.permCacheScope }
 func (s *fakeSessionView) Kind() ports.SessionKind     { return s.kind }
 func (s *fakeSessionView) Label() string               { return s.label }
 func (s *fakeSessionView) Status() ports.SessionStatus { return s.status }
@@ -2407,7 +2609,7 @@ func (s *fakeSessionView) AttachCh() <-chan llm.SDKMessage { return nil }
 func (s *fakeSessionView) Done() <-chan struct{}           { return nil }
 func (s *fakeSessionView) HasPendingAskUserQuestion() bool {
 	for _, req := range s.pending {
-		if req.Request.ToolName == "AskUserQuestion" {
+		if req.Request.ToolName == toolNameAskUserQuestion {
 			return true
 		}
 	}

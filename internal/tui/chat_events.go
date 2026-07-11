@@ -76,7 +76,7 @@ func (m ChatModel) ApplyEvents(events []chatEvent) ChatModel {
 			m.thinkingLine = ""
 			text := event.Text
 			if text == "" {
-				text = "Session error"
+				text = sessionErrorFallbackText
 			}
 			m.turns = append(m.turns, chatTurn{Role: chatTurnError, Text: text})
 			if m.sess != nil {

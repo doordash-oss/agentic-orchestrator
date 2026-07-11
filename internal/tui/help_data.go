@@ -16,7 +16,7 @@ package tui
 
 // DashboardLeftSection defines keybindings shown when the dashboard left panel is focused.
 var DashboardLeftSection = HelpSection{
-	Title: "Dashboard",
+	Title: helpContextDashboard,
 	Bindings: []HelpBinding{
 		{"n", "New feature (launch wizard)"},
 		{"enter", "Focus right panel / expand"},

@@ -28,6 +28,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+const (
+	roleUser        = "user"
+	contentTypeText = "text"
+)
+
 // --- Wire format tests ---
 // These verify that the JSON sent to the CLI matches the protocol the Python/TypeScript
 // Agent SDKs use (request_id nested inside response, not at top level).
@@ -584,12 +589,12 @@ func TestRespondToAskUser_DoesNotDuplicateExistingLocalDisplayMessages(t *testin
 	}
 	for _, text := range []string{"first answer", "second answer"} {
 		s.messageLog.Append(llm.SDKMessage{
-			Type:            "user",
+			Type:            roleUser,
 			LocallyAppended: true,
 			User: &llm.UserMessage{
 				Message: llm.ConversationMsg{
-					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: text}},
+					Role:    roleUser,
+					Content: []llm.ContentBlock{{Type: contentTypeText, Text: text}},
 				},
 			},
 		})

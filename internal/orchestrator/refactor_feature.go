@@ -292,7 +292,7 @@ func (o *Orchestrator) handleFeatureRefactorDone(
 	}
 
 	switch result.FinalStatus {
-	case "review_passed":
+	case reviewStatusPassed:
 		// Cycle complete: every staged repo's Touched flag was already set
 		// by AtomicPhaseStamp. Run the per-repo completion finalisation
 		// (commit+push) then clear each per-repo cycle entry.
@@ -323,13 +323,13 @@ func (o *Orchestrator) handleFeatureRefactorDone(
 		}
 		return
 
-	case "interrupted", "no_op":
+	case finalStatusInterrupted, finalStatusNoOp:
 		// Persisted state preserved for restart. Leave per-repo cycle
 		// entries in place; the harness recovery / next user action
 		// handles them.
 		return
 
-	case "need_user_input":
+	case finalStatusNeedUserInput:
 		// Surface the gate via the legacy per-repo NEED_USER_INPUT
 		// pathway for the staged subset. Repos outside the staged subset
 		// stay as RepoCycleRunning until the gate resolves.
@@ -338,7 +338,7 @@ func (o *Orchestrator) handleFeatureRefactorDone(
 			stagedSet[n] = true
 		}
 		gate := &agent.LoopResult{
-			FinalStatus:       "need_user_input",
+			FinalStatus:       finalStatusNeedUserInput,
 			LastError:         result.LastError,
 			NeedUserInputPath: result.NeedUserInputPath,
 		}

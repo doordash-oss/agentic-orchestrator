@@ -50,7 +50,7 @@ func newFRTestFeature(t *testing.T, stateDir, featureID string, repoNames []stri
 		repos = append(repos, feature.FeatureRepo{
 			Name:       name,
 			Path:       repoDir,
-			BaseBranch: "main",
+			BaseBranch: defaultTestBranch,
 		})
 		repoPaths = append(repoPaths, repoDir)
 		// Touched=true so the FR loop's TouchedRepos reader sees this
@@ -106,7 +106,7 @@ func frArtifactDir(stateDir string, f *feature.Feature) string {
 func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) string) *FeatureFinalReviewResult {
 	t.Helper()
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-fix-protocol", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-fix-protocol", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -151,7 +151,7 @@ func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) strin
 func runFinalReviewWithReviewScript(t *testing.T, reviewBody func(artDir string) string) *FeatureFinalReviewResult {
 	t.Helper()
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-reviewer-protocol", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-reviewer-protocol", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -188,7 +188,7 @@ func runFinalReviewWithReviewScript(t *testing.T, reviewBody func(artDir string)
 func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 	t.Parallel()
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-session-phase", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-session-phase", []string{testRepoNameAPI, testRepoNameWeb})
 	f.CurrentPhase = feature.PhaseFinalReview
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature current phase: %v", err)
@@ -204,20 +204,20 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		iterDir := latestFinalReviewIterationDir(t, artDir)
 		switch {
 		case strings.Contains(id, "-final-review-01"):
-			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", "CHANGES_REQUESTED"))
+			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("- **High**: needs final review fix", "", agentStatusChangesRequested))
 			touchPhaseComplete(t, iterDir)
 		case strings.Contains(id, "-fix-01"):
 			markFinalReviewReportPassed(t, iterDir)
 			touchPhaseComplete(t, iterDir)
 		case strings.Contains(id, "-final-review-02"):
-			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("", "", "APPROVED"))
+			writeFinalReviewFeedbackFile(t, iterDir, testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 			touchPhaseComplete(t, iterDir)
 		default:
 			t.Fatalf("unexpected session id %q", id)
 		}
 
 		sess := session.NewSession(id, featureID, phase)
-		sess.SetCost(&llm.ResultMessage{Type: "result", Subtype: "success", SessionID: "mock"})
+		sess.SetCost(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, SessionID: testMockIdentifier})
 		sess.SendStatus(agentStatusSuccess)
 		sess.CloseDone()
 		return sess, nil
@@ -232,7 +232,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		MaxIterations:  3,
 		MaxConsecFails: 3,
 		BuildSession: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-			return []string{"mock"}, nil, &session.SessionOpts{}, nil
+			return []string{testMockIdentifier}, nil, &session.SessionOpts{}, nil
 		},
 	}
 
@@ -240,7 +240,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
 	}
 
@@ -396,7 +396,7 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-success", []string{"api", "web", "infra"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-success", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -429,7 +429,7 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if got, want := result.Iterations, 1; got != want {
@@ -444,7 +444,7 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web", "infra"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra} {
 		st := loaded.RepoStates[name]
 		if st == nil || !st.Touched {
 			t.Errorf("repo %s = %+v, want review_passed", name, st)
@@ -462,7 +462,7 @@ func TestRunFeatureFinalReviewLoop_FinishOrViolateNudgeRecoversSameSession(t *te
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-nudge", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-nudge", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -502,7 +502,7 @@ done
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
 	}
 	if got, want := result.Iterations, 1; got != want {
@@ -512,7 +512,7 @@ done
 
 func TestRunFeatureFinalReviewLoop_ReviewerRepoMutationTripsProtocolViolationAndRestores(t *testing.T) {
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-reviewer-repo-mutation", []string{"api"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-reviewer-repo-mutation", []string{testRepoNameAPI})
 	repo := testutil.InitGitRepo(t)
 	f.Repos[0].Path = repo
 	f.Repos[0].WorktreePath = repo
@@ -552,7 +552,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerRepoMutationTripsProtocolViolationAnd
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "read-only Final Review phase modified target repo api") {
@@ -590,7 +590,7 @@ func TestRunFeatureFinalReviewLoop_ChangesRequestedThenFixApproves(t *testing.T)
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-changes", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-changes", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -615,12 +615,12 @@ fi`,
 			artDir,
 			testutil.JSONLInit,
 			testutil.WriteFinalReviewApproved(artDir),
-			testutil.JSONLAssistant("APPROVED"),
+			testutil.JSONLAssistant(agentStatusApproved),
 			testutil.WriteFinalReviewApproved(artDir),
 			testutil.JSONLSuccess,
 			testutil.JSONLInit,
 			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: Cross-repo type signature mismatch between api and web"),
-			testutil.JSONLAssistant("CHANGES_REQUESTED"),
+			testutil.JSONLAssistant(agentStatusChangesRequested),
 			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: Cross-repo type signature mismatch between api and web"),
 			testutil.JSONLSuccess))
 
@@ -652,7 +652,7 @@ fi`,
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -663,7 +663,7 @@ fi`,
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || !st.Touched {
 			t.Errorf("repo %s = %+v, want review_passed", name, st)
@@ -676,7 +676,7 @@ func TestRunFeatureFinalReviewLoop_ChangesRequestedWithMalformedReportStillRunsF
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-malformed-report-fix", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-malformed-report-fix", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -751,7 +751,7 @@ fi
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
 	}
 	if result.Iterations != 2 {
@@ -768,7 +768,7 @@ func TestRunFeatureFinalReviewLoop_FixAgentSeesAllReposInAddDir(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, repoPaths := newFRTestFeature(t, env.stateDir, "fr-fix-dirs", []string{"api", "web", "infra"})
+	store, f, repoPaths := newFRTestFeature(t, env.stateDir, "fr-fix-dirs", []string{testRepoNameAPI, testRepoNameWeb, testRepoNameInfra})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -896,7 +896,7 @@ func TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp(t *testing.T)
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-maxiter", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-maxiter", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -943,7 +943,7 @@ func TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp(t *testing.T)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
@@ -960,7 +960,7 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-safetyrail", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-safetyrail", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -1006,7 +1006,7 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	for _, name := range []string{"api", "web"} {
+	for _, name := range []string{testRepoNameAPI, testRepoNameWeb} {
 		st := loaded.RepoStates[name]
 		if st == nil || st.LastError == "" {
 			t.Errorf("repo %s = %+v, want failed", name, st)
@@ -1019,7 +1019,7 @@ func TestRunFeatureFinalReviewLoop_MissingEvidenceRunsFixAgent(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-missing-evidence-fix", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-missing-evidence-fix", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -1070,7 +1070,7 @@ fi`,
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if result.PlanRevisionFeedback != "" {
@@ -1158,7 +1158,7 @@ fi`,
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed; feedback:\n%s", result.FinalStatus, result.PlanRevisionFeedback)
 	}
 	if _, err := os.Stat(fixMarker); err != nil {
@@ -1174,7 +1174,7 @@ func TestRunFeatureFinalReviewLoop_FixMissingPhaseCompleteTripsProtocolViolation
 		return ""
 	})
 
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "final_review_fixer @") ||
@@ -1193,7 +1193,7 @@ rm -f "$_d/verification-report.yaml"
 touch "$_d/phase_complete"`, artDir)
 	})
 
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "final_review_fixer @") ||
@@ -1210,7 +1210,7 @@ func TestRunFeatureFinalReviewLoop_FixRejectedVerificationReportTripsProtocolVio
 		return testutil.TouchPhaseComplete(artDir)
 	})
 
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "final_review_fixer @") ||
@@ -1227,7 +1227,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerMissingPhaseCompleteTripsProtocolViol
 		return testutil.WriteReviewApproved(artDir)
 	})
 
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "final_reviewer @") ||
@@ -1244,7 +1244,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerMissingFeedbackTripsProtocolViolation
 		return testutil.TouchPhaseComplete(artDir)
 	})
 
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "final_reviewer @") ||
@@ -1261,7 +1261,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerMalformedVerdictTripsProtocolViolatio
 		return testutil.WriteFinalReviewMalformedVerdictLatest(artDir)
 	})
 
-	if result.FinalStatus != "protocol_violation" {
+	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation", result.FinalStatus)
 	}
 	if !strings.Contains(result.LastError, "final_reviewer @") ||
@@ -1280,7 +1280,7 @@ rm -f "$_d/verification-report.yaml"
 %s`, artDir, testutil.WriteFinalReviewApproved(artDir))
 	})
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 }
@@ -1293,7 +1293,7 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-resume", []string{"api"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-resume", []string{testRepoNameAPI})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	iter01 := filepath.Join(artDir, "iteration-01")
@@ -1315,7 +1315,7 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+
 			testutil.WriteFinalReviewApproved(artDir)+"\n"+
-			testutil.JSONLAssistant("APPROVED")+"\n"+
+			testutil.JSONLAssistant(agentStatusApproved)+"\n"+
 			testutil.WriteFinalReviewApproved(artDir)+"\n"+
 			testutil.JSONLSuccess+"\n")
 
@@ -1346,7 +1346,7 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -1374,12 +1374,12 @@ func TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits(t *testing.T) {
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: filepath.Join(env.stateDir, "api"), BaseBranch: "main"},
+			{Name: testRepoNameAPI, Path: filepath.Join(env.stateDir, testRepoNameAPI), BaseBranch: defaultTestBranch},
 		},
 		// All repos untouched — none staged for FR (the loop short-circuits
 		// when TouchedRepos() is empty).
 		RepoStates: map[string]*feature.RepoState{
-			"api": {},
+			testRepoNameAPI: {},
 		},
 	}
 	if err := store.Save(f); err != nil {
@@ -1395,7 +1395,7 @@ func TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 }
@@ -1408,7 +1408,7 @@ func TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract(t *test
 		t.Skip("skipping integration test in short mode")
 	}
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-contract", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-contract", []string{testRepoNameAPI, testRepoNameWeb})
 
 	artDir := frArtifactDir(env.stateDir, f)
 	if err := os.MkdirAll(artDir, 0o755); err != nil {
@@ -1452,7 +1452,7 @@ func TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract(t *test
 // level seam.
 func TestRunMultiRepoFinalReview_RunFinalReviewFnSeam(t *testing.T) {
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-seam", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-seam", []string{testRepoNameAPI, testRepoNameWeb})
 
 	called := 0
 	cfg := OrchestratorConfig{
@@ -1461,7 +1461,7 @@ func TestRunMultiRepoFinalReview_RunFinalReviewFnSeam(t *testing.T) {
 		StateDir:     env.stateDir,
 		RunFinalReviewFn: func(_ OrchestratorConfig, _ ports.SessionManager) (*FeatureFinalReviewResult, error) {
 			called++
-			return &FeatureFinalReviewResult{FinalStatus: "review_passed", Iterations: 1, Repos: []string{"api", "web"}}, nil
+			return &FeatureFinalReviewResult{FinalStatus: finalStatusReviewPassed, Iterations: 1, Repos: []string{testRepoNameAPI, testRepoNameWeb}}, nil
 		},
 	}
 
@@ -1479,7 +1479,7 @@ func TestRunMultiRepoFinalReview_RunFinalReviewFnSeam(t *testing.T) {
 
 func TestRunMultiRepoFinalReview_ProtocolViolationStatusPreserved(t *testing.T) {
 	env := newFRLoopEnv(t)
-	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-protocol-status", []string{"api", "web"})
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-protocol-status", []string{testRepoNameAPI, testRepoNameWeb})
 
 	cfg := OrchestratorConfig{
 		Feature:      f,
@@ -1487,9 +1487,9 @@ func TestRunMultiRepoFinalReview_ProtocolViolationStatusPreserved(t *testing.T) 
 		StateDir:     env.stateDir,
 		RunFinalReviewFn: func(_ OrchestratorConfig, _ ports.SessionManager) (*FeatureFinalReviewResult, error) {
 			return &FeatureFinalReviewResult{
-				FinalStatus: "protocol_violation",
+				FinalStatus: BoundedHelperStatusProtocolViolation,
 				LastError:   "protocol violation: final_review_fixer @ /tmp/iter: verification-report.yaml is missing",
-				Repos:       []string{"api", "web"},
+				Repos:       []string{testRepoNameAPI, testRepoNameWeb},
 			}, nil
 		},
 	}
@@ -1501,8 +1501,8 @@ func TestRunMultiRepoFinalReview_ProtocolViolationStatusPreserved(t *testing.T) 
 	if result.FinalStatus != "failed" {
 		t.Fatalf("FinalStatus = %q, want failed", result.FinalStatus)
 	}
-	for _, repo := range []string{"api", "web"} {
-		if result.RepoStatuses[repo] != "protocol_violation" {
+	for _, repo := range []string{testRepoNameAPI, testRepoNameWeb} {
+		if result.RepoStatuses[repo] != BoundedHelperStatusProtocolViolation {
 			t.Fatalf("RepoStatuses[%q] = %q, want protocol_violation (all statuses: %#v)", repo, result.RepoStatuses[repo], result.RepoStatuses)
 		}
 	}

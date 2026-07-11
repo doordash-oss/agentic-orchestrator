@@ -182,7 +182,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 		var finalErr error
 		if err != nil {
 			finalErr = err
-		} else if result != nil && result.FinalStatus != "review_passed" {
+		} else if result != nil && result.FinalStatus != finalStatusReviewPassed {
 			finalErr = fmt.Errorf("%s", result.FinalStatus)
 			if result.LastError != "" {
 				finalErr = fmt.Errorf("%s: %s", result.FinalStatus, result.LastError)
@@ -227,7 +227,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if jErr != nil {
 				continue
 			}
-			if jMeta.ReviewStatus == "CHANGES_REQUESTED" {
+			if jMeta.ReviewStatus == agentStatusChangesRequested {
 				if data, err := os.ReadFile(filepath.Join(jDir, "review-feedback.md")); err == nil {
 					reviewerFeedback = strings.TrimSpace(string(data))
 				}
@@ -627,12 +627,12 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// Fall through: SUCCESS — run the review gate.
 			if cfg.SkipIterationReview {
 				// Medium/Large: skip per-iteration review, rely on Final Review
-				meta.ReviewStatus = "skipped"
+				meta.ReviewStatus = reviewStatusSkipped
 				_ = am.WriteMeta(iterDir, meta)
 				_ = am.WriteSummary(summaryPath, meta)
 				consecutiveFailures = 0
 				return &LoopResult{
-					FinalStatus: "review_passed",
+					FinalStatus: finalStatusReviewPassed,
 					Iterations:  i,
 				}, nil
 			}
@@ -701,10 +701,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					meta.ReviewStatus = ReviewChangesRequested.String()
 					_ = am.WriteMeta(iterDir, meta)
 					_ = am.WriteSummary(summaryPath, meta)
-					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "protocol_violation")
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), BoundedHelperStatusProtocolViolation)
 					if consecutiveFailures >= cfg.MaxConsecFails {
 						return &LoopResult{
-							FinalStatus: "protocol_violation",
+							FinalStatus: BoundedHelperStatusProtocolViolation,
 							Iterations:  i,
 							LastError:   reviewErr.Error(),
 						}, nil
@@ -728,9 +728,9 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			switch reviewStatus {
 			case ReviewApproved:
 				consecutiveFailures = 0
-				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "review_passed")
+				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), finalStatusReviewPassed)
 				return &LoopResult{
-					FinalStatus: "review_passed",
+					FinalStatus: finalStatusReviewPassed,
 					Iterations:  i,
 				}, nil
 			case ReviewChangesRequested:
@@ -832,13 +832,13 @@ func recordProtocolViolationIteration(
 	feedback := formatContractViolationFeedback(RoleImplementer, violations)
 	_ = os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte(feedback), 0o644)
 	meta.AgentStatus = "PROTOCOL_VIOLATION"
-	meta.ReviewStatus = "CHANGES_REQUESTED"
+	meta.ReviewStatus = agentStatusChangesRequested
 	_ = am.WriteMeta(iterDir, *meta)
 	_ = am.WriteSummary(summaryPath, *meta)
 	*reviewerFeedback = feedback
-	cfg.Observer.IterationEnded(iterCtx, iteration, toSessionUsage(cost), time.Since(iterStart), "protocol_violation")
+	cfg.Observer.IterationEnded(iterCtx, iteration, toSessionUsage(cost), time.Since(iterStart), BoundedHelperStatusProtocolViolation)
 	if *consecutiveFailures >= cfg.MaxConsecFails {
-		return &LoopResult{FinalStatus: "protocol_violation", Iterations: iteration, LastError: lastErr}
+		return &LoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: iteration, LastError: lastErr}
 	}
 	return nil
 }
@@ -1240,6 +1240,8 @@ const (
 	agentStatusAPIError          = "API_ERROR"
 	agentStatusMissingMarker     = "MISSING_PHASE_COMPLETE"
 	agentStatusProtocolViolation = "PROTOCOL_VIOLATION"
+	agentStatusChangesRequested  = "CHANGES_REQUESTED"
+	agentStatusApproved          = "APPROVED"
 )
 
 // minContextHandoffWindowTokens disables the implementation wind-down nudge

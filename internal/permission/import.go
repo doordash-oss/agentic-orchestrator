@@ -97,14 +97,14 @@ func readSettingsFile(path, repoName string) ([]Rule, error) {
 	for _, pattern := range settings.Permissions.Allow {
 		rules = append(rules, Rule{
 			ToolPattern: normalizePattern(pattern),
-			Effect:      "allow",
+			Effect:      DecisionAllow,
 			RepoName:    repoName,
 		})
 	}
 	for _, pattern := range settings.Permissions.Deny {
 		rules = append(rules, Rule{
 			ToolPattern: normalizePattern(pattern),
-			Effect:      "deny",
+			Effect:      DecisionDeny,
 			RepoName:    repoName,
 		})
 	}

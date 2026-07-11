@@ -52,7 +52,7 @@ func TestSessionOutputBackfillReadsFromByteOffset(t *testing.T) {
 	}
 	handler := NewHandler(HandlerOptions{
 		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			id:      "sess-1",
+			id:      fixtureSessionID,
 			logPath: logPath,
 			status:  ports.SessionRunning,
 		}}},
@@ -80,11 +80,11 @@ func TestSessionOutputBackfillReadsFromByteOffset(t *testing.T) {
 func TestSessionOutputStreamEmitsIndexedTranscriptRecordsAndTerminates(t *testing.T) {
 	t.Parallel()
 
-	sess := &fakeSessionView{id: "sess-1", status: ports.SessionDone}
+	sess := &fakeSessionView{id: fixtureSessionID, status: ports.SessionDone}
 	sess.log = session.NewMessageLog()
-	sess.log.Append(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
-		Type:    "assistant",
-		Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "hi"}}},
+	sess.log.Append(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
+		Type:    roleAssistant,
+		Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "hi"}}},
 	}})
 	handler := NewHandler(HandlerOptions{
 		Sessions:              fakeSessionManager{views: []ports.SessionView{sess}},
@@ -122,11 +122,11 @@ func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 	t.Parallel()
 
 	log := session.NewMessageLog()
-	log.Append(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
-		Type:    "assistant",
-		Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "partial"}}},
+	log.Append(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
+		Type:    roleAssistant,
+		Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "partial"}}},
 	}})
-	sess := &raceSafeActiveSessionView{fakeSessionView: &fakeSessionView{id: "sess-1"}}
+	sess := &raceSafeActiveSessionView{fakeSessionView: &fakeSessionView{id: fixtureSessionID}}
 	sess.log = log
 	sess.active.Store(true)
 	handler := NewHandler(HandlerOptions{
@@ -146,9 +146,9 @@ func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 	// Give the handler time to emit the first (partial) row, then mutate the
 	// tail in place and mark the session finished so the handler terminates.
 	time.Sleep(300 * time.Millisecond)
-	log.UpdateLast(llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
-		Type:    "assistant",
-		Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "final"}}},
+	log.UpdateLast(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
+		Type:    roleAssistant,
+		Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "final"}}},
 	}})
 	sess.active.Store(false)
 
@@ -175,7 +175,7 @@ func TestSessionOutputStreamErrorIsRetriableForActiveSession(t *testing.T) {
 
 	handler := NewHandler(HandlerOptions{
 		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			id:     "sess-1",
+			id:     fixtureSessionID,
 			status: ports.SessionRunning,
 		}}},
 		DisableHostValidation: true,

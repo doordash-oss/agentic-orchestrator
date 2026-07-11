@@ -115,7 +115,7 @@ func TestImplementLoopSuccessFirstIteration(t *testing.T) {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	if result.Iterations != 1 {
@@ -212,7 +212,7 @@ fi
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -425,7 +425,7 @@ fi
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -555,7 +555,7 @@ func TestImplementLoopEventRouting(t *testing.T) {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 
@@ -607,7 +607,7 @@ func TestImplementLoopReviewWithShellSpecialChars(t *testing.T) {
 		testutil.JSONLInit+"\n"+reportCmd+"\n"+
 			// Custom report is written above; pair with a valid progress.md
 			// so the harness handoff parser passes.
-			testutil.WriteImplementProgressMd(artifactDir, "SUCCESS")+"\n"+
+			testutil.WriteImplementProgressMd(artifactDir, agentStatusSuccess)+"\n"+
 			testutil.TouchPhaseComplete(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
 
 	// Review script: emits stream-json APPROVED
@@ -642,7 +642,7 @@ func TestImplementLoopReviewWithShellSpecialChars(t *testing.T) {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected review_passed with shell-special chars in diff, got %s", result.FinalStatus)
 	}
 }
@@ -705,7 +705,7 @@ func TestImplementLoopResumesFromLatestIteration(t *testing.T) {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	// Should have completed on iteration 3 (resumed after 2)
@@ -738,8 +738,8 @@ func TestImplementLoopResumesReviewerFeedback(t *testing.T) {
 	iterDir, _ := am.CreateIterationDir(1)
 	am.WriteMeta(iterDir, IterationMeta{
 		Iteration:    1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
 	})
 	os.WriteFile(filepath.Join(iterDir, "review-feedback.md"), []byte("Add error handling"), 0o644)
 
@@ -776,7 +776,7 @@ func TestImplementLoopResumesReviewerFeedback(t *testing.T) {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -816,8 +816,8 @@ func TestImplementLoopResumesReviewerFeedbackAcrossFailures(t *testing.T) {
 	iter1Dir, _ := am.CreateIterationDir(1)
 	am.WriteMeta(iter1Dir, IterationMeta{
 		Iteration:    1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
 	})
 	os.WriteFile(filepath.Join(iter1Dir, "review-feedback.md"), []byte("Fix the widget tests"), 0o644)
 
@@ -860,7 +860,7 @@ func TestImplementLoopResumesReviewerFeedbackAcrossFailures(t *testing.T) {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	// Should resume at iteration 3 (after failed iteration 2)
@@ -1046,7 +1046,7 @@ func TestImplementLoopWithEscapeSequences(t *testing.T) {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
 
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 	if result.Iterations != 1 {
@@ -1217,8 +1217,8 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	iter1Dir, _ := am.CreateIterationDir(1)
 	am.WriteMeta(iter1Dir, IterationMeta{
 		Iteration:    1,
-		AgentStatus:  "SUCCESS",
-		ReviewStatus: "CHANGES_REQUESTED",
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: agentStatusChangesRequested,
 		MadeProgress: true,
 	})
 	iter2Dir, _ := am.CreateIterationDir(2)
@@ -1228,7 +1228,7 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	// The implement turn is being skipped on resume, so the harness still
 	// needs a parseable progress.md + verification-report.yaml on disk to
 	// route iteration-02 into the review gate. Seed both.
-	testutil.WriteImplementHandoffFiles(t, artifactDir, iter2Dir, "SUCCESS")
+	testutil.WriteImplementHandoffFiles(t, artifactDir, iter2Dir, agentStatusSuccess)
 
 	// Agent script would fail if called — proves the implement session
 	// is skipped on resume.
@@ -1263,7 +1263,7 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 	if result.Iterations != 2 {
@@ -1275,10 +1275,10 @@ func TestImplementLoop_ResumesReviewWhenImplementAlreadyComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading iter-02 meta: %v", err)
 	}
-	if meta.AgentStatus != "SUCCESS" {
+	if meta.AgentStatus != agentStatusSuccess {
 		t.Errorf("iter-02 meta.AgentStatus = %q, want SUCCESS", meta.AgentStatus)
 	}
-	if meta.ReviewStatus != "APPROVED" {
+	if meta.ReviewStatus != agentStatusApproved {
 		t.Errorf("iter-02 meta.ReviewStatus = %q, want APPROVED", meta.ReviewStatus)
 	}
 }
@@ -1336,7 +1336,7 @@ func TestImplementLoop_ReviewViaAssistantText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 }
@@ -1401,7 +1401,7 @@ func TestImplementLoop_CostAccumulation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
-	if result.FinalStatus != "review_passed" {
+	if result.FinalStatus != finalStatusReviewPassed {
 		t.Errorf("expected FinalStatus=review_passed, got %s", result.FinalStatus)
 	}
 

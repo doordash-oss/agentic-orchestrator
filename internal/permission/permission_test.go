@@ -17,6 +17,7 @@ package permission
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -46,18 +47,18 @@ func TestBoundedHelperArtifactHandler_AllowsOnlyDeclaredArtifacts(t *testing.T) 
 	}
 
 	requirePermissionAllowed(t, handler, "Read", `{"file_path":"`+feedbackPath+`"}`)
-	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+feedbackPath+`"}`)
-	requirePermissionAllowed(t, handler, "Edit", `{"file_path":"`+markerPath+`"}`)
-	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+approvalPath+`"}`)
+	requirePermissionAllowed(t, handler, toolNameWrite, `{"file_path":"`+feedbackPath+`"}`)
+	requirePermissionAllowed(t, handler, toolNameEdit, `{"file_path":"`+markerPath+`"}`)
+	requirePermissionAllowed(t, handler, toolNameWrite, `{"file_path":"`+approvalPath+`"}`)
 
-	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
-	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(filepath.Dir(helperDir), "review-feedback.md")+`"}`)
-	requirePermissionDenied(t, handler, "Write", `{"file_path":"`+filepath.Join(helperDir, "..", "review-feedback.md")+`"}`)
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"ls `+helperDir+` 2>/dev/null || echo \"DIR_NOT_FOUND\""}`)
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"test -f `+feedbackPath+` && echo \"FEEDBACK_EXISTS\" || echo \"FEEDBACK_NOT_FOUND\""}`)
-	requirePermissionDenied(t, handler, "Bash", `{"command":"touch phase_complete"}`)
-	requirePermissionDenied(t, handler, "Bash", `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
-	requirePermissionDenied(t, handler, "Bash", `{"command":"echo ok > `+markerPath+`"}`)
+	requirePermissionDenied(t, handler, toolNameWrite, `{"file_path":"`+filepath.Join(helperDir, "notes.md")+`"}`)
+	requirePermissionDenied(t, handler, toolNameWrite, `{"file_path":"`+filepath.Join(filepath.Dir(helperDir), "review-feedback.md")+`"}`)
+	requirePermissionDenied(t, handler, toolNameWrite, `{"file_path":"`+filepath.Join(helperDir, "..", "review-feedback.md")+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"ls `+helperDir+` 2>/dev/null || echo \"DIR_NOT_FOUND\""}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"test -f `+feedbackPath+` && echo \"FEEDBACK_EXISTS\" || echo \"FEEDBACK_NOT_FOUND\""}`)
+	requirePermissionDenied(t, handler, toolNameBash, `{"command":"touch phase_complete"}`)
+	requirePermissionDenied(t, handler, toolNameBash, `{"command":"mkdir -p `+filepath.Join(helperDir, "subdir")+`"}`)
+	requirePermissionDenied(t, handler, toolNameBash, `{"command":"echo ok > `+markerPath+`"}`)
 	requirePermissionAllowed(t, handler, "Agent", `{"prompt":"explore the implementation"}`)
 }
 
@@ -75,18 +76,18 @@ func TestBoundedHelperArtifactHandler_SandboxedAllowsAnyShell(t *testing.T) {
 	analysis := `{"command":"for s in a b; do c=$(grep -c \"$s\" README.md); echo \"$s: $c\"; done"}`
 
 	sandboxed := &BoundedHelperArtifactHandler{AllowedPaths: allowed, Sandboxed: true}
-	requirePermissionAllowed(t, sandboxed, "Bash", analysis)
-	requirePermissionAllowed(t, sandboxed, "Bash", `{"command":"\"$AGENTICO_BIN\" validate-artifacts --dir x"}`)
-	requirePermissionAllowed(t, sandboxed, "Write", `{"file_path":"`+allowed[0]+`"}`)
-	requirePermissionDenied(t, sandboxed, "Write", `{"file_path":"`+filepath.Join(helperDir, "other.md")+`"}`)
+	requirePermissionAllowed(t, sandboxed, toolNameBash, analysis)
+	requirePermissionAllowed(t, sandboxed, toolNameBash, `{"command":"\"$AGENTICO_BIN\" validate-artifacts --dir x"}`)
+	requirePermissionAllowed(t, sandboxed, toolNameWrite, `{"file_path":"`+allowed[0]+`"}`)
+	requirePermissionDenied(t, sandboxed, toolNameWrite, `{"file_path":"`+filepath.Join(helperDir, "other.md")+`"}`)
 
 	strict := &BoundedHelperArtifactHandler{AllowedPaths: allowed}
-	requirePermissionDenied(t, strict, "Bash", analysis)
+	requirePermissionDenied(t, strict, toolNameBash, analysis)
 }
 
 func requirePermissionDeferred(t *testing.T, handler ports.PermissionHandler, input string) {
 	t.Helper()
-	const toolName = "Bash"
+	const toolName = toolNameBash
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolName, Input: input})
 	if err != nil {
 		t.Fatalf("CanUseTool(%q, %q) error = %v", toolName, input, err)
@@ -101,11 +102,11 @@ func TestCreateWithinRootsHandler_AllowsPlainTouchInsideRoot(t *testing.T) {
 	marker := filepath.Join(root, "phase_complete")
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"touch `+marker+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"touch `+marker+`"}`)
 	// Multiple targets, all inside a root, still qualify.
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"touch `+marker+` `+filepath.Join(root, "other")+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"touch `+marker+` `+filepath.Join(root, "other")+`"}`)
 	// Non-Bash tools and non-touch Bash still fall through to Inner unchanged.
-	requirePermissionAllowed(t, handler, "Write", `{"file_path":"`+marker+`"}`)
+	requirePermissionAllowed(t, handler, toolNameWrite, `{"file_path":"`+marker+`"}`)
 	requirePermissionDeferred(t, handler, `{"command":"ls `+root+`"}`)
 }
 
@@ -139,11 +140,11 @@ func TestCreateWithinRootsHandler_AllowsPlainMkdirInsideRoot(t *testing.T) {
 	runDir := filepath.Join(root, "runs", "run-001", "research")
 	handler := &CreateWithinRootsHandler{Inner: &AcceptEditsHandler{}, Roots: []string{root}}
 
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"mkdir -p `+runDir+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"mkdir -p `+runDir+`"}`)
 	// Bare mkdir (no -p) on an in-root target still qualifies.
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"mkdir `+runDir+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"mkdir `+runDir+`"}`)
 	// Multiple targets, all inside a root, still qualify.
-	requirePermissionAllowed(t, handler, "Bash", `{"command":"mkdir -p `+runDir+` `+filepath.Join(root, "other")+`"}`)
+	requirePermissionAllowed(t, handler, toolNameBash, `{"command":"mkdir -p `+runDir+` `+filepath.Join(root, "other")+`"}`)
 }
 
 func TestCreateWithinRootsHandler_MkdirDefersOutsideRootOrOnOtherFlags(t *testing.T) {
@@ -172,7 +173,7 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_WrapsAcceptEditsAndCaching(t *tes
 		Guarded(&AcceptEditsHandler{}),
 	} {
 		wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})
-		requirePermissionAllowed(t, wrapped, "Bash", `{"command":"touch `+marker+`"}`)
+		requirePermissionAllowed(t, wrapped, toolNameBash, `{"command":"touch `+marker+`"}`)
 	}
 }
 
@@ -210,7 +211,7 @@ func requirePermissionAllowed(t *testing.T, handler ports.PermissionHandler, too
 	if err != nil {
 		t.Fatalf("CanUseTool(%q, %q) error = %v", toolName, input, err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Fatalf("CanUseTool(%q, %q).Behavior = %q, want allow; reason=%q", toolName, input, decision.Behavior, decision.Reason)
 	}
 }
@@ -221,7 +222,7 @@ func requirePermissionDenied(t *testing.T, handler ports.PermissionHandler, tool
 	if err != nil {
 		t.Fatalf("CanUseTool(%q, %q) error = %v", toolName, input, err)
 	}
-	if decision.Behavior != "deny" {
+	if decision.Behavior != DecisionDeny {
 		t.Fatalf("CanUseTool(%q, %q).Behavior = %q, want deny", toolName, input, decision.Behavior)
 	}
 	if strings.TrimSpace(decision.Reason) == "" {
@@ -234,22 +235,22 @@ func requirePermissionDenied(t *testing.T, handler ports.PermissionHandler, tool
 // ---------------------------------------------------------------------------
 
 func TestRule_Match_Exact(t *testing.T) {
-	r := Rule{ToolPattern: "Bash(ls -la)", Effect: "allow"}
-	if !r.Match("Bash", "ls -la") {
+	r := Rule{ToolPattern: patternBashLSExact, Effect: DecisionAllow}
+	if !r.Match(toolNameBash, testLsLa) {
 		t.Errorf("expected rule to match tool=Bash input='ls -la'")
 	}
 }
 
 func TestRule_Match_NoMatch(t *testing.T) {
-	r := Rule{ToolPattern: "Bash(ls -la)", Effect: "allow"}
-	if r.Match("Bash", "rm -rf /") {
+	r := Rule{ToolPattern: patternBashLSExact, Effect: DecisionAllow}
+	if r.Match(toolNameBash, testRmRfRoot) {
 		t.Errorf("expected rule NOT to match tool=Bash input='rm -rf /'")
 	}
 }
 
 func TestRule_Match_DifferentTool(t *testing.T) {
-	r := Rule{ToolPattern: "Bash(ls -la)", Effect: "allow"}
-	if r.Match("Edit", "ls -la") {
+	r := Rule{ToolPattern: patternBashLSExact, Effect: DecisionAllow}
+	if r.Match(toolNameEdit, testLsLa) {
 		t.Errorf("expected rule NOT to match tool=Edit input='ls -la'")
 	}
 }
@@ -267,71 +268,71 @@ func TestRule_Match(t *testing.T) {
 		want      bool
 	}{
 		// Exact match (no wildcard)
-		{"exact match", "Bash(ls -la)", "Bash", "ls -la", true},
-		{"exact no match", "Bash(ls -la)", "Bash", "rm -rf /", false},
-		{"exact wrong tool", "Bash(ls -la)", "Edit", "ls -la", false},
+		{"exact match", patternBashLSExact, toolNameBash, testLsLa, true},
+		{"exact no match", patternBashLSExact, toolNameBash, testRmRfRoot, false},
+		{"exact wrong tool", patternBashLSExact, toolNameEdit, testLsLa, false},
 
 		// Prefix wildcard
-		{"prefix match with args", "Bash(npm test *)", "Bash", "npm test --coverage", true},
-		{"prefix match exact prefix", "Bash(npm test *)", "Bash", "npm test", true},
-		{"prefix match different suffix", "Bash(npm test *)", "Bash", "npm test src/", true},
-		{"prefix no match different cmd", "Bash(npm test *)", "Bash", "npm install", false},
-		{"prefix no match partial word", "Bash(npm test *)", "Bash", "npm testing", false},
-		{"prefix wrong tool", "Bash(npm test *)", "Edit", "npm test --coverage", false},
-		{"prefix single-word pattern", "Bash(ls *)", "Bash", "ls -la /tmp", true},
-		{"prefix single-word exact", "Bash(ls *)", "Bash", "ls", true},
+		{"prefix match with args", patternBashNpmTest, toolNameBash, testNpmTestCoverage, true},
+		{"prefix match exact prefix", patternBashNpmTest, toolNameBash, testNpmTest, true},
+		{"prefix match different suffix", patternBashNpmTest, toolNameBash, "npm test src/", true},
+		{"prefix no match different cmd", patternBashNpmTest, toolNameBash, "npm install", false},
+		{"prefix no match partial word", patternBashNpmTest, toolNameBash, "npm testing", false},
+		{"prefix wrong tool", patternBashNpmTest, toolNameEdit, testNpmTestCoverage, false},
+		{"prefix single-word pattern", patternBashLS, toolNameBash, "ls -la /tmp", true},
+		{"prefix single-word exact", patternBashLS, toolNameBash, "ls", true},
 
 		// Tool-name-only (no parentheses)
-		{"tool-only matches any input", "Bash", "Bash", "anything here", true},
-		{"tool-only matches empty input", "Bash", "Bash", "", true},
-		{"tool-only wrong tool", "Bash", "Edit", "something", false},
+		{"tool-only matches any input", toolNameBash, toolNameBash, "anything here", true},
+		{"tool-only matches empty input", toolNameBash, toolNameBash, "", true},
+		{"tool-only wrong tool", toolNameBash, toolNameEdit, "something", false},
 
 		// Wildcard-only: Bash(*)
-		{"wildcard-only matches any", "Bash(*)", "Bash", "rm -rf /", true},
-		{"wildcard-only matches empty", "Bash(*)", "Bash", "", true},
-		{"wildcard-only wrong tool", "Bash(*)", "Edit", "anything", false},
+		{"wildcard-only matches any", patternBashAny, toolNameBash, testRmRfRoot, true},
+		{"wildcard-only matches empty", patternBashAny, toolNameBash, "", true},
+		{"wildcard-only wrong tool", patternBashAny, toolNameEdit, "anything", false},
 
 		// Empty inner pattern: Bash()
-		{"empty pattern matches empty input", "Bash()", "Bash", "", true},
-		{"empty pattern no match non-empty", "Bash()", "Bash", "ls", false},
+		{"empty pattern matches empty input", "Bash()", toolNameBash, "", true},
+		{"empty pattern no match non-empty", "Bash()", toolNameBash, "ls", false},
 
 		// Non-Bash tool exact match
-		{"edit exact match", "Edit(/path/to/file)", "Edit", "/path/to/file", true},
-		{"edit no match", "Edit(/path/to/file)", "Edit", "/other/file", false},
+		{"edit exact match", patternEditFilePath, toolNameEdit, testFilePath, true},
+		{"edit no match", patternEditFilePath, toolNameEdit, "/other/file", false},
 
 		// JSON input (real runtime shape from Claude CLI wire protocol)
-		{"json prefix match", "Bash(npm test *)", "Bash", `{"command":"npm test --coverage"}`, true},
-		{"json prefix exact prefix", "Bash(npm test *)", "Bash", `{"command":"npm test"}`, true},
-		{"json prefix no match", "Bash(npm test *)", "Bash", `{"command":"npm install"}`, false},
-		{"json exact match", "Bash(ls -la)", "Bash", `{"command":"ls -la"}`, true},
-		{"json exact no match", "Bash(ls -la)", "Bash", `{"command":"rm -rf /"}`, false},
-		{"json wildcard-only", "Bash(*)", "Bash", `{"command":"anything"}`, true},
-		{"json tool-only", "Bash", "Bash", `{"command":"anything"}`, true},
+		{"json prefix match", patternBashNpmTest, toolNameBash, testJSONNpmTestCoverage, true},
+		{"json prefix exact prefix", patternBashNpmTest, toolNameBash, `{"command":"npm test"}`, true},
+		{"json prefix no match", patternBashNpmTest, toolNameBash, `{"command":"npm install"}`, false},
+		{"json exact match", patternBashLSExact, toolNameBash, testJSONLsLa, true},
+		{"json exact no match", patternBashLSExact, toolNameBash, `{"command":"rm -rf /"}`, false},
+		{"json wildcard-only", patternBashAny, toolNameBash, `{"command":"anything"}`, true},
+		{"json tool-only", toolNameBash, toolNameBash, `{"command":"anything"}`, true},
 
 		// Chained commands (cd && ...) — normalized before matching
-		{"chain cd then ls", "Bash(ls *)", "Bash", "cd /path && ls -la", true},
-		{"chain cd then npm test", "Bash(npm test *)", "Bash", "cd /path && npm test --coverage", true},
-		{"chain cd then git diff", "Bash(git diff *)", "Bash", "cd /repo && git diff --stat", true},
-		{"chain no match after normalize", "Bash(ls *)", "Bash", "cd /path && rm -rf /", false},
+		{"chain cd then ls", patternBashLS, toolNameBash, "cd /path && ls -la", true},
+		{"chain cd then npm test", patternBashNpmTest, toolNameBash, "cd /path && npm test --coverage", true},
+		{"chain cd then git diff", patternBashGitDiff, toolNameBash, "cd /repo && git diff --stat", true},
+		{"chain no match after normalize", patternBashLS, toolNameBash, "cd /path && rm -rf /", false},
 
 		// Piped commands — normalized before matching
-		{"pipe ls head", "Bash(ls *)", "Bash", "ls -la | head -20", true},
-		{"pipe git diff head", "Bash(git diff *)", "Bash", "git diff --stat | head", true},
-		{"pipe no match", "Bash(ls *)", "Bash", "cat foo | grep bar", false},
+		{"pipe ls head", patternBashLS, toolNameBash, "ls -la | head -20", true},
+		{"pipe git diff head", patternBashGitDiff, toolNameBash, "git diff --stat | head", true},
+		{"pipe no match", patternBashLS, toolNameBash, "cat foo | grep bar", false},
 
 		// Chain + pipe combined
-		{"chain and pipe", "Bash(ls *)", "Bash", "cd /path && ls -la | head -20", true},
-		{"chain and pipe git", "Bash(git log *)", "Bash", "cd /repo && git log --oneline | head -30", true},
+		{"chain and pipe", patternBashLS, toolNameBash, "cd /path && ls -la | head -20", true},
+		{"chain and pipe git", "Bash(git log *)", toolNameBash, "cd /repo && git log --oneline | head -30", true},
 
 		// JSON variants of chained commands
-		{"json chain cd then ls", "Bash(ls *)", "Bash", `{"command":"cd /path && ls -la"}`, true},
-		{"json chain cd then find", "Bash(find *)", "Bash", `{"command":"cd /path && find src -type f | sort"}`, true},
-		{"json pipe ls", "Bash(ls *)", "Bash", `{"command":"ls -la src/__tests__/ | grep test"}`, true},
+		{"json chain cd then ls", patternBashLS, toolNameBash, `{"command":"cd /path && ls -la"}`, true},
+		{"json chain cd then find", "Bash(find *)", toolNameBash, `{"command":"cd /path && find src -type f | sort"}`, true},
+		{"json pipe ls", patternBashLS, toolNameBash, `{"command":"ls -la src/__tests__/ | grep test"}`, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := Rule{ToolPattern: tt.pattern, Effect: "allow"}
+			r := Rule{ToolPattern: tt.pattern, Effect: DecisionAllow}
 			got := r.Match(tt.toolName, tt.toolInput)
 			if got != tt.want {
 				t.Errorf("Rule{%q}.Match(%q, %q) = %v, want %v",
@@ -351,7 +352,7 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 		name    string
 		command string
 	}{
-		{name: "ls", command: `{"command":"ls -la"}`},
+		{name: "ls", command: testJSONLsLa},
 		{name: "pwd", command: `{"command":"pwd"}`},
 		{name: "rg", command: `{"command":"rg EnsureGlobalDefaults internal/permission"}`},
 		{name: "git diff", command: `{"command":"git diff --stat"}`},
@@ -370,12 +371,12 @@ func TestDefaultGlobalRules_MatchReadOnlyCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule, found := cache.Check("Bash", tt.command, "any-repo")
+			rule, found := cache.Check(toolNameBash, tt.command, "any-repo")
 			if !found {
 				t.Errorf("cache.Check(%q) found = false, want true", tt.command)
 				return
 			}
-			if rule.Effect != "allow" {
+			if rule.Effect != DecisionAllow {
 				t.Errorf("cache.Check(%q) effect = %q, want allow", tt.command, rule.Effect)
 			}
 		})
@@ -389,11 +390,11 @@ func TestDefaultGlobalRules_MatchAgenticoValidateArtifacts(t *testing.T) {
 	cache.mu.Unlock()
 
 	command := `{"command":"\"$AGENTICO_BIN\" validate-artifacts --phase review --role final_reviewer --dir /tmp/iteration-01"}`
-	rule, found := cache.Check("Bash", command, "any-repo")
+	rule, found := cache.Check(toolNameBash, command, "any-repo")
 	if !found {
 		t.Fatalf("cache.Check(%q) found = false, want true", command)
 	}
-	if rule.Effect != "allow" {
+	if rule.Effect != DecisionAllow {
 		t.Fatalf("cache.Check(%q) effect = %q, want allow", command, rule.Effect)
 	}
 }
@@ -417,7 +418,7 @@ func TestDefaultGlobalRules_DoNotMatchMutatingCommands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rule, found := cache.Check("Bash", tt.command, "any-repo")
+			rule, found := cache.Check(toolNameBash, tt.command, "any-repo")
 			if found {
 				t.Errorf("cache.Check(%q) = %+v, want no match", tt.command, rule)
 			}
@@ -435,9 +436,9 @@ func TestExtractBashCommand(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"json command", `{"command":"ls -la"}`, "ls -la"},
-		{"json with spaces", `{"command":"npm test --coverage"}`, "npm test --coverage"},
-		{"plain string", "ls -la", "ls -la"},
+		{"json command", testJSONLsLa, testLsLa},
+		{"json with spaces", testJSONNpmTestCoverage, testNpmTestCoverage},
+		{"plain string", testLsLa, testLsLa},
 		{"empty string", "", ""},
 		{"json empty command", `{"command":""}`, ""},
 		{"invalid json", `{bad json`, `{bad json`},
@@ -467,45 +468,45 @@ func TestInferBashPattern(t *testing.T) {
 		want      string
 	}{
 		// Standard commands (binary + subcommand)
-		{"npm test with args", "Bash", "npm test --coverage", "Bash(npm test *)"},
-		{"go test with args", "Bash", "go test ./...", "Bash(go test *)"},
-		{"git commit with flags", "Bash", "git commit -m 'foo'", "Bash(git commit *)"},
-		{"docker compose up", "Bash", "docker compose up -d", "Bash(docker compose *)"},
-		{"kubectl get pods", "Bash", "kubectl get pods -n default", "Bash(kubectl get *)"},
+		{"npm test with args", toolNameBash, testNpmTestCoverage, patternBashNpmTest},
+		{"go test with args", toolNameBash, testGoTestDotDotDot, patternBashGoTest},
+		{"git commit with flags", toolNameBash, "git commit -m 'foo'", "Bash(git commit *)"},
+		{"docker compose up", toolNameBash, "docker compose up -d", "Bash(docker compose *)"},
+		{"kubectl get pods", toolNameBash, "kubectl get pods -n default", "Bash(kubectl get *)"},
 
 		// Single-token commands
-		{"ls alone", "Bash", "ls", "Bash(ls *)"},
-		{"pwd alone", "Bash", "pwd", "Bash(pwd *)"},
+		{"ls alone", toolNameBash, "ls", patternBashLS},
+		{"pwd alone", toolNameBash, "pwd", "Bash(pwd *)"},
 
 		// Binary with flags only (second token is flag → binary *)
-		{"ls with flags", "Bash", "ls -la /tmp", "Bash(ls *)"},
-		{"rm with flags", "Bash", "rm -rf /tmp/foo", "Bash(rm *)"},
-		{"grep with flags", "Bash", "grep -rn 'pattern' .", "Bash(grep *)"},
+		{"ls with flags", toolNameBash, "ls -la /tmp", patternBashLS},
+		{"rm with flags", toolNameBash, "rm -rf /tmp/foo", patternBashRm},
+		{"grep with flags", toolNameBash, "grep -rn 'pattern' .", "Bash(grep *)"},
 
 		// Chained commands: cd && ...
-		{"cd then npm test", "Bash", "cd /path && npm test --coverage", "Bash(npm test *)"},
-		{"cd then go build", "Bash", "cd /repo && go build ./...", "Bash(go build *)"},
-		{"cd then ls", "Bash", "cd /tmp && ls -la", "Bash(ls *)"},
-		{"multiple chains", "Bash", "cd /a && cd /b && npm test", "Bash(npm test *)"},
+		{"cd then npm test", toolNameBash, "cd /path && npm test --coverage", patternBashNpmTest},
+		{"cd then go build", toolNameBash, "cd /repo && go build ./...", "Bash(go build *)"},
+		{"cd then ls", toolNameBash, "cd /tmp && ls -la", patternBashLS},
+		{"multiple chains", toolNameBash, "cd /a && cd /b && npm test", patternBashNpmTest},
 
 		// Pipes (take content before first |)
-		{"npm test piped", "Bash", "npm test 2>&1 | tee log", "Bash(npm test *)"},
-		{"cat piped to grep", "Bash", "cat file | grep pattern", "Bash(cat file *)"},
+		{"npm test piped", toolNameBash, "npm test 2>&1 | tee log", patternBashNpmTest},
+		{"cat piped to grep", toolNameBash, "cat file | grep pattern", "Bash(cat file *)"},
 
 		// Empty input
-		{"empty input", "Bash", "", "Bash(*)"},
-		{"whitespace only", "Bash", "   ", "Bash(*)"},
+		{"empty input", toolNameBash, "", patternBashAny},
+		{"whitespace only", toolNameBash, "   ", patternBashAny},
 
 		// Non-Bash tools: return exact pattern (no inference)
-		{"edit tool", "Edit", "/path/to/file", "Edit(/path/to/file)"},
-		{"write tool", "Write", "/path/to/file", "Write(/path/to/file)"},
+		{"edit tool", toolNameEdit, testFilePath, patternEditFilePath},
+		{"write tool", toolNameWrite, testFilePath, "Write(/path/to/file)"},
 
 		// JSON input (real runtime shape from Claude CLI wire protocol)
-		{"json npm test", "Bash", `{"command":"npm test --coverage"}`, "Bash(npm test *)"},
-		{"json ls", "Bash", `{"command":"ls -la"}`, "Bash(ls *)"},
-		{"json go test", "Bash", `{"command":"go test ./..."}`, "Bash(go test *)"},
-		{"json cd chain", "Bash", `{"command":"cd /repo && npm test"}`, "Bash(npm test *)"},
-		{"json empty command", "Bash", `{"command":""}`, "Bash(*)"},
+		{"json npm test", toolNameBash, testJSONNpmTestCoverage, patternBashNpmTest},
+		{"json ls", toolNameBash, testJSONLsLa, patternBashLS},
+		{"json go test", toolNameBash, `{"command":"go test ./..."}`, patternBashGoTest},
+		{"json cd chain", toolNameBash, `{"command":"cd /repo && npm test"}`, patternBashNpmTest},
+		{"json empty command", toolNameBash, `{"command":""}`, patternBashAny},
 	}
 
 	for _, tt := range tests {
@@ -523,9 +524,75 @@ func TestInferBashPattern(t *testing.T) {
 // Cache tests
 // ---------------------------------------------------------------------------
 
+func TestCacheRememberAllowPatternPersistsBeforeMemory(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(t.TempDir())
+	cache := NewCache(store)
+	result, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA)
+	if err != nil {
+		t.Fatalf("RememberAllowPattern() error = %v", err)
+	}
+	if !result.Persisted || result.AlreadyExisted {
+		t.Fatalf("result = %+v, want persisted new rule", result)
+	}
+	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/tui"}`, testRepoA); !ok {
+		t.Fatal("cache does not match remembered rule after persistence")
+	}
+	rules, err := store.Load(scopeFor(testRepoA))
+	if err != nil {
+		t.Fatalf("Load(repo-a): %v", err)
+	}
+	if len(rules) != 1 || rules[0].ToolPattern != patternBashGoTest || rules[0].RepoName != testRepoA {
+		t.Fatalf("stored rules = %+v, want repo-scoped remembered rule", rules)
+	}
+}
+
+func TestCacheRememberAllowPatternExactScopeDuplicateSkipsWrite(t *testing.T) {
+	t.Parallel()
+
+	store := NewStore(t.TempDir())
+	cache := NewCache(store)
+	if _, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA); err != nil {
+		t.Fatalf("initial remember: %v", err)
+	}
+	result, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA)
+	if err != nil {
+		t.Fatalf("duplicate remember: %v", err)
+	}
+	if !result.AlreadyExisted || result.Persisted {
+		t.Fatalf("duplicate result = %+v, want already_existed without persisted", result)
+	}
+}
+
+func TestCacheRememberAllowPatternPersistenceErrorDoesNotMutateMemory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "not-a-directory")
+	if err := os.WriteFile(storePath, []byte("file blocks permissions dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", storePath, err)
+	}
+
+	cache := NewCache(NewStore(storePath))
+	result, err := cache.RememberAllowPattern(patternBashGoTest, testRepoA)
+	if err == nil {
+		t.Fatal("RememberAllowPattern() error = nil, want persistence error")
+	}
+	if result.Persisted || result.AlreadyExisted {
+		t.Fatalf("result = %+v, want not persisted and not already existed", result)
+	}
+	if rules := cache.Rules(); len(rules) != 0 {
+		t.Fatalf("cache.Rules() = %+v, want empty after persistence error", rules)
+	}
+	if _, ok := cache.Check(toolNameBash, `{"command":"go test ./internal/tui"}`, testRepoA); ok {
+		t.Fatal("cache matches remembered rule after persistence error")
+	}
+}
+
 func TestCache_Check_Empty(t *testing.T) {
 	c := NewCache(nil)
-	_, found := c.Check("Bash", "ls", "repo")
+	_, found := c.Check(toolNameBash, "ls", "repo")
 	if found {
 		t.Errorf("expected no match in empty cache")
 	}
@@ -533,13 +600,13 @@ func TestCache_Check_Empty(t *testing.T) {
 
 func TestCache_Check_AllowMatch(t *testing.T) {
 	c := NewCache(nil)
-	c.RememberAllow("Bash", "ls", "repo")
+	c.RememberAllow(toolNameBash, "ls", "repo")
 
-	rule, found := c.Check("Bash", "ls", "repo")
+	rule, found := c.Check(toolNameBash, "ls", "repo")
 	if !found {
 		t.Fatal("expected match for allow rule")
 	}
-	if rule.Effect != "allow" {
+	if rule.Effect != DecisionAllow {
 		t.Errorf("effect = %q, want allow", rule.Effect)
 	}
 }
@@ -550,16 +617,16 @@ func TestCache_Check_DenyMatch(t *testing.T) {
 	c.mu.Lock()
 	c.rules = append(c.rules, Rule{
 		ToolPattern: "Bash(rm -rf /)",
-		Effect:      "deny",
+		Effect:      DecisionDeny,
 		RepoName:    "repo",
 	})
 	c.mu.Unlock()
 
-	rule, found := c.Check("Bash", "rm -rf /", "repo")
+	rule, found := c.Check(toolNameBash, testRmRfRoot, "repo")
 	if !found {
 		t.Fatal("expected match for deny rule")
 	}
-	if rule.Effect != "deny" {
+	if rule.Effect != DecisionDeny {
 		t.Errorf("effect = %q, want deny", rule.Effect)
 	}
 }
@@ -567,37 +634,37 @@ func TestCache_Check_DenyMatch(t *testing.T) {
 func TestCache_Check_DenyWinsOverAllow(t *testing.T) {
 	c := NewCache(nil)
 	// Add an allow rule.
-	c.RememberAllow("Bash", "npm test", "repo")
+	c.RememberAllow(toolNameBash, testNpmTest, "repo")
 	// Add a deny rule for the same pattern.
 	c.mu.Lock()
 	c.rules = append(c.rules, Rule{
 		ToolPattern: "Bash(npm test)",
-		Effect:      "deny",
+		Effect:      DecisionDeny,
 		RepoName:    "repo",
 	})
 	c.mu.Unlock()
 
-	rule, found := c.Check("Bash", "npm test", "repo")
+	rule, found := c.Check(toolNameBash, testNpmTest, "repo")
 	if !found {
 		t.Fatal("expected match")
 	}
-	if rule.Effect != "deny" {
+	if rule.Effect != DecisionDeny {
 		t.Errorf("effect = %q, want deny (deny should win over allow)", rule.Effect)
 	}
 }
 
 func TestCache_Check_RepoScope(t *testing.T) {
 	c := NewCache(nil)
-	c.RememberAllow("Bash", "make build", "repo-a")
+	c.RememberAllow(toolNameBash, "make build", testRepoA)
 
 	// Should match the correct repo.
-	_, found := c.Check("Bash", "make build", "repo-a")
+	_, found := c.Check(toolNameBash, "make build", testRepoA)
 	if !found {
 		t.Errorf("expected match for repo-a")
 	}
 
 	// Should NOT match a different repo.
-	_, found = c.Check("Bash", "make build", "repo-b")
+	_, found = c.Check(toolNameBash, "make build", "repo-b")
 	if found {
 		t.Errorf("expected no match for repo-b (rule is scoped to repo-a)")
 	}
@@ -606,14 +673,14 @@ func TestCache_Check_RepoScope(t *testing.T) {
 func TestCache_Check_GlobalScope(t *testing.T) {
 	c := NewCache(nil)
 	// Add a global rule (empty repo name).
-	c.RememberAllow("Bash", "echo hello", "")
+	c.RememberAllow(toolNameBash, "echo hello", "")
 
 	// Should match any repo.
-	_, found := c.Check("Bash", "echo hello", "repo-x")
+	_, found := c.Check(toolNameBash, "echo hello", "repo-x")
 	if !found {
 		t.Errorf("expected global rule to match repo-x")
 	}
-	_, found = c.Check("Bash", "echo hello", "repo-y")
+	_, found = c.Check(toolNameBash, "echo hello", "repo-y")
 	if !found {
 		t.Errorf("expected global rule to match repo-y")
 	}
@@ -621,17 +688,17 @@ func TestCache_Check_GlobalScope(t *testing.T) {
 
 func TestCache_RememberAllow(t *testing.T) {
 	c := NewCache(nil)
-	c.RememberAllow("Bash", "go test ./...", "my-repo")
+	c.RememberAllow(toolNameBash, testGoTestDotDotDot, testMyRepo)
 
-	rule, found := c.Check("Bash", "go test ./...", "my-repo")
+	rule, found := c.Check(toolNameBash, testGoTestDotDotDot, testMyRepo)
 	if !found {
 		t.Fatal("expected match after RememberAllow")
 	}
-	if rule.Effect != "allow" {
+	if rule.Effect != DecisionAllow {
 		t.Errorf("effect = %q, want allow", rule.Effect)
 	}
-	if rule.ToolPattern != "Bash(go test *)" {
-		t.Errorf("pattern = %q, want %q", rule.ToolPattern, "Bash(go test *)")
+	if rule.ToolPattern != patternBashGoTest {
+		t.Errorf("pattern = %q, want %q", rule.ToolPattern, patternBashGoTest)
 	}
 }
 
@@ -639,7 +706,7 @@ func TestCache_RememberAllow_CrossSession(t *testing.T) {
 	c := NewCache(nil)
 
 	// Add a rule via the shared cache.
-	c.RememberAllow("Bash", "pytest", "shared-repo")
+	c.RememberAllow(toolNameBash, "pytest", "shared-repo")
 
 	// Handler 2 shares the same cache and should find the rule.
 	h2 := &CachingHandler{
@@ -649,14 +716,14 @@ func TestCache_RememberAllow_CrossSession(t *testing.T) {
 	}
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "pytest",
 	}
 	decision, err := h2.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("behavior = %q, want allow (cross-session cache hit)", decision.Behavior)
 	}
 }
@@ -667,40 +734,40 @@ func TestCache_RememberAllow_CrossSession(t *testing.T) {
 
 func TestCachingHandler_Passthrough(t *testing.T) {
 	h := &CachingHandler{
-		Inner:    &mockHandler{behavior: "allow"},
+		Inner:    &mockHandler{behavior: DecisionAllow},
 		Cache:    NewCache(nil),
 		RepoName: "repo",
 	}
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "ls",
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("behavior = %q, want allow (inner handler passthrough)", decision.Behavior)
 	}
 }
 
 func TestCachingHandler_InnerDeny(t *testing.T) {
 	h := &CachingHandler{
-		Inner:    &mockHandler{behavior: "deny"},
+		Inner:    &mockHandler{behavior: DecisionDeny},
 		Cache:    NewCache(nil),
 		RepoName: "repo",
 	}
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "rm -rf /",
+		ToolName:  toolNameBash,
+		Input:     testRmRfRoot,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "deny" {
+	if decision.Behavior != DecisionDeny {
 		t.Errorf("behavior = %q, want deny (inner handler deny passthrough)", decision.Behavior)
 	}
 }
@@ -714,7 +781,7 @@ func TestCachingHandler_InnerError(t *testing.T) {
 	}
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "ls",
 	}
 	_, err := h.CanUseTool(req)
@@ -728,7 +795,7 @@ func TestCachingHandler_InnerError(t *testing.T) {
 
 func TestCachingHandler_CacheHit(t *testing.T) {
 	cache := NewCache(nil)
-	cache.RememberAllow("Bash", "npm test", "repo")
+	cache.RememberAllow(toolNameBash, testNpmTest, "repo")
 
 	h := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""}, // inner defers
@@ -737,14 +804,14 @@ func TestCachingHandler_CacheHit(t *testing.T) {
 	}
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "npm test",
+		ToolName:  toolNameBash,
+		Input:     testNpmTest,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("behavior = %q, want allow (cache hit)", decision.Behavior)
 	}
 }
@@ -757,7 +824,7 @@ func TestCachingHandler_CacheMiss(t *testing.T) {
 	}
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "unknown command",
 	}
 	decision, err := h.CanUseTool(req)
@@ -772,12 +839,12 @@ func TestCachingHandler_CacheMiss(t *testing.T) {
 func TestCachingHandler_DenyWins(t *testing.T) {
 	cache := NewCache(nil)
 	// Add an allow rule.
-	cache.RememberAllow("Bash", "npm test", "repo")
+	cache.RememberAllow(toolNameBash, testNpmTest, "repo")
 	// Add a deny rule for the same pattern.
 	cache.mu.Lock()
 	cache.rules = append(cache.rules, Rule{
 		ToolPattern: "Bash(npm test)",
-		Effect:      "deny",
+		Effect:      DecisionDeny,
 		RepoName:    "repo",
 	})
 	cache.mu.Unlock()
@@ -789,14 +856,14 @@ func TestCachingHandler_DenyWins(t *testing.T) {
 	}
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "npm test",
+		ToolName:  toolNameBash,
+		Input:     testNpmTest,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "deny" {
+	if decision.Behavior != DecisionDeny {
 		t.Errorf("behavior = %q, want deny (deny wins over allow)", decision.Behavior)
 	}
 }
@@ -827,7 +894,7 @@ func TestSingleRepoPermissionScoping(t *testing.T) {
 	}
 
 	// Simulate "Allow & Remember" in the TUI (r keybinding).
-	cache.RememberAllow("Bash", "npm test", permRepoName)
+	cache.RememberAllow(toolNameBash, testNpmTest, permRepoName)
 
 	// The rule should be scoped to "my-service", NOT to "".
 	rules := cache.Rules()
@@ -841,14 +908,14 @@ func TestSingleRepoPermissionScoping(t *testing.T) {
 	// Handler should auto-approve the cached command.
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "npm test",
+		ToolName:  toolNameBash,
+		Input:     testNpmTest,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("behavior = %q, want allow (cached rule)", decision.Behavior)
 	}
 
@@ -886,7 +953,7 @@ func TestGlobalScopeSessionRememberAllow(t *testing.T) {
 
 	req := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "go vet ./...",
 	}
 
@@ -902,14 +969,14 @@ func TestGlobalScopeSessionRememberAllow(t *testing.T) {
 	// Simulate pressing "r" in the TUI attach view. The TUI now uses
 	// sess.PermCacheScope (which is "" for global-scope sessions) as the
 	// repoName argument to RememberAllow, matching the handler's scope.
-	cache.RememberAllow("Bash", "go vet ./...", "" /* PermCacheScope = "" */)
+	cache.RememberAllow(toolNameBash, "go vet ./...", "" /* PermCacheScope = "" */)
 
 	// After remembering: handler must auto-approve.
 	decision, err = handler.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("CanUseTool after remember: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("after remember: behavior = %q, want allow (global-scope cache hit)", decision.Behavior)
 	}
 
@@ -923,7 +990,7 @@ func TestGlobalScopeSessionRememberAllow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CanUseTool repo handler: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("repo handler: behavior = %q, want allow (global rule matches any repo)", decision.Behavior)
 	}
 }
@@ -935,7 +1002,7 @@ func TestGlobalScopeSessionRememberAllow(t *testing.T) {
 func TestCache_LoadAndMerge_GlobalOnly(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	rules := []Rule{{ToolPattern: "Bash(echo *)", Effect: "allow"}}
+	rules := []Rule{{ToolPattern: patternBashEcho, Effect: DecisionAllow}}
 	if err := s.Save(globalScope, rules); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -947,8 +1014,8 @@ func TestCache_LoadAndMerge_GlobalOnly(t *testing.T) {
 	if len(cached) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(cached))
 	}
-	if cached[0].ToolPattern != "Bash(echo *)" {
-		t.Errorf("rule pattern = %q, want %q", cached[0].ToolPattern, "Bash(echo *)")
+	if cached[0].ToolPattern != patternBashEcho {
+		t.Errorf("rule pattern = %q, want %q", cached[0].ToolPattern, patternBashEcho)
 	}
 	if cached[0].RepoName != "" {
 		t.Errorf("rule RepoName = %q, want empty (global)", cached[0].RepoName)
@@ -958,15 +1025,15 @@ func TestCache_LoadAndMerge_GlobalOnly(t *testing.T) {
 func TestCache_LoadAndMerge_GlobalAndRepo(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	if err := s.Save(globalScope, []Rule{{ToolPattern: "Bash(echo *)", Effect: "allow"}}); err != nil {
+	if err := s.Save(globalScope, []Rule{{ToolPattern: patternBashEcho, Effect: DecisionAllow}}); err != nil {
 		t.Fatalf("Save global: %v", err)
 	}
-	if err := s.Save("my-repo", []Rule{{ToolPattern: "Bash(go test *)", Effect: "allow", RepoName: "my-repo"}}); err != nil {
+	if err := s.Save(testMyRepo, []Rule{{ToolPattern: patternBashGoTest, Effect: DecisionAllow, RepoName: testMyRepo}}); err != nil {
 		t.Fatalf("Save repo: %v", err)
 	}
 
 	c := NewCache(s)
-	c.LoadAndMerge("my-repo")
+	c.LoadAndMerge(testMyRepo)
 
 	cached := c.Rules()
 	if len(cached) != 2 {
@@ -977,15 +1044,15 @@ func TestCache_LoadAndMerge_GlobalAndRepo(t *testing.T) {
 func TestCache_LoadAndMerge_Additive(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	if err := s.Save("repo-a", []Rule{{ToolPattern: "Bash(make *)", Effect: "allow", RepoName: "repo-a"}}); err != nil {
+	if err := s.Save(testRepoA, []Rule{{ToolPattern: "Bash(make *)", Effect: DecisionAllow, RepoName: testRepoA}}); err != nil {
 		t.Fatalf("Save repo-a: %v", err)
 	}
-	if err := s.Save("repo-b", []Rule{{ToolPattern: "Bash(cargo *)", Effect: "allow", RepoName: "repo-b"}}); err != nil {
+	if err := s.Save("repo-b", []Rule{{ToolPattern: "Bash(cargo *)", Effect: DecisionAllow, RepoName: "repo-b"}}); err != nil {
 		t.Fatalf("Save repo-b: %v", err)
 	}
 
 	c := NewCache(s)
-	c.LoadAndMerge("repo-a")
+	c.LoadAndMerge(testRepoA)
 	c.LoadAndMerge("repo-b")
 
 	cached := c.Rules()
@@ -997,15 +1064,15 @@ func TestCache_LoadAndMerge_Additive(t *testing.T) {
 func TestCache_LoadAndMerge_Deduplicates(t *testing.T) {
 	dir := t.TempDir()
 	s := NewStore(dir)
-	if err := s.Save("my-repo", []Rule{{ToolPattern: "Bash(go test *)", Effect: "allow", RepoName: "my-repo"}}); err != nil {
+	if err := s.Save(testMyRepo, []Rule{{ToolPattern: patternBashGoTest, Effect: DecisionAllow, RepoName: testMyRepo}}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
 	c := NewCache(s)
 	// Pre-load the same rule into the cache
-	c.RememberAllow("Bash", "go test ./...", "my-repo")
+	c.RememberAllow(toolNameBash, testGoTestDotDotDot, testMyRepo)
 	// Now load from disk — should deduplicate
-	c.LoadAndMerge("my-repo")
+	c.LoadAndMerge(testMyRepo)
 
 	cached := c.Rules()
 	if len(cached) != 1 {
@@ -1016,7 +1083,7 @@ func TestCache_LoadAndMerge_Deduplicates(t *testing.T) {
 func TestCache_LoadAndMerge_NoStore(t *testing.T) {
 	c := NewCache(nil)
 	// Should not panic
-	c.LoadAndMerge("my-repo")
+	c.LoadAndMerge(testMyRepo)
 	if len(c.Rules()) != 0 {
 		t.Errorf("expected 0 rules with nil store")
 	}
@@ -1031,18 +1098,18 @@ func TestCache_RememberAllow_Persists(t *testing.T) {
 	s := NewStore(dir)
 	c := NewCache(s)
 
-	c.RememberAllow("Bash", "go test ./...", "my-repo")
+	c.RememberAllow(toolNameBash, testGoTestDotDotDot, testMyRepo)
 
 	// Load directly from store to verify persistence
-	loaded, err := s.Load("my-repo")
+	loaded, err := s.Load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if len(loaded) != 1 {
 		t.Fatalf("expected 1 rule on disk, got %d", len(loaded))
 	}
-	if loaded[0].ToolPattern != "Bash(go test *)" {
-		t.Errorf("persisted pattern = %q, want %q", loaded[0].ToolPattern, "Bash(go test *)")
+	if loaded[0].ToolPattern != patternBashGoTest {
+		t.Errorf("persisted pattern = %q, want %q", loaded[0].ToolPattern, patternBashGoTest)
 	}
 }
 
@@ -1055,7 +1122,7 @@ func TestCache_RememberAllow_ConcurrentSafety(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		go func(n int) {
 			defer func() { done <- struct{}{} }()
-			c.RememberAllow("Bash", fmt.Sprintf("cmd-%d", n), "repo")
+			c.RememberAllow(toolNameBash, fmt.Sprintf("cmd-%d", n), "repo")
 		}(i)
 	}
 	for i := 0; i < 10; i++ {
@@ -1089,7 +1156,7 @@ func TestCacheCheckConcurrentSafety(t *testing.T) {
 
 	// Pre-seed some rules so Check has matchable patterns to look up.
 	for i := 0; i < 5; i++ {
-		c.RememberAllow("Bash", fmt.Sprintf("seed-%d", i), "repo")
+		c.RememberAllow(toolNameBash, fmt.Sprintf("seed-%d", i), "repo")
 	}
 
 	const goroutines = 20
@@ -1102,9 +1169,9 @@ func TestCacheCheckConcurrentSafety(t *testing.T) {
 			for op := 0; op < opsPerGoroutine; op++ {
 				// Mix of operations: every 4th op is a write, the rest are reads.
 				if op%4 == 0 {
-					c.RememberAllow("Bash", fmt.Sprintf("g%d-op%d", g, op), "repo")
+					c.RememberAllow(toolNameBash, fmt.Sprintf("g%d-op%d", g, op), "repo")
 				} else {
-					_, _ = c.Check("Bash", fmt.Sprintf("seed-%d", op%5), "repo")
+					_, _ = c.Check(toolNameBash, fmt.Sprintf("seed-%d", op%5), "repo")
 				}
 			}
 		}(g)
@@ -1132,19 +1199,19 @@ func writeInput(content string) string {
 }
 
 func TestSizeGuardHandler_BlocksOversizedClaudeWrite(t *testing.T) {
-	inner := &mockHandler{behavior: "allow"}
+	inner := &mockHandler{behavior: DecisionAllow}
 	h := &SizeGuardHandler{Inner: inner, MaxBytes: 100}
 
 	req := ports.ToolPermissionRequest{
-		ToolName:     "Write",
+		ToolName:     toolNameWrite,
 		Input:        writeInput(strings.Repeat("a", 200)),
-		ProviderName: "claude",
+		ProviderName: providerNameClaude,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != "deny" {
+	if decision.Behavior != DecisionDeny {
 		t.Fatalf("Behavior = %q, want deny", decision.Behavior)
 	}
 	if decision.Reason == "" {
@@ -1153,29 +1220,29 @@ func TestSizeGuardHandler_BlocksOversizedClaudeWrite(t *testing.T) {
 }
 
 func TestSizeGuardHandler_AllowsUnderThreshold(t *testing.T) {
-	inner := &mockHandler{behavior: "allow"}
+	inner := &mockHandler{behavior: DecisionAllow}
 	h := &SizeGuardHandler{Inner: inner, MaxBytes: 1000}
 
 	req := ports.ToolPermissionRequest{
-		ToolName:     "Write",
+		ToolName:     toolNameWrite,
 		Input:        writeInput("small content"),
-		ProviderName: "claude",
+		ProviderName: providerNameClaude,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("Behavior = %q, want allow (delegated to inner)", decision.Behavior)
 	}
 }
 
 func TestSizeGuardHandler_IgnoresCodex(t *testing.T) {
-	inner := &mockHandler{behavior: "allow"}
+	inner := &mockHandler{behavior: DecisionAllow}
 	h := &SizeGuardHandler{Inner: inner, MaxBytes: 100}
 
 	req := ports.ToolPermissionRequest{
-		ToolName:     "Write",
+		ToolName:     toolNameWrite,
 		Input:        writeInput(strings.Repeat("a", 500)),
 		ProviderName: "codex",
 	}
@@ -1183,44 +1250,44 @@ func TestSizeGuardHandler_IgnoresCodex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("Behavior = %q, want allow (guard is Claude-only)", decision.Behavior)
 	}
 }
 
 func TestSizeGuardHandler_IgnoresOtherTools(t *testing.T) {
-	inner := &mockHandler{behavior: "allow"}
+	inner := &mockHandler{behavior: DecisionAllow}
 	h := &SizeGuardHandler{Inner: inner, MaxBytes: 100}
 
 	// Edit is not size-guarded (it streams only a diff, not a full payload).
 	req := ports.ToolPermissionRequest{
-		ToolName:     "Edit",
+		ToolName:     toolNameEdit,
 		Input:        fmt.Sprintf(`{"file_path":"/tmp/x","new_string":%q}`, strings.Repeat("a", 500)),
-		ProviderName: "claude",
+		ProviderName: providerNameClaude,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("Behavior = %q, want allow (Edit is not guarded)", decision.Behavior)
 	}
 }
 
 func TestSizeGuardHandler_DisabledWhenMaxBytesZero(t *testing.T) {
-	inner := &mockHandler{behavior: "allow"}
+	inner := &mockHandler{behavior: DecisionAllow}
 	h := &SizeGuardHandler{Inner: inner, MaxBytes: 0}
 
 	req := ports.ToolPermissionRequest{
-		ToolName:     "Write",
+		ToolName:     toolNameWrite,
 		Input:        writeInput(strings.Repeat("a", 100_000)),
-		ProviderName: "claude",
+		ProviderName: providerNameClaude,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("Behavior = %q, want allow (MaxBytes=0 disables guard)", decision.Behavior)
 	}
 }
@@ -1228,19 +1295,19 @@ func TestSizeGuardHandler_DisabledWhenMaxBytesZero(t *testing.T) {
 func TestSizeGuardHandler_DelegatesOnMalformedInput(t *testing.T) {
 	// If the input is not valid JSON or lacks a content field, the guard should
 	// defer to the inner handler rather than block (fail-open on parse errors).
-	inner := &mockHandler{behavior: "deny"}
+	inner := &mockHandler{behavior: DecisionDeny}
 	h := &SizeGuardHandler{Inner: inner, MaxBytes: 10}
 
 	req := ports.ToolPermissionRequest{
-		ToolName:     "Write",
+		ToolName:     toolNameWrite,
 		Input:        "not json at all",
-		ProviderName: "claude",
+		ProviderName: providerNameClaude,
 	}
 	decision, err := h.CanUseTool(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if decision.Behavior != "deny" {
+	if decision.Behavior != DecisionDeny {
 		t.Errorf("Behavior = %q, want deny from inner handler (guard should delegate on parse failure)", decision.Behavior)
 	}
 }
@@ -1251,9 +1318,9 @@ func TestSizeGuardHandler_PropagatesInnerError(t *testing.T) {
 	h := &SizeGuardHandler{Inner: inner, MaxBytes: 1000}
 
 	req := ports.ToolPermissionRequest{
-		ToolName:     "Write",
+		ToolName:     toolNameWrite,
 		Input:        writeInput("small"),
-		ProviderName: "claude",
+		ProviderName: providerNameClaude,
 	}
 	_, err := h.CanUseTool(req)
 	if !errors.Is(err, boom) {
@@ -1262,7 +1329,7 @@ func TestSizeGuardHandler_PropagatesInnerError(t *testing.T) {
 }
 
 func TestGuarded_UsesDefaultThreshold(t *testing.T) {
-	inner := &mockHandler{behavior: "allow"}
+	inner := &mockHandler{behavior: DecisionAllow}
 	guard, ok := Guarded(inner).(*SizeGuardHandler)
 	if !ok {
 		t.Fatalf("Guarded returned %T, want *SizeGuardHandler", guard)

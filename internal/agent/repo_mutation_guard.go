@@ -165,11 +165,13 @@ func captureReadOnlyRepoSnapshot(ctx context.Context, runner ports.CommandRunner
 	worktreePath := filepath.Clean(repo.WorktreePath)
 	info, err := os.Stat(worktreePath)
 	if err != nil || !info.IsDir() {
-		return readOnlyRepoSnapshot{}, false, nil
+		// pre-validation gate: not a repo yet is "skip", not fatal
+		return readOnlyRepoSnapshot{}, false, nil //nolint:nilerr
 	}
 	inside, err := gitOutput(ctx, runner, worktreePath, "rev-parse", "--is-inside-work-tree")
-	if err != nil || strings.TrimSpace(string(inside)) != "true" {
-		return readOnlyRepoSnapshot{}, false, nil
+	if err != nil || strings.TrimSpace(string(inside)) != "true" { //nolint:goconst // coincidental match with the unix `true` command name used as an unrelated test stub; not the same concept
+		// same gate: not a git worktree yet is "skip", not fatal
+		return readOnlyRepoSnapshot{}, false, nil //nolint:nilerr
 	}
 	status, err := gitOutput(ctx, runner, worktreePath, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
@@ -350,10 +352,14 @@ func nextReadOnlyRepoMutationPatchPath(dir, repoName string) (string, error) {
 	return "", fmt.Errorf("too many read-only repo mutation patches in %s", dir)
 }
 
+// defaultReadOnlyRepoSlug is the fallback patch-filename slug used when a
+// repo name is empty or sanitizes down to nothing (e.g. all-symbol names).
+const defaultReadOnlyRepoSlug = "repo"
+
 func sanitizeReadOnlyRepoName(name string) string {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if name == "" {
-		return "repo"
+		return defaultReadOnlyRepoSlug
 	}
 	var b strings.Builder
 	lastDash := false
@@ -372,7 +378,7 @@ func sanitizeReadOnlyRepoName(name string) string {
 	if slug := strings.Trim(b.String(), "-"); slug != "" {
 		return slug
 	}
-	return "repo"
+	return defaultReadOnlyRepoSlug
 }
 
 func readOnlyRepoKey(name, worktreePath string) string {

@@ -329,7 +329,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 	}
 
 	switch loopResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     repoNames,
@@ -337,7 +337,7 @@ func RunReviewCommentsLoop(cfg ReviewCommentsLoopConfig, sm ports.SessionManager
 		})
 		_ = clearActiveCycle(cfg.FeatureStore, cfg.Feature.ID)
 		return &ReviewCommentsLoopResult{
-			FinalStatus: "review_passed",
+			FinalStatus: finalStatusReviewPassed,
 			Iterations:  loopResult.Iterations,
 			Repos:       repoNames,
 		}, nil

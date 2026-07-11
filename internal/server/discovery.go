@@ -34,6 +34,14 @@ import (
 
 const discoverySchemaVersion = 1
 
+// reasonMismatchedDiscoveryPolicy is the DiscoveryDecision.Reason value used
+// whenever a discovered server's launch policy doesn't match ours.
+const reasonMismatchedDiscoveryPolicy = "mismatched discovery policy"
+
+// hostLocalhost is the loopback hostname recognized alongside literal
+// loopback IPs when validating discovery/base URLs and request hosts.
+const hostLocalhost = "localhost"
+
 func DiscoveryPath(runtimeDir string) string {
 	return filepath.Join(runtimeDir, discoveryFilename)
 }
@@ -114,14 +122,14 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return DiscoveryDecision{}, nil
 	} else if err != nil {
-		return DiscoveryDecision{Replace: true, Reason: "discovery stat failed"}, nil
+		return DiscoveryDecision{Replace: true, Reason: "discovery stat failed"}, nil //nolint:nilerr // a bad/stale discovery record is self-healed by replacing it, not a fatal error
 	}
 	if err := validateDiscoveryFileSecurity(path); err != nil {
-		return DiscoveryDecision{Replace: true, Reason: "unsafe discovery permissions"}, nil
+		return DiscoveryDecision{Replace: true, Reason: "unsafe discovery permissions"}, nil //nolint:nilerr // self-heal: replace the unsafe record instead of failing
 	}
 	rec, err := ReadDiscovery(runtimeDir)
 	if err != nil {
-		return DiscoveryDecision{Replace: true, Reason: "unreadable discovery"}, nil
+		return DiscoveryDecision{Replace: true, Reason: "unreadable discovery"}, nil //nolint:nilerr // self-heal: replace the unreadable record instead of failing
 	}
 	if !isLoopbackBaseURL(rec.BaseURL) {
 		return DiscoveryDecision{Replace: true, Reason: "non-loopback discovery base_url", Record: rec}, nil
@@ -130,7 +138,7 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery runtime", Record: rec}, nil
 	}
 	if !launchPolicyEquivalent(policy, rec.LaunchPolicy) {
-		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery policy", Record: rec}, nil
+		return DiscoveryDecision{Replace: true, Reason: reasonMismatchedDiscoveryPolicy, Record: rec}, nil
 	}
 	health, ok, reason := discoveryHealth(ctx, client, rec.BaseURL, rec.AuthToken)
 	if !ok {
@@ -143,7 +151,7 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery runtime", Record: rec}, nil
 	}
 	if !launchPolicyEquivalent(policy, health.LaunchPolicy) {
-		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery policy", Record: rec}, nil
+		return DiscoveryDecision{Replace: true, Reason: reasonMismatchedDiscoveryPolicy, Record: rec}, nil
 	}
 	if (!rec.StartedAt.IsZero() || !health.StartedAt.IsZero()) && !rec.StartedAt.Equal(health.StartedAt) {
 		return DiscoveryDecision{Replace: true, Reason: "mismatched discovery health", Record: rec}, nil
@@ -181,7 +189,7 @@ func isLoopbackBaseURL(raw string) bool {
 		return false
 	}
 	host := u.Hostname()
-	if host == "localhost" {
+	if host == hostLocalhost {
 		return true
 	}
 	ip := net.ParseIP(host)
@@ -194,7 +202,7 @@ func isLoopbackOrigin(raw string) bool {
 		return false
 	}
 	host := u.Hostname()
-	if host == "localhost" {
+	if host == hostLocalhost {
 		return true
 	}
 	ip := net.ParseIP(host)

@@ -20,7 +20,20 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
+
+// freshnessInSync and freshnessLocalOnly are RepoState.Freshness values not
+// already exported by internal/git (which only exports FreshnessUnknown and
+// FreshnessLocalChanges).
+const (
+	freshnessInSync    = "in sync"
+	freshnessLocalOnly = "local only"
+)
+
+// rebaseFailedLabel is the display label for a repo whose rebase operation
+// ended in RebaseRepoStatusFailed.
+const rebaseFailedLabel = "rebase failed"
 
 // renderReposBlock returns one rendered row per repo in the feature, sorted by
 // repo name. Each row's tail conveys the per-repo publishing surface:
@@ -87,7 +100,7 @@ func renderReposBlock(f *feature.Feature) []string {
 			}
 		}
 		if suffix := freshnessSuffix(freshness); suffix != "" &&
-			(rebaseSuffix == "" || strings.TrimSpace(freshness) != "in sync") {
+			(rebaseSuffix == "" || strings.TrimSpace(freshness) != freshnessInSync) {
 			tail = strings.TrimRight(tail, " ") + "  " + suffix
 		}
 
@@ -132,7 +145,7 @@ func rebaseOperationSuffix(f *feature.Feature, name string) string {
 		}
 		return WarningStyle.Render("⚠ " + label)
 	case feature.RebaseRepoStatusFailed:
-		label := "rebase failed"
+		label := rebaseFailedLabel
 		if progress.LastError != "" {
 			label += ": " + truncateText(progress.LastError, 60)
 		}
@@ -144,13 +157,13 @@ func rebaseOperationSuffix(f *feature.Feature, name string) string {
 
 func freshnessSuffix(freshness string) string {
 	switch strings.TrimSpace(freshness) {
-	case "", "unknown":
+	case "", git.FreshnessUnknown:
 		return ""
 	case "in sync":
 		return SuccessStyle.Render("✓ in sync")
-	case "local changes":
+	case git.FreshnessLocalChanges:
 		return WarningStyle.Render("local changes")
-	case "local only":
+	case freshnessLocalOnly:
 		return MutedStyle.Render("local only")
 	default:
 		return MutedStyle.Render(freshness)

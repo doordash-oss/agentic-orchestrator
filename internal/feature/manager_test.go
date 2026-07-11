@@ -33,6 +33,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// apiRepoName is the fixture repo name shared by rebase/cycle tests below.
+const apiRepoName = "api"
+
 func newTestManager(t *testing.T) *feature.Manager {
 	t.Helper()
 	dir := t.TempDir()
@@ -3668,7 +3671,7 @@ func TestManagerFeatureRebaseOperationLifecycle(t *testing.T) {
 		Status:        feature.StatusCodeReady,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{
-			{Name: "api"},
+			{Name: apiRepoName},
 			{Name: "web"},
 		},
 	}
@@ -3679,10 +3682,10 @@ func TestManagerFeatureRebaseOperationLifecycle(t *testing.T) {
 	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
 		t.Fatalf("StartFeatureRebaseOperation: %v", err)
 	}
-	if err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChecking, feature.RebaseRepoProgress{}); err != nil {
+	if err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChecking, feature.RebaseRepoProgress{}); err != nil {
 		t.Fatalf("UpdateFeatureRebaseRepo checking: %v", err)
 	}
-	if err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
+	if err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
 		t.Fatalf("UpdateFeatureRebaseRepo changed: %v", err)
 	}
 	if err := m.UpdateFeatureRebaseRepo(f.ID, "web", feature.RebaseRepoStatusUpToDate, feature.RebaseRepoProgress{RebaseTarget: "main"}); err != nil {
@@ -3699,8 +3702,8 @@ func TestManagerFeatureRebaseOperationLifecycle(t *testing.T) {
 	if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
 		t.Fatalf("RebaseOperation = %+v, want harness stage", got.RebaseOperation)
 	}
-	if got.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusChanged {
-		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos["api"].Status)
+	if got.RebaseOperation.Repos[apiRepoName].Status != feature.RebaseRepoStatusChanged {
+		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos[apiRepoName].Status)
 	}
 
 	if err := m.ClearFeatureRebaseOperation(f.ID); err != nil {
@@ -3727,7 +3730,7 @@ func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
 		ActiveRun:     1,
 		RunCount:      1,
 		Repos: []feature.FeatureRepo{
-			{Name: "api"},
+			{Name: apiRepoName},
 		},
 		ActiveCycle: &feature.CycleState{
 			Type:   feature.CycleTweak,
@@ -3737,7 +3740,7 @@ func TestManagerFeatureRebaseOperationDoesNotClobberOtherCycles(t *testing.T) {
 		RebaseOperation: &feature.RebaseOperationState{
 			Stage: feature.RebaseStageHarness,
 			Repos: map[string]*feature.RebaseRepoProgress{
-				"api": {Status: feature.RebaseRepoStatusChecking},
+				apiRepoName: {Status: feature.RebaseRepoStatusChecking},
 			},
 		},
 	}
@@ -3784,7 +3787,7 @@ func TestManagerFeatureRebaseOperationRejectsDuplicateStart(t *testing.T) {
 		Status:        feature.StatusCodeReady,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{
-			{Name: "api"},
+			{Name: apiRepoName},
 		},
 	}
 	if err := store.Save(f); err != nil {
@@ -3793,7 +3796,7 @@ func TestManagerFeatureRebaseOperationRejectsDuplicateStart(t *testing.T) {
 	if err := m.StartFeatureRebaseOperation(f.ID); err != nil {
 		t.Fatalf("StartFeatureRebaseOperation: %v", err)
 	}
-	if err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
+	if err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true}); err != nil {
 		t.Fatalf("UpdateFeatureRebaseRepo changed: %v", err)
 	}
 	if err := m.MarkFeatureRebaseStage(f.ID, feature.RebaseStageSmartRebase); err != nil {
@@ -3813,10 +3816,10 @@ func TestManagerFeatureRebaseOperationRejectsDuplicateStart(t *testing.T) {
 	if got.RebaseOperation.Stage != feature.RebaseStageSmartRebase {
 		t.Fatalf("RebaseOperation.Stage = %q, want %q", got.RebaseOperation.Stage, feature.RebaseStageSmartRebase)
 	}
-	if got.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusChanged {
-		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos["api"].Status)
+	if got.RebaseOperation.Repos[apiRepoName].Status != feature.RebaseRepoStatusChanged {
+		t.Fatalf("api status = %q, want changed", got.RebaseOperation.Repos[apiRepoName].Status)
 	}
-	if !got.RebaseOperation.Repos["api"].Changed {
+	if !got.RebaseOperation.Repos[apiRepoName].Changed {
 		t.Fatalf("api Changed = false, want true")
 	}
 }
@@ -3832,7 +3835,7 @@ func TestManagerFeatureRebaseOperationStageRequiresOwnership(t *testing.T) {
 			Status:        feature.StatusCodeReady,
 			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
-				{Name: "api"},
+				{Name: apiRepoName},
 			},
 		}
 		if err := store.Save(f); err != nil {
@@ -3865,7 +3868,7 @@ func TestManagerFeatureRebaseOperationStageRequiresOwnership(t *testing.T) {
 			Status:        feature.StatusCodeReady,
 			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
-				{Name: "api"},
+				{Name: apiRepoName},
 			},
 		}
 		f.SetActiveCycleType(feature.CycleRebase)
@@ -3901,7 +3904,7 @@ func TestManagerFeatureRebaseOperationStageRequiresOwnership(t *testing.T) {
 			Status:        feature.StatusCodeReady,
 			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
-				{Name: "api"},
+				{Name: apiRepoName},
 			},
 			ActiveCycle: &feature.CycleState{
 				Type:   feature.CycleRebase,
@@ -3945,7 +3948,7 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 			ActiveRun:     1,
 			RunCount:      1,
 			Repos: []feature.FeatureRepo{
-				{Name: "api"},
+				{Name: apiRepoName},
 			},
 			ActiveCycle: &feature.CycleState{
 				Type:   feature.CycleTweak,
@@ -3955,7 +3958,7 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 			RebaseOperation: &feature.RebaseOperationState{
 				Stage: feature.RebaseStageHarness,
 				Repos: map[string]*feature.RebaseRepoProgress{
-					"api": {Status: feature.RebaseRepoStatusChecking},
+					apiRepoName: {Status: feature.RebaseRepoStatusChecking},
 				},
 			},
 		}
@@ -3964,7 +3967,7 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 			t.Fatalf("save feature: %v", err)
 		}
 
-		err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
+		err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
 		if err == nil {
 			t.Fatal("UpdateFeatureRebaseRepo error = nil, want non-rebase cycle guard")
 		}
@@ -3981,8 +3984,8 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 		if got.RebaseOperation == nil || got.RebaseOperation.Stage != feature.RebaseStageHarness {
 			t.Fatalf("RebaseOperation = %+v, want stale operation preserved", got.RebaseOperation)
 		}
-		if got.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusChecking {
-			t.Fatalf("api status = %q, want checking", got.RebaseOperation.Repos["api"].Status)
+		if got.RebaseOperation.Repos[apiRepoName].Status != feature.RebaseRepoStatusChecking {
+			t.Fatalf("api status = %q, want checking", got.RebaseOperation.Repos[apiRepoName].Status)
 		}
 	})
 
@@ -3996,14 +3999,14 @@ func TestManagerFeatureRebaseOperationUpdateRequiresOwnership(t *testing.T) {
 			Status:        feature.StatusCodeReady,
 			SchemaVersion: feature.SchemaVersionCurrent,
 			Repos: []feature.FeatureRepo{
-				{Name: "api"},
+				{Name: apiRepoName},
 			},
 		}
 		if err := store.Save(f); err != nil {
 			t.Fatalf("save feature: %v", err)
 		}
 
-		err := m.UpdateFeatureRebaseRepo(f.ID, "api", feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
+		err := m.UpdateFeatureRebaseRepo(f.ID, apiRepoName, feature.RebaseRepoStatusChanged, feature.RebaseRepoProgress{RebaseTarget: "main", Changed: true})
 		if err == nil {
 			t.Fatal("UpdateFeatureRebaseRepo error = nil, want ownership guard")
 		}
@@ -5451,20 +5454,20 @@ func TestRemoveRepoCycle(t *testing.T) {
 	// Seed two repo cycle entries via Store.Modify
 	if err := mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
 		f.RepoCycles = map[string]*feature.RepoCycleState{
-			"api":     {Type: feature.CycleTweak, Status: "running"},
-			"backend": {Type: feature.CycleRebase, Status: "running"},
+			apiRepoName: {Type: feature.CycleTweak, Status: "running"},
+			"backend":   {Type: feature.CycleRebase, Status: "running"},
 		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Remove "api" — "backend" should remain
-	if err := mgr.RemoveRepoCycle(f.ID, "api"); err != nil {
+	// Remove the "api" repo cycle — "backend" should remain.
+	if err := mgr.RemoveRepoCycle(f.ID, apiRepoName); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := mgr.Get(f.ID)
-	if _, ok := got.RepoCycles["api"]; ok {
+	if _, ok := got.RepoCycles[apiRepoName]; ok {
 		t.Error("api cycle should be removed")
 	}
 	if got.RepoCycles["backend"] == nil {

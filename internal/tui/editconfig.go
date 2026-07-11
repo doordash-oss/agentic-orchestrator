@@ -35,6 +35,8 @@ const (
 	tabGates
 )
 
+const configTabLabelBehavior = "Behavior"
+
 type configFocusZone int
 
 const (
@@ -303,7 +305,7 @@ func (m EditConfigModel) renderTabStrip() string {
 		dirty bool
 	}{
 		{tabModels, "Models", m.editor.ModelsChangeCount() > 0},
-		{tabBehavior, "Behavior", m.editor.InquirenessChanged()},
+		{tabBehavior, configTabLabelBehavior, m.editor.InquirenessChanged()},
 		{tabGates, "Gates", m.editor.CheckpointsChangeCount() > 0},
 	}
 
@@ -417,7 +419,7 @@ func visibleWindow(total, focusIdx, size int) (int, int) {
 // shape as Models and Gates so tab changes do not resize the overlay.
 func (m EditConfigModel) renderBehaviorPane() string {
 	return renderConfigWorkspace(
-		"Behavior",
+		configTabLabelBehavior,
 		m.renderBehaviorSettingPanel(),
 		m.renderBehaviorValuesPanel(),
 		m.renderBehaviorDetailsPanel(),

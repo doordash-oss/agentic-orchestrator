@@ -691,7 +691,7 @@ func TestOrchestrator_StartImplement_PhasePlan_Refactor_FallbackResolvesRefactor
 		// No Artifacts entries — forces resolvePlanPath to use the
 		// resolver fallback cascade rather than a stored absolute path.
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
+			{Name: repoName, Path: repoAPath},
 		},
 	}
 	f.SetRefactorCount(1)
@@ -771,7 +771,7 @@ func TestOrchestrator_Proceed_PhasePlan_RunRelativeArtifact_RoadmapPipeline_Reso
 			"plan": filepath.Join("phase-02", "plan", "plan.md"),
 		},
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
+			{Name: repoName, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1177,7 +1177,7 @@ func TestOrchestrator_Hooks_NilSafe(t *testing.T) {
 	if err := oFail.HandlePhaseCompletion("feat-fail-nil", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhasePlan,
 		PlanResult: &agent.PlanLoopResult{
-			FinalStatus: "failed",
+			FinalStatus: finalStatusFailed,
 			LastError:   "nope",
 		},
 	}); err != nil {

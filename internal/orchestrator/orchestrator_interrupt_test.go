@@ -24,6 +24,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// kbStatusBuilding is the fixture KBStatus value shared by this file's tests.
+const kbStatusBuilding = "building"
+
 func findInterruptLifecycleCall(lc *mocks.MockFeatureLifecycle, method string) *mocks.MockCall {
 	for i := range lc.Calls {
 		if lc.Calls[i].Method == method {
@@ -38,7 +41,7 @@ func findInterruptLifecycleCall(lc *mocks.MockFeatureLifecycle, method string) *
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_InterruptFeature(t *testing.T) {
-	kbStatus := map[string]string{"repo-a": "building", "repo-b": "completed"}
+	kbStatus := map[string]string{repoName: kbStatusBuilding, repoNameB: kbStatusCompleted}
 	f := &feature.Feature{
 		ID:       "feat-int",
 		Status:   feature.StatusImplementing,
@@ -96,8 +99,8 @@ func TestOrchestrator_InterruptFeature(t *testing.T) {
 	if f.KBStatus == nil {
 		t.Error("KBStatus was cleared by InterruptFeature — should be preserved")
 	}
-	if f.KBStatus["repo-a"] != "building" {
-		t.Errorf("KBStatus[repo-a] = %q, want building", f.KBStatus["repo-a"])
+	if f.KBStatus[repoName] != kbStatusBuilding {
+		t.Errorf("KBStatus[repo-a] = %q, want building", f.KBStatus[repoName])
 	}
 
 	// Transition called with StatusInterrupted.
@@ -199,17 +202,17 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 	running1 := &feature.Feature{
 		ID:       "running-1",
 		Status:   feature.StatusImplementing,
-		KBStatus: map[string]string{"r": "building"},
+		KBStatus: map[string]string{"r": kbStatusBuilding},
 	}
 	running2 := &feature.Feature{
 		ID:       "running-2",
 		Status:   feature.StatusPlanning,
-		KBStatus: map[string]string{"r": "completed"},
+		KBStatus: map[string]string{"r": kbStatusCompleted},
 	}
 	published := &feature.Feature{
 		ID:       "pub-1",
 		Status:   feature.StatusPublished,
-		KBStatus: map[string]string{"r": "completed"},
+		KBStatus: map[string]string{"r": kbStatusCompleted},
 	}
 	done := &feature.Feature{ID: "done-1", Status: feature.StatusDone}
 	setup := &feature.Feature{ID: "setup-1", Status: feature.StatusSettingUpWorktrees}
@@ -299,15 +302,15 @@ func TestOrchestrator_InterruptAllRunning(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
-	kb := map[string]string{"r": "completed"}
+	kb := map[string]string{"r": kbStatusCompleted}
 	published := &feature.Feature{
 		ID:       "pub-cyc",
 		Status:   feature.StatusPublished,
 		KBStatus: kb,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"r1": {Type: feature.CycleRebase, Status: "running"},
-			"r2": {Type: feature.CycleTweak, Status: "reviewing"},
-			"r3": {Type: feature.CycleTweak, Status: "completed"},
+			"r1": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+			"r2": {Type: feature.CycleTweak, Status: feature.RepoCycleReviewing},
+			"r3": {Type: feature.CycleTweak, Status: kbStatusCompleted},
 		},
 	}
 
@@ -338,7 +341,7 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 		t.Errorf("r2 Status = %q, want interrupted", published.RepoCycles["r2"].Status)
 	}
 	// completed cycle unchanged.
-	if published.RepoCycles["r3"].Status != "completed" {
+	if published.RepoCycles["r3"].Status != kbStatusCompleted {
 		t.Errorf("r3 status = %q, want completed (unchanged)", published.RepoCycles["r3"].Status)
 	}
 
@@ -361,13 +364,13 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 // feature's cycle and pending help banner survived the quit and reappeared
 // stale on the next launch.
 func TestOrchestrator_InterruptAllRunning_CodeReadyWithCycles(t *testing.T) {
-	kb := map[string]string{"agentic": "completed"}
+	kb := map[string]string{agenticRepoName: kbStatusCompleted}
 	codeReady := &feature.Feature{
 		ID:       "cr-cyc",
 		Status:   feature.StatusCodeReady,
 		KBStatus: kb,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"agentic": {Type: feature.CycleTweak, Status: "running"},
+			agenticRepoName: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
 		},
 		ActiveCycle: &feature.CycleState{
 			Type:   feature.CycleTweak,
@@ -398,8 +401,8 @@ func TestOrchestrator_InterruptAllRunning_CodeReadyWithCycles(t *testing.T) {
 		t.Fatalf("InterruptAllRunning: %v", err)
 	}
 
-	if codeReady.RepoCycles["agentic"].Status != feature.RepoCycleInterrupted {
-		t.Errorf("RepoCycles[agentic].Status = %q, want interrupted", codeReady.RepoCycles["agentic"].Status)
+	if codeReady.RepoCycles[agenticRepoName].Status != feature.RepoCycleInterrupted {
+		t.Errorf("RepoCycles[agentic].Status = %q, want interrupted", codeReady.RepoCycles[agenticRepoName].Status)
 	}
 	if codeReady.ActiveCycle == nil || codeReady.ActiveCycle.Status != feature.RepoCycleInterrupted {
 		t.Errorf("ActiveCycle.Status = %v, want interrupted", codeReady.ActiveCycle)
@@ -428,7 +431,7 @@ func TestOrchestrator_InterruptAllRunning_FeatureLevelRebaseCycles(t *testing.T)
 	published := &feature.Feature{
 		ID:       "pub-feature-rebase",
 		Status:   feature.StatusPublished,
-		KBStatus: map[string]string{"api": "completed"},
+		KBStatus: map[string]string{apiRepoName: kbStatusCompleted},
 		ActiveCycle: &feature.CycleState{
 			Type:   feature.CycleRebase,
 			Status: feature.RepoCycleRunning,

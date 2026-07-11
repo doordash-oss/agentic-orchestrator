@@ -27,14 +27,30 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// taskTypeLocalAgent is the llm.TaskStartedMessage.TaskType value for a
+// locally-delegated agent task, shared with other tui tests.
+const taskTypeLocalAgent = "local_agent"
+
+// blockTypeToolResult is the llm.ContentBlock.Type value for a tool-result
+// block, shared with other tui tests that build ContentBlock fixtures.
+const blockTypeToolResult = "tool_result"
+
+// testAskToolUseID1/2/3 are fixture tool_use IDs reused across this file's
+// AskUserQuestion message-matching test table.
+const (
+	testAskToolUseID1 = "toolu_1"
+	testAskToolUseID2 = "toolu_2"
+	testAskToolUseID3 = "toolu_3"
+)
+
 func floatPtr(v float64) *float64 { return &v }
 
 func pendingAskUserControlRequest(requestID, question string) *llm.ControlRequestMessage {
 	return &llm.ControlRequestMessage{
 		RequestID: requestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input: json.RawMessage(fmt.Sprintf(`{"questions":[{"question":%q,"header":"Question","multiSelect":false,"options":[`+
 				`{"label":"A","description":""},{"label":"B","description":""}]}]}`, question)),
 		},
@@ -45,8 +61,8 @@ func pendingPermissionControlRequest(requestID string) *llm.ControlRequestMessag
 	return &llm.ControlRequestMessage{
 		RequestID: requestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "Bash",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameBash,
 			Input:    json.RawMessage(`{"command":"go test ./internal/tui"}`),
 		},
 	}
@@ -72,11 +88,11 @@ func TestAttachModelFindsAskUserQuestion(t *testing.T) {
 			name: "complete assistant message with AskUserQuestion",
 			messages: []llm.SDKMessage{
 				{
-					Type: "assistant",
+					Type: roleAssistant,
 					Assistant: &llm.AssistantMessage{
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
-								{Type: "tool_use", Name: "AskUserQuestion", Input: input, ID: "toolu_1"},
+								{Type: blockTypeToolUse, Name: toolNameAskUserQuestion, Input: input, ID: testAskToolUseID1},
 							},
 						},
 					},
@@ -88,13 +104,13 @@ func TestAttachModelFindsAskUserQuestion(t *testing.T) {
 			name: "partial assistant message with AskUserQuestion",
 			messages: []llm.SDKMessage{
 				{
-					Type:    "assistant",
+					Type:    roleAssistant,
 					Subtype: "partial",
 					Assistant: &llm.AssistantMessage{
 						Subtype: "partial",
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
-								{Type: "tool_use", Name: "AskUserQuestion", Input: input, ID: "toolu_2"},
+								{Type: blockTypeToolUse, Name: toolNameAskUserQuestion, Input: input, ID: testAskToolUseID2},
 							},
 						},
 					},
@@ -106,11 +122,11 @@ func TestAttachModelFindsAskUserQuestion(t *testing.T) {
 			name: "AskUserQuestion followed by more messages",
 			messages: []llm.SDKMessage{
 				{
-					Type: "assistant",
+					Type: roleAssistant,
 					Assistant: &llm.AssistantMessage{
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
-								{Type: "tool_use", Name: "AskUserQuestion", Input: input, ID: "toolu_3"},
+								{Type: blockTypeToolUse, Name: toolNameAskUserQuestion, Input: input, ID: testAskToolUseID3},
 							},
 						},
 					},
@@ -120,13 +136,13 @@ func TestAttachModelFindsAskUserQuestion(t *testing.T) {
 					User: &llm.UserMessage{
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
-								{Type: "tool_result", ToolUseID: "toolu_3", IsError: true},
+								{Type: blockTypeToolResult, ToolUseID: testAskToolUseID3, IsError: true},
 							},
 						},
 					},
 				},
 				{
-					Type: "assistant",
+					Type: roleAssistant,
 					Assistant: &llm.AssistantMessage{
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
@@ -146,11 +162,11 @@ func TestAttachModelFindsAskUserQuestion(t *testing.T) {
 			name: "AskUserQuestion answered with successful tool_result",
 			messages: []llm.SDKMessage{
 				{
-					Type: "assistant",
+					Type: roleAssistant,
 					Assistant: &llm.AssistantMessage{
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
-								{Type: "tool_use", Name: "AskUserQuestion", Input: input, ID: "toolu_4"},
+								{Type: blockTypeToolUse, Name: toolNameAskUserQuestion, Input: input, ID: "toolu_4"},
 							},
 						},
 					},
@@ -160,7 +176,7 @@ func TestAttachModelFindsAskUserQuestion(t *testing.T) {
 					User: &llm.UserMessage{
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
-								{Type: "tool_result", ToolUseID: "toolu_4"},
+								{Type: blockTypeToolResult, ToolUseID: "toolu_4"},
 							},
 						},
 					},
@@ -172,11 +188,11 @@ func TestAttachModelFindsAskUserQuestion(t *testing.T) {
 			name: "AskUserQuestion answered with plain user message",
 			messages: []llm.SDKMessage{
 				{
-					Type: "assistant",
+					Type: roleAssistant,
 					Assistant: &llm.AssistantMessage{
 						Message: llm.ConversationMsg{
 							Content: []llm.ContentBlock{
-								{Type: "tool_use", Name: "AskUserQuestion", Input: input, ID: "toolu_5"},
+								{Type: blockTypeToolUse, Name: toolNameAskUserQuestion, Input: input, ID: "toolu_5"},
 							},
 						},
 					},
@@ -235,8 +251,8 @@ func TestNewAttachModel_SkipsResolvedAskUserQuestionFromSessionState(t *testing.
 	base.LastControlRequestVal = &llm.ControlRequestMessage{
 		RequestID: "ask-auto-picked",
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input:    json.RawMessage(`{"questions":[{"question":"Already answered?","options":[{"label":"Yes (Recommended)","confidence":0.9},{"label":"No","confidence":0.1}]}]}`),
 		},
 	}
@@ -254,11 +270,11 @@ func TestNewAttachModel_SkipsAutoPickedAskUserQuestionFromMessageLogFallback(t *
 	input := json.RawMessage(`{"questions":[{"question":"Already answered?","options":[{"label":"Yes (Recommended)","confidence":0.9},{"label":"No","confidence":0.1}]}]}`)
 	sess := mocks.NewMockSessionView("resolved-log", "feat")
 	sess.MessageLog().Append(llm.SDKMessage{
-		Type: "assistant",
+		Type: roleAssistant,
 		Assistant: &llm.AssistantMessage{
 			Message: llm.ConversationMsg{
 				Content: []llm.ContentBlock{
-					{Type: "tool_use", Name: "AskUserQuestion", Input: input, ID: "toolu_auto"},
+					{Type: blockTypeToolUse, Name: toolNameAskUserQuestion, Input: input, ID: "toolu_auto"},
 				},
 			},
 		},
@@ -297,11 +313,11 @@ func TestAttachReplayReadsQALogWhileAskUserResponseCaptured(t *testing.T) {
 	sess := session.NewSession("qa-log-race", "feat", 0)
 	sess.SetStdinForTest(noopWriteCloser{})
 	sess.MessageLog().Append(llm.SDKMessage{
-		Type: "assistant",
+		Type: roleAssistant,
 		Assistant: &llm.AssistantMessage{
 			Message: llm.ConversationMsg{
 				Content: []llm.ContentBlock{
-					{Type: "tool_use", Name: "AskUserQuestion", Input: input, ID: "toolu_replay"},
+					{Type: blockTypeToolUse, Name: toolNameAskUserQuestion, Input: input, ID: "toolu_replay"},
 				},
 			},
 		},
@@ -355,10 +371,10 @@ func TestNewAttachModel_ZeroOptionAskUserQuestionUsesDirectFreeform(t *testing.T
 	sess := session.NewSession("test", "feat", 0)
 	sess.SetStatus(session.SessionWaitingHelp)
 	sess.SetLastControlRequest(&llm.ControlRequestMessage{
-		RequestID: "ask-1",
+		RequestID: testAskRequestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input:    json.RawMessage(`{"questions":[{"question":"What version should Agentic be bumped to?","header":"Version","multiSelect":false,"options":[]}]}`),
 		},
 	})
@@ -562,11 +578,11 @@ func TestParseAskUserQuestionsForDisplay_RecoversConfidenceFromToolUse(t *testin
 
 	sess := mocks.NewMockSessionView("confidence-recovery", "feat")
 	sess.MessageLog().Append(llm.SDKMessage{
-		Type: "assistant",
+		Type: roleAssistant,
 		Assistant: &llm.AssistantMessage{
 			Message: llm.ConversationMsg{
 				Content: []llm.ContentBlock{
-					{Type: "tool_use", ID: "toolu_ask", Name: "AskUserQuestion", Input: toolUseInput},
+					{Type: blockTypeToolUse, ID: "toolu_ask", Name: toolNameAskUserQuestion, Input: toolUseInput},
 				},
 			},
 		},
@@ -888,8 +904,8 @@ func TestActivateAskUserQuestions_ResetsScrollOffset(t *testing.T) {
 	sess.SetLastControlRequest(&llm.ControlRequestMessage{
 		RequestID: "ask-reset",
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input:    json.RawMessage(`{"questions":[{"question":"Pick one","header":"Test","multiSelect":false,"options":[{"label":"A","description":""},{"label":"B","description":""}]}]}`),
 		},
 	})
@@ -1009,7 +1025,7 @@ func TestRenderQuestion_SingleSelect_NoCheckboxes(t *testing.T) {
 	if strings.Contains(out, "[ ]") || strings.Contains(out, "[x]") {
 		t.Errorf("single-select render should not contain checkboxes, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Enter to select") {
+	if !strings.Contains(out, testHintEnterToSelect) {
 		t.Errorf("expected single-select hint, got:\n%s", out)
 	}
 	if strings.Contains(out, "Space to toggle") {
@@ -1026,8 +1042,8 @@ func makeMultiSelectSession(t *testing.T) *session.Session {
 	sess.SetLastControlRequest(&llm.ControlRequestMessage{
 		RequestID: "ask-multi",
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input: json.RawMessage(`{"questions":[{"question":"Pick any","header":"Multi","multiSelect":true,"options":[` +
 				`{"label":"A","description":""},{"label":"B","description":""},{"label":"C","description":""}]}]}`),
 		},
@@ -1642,10 +1658,10 @@ func TestParallelAskUserQuestion_QueuedAndAnsweredFIFO(t *testing.T) {
 	// Start with the first AUQ already pending so the constructor
 	// activates it. The second arrives via the attachMsgsMsg poll path.
 	sess.SetLastControlRequest(&llm.ControlRequestMessage{
-		RequestID: "ask-1",
+		RequestID: testAskRequestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input: json.RawMessage(`{"questions":[{"question":"Pick one","header":"Q1","multiSelect":false,"options":[` +
 				`{"label":"A","description":""},{"label":"B","description":""}]}]}`),
 		},
@@ -1653,7 +1669,7 @@ func TestParallelAskUserQuestion_QueuedAndAnsweredFIFO(t *testing.T) {
 	sess.CloseDone()
 
 	m := attachModelFromSession(sess, 120, 40)
-	if !m.hasActiveQuestion() || m.pendingAskRequestID != "ask-1" {
+	if !m.hasActiveQuestion() || m.pendingAskRequestID != testAskRequestID {
 		t.Fatalf("expected ask-1 active on construction, got requestID=%q hasActive=%v",
 			m.pendingAskRequestID, m.hasActiveQuestion())
 	}
@@ -1666,18 +1682,18 @@ func TestParallelAskUserQuestion_QueuedAndAnsweredFIFO(t *testing.T) {
 	secondCR := &llm.ControlRequestMessage{
 		RequestID: "ask-2",
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input: json.RawMessage(`{"questions":[{"question":"Pick another","header":"Q2","multiSelect":false,"options":[` +
 				`{"label":"X","description":""},{"label":"Y","description":""}]}]}`),
 		},
 	}
 	sess.SetLastControlRequest(secondCR)
-	second := llm.SDKMessage{Type: "control_request", ControlRequest: secondCR}
+	second := llm.SDKMessage{Type: msgTypeControlRequest, ControlRequest: secondCR}
 	updated, _ := m.Update(attachMsgsMsg{generation: m.tabGeneration, messages: []llm.SDKMessage{second}})
 	m = updated
 
-	if m.pendingAskRequestID != "ask-1" {
+	if m.pendingAskRequestID != testAskRequestID {
 		t.Errorf("active requestID should still be ask-1 (got %q) — second AUQ must queue, not overwrite",
 			m.pendingAskRequestID)
 	}
@@ -1715,7 +1731,7 @@ func TestParallelAskUserQuestion_QueuedAndAnsweredFIFO(t *testing.T) {
 	// ask-1 should be removed from the pending list, leaving ask-2.
 	pending := sess.PendingControlRequests()
 	for _, cr := range pending {
-		if cr.RequestID == "ask-1" {
+		if cr.RequestID == testAskRequestID {
 			t.Errorf("ask-1 should be cleared from pending after submit, got %v", pending)
 		}
 	}
@@ -1724,7 +1740,7 @@ func TestParallelAskUserQuestion_QueuedAndAnsweredFIFO(t *testing.T) {
 func TestNewAttachModel_RestoresPendingAskUserQuestionsFIFOFromSessionState(t *testing.T) {
 	sess := session.NewSession("restore-auq", "feat", 0)
 	sess.SetStatus(session.SessionWaitingHelp)
-	sess.SetLastControlRequest(pendingAskUserControlRequest("ask-1", "First question?"))
+	sess.SetLastControlRequest(pendingAskUserControlRequest(testAskRequestID, "First question?"))
 	sess.SetLastControlRequest(pendingAskUserControlRequest("ask-2", "Second question?"))
 	sess.CloseDone()
 
@@ -1732,7 +1748,7 @@ func TestNewAttachModel_RestoresPendingAskUserQuestionsFIFOFromSessionState(t *t
 	if !m.hasActiveQuestion() {
 		t.Fatal("NewAttachModel() should activate the oldest pending AskUserQuestion")
 	}
-	if got, want := m.pendingAskRequestID, "ask-1"; got != want {
+	if got, want := m.pendingAskRequestID, testAskRequestID; got != want {
 		t.Fatalf("NewAttachModel() active requestID = %q, want %q", got, want)
 	}
 	if got, want := len(m.pendingAskQueue), 1; got != want {
@@ -1770,12 +1786,12 @@ func TestNewAttachModel_RestoresPendingAskUserQuestionMatchingEarlierAutoPickTex
 func TestSubmitAskUserAnswers_RestoresPendingPermissionAfterAskQueueDrains(t *testing.T) {
 	sess := session.NewSession("mixed-pending-controls", "feat", 0)
 	sess.SetStatus(session.SessionWaitingPermission)
-	sess.SetLastControlRequest(pendingAskUserControlRequest("ask-1", "Answer before permission?"))
+	sess.SetLastControlRequest(pendingAskUserControlRequest(testAskRequestID, "Answer before permission?"))
 	sess.SetLastControlRequest(pendingPermissionControlRequest("perm-1"))
 	sess.CloseDone()
 
 	m := attachModelFromSession(sess, 120, 40)
-	if got, want := m.pendingAskRequestID, "ask-1"; got != want {
+	if got, want := m.pendingAskRequestID, testAskRequestID; got != want {
 		t.Fatalf("NewAttachModel() active requestID = %q, want %q", got, want)
 	}
 	if m.showPermMenu {
@@ -1806,7 +1822,7 @@ func TestSwitchToTab_RestoresPendingAskUserQuestionsFIFOFromSessionState(t *test
 	sess1 := session.NewSession("restore-tab-one", "feat", 0)
 	sess2 := session.NewSession("restore-tab-two", "feat", 0)
 	sess2.SetStatus(session.SessionWaitingHelp)
-	sess2.SetLastControlRequest(pendingAskUserControlRequest("ask-1", "First question?"))
+	sess2.SetLastControlRequest(pendingAskUserControlRequest(testAskRequestID, "First question?"))
 	sess2.SetLastControlRequest(pendingAskUserControlRequest("ask-2", "Second question?"))
 	sess1.CloseDone()
 	sess2.CloseDone()
@@ -1823,7 +1839,7 @@ func TestSwitchToTab_RestoresPendingAskUserQuestionsFIFOFromSessionState(t *test
 	if !m.hasActiveQuestion() {
 		t.Fatal("switchToTab() should activate the oldest pending AskUserQuestion")
 	}
-	if got, want := m.pendingAskRequestID, "ask-1"; got != want {
+	if got, want := m.pendingAskRequestID, testAskRequestID; got != want {
 		t.Fatalf("switchToTab() active requestID = %q, want %q", got, want)
 	}
 	if got, want := len(m.pendingAskQueue), 1; got != want {
@@ -1838,7 +1854,7 @@ func TestSwitchToTab_RestoresPendingPermissionAfterAskQueueDrains(t *testing.T) 
 	sess1 := session.NewSession("mixed-tab-one", "feat", 0)
 	sess2 := session.NewSession("mixed-tab-two", "feat", 0)
 	sess2.SetStatus(session.SessionWaitingPermission)
-	sess2.SetLastControlRequest(pendingAskUserControlRequest("ask-1", "Answer before permission?"))
+	sess2.SetLastControlRequest(pendingAskUserControlRequest(testAskRequestID, "Answer before permission?"))
 	sess2.SetLastControlRequest(pendingPermissionControlRequest("perm-1"))
 	sess1.CloseDone()
 	sess2.CloseDone()
@@ -1850,7 +1866,7 @@ func TestSwitchToTab_RestoresPendingPermissionAfterAskQueueDrains(t *testing.T) 
 	m := testAttachModel(sess1, 120, 40, tabs, 0)
 	updated, _ := m.switchToTab(1)
 	m = updated
-	if got, want := m.pendingAskRequestID, "ask-1"; got != want {
+	if got, want := m.pendingAskRequestID, testAskRequestID; got != want {
 		t.Fatalf("switchToTab() active requestID = %q, want %q", got, want)
 	}
 	if m.showPermMenu {
@@ -1881,10 +1897,10 @@ func TestParallelAskUserQuestion_ResolvedQueuedRequestSkippedOnPromotion(t *test
 	sess := session.NewSession("parallel-auq-resolved", "feat", 0)
 	sess.SetStatus(session.SessionWaitingHelp)
 	sess.SetLastControlRequest(&llm.ControlRequestMessage{
-		RequestID: "ask-1",
+		RequestID: testAskRequestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input: json.RawMessage(`{"questions":[{"question":"Pick one","header":"Q1","multiSelect":false,"options":[` +
 				`{"label":"A","description":""},{"label":"B","description":""}]}]}`),
 		},
@@ -1895,8 +1911,8 @@ func TestParallelAskUserQuestion_ResolvedQueuedRequestSkippedOnPromotion(t *test
 	secondCR := &llm.ControlRequestMessage{
 		RequestID: "ask-2",
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input: json.RawMessage(`{"questions":[{"question":"Pick another","header":"Q2","multiSelect":false,"options":[` +
 				`{"label":"X","description":""},{"label":"Y","description":""}]}]}`),
 		},
@@ -1953,12 +1969,12 @@ func TestAttachMsgs_SkipsAlreadyResolvedControlRequest(t *testing.T) {
 	// Deliver a stale control_request that the session has already
 	// resolved (not in pending list).
 	stale := llm.SDKMessage{
-		Type: "control_request",
+		Type: msgTypeControlRequest,
 		ControlRequest: &llm.ControlRequestMessage{
 			RequestID: "ask-stale",
 			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
-				ToolName: "AskUserQuestion",
+				Subtype:  controlRequestSubtypeCanUseTool,
+				ToolName: toolNameAskUserQuestion,
 				Input: json.RawMessage(`{"questions":[{"question":"Stale?","header":"X","multiSelect":false,"options":[` +
 					`{"label":"Y","description":""}]}]}`),
 			},
@@ -1974,12 +1990,12 @@ func TestAttachMsgs_SkipsAlreadyResolvedControlRequest(t *testing.T) {
 
 	// And a stale permission request must not show the perm menu.
 	stalePerm := llm.SDKMessage{
-		Type: "control_request",
+		Type: msgTypeControlRequest,
 		ControlRequest: &llm.ControlRequestMessage{
 			RequestID: "perm-stale",
 			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
-				ToolName: "Bash",
+				Subtype:  controlRequestSubtypeCanUseTool,
+				ToolName: toolNameBash,
 				Input:    json.RawMessage(`{"command":"ls"}`),
 			},
 		},
@@ -1993,7 +2009,7 @@ func TestAttachMsgs_SkipsAlreadyResolvedControlRequest(t *testing.T) {
 func TestAttachMsgs_ProgressAfterAskUserAnswerDoesNotRenderWaitingTitle(t *testing.T) {
 	sess := session.NewSession("progress-after-ask", "feat", 0)
 	sess.SetStatus(session.SessionWaitingHelp)
-	sess.SetLastControlRequest(pendingAskUserControlRequest("ask-1", "Continue?"))
+	sess.SetLastControlRequest(pendingAskUserControlRequest(testAskRequestID, "Continue?"))
 	sess.CloseDone()
 
 	m := attachModelFromSession(sess, 120, 40)
@@ -2020,9 +2036,9 @@ func TestAttachMsgs_ProgressAfterAskUserAnswerDoesNotRenderWaitingTitle(t *testi
 		generation: m.tabGeneration,
 		messages: []llm.SDKMessage{
 			{Type: "result", Result: &llm.ResultMessage{Subtype: "success"}},
-			{Type: "system", Subtype: "task_started", TaskStarted: &llm.TaskStartedMessage{
+			{Type: roleSystem, Subtype: "task_started", TaskStarted: &llm.TaskStartedMessage{
 				Description: "continuing plan",
-				TaskType:    "local_agent",
+				TaskType:    taskTypeLocalAgent,
 			}},
 		},
 	})
@@ -2043,8 +2059,8 @@ func TestParallelAskUserQuestion_DuplicateRequestIDIgnored(t *testing.T) {
 	sess.SetLastControlRequest(&llm.ControlRequestMessage{
 		RequestID: "ask-dup",
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input: json.RawMessage(`{"questions":[{"question":"Q","header":"H","multiSelect":false,"options":[` +
 				`{"label":"A","description":""}]}]}`),
 		},
@@ -2057,12 +2073,12 @@ func TestParallelAskUserQuestion_DuplicateRequestIDIgnored(t *testing.T) {
 
 	// Replay the same control_request — must not enqueue a duplicate.
 	replay := llm.SDKMessage{
-		Type: "control_request",
+		Type: msgTypeControlRequest,
 		ControlRequest: &llm.ControlRequestMessage{
 			RequestID: "ask-dup",
 			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
-				ToolName: "AskUserQuestion",
+				Subtype:  controlRequestSubtypeCanUseTool,
+				ToolName: toolNameAskUserQuestion,
 				Input: json.RawMessage(`{"questions":[{"question":"Q","header":"H","multiSelect":false,"options":[` +
 					`{"label":"A","description":""}]}]}`),
 			},

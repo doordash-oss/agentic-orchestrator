@@ -33,6 +33,8 @@ import (
 
 type publishStep int
 
+const diffReviewTitle = "Diff Review"
+
 const (
 	publishStepRepoSelect publishStep = iota // only shown for multi-repo features
 	publishStepDiff
@@ -431,6 +433,59 @@ func (m PublishModel) generateDescription() tea.Cmd {
 	}
 }
 
+// pushPublishBranch pushes worktreeDir's branch to origin: a force-with-lease
+// push when leasePush is set (manual publish is an explicit post-review
+// update, so rebased feature branches update origin/<branch> instead of
+// rebasing local history back onto the pre-rebase remote branch), otherwise a
+// pull-rebase-then-push to sync with any remote changes first. It returns a
+// non-nil result only on failure; the caller should return that immediately.
+func pushPublishBranch(worktreeDir, branch, repoPath, baseBranch, repoName, featureID string, leasePush bool) *publishExecuteResultMsg {
+	if leasePush {
+		if err := git.ForcePush(worktreeDir, branch); err != nil {
+			return &publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("force push failed: %w", err)}
+		}
+		return nil
+	}
+
+	prResult := git.PullRebase(worktreeDir, branch)
+	switch prResult.Outcome {
+	case git.PullRebaseConflict:
+		return &publishExecuteResultMsg{
+			featureID:        featureID,
+			repoName:         repoName,
+			err:              fmt.Errorf("pull-rebase conflict: %w", prResult.Err),
+			conflictDetected: true,
+			branch:           branch,
+			rebaseTarget:     pullRebaseConflictTarget(baseBranch, repoPath, worktreeDir),
+		}
+	case git.PullRebaseFailure:
+		return &publishExecuteResultMsg{
+			featureID: featureID,
+			repoName:  repoName,
+			err:       fmt.Errorf("pull-rebase failed: %w", prResult.Err),
+		}
+	}
+
+	if err := git.Push(worktreeDir, branch); err != nil {
+		return &publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("push failed: %w", err)}
+	}
+	return nil
+}
+
+// pullRebaseConflictTarget picks the branch to report as the rebase target
+// when a pull-rebase conflicts: the configured base branch, or else the
+// repo's default branch.
+func pullRebaseConflictTarget(baseBranch, repoPath, worktreeDir string) string {
+	if baseBranch != "" {
+		return baseBranch
+	}
+	defaultRepoPath := repoPath
+	if defaultRepoPath == "" {
+		defaultRepoPath = worktreeDir
+	}
+	return git.DefaultBranch(defaultRepoPath)
+}
+
 // executePublish performs the actual git push and PR creation.
 func (m PublishModel) executePublish() tea.Cmd {
 	worktreeDir := m.worktreeDir
@@ -479,45 +534,8 @@ func (m PublishModel) executePublish() tea.Cmd {
 			}
 		}
 
-		if leasePush {
-			// Manual publish is an explicit post-review update. Use a lease push so
-			// rebased feature branches update origin/<branch> instead of rebasing
-			// local history back onto the pre-rebase remote branch.
-			if err := git.ForcePush(worktreeDir, branch); err != nil {
-				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("force push failed: %w", err)}
-			}
-		} else {
-			// Pull-rebase before regular push to sync with any remote changes.
-			prResult := git.PullRebase(worktreeDir, branch)
-			switch prResult.Outcome {
-			case git.PullRebaseConflict:
-				rebaseTarget := baseBranch
-				if rebaseTarget == "" {
-					defaultRepoPath := repoPath
-					if defaultRepoPath == "" {
-						defaultRepoPath = worktreeDir
-					}
-					rebaseTarget = git.DefaultBranch(defaultRepoPath)
-				}
-				return publishExecuteResultMsg{
-					featureID:        featureID,
-					repoName:         repoName,
-					err:              fmt.Errorf("pull-rebase conflict: %w", prResult.Err),
-					conflictDetected: true,
-					branch:           branch,
-					rebaseTarget:     rebaseTarget,
-				}
-			case git.PullRebaseFailure:
-				return publishExecuteResultMsg{
-					featureID: featureID,
-					repoName:  repoName,
-					err:       fmt.Errorf("pull-rebase failed: %w", prResult.Err),
-				}
-			}
-
-			if err := git.Push(worktreeDir, branch); err != nil {
-				return publishExecuteResultMsg{featureID: featureID, repoName: repoName, err: fmt.Errorf("push failed: %w", err)}
-			}
+		if res := pushPublishBranch(worktreeDir, branch, repoPath, baseBranch, repoName, featureID, leasePush); res != nil {
+			return *res
 		}
 
 		// Create or update PR
@@ -626,7 +644,7 @@ func (m PublishModel) View() string {
 		content = sel.String()
 
 	case publishStepDiff:
-		title = "Diff Review"
+		title = diffReviewTitle
 		content = m.viewport.View()
 
 	case publishStepCommits:

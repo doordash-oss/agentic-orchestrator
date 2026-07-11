@@ -23,7 +23,7 @@ import (
 func TestBearerTokenRequiredForAPIReads(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
 	if w.Result().StatusCode != http.StatusUnauthorized {
@@ -42,7 +42,7 @@ func TestBearerTokenRequiredForAPIReads(t *testing.T) {
 func TestBearerTokenAcceptedForSSEQueryFallback(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/api/v1/events?access_token=test-token&heartbeat_ms=1000")
@@ -58,9 +58,9 @@ func TestBearerTokenAcceptedForSSEQueryFallback(t *testing.T) {
 func TestAuthorizedRejectsBareTokenWithoutBearerPrefix(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
-	req.Header.Set("Authorization", "test-token")
+	req.Header.Set("Authorization", testAuthToken)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusUnauthorized {
@@ -71,7 +71,7 @@ func TestAuthorizedRejectsBareTokenWithoutBearerPrefix(t *testing.T) {
 func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token"})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	req.Host = "attacker.example"
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -94,7 +94,7 @@ func TestHostValidationRejectsDNSRebindingHosts(t *testing.T) {
 func TestHealthDoesNotRequireAuth(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -106,7 +106,7 @@ func TestHealthDoesNotRequireAuth(t *testing.T) {
 func TestSequenceHeaderNotSetForUnauthorizedRequest(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/features", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

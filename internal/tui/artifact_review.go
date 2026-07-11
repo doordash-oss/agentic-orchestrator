@@ -200,7 +200,7 @@ func NewArtifactReviewModel(artifactPath, featureID, reviewMode string, rewindPh
 	// short-circuit because the planning loop treats approval as terminal).
 	if reviewMode == "plan" {
 		switch agent.LastAttemptReviewStatus(filepath.Dir(artifactPath)) {
-		case "APPROVED":
+		case validatorStatusApproved:
 			m.criticApproved = true
 		}
 	}
@@ -534,18 +534,18 @@ func (m ArtifactReviewModel) startSessionCmd(initialMessage string, generation u
 		if reviewMode == "plan" {
 			permHandler = &session.PlanReviewHandler{AllowedPath: artifactPath}
 			allowedTools = []string{
-				"Read", "Glob", "Grep", "LS", "LSP",
+				toolNameRead, toolNameGlob, toolNameGrep, "LS", "LSP",
 				"WebSearch", "WebFetch",
-				"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate",
-				"Agent", "AskUserQuestion", "Edit",
+				"TodoWrite", toolNameTaskCreate, "TaskGet", "TaskList", "TaskUpdate",
+				toolNameAgent, toolNameAskUserQuestion, toolNameEdit,
 			}
 		} else {
 			permHandler = &session.RewindReviewHandler{AllowedPath: artifactPath}
 			allowedTools = []string{
-				"Read", "Glob", "Grep", "LS", "LSP",
+				toolNameRead, toolNameGlob, toolNameGrep, "LS", "LSP",
 				"WebSearch", "WebFetch",
-				"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate",
-				"Agent", "AskUserQuestion", "Edit",
+				"TodoWrite", toolNameTaskCreate, "TaskGet", "TaskList", "TaskUpdate",
+				toolNameAgent, toolNameAskUserQuestion, toolNameEdit,
 			}
 		}
 		model := strings.TrimSpace(m.utilityModel)
@@ -684,7 +684,7 @@ func (m ArtifactReviewModel) handleSDKMessages(msgs []llm.SDKMessage) (ArtifactR
 			}
 			if hasText {
 				m.thinkingLine = ""
-				label := "\n\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render("Agent") + "\n"
+				label := "\n\n" + lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12")).Render(toolNameAgent) + "\n"
 				body := turnText.String()
 				if sdkMsg.Subtype == "partial" {
 					// Keep partial streaming text in its own buffer so the
@@ -727,7 +727,7 @@ func (m *ArtifactReviewModel) detectAgentEdit(block llm.ContentBlock) {
 		return
 	}
 	toolName := block.Name
-	if toolName != "Edit" && toolName != "Write" {
+	if toolName != toolNameEdit && toolName != toolNameWrite {
 		return
 	}
 	// Check if the tool input references our artifact

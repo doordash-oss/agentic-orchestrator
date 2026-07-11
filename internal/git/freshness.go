@@ -20,33 +20,40 @@ import (
 	"strings"
 )
 
+// Freshness status values returned by RepoFreshness. Exported since callers
+// outside this package (e.g. cmd/agentico) switch on these literal strings.
+const (
+	FreshnessUnknown      = "unknown"
+	FreshnessLocalChanges = "local changes"
+)
+
 func RepoFreshness(worktreePath string) string {
 	if worktreePath == "" {
-		return "unknown"
+		return FreshnessUnknown
 	}
 	if out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain").Output(); err != nil {
-		return "unknown"
+		return FreshnessUnknown
 	} else if strings.TrimSpace(string(out)) != "" {
-		return "local changes"
+		return FreshnessLocalChanges
 	}
 	if err := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").Run(); err != nil {
 		return "local only"
 	}
 	out, err := exec.Command("git", "-C", worktreePath, "rev-list", "--left-right", "--count", "HEAD...@{upstream}").Output()
 	if err != nil {
-		return "unknown"
+		return FreshnessUnknown
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) != 2 {
-		return "unknown"
+		return FreshnessUnknown
 	}
 	ahead, errA := strconv.Atoi(fields[0])
 	behind, errB := strconv.Atoi(fields[1])
 	if errA != nil || errB != nil {
-		return "unknown"
+		return FreshnessUnknown
 	}
 	if ahead == 0 && behind == 0 {
 		return "in sync"
 	}
-	return "local changes"
+	return FreshnessLocalChanges
 }

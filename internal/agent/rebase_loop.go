@@ -359,7 +359,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 	}
 
 	switch loopResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		// Cycle success: every behind-subset repo transitions to
 		// Touched (staged for FR) atomically; ActiveCycle clears.
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
@@ -369,7 +369,7 @@ func RunRebaseLoop(cfg RebaseLoopConfig, sm ports.SessionManager) (*RebaseLoopRe
 		})
 		_ = clearActiveCycle(cfg.FeatureStore, cfg.Feature.ID)
 		return &RebaseLoopResult{
-			FinalStatus: "review_passed",
+			FinalStatus: finalStatusReviewPassed,
 			Iterations:  loopResult.Iterations,
 			Repos:       repoNames,
 		}, nil

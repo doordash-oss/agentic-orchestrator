@@ -2048,7 +2048,7 @@ func TestBuildSession_TestOverride(t *testing.T) {
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
 		}
-		return []string{"mock", "--model", opts.Model}, nil, sessOpts, nil
+		return []string{testMockIdentifier, "--model", opts.Model}, nil, sessOpts, nil
 	}
 
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
@@ -2067,7 +2067,7 @@ func TestBuildSession_TestOverride(t *testing.T) {
 	if calledModel != "opus" {
 		t.Errorf("expected mock called with model 'opus', got %q", calledModel)
 	}
-	if len(cmd) != 3 || cmd[0] != "mock" {
+	if len(cmd) != 3 || cmd[0] != testMockIdentifier {
 		t.Errorf("expected mock command, got %v", cmd)
 	}
 	// Test override path should return nil env
@@ -3060,19 +3060,19 @@ func TestRunTweakSession_MultiRepo_WorkDirIsRepoSpecific(t *testing.T) {
 		ID:   "test-feat",
 		Name: "Test Feature",
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: "/tmp/api", WorktreePath: "/tmp/api-wt"},
+			{Name: testRepoNameAPI, Path: testRepoPathAPI, WorktreePath: testRepoWorktreePathAPI},
 		},
 	}
 
 	_, err := pr.RunTweakSession(f, TweakSessionConfig{
-		WorkDir: "/tmp/api-wt",
+		WorkDir: testRepoWorktreePathAPI,
 	})
 	if err == nil {
 		t.Fatal("expected error from mock BuildSession")
 	}
 
-	if captured.WorkDir != "/tmp/api-wt" {
-		t.Errorf("WorkDir = %q, want %q", captured.WorkDir, "/tmp/api-wt")
+	if captured.WorkDir != testRepoWorktreePathAPI {
+		t.Errorf("WorkDir = %q, want %q", captured.WorkDir, testRepoWorktreePathAPI)
 	}
 }
 
@@ -3100,13 +3100,13 @@ func TestRunTweakSession_MultiRepo_AdditionalDirsIncludeOtherRepos(t *testing.T)
 		ID:   "test-feat",
 		Name: "Test Feature",
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: "/tmp/api"},
+			{Name: testRepoNameAPI, Path: testRepoPathAPI},
 		},
 	}
 
 	wantDirs := []string{"/tmp/backend-wt", "/tmp/state-dir"}
 	_, err := pr.RunTweakSession(f, TweakSessionConfig{
-		WorkDir:        "/tmp/api",
+		WorkDir:        testRepoPathAPI,
 		AdditionalDirs: wantDirs,
 	})
 	if err == nil {

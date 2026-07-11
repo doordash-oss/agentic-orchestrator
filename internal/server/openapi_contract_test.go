@@ -27,6 +27,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// httpMethodGet and httpMethodPost are the lowercase "get"/"post" method
+// literals reused across the documented-route table below.
+const (
+	httpMethodGet  = "get"
+	httpMethodPost = "post"
+)
+
 type openAPISpec struct {
 	OpenAPI string `yaml:"openapi"`
 	Info    struct {
@@ -112,7 +119,7 @@ func TestOpenAPISpecCoversServerRoutes(t *testing.T) {
 			// /api/v1/health is liveness-only and intentionally exempt from
 			// bearer auth (see authRequiredPath in handler.go) so that a
 			// stale discovery token can't make a live server look dead.
-			if path != "/api/v1/health" && !hasSecurity(effectiveSecurity(spec, op), "bearerAuth") {
+			if path != apiPathHealth && !hasSecurity(effectiveSecurity(spec, op), "bearerAuth") {
 				t.Fatalf("%s %s does not require bearerAuth", strings.ToUpper(method), path)
 			}
 			if route.sse && !hasSecurity(effectiveSecurity(spec, op), "sseAccessToken") {
@@ -147,7 +154,7 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 
 func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
 	spec := loadOpenAPISpec(t)
-	handler := NewHandler(HandlerOptions{AuthToken: "test-token", DisableHostValidation: true})
+	handler := NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true})
 	cases := []struct {
 		name        string
 		method      string
@@ -160,28 +167,28 @@ func TestOpenAPIRepresentativeResponsesAreDeclared(t *testing.T) {
 		{
 			name:        "authorized health",
 			method:      http.MethodGet,
-			specPath:    "/api/v1/health",
-			requestPath: "/api/v1/health",
+			specPath:    apiPathHealth,
+			requestPath: apiPathHealth,
 			auth:        true,
 			wantStatus:  http.StatusOK,
-			wantType:    "application/json",
+			wantType:    contentTypeJSON,
 		},
 		{
 			name:        "authorized feature list",
 			method:      http.MethodGet,
-			specPath:    "/api/v1/features",
-			requestPath: "/api/v1/features",
+			specPath:    apiPathFeatures,
+			requestPath: apiPathFeatures,
 			auth:        true,
 			wantStatus:  http.StatusOK,
-			wantType:    "application/json",
+			wantType:    contentTypeJSON,
 		},
 		{
 			name:        "missing token",
 			method:      http.MethodGet,
-			specPath:    "/api/v1/features",
-			requestPath: "/api/v1/features",
+			specPath:    apiPathFeatures,
+			requestPath: apiPathFeatures,
 			wantStatus:  http.StatusUnauthorized,
-			wantType:    "application/json",
+			wantType:    contentTypeJSON,
 		},
 	}
 	for _, tc := range cases {
@@ -246,38 +253,38 @@ func TestTopLevelRoutesCoverAllDocumentedPrefixes(t *testing.T) {
 // that would serve it, mirroring routes()'s registration granularity.
 func topLevelPatternForPath(path string) string {
 	switch {
-	case path == "/api/v1/health":
-		return "/api/v1/health"
-	case path == "/api/v1/features":
-		return "/api/v1/features"
+	case path == apiPathHealth:
+		return apiPathHealth
+	case path == apiPathFeatures:
+		return apiPathFeatures
 	case strings.HasPrefix(path, "/api/v1/features/"):
 		return "/api/v1/features/"
-	case strings.HasPrefix(path, "/api/v1/config/runtime"):
-		return "/api/v1/config/runtime"
-	case path == "/api/v1/workspace/browse":
-		return "/api/v1/workspace/browse"
-	case path == "/api/v1/catalog/models":
-		return "/api/v1/catalog/models"
-	case path == "/api/v1/prompts":
-		return "/api/v1/prompts"
+	case strings.HasPrefix(path, apiPathConfigRuntime):
+		return apiPathConfigRuntime
+	case path == apiPathWorkspaceBrowse:
+		return apiPathWorkspaceBrowse
+	case path == apiPathCatalogModels:
+		return apiPathCatalogModels
+	case path == apiPathPrompts:
+		return apiPathPrompts
 	case strings.HasPrefix(path, "/api/v1/prompts/"):
 		return "/api/v1/prompts/"
-	case path == "/api/v1/permissions":
-		return "/api/v1/permissions"
+	case path == apiPathPermissions:
+		return apiPathPermissions
 	case strings.HasPrefix(path, "/api/v1/permissions/"):
 		return "/api/v1/permissions/"
-	case path == "/api/v1/sessions":
-		return "/api/v1/sessions"
+	case path == apiPathSessions:
+		return apiPathSessions
 	case strings.HasPrefix(path, "/api/v1/sessions/"):
 		return "/api/v1/sessions/"
-	case path == "/api/v1/recovery":
-		return "/api/v1/recovery"
-	case path == "/api/v1/recovery/actions":
-		return "/api/v1/recovery/actions"
-	case path == "/api/v1/shutdown":
-		return "/api/v1/shutdown"
-	case path == "/api/v1/events":
-		return "/api/v1/events"
+	case path == apiPathRecovery:
+		return apiPathRecovery
+	case path == apiPathRecoveryActions:
+		return apiPathRecoveryActions
+	case path == apiPathShutdown:
+		return apiPathShutdown
+	case path == apiPathEvents:
+		return apiPathEvents
 	default:
 		return path
 	}
@@ -299,53 +306,51 @@ func loadOpenAPISpec(t *testing.T) openAPISpec {
 	return spec
 }
 
-var osReadFile = func(path string) ([]byte, error) {
-	return os.ReadFile(path)
-}
+var osReadFile = os.ReadFile
 
 func documentedServerRoutes() []documentedRoute {
 	return []documentedRoute{
-		{method: "get", path: "/api/v1/health"},
-		{method: "get", path: "/api/v1/features"},
-		{method: "post", path: "/api/v1/features", mutation: true},
-		{method: "get", path: "/api/v1/features/{feature_id}"},
-		{method: "get", path: "/api/v1/features/{feature_id}/config"},
-		{method: "post", path: "/api/v1/features/{feature_id}/config", mutation: true},
-		{method: "get", path: "/api/v1/features/{feature_id}/live-preview"},
-		{method: "post", path: "/api/v1/features/{feature_id}/start", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/resume", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/stop", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/interrupt", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/restart", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/review-decision", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/need-user-input", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/need-user-input-draft", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/input-notifications", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
-		{method: "post", path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
-		{method: "get", path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts"},
-		{method: "get", path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts/{artifact_id}"},
-		{method: "get", path: "/api/v1/features/{feature_id}/runs/{run_number}/logs/{log_id}"},
-		{method: "get", path: "/api/v1/config/runtime"},
-		{method: "patch", path: "/api/v1/config/runtime", mutation: true},
-		{method: "put", path: "/api/v1/config/runtime", mutation: true},
-		{method: "get", path: "/api/v1/workspace/browse"},
-		{method: "get", path: "/api/v1/catalog/models"},
-		{method: "get", path: "/api/v1/prompts"},
-		{method: "post", path: "/api/v1/prompts/ask-user/answer", mutation: true},
-		{method: "post", path: "/api/v1/prompts/help/send", mutation: true},
-		{method: "post", path: "/api/v1/prompts/chat/start", mutation: true},
-		{method: "get", path: "/api/v1/permissions"},
-		{method: "post", path: "/api/v1/permissions/answer", mutation: true},
-		{method: "get", path: "/api/v1/sessions"},
-		{method: "get", path: "/api/v1/sessions/{session_id}"},
-		{method: "get", path: "/api/v1/sessions/{session_id}/transcript"},
-		{method: "get", path: "/api/v1/sessions/{session_id}/output"},
-		{method: "get", path: "/api/v1/sessions/{session_id}/output/stream", sse: true},
-		{method: "get", path: "/api/v1/recovery"},
-		{method: "post", path: "/api/v1/recovery/actions", mutation: true},
-		{method: "post", path: "/api/v1/shutdown", mutation: true},
-		{method: "get", path: "/api/v1/events", sse: true},
+		{method: httpMethodGet, path: apiPathHealth},
+		{method: httpMethodGet, path: apiPathFeatures},
+		{method: httpMethodPost, path: apiPathFeatures, mutation: true},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/config"},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/config", mutation: true},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/live-preview"},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/start", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/resume", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/stop", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/interrupt", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/restart", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/review-decision", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/need-user-input", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/need-user-input-draft", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/input-notifications", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}/{subaction}", mutation: true},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/artifacts/{artifact_id}"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/logs/{log_id}"},
+		{method: httpMethodGet, path: apiPathConfigRuntime},
+		{method: "patch", path: apiPathConfigRuntime, mutation: true},
+		{method: "put", path: apiPathConfigRuntime, mutation: true},
+		{method: httpMethodGet, path: apiPathWorkspaceBrowse},
+		{method: httpMethodGet, path: apiPathCatalogModels},
+		{method: httpMethodGet, path: apiPathPrompts},
+		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/prompts/help/send", mutation: true},
+		{method: httpMethodPost, path: "/api/v1/prompts/chat/start", mutation: true},
+		{method: httpMethodGet, path: apiPathPermissions},
+		{method: httpMethodPost, path: apiPathPermissionsAnswer, mutation: true},
+		{method: httpMethodGet, path: apiPathSessions},
+		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}"},
+		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}/transcript"},
+		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}/output"},
+		{method: httpMethodGet, path: "/api/v1/sessions/{session_id}/output/stream", sse: true},
+		{method: httpMethodGet, path: apiPathRecovery},
+		{method: httpMethodPost, path: apiPathRecoveryActions, mutation: true},
+		{method: httpMethodPost, path: apiPathShutdown, mutation: true},
+		{method: httpMethodGet, path: apiPathEvents, sse: true},
 	}
 }
 
@@ -355,7 +360,7 @@ func routeKey(method, path string) string {
 
 func isHTTPMethod(method string) bool {
 	switch strings.ToLower(method) {
-	case "get", "post", "patch", "put", "delete", "head", "options", "trace":
+	case httpMethodGet, "post", "patch", "put", "delete", "head", "options", "trace":
 		return true
 	default:
 		return false

@@ -31,6 +31,58 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// repoName and repoAPath are the fixture repo name/path shared by
+// orchestrator_test package tests.
+const (
+	repoName  = "repo-a"
+	repoAPath = "/tmp/repo-a"
+)
+
+// mainBranch is the fixture default/base branch name shared by
+// orchestrator_test package tests.
+const mainBranch = "main"
+
+// apiRepoName is the fixture repo name shared by orchestrator_test package
+// multi-repo tests.
+const apiRepoName = "api"
+
+// wtR1Path is the fixture worktree path for the "r1" repo shared by
+// publish_test.go republish tests.
+const wtR1Path = "/tmp/wt-r1"
+
+// agenticRepoName is the fixture repo name shared by orchestrator_test
+// package tests.
+const agenticRepoName = "agentic"
+
+// repoNameB and repoBPath are the fixture second-repo name/path shared by
+// orchestrator_test package multi-repo tests.
+const (
+	repoNameB = "repo-b"
+	repoBPath = "/tmp/repo-b"
+	repoNameC = "repo-c"
+)
+
+// finalStatusInterrupted and reviewStatusPassed mirror the unexported
+// orchestrator package constants of the same name (agent.OrchestratorResult/
+// PlanLoopResult.FinalStatus and per-repo RepoStatuses values), duplicated
+// here since this is package orchestrator_test and can't import them.
+const (
+	finalStatusInterrupted = "interrupted"
+	reviewStatusPassed     = "review_passed"
+	finalStatusFailed      = "failed"
+)
+
+// kbStatusCompleted is the fixture KBStatus/RepoCycle completion value shared
+// by orchestrator_test package tests.
+const kbStatusCompleted = "completed"
+
+// apiRepoWorkPath and repoAWorktreePath are fixture paths shared by
+// orchestrator_test package tests.
+const (
+	apiRepoWorkPath  = "/tmp/api"
+	repoAWorktreePath = "/tmp/repo-a-worktree"
+)
+
 // writeReviewCommentsJSON writes a review-comments fixture to
 // <stateDir>/<featureID>/runs/run-001/review-comments/comments.json so
 // agent.LoadReviewComments can find it.
@@ -76,24 +128,24 @@ func TestCompleteRepoCycle_ReviewComments_RepliesOnlyToReviewThreads(t *testing.
 		ActiveRun: 1,
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
-			Name:         "repo-a",
-			Path:         "/tmp/repo-a",
+			Name:         repoName,
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       "feature/rc-cycle",
 		}},
 		RepoStates: map[string]*feature.RepoState{
-			"repo-a": {
+			repoName: {
 				Touched: true, PRURL: "https://github.com/org/repo-a/pull/7",
 			},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleReviewComments, Status: "reviewing", Count: 1},
+			repoName: {Type: feature.CycleReviewComments, Status: feature.RepoCycleReviewing, Count: 1},
 		},
 	}
 	lc := lifecycleForFeature(f)
 	fs := newFeatureStore(f)
 
-	if err := agent.SaveReviewCommentsForRepo(stateDir, f, "repo-a", agent.ReviewCommentsData{
+	if err := agent.SaveReviewCommentsForRepo(stateDir, f, repoName, agent.ReviewCommentsData{
 		Mode: "auto",
 		Comments: []git.ReviewComment{
 			{ID: 11, Type: git.CommentTypeReview, User: struct {
@@ -109,7 +161,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesOnlyToReviewThreads(t *testing.
 	}); err != nil {
 		t.Fatalf("SaveReviewCommentsForRepo: %v", err)
 	}
-	writeReviewResolutionsJSONForRepo(t, stateDir, f.ID, "repo-a", []agent.ReviewResolution{
+	writeReviewResolutionsJSONForRepo(t, stateDir, f.ID, repoName, []agent.ReviewResolution{
 		{CommentID: 11, Disposition: "addressed", Description: "Fixed it"},
 		{CommentID: 22, Disposition: "dismissed", Description: "Already handled"},
 		{CommentID: 33, Disposition: "addressed", Description: "Added coverage"},
@@ -136,7 +188,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesOnlyToReviewThreads(t *testing.
 		PhaseRunner: pr,
 	}, orchestrator.Hooks{})
 
-	if err := o.CompleteRepoCycle(f.ID, "repo-a"); err != nil {
+	if err := o.CompleteRepoCycle(f.ID, repoName); err != nil {
 		t.Fatalf("CompleteRepoCycle: %v", err)
 	}
 
@@ -165,7 +217,7 @@ func TestCompleteRepoCycle_ReviewComments_RepliesOnlyToReviewThreads(t *testing.
 		t.Errorf("FailRepoCycle lifecycle calls = %d, want 0", got)
 	}
 
-	addressed, err := agent.LoadAddressedIDsForRepo(stateDir, f, "repo-a")
+	addressed, err := agent.LoadAddressedIDsForRepo(stateDir, f, repoName)
 	if err != nil {
 		t.Fatalf("LoadAddressedIDsForRepo: %v", err)
 	}
@@ -227,7 +279,6 @@ func lifecycleCallIndex(lc *mocks.MockFeatureLifecycle, method string) int {
 // preserve the rebase-conflict UX.
 func TestCompleteRepoCycle_Tweak_EmitsTweakReviewApproved(t *testing.T) {
 	const featureID = "feat-tweak-emit"
-	const repoName = "repo-a"
 
 	f := &feature.Feature{
 		ID:        featureID,
@@ -237,7 +288,7 @@ func TestCompleteRepoCycle_Tweak_EmitsTweakReviewApproved(t *testing.T) {
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         "/tmp/repo-a",
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       "feature/tweak-emit",
 		}},
@@ -247,7 +298,7 @@ func TestCompleteRepoCycle_Tweak_EmitsTweakReviewApproved(t *testing.T) {
 			},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleTweak, Status: "reviewing", Count: 1},
+			repoName: {Type: feature.CycleTweak, Status: feature.RepoCycleReviewing, Count: 1},
 		},
 	}
 
@@ -314,7 +365,6 @@ func TestCompleteRepoCycle_Tweak_EmitsTweakReviewApproved(t *testing.T) {
 // `git rebase --abort`.
 func TestStartRepoCycleImplement_Rebase_PassesConflictFilesAndPRURL(t *testing.T) {
 	const featureID = "feat-rebase-conflict"
-	const repoName = "repo-a"
 
 	stateDir := t.TempDir()
 	f := &feature.Feature{
@@ -325,7 +375,7 @@ func TestStartRepoCycleImplement_Rebase_PassesConflictFilesAndPRURL(t *testing.T
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         "/tmp/repo-a",
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       "feature/rebase-conflict",
 		}},
@@ -406,14 +456,13 @@ func TestStartRepoCycleImplement_Rebase_PassesConflictFilesAndPRURL(t *testing.T
 
 func TestStartRepoCycleImplement_RebaseDuplicateNoOps(t *testing.T) {
 	const featureID = "feat-rebase-duplicate"
-	const repoName = "repo-a"
 
 	f := &feature.Feature{
 		ID:     featureID,
 		Status: feature.StatusCodeReady,
 		Repos: []feature.FeatureRepo{{
 			Name:   repoName,
-			Path:   "/tmp/repo-a",
+			Path:   repoAPath,
 			Branch: "feature/rebase-duplicate",
 		}},
 		RepoCycles: map[string]*feature.RepoCycleState{
@@ -436,10 +485,10 @@ func TestStartRefactorCycle_AllowsCodeReadyFeature(t *testing.T) {
 
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[repoName] = config.RepoConfig{Path: filepath.Join(runtimeDir, repoName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("code ready refactor", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	f, err := manager.Create("code ready refactor", "desc", []string{repoName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
@@ -448,9 +497,9 @@ func TestStartRefactorCycle_AllowsCodeReadyFeature(t *testing.T) {
 		ff.CurrentPhase = feature.PhasePublish
 		ff.ActiveRun = 1
 		ff.RunCount = 1
-		ff.Repos[0].WorktreePath = filepath.Join(runtimeDir, "worktrees", "repo-a")
+		ff.Repos[0].WorktreePath = filepath.Join(runtimeDir, "worktrees", repoName)
 		ff.Repos[0].Branch = "feature/code-ready-refactor"
-		ff.RepoStates = map[string]*feature.RepoState{"repo-a": {Touched: true}}
+		ff.RepoStates = map[string]*feature.RepoState{repoName: {Touched: true}}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
@@ -475,7 +524,7 @@ func TestStartRefactorCycle_AllowsCodeReadyFeature(t *testing.T) {
 	})
 
 	const prompt = "simplify service layout"
-	if _, err := o.StartRefactorCycle(f.ID, "repo-a", prompt); err != nil {
+	if _, err := o.StartRefactorCycle(f.ID, repoName, prompt); err != nil {
 		t.Fatalf("StartRefactorCycle() error = %v, want nil for CodeReady feature", err)
 	}
 
@@ -492,7 +541,7 @@ func TestStartRefactorCycle_AllowsCodeReadyFeature(t *testing.T) {
 	if got.RefactorCount() != 1 {
 		t.Fatalf("RefactorCount = %d, want 1", got.RefactorCount())
 	}
-	rc := got.RepoCycles["repo-a"]
+	rc := got.RepoCycles[repoName]
 	if rc == nil || rc.Type != feature.CycleRefactor || rc.Status != feature.RepoCycleRunning {
 		t.Fatalf("RepoCycles[repo-a] = %+v, want running refactor cycle", rc)
 	}
@@ -512,7 +561,6 @@ func TestStartRefactorCycle_AllowsCodeReadyFeature(t *testing.T) {
 // branch head is never pushed and the PR stays in its unmerged state.
 func TestCompleteRepoCycle_Rebase_BlocksOnUnfinishedRebase(t *testing.T) {
 	const featureID = "feat-rebase-incomplete"
-	const repoName = "repo-a"
 
 	f := &feature.Feature{
 		ID:        featureID,
@@ -522,7 +570,7 @@ func TestCompleteRepoCycle_Rebase_BlocksOnUnfinishedRebase(t *testing.T) {
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         "/tmp/repo-a",
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       "feature/rebase-incomplete",
 		}},
@@ -532,7 +580,7 @@ func TestCompleteRepoCycle_Rebase_BlocksOnUnfinishedRebase(t *testing.T) {
 			},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleRebase, Status: "reviewing", Count: 1},
+			repoName: {Type: feature.CycleRebase, Status: feature.RepoCycleReviewing, Count: 1},
 		},
 	}
 
@@ -588,7 +636,6 @@ func TestCompleteRepoCycle_Rebase_BlocksOnUnfinishedRebase(t *testing.T) {
 // the entire lifetime of the cycle and afterward.
 func TestCompleteRepoCycle_Rebase_HappyPath_KeepsFeaturePublished(t *testing.T) {
 	const featureID = "feat-rebase-happy"
-	const repoName = "repo-a"
 
 	f := &feature.Feature{
 		ID:        featureID,
@@ -598,7 +645,7 @@ func TestCompleteRepoCycle_Rebase_HappyPath_KeepsFeaturePublished(t *testing.T) 
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         "/tmp/repo-a",
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       "feature/rebase-happy",
 		}},
@@ -608,7 +655,7 @@ func TestCompleteRepoCycle_Rebase_HappyPath_KeepsFeaturePublished(t *testing.T) 
 			},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleRebase, Status: "reviewing", Count: 1},
+			repoName: {Type: feature.CycleRebase, Status: feature.RepoCycleReviewing, Count: 1},
 		},
 	}
 
@@ -692,7 +739,6 @@ func TestCompleteRepoCycle_Rebase_HappyPath_KeepsFeaturePublished(t *testing.T) 
 // and the push must NOT have fired (we have unrebased work to land first).
 func TestCompleteTweakFinish_PullRebaseConflict_SurfacesPublishConflictError(t *testing.T) {
 	const featureID = "feat-tweak-conflict"
-	const repoName = "repo-a"
 	const branch = "feature/tweak-conflict"
 
 	f := &feature.Feature{
@@ -703,7 +749,7 @@ func TestCompleteTweakFinish_PullRebaseConflict_SurfacesPublishConflictError(t *
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         "/tmp/repo-a",
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       branch,
 		}},
@@ -716,7 +762,7 @@ func TestCompleteTweakFinish_PullRebaseConflict_SurfacesPublishConflictError(t *
 		// surfaced PublishConflictError directly (master) but on the unified
 		// branch was regressed to a generic error swallowed by the TUI.
 		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleTweak, Status: "reviewing", Count: 1},
+			repoName: {Type: feature.CycleTweak, Status: feature.RepoCycleReviewing, Count: 1},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -786,7 +832,6 @@ func TestCompleteTweakFinish_PullRebaseConflict_SurfacesPublishConflictError(t *
 
 func TestCompleteTweakCommitFinish_AutoPublishOff_CommitsWithoutPush(t *testing.T) {
 	const featureID = "feat-tweak-manual"
-	const repoName = "repo-a"
 	const branch = "feature/tweak-manual"
 
 	for _, tc := range []struct {
@@ -807,7 +852,7 @@ func TestCompleteTweakCommitFinish_AutoPublishOff_CommitsWithoutPush(t *testing.
 				Checkpoints: feature.Checkpoints{ManualPublish: true},
 				Repos: []feature.FeatureRepo{{
 					Name:         repoName,
-					Path:         "/tmp/repo-a",
+					Path:         repoAPath,
 					WorktreePath: "/tmp/worktrees/repo-a",
 					Branch:       branch,
 					Publishable:  &publishable,
@@ -883,7 +928,6 @@ func TestCompleteTweakCommitFinish_AutoPublishOff_CommitsWithoutPush(t *testing.
 // post-publish actions.
 func TestCompleteTweakFinish_CompleteRepoCycleError_PropagatesAndFails(t *testing.T) {
 	const featureID = "feat-tweak-complete-err"
-	const repoName = "repo-a"
 	const branch = "feature/tweak-complete-err"
 
 	f := &feature.Feature{
@@ -894,7 +938,7 @@ func TestCompleteTweakFinish_CompleteRepoCycleError_PropagatesAndFails(t *testin
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         "/tmp/repo-a",
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       branch,
 		}},
@@ -904,7 +948,7 @@ func TestCompleteTweakFinish_CompleteRepoCycleError_PropagatesAndFails(t *testin
 			},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleTweak, Status: "reviewing", Count: 1},
+			repoName: {Type: feature.CycleTweak, Status: feature.RepoCycleReviewing, Count: 1},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -963,7 +1007,6 @@ func TestCompleteTweakFinish_CompleteRepoCycleError_PropagatesAndFails(t *testin
 // wrong ref.
 func TestCompleteTweakFinish_PullRebaseConflict_RebasePlanTargetsPRBase(t *testing.T) {
 	const featureID = "feat-tweak-conflict-plan"
-	const repoName = "repo-a"
 	const branch = "feature/tweak-conflict-plan"
 	const prURL = "https://github.com/org/repo-a/pull/12"
 
@@ -976,7 +1019,7 @@ func TestCompleteTweakFinish_PullRebaseConflict_RebasePlanTargetsPRBase(t *testi
 		RunCount:  1,
 		Repos: []feature.FeatureRepo{{
 			Name:         repoName,
-			Path:         "/tmp/repo-a",
+			Path:         repoAPath,
 			WorktreePath: "/tmp/worktrees/repo-a",
 			Branch:       branch,
 		}},
@@ -986,7 +1029,7 @@ func TestCompleteTweakFinish_PullRebaseConflict_RebasePlanTargetsPRBase(t *testi
 			},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleTweak, Status: "reviewing", Count: 1},
+			repoName: {Type: feature.CycleTweak, Status: feature.RepoCycleReviewing, Count: 1},
 		},
 		MaxIterations: 1,
 	}

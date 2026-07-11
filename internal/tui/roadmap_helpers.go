@@ -16,6 +16,10 @@ package tui
 
 import "fmt"
 
+// rangeLabelNone is roadmapPhaseRangeLabel's display value for an empty
+// (start > end) phase range.
+const rangeLabelNone = "none"
+
 func fallbackRoadmapPhaseType(phase, total int) string {
 	if total == 1 {
 		return "collapsed"
@@ -43,7 +47,7 @@ func roadmapPhaseEffect(phase, total int) string {
 
 func roadmapPhaseRangeLabel(start, end int) string {
 	if start > end {
-		return "none"
+		return rangeLabelNone
 	}
 	if start == end {
 		return fmt.Sprintf("Phase %d", start)

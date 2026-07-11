@@ -41,6 +41,256 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
+// Shared fixture feature-ID literals reused across this file's test tables.
+// These double as generic status/kind literals in places (e.g. a session
+// Status of "done"); reusing the fixture-ID constant keeps a single source
+// for each short word instead of scattering raw literals.
+const (
+	testFeatureIDDone      = "done"
+	testFeatureIDActive    = "active"
+	testFeatureIDPublished = "published"
+	testFeatureIDReady     = "ready"
+	testFeatureIDFeat1     = "feat-1"
+	testFeatureIDSetupFail = "setup-fail"
+	testFeatureIDNew       = "new"
+	testFeatureIDStopped   = "stopped"
+	testFeatureIDQueued    = "queued"
+	testFeatureIDPaused    = "paused"
+)
+
+// Shared fixture slug literals.
+const (
+	testFeatureSlugTranslateReadme   = "translate-readme"
+	testFeatureSlugTranslateSicilian = "translate-readme-in-sicilian"
+	testFeatureSlugActiveWork        = "active-work"
+	testFeatureSlugFeatureOne        = "feature-one"
+)
+
+// testFeatureNameTranslateSicilian is a fixture feature name reused across
+// this file's Sicilian-translate test tables.
+const testFeatureNameTranslateSicilian = "Translate README in Sicilian"
+
+// testRequestIDReq1 is a fixture AskUser/permission request ID.
+const testRequestIDReq1 = "req-1"
+
+// testRepoNameA and testRepoNameAPI are fixture repo-name literals reused
+// across this file's repo-status and publish test tables.
+const (
+	testRepoNameA   = "repo-a"
+	testRepoNameAPI = "api"
+)
+
+// Shared provider/model fixture literals.
+const (
+	testProviderCodex  = "codex"
+	testProviderClaude = "claude"
+	testModelGPT54     = "gpt-5.4"
+)
+
+// Shared status/DTO-field literals. These are plain strings distinct from
+// the typed presentationStatus tokens in attach.go (statusPending etc.),
+// which can't be assigned directly to the string-typed server DTO fields
+// used here.
+const (
+	testStatusPending   = "pending"
+	testStatusFailed    = "failed"
+	testStatusCompleted = "completed"
+)
+
+// Shared pipeline/cycle/phase-kind literals.
+const (
+	testPipelineRoadmap      = "roadmap"
+	testPipelineRefactor     = "refactor"
+	testPipelineSizeMedium   = "medium"
+	testCycleTypeRebase      = "rebase"
+	testPhaseNameImplement   = "implement"
+	testPhaseNameFinalReview = "Final Review"
+	testPhaseKeyResearch     = "research"
+)
+
+// testActionScopeFeature is the fixture ActionScopeDTO.Type value "feature".
+const testActionScopeFeature = "feature"
+
+// testActionIDFeaturePublish is the fixture "feature.publish" action ID.
+const testActionIDFeaturePublish = "feature.publish"
+
+// Shared recovery-action-name literals.
+const (
+	testActionSkip = "skip"
+	testActionKill = "kill"
+)
+
+// Shared session/resource fixture literals.
+const (
+	testSessionKindAgent        = "agent"
+	testSessionIDLive           = "sess-live"
+	testSessionIDImpl1          = "impl-1"
+	testEventKindSessionUpdated = "session.updated"
+	testResourceIDSession       = "session"
+	testResourceTypeLog         = "log"
+)
+
+// Shared transcript-message-type/role literals.
+const (
+	testMessageTypeText    = "text"
+	testMessageTypeToolUse = "tool_use"
+	testMessageRoleSystem  = "system"
+	testMessageRoleUser    = "user"
+)
+
+// Shared artifact-ID literals.
+const (
+	testArtifactIDPhase1Plan = "phase-1-plan"
+	testArtifactIDPhase1Impl = "phase-1-impl"
+	testArtifactIDPlan       = "plan"
+	testArtifactIDDesign     = "design"
+)
+
+// Shared artifact/log server-tail-text fixtures.
+const (
+	testDesignTailFromServer = "design tail from server"
+	testPhaseLogFromServer   = "phase log from server"
+	testContentArtifactText  = "content artifact"
+)
+
+// Shared repo-freshness label literals.
+const (
+	testFreshnessLocalChanges = "local changes"
+	testFreshnessInSync       = "in sync"
+)
+
+// Shared validator-name / validation-table-column literals.
+const (
+	testValidatorNameScope        = "Scope"
+	testValidatorNameArchitecture = "Architecture"
+	testValidatorNameTesting      = "Testing"
+	testColumnLabelStatus         = "Status"
+	testSectionLabelValidators    = "Validators"
+)
+
+// Shared attach/dashboard UI-label literals.
+const (
+	testLabelLivePreview   = "Live Preview"
+	testLabelRunContent    = "Run Content"
+	testLabelPhaseProgress = "Phase Progress"
+	testTabLabelOverview   = "[o] Overview"
+)
+
+// testShellCommandGoTest is a fixture Bash-permission command summary.
+const testShellCommandGoTest = "go test ./internal/tui"
+
+// Shared cross-file fixture literals restored here because other test files
+// in this package (api_chat_adapter_test.go, attach_askuser_test.go,
+// attach_test.go, chat_events_test.go, live_preview_test.go, wizard_test.go)
+// reference them from this file.
+const (
+	testHintEnterToSelect            = "Enter to select"
+	testAskRequestID                 = "ask-1"
+	testAgentToolLabel               = "Agent: Explore KB completion handler"
+	testAssistantTextFirstParagraph  = "First paragraph."
+	testAssistantTextSecondParagraph = "Second paragraph."
+	testReadyToPatchText             = "Ready to patch live preview"
+	testContextPct42                 = "42%"
+	testQuestionNeedInput            = "Need input?"
+	testAgentDelegationPrompt        = "Read the provider docs and report every attach-view metadata gap."
+	testPastedFilePath               = "/tmp/spec.pdf"
+	testOptionLabelAlpha             = "Alpha"
+	testOptionLabelBeta              = "Beta"
+	testOptionLabelGamma             = "Gamma"
+)
+
+// testUsingBashActivity is the rendered "Using Bash..." activity line,
+// reused across this file and other test files in this package.
+var testUsingBashActivity = "Using " + toolNameBash + "..."
+
+// New fixture literals introduced by the second goconst cleanup pass.
+const (
+	testFeatureStatusDone                = "Done"
+	testFeatureNameClientCutover         = "Client cutover"
+	testFeatureStatusPublished           = "Published"
+	testActivityImplement                = "Implement"
+	testFeatureStatusCodeReady           = "CodeReady"
+	testFeatureNameTranslateReadme       = "Translate README"
+	testFeatureStatusDesigning           = "Designing"
+	testFeatureStatusPlanning            = "Planning"
+	testActivityResearch                 = "Research"
+	testFeatureStatusFailed              = "Failed"
+	testFeatureStatusCreated             = "Created"
+	testFeatureNameActiveWork            = "Active work"
+	testSessionStatusRunning             = "Running"
+	testSessionIDTestingValidator        = "testing-validator"
+	testFeatureNameFeatureOne            = "Feature one"
+	testPromptBashPrefix                 = "$ Bash"
+	testFeatureStatusInterrupted         = "Interrupted"
+	testFeatureNameQueuedWork            = "Queued work"
+	testFeatureNamePausedWork            = "Paused work"
+	testFeatureNameFailedWork            = "Failed work"
+	testSessionStatusWaitingHelp         = "WaitingHelp"
+	testResultStatusSuccess              = "success"
+	testFeatureIDFeatCreated             = "feat-created"
+	testActionIDTweak                    = "tweak"
+	testActivityTweaking                 = "Tweaking"
+	testModelCodexGPT54                  = "codex:gpt-5.4"
+	testModelCodexGPT55                  = "codex:gpt-5.5"
+	testPipelineSizeLarge                = "large"
+	testInquirenessTargeted              = "targeted"
+	testSectionLabelGates                = "Gates"
+	testLabelModelsForCodex              = "Models for codex"
+	testInquirenessHigh                  = "high"
+	testModelCodexGPT54Mini              = "codex:gpt-5.4-mini"
+	testModelCodexGPT55Mini              = "codex:gpt-5.5-mini"
+	testSectionLabelUtilities            = "Utilities"
+	testFeatureNameBlockedWork           = "Blocked work"
+	testQuestionWhichDatabase            = "Which database?"
+	testDBOptionPostgres                 = "PostgreSQL"
+	testActionInputNamePrompt            = "prompt"
+	testInputKeyQuestions                = "questions"
+	testInputKeyQuestion                 = "question"
+	testDBOptionDynamoDB                 = "DynamoDB"
+	testFeatureStatusPlanNeedsReview     = "PlanNeedsReview"
+	testUtilityModelID                   = "test-utility"
+	testFeatureStatusDesignNeedsReview   = "DesignNeedsReview"
+	testArtifactPhaseDescription         = "description"
+	testFeatureStatusResearchNeedsReview = "ResearchNeedsReview"
+	testPipelineSizeMoonshot             = "moonshot"
+	testPhaseKeyInquire                  = "inquire"
+	testParamKindString                  = "string"
+	testActivityRefactoring              = "Refactoring"
+	testPasteTextMultiline               = "line1\nline2\nline3"
+	testPasteTextLine1                   = "line1"
+	testPastedFileName                   = "spec.pdf"
+	testFeatureNamePublishedWork         = "Published work"
+	testFeatureSlugPublishedWork         = "published-work"
+	testFeatureIDNext                    = "next"
+	testFeatureNameReadyPublish          = "Ready to publish"
+	testGitBranchMain                    = "main"
+	testActionInputNameUpgradePipeline   = "upgrade_pipeline"
+	testArtifactIDOldPlan                = "old-plan"
+	testChatMessageHello                 = "hello"
+	testRuntimeStateDirFeatures          = "/tmp/agentico/features"
+)
+
+// New fixture literals introduced by the third goconst cleanup pass.
+const (
+	testFeatureIDBlocked            = "blocked"
+	testFeatureStatusImplementing   = "Implementing"
+	testFeatureSlugPublishedFeature = "published-feature"
+	testPermissionRequestIDPerm1    = "perm-1"
+	testSectionLabelInProgress      = "IN PROGRESS"
+	testTabLabelLivePreview         = "[l] Live Preview"
+	testSessionKindValidator        = "validator"
+	testFeatureSlugQueuedWork       = "queued-work"
+	testFeatureSlugPausedWork       = "paused-work"
+	testFeatureSlugFailedWork       = "failed-work"
+	testSectionLabelModels          = "Models"
+	testSectionLabelPhases          = "Phases"
+	testParamKindEnum               = "enum"
+	testFeatureSlugReadyToPublish   = "ready-to-publish"
+	testSessionIDOne                = "sess-1"
+	testStatusNeedUserInput         = "NeedUserInput"
+	testFeatureSlugClientCutover    = "client-cutover"
+)
+
 func apiTestFeatureDetail(summary server.FeatureSummary) server.FeatureDetailDTO {
 	return server.FeatureDetailDTO{
 		ID:           summary.ID,
@@ -166,50 +416,50 @@ func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
 	}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "done", Name: "Done feature", Slug: "done-feature", Status: "Done", CurrentPhase: "publish", CreatedAt: created.Add(-2 * time.Hour)},
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", ActiveRun: 2, RunCount: 3, Repos: []string{"agentic-orchestrator"}, CreatedAt: created},
-			{ID: "published", Name: "Published feature", Slug: "published-feature", Status: "Published", CurrentPhase: "publish", CreatedAt: created.Add(-1 * time.Hour)},
+			{ID: testFeatureIDDone, Name: "Done feature", Slug: "done-feature", Status: testFeatureStatusDone, CurrentPhase: actionIDPublish, CreatedAt: created.Add(-2 * time.Hour)},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, ActiveRun: 2, RunCount: 3, Repos: []string{testRepoNameOrchestrator}, CreatedAt: created},
+			{ID: testFeatureIDPublished, Name: "Published feature", Slug: testFeatureSlugPublishedFeature, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: created.Add(-1 * time.Hour)},
 		}},
 		runtime: server.RuntimeConfigResponse{
 			Runtime:   runtime,
-			Providers: []string{"codex"},
+			Providers: []string{testProviderCodex},
 		},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {{ID: "gpt-5.4"}},
+				testProviderCodex: {{ID: testModelGPT54}},
 			},
 		},
 		prompts: server.PromptSnapshotResponse{HelpQueue: []server.HelpQueueDTO{
-			{FeatureID: "active", Question: "Need a decision", Pending: true},
+			{FeatureID: testFeatureIDActive, Question: "Need a decision", Pending: true},
 		}},
 		permissions: server.PermissionSnapshotResponse{Requests: []server.ControlRequestDTO{
-			{FeatureID: "active", RequestID: "perm-1", Status: "pending", ToolName: "Bash", Summary: "run tests"},
+			{FeatureID: testFeatureIDActive, RequestID: testPermissionRequestIDPerm1, Status: testStatusPending, ToolName: toolNameBash, Summary: "run tests"},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "implement", Repo: "agentic-orchestrator", Kind: "agent", Label: "Implement", Provider: "codex", Model: "gpt-5.4", Status: "running", ContextPct: 42},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Repo: testRepoNameOrchestrator, Kind: testSessionKindAgent, Label: testActivityImplement, Provider: testProviderCodex, Model: testModelGPT54, Status: featureStatusTokenRunning, ContextPct: 42},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement}, server.FeatureDetailDTO{
 
 			Description: "Render selected feature detail from REST.",
-			Pipeline:    "roadmap",
+			Pipeline:    testPipelineRoadmap,
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "rebase", CycleStatus: "running"},
+				{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: testCycleTypeRebase, CycleStatus: featureStatusTokenRunning},
 			},
 			Actions: []server.ActionDTO{
-				{ID: "feature.stop", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
-				{ID: "feature.publish", Enabled: false, Scope: server.ActionScopeDTO{Type: "feature"}, DisabledReasons: []server.ActionDisabledReasonDTO{
+				{ID: mutationKindFeatureStop, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
+				{ID: testActionIDFeaturePublish, Enabled: false, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}, DisabledReasons: []server.ActionDisabledReasonDTO{
 					{Code: "not_ready", Message: "feature is not ready to publish"},
 				}},
 			},
 			Cost:          server.CostDTO{TotalUSD: 12.34},
-			NeedUserInput: &server.NeedInputGateDTO{FeatureID: "active", Open: true, Scope: "feature", Iteration: 9},
+			NeedUserInput: &server.NeedInputGateDTO{FeatureID: testFeatureIDActive, Open: true, Scope: testActionScopeFeature, Iteration: 9},
 		})},
 	}
 
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{
 		Runtime:      runtime,
-		LaunchPolicy: server.LaunchPolicy{Resolved: true, Providers: []string{"codex"}, DangerouslySkipPermissions: true},
+		LaunchPolicy: server.LaunchPolicy{Resolved: true, Providers: []string{testProviderCodex}, DangerouslySkipPermissions: true},
 	})
 	if err != nil {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
@@ -218,10 +468,10 @@ func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
 	if got, want := strings.Join(client.calls, ","), "Features,RuntimeConfig,ModelCatalog,Prompts,Permissions,Sessions,Recovery,FeatureDetail,LivePreview"; got != want {
 		t.Fatalf("API calls = %s, want %s", got, want)
 	}
-	if got := strings.Join(client.detailFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.detailFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("FeatureDetail calls = %q, want active", got)
 	}
-	if got := app.selectedFeature; got != "active" {
+	if got := app.selectedFeature; got != testFeatureIDActive {
 		t.Fatalf("selectedFeature = %q, want active", got)
 	}
 	if got := app.snapshot.Features[0].AttentionCount; got != 2 {
@@ -231,12 +481,12 @@ func TestAPIAppModelInitializesFromRESTSnapshots(t *testing.T) {
 		t.Fatal("Runtime.DangerouslySkipPermissions = false, want true from launch policy")
 	}
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Orchestrator v", "Features", "IN PROGRESS", "PUBLISHED", "COMPLETED", "client-cutover", "published-feature", "done-feature", "Live Preview", "Permission Request", "Bash: run tests", "$12.34", "NeedUserInput"} {
+	for _, want := range []string{"Orchestrator v", dashboardFeaturesPanelTitle, testSectionLabelInProgress, "PUBLISHED", "COMPLETED", testFeatureSlugClientCutover, testFeatureSlugPublishedFeature, "done-feature", testLabelLivePreview, "Permission Request", "Bash: run tests", "$12.34", testStatusNeedUserInput} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"Selected detail", "Attach / Live Preview", "Run Content", "Operations"} {
+	for _, notWant := range []string{"Selected detail", "Attach / Live Preview", testLabelRunContent, "Operations"} {
 		if strings.Contains(view, notWant) {
 			t.Fatalf("API app View() rendered reduced-client section %q in:\n%s", notWant, view)
 		}
@@ -252,12 +502,12 @@ func TestAPIAppModelDashboardKeepsManualPublishCodeReady(t *testing.T) {
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "ready",
+		ID:           testFeatureIDReady,
 		Name:         "Ready work",
 		Slug:         "ready-work",
-		Status:       "CodeReady",
-		CurrentPhase: "publish",
-		Repos:        []string{"agentic-orchestrator"},
+		Status:       testFeatureStatusCodeReady,
+		CurrentPhase: actionIDPublish,
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    time.Now(),
 		Checkpoints:  server.CheckpointsDTO{ManualPublish: true},
 	}
@@ -266,7 +516,7 @@ func TestAPIAppModelDashboardKeepsManualPublishCodeReady(t *testing.T) {
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
 
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "agentic-orchestrator", Publishable: true},
+				{Name: testRepoNameOrchestrator, Publishable: true},
 			},
 		})},
 	}
@@ -293,12 +543,12 @@ func TestAPIAppModelRefreshErrorStillAppliesPartialSnapshot(t *testing.T) {
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "feat-1",
-		Name:         "Translate README",
-		Slug:         "translate-readme",
-		Status:       "Designing",
-		CurrentPhase: "design",
-		Repos:        []string{"agentic-orchestrator"},
+		ID:           testFeatureIDFeat1,
+		Name:         testFeatureNameTranslateReadme,
+		Slug:         testFeatureSlugTranslateReadme,
+		Status:       testFeatureStatusDesigning,
+		CurrentPhase: testArtifactIDDesign,
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    time.Now(),
 	}
 	client := &fakeTUIAPIClient{
@@ -316,7 +566,7 @@ func TestAPIAppModelRefreshErrorStillAppliesPartialSnapshot(t *testing.T) {
 	model, _ := app.Update(apiRefreshSnapshotMsg{
 		snapshot: server.RefreshSnapshot{Prompts: &server.PromptSnapshotResponse{
 			AskUserQuestions: []server.ControlRequestDTO{
-				{RequestID: "req-1", FeatureID: "feat-1", ToolName: "AskUserQuestion", Status: "pending"},
+				{RequestID: testRequestIDReq1, FeatureID: testFeatureIDFeat1, ToolName: toolNameAskUserQuestion, Status: testStatusPending},
 			},
 		}},
 		err: errors.New(`send request: Get ".../features/feat-1/live-preview": context deadline exceeded`),
@@ -334,17 +584,17 @@ func TestAPIAppModelDashboardRestoresMainBranchSpinnerVisuals(t *testing.T) {
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "active",
-		Name:         "Translate README in Sicilian",
-		Slug:         "translate-readme-in-sicilian",
-		Status:       "Planning",
-		CurrentPhase: "plan",
-		Repos:        []string{"agentic-orchestrator"},
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameTranslateSicilian,
+		Slug:         testFeatureSlugTranslateSicilian,
+		Status:       testFeatureStatusPlanning,
+		CurrentPhase: testArtifactIDPlan,
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    time.Now(),
 		Progress: server.FeatureProgress{
 			CurrentRoadmapPhase: 0,
 			TotalRoadmapPhases:  3,
-			CurrentPhaseStatus:  "running",
+			CurrentPhaseStatus:  featureStatusTokenRunning,
 		},
 	}
 	app := APIAppModel{
@@ -357,7 +607,7 @@ func TestAPIAppModelDashboardRestoresMainBranchSpinnerVisuals(t *testing.T) {
 			summary.ID: {Feature: apiTestFeatureDetail(summary)},
 		},
 		runtimeConfig: server.RuntimeConfigResponse{
-			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+			Runtime: server.RuntimeIdentity{StateDir: testRuntimeStateDirFeatures},
 		},
 	}
 	app.rebuildPresentation(summary.ID)
@@ -378,12 +628,12 @@ func TestAPIAppModelDashboardRendersPhaseCostsFromRESTDetail(t *testing.T) {
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "published",
+		ID:           testFeatureIDPublished,
 		Name:         "Published feature",
-		Slug:         "published-feature",
-		Status:       "Published",
-		CurrentPhase: "Publish",
-		Repos:        []string{"agentic-orchestrator"},
+		Slug:         testFeatureSlugPublishedFeature,
+		Status:       testFeatureStatusPublished,
+		CurrentPhase: helpContextPublish,
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    time.Now(),
 		Progress: server.FeatureProgress{
 			CurrentRoadmapPhase: 2,
@@ -400,24 +650,24 @@ func TestAPIAppModelDashboardRendersPhaseCostsFromRESTDetail(t *testing.T) {
 			summary.ID: {Feature: apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
 
 				Timing: server.TimingDTO{ByPhase: map[string]int64{
-					"research":     60,
-					"phase-1-plan": 120,
-					"phase-1-impl": 180,
-					"review":       240,
+					testPhaseKeyResearch:     60,
+					testArtifactIDPhase1Plan: 120,
+					testArtifactIDPhase1Impl: 180,
+					reviewCommentTypeReview:  240,
 				}},
 				Cost: server.CostDTO{
 					TotalUSD: 7.25,
 					ByPhase: map[string]float64{
-						"research":     1.25,
-						"phase-1-plan": 2.50,
-						"phase-1-impl": 3.00,
-						"review":       0.50,
+						testPhaseKeyResearch:     1.25,
+						testArtifactIDPhase1Plan: 2.50,
+						testArtifactIDPhase1Impl: 3.00,
+						reviewCommentTypeReview:  0.50,
 					},
 				},
 			})},
 		},
 		runtimeConfig: server.RuntimeConfigResponse{
-			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+			Runtime: server.RuntimeIdentity{StateDir: testRuntimeStateDirFeatures},
 		},
 		livePreviews: map[string]server.LivePreviewResponse{
 			summary.ID: {
@@ -435,11 +685,11 @@ func TestAPIAppModelDashboardRendersPhaseCostsFromRESTDetail(t *testing.T) {
 	if dashboard.preview.feature == nil {
 		t.Fatal("dashboard preview feature is nil")
 	}
-	if got := dashboard.preview.feature.PhaseCost("research"); got != 1.25 {
+	if got := dashboard.preview.feature.PhaseCost(testPhaseKeyResearch); got != 1.25 {
 		t.Fatalf("dashboard preview research cost = %v, want 1.25; costs=%v", got, dashboard.preview.feature.PhaseCosts)
 	}
 	view := stripANSI(dashboard.View())
-	for _, want := range []string{"Cost", "$7.25", "Research", "$1.25", "Phase 1 Plan", "$2.50", "Phase 1", "$3.00", "Final Review", "$0.50"} {
+	for _, want := range []string{"Cost", "$7.25", testActivityResearch, "$1.25", "Phase 1 Plan", "$2.50", "Phase 1", "$3.00", testPhaseNameFinalReview, "$0.50"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API dashboard View() missing phase cost %q in:\n%s", want, view)
 		}
@@ -451,17 +701,17 @@ func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 
 	runtimeDir := t.TempDir()
 	stateDir := filepath.Join(runtimeDir, "features")
-	workDir := filepath.Join(runtimeDir, "worktrees", feature.WorkspaceSlug("translate-readme-in-sicilian", "active"), "agentic-orchestrator")
+	workDir := filepath.Join(runtimeDir, "worktrees", feature.WorkspaceSlug(testFeatureSlugTranslateSicilian, testFeatureIDActive), testRepoNameOrchestrator)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("create workdir: %v", err)
 	}
 	summary := server.FeatureSummary{
-		ID:           "active",
-		Name:         "Translate README in Sicilian",
-		Slug:         "translate-readme-in-sicilian",
-		Status:       "Planning",
-		CurrentPhase: "plan",
-		Repos:        []string{"agentic-orchestrator"},
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameTranslateSicilian,
+		Slug:         testFeatureSlugTranslateSicilian,
+		Status:       testFeatureStatusPlanning,
+		CurrentPhase: testArtifactIDPlan,
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    time.Now(),
 	}
 	app := APIAppModel{
@@ -474,14 +724,14 @@ func TestAPIAppModelDashboardShowsDerivedWorkDir(t *testing.T) {
 			summary.ID: {Feature: apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
 
 				RepoStatus: []server.RepoStatusDTO{
-					{Name: "agentic-orchestrator", Publishable: true},
+					{Name: testRepoNameOrchestrator, Publishable: true},
 				},
 			})},
 		},
 		runtimeConfig: server.RuntimeConfigResponse{
 			Runtime: server.RuntimeIdentity{StateDir: stateDir},
 			Repos: []server.ConfigRepoDTO{
-				{Name: "agentic-orchestrator", Path: "/repo/path"},
+				{Name: testRepoNameOrchestrator, Path: "/repo/path"},
 			},
 		},
 	}
@@ -549,14 +799,14 @@ func TestAPIAppModelDashboardRestoresSetupFailureFromRESTDetail(t *testing.T) {
 		t.Fatalf("unmarshal detail: %v", err)
 	}
 	summary := server.FeatureSummary{
-		ID:           "setup-fail",
+		ID:           testFeatureIDSetupFail,
 		Name:         "Setup Fail",
-		Slug:         "setup-fail",
-		Status:       "Failed",
-		CurrentPhase: "plan",
+		Slug:         testFeatureIDSetupFail,
+		Status:       testFeatureStatusFailed,
+		CurrentPhase: testArtifactIDPlan,
 		ActiveRun:    1,
 		RunCount:     1,
-		Repos:        []string{"repo-a"},
+		Repos:        []string{testRepoNameA},
 		CreatedAt:    time.Date(2026, 6, 18, 10, 0, 0, 0, time.UTC),
 	}
 	app := APIAppModel{
@@ -570,7 +820,7 @@ func TestAPIAppModelDashboardRestoresSetupFailureFromRESTDetail(t *testing.T) {
 			summary.ID: detail,
 		},
 		runtimeConfig: server.RuntimeConfigResponse{
-			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+			Runtime: server.RuntimeIdentity{StateDir: testRuntimeStateDirFeatures},
 		},
 	}
 	app.rebuildPresentation(summary.ID)
@@ -588,7 +838,7 @@ func TestAPIAppModelDashboardRestoresSetupFailureFromRESTDetail(t *testing.T) {
 	}
 
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"IN PROGRESS", "Failed (worktree setup)", "Setup attempt 1", "git worktree add failed", "Worktree: repo-a", "/tmp/agentico/setup.log"} {
+	for _, want := range []string{testSectionLabelInProgress, "Failed (worktree setup)", "Setup attempt 1", "git worktree add failed", "Worktree: repo-a", "/tmp/agentico/setup.log"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API dashboard View() missing setup failure detail %q in:\n%s", want, view)
 		}
@@ -632,7 +882,7 @@ func TestAPIAppModelRShortcutRetriesFailedSetup(t *testing.T) {
 	}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "setup-fail", Name: "Setup Fail", Slug: "setup-fail", Status: "Failed", CurrentPhase: "plan", CreatedAt: time.Now()},
+			{ID: testFeatureIDSetupFail, Name: "Setup Fail", Slug: testFeatureIDSetupFail, Status: testFeatureStatusFailed, CurrentPhase: testArtifactIDPlan, CreatedAt: time.Now()},
 		}},
 		detail:        detail,
 		retryAccepted: apiTestActionResponse{},
@@ -646,7 +896,7 @@ func TestAPIAppModelRShortcutRetriesFailedSetup(t *testing.T) {
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
 
-	if got := strings.Join(client.retryFeatureIDs, ","); got != "setup-fail" {
+	if got := strings.Join(client.retryFeatureIDs, ","); got != testFeatureIDSetupFail {
 		t.Fatalf("RetryFeature calls = %q, want setup-fail", got)
 	}
 	if len(client.restartFeatureIDs) != 0 {
@@ -684,15 +934,15 @@ func TestAPIAppModelDiffUsesSavedFeatureBaseBranch(t *testing.T) {
 	runtimeDir := t.TempDir()
 	stateDir := filepath.Join(runtimeDir, "features")
 	const (
-		featureID = "active"
+		featureID = testFeatureIDActive
 		slug      = "base-aware-diff"
-		repoName  = "agentic-orchestrator"
+		repoName  = testRepoNameOrchestrator
 	)
 	workDir := filepath.Join(runtimeDir, "worktrees", slug, repoName)
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("create workdir: %v", err)
 	}
-	runGit(t, workDir, "init", "-b", "main")
+	runGit(t, workDir, "init", "-b", testGitBranchMain)
 	runGit(t, workDir, "config", "user.email", "test@test.com")
 	runGit(t, workDir, "config", "user.name", "Test")
 	runGit(t, workDir, "config", "commit.gpgsign", "false")
@@ -705,8 +955,8 @@ func TestAPIAppModelDiffUsesSavedFeatureBaseBranch(t *testing.T) {
 	runGit(t, runtimeDir, "init", "--bare", bareDir)
 	runGit(t, bareDir, "symbolic-ref", "HEAD", "refs/heads/main")
 	runGit(t, workDir, "remote", "add", "origin", bareDir)
-	runGit(t, workDir, "push", "-u", "origin", "main")
-	runGit(t, workDir, "remote", "set-head", "origin", "main")
+	runGit(t, workDir, "push", "-u", "origin", testGitBranchMain)
+	runGit(t, workDir, "remote", "set-head", "origin", testGitBranchMain)
 
 	runGit(t, workDir, "checkout", "-b", "release")
 	writeReadme(t, workDir, "release-base\n")
@@ -741,8 +991,8 @@ func TestAPIAppModelDiffUsesSavedFeatureBaseBranch(t *testing.T) {
 		ID:           featureID,
 		Name:         "Base Aware Diff",
 		Slug:         slug,
-		Status:       "CodeReady",
-		CurrentPhase: "publish",
+		Status:       testFeatureStatusCodeReady,
+		CurrentPhase: actionIDPublish,
 		Repos:        []string{repoName},
 		CreatedAt:    time.Now(),
 	}
@@ -800,8 +1050,8 @@ func TestAPIAppModelDashboardFeatureUsesDetailModels(t *testing.T) {
 		ID:           "feature-1",
 		Name:         "Model override",
 		Slug:         "model-override",
-		Status:       "Created",
-		CurrentPhase: "research",
+		Status:       testFeatureStatusCreated,
+		CurrentPhase: testPhaseKeyResearch,
 		CreatedAt:    time.Now(),
 	}
 	selected := config.ModelConfig{
@@ -842,15 +1092,15 @@ func TestAPIAppModelDashboardFeatureUsesDetailModels(t *testing.T) {
 func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 	t.Parallel()
 
-	cycle := &server.CycleDTO{Type: "refactor", Status: "running", Count: 1, Iteration: 1}
+	cycle := &server.CycleDTO{Type: testPipelineRefactor, Status: featureStatusTokenRunning, Count: 1, Iteration: 1}
 	summary := server.FeatureSummary{
-		ID:           "active",
+		ID:           testFeatureIDActive,
 		Name:         "Sicilian README",
 		Slug:         "translate-in-sicilian",
-		Status:       "CodeReady",
-		CurrentPhase: "publish",
+		Status:       testFeatureStatusCodeReady,
+		CurrentPhase: actionIDPublish,
 		Cycle:        cycle,
-		Repos:        []string{"agentic-orchestrator"},
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    time.Now(),
 	}
 	app := APIAppModel{
@@ -864,9 +1114,9 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 			summary.ID: {Feature: apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
 
 				Cycle:  cycle,
-				Timing: server.TimingDTO{ByPhase: map[string]int64{"implement": 300}},
+				Timing: server.TimingDTO{ByPhase: map[string]int64{testPhaseNameImplement: 300}},
 				RepoStatus: []server.RepoStatusDTO{
-					{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "refactor", CycleStatus: "running"},
+					{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: testPipelineRefactor, CycleStatus: featureStatusTokenRunning},
 				},
 			})},
 		},
@@ -888,12 +1138,12 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 	}
 
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Info", "Phase Progress", "Refactor #1", "in progress", "[l] Live Preview"} {
+	for _, want := range []string{labelInfo, testLabelPhaseProgress, "Refactor #1", "in progress", testTabLabelLivePreview} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("REST refactor cycle overview missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"Feature ID", "Current: Refactoring", "[o] Overview"} {
+	for _, notWant := range []string{"Feature ID", "Current: Refactoring", testTabLabelOverview} {
 		if strings.Contains(view, notWant) {
 			t.Fatalf("REST refactor cycle overview contained live-preview copy %q in:\n%s", notWant, view)
 		}
@@ -903,15 +1153,15 @@ func TestAPIAppModelOverviewShowsRESTRefactorCycleSubphase(t *testing.T) {
 func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
 	t.Parallel()
 
-	cycle := &server.CycleDTO{Type: "rebase", Status: "running", Count: 1, Iteration: 1}
+	cycle := &server.CycleDTO{Type: testCycleTypeRebase, Status: featureStatusTokenRunning, Count: 1, Iteration: 1}
 	summary := server.FeatureSummary{
-		ID:           "active",
+		ID:           testFeatureIDActive,
 		Name:         "Multi Repo Rebase",
 		Slug:         "multi-repo-rebase",
-		Status:       "CodeReady",
-		CurrentPhase: "publish",
+		Status:       testFeatureStatusCodeReady,
+		CurrentPhase: actionIDPublish,
 		Cycle:        cycle,
-		Repos:        []string{"api", "web"},
+		Repos:        []string{testRepoNameAPI, testRepoNameWeb},
 		CreatedAt:    time.Now(),
 	}
 	app := APIAppModel{
@@ -926,8 +1176,8 @@ func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
 
 				Cycle: cycle,
 				RepoStatus: []server.RepoStatusDTO{
-					{Name: "api", Touched: true, Publishable: true, Freshness: "local changes", RebaseStatus: "conflict", ConflictFiles: []string{"service.go"}},
-					{Name: "web", Touched: true, Publishable: true, Freshness: "in sync", RebaseStatus: "up_to_date"},
+					{Name: testRepoNameAPI, Touched: true, Publishable: true, Freshness: testFreshnessLocalChanges, RebaseStatus: "conflict", ConflictFiles: []string{"service.go"}},
+					{Name: testRepoNameWeb, Touched: true, Publishable: true, Freshness: testFreshnessInSync, RebaseStatus: "up_to_date"},
 				},
 			})},
 		},
@@ -941,10 +1191,10 @@ func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
 	if f.ActiveCycle == nil || f.ActiveCycle.Type != feature.CycleRebase || f.ActiveCycle.Status != feature.RepoCycleRunning {
 		t.Fatalf("ActiveCycle = %+v, want running feature-level rebase", f.ActiveCycle)
 	}
-	if f.RebaseOperation == nil || f.RebaseOperation.Repos["api"].Status != feature.RebaseRepoStatusConflict {
+	if f.RebaseOperation == nil || f.RebaseOperation.Repos[testRepoNameAPI].Status != feature.RebaseRepoStatusConflict {
 		t.Fatalf("RebaseOperation = %+v, want api conflict progress", f.RebaseOperation)
 	}
-	if got := f.RepoStates["api"].Freshness; got != "local changes" {
+	if got := f.RepoStates[testRepoNameAPI].Freshness; got != testFreshnessLocalChanges {
 		t.Fatalf("api freshness = %q, want local changes", got)
 	}
 	wantSpinner := stripANSI(newAPIAppSpinner().View())
@@ -959,7 +1209,7 @@ func TestAPIAppModelOverviewShowsFeatureRebaseAndFreshness(t *testing.T) {
 	}
 
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Info", "Rebasing [1]", "Repo Status", "api", "conflict: service.go", "local changes", "web", "in sync"} {
+	for _, want := range []string{labelInfo, "Rebasing [1]", "Repo Status", testRepoNameAPI, "conflict: service.go", testFreshnessLocalChanges, testRepoNameWeb, testFreshnessInSync} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("REST rebase overview missing %q in:\n%s", want, view)
 		}
@@ -974,16 +1224,16 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		runtime: server.RuntimeConfigResponse{
-			Repos:     []server.ConfigRepoDTO{{Name: "agentic-orchestrator", Path: "/workspace/agentic-orchestrator"}},
-			Providers: []string{"codex"},
+			Repos:     []server.ConfigRepoDTO{{Name: testRepoNameOrchestrator, Path: "/workspace/agentic-orchestrator"}},
+			Providers: []string{testProviderCodex},
 		},
 		livePreview: server.LivePreviewResponse{
-			Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover"},
-			Activity: "Using Bash...",
-			Session:  &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Label: "Implement", Status: "running"},
+			Feature:  server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover},
+			Activity: testUsingBashActivity,
+			Session:  &server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Label: testActivityImplement, Status: featureStatusTokenRunning},
 		},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -992,10 +1242,10 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 	flatView := strings.Join(strings.Fields(view), " ")
 	for _, want := range []string{
 		"Orchestrator v",
-		"Features",
-		"IN PROGRESS",
-		"client-cutover",
-		"Live Preview",
+		dashboardFeaturesPanelTitle,
+		testSectionLabelInProgress,
+		testFeatureSlugClientCutover,
+		testLabelLivePreview,
 		"[n] New",
 		"[→/enter] Focus",
 		"[Shift+W] Workspaces",
@@ -1010,7 +1260,7 @@ func TestAPIAppModelAdvertisesProductionWorkflowSurface(t *testing.T) {
 			t.Fatalf("API app production surface missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"Agentico API Client", "Selected detail", "Attach / Live Preview", "Run Content"} {
+	for _, notWant := range []string{"Agentico API Client", "Selected detail", "Attach / Live Preview", testLabelRunContent} {
 		if strings.Contains(view, notWant) {
 			t.Fatalf("API app View() exposed reduced-client surface %q in:\n%s", notWant, view)
 		}
@@ -1059,7 +1309,7 @@ func TestAPIAppModelWelcomeRoutesDirPickerScanMessages(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "repo", ".git"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, actionInputNameRepo, ".git"), 0o755); err != nil {
 		t.Fatalf("create repo fixture: %v", err)
 	}
 	client := &fakeTUIAPIClient{
@@ -1083,7 +1333,7 @@ func TestAPIAppModelWelcomeRoutesDirPickerScanMessages(t *testing.T) {
 	model, _ = app.Update(gitRepoScanMsg{
 		dir:           root,
 		count:         1,
-		repoDirs:      map[string]bool{"repo": true},
+		repoDirs:      map[string]bool{actionInputNameRepo: true},
 		dirRepoCounts: map[string]int{},
 	})
 	app = model.(APIAppModel)
@@ -1098,7 +1348,7 @@ func TestAPIAppModelWelcomeRoutesDirPickerScanMessages(t *testing.T) {
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
 	app = model.(APIAppModel)
-	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].WorkspaceRoots == nil || len(*got[0].WorkspaceRoots) != 1 || (*got[0].WorkspaceRoots)[0] != filepath.Join(root, "repo") {
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].WorkspaceRoots == nil || len(*got[0].WorkspaceRoots) != 1 || (*got[0].WorkspaceRoots)[0] != filepath.Join(root, actionInputNameRepo) {
 		t.Fatalf("UpdateRuntimeConfig requests = %+v, want selected repo root", got)
 	}
 }
@@ -1109,7 +1359,7 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		recovery: server.RecoverySnapshotResponse{
 			SnapshotID: "recovery-snapshot-1",
@@ -1117,13 +1367,13 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 				Key:            "feat-recover:api",
 				FeatureID:      "feat-recover",
 				FeatureName:    "Recover me",
-				RepoName:       "api",
-				Phase:          "implement",
+				RepoName:       testRepoNameAPI,
+				Phase:          testPhaseNameImplement,
 				Iteration:      7,
 				PID:            12345,
 				ProcessAlive:   true,
-				DefaultAction:  "skip",
-				AllowedActions: []string{"resume", "kill", "skip"},
+				DefaultAction:  testActionSkip,
+				AllowedActions: []string{recoveryActionResume, testActionKill, testActionSkip},
 			}},
 		},
 		executeRecoveryAccepted: apiTestActionResponse{Result: "executed"},
@@ -1134,7 +1384,7 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Session Recovery", "Recover me", "api", "implement", "iter 7", "PID 12345", "[S]kip"} {
+	for _, want := range []string{"Session Recovery", "Recover me", testRepoNameAPI, testPhaseNameImplement, "iter 7", "PID 12345", "[S]kip"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing recovery text %q in:\n%s", want, view)
 		}
@@ -1161,7 +1411,7 @@ func TestAPIAppModelRecoverySnapshotUsesRESTAndSubmitsAction(t *testing.T) {
 	if got := strings.Join(client.executeRecoverySnapshotIDs, ","); got != "recovery-snapshot-1" {
 		t.Fatalf("ExecuteRecovery snapshot IDs = %q, want recovery-snapshot-1", got)
 	}
-	if got := client.executeRecoveryRequests[0].Actions["feat-recover:api"]; got != "resume" {
+	if got := client.executeRecoveryRequests[0].Actions["feat-recover:api"]; got != recoveryActionResume {
 		t.Fatalf("ExecuteRecovery action = %q, want resume", got)
 	}
 	if strings.Contains(stripANSI(submitted.View().Content), "Session Recovery") {
@@ -1182,14 +1432,14 @@ func TestAPIAppModelRecoveryTweakShowsKillOnlyAffordance(t *testing.T) {
 				Key:            "feat-tweak:api",
 				FeatureID:      "feat-tweak",
 				FeatureName:    "Tweak me",
-				RepoName:       "api",
-				Phase:          "implement",
+				RepoName:       testRepoNameAPI,
+				Phase:          testPhaseNameImplement,
 				Iteration:      2,
 				PID:            23456,
 				ProcessAlive:   true,
 				Tweak:          true,
-				DefaultAction:  "kill",
-				AllowedActions: []string{"kill"},
+				DefaultAction:  testActionKill,
+				AllowedActions: []string{testActionKill},
 			}},
 		},
 		executeRecoveryAccepted: apiTestActionResponse{Result: "executed"},
@@ -1217,7 +1467,7 @@ func TestAPIAppModelRecoveryTweakShowsKillOnlyAffordance(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = model.(APIAppModel).Update(msg)
-	if got := client.executeRecoveryRequests; len(got) != 1 || got[0].Actions["feat-tweak:api"] != "kill" {
+	if got := client.executeRecoveryRequests; len(got) != 1 || got[0].Actions["feat-tweak:api"] != testActionKill {
 		t.Fatalf("ExecuteRecovery requests = %+v, want kill action", got)
 	}
 }
@@ -1228,10 +1478,10 @@ func TestAPIAppModelSessionSnapshotRefreshUsesAPIReadModels(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "implement", Repo: "agentic-orchestrator", Kind: "agent", Label: "Implement", Status: "running", ContextPct: 10},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Repo: testRepoNameOrchestrator, Kind: testSessionKindAgent, Label: testActivityImplement, Status: featureStatusTokenRunning, ContextPct: 10},
 		}},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -1241,16 +1491,16 @@ func TestAPIAppModelSessionSnapshotRefreshUsesAPIReadModels(t *testing.T) {
 	initialDetailCalls := len(client.detailFeatureIDs)
 
 	initial := app.snapshot
-	if len(initial.Sessions) != 1 || initial.Sessions[0].ID != "sess-1" || initial.Sessions[0].ContextPct != 10 {
+	if len(initial.Sessions) != 1 || initial.Sessions[0].ID != testSessionIDOne || initial.Sessions[0].ContextPct != 10 {
 		t.Fatalf("initial Snapshot().Sessions = %+v, want sess-1 at 10%%", initial.Sessions)
 	}
 
 	signal := server.RefreshSignal{
-		Event:    server.SSEEventDTO{Kind: "session.updated"},
-		Resource: server.ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "active"},
+		Event:    server.SSEEventDTO{Kind: testEventKindSessionUpdated},
+		Resource: server.ResourceDTO{Type: testResourceIDSession, ID: testSessionIDOne, FeatureID: testFeatureIDActive},
 	}
 	client.refreshSnapshot = server.RefreshSnapshot{
-		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: "sess-1", FeatureID: "active", Phase: "implement", Repo: "agentic-orchestrator", Kind: "agent", Label: "Implement", Status: "completed", ContextPct: 37}, server.SessionDetailDTO{
+		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Repo: testRepoNameOrchestrator, Kind: testSessionKindAgent, Label: testActivityImplement, Status: testStatusCompleted, ContextPct: 37}, server.SessionDetailDTO{
 
 			CanAttach:    false,
 			LogAvailable: true,
@@ -1267,7 +1517,7 @@ func TestAPIAppModelSessionSnapshotRefreshUsesAPIReadModels(t *testing.T) {
 		t.Fatalf("FeatureDetail calls after session refresh = %d, want unchanged %d", got, initialDetailCalls)
 	}
 	snapshot := refreshed.snapshot
-	if len(snapshot.Sessions) != 1 || snapshot.Sessions[0].ID != "sess-1" || snapshot.Sessions[0].Status != "completed" || snapshot.Sessions[0].ContextPct != 37 || !snapshot.Sessions[0].LogAvailable {
+	if len(snapshot.Sessions) != 1 || snapshot.Sessions[0].ID != testSessionIDOne || snapshot.Sessions[0].Status != testStatusCompleted || snapshot.Sessions[0].ContextPct != 37 || !snapshot.Sessions[0].LogAvailable {
 		t.Fatalf("refreshed Snapshot().Sessions = %+v, want completed sess-1 with log at 37%%", snapshot.Sessions)
 	}
 }
@@ -1277,11 +1527,11 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "impl-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
-			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Running"},
+			{ID: testSessionIDImpl1, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
+			{ID: testSessionIDTestingValidator, FeatureID: testFeatureIDActive, Phase: testArtifactIDPlan, Kind: testSessionKindValidator, Label: testValidatorNameTesting, Status: testSessionStatusRunning},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -1297,8 +1547,8 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 
 	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
 		Sessions: &server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "impl-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
-			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Done"},
+			{ID: testSessionIDImpl1, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
+			{ID: testSessionIDTestingValidator, FeatureID: testFeatureIDActive, Phase: testArtifactIDPlan, Kind: testSessionKindValidator, Label: testValidatorNameTesting, Status: testFeatureStatusDone},
 		}},
 	}})
 	refreshed := model.(APIAppModel)
@@ -1308,10 +1558,10 @@ func TestAPIAppModelAttachRefreshPrunesCompletedValidatorTab(t *testing.T) {
 	if got := len(refreshed.attach.repoTabs); got != 1 {
 		t.Fatalf("attach tab count = %d, want 1 after completed validator is pruned: %+v", got, refreshed.attach.repoTabs)
 	}
-	if got := refreshed.attach.repoTabs[0].sess.ID(); got != "impl-1" {
+	if got := refreshed.attach.repoTabs[0].sess.ID(); got != testSessionIDImpl1 {
 		t.Fatalf("remaining attach session = %q, want impl-1", got)
 	}
-	if view := stripANSI(refreshed.View().Content); strings.Contains(view, "Testing") || strings.Contains(view, "Plan (running)") {
+	if view := stripANSI(refreshed.View().Content); strings.Contains(view, testValidatorNameTesting) || strings.Contains(view, "Plan (running)") {
 		t.Fatalf("attach view still renders completed validator as running:\n%s", view)
 	}
 }
@@ -1328,11 +1578,11 @@ func TestApplyTranscriptRowStreamThenSnapshotDoesNotDuplicate(t *testing.T) {
 
 	client := &fakeTUIAPIClient{}
 	sess := newAPIAttachSession(client, apiTestSessionDetail(
-		server.SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"}),
+		server.SessionSummaryDTO{ID: testSessionIDOne, FeatureID: testFeatureIDFeat1, Status: testSessionStatusRunning}),
 
 		server.TranscriptResponse{}, nil)
 
-	streamedRow := server.TranscriptMessageDTO{Index: 0, Role: "assistant", Type: "text", Text: "hello from the stream"}
+	streamedRow := server.TranscriptMessageDTO{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: "hello from the stream"}
 
 	// Apply the row via the live-stream push path.
 	if msg := sess.applyTranscriptRow(streamedRow); msg == nil {
@@ -1342,12 +1592,12 @@ func TestApplyTranscriptRowStreamThenSnapshotDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("MessageLog().Len() = %d after stream apply, want 1", got)
 	}
 
-	newRow := server.TranscriptMessageDTO{Index: 1, Role: "assistant", Type: "text", Text: "a newer row in the same snapshot"}
+	newRow := server.TranscriptMessageDTO{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "a newer row in the same snapshot"}
 
 	// A snapshot refresh later observes both the already-streamed row and
 	// a genuinely new one.
 	messages := sess.applyAPISessionSnapshot(apiTestSessionDetail(
-		server.SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"}),
+		server.SessionSummaryDTO{ID: testSessionIDOne, FeatureID: testFeatureIDFeat1, Status: testSessionStatusRunning}),
 
 		&server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{streamedRow, newRow}}, nil)
 
@@ -1373,10 +1623,10 @@ func TestApplyTranscriptRowStreamThenSnapshotDoesNotDuplicate(t *testing.T) {
 func TestApplyTranscriptRowIsRaceSafeAcrossConcurrentCallers(t *testing.T) {
 	t.Parallel()
 
-	sess := newAPIAttachSession(nil, apiTestSessionDetail(server.SessionSummaryDTO{ID: "sess-1"}), server.TranscriptResponse{}, nil)
+	sess := newAPIAttachSession(nil, apiTestSessionDetail(server.SessionSummaryDTO{ID: testSessionIDOne}), server.TranscriptResponse{}, nil)
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
-		row := server.TranscriptMessageDTO{Index: i, Role: "assistant", Type: "text", Text: fmt.Sprintf("msg-%d", i)}
+		row := server.TranscriptMessageDTO{Index: i, Role: roleAssistant, Type: testMessageTypeText, Text: fmt.Sprintf("msg-%d", i)}
 		wg.Add(2)
 		go func(r server.TranscriptMessageDTO) {
 			defer wg.Done()
@@ -1399,20 +1649,20 @@ func TestOpenAPIAttachStartsLiveOutputFeed(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDFeat1, Name: testFeatureNameFeatureOne, Slug: testFeatureSlugFeatureOne, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDFeat1, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: featureStatusTokenRunning, Provider: testProviderClaude},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
 
-	model, _ := app.openAPIAttachForFeature("feat-1")
+	model, _ := app.openAPIAttachForFeature(testFeatureIDFeat1)
 	updated := model.(APIAppModel)
 	if updated.liveOutputCancel == nil {
 		t.Fatal("openAPIAttachForFeature did not start a live output feed")
 	}
-	if updated.liveOutputSessionID != "sess-1" {
+	if updated.liveOutputSessionID != testSessionIDOne {
 		t.Fatalf("liveOutputSessionID = %q, want sess-1", updated.liveOutputSessionID)
 	}
 }
@@ -1421,11 +1671,11 @@ func TestAPIAppModelContextualAAttachesFromOverviewAndLivePreviewWithoutSessionS
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "active",
-		Name:         "Active work",
-		Slug:         "active-work",
-		Status:       "Planning",
-		CurrentPhase: "plan",
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameActiveWork,
+		Slug:         testFeatureSlugActiveWork,
+		Status:       testFeatureStatusPlanning,
+		CurrentPhase: testArtifactIDPlan,
 		CreatedAt:    time.Now(),
 	}
 
@@ -1435,7 +1685,7 @@ func TestAPIAppModelContextualAAttachesFromOverviewAndLivePreviewWithoutSessionS
 				features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
 				livePreview: server.LivePreviewResponse{
 					Feature:  summary,
-					Activity: "Planning",
+					Activity: testFeatureStatusPlanning,
 				},
 			}
 			app := newTestAPIAppModel(t, client)
@@ -1467,19 +1717,19 @@ func TestLiveSessionOutputFeedAppliesTranscriptRow(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDFeat1, Name: testFeatureNameFeatureOne, Slug: testFeatureSlugFeatureOne, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDFeat1, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: featureStatusTokenRunning, Provider: testProviderClaude},
 		}},
 		subscribeSessionOutputRecords: []server.SessionOutputRecord{
-			{SessionID: "sess-1", Index: 0, Message: server.TranscriptMessageDTO{Index: 0, Role: "assistant", Type: "text", Text: "hi"}},
-			{SessionID: "sess-1", Index: 1, Message: server.TranscriptMessageDTO{Index: 1, Role: "assistant", Type: "text", Text: "there"}},
+			{SessionID: testSessionIDOne, Index: 0, Message: server.TranscriptMessageDTO{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: "hi"}},
+			{SessionID: testSessionIDOne, Index: 1, Message: server.TranscriptMessageDTO{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "there"}},
 		},
 	}
 	app := newTestAPIAppModel(t, client)
 
-	model, _ := app.openAPIAttachForFeature("feat-1")
+	model, _ := app.openAPIAttachForFeature(testFeatureIDFeat1)
 	updated := model.(APIAppModel)
 	sess := updated.attachedSessionView()
 	if sess == nil {
@@ -1519,15 +1769,15 @@ func TestAPIAttachDetachStopsLiveOutputFeed(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "feat-1", Name: "Feature one", Slug: "feature-one", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDFeat1, Name: testFeatureNameFeatureOne, Slug: testFeatureSlugFeatureOne, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "feat-1", Phase: "implement", Kind: "phase", Status: "running", Provider: "claude"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDFeat1, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: featureStatusTokenRunning, Provider: testProviderClaude},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
 
-	model, _ := app.openAPIAttachForFeature("feat-1")
+	model, _ := app.openAPIAttachForFeature(testFeatureIDFeat1)
 	attached := model.(APIAppModel)
 	if attached.liveOutputCancel == nil {
 		t.Fatal("openAPIAttachForFeature did not start a live output feed")
@@ -1552,11 +1802,11 @@ func TestAPIAttachTabSwitchResyncsLiveOutputFeed(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "impl-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
-			{ID: "testing-validator", FeatureID: "active", Phase: "plan", Kind: "validator", Label: "Testing", Status: "Running"},
+			{ID: testSessionIDImpl1, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
+			{ID: testSessionIDTestingValidator, FeatureID: testFeatureIDActive, Phase: testArtifactIDPlan, Kind: testSessionKindValidator, Label: testValidatorNameTesting, Status: testSessionStatusRunning},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -1594,19 +1844,19 @@ func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		livePreview: server.LivePreviewResponse{
-			Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
-			Activity: "Using Bash...",
-			Session:  &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Label: "Implement", Status: "running"},
+			Feature:  server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing},
+			Activity: testUsingBashActivity,
+			Session:  &server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Label: testActivityImplement, Status: featureStatusTokenRunning},
 			Context:  server.ContextDTO{Percentage: 42},
 			Cost:     server.CostDTO{TotalUSD: 0.42},
 			Attention: []server.ControlRequestDTO{
-				{RequestID: "ask-1", FeatureID: "active", ToolName: "AskUserQuestion", Status: "pending", Summary: "Pick the cutover path"},
+				{RequestID: testAskRequestID, FeatureID: testFeatureIDActive, ToolName: toolNameAskUserQuestion, Status: testStatusPending, Summary: "Pick the cutover path"},
 			},
 			Transcript: []server.TranscriptMessageDTO{
-				{Index: 1, Role: "assistant", Type: "text", Text: "Ready to patch live preview"},
+				{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Ready to patch live preview"},
 			},
 		},
 	}
@@ -1615,11 +1865,11 @@ func TestAPIAppModelLivePreviewLoadsSelectedFeatureFromREST(t *testing.T) {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 
-	if got := strings.Join(client.livePreviewFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.livePreviewFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("LivePreview calls = %q, want active", got)
 	}
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Live Preview", "Using Bash...", "42%", "$0.42", "Ready to patch live preview"} {
+	for _, want := range []string{testLabelLivePreview, testUsingBashActivity, "42%", "$0.42", "Ready to patch live preview"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -1630,11 +1880,11 @@ func TestAPIAppModelOverviewUsesLivePreviewContextPct(t *testing.T) {
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "active",
-		Name:         "Client cutover",
-		Slug:         "client-cutover",
-		Status:       "Implementing",
-		CurrentPhase: "implement",
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameClientCutover,
+		Slug:         testFeatureSlugClientCutover,
+		Status:       testFeatureStatusImplementing,
+		CurrentPhase: testPhaseNameImplement,
 		CreatedAt:    time.Now(),
 		Progress: server.FeatureProgress{
 			CurrentIteration: 1,
@@ -1646,10 +1896,10 @@ func TestAPIAppModelOverviewUsesLivePreviewContextPct(t *testing.T) {
 		livePreview: server.LivePreviewResponse{
 			Feature: summary,
 			Session: &server.SessionSummaryDTO{
-				ID:        "sess-live",
-				FeatureID: "active",
-				Phase:     "implement",
-				Status:    "running",
+				ID:        testSessionIDLive,
+				FeatureID: testFeatureIDActive,
+				Phase:     testPhaseNameImplement,
+				Status:    featureStatusTokenRunning,
 			},
 			Context: server.ContextDTO{Percentage: 42},
 		},
@@ -1674,20 +1924,20 @@ func TestAPIAppModelOverviewParsesFinalReviewPhaseFromREST(t *testing.T) {
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "active",
-		Name:         "Translate README",
-		Slug:         "translate-readme",
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameTranslateReadme,
+		Slug:         testFeatureSlugTranslateReadme,
 		Status:       "FinalReviewing",
-		CurrentPhase: "Final Review",
+		CurrentPhase: testPhaseNameFinalReview,
 		CreatedAt:    time.Now(),
-		Repos:        []string{"agentic-orchestrator"},
+		Repos:        []string{testRepoNameOrchestrator},
 	}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
 
-			Pipeline:        "medium",
-			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: "Final Review"},
+			Pipeline:        testPipelineSizeMedium,
+			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: testPhaseNameFinalReview},
 		})},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -1700,7 +1950,7 @@ func TestAPIAppModelOverviewParsesFinalReviewPhaseFromREST(t *testing.T) {
 	view := stripANSI(dashboard.View())
 	finalReviewLine := ""
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "Final Review") && !strings.Contains(line, "Status") {
+		if strings.Contains(line, testPhaseNameFinalReview) && !strings.Contains(line, testColumnLabelStatus) {
 			finalReviewLine = line
 			break
 		}
@@ -1708,7 +1958,7 @@ func TestAPIAppModelOverviewParsesFinalReviewPhaseFromREST(t *testing.T) {
 	if finalReviewLine == "" {
 		t.Fatalf("overview missing Final Review progress row in:\n%s", view)
 	}
-	if strings.Contains(finalReviewLine, "pending") {
+	if strings.Contains(finalReviewLine, testStatusPending) {
 		t.Fatalf("Final Review row rendered as pending: %q\nview:\n%s", finalReviewLine, view)
 	}
 	if !strings.Contains(finalReviewLine, "reviewing") {
@@ -1722,15 +1972,15 @@ func TestAPIAppModelLivePreviewPreservesTranscriptToolRowsFromREST(t *testing.T)
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		livePreview: server.LivePreviewResponse{
-			Feature: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"},
-			Session: &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Label: "Implement", Status: "running"},
+			Feature: server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement},
+			Session: &server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Label: testActivityImplement, Status: featureStatusTokenRunning},
 			Transcript: []server.TranscriptMessageDTO{
-				{Index: 1, Role: "assistant", Type: "text", Text: "Preparing patch"},
-				{Index: 2, Role: "assistant", Type: "tool_use", Tool: "Bash", Redacted: true},
-				{Index: 3, Role: "assistant", Type: "tool_use", Tool: "AskUserQuestion", Redacted: true},
+				{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Preparing patch"},
+				{Index: 2, Role: roleAssistant, Type: testMessageTypeToolUse, Tool: toolNameBash, Redacted: true},
+				{Index: 3, Role: roleAssistant, Type: testMessageTypeToolUse, Tool: toolNameAskUserQuestion, Redacted: true},
 			},
 		},
 	}
@@ -1740,7 +1990,7 @@ func TestAPIAppModelLivePreviewPreservesTranscriptToolRowsFromREST(t *testing.T)
 	}
 
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"Preparing patch", "$ Bash", "? AskUser:"} {
+	for _, want := range []string{"Preparing patch", testPromptBashPrefix, "? AskUser:"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API live preview missing typed transcript row %q in:\n%s", want, view)
 		}
@@ -1758,14 +2008,14 @@ func TestAPIAppModelLivePreviewPreservesToolProgressRowsFromREST(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		livePreview: server.LivePreviewResponse{
-			Feature: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"},
-			Session: &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Label: "Implement", Provider: "codex", Status: "running"},
+			Feature: server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement},
+			Session: &server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Label: testActivityImplement, Provider: testProviderCodex, Status: featureStatusTokenRunning},
 			Transcript: []server.TranscriptMessageDTO{
-				{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
-				{Index: 2, Role: "assistant", Type: "text", Text: "Continuing after tool use"},
+				{Index: 1, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameBash, Redacted: true},
+				{Index: 2, Role: roleAssistant, Type: testMessageTypeText, Text: "Continuing after tool use"},
 			},
 		},
 	}
@@ -1775,7 +2025,7 @@ func TestAPIAppModelLivePreviewPreservesToolProgressRowsFromREST(t *testing.T) {
 	}
 
 	view := stripANSI(app.View().Content)
-	for _, want := range []string{"$ Bash", "Continuing after tool use"} {
+	for _, want := range []string{testPromptBashPrefix, "Continuing after tool use"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API live preview missing tool-progress transcript row %q in:\n%s", want, view)
 		}
@@ -1792,11 +2042,11 @@ func TestAPITranscriptRowToSDKMessagePreservesToolProgress(t *testing.T) {
 
 	msg, ok := apiTranscriptRowToSDKMessage(server.TranscriptMessageDTO{
 		Index:    1,
-		Role:     "system",
-		Type:     "tool_progress",
-		Tool:     "Bash",
+		Role:     testMessageRoleSystem,
+		Type:     transcriptTypeToolProgress,
+		Tool:     toolNameBash,
 		Redacted: true,
-	}, "sess-live")
+	}, testSessionIDLive)
 	if !ok {
 		t.Fatal("apiTranscriptRowToSDKMessage(tool_progress) returned !ok")
 	}
@@ -1806,7 +2056,7 @@ func TestAPITranscriptRowToSDKMessagePreservesToolProgress(t *testing.T) {
 	if msg.Assistant != nil {
 		t.Fatalf("tool_progress row should not reconstruct as assistant tool use: %+v", msg.Assistant)
 	}
-	if msg.ToolProgress.ToolName != "Bash" || msg.ToolProgress.SessionID != "sess-live" {
+	if msg.ToolProgress.ToolName != toolNameBash || msg.ToolProgress.SessionID != testSessionIDLive {
 		t.Fatalf("ToolProgress = %+v, want Bash in sess-live", msg.ToolProgress)
 	}
 }
@@ -1814,8 +2064,8 @@ func TestAPITranscriptRowToSDKMessagePreservesToolProgress(t *testing.T) {
 func TestAPITranscriptRowKeyIncludesBlockIndex(t *testing.T) {
 	t.Parallel()
 
-	first := server.TranscriptMessageDTO{Index: 1, BlockIndex: 0, Role: "assistant", Type: "text", Text: "first section"}
-	second := server.TranscriptMessageDTO{Index: 1, BlockIndex: 1, Role: "assistant", Type: "text", Text: "second section"}
+	first := server.TranscriptMessageDTO{Index: 1, BlockIndex: 0, Role: roleAssistant, Type: testMessageTypeText, Text: "first section"}
+	second := server.TranscriptMessageDTO{Index: 1, BlockIndex: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "second section"}
 
 	if apiTranscriptRowKey(first) == apiTranscriptRowKey(second) {
 		t.Fatalf("same-index transcript text rows produced identical keys: %q", apiTranscriptRowKey(first))
@@ -1827,14 +2077,14 @@ func TestAPITranscriptRowToSDKMessagePreservesAutoPickedUserEcho(t *testing.T) {
 
 	msg, ok := apiTranscriptRowToSDKMessage(server.TranscriptMessageDTO{
 		Index:              1,
-		Role:               "user",
-		Type:               "text",
+		Role:               testMessageRoleUser,
+		Type:               testMessageTypeText,
 		Text:               "Translate `README.md` in place (Recommended)",
 		LocallyAppended:    true,
 		AutoPicked:         true,
 		AutoPickQuestion:   "Which output shape?",
 		AutoPickConfidence: 0.72,
-	}, "sess-live")
+	}, testSessionIDLive)
 	if !ok {
 		t.Fatal("apiTranscriptRowToSDKMessage(auto-picked user text) returned !ok")
 	}
@@ -1854,23 +2104,23 @@ func TestAPITranscriptRowToSDKMessagePreservesAutoPickedUserEcho(t *testing.T) {
 func TestAPILivePreviewSessionCarriesProviderFromREST(t *testing.T) {
 	t.Parallel()
 
-	presentation := apiLivePreviewPresentation("active", server.LivePreviewResponse{
+	presentation := apiLivePreviewPresentation(testFeatureIDActive, server.LivePreviewResponse{
 		Session: &server.SessionSummaryDTO{
-			ID:       "sess-live",
-			Phase:    "implement",
-			Kind:     "agent",
-			Provider: "codex",
+			ID:       testSessionIDLive,
+			Phase:    testPhaseNameImplement,
+			Kind:     testSessionKindAgent,
+			Provider: testProviderCodex,
 			Model:    "gpt-5-codex",
 		},
 		Transcript: []server.TranscriptMessageDTO{
-			{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+			{Index: 1, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameBash, Redacted: true},
 		},
 	})
 	sess := newAPILivePreviewSession(presentation)
 	if sess == nil {
 		t.Fatal("newAPILivePreviewSession returned nil")
 	}
-	if got := sess.ProviderName(); got != "codex" {
+	if got := sess.ProviderName(); got != testProviderCodex {
 		t.Fatalf("ProviderName() = %q, want codex", got)
 	}
 	if got := sess.Model(); got != "gpt-5-codex" {
@@ -1881,11 +2131,11 @@ func TestAPILivePreviewSessionCarriesProviderFromREST(t *testing.T) {
 func TestAPILivePreviewSessionCarriesPhaseFromREST(t *testing.T) {
 	t.Parallel()
 
-	presentation := apiLivePreviewPresentation("active", server.LivePreviewResponse{
+	presentation := apiLivePreviewPresentation(testFeatureIDActive, server.LivePreviewResponse{
 		Session: &server.SessionSummaryDTO{
-			ID:     "sess-live",
-			Phase:  "Final Review",
-			Status: "running",
+			ID:     testSessionIDLive,
+			Phase:  testPhaseNameFinalReview,
+			Status: featureStatusTokenRunning,
 		},
 	})
 	sess := newAPILivePreviewSession(presentation)
@@ -1900,23 +2150,23 @@ func TestAPILivePreviewSessionCarriesPhaseFromREST(t *testing.T) {
 func TestAPILivePreviewSessionCarriesKindAndLabelFromREST(t *testing.T) {
 	t.Parallel()
 
-	presentation := apiLivePreviewPresentation("active", server.LivePreviewResponse{
+	presentation := apiLivePreviewPresentation(testFeatureIDActive, server.LivePreviewResponse{
 		Session: &server.SessionSummaryDTO{
 			ID:     "scope-validator",
-			Phase:  "plan",
-			Kind:   "validator",
-			Label:  "Scope",
-			Status: "running",
+			Phase:  testArtifactIDPlan,
+			Kind:   testSessionKindValidator,
+			Label:  testValidatorNameScope,
+			Status: featureStatusTokenRunning,
 		},
 	})
 	sess := newAPILivePreviewSession(presentation)
 	if sess == nil {
 		t.Fatal("newAPILivePreviewSession returned nil")
 	}
-	if got := sess.Kind().String(); got != "validator" {
+	if got := sess.Kind().String(); got != testSessionKindValidator {
 		t.Fatalf("Kind() = %q, want validator", got)
 	}
-	if got := sess.Label(); got != "Scope" {
+	if got := sess.Label(); got != testValidatorNameScope {
 		t.Fatalf("Label() = %q, want Scope", got)
 	}
 }
@@ -1925,11 +2175,11 @@ func TestAPIAppModelDashboardFeatureCarriesValidationReviewGateFromREST(t *testi
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "active",
+		ID:           testFeatureIDActive,
 		Name:         "Validate roadmap",
 		Slug:         "validate-roadmap",
-		Status:       "Planning",
-		CurrentPhase: "plan",
+		Status:       testFeatureStatusPlanning,
+		CurrentPhase: testArtifactIDPlan,
 		Progress: server.FeatureProgress{
 			CurrentRoadmapPhase: 1,
 			TotalRoadmapPhases:  3,
@@ -1937,13 +2187,13 @@ func TestAPIAppModelDashboardFeatureCarriesValidationReviewGateFromREST(t *testi
 	}
 	detail := apiTestFeatureDetailWith(summary, server.FeatureDetailDTO{
 
-		ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: "plan", RoadmapPhase: 1, RoadmapTotal: 3},
+		ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: testArtifactIDPlan, RoadmapPhase: 1, RoadmapTotal: 3},
 		ReviewGate: server.ReviewGateDTO{
 			ValidatingPlan: true,
 			ValidatorStatuses: map[string]string{
-				"Architecture": "APPROVED",
-				"Scope":        "CHANGES_REQUESTED",
-				"Testing":      "running",
+				testValidatorNameArchitecture: "APPROVED",
+				testValidatorNameScope:        "CHANGES_REQUESTED",
+				testValidatorNameTesting:      featureStatusTokenRunning,
 			},
 		},
 	})
@@ -1951,15 +2201,15 @@ func TestAPIAppModelDashboardFeatureCarriesValidationReviewGateFromREST(t *testi
 	if !f.ValidatingPlan {
 		t.Fatal("ValidatingPlan = false, want true")
 	}
-	if got := f.ValidatorStatuses["Scope"]; got != "CHANGES_REQUESTED" {
+	if got := f.ValidatorStatuses[testValidatorNameScope]; got != "CHANGES_REQUESTED" {
 		t.Fatalf("ValidatorStatuses[Scope] = %q, want CHANGES_REQUESTED", got)
 	}
 
-	sess := validatorLivePreviewSession("scope-validator", "Scope")
+	sess := validatorLivePreviewSession("scope-validator", testValidatorNameScope)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(120))
 	for _, want := range []string{
-		"Status", "Validating Phase 1 plan",
-		"Validators", "Arch ✓", "Test ⟳", "Scope ✗",
+		testColumnLabelStatus, "Validating Phase 1 plan",
+		testSectionLabelValidators, "Arch ✓", "Test ⟳", "Scope ✗",
 		"Current: Validating Phase 1 plan", "1 ✓", "1 ✗", "1 running", "Showing Scope",
 	} {
 		if !strings.Contains(view, want) {
@@ -1974,21 +2224,21 @@ func TestAPIAppModelTranscriptLoadsSelectedSessionFromREST(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		livePreview: server.LivePreviewResponse{
-			Feature: server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
-			Session: &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Label: "Implement", Status: "running"},
+			Feature: server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing},
+			Session: &server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Label: testActivityImplement, Status: featureStatusTokenRunning},
 		},
-		sessionDetail: server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Label: "Implement", Status: "running"}, server.SessionDetailDTO{
+		sessionDetail: server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Label: testActivityImplement, Status: featureStatusTokenRunning}, server.SessionDetailDTO{
 
 			TranscriptCursor: server.CursorDTO{Total: 64, Start: 0, End: 64},
 		})},
 		transcript: server.TranscriptResponse{
 			Cursor: server.CursorDTO{Total: 64, Start: 14, End: 64},
 			Messages: []server.TranscriptMessageDTO{
-				{Index: 62, Role: "assistant", Type: "text", Text: "Patch transcript continuation"},
-				{Index: 63, Role: "system", Type: "tool_use", Tool: "Bash", Redacted: true},
+				{Index: 62, Role: roleAssistant, Type: testMessageTypeText, Text: "Patch transcript continuation"},
+				{Index: 63, Role: testMessageRoleSystem, Type: testMessageTypeToolUse, Tool: toolNameBash, Redacted: true},
 			},
 		},
 	}
@@ -1997,10 +2247,10 @@ func TestAPIAppModelTranscriptLoadsSelectedSessionFromREST(t *testing.T) {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 
-	if got := strings.Join(client.sessionDetailIDs, ","); got != "sess-live" {
+	if got := strings.Join(client.sessionDetailIDs, ","); got != testSessionIDLive {
 		t.Fatalf("SessionDetail calls = %q, want sess-live", got)
 	}
-	if got := strings.Join(client.transcriptSessionIDs, ","); got != "sess-live" {
+	if got := strings.Join(client.transcriptSessionIDs, ","); got != testSessionIDLive {
 		t.Fatalf("Transcript calls = %q, want sess-live", got)
 	}
 	if len(client.transcriptQueries) != 1 {
@@ -2010,10 +2260,10 @@ func TestAPIAppModelTranscriptLoadsSelectedSessionFromREST(t *testing.T) {
 		t.Fatalf("Transcript query = %+v, want cursor 14 limit 50", got)
 	}
 	snapshot := app.snapshot
-	if snapshot.Transcript == nil || snapshot.Transcript.SessionID != "sess-live" {
+	if snapshot.Transcript == nil || snapshot.Transcript.SessionID != testSessionIDLive {
 		t.Fatalf("Snapshot().Transcript = %+v, want sess-live transcript", snapshot.Transcript)
 	}
-	if got := strings.Join(snapshot.Transcript.Lines, "\n"); !strings.Contains(got, "Patch transcript continuation") || !strings.Contains(got, "Bash") {
+	if got := strings.Join(snapshot.Transcript.Lines, "\n"); !strings.Contains(got, "Patch transcript continuation") || !strings.Contains(got, toolNameBash) {
 		t.Fatalf("Snapshot().Transcript lines = %q, want transcript continuation and Bash", got)
 	}
 }
@@ -2024,24 +2274,24 @@ func TestAPIAppModelLoadsSelectedRunContentFromREST(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing}, server.FeatureDetailDTO{
 
-			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 3, CurrentPhase: "implement", ArtifactCount: 1},
+			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 3, CurrentPhase: testPhaseNameImplement, ArtifactCount: 1},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "plan", RunNumber: 3, Phase: "plan", Size: apiContentTailLimit + 14, ContentAvailable: true},
+			{ID: testArtifactIDPlan, RunNumber: 3, Phase: testArtifactIDPlan, Size: apiContentTailLimit + 14, ContentAvailable: true},
 		}},
 		logContent: server.TextContentResponse{
-			ID:     "session",
+			ID:     testResourceIDSession,
 			Offset: 0,
 			Limit:  apiContentTailLimit,
 			Size:   apiContentTailLimit + 80,
 			Text:   "log tail from server",
 		},
 		artifactContent: server.TextContentResponse{
-			ID:     "plan",
+			ID:     testArtifactIDPlan,
 			Offset: 14,
 			Limit:  apiContentTailLimit,
 			Size:   apiContentTailLimit + 14,
@@ -2053,16 +2303,16 @@ func TestAPIAppModelLoadsSelectedRunContentFromREST(t *testing.T) {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 
-	if got := strings.Join(client.logContentIDs, ","); got != "session" {
+	if got := strings.Join(client.logContentIDs, ","); got != testResourceIDSession {
 		t.Fatalf("LogContent IDs = %q, want session", got)
 	}
 	if got := client.logContentQueries[0]; got.Offset != 0 || got.Limit != apiContentTailLimit {
 		t.Fatalf("LogContent query = %+v, want offset 0 limit %d", got, apiContentTailLimit)
 	}
-	if got := strings.Join(client.artifactListFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.artifactListFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("ArtifactList feature IDs = %q, want active", got)
 	}
-	if got := strings.Join(client.artifactContentIDs, ","); got != "plan" {
+	if got := strings.Join(client.artifactContentIDs, ","); got != testArtifactIDPlan {
 		t.Fatalf("ArtifactContent IDs = %q, want plan", got)
 	}
 	if got := client.artifactContentQueries[0]; got.Offset != 14 || got.Limit != apiContentTailLimit {
@@ -2073,12 +2323,12 @@ func TestAPIAppModelLoadsSelectedRunContentFromREST(t *testing.T) {
 		t.Fatalf("Snapshot().Content = %+v, want run 3 content", snapshot.Content)
 	}
 	view := stripANSI(app.View().Content)
-	if strings.Contains(view, "Run Content") {
+	if strings.Contains(view, testLabelRunContent) {
 		t.Fatalf("API app View() showed run content before opening the content panel:\n%s", view)
 	}
 	app.contentPanelActive = true
 	view = stripANSI(app.View().Content)
-	for _, want := range []string{"Run Content", "Log session", "log tail from server", "Artifact plan", "artifact tail from server"} {
+	for _, want := range []string{testLabelRunContent, "Log session", "log tail from server", "Artifact plan", "artifact tail from server"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2091,24 +2341,24 @@ func TestAPIAppModelLogRefreshUsesBoundedContentTail(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing}, server.FeatureDetailDTO{
 
-			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 4, CurrentPhase: "implement", ArtifactCount: 1},
+			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 4, CurrentPhase: testPhaseNameImplement, ArtifactCount: 1},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "plan", RunNumber: 4, Phase: "plan", Size: apiContentTailLimit + 120, ContentAvailable: true},
+			{ID: testArtifactIDPlan, RunNumber: 4, Phase: testArtifactIDPlan, Size: apiContentTailLimit + 120, ContentAvailable: true},
 		}},
 		logContent: server.TextContentResponse{
-			ID:     "session",
+			ID:     testResourceIDSession,
 			Offset: 0,
 			Limit:  apiContentTailLimit,
 			Size:   apiContentTailLimit + 250,
 			Text:   "initial log tail",
 		},
 		artifactContent: server.TextContentResponse{
-			ID:     "plan",
+			ID:     testArtifactIDPlan,
 			Offset: 120,
 			Limit:  apiContentTailLimit,
 			Size:   apiContentTailLimit + 120,
@@ -2116,7 +2366,7 @@ func TestAPIAppModelLogRefreshUsesBoundedContentTail(t *testing.T) {
 		},
 		refreshSnapshot: server.RefreshSnapshot{
 			Session: &server.SessionDetailResponse{Session: apiTestSessionDetail(
-				server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Status: "running"})},
+				server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Status: featureStatusTokenRunning})},
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -2124,14 +2374,14 @@ func TestAPIAppModelLogRefreshUsesBoundedContentTail(t *testing.T) {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
 	client.logContent = server.TextContentResponse{
-		ID:     "session",
+		ID:     testResourceIDSession,
 		Offset: 250,
 		Limit:  apiContentTailLimit,
 		Size:   apiContentTailLimit + 375,
 		Text:   "refreshed log tail",
 	}
 	client.artifactContent = server.TextContentResponse{
-		ID:     "plan",
+		ID:     testArtifactIDPlan,
 		Offset: 120,
 		Limit:  apiContentTailLimit,
 		Size:   apiContentTailLimit + 120,
@@ -2139,7 +2389,7 @@ func TestAPIAppModelLogRefreshUsesBoundedContentTail(t *testing.T) {
 	}
 	signal := server.RefreshSignal{
 		Event:    server.SSEEventDTO{Kind: "log.resource.updated"},
-		Resource: server.ResourceDTO{Type: "log", ID: "session", FeatureID: "active"},
+		Resource: server.ResourceDTO{Type: testResourceTypeLog, ID: testResourceIDSession, FeatureID: testFeatureIDActive},
 	}
 	msg := app.fetchRefreshSnapshotCmd(signal)()
 	model, _ := app.Update(msg)
@@ -2175,23 +2425,23 @@ func TestAPIAppModelContentKeysCycleArtifactsAndLogsThroughREST(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing}, server.FeatureDetailDTO{
 
-			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 5, CurrentPhase: "implement", ArtifactCount: 2},
+			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 5, CurrentPhase: testPhaseNameImplement, ArtifactCount: 2},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "plan", RunNumber: 5, Phase: "plan", Size: apiContentTailLimit + 10, ContentAvailable: true},
-			{ID: "design", RunNumber: 5, Phase: "design", Size: apiContentTailLimit + 20, ContentAvailable: true},
+			{ID: testArtifactIDPlan, RunNumber: 5, Phase: testArtifactIDPlan, Size: apiContentTailLimit + 10, ContentAvailable: true},
+			{ID: testArtifactIDDesign, RunNumber: 5, Phase: testArtifactIDDesign, Size: apiContentTailLimit + 20, ContentAvailable: true},
 		}},
 		artifactContentByID: map[string]server.TextContentResponse{
-			"plan":   {ID: "plan", Offset: 10, Limit: apiContentTailLimit, Size: apiContentTailLimit + 10, Text: "plan tail from server"},
-			"design": {ID: "design", Offset: 20, Limit: apiContentTailLimit, Size: apiContentTailLimit + 20, Text: "design tail from server"},
+			testArtifactIDPlan:   {ID: testArtifactIDPlan, Offset: 10, Limit: apiContentTailLimit, Size: apiContentTailLimit + 10, Text: "plan tail from server"},
+			testArtifactIDDesign: {ID: testArtifactIDDesign, Offset: 20, Limit: apiContentTailLimit, Size: apiContentTailLimit + 20, Text: testDesignTailFromServer},
 		},
 		logContentByID: map[string]server.TextContentResponse{
-			"session": {ID: "session", Offset: 0, Limit: apiContentTailLimit, Size: 25, Text: "session log from server"},
-			"phase":   {ID: "phase", Offset: 0, Limit: apiContentTailLimit, Size: 20, Text: "phase log from server"},
+			testResourceIDSession: {ID: testResourceIDSession, Offset: 0, Limit: apiContentTailLimit, Size: 25, Text: "session log from server"},
+			logTabPhase:           {ID: logTabPhase, Offset: 0, Limit: apiContentTailLimit, Size: 20, Text: testPhaseLogFromServer},
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -2214,7 +2464,7 @@ func TestAPIAppModelContentKeysCycleArtifactsAndLogsThroughREST(t *testing.T) {
 		t.Fatalf("second ArtifactContent query = %+v, want offset 20 limit %d", got, apiContentTailLimit)
 	}
 	view := stripANSI(switchedArtifact.View().Content)
-	if !strings.Contains(view, "Artifact design") || !strings.Contains(view, "design tail from server") {
+	if !strings.Contains(view, "Artifact design") || !strings.Contains(view, testDesignTailFromServer) {
 		t.Fatalf("API app View() missing selected design artifact in:\n%s", view)
 	}
 	if strings.Contains(view, "plan tail from server") {
@@ -2236,7 +2486,7 @@ func TestAPIAppModelContentKeysCycleArtifactsAndLogsThroughREST(t *testing.T) {
 		t.Fatalf("second LogContent query = %+v, want offset 0 limit %d", got, apiContentTailLimit)
 	}
 	view = stripANSI(switchedLog.View().Content)
-	for _, want := range []string{"Log phase", "phase log from server", "Artifact design", "design tail from server"} {
+	for _, want := range []string{"Log phase", testPhaseLogFromServer, "Artifact design", testDesignTailFromServer} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2252,28 +2502,28 @@ func TestAPIAppModelContentViewRendersFullScreen(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing}, server.FeatureDetailDTO{
 
-			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 7, CurrentPhase: "implement", ArtifactCount: 1},
+			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 7, CurrentPhase: testPhaseNameImplement, ArtifactCount: 1},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "plan", RunNumber: 7, Phase: "plan", Size: 16, ContentAvailable: true},
+			{ID: testArtifactIDPlan, RunNumber: 7, Phase: testArtifactIDPlan, Size: 16, ContentAvailable: true},
 		}},
 		logContent: server.TextContentResponse{
-			ID:     "session",
+			ID:     testResourceIDSession,
 			Offset: 0,
 			Limit:  apiContentTailLimit,
 			Size:   21,
 			Text:   "content view log tail",
 		},
 		artifactContent: server.TextContentResponse{
-			ID:     "plan",
+			ID:     testArtifactIDPlan,
 			Offset: 0,
 			Limit:  apiContentTailLimit,
 			Size:   16,
-			Text:   "content artifact",
+			Text:   testContentArtifactText,
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -2288,12 +2538,12 @@ func TestAPIAppModelContentViewRendersFullScreen(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(cmd())
 	view := stripANSI(model.(APIAppModel).View().Content)
 
-	for _, want := range []string{"Run Content", "content view log tail", "content artifact", "Next log"} {
+	for _, want := range []string{testLabelRunContent, "content view log tail", testContentArtifactText, "Next log"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("content view missing %q in:\n%s", want, view)
 		}
 	}
-	for _, notWant := range []string{"Features", "Client cutover", "IN PROGRESS"} {
+	for _, notWant := range []string{dashboardFeaturesPanelTitle, testFeatureNameClientCutover, testSectionLabelInProgress} {
 		if strings.Contains(view, notWant) {
 			t.Fatalf("content view included dashboard chrome %q:\n%s", notWant, view)
 		}
@@ -2315,26 +2565,26 @@ func TestAPIAppModelMissingRunLogsDoNotShowRawAPIError(t *testing.T) {
 	}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing}, server.FeatureDetailDTO{
 
-			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 7, CurrentPhase: "implement", ArtifactCount: 1},
+			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 7, CurrentPhase: testPhaseNameImplement, ArtifactCount: 1},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "plan", RunNumber: 7, Phase: "plan", Size: 16, ContentAvailable: true},
+			{ID: testArtifactIDPlan, RunNumber: 7, Phase: testArtifactIDPlan, Size: 16, ContentAvailable: true},
 		}},
 		artifactContent: server.TextContentResponse{
-			ID:     "plan",
+			ID:     testArtifactIDPlan,
 			Offset: 0,
 			Limit:  apiContentTailLimit,
 			Size:   16,
-			Text:   "content artifact",
+			Text:   testContentArtifactText,
 		},
 		logContentErrByID: map[string]error{
-			"session": notFoundLogErr("session"),
-			"phase":   notFoundLogErr("phase"),
-			"observe": notFoundLogErr("observe"),
+			testResourceIDSession: notFoundLogErr(testResourceIDSession),
+			logTabPhase:           notFoundLogErr(logTabPhase),
+			"observe":             notFoundLogErr("observe"),
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -2356,7 +2606,7 @@ func TestAPIAppModelMissingRunLogsDoNotShowRawAPIError(t *testing.T) {
 		t.Fatalf("statusMessage leaked raw API error: %q", updated.statusMessage)
 	}
 	view := stripANSI(updated.View().Content)
-	if !strings.Contains(view, "content artifact") {
+	if !strings.Contains(view, testContentArtifactText) {
 		t.Fatalf("content view lost artifact after missing logs:\n%s", view)
 	}
 }
@@ -2367,27 +2617,27 @@ func TestAPIAppModelContentRefreshPreservesSelectedArtifactAndLog(t *testing.T) 
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing}, server.FeatureDetailDTO{
 
-			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 6, CurrentPhase: "implement", ArtifactCount: 2},
+			ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 6, CurrentPhase: testPhaseNameImplement, ArtifactCount: 2},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "plan", RunNumber: 6, Phase: "plan", Size: apiContentTailLimit + 10, ContentAvailable: true},
-			{ID: "design", RunNumber: 6, Phase: "design", Size: apiContentTailLimit + 20, ContentAvailable: true},
+			{ID: testArtifactIDPlan, RunNumber: 6, Phase: testArtifactIDPlan, Size: apiContentTailLimit + 10, ContentAvailable: true},
+			{ID: testArtifactIDDesign, RunNumber: 6, Phase: testArtifactIDDesign, Size: apiContentTailLimit + 20, ContentAvailable: true},
 		}},
 		artifactContentByID: map[string]server.TextContentResponse{
-			"plan":   {ID: "plan", Offset: 10, Limit: apiContentTailLimit, Size: apiContentTailLimit + 10, Text: "plan tail from server"},
-			"design": {ID: "design", Offset: 20, Limit: apiContentTailLimit, Size: apiContentTailLimit + 20, Text: "design tail from server"},
+			testArtifactIDPlan:   {ID: testArtifactIDPlan, Offset: 10, Limit: apiContentTailLimit, Size: apiContentTailLimit + 10, Text: "plan tail from server"},
+			testArtifactIDDesign: {ID: testArtifactIDDesign, Offset: 20, Limit: apiContentTailLimit, Size: apiContentTailLimit + 20, Text: testDesignTailFromServer},
 		},
 		logContentByID: map[string]server.TextContentResponse{
-			"session": {ID: "session", Offset: 0, Limit: apiContentTailLimit, Size: apiContentTailLimit + 50, Text: "session log from server"},
-			"phase":   {ID: "phase", Offset: 0, Limit: apiContentTailLimit, Size: apiContentTailLimit + 60, Text: "phase log from server"},
+			testResourceIDSession: {ID: testResourceIDSession, Offset: 0, Limit: apiContentTailLimit, Size: apiContentTailLimit + 50, Text: "session log from server"},
+			logTabPhase:           {ID: logTabPhase, Offset: 0, Limit: apiContentTailLimit, Size: apiContentTailLimit + 60, Text: testPhaseLogFromServer},
 		},
 		refreshSnapshot: server.RefreshSnapshot{
 			Session: &server.SessionDetailResponse{Session: apiTestSessionDetail(
-				server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Status: "running"})},
+				server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Status: featureStatusTokenRunning})},
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -2409,15 +2659,15 @@ func TestAPIAppModelContentRefreshPreservesSelectedArtifactAndLog(t *testing.T) 
 	model, _ = model.(APIAppModel).Update(msg)
 	app = model.(APIAppModel)
 
-	client.artifactContentByID["design"] = server.TextContentResponse{
-		ID:     "design",
+	client.artifactContentByID[testArtifactIDDesign] = server.TextContentResponse{
+		ID:     testArtifactIDDesign,
 		Offset: 20,
 		Limit:  apiContentTailLimit,
 		Size:   apiContentTailLimit + 20,
 		Text:   "refreshed design tail from server",
 	}
-	client.logContentByID["phase"] = server.TextContentResponse{
-		ID:     "phase",
+	client.logContentByID[logTabPhase] = server.TextContentResponse{
+		ID:     logTabPhase,
 		Offset: 60,
 		Limit:  apiContentTailLimit,
 		Size:   apiContentTailLimit + 90,
@@ -2425,7 +2675,7 @@ func TestAPIAppModelContentRefreshPreservesSelectedArtifactAndLog(t *testing.T) 
 	}
 	signal := server.RefreshSignal{
 		Event:    server.SSEEventDTO{Kind: "log.resource.updated"},
-		Resource: server.ResourceDTO{Type: "log", ID: "phase", FeatureID: "active"},
+		Resource: server.ResourceDTO{Type: testResourceTypeLog, ID: logTabPhase, FeatureID: testFeatureIDActive},
 	}
 	msg = app.fetchRefreshSnapshotCmd(signal)()
 	model, _ = app.Update(msg)
@@ -2457,14 +2707,14 @@ func TestAPIAppModelLivePreviewRefreshUsesBoundedAPIReadModel(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		livePreview: server.LivePreviewResponse{
-			Feature:    server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
+			Feature:    server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing},
 			Activity:   "Thinking...",
-			Session:    &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Status: "running"},
+			Session:    &server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Status: featureStatusTokenRunning},
 			Context:    server.ContextDTO{Percentage: 11},
-			Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: "assistant", Type: "text", Text: "Initial tail"}},
+			Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Initial tail"}},
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -2475,18 +2725,18 @@ func TestAPIAppModelLivePreviewRefreshUsesBoundedAPIReadModel(t *testing.T) {
 	initialTranscriptCalls := countString(client.calls, "Transcript")
 
 	signal := server.RefreshSignal{
-		Event:    server.SSEEventDTO{Kind: "session.updated"},
-		Resource: server.ResourceDTO{Type: "session", ID: "sess-live", FeatureID: "active"},
+		Event:    server.SSEEventDTO{Kind: testEventKindSessionUpdated},
+		Resource: server.ResourceDTO{Type: testResourceIDSession, ID: testSessionIDLive, FeatureID: testFeatureIDActive},
 	}
 	client.refreshSnapshot = server.RefreshSnapshot{
 		LivePreview: &server.LivePreviewResponse{
-			Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
-			Activity: "Using Bash...",
-			Session:  &server.SessionSummaryDTO{ID: "sess-live", FeatureID: "active", Phase: "implement", Status: "running"},
+			Feature:  server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing},
+			Activity: testUsingBashActivity,
+			Session:  &server.SessionSummaryDTO{ID: testSessionIDLive, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Status: featureStatusTokenRunning},
 			Context:  server.ContextDTO{Percentage: 57},
 			Cost:     server.CostDTO{TotalUSD: 1.25},
 			Transcript: []server.TranscriptMessageDTO{
-				{Index: 2, Role: "assistant", Type: "text", Text: "Patched through REST snapshot"},
+				{Index: 2, Role: roleAssistant, Type: testMessageTypeText, Text: "Patched through REST snapshot"},
 			},
 		},
 	}
@@ -2501,7 +2751,7 @@ func TestAPIAppModelLivePreviewRefreshUsesBoundedAPIReadModel(t *testing.T) {
 		t.Fatalf("Transcript calls after live-preview refresh = %d, want unchanged %d", got, initialTranscriptCalls)
 	}
 	view := stripANSI(refreshed.View().Content)
-	for _, want := range []string{"Live Preview", "Using Bash...", "57%", "$1.25", "Initial tail", "Patched through REST snapshot"} {
+	for _, want := range []string{testLabelLivePreview, testUsingBashActivity, "57%", "$1.25", "Initial tail", "Patched through REST snapshot"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("refreshed API app View() missing %q in:\n%s", want, view)
 		}
@@ -2514,13 +2764,13 @@ func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSessionChanges(t *testi
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		livePreview: server.LivePreviewResponse{
-			Feature:    server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
+			Feature:    server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing},
 			Activity:   "Thinking...",
-			Session:    &server.SessionSummaryDTO{ID: "sess-old", FeatureID: "active", Phase: "implement", Status: "running"},
-			Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: "assistant", Type: "text", Text: "Old session tail"}},
+			Session:    &server.SessionSummaryDTO{ID: "sess-old", FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Status: featureStatusTokenRunning},
+			Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Old session tail"}},
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
@@ -2530,17 +2780,17 @@ func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSessionChanges(t *testi
 
 	client.refreshSnapshot = server.RefreshSnapshot{
 		LivePreview: &server.LivePreviewResponse{
-			Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
-			Activity: "Using Bash...",
-			Session:  &server.SessionSummaryDTO{ID: "sess-new", FeatureID: "active", Phase: "implement", Status: "running"},
+			Feature:  server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing},
+			Activity: testUsingBashActivity,
+			Session:  &server.SessionSummaryDTO{ID: "sess-new", FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Status: featureStatusTokenRunning},
 			Transcript: []server.TranscriptMessageDTO{
-				{Index: 1, Role: "assistant", Type: "text", Text: "New session tail"},
+				{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "New session tail"},
 			},
 		},
 	}
 	signal := server.RefreshSignal{
-		Event:    server.SSEEventDTO{Kind: "session.updated"},
-		Resource: server.ResourceDTO{Type: "session", ID: "sess-new", FeatureID: "active"},
+		Event:    server.SSEEventDTO{Kind: testEventKindSessionUpdated},
+		Resource: server.ResourceDTO{Type: testResourceIDSession, ID: "sess-new", FeatureID: testFeatureIDActive},
 	}
 	msg := app.fetchRefreshSnapshotCmd(signal)()
 	model, _ := app.Update(msg)
@@ -2562,25 +2812,25 @@ func TestAPIAppModelLivePreviewRefreshDropsCachedTailWhenSameSessionIDRestarts(t
 	newStartedAt := oldStartedAt.Add(time.Minute)
 
 	app := APIAppModel{}
-	app.storeLivePreview("active", server.LivePreviewResponse{
-		Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Interrupted"},
+	app.storeLivePreview(testFeatureIDActive, server.LivePreviewResponse{
+		Feature:  server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusInterrupted},
 		Activity: "Stopped",
-		Session:  &server.SessionSummaryDTO{ID: "active-impl", FeatureID: "active", Phase: "implement", Status: "done", StartedAt: oldStartedAt},
+		Session:  &server.SessionSummaryDTO{ID: "active-impl", FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Status: testFeatureIDDone, StartedAt: oldStartedAt},
 		Transcript: []server.TranscriptMessageDTO{
-			{Index: 1, Role: "assistant", Type: "text", Text: "Old session first row"},
-			{Index: 2, Role: "assistant", Type: "text", Text: "Old session tail"},
+			{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Old session first row"},
+			{Index: 2, Role: roleAssistant, Type: testMessageTypeText, Text: "Old session tail"},
 		},
 	})
-	app.storeLivePreview("active", server.LivePreviewResponse{
-		Feature:  server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing"},
-		Activity: "Using Bash...",
-		Session:  &server.SessionSummaryDTO{ID: "active-impl", FeatureID: "active", Phase: "implement", Status: "running", StartedAt: newStartedAt},
+	app.storeLivePreview(testFeatureIDActive, server.LivePreviewResponse{
+		Feature:  server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing},
+		Activity: testUsingBashActivity,
+		Session:  &server.SessionSummaryDTO{ID: "active-impl", FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Status: featureStatusTokenRunning, StartedAt: newStartedAt},
 		Transcript: []server.TranscriptMessageDTO{
-			{Index: 1, Role: "assistant", Type: "text", Text: "New restarted session tail"},
+			{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "New restarted session tail"},
 		},
 	})
 
-	got := app.livePreviews["active"].Transcript
+	got := app.livePreviews[testFeatureIDActive].Transcript
 	if len(got) != 1 {
 		t.Fatalf("cached live preview transcript len = %d, want 1 after same-ID restart: %+v", len(got), got)
 	}
@@ -2593,15 +2843,15 @@ func TestMergeLivePreviewTranscriptTreatsShiftedSnapshotsAsOverlappingTail(t *te
 	t.Parallel()
 
 	existing := []server.TranscriptMessageDTO{
-		{Index: 10, Role: "assistant", Type: "text", Text: "I have enough context. Let me now write the research questions file."},
-		{Index: 11, Role: "assistant", Type: "tool_use", Tool: "Bash", Redacted: true},
-		{Index: 12, Role: "system", Type: "control_request", Tool: "AskUserQuestion", Status: "pending", Redacted: true},
+		{Index: 10, Role: roleAssistant, Type: testMessageTypeText, Text: "I have enough context. Let me now write the research questions file."},
+		{Index: 11, Role: roleAssistant, Type: testMessageTypeToolUse, Tool: toolNameBash, Redacted: true},
+		{Index: 12, Role: testMessageRoleSystem, Type: "control_request", Tool: toolNameAskUserQuestion, Status: testStatusPending, Redacted: true},
 	}
 	incoming := []server.TranscriptMessageDTO{
-		{Index: 20, Role: "assistant", Type: "text", Text: "I have enough context. Let me now write the research questions file."},
-		{Index: 21, Role: "assistant", Type: "tool_use", Tool: "Bash", Redacted: true},
-		{Index: 22, Role: "system", Type: "control_request", Tool: "AskUserQuestion", Status: "pending", Redacted: true},
-		{Index: 23, Role: "assistant", Type: "tool_use", Tool: "Read", Redacted: true},
+		{Index: 20, Role: roleAssistant, Type: testMessageTypeText, Text: "I have enough context. Let me now write the research questions file."},
+		{Index: 21, Role: roleAssistant, Type: testMessageTypeToolUse, Tool: toolNameBash, Redacted: true},
+		{Index: 22, Role: testMessageRoleSystem, Type: "control_request", Tool: toolNameAskUserQuestion, Status: testStatusPending, Redacted: true},
+		{Index: 23, Role: roleAssistant, Type: testMessageTypeToolUse, Tool: toolNameRead, Redacted: true},
 	}
 
 	merged := mergeLivePreviewTranscript(existing, incoming)
@@ -2611,13 +2861,13 @@ func TestMergeLivePreviewTranscriptTreatsShiftedSnapshotsAsOverlappingTail(t *te
 	if got, want := merged[0].Text, existing[0].Text; got != want {
 		t.Fatalf("merged[0].Text = %q, want %q", got, want)
 	}
-	if got, want := merged[1].Tool, "Bash"; got != want {
+	if got, want := merged[1].Tool, toolNameBash; got != want {
 		t.Fatalf("merged[1].Tool = %q, want %q", got, want)
 	}
-	if got, want := merged[2].Tool, "AskUserQuestion"; got != want {
+	if got, want := merged[2].Tool, toolNameAskUserQuestion; got != want {
 		t.Fatalf("merged[2].Tool = %q, want %q", got, want)
 	}
-	if got, want := merged[3].Tool, "Read"; got != want {
+	if got, want := merged[3].Tool, toolNameRead; got != want {
 		t.Fatalf("merged[3].Tool = %q, want %q", got, want)
 	}
 }
@@ -2626,14 +2876,14 @@ func TestMergeLivePreviewTranscriptReplacesUpdatedStreamingRow(t *testing.T) {
 	t.Parallel()
 
 	existing := []server.TranscriptMessageDTO{
-		{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
-		{Index: 2, Role: "assistant", Type: "text", Text: "I'm using the inquire workflow now; I'll keep this"},
-		{Index: 3, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+		{Index: 1, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameBash, Redacted: true},
+		{Index: 2, Role: roleAssistant, Type: testMessageTypeText, Text: "I'm using the inquire workflow now; I'll keep this"},
+		{Index: 3, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameBash, Redacted: true},
 	}
 	incoming := []server.TranscriptMessageDTO{
-		{Index: 1, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
-		{Index: 2, Role: "assistant", Type: "text", Text: "I'm using the inquire workflow now; I'll keep this to requirements-level clarification."},
-		{Index: 3, Role: "system", Type: "tool_progress", Tool: "Bash", Redacted: true},
+		{Index: 1, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameBash, Redacted: true},
+		{Index: 2, Role: roleAssistant, Type: testMessageTypeText, Text: "I'm using the inquire workflow now; I'll keep this to requirements-level clarification."},
+		{Index: 3, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameBash, Redacted: true},
 	}
 
 	merged := mergeLivePreviewTranscript(existing, incoming)
@@ -2652,16 +2902,16 @@ func TestAPIAppStoreTranscriptMergesFirstPageBackfillWithExistingTail(t *testing
 	t.Parallel()
 
 	app := APIAppModel{}
-	app.storeTranscript("sess-1", server.TranscriptResponse{
+	app.storeTranscript(testSessionIDOne, server.TranscriptResponse{
 		Cursor:   server.CursorDTO{Total: 100, Start: 50, End: 100},
 		Messages: apiTestTranscriptRows(50, 100),
 	})
-	app.storeTranscript("sess-1", server.TranscriptResponse{
+	app.storeTranscript(testSessionIDOne, server.TranscriptResponse{
 		Cursor:   server.CursorDTO{Total: 100, Start: 0, End: 50},
 		Messages: apiTestTranscriptRows(0, 50),
 	})
 
-	got := app.transcripts["sess-1"]
+	got := app.transcripts[testSessionIDOne]
 	if got.Cursor.Start != 0 || got.Cursor.End != 100 || got.Cursor.Total != 100 {
 		t.Fatalf("merged cursor = %+v, want total 100 start 0 end 100", got.Cursor)
 	}
@@ -2679,7 +2929,7 @@ func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CreatedAt: time.Now()},
 		}},
 		runtime:     server.RuntimeConfigResponse{},
 		catalog:     server.ModelCatalogResponse{},
@@ -2693,21 +2943,21 @@ func TestAPIAppModelAppliesResourceTargetedRefreshSnapshot(t *testing.T) {
 
 	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
 		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()},
-			{ID: "new", Name: "New API feature", Slug: "new-api-feature", Status: "Created", CurrentPhase: "research", CreatedAt: time.Now().Add(time.Second)},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()},
+			{ID: testFeatureIDNew, Name: "New API feature", Slug: "new-api-feature", Status: testFeatureStatusCreated, CurrentPhase: testPhaseKeyResearch, CreatedAt: time.Now().Add(time.Second)},
 		}},
 		Prompts: &server.PromptSnapshotResponse{NeedUserInputs: []server.NeedInputGateDTO{
-			{FeatureID: "new", Open: true, Scope: "feature"},
+			{FeatureID: testFeatureIDNew, Open: true, Scope: testActionScopeFeature},
 		}},
 	})
 
-	if got := app.selectedFeature; got != "active" {
+	if got := app.selectedFeature; got != testFeatureIDActive {
 		t.Fatalf("SelectedFeatureID() after refresh = %q, want active", got)
 	}
 	snapshot := app.snapshot
 	var newFeature APIFeaturePresentation
 	for _, f := range snapshot.Features {
-		if f.ID == "new" {
+		if f.ID == testFeatureIDNew {
 			newFeature = f
 			break
 		}
@@ -2725,18 +2975,18 @@ func TestAPIAppModelIgnoresStaleAttentionForInterruptedFeature(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "stopped", Name: "Stopped work", Slug: "stopped-work", Status: "Interrupted", CurrentPhase: "design", CreatedAt: time.Now()},
+			{ID: testFeatureIDStopped, Name: "Stopped work", Slug: "stopped-work", Status: testFeatureStatusInterrupted, CurrentPhase: testArtifactIDDesign, CreatedAt: time.Now()},
 		}},
 		prompts: server.PromptSnapshotResponse{
 			AskUserQuestions: []server.ControlRequestDTO{
-				{FeatureID: "stopped", RequestID: "ask-1", Status: "pending", ToolName: "AskUserQuestion", Summary: "Which path?"},
+				{FeatureID: testFeatureIDStopped, RequestID: testAskRequestID, Status: testStatusPending, ToolName: toolNameAskUserQuestion, Summary: "Which path?"},
 			},
 			HelpQueue: []server.HelpQueueDTO{
-				{FeatureID: "stopped", Question: "Need input?", Pending: true},
+				{FeatureID: testFeatureIDStopped, Question: "Need input?", Pending: true},
 			},
 		},
 		permissions: server.PermissionSnapshotResponse{Requests: []server.ControlRequestDTO{
-			{FeatureID: "stopped", RequestID: "perm-1", Status: "pending", ToolName: "Bash", Summary: "go test ./internal/tui"},
+			{FeatureID: testFeatureIDStopped, RequestID: testPermissionRequestIDPerm1, Status: testStatusPending, ToolName: toolNameBash, Summary: testShellCommandGoTest},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -2756,40 +3006,40 @@ func TestAPIAppModelReconnectSnapshotRecoveryPreservesSelection(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
-			{ID: "queued", Name: "Queued work", Slug: "queued-work", Status: "Created", CurrentPhase: "research", CreatedAt: time.Now().Add(-time.Hour)},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
+			{ID: testFeatureIDQueued, Name: testFeatureNameQueuedWork, Slug: testFeatureSlugQueuedWork, Status: testFeatureStatusCreated, CurrentPhase: testPhaseKeyResearch, CreatedAt: time.Now().Add(-time.Hour)},
 		}},
-		runtime:     server.RuntimeConfigResponse{Providers: []string{"codex"}},
+		runtime:     server.RuntimeConfigResponse{Providers: []string{testProviderCodex}},
 		catalog:     server.ModelCatalogResponse{},
 		prompts:     server.PromptSnapshotResponse{},
 		permissions: server.PermissionSnapshotResponse{},
 		refreshSnapshot: server.RefreshSnapshot{
 			Feature: &server.FeatureDetailResponse{Feature: apiTestFeatureDetail(
-				server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()})},
+				server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()})},
 		},
 	}
 	app, err := NewAPIAppModel(ctx, client, APIAppOptions{})
 	if err != nil {
 		t.Fatalf("NewAPIAppModel() error = %v", err)
 	}
-	if got := app.selectedFeature; got != "active" {
+	if got := app.selectedFeature; got != testFeatureIDActive {
 		t.Fatalf("initial SelectedFeatureID() = %q, want active", got)
 	}
 	initialSessionCalls := countString(client.calls, "Sessions")
 	initialTranscriptCalls := countString(client.calls, "Transcript")
 
 	signal := server.RefreshSignal{
-		Resource:         server.ResourceDTO{Type: "feature", ID: "active", FeatureID: "active"},
+		Resource:         server.ResourceDTO{Type: testActionScopeFeature, ID: testFeatureIDActive, FeatureID: testFeatureIDActive},
 		SnapshotRequired: true,
 	}
 	msg := app.fetchRefreshSnapshotCmd(signal)()
 	model, _ := app.Update(msg)
 	recovered := model.(APIAppModel)
 
-	if got := recovered.selectedFeature; got != "active" {
+	if got := recovered.selectedFeature; got != testFeatureIDActive {
 		t.Fatalf("SelectedFeatureID() after reconnect snapshot = %q, want active", got)
 	}
-	if len(client.refreshSignals) != 1 || client.refreshSignals[0].Resource.ID != "active" {
+	if len(client.refreshSignals) != 1 || client.refreshSignals[0].Resource.ID != testFeatureIDActive {
 		t.Fatalf("refresh signals = %+v, want targeted active feature refresh", client.refreshSignals)
 	}
 	if got := countString(client.calls, "Sessions"); got != initialSessionCalls {
@@ -2806,9 +3056,9 @@ func TestAPIAppModelRecoveryRefreshRehydratesPanel(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		runtime:     server.RuntimeConfigResponse{Providers: []string{"codex"}},
+		runtime:     server.RuntimeConfigResponse{Providers: []string{testProviderCodex}},
 		catalog:     server.ModelCatalogResponse{},
 		prompts:     server.PromptSnapshotResponse{},
 		permissions: server.PermissionSnapshotResponse{},
@@ -2818,15 +3068,15 @@ func TestAPIAppModelRecoveryRefreshRehydratesPanel(t *testing.T) {
 				SnapshotID: "recovery-snapshot-2",
 				Items: []server.RecoveryItemDTO{{
 					Key:            "feat-1:api",
-					FeatureID:      "active",
-					FeatureName:    "Client cutover",
-					RepoName:       "api",
-					Phase:          "implement",
+					FeatureID:      testFeatureIDActive,
+					FeatureName:    testFeatureNameClientCutover,
+					RepoName:       testRepoNameAPI,
+					Phase:          testPhaseNameImplement,
 					Iteration:      8,
 					PID:            4321,
 					ProcessAlive:   true,
-					DefaultAction:  "kill",
-					AllowedActions: []string{"kill", "skip"},
+					DefaultAction:  testActionKill,
+					AllowedActions: []string{testActionKill, testActionSkip},
 				}},
 			},
 		},
@@ -2848,7 +3098,7 @@ func TestAPIAppModelRecoveryRefreshRehydratesPanel(t *testing.T) {
 	refreshed := model.(APIAppModel)
 
 	view := stripANSI(refreshed.View().Content)
-	for _, want := range []string{"Session Recovery", "Client cutover", "PID 4321", "[K]ill"} {
+	for _, want := range []string{"Session Recovery", testFeatureNameClientCutover, "PID 4321", "[K]ill"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("refreshed API app View() missing %q in:\n%s", want, view)
 		}
@@ -2861,7 +3111,7 @@ func TestAPIAppModelStartSelectedFeatureUsesRESTMutation(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "queued", Name: "Queued work", Slug: "queued-work", Status: "Created", CurrentPhase: "research", CreatedAt: time.Now()},
+			{ID: testFeatureIDQueued, Name: testFeatureNameQueuedWork, Slug: testFeatureSlugQueuedWork, Status: testFeatureStatusCreated, CurrentPhase: testPhaseKeyResearch, CreatedAt: time.Now()},
 		}},
 		startAccepted: apiTestActionResponse{},
 	}
@@ -2883,11 +3133,11 @@ func TestAPIAppModelStartSelectedFeatureUsesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	started := model.(APIAppModel)
 
-	if got := strings.Join(client.startFeatureIDs, ","); got != "queued" {
+	if got := strings.Join(client.startFeatureIDs, ","); got != testFeatureIDQueued {
 		t.Fatalf("StartFeature calls = %q, want queued", got)
 	}
 	view := stripANSI(started.View().Content)
-	for _, want := range []string{"Completed Start", "queued"} {
+	for _, want := range []string{"Completed Start", testFeatureIDQueued} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2900,12 +3150,12 @@ func TestAPIAppModelResumeSelectedFeatureUsesRESTMutation(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "paused", Name: "Paused work", Slug: "paused-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDPaused, Name: testFeatureNamePausedWork, Slug: testFeatureSlugPausedWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "paused", Name: "Paused work", Slug: "paused-work", Status: "Interrupted", CurrentPhase: "implement"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDPaused, Name: testFeatureNamePausedWork, Slug: testFeatureSlugPausedWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement}, server.FeatureDetailDTO{
 
 			Actions: []server.ActionDTO{
-				{ID: "resume", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+				{ID: recoveryActionResume, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 			},
 		})},
 		resumeAccepted: apiTestActionResponse{},
@@ -2928,14 +3178,14 @@ func TestAPIAppModelResumeSelectedFeatureUsesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	resumed := model.(APIAppModel)
 
-	if got := strings.Join(client.resumeFeatureIDs, ","); got != "paused" {
+	if got := strings.Join(client.resumeFeatureIDs, ","); got != testFeatureIDPaused {
 		t.Fatalf("ResumeFeature calls = %q, want paused", got)
 	}
 	if len(client.startFeatureIDs) != 0 {
 		t.Fatalf("StartFeature calls = %v, want none for resume action", client.startFeatureIDs)
 	}
 	view := stripANSI(resumed.View().Content)
-	for _, want := range []string{"Completed Resume", "paused"} {
+	for _, want := range []string{"Completed Resume", testFeatureIDPaused} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -2947,7 +3197,7 @@ func TestAPIAppModelContextualRetryUsesRESTMutation(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testStatusFailed, Name: testFeatureNameFailedWork, Slug: testFeatureSlugFailedWork, Status: testFeatureStatusFailed, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		retryAccepted: apiTestActionResponse{},
 	}
@@ -2961,7 +3211,7 @@ func TestAPIAppModelContextualRetryUsesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	retried := model.(APIAppModel)
 
-	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
+	if got := strings.Join(client.retryFeatureIDs, ","); got != testStatusFailed {
 		t.Fatalf("RetryFeature calls = %q, want failed", got)
 	}
 	if view := stripANSI(retried.View().Content); !strings.Contains(view, "Completed Retry") {
@@ -2974,7 +3224,7 @@ func TestAPIAppModelDetailContextualRetryUsesAWithoutResumeAll(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testStatusFailed, Name: testFeatureNameFailedWork, Slug: testFeatureSlugFailedWork, Status: testFeatureStatusFailed, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		retryAccepted: apiTestActionResponse{},
 	}
@@ -2989,7 +3239,7 @@ func TestAPIAppModelDetailContextualRetryUsesAWithoutResumeAll(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	retried := model.(APIAppModel)
 
-	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
+	if got := strings.Join(client.retryFeatureIDs, ","); got != testStatusFailed {
 		t.Fatalf("RetryFeature calls = %q, want failed", got)
 	}
 	if retried.resumeAllConfirmActive {
@@ -3005,8 +3255,8 @@ func TestAPIAppModelResumeAllUsesRESTMutations(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "paused", Name: "Paused work", Slug: "paused-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now()},
-			{ID: "failed", Name: "Failed work", Slug: "failed-work", Status: "Failed", CurrentPhase: "implement", CreatedAt: time.Now().Add(-time.Minute)},
+			{ID: testFeatureIDPaused, Name: testFeatureNamePausedWork, Slug: testFeatureSlugPausedWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
+			{ID: testStatusFailed, Name: testFeatureNameFailedWork, Slug: testFeatureSlugFailedWork, Status: testFeatureStatusFailed, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now().Add(-time.Minute)},
 		}},
 		resumeAccepted: apiTestActionResponse{},
 		retryAccepted:  apiTestActionResponse{},
@@ -3038,10 +3288,10 @@ func TestAPIAppModelResumeAllUsesRESTMutations(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	resumed := model.(APIAppModel)
 
-	if got := strings.Join(client.resumeFeatureIDs, ","); got != "paused" {
+	if got := strings.Join(client.resumeFeatureIDs, ","); got != testFeatureIDPaused {
 		t.Fatalf("ResumeFeature calls = %q, want paused", got)
 	}
-	if got := strings.Join(client.retryFeatureIDs, ","); got != "failed" {
+	if got := strings.Join(client.retryFeatureIDs, ","); got != testStatusFailed {
 		t.Fatalf("RetryFeature calls = %q, want failed", got)
 	}
 	if view := stripANSI(resumed.View().Content); !strings.Contains(view, "Resumed 2 feature(s)") {
@@ -3054,7 +3304,7 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		toggleInputAccepted: apiTestActionResponse{},
 	}
@@ -3121,7 +3371,7 @@ func TestAPIAppModelDashboardShortcutParity(t *testing.T) {
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
 	toggled := model.(APIAppModel)
-	if got := strings.Join(client.toggleInputFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.toggleInputFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("ToggleInputNotifications calls = %q, want active", got)
 	}
 	if view := stripANSI(toggled.View().Content); !strings.Contains(view, "Completed Input Alerts") {
@@ -3166,7 +3416,7 @@ func TestAPIAppModelChatStartErrorStopsRespondingAndRendersError(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		startChatErr: errors.New("monthly spend limit"),
 	}
@@ -3199,7 +3449,7 @@ func TestAPIAppModelChatRefreshRendersResultErrorAsRedResponse(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -3215,15 +3465,15 @@ func TestAPIAppModelChatRefreshRendersResultErrorAsRedResponse(t *testing.T) {
 	const errorText = "You've hit your org's monthly spend limit."
 
 	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
-		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "failed"}, server.SessionDetailDTO{
+		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: testPhaseKeyResearch, Status: testStatusFailed}, server.SessionDetailDTO{
 
 			TranscriptCursor: server.CursorDTO{Total: 2, Start: 0, End: 2},
 		})},
 		Transcript: &server.TranscriptResponse{
 			Cursor: server.CursorDTO{Total: 2, Start: 0, End: 2},
 			Messages: []server.TranscriptMessageDTO{
-				{Index: 0, Role: "assistant", Type: "text", Text: errorText},
-				{Index: 1, Role: "system", Type: "result", Status: "error", Redacted: true},
+				{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: errorText},
+				{Index: 1, Role: testMessageRoleSystem, Type: transcriptTypeResult, Status: resultSubtypeError, Redacted: true},
 			},
 		},
 	}})
@@ -3253,7 +3503,7 @@ func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -3268,14 +3518,14 @@ func TestAPIAppModelChatWaitingHelpSnapshotAllowsNextMessage(t *testing.T) {
 	started := model.(APIAppModel)
 
 	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
-		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "WaitingHelp"}, server.SessionDetailDTO{
+		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: testPhaseKeyResearch, Status: testSessionStatusWaitingHelp}, server.SessionDetailDTO{
 
 			TranscriptCursor: server.CursorDTO{Total: 1, Start: 0, End: 1},
 		})},
 		Transcript: &server.TranscriptResponse{
 			Cursor: server.CursorDTO{Total: 1, Start: 0, End: 1},
 			Messages: []server.TranscriptMessageDTO{
-				{Index: 0, Role: "assistant", Type: "text", Text: "yo! What's up?"},
+				{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: "yo! What's up?"},
 			},
 		},
 	}})
@@ -3305,14 +3555,14 @@ func TestAPIAppModelChatRecoveryTickFetchesSessionSnapshot(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		refreshSnapshot: server.RefreshSnapshot{
 			Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{
 				ID:        chatSessionID,
 				FeatureID: chatSessionID,
-				Phase:     "research",
-				Status:    "WaitingHelp",
+				Phase:     testPhaseKeyResearch,
+				Status:    testSessionStatusWaitingHelp,
 				TurnState: "waiting_input",
 			}, server.SessionDetailDTO{
 
@@ -3321,8 +3571,8 @@ func TestAPIAppModelChatRecoveryTickFetchesSessionSnapshot(t *testing.T) {
 			Transcript: &server.TranscriptResponse{
 				Cursor: server.CursorDTO{Total: 2, Start: 0, End: 2},
 				Messages: []server.TranscriptMessageDTO{
-					{Index: 0, Role: "assistant", Type: "text", Text: "Recovered answer."},
-					{Index: 1, Role: "system", Type: "result", Status: "success", Redacted: true},
+					{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: "Recovered answer."},
+					{Index: 1, Role: testMessageRoleSystem, Type: transcriptTypeResult, Status: testResultStatusSuccess, Redacted: true},
 				},
 			},
 		},
@@ -3358,7 +3608,7 @@ func TestAPIAppModelChatRecoveryTickFetchesSessionSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatalf("chat recovery command returned %T, want apiRefreshSnapshotMsg", msg)
 	}
-	if got := client.refreshSignals; len(got) != 1 || got[0].Resource.Type != "session" || got[0].Resource.ID != chatSessionID || got[0].Resource.FeatureID != chatSessionID {
+	if got := client.refreshSignals; len(got) != 1 || got[0].Resource.Type != testResourceIDSession || got[0].Resource.ID != chatSessionID || got[0].Resource.FeatureID != chatSessionID {
 		t.Fatalf("recovery refresh signals = %+v, want chat session-targeted refresh", got)
 	}
 
@@ -3378,7 +3628,7 @@ func TestAPIAppModelChatToolProgressOnlyWaitingHelpShowsNoAnswer(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -3393,14 +3643,14 @@ func TestAPIAppModelChatToolProgressOnlyWaitingHelpShowsNoAnswer(t *testing.T) {
 	started := model.(APIAppModel)
 
 	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
-		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "WaitingHelp"}, server.SessionDetailDTO{
+		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: testPhaseKeyResearch, Status: testSessionStatusWaitingHelp}, server.SessionDetailDTO{
 
 			TranscriptCursor: server.CursorDTO{Total: 1, Start: 0, End: 1},
 		})},
 		Transcript: &server.TranscriptResponse{
 			Cursor: server.CursorDTO{Total: 1, Start: 0, End: 1},
 			Messages: []server.TranscriptMessageDTO{
-				{Index: 0, Role: "system", Type: "tool_progress", Tool: "Read", Redacted: true},
+				{Index: 0, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameRead, Redacted: true},
 			},
 		},
 	}})
@@ -3426,7 +3676,7 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -3441,26 +3691,26 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 	started := model.(APIAppModel)
 
 	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
-		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "WaitingHelp"}, server.SessionDetailDTO{
+		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: testPhaseKeyResearch, Status: testSessionStatusWaitingHelp}, server.SessionDetailDTO{
 
 			PendingControls: []server.ControlRequestDTO{{
-				RequestID: "ask-1",
+				RequestID: testAskRequestID,
 				SessionID: chatSessionID,
 				FeatureID: chatSessionID,
-				ToolName:  "AskUserQuestion",
-				Status:    "pending",
+				ToolName:  toolNameAskUserQuestion,
+				Status:    testStatusPending,
 				Questions: []server.AskUserQuestionDTO{{
-					Question: "Pick a direction",
+					Question: testQuestionPickDirection,
 					Options: []server.AskUserOptionDTO{
-						{Label: "Alpha", Description: "First option"},
-						{Label: "Beta", Description: "Second option"},
-						{Label: "Gamma", Description: "Third option"},
+						{Label: testOptionLabelAlpha, Description: "First option"},
+						{Label: testOptionLabelBeta, Description: "Second option"},
+						{Label: testOptionLabelGamma, Description: "Third option"},
 					},
 				}},
 			}},
 		})},
 		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-			{Index: 0, Role: "assistant", Type: "tool_progress", Tool: "AskUserQuestion", Redacted: true},
+			{Index: 0, Role: roleAssistant, Type: transcriptTypeToolProgress, Tool: toolNameAskUserQuestion, Redacted: true},
 		}},
 	}})
 	waiting := model.(APIAppModel)
@@ -3469,7 +3719,7 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 		t.Fatal("chat remained responding after pending AskUserQuestion snapshot")
 	}
 	view := stripANSI(waiting.View().Content)
-	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "Enter to select"} {
+	for _, want := range []string{testQuestionPickDirection, testOptionLabelAlpha, testOptionLabelBeta, testOptionLabelGamma, testHintEnterToSelect} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat view missing %q while waiting for AskUser answer:\n%s", want, view)
 		}
@@ -3478,7 +3728,7 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 		t.Fatalf("chat view still rendered responding footer:\n%s", view)
 	}
 
-	// Navigate the picker down to "Beta" and commit it — with a single
+	// Navigate the picker down to testOptionLabelBeta and commit it — with a single
 	// question this lands on the recap slot, so a second Enter submits.
 	model, _ = waiting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -3494,7 +3744,7 @@ func TestAPIAppModelChatPendingAskUserSnapshotCanBeAnswered(t *testing.T) {
 	if len(client.helpRequests) != 0 {
 		t.Fatalf("SendHelp requests = %+v, want none for AskUser answer", client.helpRequests)
 	}
-	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != "ask-1" || got[0].SessionID != chatSessionID || got[0].Answers["Pick a direction"] != "Beta" {
+	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != testAskRequestID || got[0].SessionID != chatSessionID || got[0].Answers[testQuestionPickDirection] != testOptionLabelBeta {
 		t.Fatalf("AnswerAskUser requests = %+v, want chat answer", got)
 	}
 }
@@ -3504,7 +3754,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -3520,9 +3770,9 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 
 	model, _ = started.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
 		Session: &server.SessionDetailResponse{Session: apiTestSessionDetail(
-			server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: "research", Status: "Running"})},
+			server.SessionSummaryDTO{ID: chatSessionID, FeatureID: chatSessionID, Phase: testPhaseKeyResearch, Status: testSessionStatusRunning})},
 		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-			{Index: 0, Role: "system", Type: "tool_progress", Tool: "AskUserQuestion", Redacted: true},
+			{Index: 0, Role: testMessageRoleSystem, Type: transcriptTypeToolProgress, Tool: toolNameAskUserQuestion, Redacted: true},
 		}},
 	}})
 	thinking := model.(APIAppModel)
@@ -3531,17 +3781,17 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 	}
 
 	askControl := server.ControlRequestDTO{
-		RequestID: "ask-1",
+		RequestID: testAskRequestID,
 		SessionID: chatSessionID,
 		FeatureID: chatSessionID,
-		ToolName:  "AskUserQuestion",
-		Status:    "pending",
+		ToolName:  toolNameAskUserQuestion,
+		Status:    testStatusPending,
 		Questions: []server.AskUserQuestionDTO{{
-			Question: "Pick a direction",
+			Question: testQuestionPickDirection,
 			Options: []server.AskUserOptionDTO{
-				{Label: "Alpha"},
-				{Label: "Beta"},
-				{Label: "Gamma"},
+				{Label: testOptionLabelAlpha},
+				{Label: testOptionLabelBeta},
+				{Label: testOptionLabelGamma},
 			},
 		}},
 	}
@@ -3554,13 +3804,13 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 		t.Fatal("chat remained responding after prompt-only AskUserQuestion snapshot")
 	}
 	view := stripANSI(waiting.View().Content)
-	for _, want := range []string{"Pick a direction", "Alpha", "Beta", "Gamma", "Enter to select"} {
+	for _, want := range []string{testQuestionPickDirection, testOptionLabelAlpha, testOptionLabelBeta, testOptionLabelGamma, testHintEnterToSelect} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat view missing %q after prompt-only AskUser snapshot:\n%s", want, view)
 		}
 	}
 
-	// Navigate the picker down to "Gamma" and commit it — with a single
+	// Navigate the picker down to testOptionLabelGamma and commit it — with a single
 	// question this lands on the recap slot, so a second Enter submits.
 	model, _ = waiting.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model, _ = model.(APIAppModel).Update(tea.KeyPressMsg{Code: tea.KeyDown})
@@ -3574,7 +3824,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 		t.Fatal("Update(enter) on recap slot returned nil command, want AskUser answer command")
 	}
 	model, _ = model.(APIAppModel).Update(cmd())
-	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != "ask-1" || got[0].Answers["Pick a direction"] != "Gamma" {
+	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != testAskRequestID || got[0].Answers[testQuestionPickDirection] != testOptionLabelGamma {
 		t.Fatalf("AnswerAskUser requests = %+v, want prompt-only chat answer", got)
 	}
 
@@ -3585,7 +3835,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 	view = stripANSI(answered.View().Content)
 	occurrences := 0
 	for _, turn := range answered.chat.turns {
-		occurrences += strings.Count(turn.Text, "Pick a direction")
+		occurrences += strings.Count(turn.Text, testQuestionPickDirection)
 	}
 	if occurrences != 1 {
 		t.Fatalf("AskUser prompt history count = %d, want exactly one inactive history entry: %+v", occurrences, answered.chat.turns)
@@ -3593,7 +3843,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotCanBeAnswered(t *testing.T) {
 	answerOccurrences := 0
 	for _, turn := range answered.chat.turns {
 		if turn.Role == chatTurnUser {
-			answerOccurrences += strings.Count(turn.Text, "Gamma")
+			answerOccurrences += strings.Count(turn.Text, testOptionLabelGamma)
 		}
 	}
 	if answerOccurrences != 1 {
@@ -3628,20 +3878,20 @@ func TestAPIAppModelCreateFeatureUsesRESTMutation(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
-			Defaults:  config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
-			Providers: []string{"codex"},
+			Defaults:  config.ModelConfig{Research: testModelGPT54, Planning: testModelGPT54, Implementation: testModelGPT54, Review: testModelGPT54},
+			Providers: []string{testProviderCodex},
 			Repos: []server.ConfigRepoDTO{
-				{Name: "agentic-orchestrator"},
+				{Name: testRepoNameOrchestrator},
 			},
 		},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {{ID: "gpt-5.4"}},
+				testProviderCodex: {{ID: testModelGPT54}},
 			},
-			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+			PhaseDefaults: config.ModelConfig{Research: testModelGPT54, Planning: testModelGPT54, Implementation: testModelGPT54, Review: testModelGPT54},
 		},
-		createAccepted: apiTestActionResponse{FeatureID: "feat-created"},
+		createAccepted: apiTestActionResponse{FeatureID: testFeatureIDFeatCreated},
 	}
 	app := newTestAPIAppModel(t, client)
 
@@ -3675,7 +3925,7 @@ func TestAPIAppModelCreateFeatureUsesRESTMutation(t *testing.T) {
 		t.Fatalf("wizard step after name/description = %+v, want where", creating.wizard)
 	}
 	view = stripANSI(creating.View().Content)
-	for _, want := range []string{"Pick one or more repos", "agentic-orchestrator", "Browse for more"} {
+	for _, want := range []string{"Pick one or more repos", testRepoNameOrchestrator, "Browse for more"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app wizard repo step missing %q in:\n%s", want, view)
 		}
@@ -3703,14 +3953,14 @@ func TestAPIAppModelCreateFeatureUsesRESTMutation(t *testing.T) {
 		if got[0].Name != "API cutover regression" {
 			t.Fatalf("CreateFeature name = %q, want API cutover regression", got[0].Name)
 		}
-		if len(got[0].Repos) != 1 || got[0].Repos[0] != "agentic-orchestrator" {
+		if len(got[0].Repos) != 1 || got[0].Repos[0] != testRepoNameOrchestrator {
 			t.Fatalf("CreateFeature repos = %+v, want agentic-orchestrator selected", got[0].Repos)
 		}
-		if got[0].Models.Implementation != "gpt-5.4" {
+		if got[0].Models.Implementation != testModelGPT54 {
 			t.Fatalf("CreateFeature implementation model = %q, want gpt-5.4", got[0].Models.Implementation)
 		}
 	}
-	if got := strings.Join(client.startFeatureIDs, ","); got != "feat-created" {
+	if got := strings.Join(client.startFeatureIDs, ","); got != testFeatureIDFeatCreated {
 		t.Fatalf("StartFeature calls = %q, want feat-created auto-start after create", got)
 	}
 	if got := strings.Join(client.calls[len(client.calls)-2:], ","); got != "CreateFeature,StartFeature" {
@@ -3729,8 +3979,8 @@ func TestAPIAppModelWorkspaceManagerUsesRuntimeConfigMutation(t *testing.T) {
 
 	rootA := t.TempDir()
 	rootB := t.TempDir()
-	makeGitRepoDir(t, rootA, "api")
-	makeGitRepoDir(t, rootB, "web")
+	makeGitRepoDir(t, rootA, testRepoNameAPI)
+	makeGitRepoDir(t, rootB, testRepoNameWeb)
 
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
@@ -3776,7 +4026,7 @@ func TestAPIAppModelWorkspaceManagerUsesRuntimeConfigMutation(t *testing.T) {
 		t.Fatalf("runtime workspace roots = %+v, want %q", updated.runtimeConfig.WorkspaceRoots, rootB)
 	}
 	_, repoPaths, _ := apiRuntimeRepoState(updated.runtimeConfig)
-	if repoPaths["web"] != filepath.Join(rootB, "web") {
+	if repoPaths[testRepoNameWeb] != filepath.Join(rootB, testRepoNameWeb) {
 		t.Fatalf("runtime repos = %+v, want discovered web repo under rootB", updated.runtimeConfig.Repos)
 	}
 }
@@ -3785,19 +4035,19 @@ func TestAPIAppModelWizardBrowseRootPersistsAndRefreshesRepos(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	makeGitRepoDir(t, root, "agentic-orchestrator")
+	makeGitRepoDir(t, root, testRepoNameOrchestrator)
 
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
-			Defaults:  config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
-			Providers: []string{"codex"},
+			Defaults:  config.ModelConfig{Research: testModelGPT54, Planning: testModelGPT54, Implementation: testModelGPT54, Review: testModelGPT54},
+			Providers: []string{testProviderCodex},
 		},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {{ID: "gpt-5.4"}},
+				testProviderCodex: {{ID: testModelGPT54}},
 			},
-			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+			PhaseDefaults: config.ModelConfig{Research: testModelGPT54, Planning: testModelGPT54, Implementation: testModelGPT54, Review: testModelGPT54},
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
@@ -3823,7 +4073,7 @@ func TestAPIAppModelWizardBrowseRootPersistsAndRefreshesRepos(t *testing.T) {
 	if !containsRootExpanded(updated.wizard.workspaceRoots, root) {
 		t.Fatalf("wizard workspace roots = %+v, want %q", updated.wizard.workspaceRoots, root)
 	}
-	if _, ok := updated.wizard.repoPaths["agentic-orchestrator"]; !ok {
+	if _, ok := updated.wizard.repoPaths[testRepoNameOrchestrator]; !ok {
 		t.Fatalf("wizard repo paths = %+v, want discovered agentic-orchestrator", updated.wizard.repoPaths)
 	}
 }
@@ -3836,16 +4086,16 @@ func TestAPIAppModelWizardCreateRepoPersistsRootRescansAndAutoSelects(t *testing
 
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
-			Defaults:       config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
-			Providers:      []string{"codex"},
+			Defaults:       config.ModelConfig{Research: testModelGPT54, Planning: testModelGPT54, Implementation: testModelGPT54, Review: testModelGPT54},
+			Providers:      []string{testProviderCodex},
 			WorkspaceRoots: []string{root},
 		},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {{ID: "gpt-5.4"}},
+				testProviderCodex: {{ID: testModelGPT54}},
 			},
-			PhaseDefaults: config.ModelConfig{Research: "gpt-5.4", Planning: "gpt-5.4", Implementation: "gpt-5.4", Review: "gpt-5.4"},
+			PhaseDefaults: config.ModelConfig{Research: testModelGPT54, Planning: testModelGPT54, Implementation: testModelGPT54, Review: testModelGPT54},
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
 	}
@@ -3919,11 +4169,11 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			name:     "merge",
 			key:      tea.KeyPressMsg{Code: 'M', Text: "M"},
 			actionID: "merge",
-			wantKind: "feature.merge",
+			wantKind: mutationKindFeatureMerge,
 			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.mergeFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.mergeFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("MergeFeature calls = %q, want active", got)
 				}
 			},
@@ -3932,28 +4182,28 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			name:     "mark done",
 			key:      tea.KeyPressMsg{Code: 'D', Text: "D"},
 			actionID: "mark-done",
-			wantKind: "feature.mark-done",
+			wantKind: mutationKindFeatureMarkDone,
 			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.markDoneFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.markDoneFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("MarkDone calls = %q, want active", got)
 				}
 			},
 		},
 		{
-			name:     "rebase",
+			name:     testCycleTypeRebase,
 			key:      tea.KeyPressMsg{Code: 'b', Text: "b"},
-			actionID: "rebase",
-			wantKind: "feature.rebase",
+			actionID: testCycleTypeRebase,
+			wantKind: mutationKindFeatureRebase,
 			accepted: apiTestActionResponse{},
 			refresh: struct {
 				cycleType string
 				wantLabel string
-			}{cycleType: "rebase", wantLabel: "Rebasing"},
+			}{cycleType: testCycleTypeRebase, wantLabel: "Rebasing"},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.startRebaseFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.startRebaseFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("StartRebase calls = %q, want active", got)
 				}
 				if got := client.startRebaseRequests; len(got) != 1 {
@@ -3965,11 +4215,11 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			name:     "cleanup worktrees",
 			key:      tea.KeyPressMsg{Code: 'c', Text: "c"},
 			actionID: "cleanup",
-			wantKind: "feature.cleanup",
+			wantKind: mutationKindFeatureCleanup,
 			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.cleanupFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.cleanupFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("CleanupFeature calls = %q, want active", got)
 				}
 				if got := client.cleanupRequests; len(got) != 1 || got[0].Target != "worktrees" {
@@ -3980,16 +4230,16 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 		{
 			name:     "tweak start",
 			key:      tea.KeyPressMsg{Code: 't', Text: "t"},
-			actionID: "tweak",
-			wantKind: "feature.tweak.start",
+			actionID: testActionIDTweak,
+			wantKind: mutationKindFeatureTweakStart,
 			accepted: apiTestActionResponse{},
 			refresh: struct {
 				cycleType string
 				wantLabel string
-			}{cycleType: "tweak", wantLabel: "Tweaking"},
+			}{cycleType: testActionIDTweak, wantLabel: testActivityTweaking},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.startTweakFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.startTweakFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("StartTweak calls = %q, want active", got)
 				}
 				if got := client.startTweakRequests; len(got) != 1 {
@@ -3998,17 +4248,17 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			},
 		},
 		{
-			name:     "rewind",
+			name:     reviewModeRewind,
 			key:      tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl},
-			actionID: "rewind",
-			wantKind: "feature.rewind",
+			actionID: reviewModeRewind,
+			wantKind: mutationKindFeatureRewind,
 			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.rewindFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.rewindFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("RewindFeature calls = %q, want active", got)
 				}
-				if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "implement" || got[0].RoadmapPhase != 0 {
+				if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != testPhaseNameImplement || got[0].RoadmapPhase != 0 {
 					t.Fatalf("RewindFeature requests = %+v, want target phase implement without roadmap phase", got)
 				}
 			},
@@ -4017,11 +4267,11 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			name:     "restart",
 			key:      tea.KeyPressMsg{Code: 'r', Text: "r"},
 			actionID: "restart",
-			wantKind: "feature.restart",
+			wantKind: mutationKindFeatureRestart,
 			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.restartFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.restartFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("RestartFeature calls = %q, want active", got)
 				}
 			},
@@ -4030,24 +4280,24 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			name:     "stop",
 			key:      tea.KeyPressMsg{Code: 's', Text: "s"},
 			actionID: "pause-stop",
-			wantKind: "feature.stop",
+			wantKind: mutationKindFeatureStop,
 			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.stopFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.stopFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("StopFeature calls = %q, want active", got)
 				}
 			},
 		},
 		{
-			name:     "delete",
+			name:     actionIDDelete,
 			key:      tea.KeyPressMsg{Code: 'd', Text: "d"},
-			actionID: "delete",
-			wantKind: "feature.delete",
+			actionID: actionIDDelete,
+			wantKind: mutationKindFeatureDelete,
 			accepted: apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
 				t.Helper()
-				if got := strings.Join(client.deleteFeatureIDs, ","); got != "active" {
+				if got := strings.Join(client.deleteFeatureIDs, ","); got != testFeatureIDActive {
 					t.Fatalf("DeleteFeature calls = %q, want active", got)
 				}
 			},
@@ -4060,16 +4310,16 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 
 			client := &fakeTUIAPIClient{
 				features: server.FeatureListResponse{Features: []server.FeatureSummary{
-					{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", Repos: []string{"agentic-orchestrator"}, CreatedAt: time.Now()},
+					{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, Repos: []string{testRepoNameOrchestrator}, CreatedAt: time.Now()},
 				}},
-				detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"}, server.FeatureDetailDTO{
+				detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement}, server.FeatureDetailDTO{
 
 					Cycle: tt.cycle,
 					RepoStatus: []server.RepoStatusDTO{
-						{Name: "agentic-orchestrator", Publishable: true},
+						{Name: testRepoNameOrchestrator, Publishable: true},
 					},
 					Actions: []server.ActionDTO{
-						{ID: tt.actionID, Enabled: !tt.disabled, Scope: server.ActionScopeDTO{Type: "feature"}},
+						{ID: tt.actionID, Enabled: !tt.disabled, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 					},
 				})},
 				restartAccepted:     tt.accepted,
@@ -4095,7 +4345,7 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			}
 			confirming := model.(APIAppModel)
 			wantTitle := "Confirm " + apiMutationKindLabel(tt.wantKind)
-			if tt.wantKind == "feature.rewind" {
+			if tt.wantKind == mutationKindFeatureRewind {
 				wantTitle = "Rewind Confirmation"
 			}
 			if view := stripANSI(confirming.View().Content); !strings.Contains(view, wantTitle) {
@@ -4119,12 +4369,12 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 				if cmd == nil {
 					t.Fatalf("%s mutation result returned nil command, want immediate feature detail refresh", tt.name)
 				}
-				cycle := &server.CycleDTO{Type: tt.refresh.cycleType, Status: "running"}
-				client.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "CodeReady", CurrentPhase: "publish", Cycle: cycle, CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}}, server.FeatureDetailDTO{
+				cycle := &server.CycleDTO{Type: tt.refresh.cycleType, Status: featureStatusTokenRunning}
+				client.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusCodeReady, CurrentPhase: actionIDPublish, Cycle: cycle, CreatedAt: time.Now(), Repos: []string{testRepoNameOrchestrator}}, server.FeatureDetailDTO{
 
 					Cycle: cycle,
 					RepoStatus: []server.RepoStatusDTO{
-						{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: tt.refresh.cycleType, CycleStatus: "running"},
+						{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: tt.refresh.cycleType, CycleStatus: featureStatusTokenRunning},
 					},
 				})}
 				msg = cmd()
@@ -4143,12 +4393,12 @@ func TestAPIAppModelFeatureActionsConfirmBeforeRESTMutation(t *testing.T) {
 			if tt.refresh.wantLabel != "" && !strings.Contains(view, tt.refresh.wantLabel) {
 				t.Fatalf("API app View() missing refreshed cycle label %q in:\n%s", tt.refresh.wantLabel, view)
 			}
-			if tt.wantKind == "feature.delete" {
-				if strings.Contains(view, "active") {
+			if tt.wantKind == mutationKindFeatureDelete {
+				if strings.Contains(view, testFeatureIDActive) {
 					t.Fatalf("API app View() still shows deleted feature:\n%s", view)
 				}
-			} else if !strings.Contains(view, "active") {
-				t.Fatalf("API app View() missing %q in:\n%s", "active", view)
+			} else if !strings.Contains(view, testFeatureIDActive) {
+				t.Fatalf("API app View() missing %q in:\n%s", testFeatureIDActive, view)
 			}
 		})
 	}
@@ -4164,9 +4414,9 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 		wantHadChanges bool
 	}{
 		{
-			name:           "review",
+			name:           reviewCommentTypeReview,
 			key:            tea.KeyPressMsg{Code: 'y', Text: "y"},
-			wantDecision:   "final-review",
+			wantDecision:   phaseAliasFinalReview,
 			wantHadChanges: true,
 		},
 		{
@@ -4186,19 +4436,19 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			cycle := &server.CycleDTO{Type: "tweak", Status: "running"}
+			cycle := &server.CycleDTO{Type: testActionIDTweak, Status: featureStatusTokenRunning}
 			client := &fakeTUIAPIClient{
 				features: server.FeatureListResponse{Features: []server.FeatureSummary{
-					{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", Cycle: cycle, Repos: []string{"agentic-orchestrator"}, CreatedAt: time.Now()},
+					{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, Cycle: cycle, Repos: []string{testRepoNameOrchestrator}, CreatedAt: time.Now()},
 				}},
-				detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", Cycle: cycle}, server.FeatureDetailDTO{
+				detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, Cycle: cycle}, server.FeatureDetailDTO{
 
 					Cycle: cycle,
 					RepoStatus: []server.RepoStatusDTO{
-						{Name: "agentic-orchestrator", CycleType: "tweak", CycleStatus: "running"},
+						{Name: testRepoNameOrchestrator, CycleType: testActionIDTweak, CycleStatus: featureStatusTokenRunning},
 					},
 					Actions: []server.ActionDTO{
-						{ID: "tweak", Enabled: false, Scope: server.ActionScopeDTO{Type: "feature"}},
+						{ID: testActionIDTweak, Enabled: false, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 					},
 				})},
 				finishTweakAccepted: apiTestActionResponse{Result: "finished"},
@@ -4214,7 +4464,7 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 			}
 			deciding := model.(APIAppModel)
 			view := stripANSI(deciding.View().Content)
-			for _, want := range []string{"Final Review", "Changes have been committed. Run a Final Review?", "[y] Yes", "[n] No", "Esc to cancel"} {
+			for _, want := range []string{testPhaseNameFinalReview, "Changes have been committed. Run a Final Review?", "[y] Yes", "[n] No", "Esc to cancel"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("View() missing %q in:\n%s", want, view)
 				}
@@ -4234,7 +4484,7 @@ func TestAPIAppModelFinishTweakShowsFinalReviewDecisionModal(t *testing.T) {
 			model, _ = model.(APIAppModel).Update(msg)
 			accepted := model.(APIAppModel)
 
-			if got := strings.Join(client.finishTweakFeatureIDs, ","); got != "active" {
+			if got := strings.Join(client.finishTweakFeatureIDs, ","); got != testFeatureIDActive {
 				t.Fatalf("FinishTweak calls = %q, want active", got)
 			}
 			if got := client.finishTweakRequests; len(got) != 1 || got[0].Decision != tt.wantDecision || got[0].HadChanges != tt.wantHadChanges {
@@ -4252,37 +4502,37 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()},
 		}},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {
-					{ID: "codex:gpt-5.4"},
-					{ID: "codex:gpt-5.5"},
+				testProviderCodex: {
+					{ID: testModelCodexGPT54},
+					{ID: testModelCodexGPT55},
 				},
 			},
 			PhaseDefaults: config.ModelConfig{
-				Research: "codex:gpt-5.4",
+				Research: testModelCodexGPT54,
 			},
 			PhaseProviderModels: map[string]map[string][]string{
-				"Research": {"codex": {"codex:gpt-5.4", "codex:gpt-5.5"}},
+				testActivityResearch: {testProviderCodex: {testModelCodexGPT54, testModelCodexGPT55}},
 			},
 		},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish}, server.FeatureDetailDTO{
 
-			Pipeline: "large",
+			Pipeline: testPipelineSizeLarge,
 		})},
 		featureConfig: server.FeatureConfigResponse{
-			FeatureID: "active",
+			FeatureID: testFeatureIDActive,
 			Current: server.FeatureConfigDTO{
-				Models:      config.ModelConfig{Research: "codex:gpt-5.4", Planning: "codex:gpt-5.4", Implementation: "codex:gpt-5.4", Review: "codex:gpt-5.4", KBBuild: "codex:gpt-5.4"},
-				Inquireness: "targeted",
+				Models:      config.ModelConfig{Research: testModelCodexGPT54, Planning: testModelCodexGPT54, Implementation: testModelCodexGPT54, Review: testModelCodexGPT54, KBBuild: testModelCodexGPT54},
+				Inquireness: testInquirenessTargeted,
 				Checkpoints: server.CheckpointsDTO{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
-				Pipeline:    "large",
+				Pipeline:    testPipelineSizeLarge,
 			},
 			Defaults: server.FeatureConfigDTO{
-				Models: config.ModelConfig{Research: "codex:gpt-5.4"},
+				Models: config.ModelConfig{Research: testModelCodexGPT54},
 			},
 		},
 		updateFeatureConfigAccepted: apiTestActionResponse{},
@@ -4297,11 +4547,11 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 	model, _ = model.(APIAppModel).Update(msg)
 	editing := model.(APIAppModel)
 
-	if got := strings.Join(client.featureConfigIDs, ","); got != "active" {
+	if got := strings.Join(client.featureConfigIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("FeatureConfig calls = %q, want active", got)
 	}
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Edit Config", "Client cutover", "Models", "Behavior", "Gates", "Research", "codex / gpt-5.4"} {
+	for _, want := range []string{"Edit Config", testFeatureNameClientCutover, testSectionLabelModels, "Behavior", testSectionLabelGates, testActivityResearch, "codex / gpt-5.4"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4334,14 +4584,14 @@ func TestAPIAppModelFeatureConfigEditorLoadsFromRESTAndSavesMutation(t *testing.
 	model, _ = model.(APIAppModel).Update(msg)
 	saved := model.(APIAppModel)
 
-	if got := strings.Join(client.updateFeatureConfigIDs, ","); got != "active" {
+	if got := strings.Join(client.updateFeatureConfigIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("UpdateFeatureConfig calls = %q, want active", got)
 	}
-	if got := client.updateFeatureConfigRequests; len(got) != 1 || got[0].Models.Research != "codex:gpt-5.5" || got[0].Pipeline != "large" || got[0].Inquireness != "targeted" || !got[0].Checkpoints.RoadmapReview || !got[0].Checkpoints.PhasePlanReview || !got[0].Checkpoints.ManualPublish {
+	if got := client.updateFeatureConfigRequests; len(got) != 1 || got[0].Models.Research != testModelCodexGPT55 || got[0].Pipeline != testPipelineSizeLarge || got[0].Inquireness != testInquirenessTargeted || !got[0].Checkpoints.RoadmapReview || !got[0].Checkpoints.PhasePlanReview || !got[0].Checkpoints.ManualPublish {
 		t.Fatalf("UpdateFeatureConfig requests = %+v, want edited research model and preserved config axes", got)
 	}
 	view = stripANSI(saved.View().Content)
-	for _, want := range []string{"Completed Feature Config", "active"} {
+	for _, want := range []string{"Completed Feature Config", testFeatureIDActive} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4353,13 +4603,13 @@ func TestAPIAppModelFeatureConfigEditorOpensForRunningFeature(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		featureConfig: server.FeatureConfigResponse{
-			FeatureID: "active",
+			FeatureID: testFeatureIDActive,
 			Current: server.FeatureConfigDTO{
-				Inquireness: "targeted",
-				Pipeline:    "large",
+				Inquireness: testInquirenessTargeted,
+				Pipeline:    testPipelineSizeLarge,
 			},
 		},
 	}
@@ -4372,7 +4622,7 @@ func TestAPIAppModelFeatureConfigEditorOpensForRunningFeature(t *testing.T) {
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
 	editing := model.(APIAppModel)
-	if got := strings.Join(client.featureConfigIDs, ","); got != "active" {
+	if got := strings.Join(client.featureConfigIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("FeatureConfig calls = %q, want active", got)
 	}
 	if editing.configEditor == nil {
@@ -4389,42 +4639,42 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
 			Defaults: config.ModelConfig{
-				Inquiry:        "codex:gpt-5.4",
-				Research:       "codex:gpt-5.4",
-				Planning:       "codex:gpt-5.4",
-				Implementation: "codex:gpt-5.4",
-				Review:         "codex:gpt-5.4",
-				KBBuild:        "codex:gpt-5.4",
+				Inquiry:        testModelCodexGPT54,
+				Research:       testModelCodexGPT54,
+				Planning:       testModelCodexGPT54,
+				Implementation: testModelCodexGPT54,
+				Review:         testModelCodexGPT54,
+				KBBuild:        testModelCodexGPT54,
 			},
 			FeatureDefaults: server.FeatureDefaultsDTO{
 				Models: config.ModelConfig{
-					Inquiry:        "codex:gpt-5.4",
-					Research:       "codex:gpt-5.4",
-					Planning:       "codex:gpt-5.4",
-					Implementation: "codex:gpt-5.4",
-					Review:         "codex:gpt-5.4",
-					KBBuild:        "codex:gpt-5.4",
+					Inquiry:        testModelCodexGPT54,
+					Research:       testModelCodexGPT54,
+					Planning:       testModelCodexGPT54,
+					Implementation: testModelCodexGPT54,
+					Review:         testModelCodexGPT54,
+					KBBuild:        testModelCodexGPT54,
 				},
-				Inquireness: "medium",
-				Pipeline:    "large",
+				Inquireness: testPipelineSizeMedium,
+				Pipeline:    testPipelineSizeLarge,
 				Checkpoints: config.Checkpoints{ManualPublish: true},
 			},
-			Providers: []string{"codex"},
+			Providers: []string{testProviderCodex},
 		},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {
-					{ID: "codex:gpt-5.4"},
-					{ID: "codex:gpt-5.5"},
+				testProviderCodex: {
+					{ID: testModelCodexGPT54},
+					{ID: testModelCodexGPT55},
 				},
 			},
 			PhaseDefaults: config.ModelConfig{
-				Inquiry:  "codex:gpt-5.4",
-				Research: "codex:gpt-5.4",
+				Inquiry:  testModelCodexGPT54,
+				Research: testModelCodexGPT54,
 			},
 			PhaseProviderModels: map[string]map[string][]string{
-				"Research": {"codex": {"codex:gpt-5.4", "codex:gpt-5.5"}},
+				testActivityResearch: {testProviderCodex: {testModelCodexGPT54, testModelCodexGPT55}},
 			},
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
@@ -4437,7 +4687,7 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	}
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Edit Config · Workspace Defaults", "Models", "Behavior", "Gates", "Phases", "Agents", "Models for codex"} {
+	for _, want := range []string{"Edit Config · Workspace Defaults", testSectionLabelModels, "Behavior", testSectionLabelGates, testSectionLabelPhases, "Agents", testLabelModelsForCodex} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4469,15 +4719,15 @@ func TestAPIAppModelWorkspaceConfigEditorSavesRESTMutation(t *testing.T) {
 	saved := model.(APIAppModel)
 
 	if got := client.updateRuntimeConfigRequests; len(got) != 1 ||
-		got[0].Defaults.Models.Inquiry != "codex:gpt-5.5" ||
-		got[0].Defaults.Inquireness != "high" ||
+		got[0].Defaults.Models.Inquiry != testModelCodexGPT55 ||
+		got[0].Defaults.Inquireness != testInquirenessHigh ||
 		!got[0].Defaults.Checkpoints.RoadmapReview {
 		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited models, behavior, and gates", got)
 	}
 	if saved.configEditor != nil {
 		t.Fatal("workspace config editor still open after successful save")
 	}
-	if saved.runtimeConfig.FeatureDefaults.Models.Inquiry != "codex:gpt-5.5" {
+	if saved.runtimeConfig.FeatureDefaults.Models.Inquiry != testModelCodexGPT55 {
 		t.Fatalf("runtime snapshot inquiry default = %q, want reloaded codex:gpt-5.5", saved.runtimeConfig.FeatureDefaults.Models.Inquiry)
 	}
 	view = stripANSI(saved.View().Content)
@@ -4494,41 +4744,41 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 	client := &fakeTUIAPIClient{
 		runtime: server.RuntimeConfigResponse{
 			Defaults: config.ModelConfig{
-				Research:       "codex:gpt-5.4",
-				Planning:       "codex:gpt-5.4",
-				Implementation: "codex:gpt-5.4",
-				Review:         "codex:gpt-5.4",
-				Utilities:      "codex:gpt-5.4-mini",
-				KBBuild:        "codex:gpt-5.4",
+				Research:       testModelCodexGPT54,
+				Planning:       testModelCodexGPT54,
+				Implementation: testModelCodexGPT54,
+				Review:         testModelCodexGPT54,
+				Utilities:      testModelCodexGPT54Mini,
+				KBBuild:        testModelCodexGPT54,
 			},
 			FeatureDefaults: server.FeatureDefaultsDTO{
 				Models: config.ModelConfig{
-					Research:       "codex:gpt-5.4",
-					Planning:       "codex:gpt-5.4",
-					Implementation: "codex:gpt-5.4",
-					Review:         "codex:gpt-5.4",
-					Utilities:      "codex:gpt-5.4-mini",
-					KBBuild:        "codex:gpt-5.4",
+					Research:       testModelCodexGPT54,
+					Planning:       testModelCodexGPT54,
+					Implementation: testModelCodexGPT54,
+					Review:         testModelCodexGPT54,
+					Utilities:      testModelCodexGPT54Mini,
+					KBBuild:        testModelCodexGPT54,
 				},
-				Inquireness: "medium",
-				Pipeline:    "large",
+				Inquireness: testPipelineSizeMedium,
+				Pipeline:    testPipelineSizeLarge,
 			},
-			Providers: []string{"codex"},
+			Providers: []string{testProviderCodex},
 		},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {
-					{ID: "codex:gpt-5.4"},
-					{ID: "codex:gpt-5.4-mini"},
-					{ID: "codex:gpt-5.5-mini"},
+				testProviderCodex: {
+					{ID: testModelCodexGPT54},
+					{ID: testModelCodexGPT54Mini},
+					{ID: testModelCodexGPT55Mini},
 				},
 			},
 			PhaseDefaults: config.ModelConfig{
-				Utilities: "codex:gpt-5.4-mini",
+				Utilities: testModelCodexGPT54Mini,
 			},
 			PhaseProviderModels: map[string]map[string][]string{
-				"chat": {"codex": {"codex:gpt-5.4-mini", "codex:gpt-5.5-mini"}},
+				"chat": {testProviderCodex: {testModelCodexGPT54Mini, testModelCodexGPT55Mini}},
 			},
 		},
 		updateRuntimeConfigAccepted: apiTestActionResponse{},
@@ -4538,7 +4788,7 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'E', Text: "E"})
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	for _, want := range []string{"Edit Config · Workspace Defaults", "Phases", "Agents", "Models for codex", "Utilities", "gpt-5.4-mini"} {
+	for _, want := range []string{"Edit Config · Workspace Defaults", testSectionLabelPhases, "Agents", testLabelModelsForCodex, testSectionLabelUtilities, "gpt-5.4-mini"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("runtime config view missing %q:\n%s", want, view)
 		}
@@ -4550,7 +4800,7 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 	}
 	editing = model.(APIAppModel)
 	view = stripANSI(editing.View().Content)
-	for _, want := range []string{"Utilities", "Models for codex", "gpt-5.4-mini", "gpt-5.5-mini"} {
+	for _, want := range []string{testSectionLabelUtilities, testLabelModelsForCodex, "gpt-5.4-mini", "gpt-5.5-mini"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("utilities choices missing %q:\n%s", want, view)
 		}
@@ -4570,7 +4820,7 @@ func TestAPIAppModelWorkspaceConfigEditorIncludesUtilitiesAndDiscoveredRoleOptio
 	msg := cmd()
 	_, _ = model.(APIAppModel).Update(msg)
 
-	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Utilities != "codex:gpt-5.5-mini" {
+	if got := client.updateRuntimeConfigRequests; len(got) != 1 || got[0].Defaults.Models.Utilities != testModelCodexGPT55Mini {
 		t.Fatalf("UpdateRuntimeConfig requests = %+v, want edited utilities default model", got)
 	}
 }
@@ -4580,44 +4830,44 @@ func TestAPIAppModelFeatureConfigEditorDoesNotExposeUtilities(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()},
 		}},
 		catalog: server.ModelCatalogResponse{
-			ProviderOrder: []string{"codex"},
+			ProviderOrder: []string{testProviderCodex},
 			ProviderModels: map[string][]server.ModelDTO{
-				"codex": {
-					{ID: "codex:gpt-5.4"},
-					{ID: "codex:gpt-5.4-mini"},
+				testProviderCodex: {
+					{ID: testModelCodexGPT54},
+					{ID: testModelCodexGPT54Mini},
 				},
 			},
 			PhaseDefaults: config.ModelConfig{
-				Research:  "codex:gpt-5.4",
-				Utilities: "codex:gpt-5.4-mini",
+				Research:  testModelCodexGPT54,
+				Utilities: testModelCodexGPT54Mini,
 			},
 			PhaseProviderModels: map[string]map[string][]string{
-				"Research": {"codex": {"codex:gpt-5.4"}},
-				"chat":     {"codex": {"codex:gpt-5.4-mini"}},
+				testActivityResearch: {testProviderCodex: {testModelCodexGPT54}},
+				"chat":               {testProviderCodex: {testModelCodexGPT54Mini}},
 			},
 		},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Published", CurrentPhase: "publish"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish}, server.FeatureDetailDTO{
 
-			Pipeline: "large",
+			Pipeline: testPipelineSizeLarge,
 		})},
 		featureConfig: server.FeatureConfigResponse{
-			FeatureID: "active",
+			FeatureID: testFeatureIDActive,
 			Current: server.FeatureConfigDTO{
-				Models:      config.ModelConfig{Research: "codex:gpt-5.4", Utilities: "codex:gpt-5.4-mini"},
-				Inquireness: "targeted",
+				Models:      config.ModelConfig{Research: testModelCodexGPT54, Utilities: testModelCodexGPT54Mini},
+				Inquireness: testInquirenessTargeted,
 				Checkpoints: server.CheckpointsDTO{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true},
-				Pipeline:    "large",
+				Pipeline:    testPipelineSizeLarge,
 			},
 			Defaults: server.FeatureConfigDTO{
-				Models:      config.ModelConfig{Research: "codex:gpt-5.4"},
-				Inquireness: "targeted",
+				Models:      config.ModelConfig{Research: testModelCodexGPT54},
+				Inquireness: testInquirenessTargeted,
 				Checkpoints: server.CheckpointsDTO{ManualPublish: true},
-				Pipeline:    "large",
+				Pipeline:    testPipelineSizeLarge,
 			},
-			Publish: server.PublishabilityDTO{ManualPublish: true, Repos: map[string]bool{"api": true}},
+			Publish: server.PublishabilityDTO{ManualPublish: true, Repos: map[string]bool{testRepoNameAPI: true}},
 		},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -4629,7 +4879,7 @@ func TestAPIAppModelFeatureConfigEditorDoesNotExposeUtilities(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(cmd())
 	editing := model.(APIAppModel)
 	view := stripANSI(editing.View().Content)
-	if strings.Contains(view, "Utilities") {
+	if strings.Contains(view, testSectionLabelUtilities) {
 		t.Fatalf("feature config editor exposed global Utilities field:\n%s", view)
 	}
 }
@@ -4639,11 +4889,11 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "blocked", Name: "Blocked work", Slug: "blocked-work", Status: "NeedUserInput", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDBlocked, Name: testFeatureNameBlockedWork, Slug: "blocked-work", Status: testStatusNeedUserInput, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "blocked", Name: "Blocked work", Slug: "blocked-work", Status: "NeedUserInput", CurrentPhase: "implement"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDBlocked, Name: testFeatureNameBlockedWork, Slug: "blocked-work", Status: testStatusNeedUserInput, CurrentPhase: testPhaseNameImplement}, server.FeatureDetailDTO{
 
-			NeedUserInput: &server.NeedInputGateDTO{FeatureID: "blocked", Open: true, Scope: "feature", Iteration: 3},
+			NeedUserInput: &server.NeedInputGateDTO{FeatureID: testFeatureIDBlocked, Open: true, Scope: testActionScopeFeature, Iteration: 3},
 		})},
 		needUserInputAccepted: apiTestActionResponse{},
 	}
@@ -4658,7 +4908,7 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 		t.Fatal("Update(i) did not show need-user-input decision prompt")
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Need user input", "Blocked work", "[r] Resume", "[a] Abort"} {
+	for _, want := range []string{"Need user input", testFeatureNameBlockedWork, "[r] Resume", "[a] Abort"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4675,17 +4925,17 @@ func TestAPIAppModelNeedUserInputDecisionUsesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	decided := model.(APIAppModel)
 
-	if got := strings.Join(client.needUserInputFeatureIDs, ","); got != "blocked" {
+	if got := strings.Join(client.needUserInputFeatureIDs, ","); got != testFeatureIDBlocked {
 		t.Fatalf("NeedUserInputDecision calls = %q, want blocked", got)
 	}
-	if got := client.needUserInputRequests; len(got) != 1 || got[0].Decision != "resume" || got[0].RepoName != "" || got[0].CycleType != "" {
+	if got := client.needUserInputRequests; len(got) != 1 || got[0].Decision != recoveryActionResume || got[0].RepoName != "" || got[0].CycleType != "" {
 		t.Fatalf("NeedUserInputDecision requests = %+v, want feature-scoped resume", got)
 	}
 	if decided.needInputPromptActive {
 		t.Fatal("need-user-input prompt remained open after accepted decision")
 	}
 	view = stripANSI(decided.View().Content)
-	for _, want := range []string{"Completed Need Input Decision", "blocked"} {
+	for _, want := range []string{"Completed Need Input Decision", testFeatureIDBlocked} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4697,10 +4947,10 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		permissions: server.PermissionSnapshotResponse{Requests: []server.ControlRequestDTO{
-			{RequestID: "perm-1", SessionID: "sess-1", FeatureID: "active", ToolName: "Bash", Status: "pending", Summary: "go test ./internal/tui"},
+			{RequestID: testPermissionRequestIDPerm1, SessionID: testSessionIDOne, FeatureID: testFeatureIDActive, ToolName: toolNameBash, Status: testStatusPending, Summary: testShellCommandGoTest},
 		}},
 		permissionAccepted: apiTestActionResponse{},
 	}
@@ -4715,7 +4965,7 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 		t.Fatal("Update(a) did not enter attach permission prompt")
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Allow Bash?", "Active work", "go test ./internal/tui", "[y] Allow", "[n] Deny"} {
+	for _, want := range []string{"Allow Bash?", testFeatureNameActiveWork, testShellCommandGoTest, "[y] Allow", "[n] Deny"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4732,14 +4982,14 @@ func TestAPIAppModelPermissionAnswerUsesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	answered := model.(APIAppModel)
 
-	if got := client.permissionAnswers; len(got) != 1 || got[0].RequestID != "perm-1" || got[0].SessionID != "sess-1" || got[0].Decision != "allow" {
+	if got := client.permissionAnswers; len(got) != 1 || got[0].RequestID != testPermissionRequestIDPerm1 || got[0].SessionID != testSessionIDOne || got[0].Decision != "allow" {
 		t.Fatalf("AnswerPermission requests = %+v, want perm-1/sess-1 allow", got)
 	}
 	if apiTestShowingPermissionPrompt(answered) {
 		t.Fatal("permission prompt remained open after accepted answer")
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Active work", "Type a message"} {
+	for _, want := range []string{testFeatureNameActiveWork, "Type a message"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4751,10 +5001,10 @@ func TestAPIAppModelHelpMessageUsesRESTMutation(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		prompts: server.PromptSnapshotResponse{HelpQueue: []server.HelpQueueDTO{
-			{FeatureID: "active", Question: "Which implementation path?", Pending: true},
+			{FeatureID: testFeatureIDActive, Question: "Which implementation path?", Pending: true},
 		}},
 		helpAccepted: apiTestActionResponse{},
 	}
@@ -4769,7 +5019,7 @@ func TestAPIAppModelHelpMessageUsesRESTMutation(t *testing.T) {
 		t.Fatal("Update(h) did not show help answer prompt")
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Help request", "Active work", "Which implementation path?", "Answer:"} {
+	for _, want := range []string{"Help request", testFeatureNameActiveWork, "Which implementation path?", "Answer:"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4793,14 +5043,14 @@ func TestAPIAppModelHelpMessageUsesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	answered := model.(APIAppModel)
 
-	if got := client.helpRequests; len(got) != 1 || got[0].FeatureID != "active" || got[0].SessionID != "" || got[0].Message != "use codex" {
+	if got := client.helpRequests; len(got) != 1 || got[0].FeatureID != testFeatureIDActive || got[0].SessionID != "" || got[0].Message != "use codex" {
 		t.Fatalf("SendHelp requests = %+v, want feature-scoped message", got)
 	}
 	if answered.helpPromptActive {
 		t.Fatal("help prompt remained open after accepted answer")
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"Completed Help Reply", "active"} {
+	for _, want := range []string{"Completed Help Reply", testFeatureIDActive} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4812,17 +5062,17 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		prompts: server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
 			{
-				RequestID: "ask-1",
-				SessionID: "sess-1",
-				FeatureID: "active",
-				ToolName:  "AskUserQuestion",
-				Status:    "pending",
-				Summary:   "Which database?",
-				Questions: []server.AskUserQuestionDTO{{Question: "Which database?"}},
+				RequestID: testAskRequestID,
+				SessionID: testSessionIDOne,
+				FeatureID: testFeatureIDActive,
+				ToolName:  toolNameAskUserQuestion,
+				Status:    testStatusPending,
+				Summary:   testQuestionWhichDatabase,
+				Questions: []server.AskUserQuestionDTO{{Question: testQuestionWhichDatabase}},
 			},
 		}},
 		askUserAccepted: apiTestActionResponse{},
@@ -4838,7 +5088,7 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 		t.Fatal("Update(a) did not enter attach ask-user prompt")
 	}
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Which database?", "Type your answer", "Enter"} {
+	for _, want := range []string{testQuestionWhichDatabase, "Type your answer", "Enter"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4847,7 +5097,7 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 		t.Fatalf("AnswerAskUser calls = %v before answer, want none", client.askUserAnswers)
 	}
 
-	for _, ch := range "PostgreSQL" {
+	for _, ch := range testDBOptionPostgres {
 		model, _ = prompting.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
 		prompting = model.(APIAppModel)
 	}
@@ -4863,14 +5113,14 @@ func TestAPIAppModelAskUserAnswerUsesRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	answered := model.(APIAppModel)
 
-	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != "ask-1" || got[0].SessionID != "sess-1" || got[0].Answers["Which database?"] != "PostgreSQL" {
+	if got := client.askUserAnswers; len(got) != 1 || got[0].RequestID != testAskRequestID || got[0].SessionID != testSessionIDOne || got[0].Answers[testQuestionWhichDatabase] != testDBOptionPostgres {
 		t.Fatalf("AnswerAskUser requests = %+v, want ask-1/sess-1 answer keyed by full question", got)
 	}
 	if apiTestShowingAskUserPrompt(answered) {
 		t.Fatal("ask-user question remained active after accepted answer")
 	}
 	view = stripANSI(answered.View().Content)
-	for _, want := range []string{"[you] PostgreSQL", "Active work"} {
+	for _, want := range []string{"[you] PostgreSQL", testFeatureNameActiveWork} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -4882,24 +5132,24 @@ func TestAPIAttachSessionRendersRestoredLocalUserTranscriptAsYou(t *testing.T) {
 
 	sess := newAPIAttachSession(nil, apiTestSessionDetail(
 		server.SessionSummaryDTO{
-			ID:        "sess-1",
-			FeatureID: "active",
-			Phase:     "implement",
-			Kind:      "phase",
-			Status:    "Running",
+			ID:        testSessionIDOne,
+			FeatureID: testFeatureIDActive,
+			Phase:     testPhaseNameImplement,
+			Kind:      logTabPhase,
+			Status:    testSessionStatusRunning,
 		}),
 
 		server.TranscriptResponse{
 			Messages: []server.TranscriptMessageDTO{
-				{Index: 0, Role: "assistant", Type: "text", Text: "Which database?"},
-				{Index: 1, Role: "user", Type: "text", Text: "PostgreSQL", LocallyAppended: true},
-				{Index: 2, Role: "assistant", Type: "text", Text: "Active work"},
+				{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: testQuestionWhichDatabase},
+				{Index: 1, Role: testMessageRoleUser, Type: testMessageTypeText, Text: testDBOptionPostgres, LocallyAppended: true},
+				{Index: 2, Role: roleAssistant, Type: testMessageTypeText, Text: testFeatureNameActiveWork},
 			},
 		}, nil)
 
 	m := attachModelFromSession(sess, 120, 40)
 	view := stripANSI(m.View())
-	for _, want := range []string{"[you] PostgreSQL", "Active work"} {
+	for _, want := range []string{"[you] PostgreSQL", testFeatureNameActiveWork} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("reattached API transcript missing %q in:\n%s", want, view)
 		}
@@ -4928,17 +5178,17 @@ func TestAPIAttachSessionRendersProtocolUserTranscriptAsPrompt(t *testing.T) {
 	}
 	sess := newAPIAttachSession(nil, apiTestSessionDetail(
 		server.SessionSummaryDTO{
-			ID:        "sess-1",
-			FeatureID: "active",
-			Phase:     "implement",
-			Kind:      "phase",
-			Status:    "Running",
+			ID:        testSessionIDOne,
+			FeatureID: testFeatureIDActive,
+			Phase:     testPhaseNameImplement,
+			Kind:      logTabPhase,
+			Status:    testSessionStatusRunning,
 		}),
 
 		transcript, nil)
 
 	view := stripANSI(renderAttachMessages(sess.MessageLog().Messages(), filterAll, 120, nil))
-	for _, want := range []string{"prompt", "Translate README in Neapolitan.", "[you] Replace the existing README"} {
+	for _, want := range []string{testActionInputNamePrompt, "Translate README in Neapolitan.", "[you] Replace the existing README"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("reattached API transcript missing %q in:\n%s", want, view)
 		}
@@ -4969,7 +5219,7 @@ func TestAPIControlRequestMessagePreservesRESTToolInput(t *testing.T) {
 	if err := json.Unmarshal(msg.Request.Input, &payload); err != nil {
 		t.Fatalf("json.Unmarshal(input): %v", err)
 	}
-	if got, want := payload["command"], "go test ./internal/tui"; got != want {
+	if got, want := payload["command"], testShellCommandGoTest; got != want {
 		t.Fatalf("payload[command] = %q; want %q", got, want)
 	}
 	if payload["summary"] != "" {
@@ -4983,15 +5233,15 @@ func TestAPIControlRequestMessagePrefersRESTAskUserInput(t *testing.T) {
 	fullQuestion := "Which persistence strategy should the orchestrator use when an AskUserQuestion contains enough detail that the read API truncates the display projection, but the provider still requires the exact original question text as the answer-map key?"
 	displayQuestion := fullQuestion[:180]
 	req := server.ControlRequestDTO{
-		RequestID: "ask-1",
-		SessionID: "sess-1",
-		FeatureID: "active",
-		ToolName:  "AskUserQuestion",
-		Status:    "pending",
+		RequestID: testAskRequestID,
+		SessionID: testSessionIDOne,
+		FeatureID: testFeatureIDActive,
+		ToolName:  toolNameAskUserQuestion,
+		Status:    testStatusPending,
 		Input: map[string]any{
-			"questions": []any{
+			testInputKeyQuestions: []any{
 				map[string]any{
-					"question": fullQuestion,
+					testInputKeyQuestion: fullQuestion,
 					"options": []any{
 						map[string]any{"label": "Full input"},
 					},
@@ -5039,11 +5289,11 @@ func TestAPIAttachSessionRendersFileChangeTranscriptRows(t *testing.T) {
 	}
 	sess := newAPIAttachSession(nil, apiTestSessionDetail(
 		server.SessionSummaryDTO{
-			ID:        "sess-1",
-			FeatureID: "active",
-			Phase:     "implement",
-			Kind:      "phase",
-			Status:    "Running",
+			ID:        testSessionIDOne,
+			FeatureID: testFeatureIDActive,
+			Phase:     testPhaseNameImplement,
+			Kind:      logTabPhase,
+			Status:    testSessionStatusRunning,
 		}),
 
 		transcript, nil)
@@ -5111,11 +5361,11 @@ func TestAPIAttachSessionRendersTaskLifecycleAndDelegationRows(t *testing.T) {
 	}
 	sess := newAPIAttachSession(nil, apiTestSessionDetail(
 		server.SessionSummaryDTO{
-			ID:        "sess-1",
-			FeatureID: "active",
-			Phase:     "implement",
-			Kind:      "phase",
-			Status:    "Running",
+			ID:        testSessionIDOne,
+			FeatureID: testFeatureIDActive,
+			Phase:     testPhaseNameImplement,
+			Kind:      logTabPhase,
+			Status:    testSessionStatusRunning,
 		}),
 
 		transcript, nil)
@@ -5141,42 +5391,42 @@ func TestAPIAttachRefreshDoesNotDuplicateRestoredLocalUserEcho(t *testing.T) {
 	client := &fakeTUIAPIClient{askUserAccepted: apiTestActionResponse{}}
 	sess := newAPIAttachSession(client, apiTestSessionDetail(
 		server.SessionSummaryDTO{
-			ID:        "sess-1",
-			FeatureID: "active",
-			Phase:     "implement",
-			Kind:      "phase",
-			Status:    "Running",
+			ID:        testSessionIDOne,
+			FeatureID: testFeatureIDActive,
+			Phase:     testPhaseNameImplement,
+			Kind:      logTabPhase,
+			Status:    testSessionStatusRunning,
 		}),
 
 		server.TranscriptResponse{}, nil)
 	sess.MessageLog().Append(llm.SDKMessage{
-		Type:            "user",
+		Type:            testMessageRoleUser,
 		LocallyAppended: true,
 		User: &llm.UserMessage{
 			Message: llm.ConversationMsg{
-				Role:    "user",
-				Content: []llm.ContentBlock{{Type: "text", Text: "PostgreSQL"}},
+				Role:    testMessageRoleUser,
+				Content: []llm.ContentBlock{{Type: testMessageTypeText, Text: testDBOptionPostgres}},
 			},
 		},
 	})
 	if err := sess.RespondToAskUser("ask-1", json.RawMessage(`{"questions":[{"question":"Which database?"}]}`), map[string]string{
-		"Which database?": "PostgreSQL",
+		testQuestionWhichDatabase: testDBOptionPostgres,
 	}, nil); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 
 	newMessages := sess.applyAPISessionSnapshot(apiTestSessionDetail(
 		server.SessionSummaryDTO{
-			ID:        "sess-1",
-			FeatureID: "active",
-			Phase:     "implement",
-			Kind:      "phase",
-			Status:    "Running",
+			ID:        testSessionIDOne,
+			FeatureID: testFeatureIDActive,
+			Phase:     testPhaseNameImplement,
+			Kind:      logTabPhase,
+			Status:    testSessionStatusRunning,
 		}),
 
 		&server.TranscriptResponse{
 			Messages: []server.TranscriptMessageDTO{
-				{Index: 0, Role: "user", Type: "text", Text: "PostgreSQL", LocallyAppended: true},
+				{Index: 0, Role: testMessageRoleUser, Type: testMessageTypeText, Text: testDBOptionPostgres, LocallyAppended: true},
 			},
 		}, nil)
 
@@ -5196,20 +5446,20 @@ func TestAPIAppModelAskUserAnswerUsesFullInputQuestionKey(t *testing.T) {
 	displayQuestion := fullQuestion[:180]
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		prompts: server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
 			{
-				RequestID: "ask-1",
-				FeatureID: "active",
-				ToolName:  "AskUserQuestion",
-				Status:    "pending",
+				RequestID: testAskRequestID,
+				FeatureID: testFeatureIDActive,
+				ToolName:  toolNameAskUserQuestion,
+				Status:    testStatusPending,
 				Summary:   displayQuestion,
 				Input: map[string]any{
-					"questions": []any{
+					testInputKeyQuestions: []any{
 						map[string]any{
-							"question": fullQuestion,
-							"options":  []any{},
+							testInputKeyQuestion: fullQuestion,
+							"options":            []any{},
 						},
 					},
 				},
@@ -5249,21 +5499,21 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		prompts: server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
 			{
-				RequestID: "ask-1",
-				SessionID: "sess-1",
-				FeatureID: "active",
-				ToolName:  "AskUserQuestion",
-				Status:    "pending",
-				Summary:   "Which database?",
+				RequestID: testAskRequestID,
+				SessionID: testSessionIDOne,
+				FeatureID: testFeatureIDActive,
+				ToolName:  toolNameAskUserQuestion,
+				Status:    testStatusPending,
+				Summary:   testQuestionWhichDatabase,
 				Questions: []server.AskUserQuestionDTO{{
-					Question: "Which database?",
+					Question: testQuestionWhichDatabase,
 					Options: []server.AskUserOptionDTO{
-						{Label: "PostgreSQL", Description: "relational"},
-						{Label: "DynamoDB", Description: "managed key-value"},
+						{Label: testDBOptionPostgres, Description: "relational"},
+						{Label: testDBOptionDynamoDB, Description: "managed key-value"},
 					},
 				}},
 			},
@@ -5275,7 +5525,7 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'u', Text: "u"})
 	prompting := model.(APIAppModel)
 	view := stripANSI(prompting.View().Content)
-	for _, want := range []string{"Which database?", "PostgreSQL", "relational", "DynamoDB", "managed key-value"} {
+	for _, want := range []string{testQuestionWhichDatabase, testDBOptionPostgres, "relational", testDBOptionDynamoDB, "managed key-value"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("AskUser option prompt missing %q in:\n%s", want, view)
 		}
@@ -5292,7 +5542,7 @@ func TestAPIAppModelAskUserOptionPromptSendsSelectedOption(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = model.(APIAppModel).Update(msg)
-	if got := client.askUserAnswers; len(got) != 1 || got[0].Answers["Which database?"] != "DynamoDB" {
+	if got := client.askUserAnswers; len(got) != 1 || got[0].Answers[testQuestionWhichDatabase] != testDBOptionDynamoDB {
 		t.Fatalf("AnswerAskUser requests = %+v, want DynamoDB answer", got)
 	}
 }
@@ -5304,7 +5554,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotShowsReadableLongText(t *testin
 	longDescription := "Translate all prose including TUI labels. The README is a localized document, and describing what the screen says in English breaks immersion even though the reader can still match the workflow by position, status, and surrounding context."
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "design", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testArtifactIDDesign, CreatedAt: time.Now()},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -5324,8 +5574,8 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotShowsReadableLongText(t *testin
 		RequestID: "ask-long",
 		SessionID: chatSessionID,
 		FeatureID: chatSessionID,
-		ToolName:  "AskUserQuestion",
-		Status:    "pending",
+		ToolName:  toolNameAskUserQuestion,
+		Status:    testStatusPending,
 		Questions: []server.AskUserQuestionDTO{{
 			Question: longQuestion,
 			Options: []server.AskUserOptionDTO{{
@@ -5346,7 +5596,7 @@ func TestAPIAppModelChatPromptOnlyAskUserSnapshotShowsReadableLongText(t *testin
 	for _, want := range []string{
 		"losing important workflow context?",
 		"Translate TUI labels too (Recommended)",
-		"Enter to select",
+		testHintEnterToSelect,
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("chat view missing %q after long AskUser snapshot:\n%s", want, view)
@@ -5364,10 +5614,10 @@ func TestAPIAppModelAttachRefreshActivatesAskUserPrompt(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -5384,11 +5634,11 @@ func TestAPIAppModelAttachRefreshActivatesAskUserPrompt(t *testing.T) {
 	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
 		Prompts: &server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
 			{
-				RequestID: "ask-1",
-				SessionID: "sess-1",
-				FeatureID: "active",
-				ToolName:  "AskUserQuestion",
-				Status:    "pending",
+				RequestID: testAskRequestID,
+				SessionID: testSessionIDOne,
+				FeatureID: testFeatureIDActive,
+				ToolName:  toolNameAskUserQuestion,
+				Status:    testStatusPending,
 				Summary:   "Pick database",
 				Questions: []server.AskUserQuestionDTO{{Question: "Pick database"}},
 			},
@@ -5408,18 +5658,18 @@ func TestAPIAppModelAttachAskUserAnswerDoesNotReactivateCachedPrompt(t *testing.
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "plan", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testArtifactIDPlan, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "plan", Kind: "phase", Status: "WaitingHelp"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testArtifactIDPlan, Kind: logTabPhase, Status: testSessionStatusWaitingHelp},
 		}},
 		prompts: server.PromptSnapshotResponse{AskUserQuestions: []server.ControlRequestDTO{
 			{
-				RequestID: "ask-1",
-				SessionID: "sess-1",
-				FeatureID: "active",
-				ToolName:  "AskUserQuestion",
-				Status:    "pending",
+				RequestID: testAskRequestID,
+				SessionID: testSessionIDOne,
+				FeatureID: testFeatureIDActive,
+				ToolName:  toolNameAskUserQuestion,
+				Status:    testStatusPending,
 				Summary:   "Which README?",
 				Questions: []server.AskUserQuestionDTO{{
 					Question: "Which README?",
@@ -5472,10 +5722,10 @@ func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -5489,10 +5739,10 @@ func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
 	fullText := "I found the workspace is a monorepo with README docs."
 	firstSnapshot := server.RefreshSnapshot{
 		Session: &server.SessionDetailResponse{Session: apiTestSessionDetail(server.SessionSummaryDTO{
-			ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+			ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning,
 		})},
 		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-			{Index: 0, Role: "assistant", Type: "text", Text: partialText},
+			{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: partialText},
 		}},
 	}
 
@@ -5504,7 +5754,7 @@ func TestAPIAppModelAttachRefreshUpdatesStreamingTranscriptRow(t *testing.T) {
 
 	secondSnapshot := firstSnapshot
 	secondSnapshot.Transcript = &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-		{Index: 0, Role: "assistant", Type: "text", Text: fullText},
+		{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: fullText},
 	}}
 	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: secondSnapshot})
 	updated := model.(APIAppModel)
@@ -5522,10 +5772,10 @@ func TestAPIAppModelAttachBackfillsOlderTranscriptOnScrollTop(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
 		}},
 		transcript: server.TranscriptResponse{
 			Cursor:   server.CursorDTO{Total: 100, Start: 0, End: 50},
@@ -5534,13 +5784,13 @@ func TestAPIAppModelAttachBackfillsOlderTranscriptOnScrollTop(t *testing.T) {
 	}
 	app := newTestAPIAppModel(t, client)
 	app.storeSessionDetail(server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{
-		ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+		ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning,
 	}, server.SessionDetailDTO{
 
 		TranscriptCursor: server.CursorDTO{Total: 100, Start: 0, End: 100},
 		CanAttach:        true,
 	})})
-	app.storeTranscript("sess-1", server.TranscriptResponse{
+	app.storeTranscript(testSessionIDOne, server.TranscriptResponse{
 		Cursor:   server.CursorDTO{Total: 100, Start: 50, End: 100},
 		Messages: apiTestTranscriptRows(50, 100),
 	})
@@ -5592,8 +5842,8 @@ func apiTestTranscriptRows(start, end int) []server.TranscriptMessageDTO {
 	for i := start; i < end; i++ {
 		rows = append(rows, server.TranscriptMessageDTO{
 			Index: i,
-			Role:  "assistant",
-			Type:  "text",
+			Role:  roleAssistant,
+			Type:  testMessageTypeText,
 			Text:  fmt.Sprintf("transcript row %03d", i),
 		})
 	}
@@ -5605,21 +5855,21 @@ func TestAPIAppModelAttachRendersSessionInitialPrompt(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
 	app.storeSessionDetail(server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{
-		ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+		ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning,
 	}, server.SessionDetailDTO{
 
 		InitialPrompt: "Implement the user-visible attach header.",
 	})})
-	app.storeTranscript("sess-1", server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-		{Index: 0, Role: "assistant", Type: "text", Text: "Working on it."},
+	app.storeTranscript(testSessionIDOne, server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+		{Index: 0, Role: roleAssistant, Type: testMessageTypeText, Text: "Working on it."},
 	}})
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
@@ -5640,16 +5890,16 @@ func TestAPIAppModelAttachBackfillsInitialPromptFromRefresh(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
 		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{
-			{ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running"},
+			{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
-	app.selectedFeature = "active"
+	app.selectedFeature = testFeatureIDActive
 
-	model, _ := app.openAPIAttachForFeature("active")
+	model, _ := app.openAPIAttachForFeature(testFeatureIDActive)
 	attached := model.(APIAppModel)
 	if attached.attach == nil {
 		t.Fatal("expected attach model to open")
@@ -5660,7 +5910,7 @@ func TestAPIAppModelAttachBackfillsInitialPromptFromRefresh(t *testing.T) {
 
 	model, _ = attached.Update(apiRefreshSnapshotMsg{snapshot: server.RefreshSnapshot{
 		Session: &server.SessionDetailResponse{Session: apiTestSessionDetailWith(server.SessionSummaryDTO{
-			ID: "sess-1", FeatureID: "active", Phase: "implement", Kind: "phase", Status: "Running",
+			ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Kind: logTabPhase, Status: testSessionStatusRunning,
 		}, server.SessionDetailDTO{
 
 			InitialPrompt: "# Repository Context\n\nBuild the repo knowledge base.",
@@ -5678,21 +5928,21 @@ func TestAPIAppModelFetchAttachSessionDetailCmdReturnsRefreshSnapshot(t *testing
 
 	client := &fakeTUIAPIClient{
 		sessionDetailsByID: map[string]server.SessionDetailResponse{
-			"sess-1": {Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: "sess-1", FeatureID: "active", Phase: "implement", Status: "Running"}, server.SessionDetailDTO{
+			testSessionIDOne: {Session: apiTestSessionDetailWith(server.SessionSummaryDTO{ID: testSessionIDOne, FeatureID: testFeatureIDActive, Phase: testPhaseNameImplement, Status: testSessionStatusRunning}, server.SessionDetailDTO{
 
 				InitialPrompt:    "# Repository Context\n\nBuild the repo knowledge base.",
 				TranscriptCursor: server.CursorDTO{End: 2, Total: 2},
 			})},
 		},
 		transcriptsByID: map[string]server.TranscriptResponse{
-			"sess-1": {Messages: []server.TranscriptMessageDTO{
-				{Index: 1, Role: "assistant", Type: "text", Text: "Working on it."},
+			testSessionIDOne: {Messages: []server.TranscriptMessageDTO{
+				{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Working on it."},
 			}},
 		},
 	}
 	app := newTestAPIAppModel(t, client)
 
-	cmd := app.fetchAttachSessionDetailCmd("sess-1")
+	cmd := app.fetchAttachSessionDetailCmd(testSessionIDOne)
 	if cmd == nil {
 		t.Fatal("fetchAttachSessionDetailCmd returned nil")
 	}
@@ -5722,37 +5972,37 @@ func TestAPIAppModelReviewDecisionsUseRESTMutation(t *testing.T) {
 	}{
 		{
 			name: "phase plan proceeds",
-			msg:  PlanReviewDecisionMsg{FeatureID: "active", Decision: "proceed"},
+			msg:  PlanReviewDecisionMsg{FeatureID: testFeatureIDActive, Decision: reviewDecisionProceed},
 			detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetail(
 				server.FeatureSummary{
-					ID: "active", Name: "Active work", Slug: "active-work", Status: "PlanNeedsReview", CurrentPhase: "plan",
+					ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPlanNeedsReview, CurrentPhase: testArtifactIDPlan,
 					Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3},
 				})},
-			wantReq: server.ReviewDecisionRequest{Decision: "proceed", PhasePlan: true},
+			wantReq: server.ReviewDecisionRequest{Decision: reviewDecisionProceed, PhasePlan: true},
 		},
 		{
 			name: "roadmap reject iterates with comment",
-			msg:  RoadmapReviewDecisionMsg{FeatureID: "active", Decision: "reject", Comment: "Needs clearer slices"},
+			msg:  RoadmapReviewDecisionMsg{FeatureID: testFeatureIDActive, Decision: "reject", Comment: "Needs clearer slices"},
 			wantReq: server.ReviewDecisionRequest{
-				Decision: "iterate",
+				Decision: reviewDecisionIterate,
 				Roadmap:  true,
 				Comment:  "Needs clearer slices",
 			},
 		},
 		{
 			name: "gate proceeds with target phase",
-			msg:  GateReviewDecisionMsg{FeatureID: "active", Phase: feature.PhaseImplement, Decision: "proceed"},
+			msg:  GateReviewDecisionMsg{FeatureID: testFeatureIDActive, Phase: feature.PhaseImplement, Decision: reviewDecisionProceed},
 			wantReq: server.ReviewDecisionRequest{
-				Decision: "proceed",
-				Phase:    "implement",
+				Decision: reviewDecisionProceed,
+				Phase:    testPhaseNameImplement,
 			},
 		},
 		{
 			name: "rewind proceeds with target phase",
-			msg:  RewindReviewDecisionMsg{FeatureID: "active", Phase: feature.PhasePlan, Decision: "proceed"},
+			msg:  RewindReviewDecisionMsg{FeatureID: testFeatureIDActive, Phase: feature.PhasePlan, Decision: reviewDecisionProceed},
 			wantReq: server.ReviewDecisionRequest{
-				Decision: "proceed",
-				Phase:    "plan",
+				Decision: reviewDecisionProceed,
+				Phase:    testArtifactIDPlan,
 				IsRewind: true,
 			},
 		},
@@ -5764,11 +6014,11 @@ func TestAPIAppModelReviewDecisionsUseRESTMutation(t *testing.T) {
 
 			if tt.detail.Feature.ID == "" {
 				tt.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetail(
-					server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "PlanNeedsReview", CurrentPhase: "plan"})}
+					server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPlanNeedsReview, CurrentPhase: testArtifactIDPlan})}
 			}
 			client := &fakeTUIAPIClient{
 				features: server.FeatureListResponse{Features: []server.FeatureSummary{
-					{ID: "active", Name: "Active work", Slug: "active-work", Status: "PlanNeedsReview", CurrentPhase: "plan", CreatedAt: time.Now()},
+					{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPlanNeedsReview, CurrentPhase: testArtifactIDPlan, CreatedAt: time.Now()},
 				}},
 				detail:         tt.detail,
 				reviewAccepted: apiTestActionResponse{},
@@ -5786,14 +6036,14 @@ func TestAPIAppModelReviewDecisionsUseRESTMutation(t *testing.T) {
 			model, _ = model.(APIAppModel).Update(msg)
 			reviewed := model.(APIAppModel)
 
-			if got := strings.Join(client.reviewFeatureIDs, ","); got != "active" {
+			if got := strings.Join(client.reviewFeatureIDs, ","); got != testFeatureIDActive {
 				t.Fatalf("ReviewDecision feature IDs = %q, want active", got)
 			}
 			if len(client.reviewRequests) != 1 || client.reviewRequests[0] != tt.wantReq {
 				t.Fatalf("ReviewDecision requests = %+v, want %+v", client.reviewRequests, tt.wantReq)
 			}
 			view := stripANSI(reviewed.View().Content)
-			for _, want := range []string{"Completed Review Decision", "active"} {
+			for _, want := range []string{"Completed Review Decision", testFeatureIDActive} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("API app View() missing %q in:\n%s", want, view)
 				}
@@ -5814,11 +6064,11 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "PlanNeedsReview",
-				CurrentPhase: "plan",
+				ID:           testFeatureIDActive,
+				Name:         testFeatureNameTranslateReadme,
+				Slug:         testFeatureSlugTranslateReadme,
+				Status:       testFeatureStatusPlanNeedsReview,
+				CurrentPhase: testArtifactIDPlan,
 				ActiveRun:    1,
 				CreatedAt:    time.Now(),
 				Progress: server.FeatureProgress{
@@ -5828,11 +6078,11 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 			},
 		}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{
-			ID:           "active",
-			Name:         "Translate README",
-			Slug:         "translate-readme",
-			Status:       "PlanNeedsReview",
-			CurrentPhase: "plan",
+			ID:           testFeatureIDActive,
+			Name:         testFeatureNameTranslateReadme,
+			Slug:         testFeatureSlugTranslateReadme,
+			Status:       testFeatureStatusPlanNeedsReview,
+			CurrentPhase: testArtifactIDPlan,
 			ActiveRun:    1,
 			Progress: server.FeatureProgress{
 				CurrentRoadmapPhase: 0,
@@ -5842,15 +6092,15 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 
 			ActiveRunDetail: &server.RunSummaryDTO{
 				RunNumber:     1,
-				CurrentPhase:  "plan",
+				CurrentPhase:  testArtifactIDPlan,
 				RoadmapPhase:  0,
 				RoadmapTotal:  3,
 				ArtifactCount: 1,
 			},
-			Models: config.ModelConfig{Utilities: "test-utility"},
+			Models: config.ModelConfig{Utilities: testUtilityModelID},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "roadmap", RunNumber: 1, Phase: "plan", Path: roadmapPath, Size: 28, ContentAvailable: true},
+			{ID: testPipelineRoadmap, RunNumber: 1, Phase: testArtifactIDPlan, Path: roadmapPath, Size: 28, ContentAvailable: true},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -5865,10 +6115,10 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 	if updated.artifactReview == nil {
 		t.Fatalf("pressing a did not open artifact review; statusMessage=%q", updated.statusMessage)
 	}
-	if got := updated.artifactReview.FeatureID(); got != "active" {
+	if got := updated.artifactReview.FeatureID(); got != testFeatureIDActive {
 		t.Fatalf("artifactReview.FeatureID() = %q, want active", got)
 	}
-	if got := updated.artifactReview.ReviewMode(); got != "plan" {
+	if got := updated.artifactReview.ReviewMode(); got != testArtifactIDPlan {
 		t.Fatalf("artifactReview.ReviewMode() = %q, want plan", got)
 	}
 	if got := updated.artifactReview.ArtifactPath(); got != roadmapPath {
@@ -5891,7 +6141,7 @@ func TestAPIAppModelContextualActionOpensNeedsReviewArtifact(t *testing.T) {
 	}
 	_, _ = model.(APIAppModel).Update(cmd())
 
-	wantReq := server.ReviewDecisionRequest{Decision: "proceed", Roadmap: true}
+	wantReq := server.ReviewDecisionRequest{Decision: reviewDecisionProceed, Roadmap: true}
 	if len(client.reviewRequests) != 1 || client.reviewRequests[0] != wantReq {
 		t.Fatalf("reviewRequests = %+v, want %+v", client.reviewRequests, wantReq)
 	}
@@ -5909,39 +6159,39 @@ func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testin
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "DesignNeedsReview",
-				CurrentPhase: "design",
+				ID:           testFeatureIDActive,
+				Name:         testFeatureNameTranslateReadme,
+				Slug:         testFeatureSlugTranslateReadme,
+				Status:       testFeatureStatusDesignNeedsReview,
+				CurrentPhase: testArtifactIDDesign,
 				ActiveRun:    2,
 				RunCount:     2,
 				CreatedAt:    time.Now(),
 			},
 		}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{
-			ID:           "active",
-			Name:         "Translate README",
-			Slug:         "translate-readme",
-			Status:       "DesignNeedsReview",
-			CurrentPhase: "design",
+			ID:           testFeatureIDActive,
+			Name:         testFeatureNameTranslateReadme,
+			Slug:         testFeatureSlugTranslateReadme,
+			Status:       testFeatureStatusDesignNeedsReview,
+			CurrentPhase: testArtifactIDDesign,
 			ActiveRun:    2,
 			RunCount:     2,
 		}, server.FeatureDetailDTO{
 
-			Pipeline: "medium",
+			Pipeline: testPipelineSizeMedium,
 			ActiveRunDetail: &server.RunSummaryDTO{
 				RunNumber:          2,
-				CurrentPhase:       "design",
-				PendingReviewPhase: "plan",
+				CurrentPhase:       testArtifactIDDesign,
+				PendingReviewPhase: testArtifactIDPlan,
 				IsRewind:           true,
 				ArtifactCount:      1,
 			},
-			Models: config.ModelConfig{Utilities: "test-utility"},
+			Models: config.ModelConfig{Utilities: testUtilityModelID},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: filepath.Join(tmp, "roadmap.md"), Size: 1, ContentAvailable: true},
-			{ID: "description-review", RunNumber: 2, Phase: "description", Path: descPath, Size: 27, ContentAvailable: true},
+			{ID: testPipelineRoadmap, RunNumber: 2, Phase: testArtifactIDPlan, Path: filepath.Join(tmp, "roadmap.md"), Size: 1, ContentAvailable: true},
+			{ID: artifactIDDescriptionReview, RunNumber: 2, Phase: testArtifactPhaseDescription, Path: descPath, Size: 27, ContentAvailable: true},
 		}},
 		reviewAccepted: apiTestActionResponse{},
 	}
@@ -5956,7 +6206,7 @@ func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testin
 	if updated.artifactReview == nil {
 		t.Fatalf("pressing a did not open artifact review; statusMessage=%q", updated.statusMessage)
 	}
-	if got := updated.artifactReview.ReviewMode(); got != "rewind" {
+	if got := updated.artifactReview.ReviewMode(); got != reviewModeRewind {
 		t.Fatalf("artifactReview.ReviewMode() = %q, want rewind", got)
 	}
 	if got := updated.artifactReview.ArtifactPath(); got != descPath {
@@ -5975,7 +6225,7 @@ func TestAPIAppModelContextualActionOpensMediumRewindDescriptionReview(t *testin
 	}
 	_, _ = model.(APIAppModel).Update(cmd())
 
-	wantReq := server.ReviewDecisionRequest{Decision: "proceed", Phase: "plan", IsRewind: true}
+	wantReq := server.ReviewDecisionRequest{Decision: reviewDecisionProceed, Phase: testArtifactIDPlan, IsRewind: true}
 	if len(client.reviewRequests) != 1 || client.reviewRequests[0] != wantReq {
 		t.Fatalf("reviewRequests = %+v, want %+v", client.reviewRequests, wantReq)
 	}
@@ -5987,9 +6237,9 @@ func newStaleRewindReviewClient(status, phase, pipeline, pendingReviewPhase stri
 	return &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
+				ID:           testFeatureIDActive,
+				Name:         testFeatureNameTranslateReadme,
+				Slug:         testFeatureSlugTranslateReadme,
 				Status:       status,
 				CurrentPhase: phase,
 				ActiveRun:    2,
@@ -5998,9 +6248,9 @@ func newStaleRewindReviewClient(status, phase, pipeline, pendingReviewPhase stri
 			},
 		}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{
-			ID:           "active",
-			Name:         "Translate README",
-			Slug:         "translate-readme",
+			ID:           testFeatureIDActive,
+			Name:         testFeatureNameTranslateReadme,
+			Slug:         testFeatureSlugTranslateReadme,
 			Status:       status,
 			CurrentPhase: phase,
 			ActiveRun:    2,
@@ -6015,7 +6265,7 @@ func newStaleRewindReviewClient(status, phase, pipeline, pendingReviewPhase stri
 				IsRewind:           true,
 				ArtifactCount:      1,
 			},
-			Models: config.ModelConfig{Utilities: "test-utility"},
+			Models: config.ModelConfig{Utilities: testUtilityModelID},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{artifact}},
 	}
@@ -6030,8 +6280,8 @@ func TestAPIAppModelContextualActionRejectsStaleRewindReviewArtifact(t *testing.
 		t.Fatalf("write stale roadmap artifact: %v", err)
 	}
 
-	client := newStaleRewindReviewClient("PromptNeedsReview", "knowledge-base", "large", "inquire",
-		server.ArtifactDTO{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true})
+	client := newStaleRewindReviewClient("PromptNeedsReview", "knowledge-base", testPipelineSizeLarge, testPhaseKeyInquire,
+		server.ArtifactDTO{ID: testPipelineRoadmap, RunNumber: 2, Phase: testArtifactIDPlan, Path: roadmapPath, Size: 14, ContentAvailable: true})
 	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
@@ -6042,7 +6292,7 @@ func TestAPIAppModelContextualActionRejectsStaleRewindReviewArtifact(t *testing.
 	if cmd == nil {
 		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
 	}
-	if updated.statusMessage != "Loading review artifact" {
+	if updated.statusMessage != statusMsgLoadingReviewArtifact {
 		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
 	}
 }
@@ -6059,37 +6309,37 @@ func TestAPIAppModelContextualActionRejectsStaleNonRewindGateArtifact(t *testing
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
 			{
-				ID:           "active",
-				Name:         "Translate README",
-				Slug:         "translate-readme",
-				Status:       "ResearchNeedsReview",
-				CurrentPhase: "research",
+				ID:           testFeatureIDActive,
+				Name:         testFeatureNameTranslateReadme,
+				Slug:         testFeatureSlugTranslateReadme,
+				Status:       testFeatureStatusResearchNeedsReview,
+				CurrentPhase: testPhaseKeyResearch,
 				ActiveRun:    1,
 				RunCount:     1,
 				CreatedAt:    time.Now(),
 			},
 		}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{
-			ID:           "active",
-			Name:         "Translate README",
-			Slug:         "translate-readme",
-			Status:       "ResearchNeedsReview",
-			CurrentPhase: "research",
+			ID:           testFeatureIDActive,
+			Name:         testFeatureNameTranslateReadme,
+			Slug:         testFeatureSlugTranslateReadme,
+			Status:       testFeatureStatusResearchNeedsReview,
+			CurrentPhase: testPhaseKeyResearch,
 			ActiveRun:    1,
 			RunCount:     1,
 		}, server.FeatureDetailDTO{
 
-			Pipeline: "moonshot",
+			Pipeline: testPipelineSizeMoonshot,
 			ActiveRunDetail: &server.RunSummaryDTO{
 				RunNumber:          1,
-				CurrentPhase:       "research",
-				PendingReviewPhase: "design",
+				CurrentPhase:       testPhaseKeyResearch,
+				PendingReviewPhase: testArtifactIDDesign,
 				ArtifactCount:      1,
 			},
-			Models: config.ModelConfig{Utilities: "test-utility"},
+			Models: config.ModelConfig{Utilities: testUtilityModelID},
 		})},
 		artifactList: server.ArtifactListResponse{Artifacts: []server.ArtifactDTO{
-			{ID: "inquire", RunNumber: 1, Phase: "inquire", Path: questionsPath, Size: 12, ContentAvailable: true},
+			{ID: testPhaseKeyInquire, RunNumber: 1, Phase: testPhaseKeyInquire, Path: questionsPath, Size: 12, ContentAvailable: true},
 		}},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -6106,7 +6356,7 @@ func TestAPIAppModelContextualActionRejectsStaleNonRewindGateArtifact(t *testing
 	if cmd == nil {
 		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
 	}
-	if updated.statusMessage != "Loading review artifact" {
+	if updated.statusMessage != statusMsgLoadingReviewArtifact {
 		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
 	}
 }
@@ -6120,10 +6370,10 @@ func TestAPIAppModelContextualActionRejectsDetachedStaleReviewAfterRewind(t *tes
 		t.Fatalf("write stale roadmap artifact: %v", err)
 	}
 
-	client := newStaleRewindReviewClient("PromptNeedsReview", "knowledge-base", "large", "inquire",
-		server.ArtifactDTO{ID: "roadmap", RunNumber: 2, Phase: "plan", Path: roadmapPath, Size: 14, ContentAvailable: true})
+	client := newStaleRewindReviewClient("PromptNeedsReview", "knowledge-base", testPipelineSizeLarge, testPhaseKeyInquire,
+		server.ArtifactDTO{ID: testPipelineRoadmap, RunNumber: 2, Phase: testArtifactIDPlan, Path: roadmapPath, Size: 14, ContentAvailable: true})
 	app := newTestAPIAppModel(t, client)
-	stale := NewArtifactReviewModel(roadmapPath, "active", "plan", feature.PhasePlan, app.width, app.height, nil, "", nil)
+	stale := NewArtifactReviewModel(roadmapPath, testFeatureIDActive, testArtifactIDPlan, feature.PhasePlan, app.width, app.height, nil, "", nil)
 	stale.detached = true
 	app.artifactReview = &stale
 
@@ -6135,7 +6385,7 @@ func TestAPIAppModelContextualActionRejectsDetachedStaleReviewAfterRewind(t *tes
 	if cmd == nil {
 		t.Fatalf("pressing a returned nil command; want review artifact refresh, statusMessage=%q", updated.statusMessage)
 	}
-	if updated.statusMessage != "Loading review artifact" {
+	if updated.statusMessage != statusMsgLoadingReviewArtifact {
 		t.Fatalf("statusMessage = %q, want Loading review artifact", updated.statusMessage)
 	}
 }
@@ -6149,11 +6399,11 @@ func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *
 		t.Fatalf("write description review: %v", err)
 	}
 
-	client := newStaleRewindReviewClient("DesignNeedsReview", "design", "medium", "plan",
-		server.ArtifactDTO{ID: "description-review", RunNumber: 2, Phase: "description", Path: descPath, Size: 27, ContentAvailable: true})
+	client := newStaleRewindReviewClient(testFeatureStatusDesignNeedsReview, testArtifactIDDesign, testPipelineSizeMedium, testArtifactIDPlan,
+		server.ArtifactDTO{ID: artifactIDDescriptionReview, RunNumber: 2, Phase: testArtifactPhaseDescription, Path: descPath, Size: 27, ContentAvailable: true})
 	app := newTestAPIAppModel(t, client)
-	delete(app.contents, "active")
-	app.rebuildPresentation("active")
+	delete(app.contents, testFeatureIDActive)
+	app.rebuildPresentation(testFeatureIDActive)
 	initialArtifactListCalls := len(client.artifactListFeatureIDs)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
@@ -6167,7 +6417,7 @@ func TestAPIAppModelContextualActionLoadsReviewArtifactWhenContentCacheEmpty(t *
 	if updated.artifactReview == nil {
 		t.Fatalf("review artifact load did not open review; statusMessage=%q", updated.statusMessage)
 	}
-	if got := updated.artifactReview.ReviewMode(); got != "rewind" {
+	if got := updated.artifactReview.ReviewMode(); got != reviewModeRewind {
 		t.Fatalf("artifactReview.ReviewMode() = %q, want rewind", got)
 	}
 	if got := updated.artifactReview.ArtifactPath(); got != descPath {
@@ -6183,30 +6433,30 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish}, server.FeatureDetailDTO{
 
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "agentic-orchestrator", Publishable: true},
+				{Name: testRepoNameOrchestrator, Publishable: true},
 			},
 			Actions: []server.ActionDTO{
 				{
-					ID:      "review-comments",
+					ID:      actionIDReviewComments,
 					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature", RepoSelection: "required", CycleType: "review-comments"},
+					Scope:   server.ActionScopeDTO{Type: testActionScopeFeature, RepoSelection: "required", CycleType: actionIDReviewComments},
 					RequiredInputs: []server.ActionInputDTO{
-						{Name: "repo", Kind: "string", Required: true},
-						{Name: "mode", Kind: "enum", Required: true, Options: []string{"auto", "address_all"}},
+						{Name: actionInputNameRepo, Kind: testParamKindString, Required: true},
+						{Name: "mode", Kind: testParamKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
 					},
 				},
 			},
 		})},
 		reviewCommentsResponse: server.ReviewCommentsFetchResponse{
-			FeatureID: "active",
-			Repo:      "agentic-orchestrator",
+			FeatureID: testFeatureIDActive,
+			Repo:      testRepoNameOrchestrator,
 			Comments: []server.ReviewCommentDTO{
-				{ID: 101, Type: "review", Path: "internal/tui/api_app.go", Line: 42, Body: "use REST DTOs here", UserLogin: "reviewer", DiffHunk: "@@ -1 +1 @@\n-old\n+new"},
+				{ID: 101, Type: reviewCommentTypeReview, Path: "internal/tui/api_app.go", Line: 42, Body: "use REST DTOs here", UserLogin: "reviewer", DiffHunk: "@@ -1 +1 @@\n-old\n+new"},
 			},
 		},
 		startReviewCommentsAccepted: apiTestActionResponse{},
@@ -6223,17 +6473,17 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	previewing := model.(APIAppModel)
 
-	if got := strings.Join(client.reviewCommentsFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.reviewCommentsFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("FetchReviewComments feature IDs = %q, want active", got)
 	}
-	if got := client.reviewCommentsFetchRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" {
+	if got := client.reviewCommentsFetchRequests; len(got) != 1 || got[0].Repo != testRepoNameOrchestrator {
 		t.Fatalf("FetchReviewComments requests = %+v, want agentic-orchestrator repo", got)
 	}
 	if len(client.startReviewCommentsFeatureIDs) != 0 {
 		t.Fatalf("StartReviewComments calls = %v before preview confirmation, want none", client.startReviewCommentsFeatureIDs)
 	}
 	view := stripANSI(previewing.View().Content)
-	if strings.Contains(view, "Features") {
+	if strings.Contains(view, dashboardFeaturesPanelTitle) {
 		t.Fatalf("review comments preview rendered over dashboard instead of full-screen surface:\n%s", view)
 	}
 	if maxPlainLineWidth(view) < 130 {
@@ -6247,13 +6497,13 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 		t.Fatalf("review comments preview footer not on final rendered line:\n%s", view)
 	}
 	for _, want := range []string{
-		"Review Comments",
-		"Active work",
-		"agentic-orchestrator",
+		helpContextReviewComments,
+		testFeatureNameActiveWork,
+		testRepoNameOrchestrator,
 		"1 pending",
 		"1 included",
 		"Queue",
-		"Detail",
+		helpContextDetail,
 		"@reviewer",
 		"internal/tui/api_app.go:42",
 		"use REST DTOs here",
@@ -6293,22 +6543,22 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	model, cmd = model.(APIAppModel).Update(msg)
 	started := model.(APIAppModel)
 
-	if got := strings.Join(client.startReviewCommentsFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.startReviewCommentsFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("StartReviewComments feature IDs = %q, want active", got)
 	}
-	if got := client.startReviewCommentsRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Mode != "auto" || len(got[0].Comments) != 1 || got[0].Comments[0].ID != 101 || got[0].Comments[0].DiffHunk == "" {
+	if got := client.startReviewCommentsRequests; len(got) != 1 || got[0].Repo != testRepoNameOrchestrator || got[0].Mode != reviewCommentsModeAuto || len(got[0].Comments) != 1 || got[0].Comments[0].ID != 101 || got[0].Comments[0].DiffHunk == "" {
 		t.Fatalf("StartReviewComments requests = %+v, want agentic-orchestrator auto with previewed comment", got)
 	}
 	if cmd == nil {
 		t.Fatal("review-comments mutation result returned nil command, want immediate feature detail refresh")
 	}
 
-	cycle := &server.CycleDTO{Type: "review-comments", Status: "running"}
-	client.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", Cycle: cycle, CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}}, server.FeatureDetailDTO{
+	cycle := &server.CycleDTO{Type: actionIDReviewComments, Status: featureStatusTokenRunning}
+	client.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, Cycle: cycle, CreatedAt: time.Now(), Repos: []string{testRepoNameOrchestrator}}, server.FeatureDetailDTO{
 
 		Cycle: cycle,
 		RepoStatus: []server.RepoStatusDTO{
-			{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "review-comments", CycleStatus: "running"},
+			{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: actionIDReviewComments, CycleStatus: featureStatusTokenRunning},
 		},
 	})}
 	msg = cmd()
@@ -6316,7 +6566,7 @@ func TestAPIAppModelReviewCommentsPreviewAndStartUseREST(t *testing.T) {
 	started = model.(APIAppModel)
 
 	view = stripANSI(started.View().Content)
-	for _, want := range []string{"Started Review Comments", "active", "Addressing Review Comments"} {
+	for _, want := range []string{"Started Review Comments", testFeatureIDActive, "Addressing Review Comments"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -6334,26 +6584,26 @@ func maxPlainLineWidth(s string) int {
 }
 
 // newRefactorActionClient builds a fakeTUIAPIClient exposing an enabled
-// feature-scoped "refactor" action on an otherwise-published feature.
+// feature-scoped testPipelineRefactor action on an otherwise-published feature.
 func newRefactorActionClient() *fakeTUIAPIClient {
 	return &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now(), Repos: []string{testRepoNameOrchestrator}},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish}, server.FeatureDetailDTO{
 
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "agentic-orchestrator", Publishable: true},
+				{Name: testRepoNameOrchestrator, Publishable: true},
 			},
 			Actions: []server.ActionDTO{
 				{
-					ID:      "refactor",
+					ID:      testPipelineRefactor,
 					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
+					Scope:   server.ActionScopeDTO{Type: testActionScopeFeature},
 					RequiredInputs: []server.ActionInputDTO{
-						{Name: "repo", Kind: "string", Required: false},
-						{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
-						{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
+						{Name: actionInputNameRepo, Kind: testParamKindString, Required: false},
+						{Name: testActionInputNamePrompt, Kind: testParamKindString, Required: true, MaxLength: server.MaxActionTextBytes},
+						{Name: "pipeline", Kind: testParamKindEnum, Required: false, Options: []string{testPipelineSizeMedium, testPipelineSizeLarge, testPipelineSizeMoonshot}},
 					},
 				},
 			},
@@ -6374,7 +6624,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	}
 	refactor := model.(APIAppModel)
 	view := stripANSI(refactor.View().Content)
-	for _, want := range []string{"Refactor", "Active work", "What changes do you want to make?", "Describe the refactoring for", "agentic-orchestrator...", "ctrl+s"} {
+	for _, want := range []string{"Refactor", testFeatureNameActiveWork, "What changes do you want to make?", "Describe the refactoring for", "agentic-orchestrator...", "ctrl+s"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in refactor prompt:\n%s", want, view)
 		}
@@ -6390,7 +6640,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	}
 	refactor = model.(APIAppModel)
 	view = stripANSI(refactor.View().Content)
-	for _, want := range []string{"Select Pipeline for Refactor", "medium", "large", "moonshot", "Inquiry + research + planning", "Confirm"} {
+	for _, want := range []string{"Select Pipeline for Refactor", testPipelineSizeMedium, testPipelineSizeLarge, testPipelineSizeMoonshot, "Inquiry + research + planning", "Confirm"} { //nolint:goconst // "Confirm" here is a substring check against the composite "[enter] Confirm" key hint, coincidentally matching unrelated keybinding-description literals elsewhere
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in refactor pipeline selector:\n%s", want, view)
 		}
@@ -6404,22 +6654,22 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	model, cmd = model.(APIAppModel).Update(msg)
 	started := model.(APIAppModel)
 
-	if got := strings.Join(client.startRefactorFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.startRefactorFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("StartRefactor feature IDs = %q, want active", got)
 	}
-	if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != "agentic-orchestrator" || got[0].Prompt != "extract transport boundary" || got[0].Pipeline != feature.PipelineLarge {
+	if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != testRepoNameOrchestrator || got[0].Prompt != "extract transport boundary" || got[0].Pipeline != feature.PipelineLarge {
 		t.Fatalf("StartRefactor requests = %+v, want agentic-orchestrator prompt with large pipeline", got)
 	}
 	if cmd == nil {
 		t.Fatal("refactor mutation result returned nil command, want immediate feature detail refresh")
 	}
 
-	cycle := &server.CycleDTO{Type: "refactor", Status: "running"}
-	client.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", Cycle: cycle, CreatedAt: time.Now(), Repos: []string{"agentic-orchestrator"}}, server.FeatureDetailDTO{
+	cycle := &server.CycleDTO{Type: testPipelineRefactor, Status: featureStatusTokenRunning}
+	client.detail = server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, Cycle: cycle, CreatedAt: time.Now(), Repos: []string{testRepoNameOrchestrator}}, server.FeatureDetailDTO{
 
 		Cycle: cycle,
 		RepoStatus: []server.RepoStatusDTO{
-			{Name: "agentic-orchestrator", Touched: true, Publishable: true, CycleType: "refactor", CycleStatus: "running"},
+			{Name: testRepoNameOrchestrator, Touched: true, Publishable: true, CycleType: testPipelineRefactor, CycleStatus: featureStatusTokenRunning},
 		},
 	})}
 	msg = cmd()
@@ -6427,7 +6677,7 @@ func TestAPIAppModelRefactorPromptSelectsPipelineAndStartsRESTMutation(t *testin
 	refreshed := model.(APIAppModel)
 
 	view = stripANSI(refreshed.View().Content)
-	for _, want := range []string{"Started Refactor", "active", "Refactoring"} {
+	for _, want := range []string{"Started Refactor", testFeatureIDActive, testActivityRefactoring} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("API app View() missing %q in:\n%s", want, view)
 		}
@@ -6442,7 +6692,7 @@ func TestAPIAppModelRefactorPromptShiftEnterAndTerminalPaste(t *testing.T) {
 
 	model, _ := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
 	refactor := model.(APIAppModel)
-	model, _ = refactor.Update(tea.KeyPressMsg{Text: "line1"})
+	model, _ = refactor.Update(tea.KeyPressMsg{Text: testPasteTextLine1})
 	refactor = model.(APIAppModel)
 	model, _ = refactor.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
 	refactor = model.(APIAppModel)
@@ -6452,8 +6702,8 @@ func TestAPIAppModelRefactorPromptShiftEnterAndTerminalPaste(t *testing.T) {
 	if refactor.refactorPrompt == nil {
 		t.Fatal("refactor prompt closed unexpectedly")
 	}
-	if got := refactor.refactorPrompt.input.Value(); got != "line1\nline2\nline3" {
-		t.Fatalf("refactor prompt value = %q, want %q", got, "line1\nline2\nline3")
+	if got := refactor.refactorPrompt.input.Value(); got != testPasteTextMultiline {
+		t.Fatalf("refactor prompt value = %q, want %q", got, testPasteTextMultiline)
 	}
 }
 
@@ -6467,7 +6717,7 @@ func TestAPIAppModelRefactorPromptTracksPastedImagesAndFiles(t *testing.T) {
 	refactor := model.(APIAppModel)
 	model, _ = refactor.Update(ImagePastedMsg{Path: "/tmp/refactor-image.png"})
 	refactor = model.(APIAppModel)
-	model, _ = refactor.Update(FilesPastedMsg{Paths: []string{"/tmp/spec.pdf"}, Names: []string{"spec.pdf"}})
+	model, _ = refactor.Update(FilesPastedMsg{Paths: []string{"/tmp/spec.pdf"}, Names: []string{testPastedFileName}})
 	refactor = model.(APIAppModel)
 	model, _ = refactor.Update(TextPastedMsg{Text: " tighten the layout"})
 	refactor = model.(APIAppModel)
@@ -6520,13 +6770,13 @@ func TestAPIAppModelFeatureActionUsesReadModelDisabledState(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Client cutover", Slug: "client-cutover", Status: "Implementing", CurrentPhase: "implement"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameClientCutover, Slug: testFeatureSlugClientCutover, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement}, server.FeatureDetailDTO{
 
 			Actions: []server.ActionDTO{
-				{ID: "delete", Enabled: false, Scope: server.ActionScopeDTO{Type: "feature"}, DisabledReasons: []server.ActionDisabledReasonDTO{
-					{Code: "running", Message: "delete is disabled while work is running"},
+				{ID: actionIDDelete, Enabled: false, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}, DisabledReasons: []server.ActionDisabledReasonDTO{
+					{Code: featureStatusTokenRunning, Message: "delete is disabled while work is running"},
 				}},
 			},
 		})},
@@ -6555,16 +6805,16 @@ func TestAPIAppModelDestructiveActionsGuardActiveRepoCycles(t *testing.T) {
 
 	makeApp := func(t *testing.T) (APIAppModel, *fakeTUIAPIClient) {
 		t.Helper()
-		cycle := &server.CycleDTO{Type: "rebase", Status: "running"}
+		cycle := &server.CycleDTO{Type: testCycleTypeRebase, Status: featureStatusTokenRunning}
 		summary := server.FeatureSummary{
-			ID:           "active",
-			Name:         "Published work",
-			Slug:         "published-work",
-			Status:       "Published",
-			CurrentPhase: "publish",
+			ID:           testFeatureIDActive,
+			Name:         testFeatureNamePublishedWork,
+			Slug:         testFeatureSlugPublishedWork,
+			Status:       testFeatureStatusPublished,
+			CurrentPhase: actionIDPublish,
 			Cycle:        cycle,
 			CreatedAt:    time.Now(),
-			Repos:        []string{"api"},
+			Repos:        []string{testRepoNameAPI},
 		}
 		client := &fakeTUIAPIClient{
 			features: server.FeatureListResponse{Features: []server.FeatureSummary{summary}},
@@ -6572,13 +6822,13 @@ func TestAPIAppModelDestructiveActionsGuardActiveRepoCycles(t *testing.T) {
 
 				Cycle: cycle,
 				RepoStatus: []server.RepoStatusDTO{
-					{Name: "api", Publishable: true, CycleType: "rebase", CycleStatus: "running"},
+					{Name: testRepoNameAPI, Publishable: true, CycleType: testCycleTypeRebase, CycleStatus: featureStatusTokenRunning},
 				},
 				Actions: []server.ActionDTO{
-					{ID: "delete", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
-					{ID: "mark-done", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
-					{ID: "rewind", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}, RequiredInputs: []server.ActionInputDTO{
-						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"implement"}},
+					{ID: actionIDDelete, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
+					{ID: "mark-done", Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
+					{ID: reviewModeRewind, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}, RequiredInputs: []server.ActionInputDTO{
+						{Name: actionInputNameTargetPhase, Kind: testParamKindEnum, Required: true, Options: []string{testPhaseNameImplement}},
 					}},
 				},
 			})},
@@ -6600,7 +6850,7 @@ func TestAPIAppModelDestructiveActionsGuardActiveRepoCycles(t *testing.T) {
 		assert     func(t *testing.T, client *fakeTUIAPIClient)
 	}{
 		{
-			name:       "delete",
+			name:       actionIDDelete,
 			key:        tea.KeyPressMsg{Code: 'd', Text: "d"},
 			wantStatus: "Stop active repo cycles before deleting",
 			assert: func(t *testing.T, client *fakeTUIAPIClient) {
@@ -6622,7 +6872,7 @@ func TestAPIAppModelDestructiveActionsGuardActiveRepoCycles(t *testing.T) {
 			},
 		},
 		{
-			name:       "rewind",
+			name:       reviewModeRewind,
 			key:        tea.KeyPressMsg{Code: 'r', Text: "r", Mod: tea.ModCtrl},
 			wantStatus: "Stop active repo cycles before rewinding",
 			assert: func(t *testing.T, client *fakeTUIAPIClient) {
@@ -6660,33 +6910,33 @@ func TestAPIAppModelDeleteEvictsFeatureBeforeRefresh(t *testing.T) {
 	t.Parallel()
 
 	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
-	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created}
-	next := server.FeatureSummary{ID: "next", Name: "Next work", Slug: "next-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created.Add(-time.Minute)}
+	active := server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusCreated, CurrentPhase: testPhaseNameImplement, CreatedAt: created}
+	next := server.FeatureSummary{ID: testFeatureIDNext, Name: "Next work", Slug: "next-work", Status: testFeatureStatusCreated, CurrentPhase: testPhaseNameImplement, CreatedAt: created.Add(-time.Minute)}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{active, next}},
 		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(active, server.FeatureDetailDTO{
 
 			Actions: []server.ActionDTO{
-				{ID: "delete", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+				{ID: actionIDDelete, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 			},
 		})},
 		detailsByID: map[string]server.FeatureDetailResponse{
-			"active": {Feature: apiTestFeatureDetailWith(active, server.FeatureDetailDTO{
+			testFeatureIDActive: {Feature: apiTestFeatureDetailWith(active, server.FeatureDetailDTO{
 
 				Actions: []server.ActionDTO{
-					{ID: "delete", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+					{ID: actionIDDelete, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 				},
 			})},
-			"next": {Feature: apiTestFeatureDetail(next)},
+			testFeatureIDNext: {Feature: apiTestFeatureDetail(next)},
 		},
 		livePreviewsByID: map[string]server.LivePreviewResponse{
-			"active": {Feature: active},
-			"next":   {Feature: next},
+			testFeatureIDActive: {Feature: active},
+			testFeatureIDNext:   {Feature: next},
 		},
 		deleteAccepted: apiTestActionResponse{},
 	}
 	app := newTestAPIAppModel(t, client)
-	if got := app.selectedFeature; got != "active" {
+	if got := app.selectedFeature; got != testFeatureIDActive {
 		t.Fatalf("SelectedFeatureID() = %q, want active precondition", got)
 	}
 
@@ -6702,14 +6952,14 @@ func TestAPIAppModelDeleteEvictsFeatureBeforeRefresh(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	updated := model.(APIAppModel)
 
-	if got := strings.Join(client.deleteFeatureIDs, ","); got != "active" {
+	if got := strings.Join(client.deleteFeatureIDs, ","); got != testFeatureIDActive {
 		t.Fatalf("DeleteFeature calls = %q, want active", got)
 	}
-	if got := updated.selectedFeature; got != "next" {
+	if got := updated.selectedFeature; got != testFeatureIDNext {
 		t.Fatalf("SelectedFeatureID() = %q, want next after delete", got)
 	}
 	view := stripANSI(updated.View().Content)
-	if strings.Contains(view, "active-work") {
+	if strings.Contains(view, testFeatureSlugActiveWork) {
 		t.Fatalf("API app View() still shows deleted feature:\n%s", view)
 	}
 	if !strings.Contains(view, "Completed Delete") {
@@ -6721,8 +6971,8 @@ func TestAPIAppModelIgnoresStaleDetailErrorForRemovedFeature(t *testing.T) {
 	t.Parallel()
 
 	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
-	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created}
-	next := server.FeatureSummary{ID: "next", Name: "Next work", Slug: "next-work", Status: "Created", CurrentPhase: "implement", CreatedAt: created.Add(-time.Minute)}
+	active := server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusCreated, CurrentPhase: testPhaseNameImplement, CreatedAt: created}
+	next := server.FeatureSummary{ID: testFeatureIDNext, Name: "Next work", Slug: "next-work", Status: testFeatureStatusCreated, CurrentPhase: testPhaseNameImplement, CreatedAt: created.Add(-time.Minute)}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{active, next}},
 		detail:   server.FeatureDetailResponse{Feature: apiTestFeatureDetail(active)},
@@ -6734,19 +6984,19 @@ func TestAPIAppModelIgnoresStaleDetailErrorForRemovedFeature(t *testing.T) {
 	app.ApplyRefreshSnapshot(server.RefreshSnapshot{
 		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{next}},
 	})
-	if got := app.selectedFeature; got != "next" {
+	if got := app.selectedFeature; got != testFeatureIDNext {
 		t.Fatalf("SelectedFeatureID() = %q, want next after refresh removed active", got)
 	}
 
 	model, _ := app.Update(apiFeatureDetailMsg{
-		featureID: "active",
+		featureID: testFeatureIDActive,
 		err:       errors.New("api GET /api/v1/features/active: not_found (404): feature not found"),
 	})
 	updated := model.(APIAppModel)
 	if strings.Contains(updated.statusMessage, "Detail refresh failed") {
 		t.Fatalf("statusMessage = %q, want stale detail error ignored", updated.statusMessage)
 	}
-	if got := updated.selectedFeature; got != "next" {
+	if got := updated.selectedFeature; got != testFeatureIDNext {
 		t.Fatalf("SelectedFeatureID() = %q, want next after stale detail error", got)
 	}
 }
@@ -6756,22 +7006,22 @@ func TestAPIAppModelListRefreshClearsStalePublishedCycleDetail(t *testing.T) {
 
 	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
 	published := server.FeatureSummary{
-		ID:           "active",
-		Name:         "Active work",
-		Slug:         "active-work",
-		Status:       "Published",
-		CurrentPhase: "publish",
-		Repos:        []string{"agentic-orchestrator"},
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameActiveWork,
+		Slug:         testFeatureSlugActiveWork,
+		Status:       testFeatureStatusPublished,
+		CurrentPhase: actionIDPublish,
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    created,
 		Progress:     server.FeatureProgress{CurrentIteration: 2},
 	}
 	staleDetail := server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(published, server.FeatureDetailDTO{
 
-		Cycle: &server.CycleDTO{Type: "refactor", Status: "running", Count: 1},
+		Cycle: &server.CycleDTO{Type: testPipelineRefactor, Status: featureStatusTokenRunning, Count: 1},
 		RepoStatus: []server.RepoStatusDTO{{
-			Name:        "agentic-orchestrator",
-			CycleType:   "refactor",
-			CycleStatus: "running",
+			Name:        testRepoNameOrchestrator,
+			CycleType:   testPipelineRefactor,
+			CycleStatus: featureStatusTokenRunning,
 			Touched:     true,
 		}},
 	})}
@@ -6785,10 +7035,10 @@ func TestAPIAppModelListRefreshClearsStalePublishedCycleDetail(t *testing.T) {
 		Features: &server.FeatureListResponse{Features: []server.FeatureSummary{published}},
 	})
 	view := stripANSI(app.View().Content)
-	if strings.Contains(view, "IN PROGRESS") || strings.Contains(view, "Refactoring") {
+	if strings.Contains(view, testSectionLabelInProgress) || strings.Contains(view, testActivityRefactoring) {
 		t.Fatalf("list-only refresh kept stale refactor cycle in dashboard:\n%s", view)
 	}
-	if !strings.Contains(view, "PUBLISHED") || !strings.Contains(view, "active-work") {
+	if !strings.Contains(view, "PUBLISHED") || !strings.Contains(view, testFeatureSlugActiveWork) {
 		t.Fatalf("list-only refresh did not render feature as published:\n%s", view)
 	}
 }
@@ -6798,19 +7048,19 @@ func TestAPIAppModelPublishOpensReviewFlowBeforeRESTMutation(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
+			{ID: testFeatureIDReady, Name: testFeatureNameReadyPublish, Slug: testFeatureSlugReadyToPublish, Status: testFeatureStatusCodeReady, CurrentPhase: actionIDPublish, Repos: []string{testRepoNameAPI}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDReady, Name: testFeatureNameReadyPublish, Slug: testFeatureSlugReadyToPublish, Status: testFeatureStatusCodeReady, CurrentPhase: actionIDPublish, Repos: []string{testRepoNameAPI}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}}, server.FeatureDetailDTO{
 
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "api", Publishable: true, Touched: true},
+				{Name: testRepoNameAPI, Publishable: true, Touched: true},
 			},
 			Actions: []server.ActionDTO{
-				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+				{ID: actionIDPublish, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 			},
 		})},
 		runtime: server.RuntimeConfigResponse{
-			Repos: []server.ConfigRepoDTO{{Name: "api", Path: "/tmp/api"}},
+			Repos: []server.ConfigRepoDTO{{Name: testRepoNameAPI, Path: "/tmp/api"}},
 		},
 		publishDescriptionTitle: "AI: Ready to publish",
 		publishDescriptionBody:  "AI generated commit summary with implementation details.",
@@ -6856,10 +7106,10 @@ func TestAPIAppModelPublishOpensReviewFlowBeforeRESTMutation(t *testing.T) {
 	} else if !strings.Contains(view, client.publishDescriptionBody) {
 		t.Fatalf("publish PR description missing generated AI body %q in:\n%s", client.publishDescriptionBody, view)
 	}
-	if got := client.publishDescriptionFeatureIDs; strings.Join(got, ",") != "ready" {
+	if got := client.publishDescriptionFeatureIDs; strings.Join(got, ",") != testFeatureIDReady {
 		t.Fatalf("GeneratePublishDescription feature IDs = %v, want ready", got)
 	}
-	if got := client.publishDescriptionRequests; len(got) != 1 || got[0].FeatureName != "Ready to publish" || strings.TrimSpace(got[0].Model) == "" {
+	if got := client.publishDescriptionRequests; len(got) != 1 || got[0].FeatureName != testFeatureNameReadyPublish || strings.TrimSpace(got[0].Model) == "" {
 		t.Fatalf("GeneratePublishDescription requests = %+v, want publish context with model", got)
 	}
 
@@ -6879,7 +7129,7 @@ func TestAPIAppModelPublishOpensReviewFlowBeforeRESTMutation(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(cmd())
 	published := model.(APIAppModel)
 
-	if got := strings.Join(client.publishFeatureIDs, ","); got != "ready" {
+	if got := strings.Join(client.publishFeatureIDs, ","); got != testFeatureIDReady {
 		t.Fatalf("PublishFeature calls = %q, want ready", got)
 	}
 	if got := client.publishRequests; len(got) != 1 || len(got[0].Repos) != 0 || got[0].Title != client.publishDescriptionTitle || got[0].Body != client.publishDescriptionBody {
@@ -6901,19 +7151,19 @@ func TestAPIAppModelPublishCommitsSingleRepoBeforeCommitLogPreview(t *testing.T)
 	stateDir := filepath.Join(t.TempDir(), "features")
 	store := feature.NewStore(stateDir)
 	if err := store.Save(&feature.Feature{
-		ID:            "ready",
-		Name:          "Ready to publish",
-		Slug:          "ready-to-publish",
+		ID:            testFeatureIDReady,
+		Name:          testFeatureNameReadyPublish,
+		Slug:          testFeatureSlugReadyToPublish,
 		Status:        feature.StatusCodeReady,
 		CurrentPhase:  feature.PhasePublish,
 		Created:       time.Now(),
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{{
-			Name:         "api",
+			Name:         testRepoNameAPI,
 			Path:         repo,
 			WorktreePath: repo,
 			Branch:       "feature/ready-to-publish",
-			BaseBranch:   "main",
+			BaseBranch:   testGitBranchMain,
 		}},
 	}); err != nil {
 		t.Fatalf("save feature: %v", err)
@@ -6921,20 +7171,20 @@ func TestAPIAppModelPublishCommitsSingleRepoBeforeCommitLogPreview(t *testing.T)
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
+			{ID: testFeatureIDReady, Name: testFeatureNameReadyPublish, Slug: testFeatureSlugReadyToPublish, Status: testFeatureStatusCodeReady, CurrentPhase: actionIDPublish, Repos: []string{testRepoNameAPI}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api"}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDReady, Name: testFeatureNameReadyPublish, Slug: testFeatureSlugReadyToPublish, Status: testFeatureStatusCodeReady, CurrentPhase: actionIDPublish, Repos: []string{testRepoNameAPI}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}}, server.FeatureDetailDTO{
 
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "api", Publishable: true, Touched: true},
+				{Name: testRepoNameAPI, Publishable: true, Touched: true},
 			},
 			Actions: []server.ActionDTO{
-				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+				{ID: actionIDPublish, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 			},
 		})},
 		runtime: server.RuntimeConfigResponse{
 			Runtime: server.RuntimeIdentity{StateDir: stateDir},
-			Repos:   []server.ConfigRepoDTO{{Name: "api", Path: repo}},
+			Repos:   []server.ConfigRepoDTO{{Name: testRepoNameAPI, Path: repo}},
 		},
 	}
 	app := newTestAPIAppModel(t, client)
@@ -6954,7 +7204,7 @@ func TestAPIAppModelPublishCommitsSingleRepoBeforeCommitLogPreview(t *testing.T)
 	if !strings.Contains(view, "Commit Log") {
 		t.Fatalf("publish review did not advance to commit log:\n%s", view)
 	}
-	if !strings.Contains(view, "Ready to publish") {
+	if !strings.Contains(view, testFeatureNameReadyPublish) {
 		t.Fatalf("publish commit log page is empty or missing the pre-publish commit:\n%s", view)
 	}
 }
@@ -6964,16 +7214,16 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api", "web"}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
+			{ID: testFeatureIDReady, Name: testFeatureNameReadyPublish, Slug: testFeatureSlugReadyToPublish, Status: testFeatureStatusCodeReady, CurrentPhase: actionIDPublish, Repos: []string{testRepoNameAPI, testRepoNameWeb}, CreatedAt: time.Now(), Checkpoints: server.CheckpointsDTO{ManualPublish: true}},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "ready", Name: "Ready to publish", Slug: "ready-to-publish", Status: "CodeReady", CurrentPhase: "publish", Repos: []string{"api", "web"}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDReady, Name: testFeatureNameReadyPublish, Slug: testFeatureSlugReadyToPublish, Status: testFeatureStatusCodeReady, CurrentPhase: actionIDPublish, Repos: []string{testRepoNameAPI, testRepoNameWeb}, Checkpoints: server.CheckpointsDTO{ManualPublish: true}}, server.FeatureDetailDTO{
 
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "api", Publishable: true},
-				{Name: "web", Publishable: true},
+				{Name: testRepoNameAPI, Publishable: true},
+				{Name: testRepoNameWeb, Publishable: true},
 			},
 			Actions: []server.ActionDTO{
-				{ID: "publish", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+				{ID: actionIDPublish, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 			},
 		})},
 		publishAccepted: apiTestActionResponse{},
@@ -6986,7 +7236,7 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 	}
 	selecting := model.(APIAppModel)
 	view := stripANSI(selecting.View().Content)
-	for _, want := range []string{"Publish Feature", "Select Repository", "api", "web"} {
+	for _, want := range []string{"Publish Feature", "Select Repository", testRepoNameAPI, testRepoNameWeb} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("repo selector missing %q in:\n%s", want, view)
 		}
@@ -7024,7 +7274,7 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 		t.Fatal("Update(enter on final confirmation) returned nil command, want publish mutation")
 	}
 	_, _ = model.(APIAppModel).Update(cmd())
-	if got := client.publishRequests; len(got) != 1 || !slices.Equal(got[0].Repos, []string{"web"}) {
+	if got := client.publishRequests; len(got) != 1 || !slices.Equal(got[0].Repos, []string{testRepoNameWeb}) {
 		t.Fatalf("PublishFeature requests = %+v, want repos [web]", got)
 	}
 }
@@ -7041,9 +7291,9 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 		assertCall func(t *testing.T, client *fakeTUIAPIClient)
 	}{
 		{
-			name:      "tweak",
+			name:      testActionIDTweak,
 			key:       tea.KeyPressMsg{Code: 't', Text: "t"},
-			actionID:  "tweak",
+			actionID:  testActionIDTweak,
 			wantTitle: "Confirm Tweak",
 			accepted:  apiTestActionResponse{},
 			assertCall: func(t *testing.T, client *fakeTUIAPIClient) {
@@ -7070,7 +7320,7 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 				t.Fatal("action key returned command before repo selection")
 			}
 			selecting := model.(APIAppModel)
-			if view := stripANSI(selecting.View().Content); !strings.Contains(view, "Select repo") || !strings.Contains(view, "api") || !strings.Contains(view, "web") {
+			if view := stripANSI(selecting.View().Content); !strings.Contains(view, "Select repo") || !strings.Contains(view, testRepoNameAPI) || !strings.Contains(view, testRepoNameWeb) {
 				t.Fatalf("repo selector not shown:\n%s", view)
 			}
 
@@ -7102,7 +7352,7 @@ func TestAPIAppModelRepoSelectorsRouteCycleActions(t *testing.T) {
 func TestAPIAppModelRebaseDoesNotOpenRepoSelector(t *testing.T) {
 	t.Parallel()
 
-	client := apiRepoSelectorClient("rebase", apiTestActionResponse{})
+	client := apiRepoSelectorClient(testCycleTypeRebase, apiTestActionResponse{})
 	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
@@ -7135,8 +7385,8 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 	t.Run("review comments", func(t *testing.T) {
 		t.Parallel()
 
-		client := apiRepoSelectorClient("review-comments", apiTestActionResponse{})
-		client.reviewCommentsResponse = server.ReviewCommentsFetchResponse{FeatureID: "active", Repo: "web"}
+		client := apiRepoSelectorClient(actionIDReviewComments, apiTestActionResponse{})
+		client.reviewCommentsResponse = server.ReviewCommentsFetchResponse{FeatureID: testFeatureIDActive, Repo: testRepoNameWeb}
 		app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 		if err != nil {
 			t.Fatalf("NewAPIAppModel() error = %v", err)
@@ -7153,15 +7403,15 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 		}
 		msg := cmd()
 		_, _ = model.(APIAppModel).Update(msg)
-		if got := client.reviewCommentsFetchRequests; len(got) != 1 || got[0].Repo != "web" {
+		if got := client.reviewCommentsFetchRequests; len(got) != 1 || got[0].Repo != testRepoNameWeb {
 			t.Fatalf("FetchReviewComments requests = %+v, want repo web", got)
 		}
 	})
 
-	t.Run("refactor", func(t *testing.T) {
+	t.Run(testPipelineRefactor, func(t *testing.T) {
 		t.Parallel()
 
-		client := apiRepoSelectorClient("refactor", apiTestActionResponse{})
+		client := apiRepoSelectorClient(testPipelineRefactor, apiTestActionResponse{})
 		app, err := NewAPIAppModel(context.Background(), client, APIAppOptions{})
 		if err != nil {
 			t.Fatalf("NewAPIAppModel() error = %v", err)
@@ -7193,7 +7443,7 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 		}
 		msg := cmd()
 		_, _ = model.(APIAppModel).Update(msg)
-		if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != "web" || got[0].Prompt != "split transport" {
+		if got := client.startRefactorRequests; len(got) != 1 || got[0].Repo != testRepoNameWeb || got[0].Prompt != "split transport" {
 			t.Fatalf("StartRefactor requests = %+v, want repo web prompt", got)
 		}
 	})
@@ -7204,18 +7454,18 @@ func TestAPIAppModelRewindPhaseSelectorUsesChosenTarget(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: reviewCommentTypeReview, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: reviewCommentTypeReview}, server.FeatureDetailDTO{
 
 			Actions: []server.ActionDTO{
 				{
-					ID:      "rewind",
+					ID:      reviewModeRewind,
 					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
+					Scope:   server.ActionScopeDTO{Type: testActionScopeFeature},
 					RequiredInputs: []server.ActionInputDTO{
-						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"plan", "implement"}},
-						{Name: "upgrade_pipeline", Kind: "enum", Required: false, Options: []string{"large"}},
+						{Name: actionInputNameTargetPhase, Kind: testParamKindEnum, Required: true, Options: []string{testArtifactIDPlan, testPhaseNameImplement}},
+						{Name: testActionInputNameUpgradePipeline, Kind: testParamKindEnum, Required: false, Options: []string{testPipelineSizeLarge}},
 					},
 				},
 			},
@@ -7249,7 +7499,7 @@ func TestAPIAppModelRewindPhaseSelectorUsesChosenTarget(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = model.(APIAppModel).Update(msg)
-	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "implement" {
+	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != testPhaseNameImplement {
 		t.Fatalf("RewindFeature requests = %+v, want target implement", got)
 	}
 }
@@ -7259,18 +7509,18 @@ func TestAPIAppModelRewindPipelineUpgradeUsesUpgradeRequest(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review", CreatedAt: time.Now()},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: reviewCommentTypeReview, CreatedAt: time.Now()},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "review"}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: reviewCommentTypeReview}, server.FeatureDetailDTO{
 
 			Actions: []server.ActionDTO{
 				{
-					ID:      "rewind",
+					ID:      reviewModeRewind,
 					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
+					Scope:   server.ActionScopeDTO{Type: testActionScopeFeature},
 					RequiredInputs: []server.ActionInputDTO{
-						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"plan", "implement"}},
-						{Name: "upgrade_pipeline", Kind: "enum", Required: false, Options: []string{"large"}},
+						{Name: actionInputNameTargetPhase, Kind: testParamKindEnum, Required: true, Options: []string{testArtifactIDPlan, testPhaseNameImplement}},
+						{Name: testActionInputNameUpgradePipeline, Kind: testParamKindEnum, Required: false, Options: []string{testPipelineSizeLarge}},
 					},
 				},
 			},
@@ -7300,7 +7550,7 @@ func TestAPIAppModelRewindPipelineUpgradeUsesUpgradeRequest(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = model.(APIAppModel).Update(msg)
-	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "inquire" || got[0].UpgradePipeline != feature.PipelineLarge {
+	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != testPhaseKeyInquire || got[0].UpgradePipeline != feature.PipelineLarge {
 		t.Fatalf("RewindFeature requests = %+v, want inquire with large upgrade", got)
 	}
 }
@@ -7310,17 +7560,17 @@ func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now(), Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now(), Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}}, server.FeatureDetailDTO{
 
 			Actions: []server.ActionDTO{
 				{
-					ID:      "rewind",
+					ID:      reviewModeRewind,
 					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
+					Scope:   server.ActionScopeDTO{Type: testActionScopeFeature},
 					RequiredInputs: []server.ActionInputDTO{
-						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"plan", "implement"}},
+						{Name: actionInputNameTargetPhase, Kind: testParamKindEnum, Required: true, Options: []string{testArtifactIDPlan, testPhaseNameImplement}},
 					},
 				},
 			},
@@ -7358,7 +7608,7 @@ func TestAPIAppModelRewindImplementOpensRoadmapPhasePicker(t *testing.T) {
 	}
 	msg := cmd()
 	_, _ = model.(APIAppModel).Update(msg)
-	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != "implement" || got[0].RoadmapPhase != 2 {
+	if got := client.rewindRequests; len(got) != 1 || got[0].TargetPhase != testPhaseNameImplement || got[0].RoadmapPhase != 2 {
 		t.Fatalf("RewindFeature requests = %+v, want implement roadmap phase 2", got)
 	}
 }
@@ -7368,17 +7618,17 @@ func TestAPIAppModelRewindSingleImplementTargetOpensRoadmapPhasePicker(t *testin
 
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", CreatedAt: time.Now(), Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now(), Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Interrupted", CurrentPhase: "implement", Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusInterrupted, CurrentPhase: testPhaseNameImplement, Progress: server.FeatureProgress{CurrentRoadmapPhase: 2, TotalRoadmapPhases: 3}}, server.FeatureDetailDTO{
 
 			Actions: []server.ActionDTO{
 				{
-					ID:      "rewind",
+					ID:      reviewModeRewind,
 					Enabled: true,
-					Scope:   server.ActionScopeDTO{Type: "feature"},
+					Scope:   server.ActionScopeDTO{Type: testActionScopeFeature},
 					RequiredInputs: []server.ActionInputDTO{
-						{Name: "target_phase", Kind: "enum", Required: true, Options: []string{"implement"}},
+						{Name: actionInputNameTargetPhase, Kind: testParamKindEnum, Required: true, Options: []string{testPhaseNameImplement}},
 					},
 				},
 			},
@@ -7410,27 +7660,27 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 	t.Parallel()
 
 	run1Detail := server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{
-		ID:           "active",
-		Name:         "Active work",
-		Slug:         "active-work",
-		Status:       "Implementing",
-		CurrentPhase: "implement",
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameActiveWork,
+		Slug:         testFeatureSlugActiveWork,
+		Status:       testFeatureStatusImplementing,
+		CurrentPhase: testPhaseNameImplement,
 		ActiveRun:    1,
 		RunCount:     1,
 		CreatedAt:    time.Now(),
 	}, server.FeatureDetailDTO{
 
-		ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: "implement", ArtifactCount: 1},
+		ActiveRunDetail: &server.RunSummaryDTO{RunNumber: 1, CurrentPhase: testPhaseNameImplement, ArtifactCount: 1},
 		Actions: []server.ActionDTO{
-			{ID: "rewind", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+			{ID: reviewModeRewind, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 		},
 	})}
 	run2Detail := server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{
-		ID:           "active",
-		Name:         "Active work",
-		Slug:         "active-work",
-		Status:       "PlanNeedsReview",
-		CurrentPhase: "design",
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameActiveWork,
+		Slug:         testFeatureSlugActiveWork,
+		Status:       testFeatureStatusPlanNeedsReview,
+		CurrentPhase: testArtifactIDDesign,
 		ActiveRun:    2,
 		RunCount:     2,
 		CreatedAt:    run1Detail.Feature.CreatedAt,
@@ -7438,13 +7688,13 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 
 		ActiveRunDetail: &server.RunSummaryDTO{
 			RunNumber:          2,
-			CurrentPhase:       "design",
-			PendingReviewPhase: "plan",
+			CurrentPhase:       testArtifactIDDesign,
+			PendingReviewPhase: testArtifactIDPlan,
 			IsRewind:           true,
 			ArtifactCount:      1,
 		},
 		Actions: []server.ActionDTO{
-			{ID: "rewind", Enabled: true, Scope: server.ActionScopeDTO{Type: "feature"}},
+			{ID: reviewModeRewind, Enabled: true, Scope: server.ActionScopeDTO{Type: testActionScopeFeature}},
 		},
 	})}
 	client := &fakeTUIAPIClient{
@@ -7452,32 +7702,32 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 		detail:   run1Detail,
 		artifactListByRun: map[int]server.ArtifactListResponse{
 			1: {Artifacts: []server.ArtifactDTO{
-				{ID: "old-plan", RunNumber: 1, Phase: "plan", Size: 18, ContentAvailable: true},
+				{ID: testArtifactIDOldPlan, RunNumber: 1, Phase: testArtifactIDPlan, Size: 18, ContentAvailable: true},
 			}},
 			2: {Artifacts: []server.ArtifactDTO{
-				{ID: "description-review", RunNumber: 2, Phase: "description", Size: 24, ContentAvailable: true},
+				{ID: artifactIDDescriptionReview, RunNumber: 2, Phase: testArtifactPhaseDescription, Size: 24, ContentAvailable: true},
 			}},
 		},
 		artifactContentByID: map[string]server.TextContentResponse{
-			"old-plan":           {ID: "old-plan", Text: "old run plan artifact", Size: 18},
-			"description-review": {ID: "description-review", Text: "new rewind review artifact", Size: 24},
+			testArtifactIDOldPlan:       {ID: testArtifactIDOldPlan, Text: "old run plan artifact", Size: 18},
+			artifactIDDescriptionReview: {ID: artifactIDDescriptionReview, Text: "new rewind review artifact", Size: 24},
 		},
 	}
 	app := newTestAPIAppModel(t, client)
-	if got := app.snapshot.Content; got == nil || got.RunNumber != 1 || got.Artifact == nil || got.Artifact.ID != "old-plan" {
+	if got := app.snapshot.Content; got == nil || got.RunNumber != 1 || got.Artifact == nil || got.Artifact.ID != testArtifactIDOldPlan {
 		t.Fatalf("initial content = %+v, want run 1 old-plan", got)
 	}
-	staleReview := NewArtifactReviewModel("/tmp/old-plan.md", "active", "plan", feature.PhasePlan, app.width, app.height, nil, "", nil)
+	staleReview := NewArtifactReviewModel("/tmp/old-plan.md", testFeatureIDActive, testArtifactIDPlan, feature.PhasePlan, app.width, app.height, nil, "", nil)
 	staleReview.detached = true
 	app.artifactReview = &staleReview
 
 	client.detail = run2Detail
-	model, cmd := app.Update(apiMutationResultMsg{kind: "feature.rewind", featureID: "active"})
+	model, cmd := app.Update(apiMutationResultMsg{kind: mutationKindFeatureRewind, featureID: testFeatureIDActive})
 	if cmd == nil {
 		t.Fatal("rewind mutation result returned nil command, want immediate feature detail refresh")
 	}
 	afterRewind := model.(APIAppModel)
-	if got, ok := afterRewind.contents["active"]; ok {
+	if got, ok := afterRewind.contents[testFeatureIDActive]; ok {
 		t.Fatalf("rewind mutation retained stale content = %+v, want content cleared until run 2 loads", got)
 	}
 	if afterRewind.artifactReview != nil {
@@ -7487,10 +7737,10 @@ func TestAPIAppModelRewindMutationRefreshesFeatureAndClearsStaleRunContent(t *te
 	msg := cmd()
 	model, _ = afterRewind.Update(msg)
 	refreshed := model.(APIAppModel)
-	if got := refreshed.snapshot.Content; got == nil || got.RunNumber != 2 || got.Artifact == nil || got.Artifact.ID != "description-review" {
+	if got := refreshed.snapshot.Content; got == nil || got.RunNumber != 2 || got.Artifact == nil || got.Artifact.ID != artifactIDDescriptionReview {
 		t.Fatalf("refreshed content = %+v, want run 2 description-review", got)
 	}
-	if got := refreshed.snapshot.Detail; got == nil || got.ID != "active" {
+	if got := refreshed.snapshot.Detail; got == nil || got.ID != testFeatureIDActive {
 		t.Fatalf("refreshed detail = %+v, want active feature detail", got)
 	}
 }
@@ -7501,29 +7751,29 @@ func TestAPIAppModelSelectionFetchesSelectedFeatureDetail(t *testing.T) {
 	ctx := context.Background()
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: time.Now()},
-			{ID: "queued", Name: "Queued work", Slug: "queued-work", Status: "Created", CurrentPhase: "research", CreatedAt: time.Now().Add(-time.Hour)},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: time.Now()},
+			{ID: testFeatureIDQueued, Name: testFeatureNameQueuedWork, Slug: testFeatureSlugQueuedWork, Status: testFeatureStatusCreated, CurrentPhase: testPhaseKeyResearch, CreatedAt: time.Now().Add(-time.Hour)},
 		}},
 		detailsByID: map[string]server.FeatureDetailResponse{
-			"active": {Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work"}, server.FeatureDetailDTO{
+			testFeatureIDActive: {Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork}, server.FeatureDetailDTO{
 
 				Description: "Active detail",
 			})},
-			"queued": {Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "queued", Name: "Queued work", Slug: "queued-work"}, server.FeatureDetailDTO{
+			testFeatureIDQueued: {Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDQueued, Name: testFeatureNameQueuedWork, Slug: testFeatureSlugQueuedWork}, server.FeatureDetailDTO{
 
 				Description: "Queued detail from REST",
 			})},
 		},
 		livePreviewsByID: map[string]server.LivePreviewResponse{
-			"active": {
-				Feature:    server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work"},
+			testFeatureIDActive: {
+				Feature:    server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork},
 				Activity:   "Active preview",
-				Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: "assistant", Type: "text", Text: "Active preview tail"}},
+				Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Active preview tail"}},
 			},
-			"queued": {
-				Feature:    server.FeatureSummary{ID: "queued", Name: "Queued work", Slug: "queued-work"},
+			testFeatureIDQueued: {
+				Feature:    server.FeatureSummary{ID: testFeatureIDQueued, Name: testFeatureNameQueuedWork, Slug: testFeatureSlugQueuedWork},
 				Activity:   "Queued preview",
-				Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: "assistant", Type: "text", Text: "Queued preview from REST"}},
+				Transcript: []server.TranscriptMessageDTO{{Index: 1, Role: roleAssistant, Type: testMessageTypeText, Text: "Queued preview from REST"}},
 			},
 		},
 	}
@@ -7540,7 +7790,7 @@ func TestAPIAppModelSelectionFetchesSelectedFeatureDetail(t *testing.T) {
 	model, _ = model.(APIAppModel).Update(msg)
 	selected := model.(APIAppModel)
 
-	if got := selected.selectedFeature; got != "queued" {
+	if got := selected.selectedFeature; got != testFeatureIDQueued {
 		t.Fatalf("SelectedFeatureID() = %q, want queued", got)
 	}
 	if got := strings.Join(client.detailFeatureIDs, ","); got != "active,queued" {
@@ -7566,9 +7816,9 @@ func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
 	t.Parallel()
 
 	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
-	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: created}
-	published := server.FeatureSummary{ID: "published", Name: "Published work", Slug: "published-work", Status: "Published", CurrentPhase: "publish", CreatedAt: created.Add(-time.Minute)}
-	done := server.FeatureSummary{ID: "done", Name: "Done work", Slug: "done-work", Status: "Done", CurrentPhase: "publish", CreatedAt: created.Add(-2 * time.Minute)}
+	active := server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: created}
+	published := server.FeatureSummary{ID: testFeatureIDPublished, Name: testFeatureNamePublishedWork, Slug: testFeatureSlugPublishedWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: created.Add(-time.Minute)}
+	done := server.FeatureSummary{ID: testFeatureIDDone, Name: "Done work", Slug: "done-work", Status: testFeatureStatusDone, CurrentPhase: actionIDPublish, CreatedAt: created.Add(-2 * time.Minute)}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{done, published, active}},
 		detail:   server.FeatureDetailResponse{Feature: apiTestFeatureDetail(active)},
@@ -7585,7 +7835,7 @@ func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
 	if got := app.selectedFeature; got != "" {
 		t.Fatalf("SelectedFeatureID() = %q, want no feature while cursor is on completed section", got)
 	}
-	if got := app.selectedSection; got != "completed" {
+	if got := app.selectedSection; got != testStatusCompleted {
 		t.Fatalf("selectedSection = %q, want completed", got)
 	}
 
@@ -7596,7 +7846,7 @@ func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
 	msg := cmd()
 	model, _ = model.(APIAppModel).Update(msg)
 	app = model.(APIAppModel)
-	if !slices.Contains(app.runtimeConfig.UI.CollapsedSections, "completed") {
+	if !slices.Contains(app.runtimeConfig.UI.CollapsedSections, testStatusCompleted) {
 		t.Fatalf("CollapsedSections = %v, want completed", app.runtimeConfig.UI.CollapsedSections)
 	}
 	view := stripANSI(app.View().Content)
@@ -7609,7 +7859,7 @@ func TestAPIAppModelDashboardNavigationCanToggleCompletedSection(t *testing.T) {
 		t.Fatal("Update(down after collapsed completed section) returned command, want no-op at list bottom")
 	}
 	app = model.(APIAppModel)
-	if got := app.selectedSection; got != "completed" {
+	if got := app.selectedSection; got != testStatusCompleted {
 		t.Fatalf("selectedSection after down = %q, want completed", got)
 	}
 	if got := app.selectedFeature; got != "" {
@@ -7621,9 +7871,9 @@ func TestAPIAppModelDashboardSectionCollapsePersistsThroughREST(t *testing.T) {
 	t.Parallel()
 
 	created := time.Date(2026, 6, 16, 9, 0, 0, 0, time.UTC)
-	active := server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Implementing", CurrentPhase: "implement", CreatedAt: created}
-	published := server.FeatureSummary{ID: "published", Name: "Published work", Slug: "published-work", Status: "Published", CurrentPhase: "publish", CreatedAt: created.Add(-time.Minute)}
-	done := server.FeatureSummary{ID: "done", Name: "Done work", Slug: "done-work", Status: "Done", CurrentPhase: "publish", CreatedAt: created.Add(-2 * time.Minute)}
+	active := server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: testPhaseNameImplement, CreatedAt: created}
+	published := server.FeatureSummary{ID: testFeatureIDPublished, Name: testFeatureNamePublishedWork, Slug: testFeatureSlugPublishedWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: created.Add(-time.Minute)}
+	done := server.FeatureSummary{ID: testFeatureIDDone, Name: "Done work", Slug: "done-work", Status: testFeatureStatusDone, CurrentPhase: actionIDPublish, CreatedAt: created.Add(-2 * time.Minute)}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{done, published, active}},
 		detail:   server.FeatureDetailResponse{Feature: apiTestFeatureDetail(active)},
@@ -7652,10 +7902,10 @@ func TestAPIAppModelDashboardSectionCollapsePersistsThroughREST(t *testing.T) {
 	if req.UI == nil {
 		t.Fatalf("UpdateRuntimeConfig request UI = nil, want collapsed section persisted")
 	}
-	if !slices.Contains(req.UI.CollapsedSections, "completed") {
+	if !slices.Contains(req.UI.CollapsedSections, testStatusCompleted) {
 		t.Fatalf("persisted CollapsedSections = %v, want completed", req.UI.CollapsedSections)
 	}
-	if !slices.Contains(app.runtimeConfig.UI.CollapsedSections, "completed") {
+	if !slices.Contains(app.runtimeConfig.UI.CollapsedSections, testStatusCompleted) {
 		t.Fatalf("runtime CollapsedSections after persistence = %v, want completed", app.runtimeConfig.UI.CollapsedSections)
 	}
 }
@@ -7840,33 +8090,33 @@ func apiRepoSelectorClient(actionID string, accepted apiTestActionResponse) *fak
 	action := server.ActionDTO{
 		ID:      actionID,
 		Enabled: true,
-		Scope:   server.ActionScopeDTO{Type: "feature", RepoSelection: "optional"},
+		Scope:   server.ActionScopeDTO{Type: testActionScopeFeature, RepoSelection: "optional"},
 	}
 	switch actionID {
-	case "rebase":
-		action.Scope = server.ActionScopeDTO{Type: "feature"}
-	case "review-comments":
-		action.Scope = server.ActionScopeDTO{Type: "feature", RepoSelection: "required", CycleType: "review-comments"}
+	case testCycleTypeRebase:
+		action.Scope = server.ActionScopeDTO{Type: testActionScopeFeature}
+	case actionIDReviewComments:
+		action.Scope = server.ActionScopeDTO{Type: testActionScopeFeature, RepoSelection: "required", CycleType: actionIDReviewComments}
 		action.RequiredInputs = []server.ActionInputDTO{
-			{Name: "repo", Kind: "string", Required: true},
-			{Name: "mode", Kind: "enum", Required: true, Options: []string{"auto", "address_all"}},
+			{Name: actionInputNameRepo, Kind: testParamKindString, Required: true},
+			{Name: "mode", Kind: testParamKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
 		}
-	case "refactor":
+	case testPipelineRefactor:
 		action.RequiredInputs = []server.ActionInputDTO{
-			{Name: "repo", Kind: "string", Required: false},
-			{Name: "prompt", Kind: "string", Required: true, MaxLength: server.MaxActionTextBytes},
-			{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
+			{Name: actionInputNameRepo, Kind: testParamKindString, Required: false},
+			{Name: testActionInputNamePrompt, Kind: testParamKindString, Required: true, MaxLength: server.MaxActionTextBytes},
+			{Name: "pipeline", Kind: testParamKindEnum, Required: false, Options: []string{testPipelineSizeMedium, testPipelineSizeLarge, testPipelineSizeMoonshot}},
 		}
 	}
 	client := &fakeTUIAPIClient{
 		features: server.FeatureListResponse{Features: []server.FeatureSummary{
-			{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", CreatedAt: time.Now(), Repos: []string{"api", "web"}},
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, CreatedAt: time.Now(), Repos: []string{testRepoNameAPI, testRepoNameWeb}},
 		}},
-		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: "active", Name: "Active work", Slug: "active-work", Status: "Published", CurrentPhase: "publish", Repos: []string{"api", "web"}}, server.FeatureDetailDTO{
+		detail: server.FeatureDetailResponse{Feature: apiTestFeatureDetailWith(server.FeatureSummary{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusPublished, CurrentPhase: actionIDPublish, Repos: []string{testRepoNameAPI, testRepoNameWeb}}, server.FeatureDetailDTO{
 
 			RepoStatus: []server.RepoStatusDTO{
-				{Name: "api", Publishable: true},
-				{Name: "web", Publishable: true},
+				{Name: testRepoNameAPI, Publishable: true},
+				{Name: testRepoNameWeb, Publishable: true},
 			},
 			Actions: []server.ActionDTO{action},
 		})},
@@ -8070,7 +8320,7 @@ type fakeTUIAPIClient struct {
 }
 
 func (f *fakeTUIAPIClient) Features(context.Context) (server.FeatureListResponse, error) {
-	f.calls = append(f.calls, "Features")
+	f.calls = append(f.calls, dashboardFeaturesPanelTitle)
 	return f.features, nil
 }
 
@@ -8215,7 +8465,7 @@ func (f *fakeTUIAPIClient) RestartFeature(_ context.Context, featureID string, _
 func (f *fakeTUIAPIClient) StopFeature(_ context.Context, featureID string) (server.FeatureStopResponse, error) {
 	f.calls = append(f.calls, "StopFeature")
 	f.stopFeatureIDs = append(f.stopFeatureIDs, featureID)
-	return server.FeatureStopResponse{FeatureID: f.stopAccepted.featureID(featureID), Result: f.stopAccepted.result("stopped")}, f.stopErr
+	return server.FeatureStopResponse{FeatureID: f.stopAccepted.featureID(featureID), Result: f.stopAccepted.result(testFeatureIDStopped)}, f.stopErr
 }
 
 func (f *fakeTUIAPIClient) DeleteFeature(_ context.Context, featureID string) (server.DeleteFeatureResponse, error) {
@@ -8228,7 +8478,7 @@ func (f *fakeTUIAPIClient) PublishFeature(_ context.Context, featureID string, r
 	f.calls = append(f.calls, "PublishFeature")
 	f.publishFeatureIDs = append(f.publishFeatureIDs, featureID)
 	f.publishRequests = append(f.publishRequests, req)
-	return server.PublishFeatureResponse{FeatureID: f.publishAccepted.featureID(featureID), Result: f.publishAccepted.result("published")}, f.publishErr
+	return server.PublishFeatureResponse{FeatureID: f.publishAccepted.featureID(featureID), Result: f.publishAccepted.result(testFeatureIDPublished)}, f.publishErr
 }
 
 func (f *fakeTUIAPIClient) GeneratePublishDescription(_ context.Context, featureID string, req server.PublishDescriptionRequest) (server.PublishDescriptionResponse, error) {
@@ -8505,12 +8755,12 @@ func TestAPIAppModelFullscreenChatSkipsDashboard(t *testing.T) {
 	t.Parallel()
 
 	summary := server.FeatureSummary{
-		ID:           "active",
-		Name:         "Translate README in Sicilian",
-		Slug:         "translate-readme-in-sicilian",
-		Status:       "Planning",
-		CurrentPhase: "plan",
-		Repos:        []string{"agentic-orchestrator"},
+		ID:           testFeatureIDActive,
+		Name:         testFeatureNameTranslateSicilian,
+		Slug:         testFeatureSlugTranslateSicilian,
+		Status:       testFeatureStatusPlanning,
+		CurrentPhase: testArtifactIDPlan,
+		Repos:        []string{testRepoNameOrchestrator},
 		CreatedAt:    time.Now(),
 	}
 	app := APIAppModel{
@@ -8523,7 +8773,7 @@ func TestAPIAppModelFullscreenChatSkipsDashboard(t *testing.T) {
 			summary.ID: {Feature: apiTestFeatureDetail(summary)},
 		},
 		runtimeConfig: server.RuntimeConfigResponse{
-			Runtime: server.RuntimeIdentity{StateDir: "/tmp/agentico/features"},
+			Runtime: server.RuntimeIdentity{StateDir: testRuntimeStateDirFeatures},
 		},
 	}
 	app.rebuildPresentation(summary.ID)
@@ -8533,14 +8783,14 @@ func TestAPIAppModelFullscreenChatSkipsDashboard(t *testing.T) {
 	app.chat = NewAPIChatModel(app.width, 10, nil)
 	app.chatOpen = true
 	docked := stripANSI(app.View().Content)
-	if !strings.Contains(docked, "IN PROGRESS") {
+	if !strings.Contains(docked, testSectionLabelInProgress) {
 		t.Fatalf("expected dashboard section header present while docked, got:\n%s", docked)
 	}
 
 	// Fullscreen: dashboard chrome is gone, only the chat panel renders.
 	app.chat.fullscreen = true
 	fullscreen := stripANSI(app.View().Content)
-	if strings.Contains(fullscreen, "IN PROGRESS") {
+	if strings.Contains(fullscreen, testSectionLabelInProgress) {
 		t.Errorf("expected dashboard section header absent while chat is fullscreen, got:\n%s", fullscreen)
 	}
 	if !strings.Contains(fullscreen, "Ask me Anything") {
@@ -8573,7 +8823,7 @@ func TestAPIAppModelChatResizesAsConversationGrowsWithoutWindowResize(t *testing
 	// Simulate a turn having been added without any resize having happened
 	// yet (e.g. a streamed response arriving via chatMsgsMsg/refresh-snapshot
 	// handling) — chatPanelHeight should now report the non-empty range.
-	app.chat.turns = []chatTurn{{Role: chatTurnUser, Text: "hello"}}
+	app.chat.turns = []chatTurn{{Role: chatTurnUser, Text: testChatMessageHello}}
 	wantHeight := app.chat.chatPanelHeight(app.height)
 	if wantHeight != 18 {
 		t.Fatalf("test setup invalid: chatPanelHeight = %d, want 18 (non-empty ceiling at height=100)", wantHeight)

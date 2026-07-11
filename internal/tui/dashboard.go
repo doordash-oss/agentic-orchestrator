@@ -85,6 +85,8 @@ const (
 	dashboardRightPanelOverview
 )
 
+const dashboardFeaturesPanelTitle = "Features"
+
 type DashboardModel struct {
 	features             []*feature.Feature
 	cursor               int
@@ -344,7 +346,7 @@ func (m DashboardModel) View() string {
 			Width(w).
 			Height(panelHeight + 2).
 			Render(leftContent)
-		leftBox = renderBorderTitle(leftBox, "Features", lipgloss.NewStyle().Foreground(colorBrand))
+		leftBox = renderBorderTitle(leftBox, dashboardFeaturesPanelTitle, lipgloss.NewStyle().Foreground(colorBrand))
 		return truncateRenderedLines(header+leftBox+"\n"+footer+"\n", w)
 	}
 
@@ -378,7 +380,7 @@ func (m DashboardModel) View() string {
 	if m.focusPanel == 1 {
 		leftTitleStyle = lipgloss.NewStyle().Foreground(colorOverlay)
 	}
-	leftBox = renderBorderTitle(leftBox, "Features", leftTitleStyle)
+	leftBox = renderBorderTitle(leftBox, dashboardFeaturesPanelTitle, leftTitleStyle)
 
 	// Build right panel
 	var rightContent string
@@ -654,6 +656,13 @@ type sectionMeta struct {
 	features []*feature.Feature
 }
 
+// dashboardSectionPublished and dashboardSectionCompleted are sectionMeta.key
+// / listItem.section values for the dashboard's feature-list groupings.
+const (
+	dashboardSectionPublished = "published"
+	dashboardSectionCompleted = "completed"
+)
+
 // buildVisibleItems computes the flat list of navigable items (section headers + features).
 // It must be called whenever features or collapsed sections change.
 func (m *DashboardModel) buildVisibleItems() {
@@ -673,9 +682,9 @@ func (m *DashboardModel) buildVisibleItems() {
 	}
 
 	sections := []sectionMeta{
-		{"inProgress", "IN PROGRESS", inProgress},
-		{"published", "PUBLISHED", published},
-		{"completed", "COMPLETED", completed},
+		{"inProgress", sectionLabel("inProgress"), inProgress},
+		{dashboardSectionPublished, sectionLabel(dashboardSectionPublished), published},
+		{dashboardSectionCompleted, sectionLabel(dashboardSectionCompleted), completed},
 	}
 
 	var items []listItem
@@ -1330,32 +1339,10 @@ func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing boo
 	case feature.RepoCycleNeedUserInput:
 		label = string(cycle.rc.Type) + " needs input"
 	case feature.RepoCycleReviewing:
-		switch cycle.rc.Type {
-		case feature.CycleReviewComments:
-			label = "Final Review (Review Comments)"
-		case feature.CycleRebase:
-			label = "Final Review (Rebase)"
-		case feature.CycleTweak:
-			label = "Final Review (Tweak)"
-		case feature.CycleRefactor:
-			label = "Final Review (Refactor)"
-		default:
-			label = "Final Review (Repo Cycle)"
-		}
+		label = repoCycleFinalReviewLabel(cycle.rc.Type)
 		reviewing = true
 	default:
-		switch cycle.rc.Type {
-		case feature.CycleReviewComments:
-			label = "Addressing Review Comments"
-		case feature.CycleRebase:
-			label = "Rebasing"
-		case feature.CycleTweak:
-			label = "Tweaking"
-		case feature.CycleRefactor:
-			label = "Refactoring"
-		default:
-			label = "Repo Cycle Running"
-		}
+		label = repoCycleRunningLabel(cycle.rc.Type)
 		if f.CurrentIteration > 0 {
 			label = fmt.Sprintf("%s [%d]", label, f.CurrentIteration)
 		}
@@ -1367,6 +1354,40 @@ func activePublishedCycleStatus(f *feature.Feature) (label string, reviewing boo
 	return label, reviewing, true
 }
 
+// repoCycleFinalReviewLabel returns the dashboard label for a repo cycle
+// awaiting final review, keyed by cycle type.
+func repoCycleFinalReviewLabel(t feature.RepoCycleType) string {
+	switch t {
+	case feature.CycleReviewComments:
+		return "Final Review (Review Comments)"
+	case feature.CycleRebase:
+		return "Final Review (Rebase)"
+	case feature.CycleTweak:
+		return "Final Review (Tweak)"
+	case feature.CycleRefactor:
+		return "Final Review (Refactor)"
+	default:
+		return "Final Review (Repo Cycle)"
+	}
+}
+
+// repoCycleRunningLabel returns the dashboard label for a repo cycle
+// actively running, keyed by cycle type.
+func repoCycleRunningLabel(t feature.RepoCycleType) string {
+	switch t {
+	case feature.CycleReviewComments:
+		return "Addressing Review Comments"
+	case feature.CycleRebase:
+		return "Rebasing"
+	case feature.CycleTweak:
+		return "Tweaking"
+	case feature.CycleRefactor:
+		return "Refactoring"
+	default:
+		return "Repo Cycle Running"
+	}
+}
+
 func activeFeatureCycleStatus(f *feature.Feature) (label string, reviewing bool, ok bool) {
 	if f == nil || f.ActiveCycle == nil {
 		return "", false, false
@@ -1375,31 +1396,9 @@ func activeFeatureCycleStatus(f *feature.Feature) (label string, reviewing bool,
 	case feature.RepoCycleNeedUserInput:
 		return string(f.ActiveCycle.Type) + " needs input", false, true
 	case feature.RepoCycleReviewing:
-		switch f.ActiveCycle.Type {
-		case feature.CycleReviewComments:
-			return "Final Review (Review Comments)", true, true
-		case feature.CycleRebase:
-			return "Final Review (Rebase)", true, true
-		case feature.CycleTweak:
-			return "Final Review (Tweak)", true, true
-		case feature.CycleRefactor:
-			return "Final Review (Refactor)", true, true
-		default:
-			return "Final Review (Repo Cycle)", true, true
-		}
+		return repoCycleFinalReviewLabel(f.ActiveCycle.Type), true, true
 	case feature.RepoCycleRunning:
-		switch f.ActiveCycle.Type {
-		case feature.CycleReviewComments:
-			label = "Addressing Review Comments"
-		case feature.CycleRebase:
-			label = "Rebasing"
-		case feature.CycleTweak:
-			label = "Tweaking"
-		case feature.CycleRefactor:
-			label = "Refactoring"
-		default:
-			label = "Repo Cycle Running"
-		}
+		label = repoCycleRunningLabel(f.ActiveCycle.Type)
 		iteration := f.CurrentIteration
 		if iteration == 0 {
 			iteration = f.ActiveCycle.Iteration

@@ -72,6 +72,56 @@ const (
 	defaultLogBasename    = "agentico.log"
 )
 
+// Wire-level result/status/action strings shared across server mutation
+// handlers (and reused by their tests) to avoid duplicated literals.
+const (
+	resultFailed   = "failed"
+	resultAnswered = "answered"
+	resultConflict = "conflict"
+	resultCleaned  = "cleaned"
+	resultStarted  = "started"
+	resultUpdated  = "updated"
+	resultSent     = "sent"
+	resultRetried  = "retried"
+
+	dispatchNone = "none"
+
+	toolNameBash            = "Bash"
+	toolNameAskUserQuestion = "AskUserQuestion"
+
+	chatName = "chat"
+
+	reviewModeAuto = "auto"
+
+	phaseNameInquire     = "inquire"
+	phaseNameImplement   = "implement"
+	phaseNameFinalReview = "final-review"
+	phaseNameResearch    = "research"
+	phaseNamePlan        = "plan"
+	phaseNameReview      = "review"
+	phaseNamePublish     = "publish"
+
+	cleanupTargetCycles    = "cycles"
+	cleanupTargetWorktrees = "worktrees"
+
+	providerNameClaude   = "claude"
+	providerNameCodex    = "codex"
+	providerNameOpencode = "opencode"
+
+	modelNameSonnet = "sonnet"
+
+	cliSubcommandServer            = "server"
+	cliSubcommandValidateArtifacts = "validate-artifacts"
+	cliFlagDir                     = "--dir"
+	cliFlagPhase                   = "--phase"
+	cliFlagRole                    = "--role"
+
+	// repoConflictKey is the Target map key used to report the repo name on
+	// a publish conflict. Coincidentally shares its value with an unrelated
+	// "repo" fixture in update_test.go's slug-parsing table.
+	repoConflictKey = "repo"
+)
+
 func main() {
 	run()
 }
@@ -210,11 +260,11 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == "update" {
 		return parseUpdateArgs(opts, args[1:])
 	}
-	if len(args) > 0 && args[0] == "validate-artifacts" {
+	if len(args) > 0 && args[0] == cliSubcommandValidateArtifacts {
 		opts.mode = launchModeValidateArtifacts
 		return parseValidateArtifactsArgs(opts, args[1:])
 	}
-	if len(args) > 0 && args[0] == "server" {
+	if len(args) > 0 && args[0] == cliSubcommandServer {
 		opts.mode = launchModeServer
 		args = args[1:]
 	}
@@ -263,19 +313,19 @@ func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOption
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch arg {
-		case "--phase":
+		case cliFlagPhase:
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--phase requires a value")
 			}
 			i++
 			opts.validateArtifacts.phase = args[i]
-		case "--role":
+		case cliFlagRole:
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--role requires a value")
 			}
 			i++
 			opts.validateArtifacts.role = args[i]
-		case "--dir":
+		case cliFlagDir:
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--dir requires a value")
 			}
@@ -759,16 +809,17 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 }
 
 type serverMutationTarget struct {
-	mu            sync.Mutex
-	orch          *orchestrator.Orchestrator
-	rebaseStarter featureRebaseStarter
-	cfg           *config.Config
-	configPath    string
-	store         *feature.Store
-	sessions      ports.SessionManager
-	phaseRunner   *agent.PhaseRunner
-	workspaceDir  string
-	reviewer      ports.ReviewCommentOperator
+	mu              sync.Mutex
+	orch            *orchestrator.Orchestrator
+	rebaseStarter   featureRebaseStarter
+	cfg             *config.Config
+	configPath      string
+	store           *feature.Store
+	sessions        ports.SessionManager
+	phaseRunner     *agent.PhaseRunner
+	permissionCache *permission.Cache
+	workspaceDir    string
+	reviewer        ports.ReviewCommentOperator
 }
 
 type featureRebaseStarter interface {
@@ -785,7 +836,7 @@ func (gitFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRe
 	switch git.RepoFreshness(worktree) {
 	case "in sync":
 		return serverruntime.RepoFreshnessInSync
-	case "local changes":
+	case git.FreshnessLocalChanges:
 		return serverruntime.RepoFreshnessLocalChanges
 	case "local only":
 		return serverruntime.RepoFreshnessLocalOnly
@@ -827,7 +878,7 @@ func (t *serverMutationTarget) StartFeature(featureID string) (serverruntime.Fea
 	if err := t.orch.StartFeature(featureID); err != nil {
 		return serverruntime.FeatureStartResponse{}, err
 	}
-	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: "started"}, nil
+	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
 }
 
 func (t *serverMutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
@@ -847,7 +898,7 @@ func (t *serverMutationTarget) RestartFeature(featureID string, req serverruntim
 		resp.Phase = outcome.Phase.String()
 	}
 	if err := t.dispatchRestartOutcome(featureID, outcome, &resp); err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
 	return resp, nil
@@ -859,7 +910,7 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 	}
 	switch outcome.Action {
 	case orchestrator.RestartNoOp:
-		resp.Dispatch = "none"
+		resp.Dispatch = dispatchNone
 		return nil
 	case orchestrator.RestartDispatchPhase:
 		resp.Dispatch = "phase"
@@ -938,7 +989,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
 		return serverruntime.FeatureConfigUpdateResponse{}, err
 	}
-	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: "updated"}, nil
+	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
 }
 
 func (t *serverMutationTarget) NeedUserInputDecision(featureID string, req serverruntime.NeedUserInputDecisionRequest) (serverruntime.NeedUserInputDecisionResponse, error) {
@@ -971,22 +1022,46 @@ func (t *serverMutationTarget) DraftNeedUserInputAnswers(featureID string, req s
 }
 
 func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequest) (serverruntime.PermissionAnswerResponse, error) {
-	decision := strings.ToLower(strings.TrimSpace(req.Decision))
-	if decision != "allow" && decision != "deny" {
-		return serverruntime.PermissionAnswerResponse{}, fmt.Errorf("unknown permission decision %q", req.Decision)
-	}
 	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, false)
 	if err != nil {
 		return serverruntime.PermissionAnswerResponse{}, err
 	}
-	reason := ""
-	if decision == "deny" {
-		reason = "denied by user"
+	rememberScope := ""
+	if req.RememberScope != nil {
+		rememberScope = *req.RememberScope
 	}
-	if err := sess.RespondToControl(pending.RequestID, decision == "allow", reason); err != nil {
-		return serverruntime.PermissionAnswerResponse{}, fmt.Errorf("answer permission: %w", err)
+	result, err := t.permissionAnswerService().Answer(permission.AnswerRequest{
+		RequestID:        pending.RequestID,
+		SessionID:        sess.ID(),
+		FeatureID:        sess.FeatureID(),
+		ToolName:         pending.Request.ToolName,
+		ToolInput:        string(pending.Request.Input),
+		Decision:         req.Decision,
+		RememberPattern:  req.RememberPattern,
+		RememberScope:    rememberScope,
+		RememberScopeSet: req.RememberScope != nil,
+	}, func(requestID string, allow bool, reason string) error {
+		return sess.RespondToControl(requestID, allow, reason)
+	})
+	if err != nil {
+		return serverruntime.PermissionAnswerResponse{}, err
 	}
-	return serverruntime.PermissionAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Decision: decision, Result: "answered"}, nil
+	resp := serverruntime.PermissionAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Decision: result.Decision, Result: resultAnswered}
+	if result.AlreadyExisted {
+		resp.Set("already_existed", true)
+	}
+	if result.AuditWarning != "" {
+		resp.Set("audit_warning", result.AuditWarning)
+	}
+	return resp, nil
+}
+
+func (t *serverMutationTarget) permissionAnswerService() *permission.AnswerService {
+	var audit *permission.AuditSink
+	if t != nil && t.permissionCache != nil && t.permissionCache.StoreRef() != nil {
+		audit = permission.NewAuditSink(t.permissionCache.StoreRef().BaseDir)
+	}
+	return permission.NewAnswerService(t.permissionCache, audit)
 }
 
 func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequest) (serverruntime.AskUserAnswerResponse, error) {
@@ -998,7 +1073,7 @@ func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequ
 	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil); err != nil {
 		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", err)
 	}
-	return serverruntime.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Result: "answered"}, nil
+	return serverruntime.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Result: resultAnswered}, nil
 }
 
 func normalizeAskUserAnswerKeys(input json.RawMessage, answers map[string]string) map[string]string {
@@ -1089,7 +1164,7 @@ func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (se
 	if err := sess.SendUserMessage(req.Message); err != nil {
 		return serverruntime.HelpSendResponse{}, fmt.Errorf("send help message: %w", err)
 	}
-	return serverruntime.HelpSendResponse{FeatureID: sess.FeatureID(), SessionID: sess.ID(), Result: "sent"}, nil
+	return serverruntime.HelpSendResponse{FeatureID: sess.FeatureID(), SessionID: sess.ID(), Result: resultSent}, nil
 }
 
 const serverChatSessionID = serverruntime.ChatSessionID
@@ -1106,7 +1181,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		if err := sess.SendUserMessage(message); err != nil {
 			return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
 		}
-		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: "sent"}, nil
+		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultSent}, nil
 	}
 	if t.phaseRunner == nil {
 		return serverruntime.ChatStartResponse{}, errors.New("phase runner is not available")
@@ -1116,7 +1191,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
 		prompt = instruction + "\n\n" + prompt
 	}
-	model := "sonnet"
+	model := modelNameSonnet
 	if t.cfg != nil && t.cfg.Defaults.Models.Utilities != "" {
 		model = t.cfg.Defaults.Models.Utilities
 	}
@@ -1125,7 +1200,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	if workDir == "" {
 		workDir = t.phaseRunner.StateDir
 	}
-	chatDir := filepath.Join(t.phaseRunner.StateDir, "chat")
+	chatDir := filepath.Join(t.phaseRunner.StateDir, chatName)
 	if err := os.MkdirAll(chatDir, 0o755); err != nil {
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("prepare chat state: %w", err)
 	}
@@ -1133,7 +1208,7 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		Model:           model,
 		Prompt:          prompt,
 		SystemPrompt:    t.buildChatContext(),
-		DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "Bash"},
+		DisallowedTools: []string{"Edit", "Write", "NotebookEdit", toolNameBash},
 		WorkDir:         workDir,
 		PIDDir:          chatDir,
 		PermHandler:     &session.ReadOnlyHandler{},
@@ -1150,21 +1225,21 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 	sessOpts.InitialPrompt = prompt
 	sessOpts.Kind = ports.KindChat
 	sessOpts.TurnMode = ports.TurnModeInteractive
-	sessOpts.Label = "chat"
+	sessOpts.Label = chatName
 	sessOpts.LogPath = filepath.Join(chatDir, "output.txt")
 	sessOpts.StderrPath = filepath.Join(chatDir, "stderr.log")
 	sess, err := t.sessions.StartSession(serverChatSessionID, serverChatSessionID, feature.PhaseResearch, cmd, workDir, env, sessOpts)
 	if err != nil {
 		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
 	}
-	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: "started"}, nil
+	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
 }
 
 func serverChatSkillInstruction(skillsDir string) string {
 	if strings.TrimSpace(skillsDir) == "" {
 		return ""
 	}
-	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", filepath.Join(skillsDir, "chat", "SKILL.md"))
+	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", filepath.Join(skillsDir, chatName, "SKILL.md"))
 }
 
 func (t *serverMutationTarget) buildChatContext() string {
@@ -1232,7 +1307,7 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 	t.cfg = cfg
 	status := "unchanged"
 	if changed {
-		status = "updated"
+		status = resultUpdated
 	}
 	return serverruntime.RuntimeConfigUpdateResponse{Result: status}, nil
 }
@@ -1286,9 +1361,9 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 		Body:  req.Body,
 	}); err != nil {
 		if conflict := actionConflictError(err); conflict != nil {
-			return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "conflict"}, conflict
+			return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultConflict}, conflict
 		}
-		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
 }
@@ -1315,7 +1390,7 @@ func (t *serverMutationTarget) MergeFeature(featureID string) (serverruntime.Mer
 		return serverruntime.MergeFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
 	if err := t.orch.MergeFeatureLocal(featureID); err != nil {
-		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
 }
@@ -1331,16 +1406,16 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		resp.UpgradePipeline = string(req.UpgradePipeline)
 	}
 	if err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
 	if t.orch == nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, errors.New("orchestrator is not available")
 	}
 	if req.UpgradePipeline != "" {
 		if err := t.orch.UpgradePipeline(featureID, req.UpgradePipeline); err != nil {
-			resp.Result = "failed"
+			resp.Result = resultFailed
 			return resp, err
 		}
 	}
@@ -1349,12 +1424,12 @@ func (t *serverMutationTarget) RewindFeature(featureID string, req serverruntime
 		TargetPhase:  targetPhase,
 		RoadmapPhase: req.RoadmapPhase,
 	})
-	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, "research") {
+	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
 		resp.EffectivePhase = effectiveTarget.DirName()
 	}
 	resp.WarningCount = len(warnings)
 	if err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
 	resp.Result = "rewound"
@@ -1369,15 +1444,15 @@ func (t *serverMutationTarget) RetryFeature(featureID string) (serverruntime.Ret
 		f, err := t.store.Load(featureID)
 		if err == nil && isFailedSetupFeature(f) {
 			if err := t.orch.RetrySetup(featureID); err != nil {
-				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 			}
-			return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "retried"}, nil
+			return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 		}
 	}
 	if err := t.orch.RetryPhase(featureID); err != nil {
-		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
-	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: "retried"}, nil
+	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 }
 
 func isFailedSetupFeature(f *feature.Feature) bool {
@@ -1404,10 +1479,10 @@ func (t *serverMutationTarget) StartRebase(featureID string, req serverruntime.R
 		return resp, errors.New("orchestrator is not available")
 	}
 	if err := starter.StartFeatureRebase(featureID); err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
-	resp.Result = "started"
+	resp.Result = resultStarted
 	return resp, nil
 }
 
@@ -1420,7 +1495,7 @@ func (t *serverMutationTarget) FetchReviewComments(featureID string, req serverr
 		APIVersion: serverruntime.APIVersion,
 		FeatureID:  featureID,
 		Repo:       req.Repo,
-		Mode:       "auto",
+		Mode:       reviewModeAuto,
 		Comments:   reviewCommentDTOs(req.Repo, comments),
 	}, nil
 }
@@ -1479,7 +1554,7 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 		var err error
 		comments, err = t.fetchUnaddressedReviewComments(featureID, req.Repo)
 		if err != nil {
-			resp.Result = "failed"
+			resp.Result = resultFailed
 			return resp, err
 		}
 	} else {
@@ -1494,11 +1569,11 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 	resp.CommentCount = len(comments)
 	f, err := t.store.Load(featureID)
 	if err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
 	if err := agent.SaveReviewCommentsForRepo(t.store.BaseDir, f, req.Repo, agent.ReviewCommentsData{Mode: req.Mode, Comments: comments}); err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
 	sessionID, err := t.orch.StartRepoCycleImplement(featureID, req.Repo, feature.CycleReviewComments, "")
@@ -1506,10 +1581,10 @@ func (t *serverMutationTarget) StartReviewComments(featureID string, req serverr
 		resp.SessionID = sessionID
 	}
 	if err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
-	resp.Result = "started"
+	resp.Result = resultStarted
 	return resp, nil
 }
 
@@ -1523,10 +1598,10 @@ func (t *serverMutationTarget) StartTweak(featureID string, req serverruntime.Tw
 		resp.SessionID = sessionID
 	}
 	if err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
-	resp.Result = "started"
+	resp.Result = resultStarted
 	return resp, nil
 }
 
@@ -1551,7 +1626,7 @@ func (t *serverMutationTarget) FinishTweak(featureID string, req serverruntime.T
 		err = t.orch.RestoreTweakFromReview(featureID)
 	case "fail":
 		err = t.orch.FailTweakSession(featureID)
-	case "final-review":
+	case phaseNameFinalReview:
 		resp.HadChanges = req.HadChanges
 		err = t.orch.StartCycleFinalReview(featureID)
 		if err == nil {
@@ -1562,10 +1637,10 @@ func (t *serverMutationTarget) FinishTweak(featureID string, req serverruntime.T
 	}
 	if err != nil {
 		if conflict := actionConflictError(err); conflict != nil {
-			resp.Result = "conflict"
+			resp.Result = resultConflict
 			return resp, conflict
 		}
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
 	if resp.Result == "" {
@@ -1595,7 +1670,7 @@ func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.MarkDon
 		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
 	if err := t.orch.MarkDone(featureID); err != nil {
-		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: "failed"}, err
+		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: "done"}, nil
 }
@@ -1603,31 +1678,31 @@ func (t *serverMutationTarget) MarkDone(featureID string) (serverruntime.MarkDon
 func (t *serverMutationTarget) CleanupFeature(featureID string, req serverruntime.CleanupActionRequest) (serverruntime.CleanupFeatureResponse, error) {
 	target := strings.ToLower(strings.TrimSpace(req.Target))
 	if target == "" {
-		target = "worktrees"
+		target = cleanupTargetWorktrees
 	}
 	resp := serverruntime.CleanupFeatureResponse{FeatureID: featureID, Target: target}
 	if t.orch == nil {
 		return resp, errors.New("orchestrator is not available")
 	}
 	switch target {
-	case "worktrees":
+	case cleanupTargetWorktrees:
 		if err := t.orch.CleanWorktree(featureID); err != nil {
-			resp.Result = "failed"
+			resp.Result = resultFailed
 			return resp, err
 		}
-	case "cycles":
+	case cleanupTargetCycles:
 		if err := t.orch.ClearRepoCycles(featureID); err != nil {
-			resp.Result = "failed"
+			resp.Result = resultFailed
 			return resp, err
 		}
 	case "failed-cycles", "completed-cycles":
 		resp.Result = "unsupported"
 		return resp, fmt.Errorf("cleanup target %q is not supported by the orchestrator adapter", target)
 	default:
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, fmt.Errorf("unknown cleanup target %q", req.Target)
 	}
-	resp.Result = "cleaned"
+	resp.Result = resultCleaned
 	return resp, nil
 }
 
@@ -1636,7 +1711,7 @@ func (t *serverMutationTarget) DeleteFeature(featureID string) (serverruntime.De
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
 	}
 	if err := t.orch.Delete(featureID); err != nil {
-		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: "failed"}, err
+		return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.DeleteFeatureResponse{FeatureID: featureID, Result: "deleted"}, nil
 }
@@ -1651,8 +1726,8 @@ func actionConflictError(err error) error {
 			Err:     err,
 			Message: "publish conflict",
 			Target: map[string]any{
-				"conflict":       "publish",
-				"repo":           publishConflict.RepoName,
+				resultConflict:   phaseNamePublish,
+				repoConflictKey:  publishConflict.RepoName,
 				"branch":         publishConflict.Branch,
 				"rebase_target":  publishConflict.RebaseTarget,
 				"conflict_files": []string{},
@@ -1693,13 +1768,13 @@ func (t *serverMutationTarget) startRefactorAction(featureID string, req serverr
 		resp.SessionID = sessionID
 	}
 	if err != nil {
-		resp.Result = "failed"
+		resp.Result = resultFailed
 		return resp, err
 	}
 	if restart {
 		resp.Result = "restarted"
 	} else {
-		resp.Result = "started"
+		resp.Result = resultStarted
 	}
 	return resp, nil
 }
@@ -1777,21 +1852,21 @@ func parseServerPhaseStrict(in string) (feature.Phase, error) {
 	switch strings.ToLower(strings.TrimSpace(in)) {
 	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
 		return feature.PhaseKnowledgeBase, nil
-	case "inquire":
+	case phaseNameInquire:
 		return feature.PhaseInquire, nil
-	case "research":
+	case phaseNameResearch:
 		return feature.PhaseResearch, nil
 	case "design":
 		return feature.PhaseDesign, nil
-	case "plan":
+	case phaseNamePlan:
 		return feature.PhasePlan, nil
-	case "implement":
+	case phaseNameImplement:
 		return feature.PhaseImplement, nil
-	case "review":
+	case phaseNameReview:
 		return feature.PhaseReview, nil
-	case "final-review", "final review":
+	case phaseNameFinalReview, "final review":
 		return feature.PhaseFinalReview, nil
-	case "publish":
+	case phaseNamePublish:
 		return feature.PhasePublish, nil
 	default:
 		return feature.PhaseResearch, fmt.Errorf("unknown phase %q", in)
@@ -1824,7 +1899,7 @@ func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID st
 			if pending == nil || pending.RequestID != requestID {
 				continue
 			}
-			isAskUser := pending.Request.ToolName == "AskUserQuestion"
+			isAskUser := pending.Request.ToolName == toolNameAskUserQuestion
 			if isAskUser != wantAskUser {
 				return nil, nil, fmt.Errorf("request %s has incompatible control type", requestID)
 			}
@@ -2043,21 +2118,21 @@ func parseServerPhase(in string) feature.Phase {
 	switch strings.ToLower(strings.TrimSpace(in)) {
 	case "knowledgebase", "knowledge-base", "knowledge base", "kb":
 		return feature.PhaseKnowledgeBase
-	case "inquire":
+	case phaseNameInquire:
 		return feature.PhaseInquire
-	case "research":
+	case phaseNameResearch:
 		return feature.PhaseResearch
 	case "design":
 		return feature.PhaseDesign
-	case "plan":
+	case phaseNamePlan:
 		return feature.PhasePlan
-	case "implement":
+	case phaseNameImplement:
 		return feature.PhaseImplement
-	case "review":
+	case phaseNameReview:
 		return feature.PhaseReview
-	case "final-review", "final review":
+	case phaseNameFinalReview, "final review":
 		return feature.PhaseFinalReview
-	case "publish":
+	case phaseNamePublish:
 		return feature.PhasePublish
 	default:
 		return feature.Phase(0)
@@ -2172,11 +2247,12 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	stop()
 
 	for _, vr := range agent.CheckProviderVersions(detected) {
-		if vr.Err != nil {
+		switch {
+		case vr.Err != nil:
 			fmt.Fprintf(stderr, "Warning: could not check %s CLI version: %v\n", vr.Provider, vr.Err)
-		} else if vr.Warning != "" {
+		case vr.Warning != "":
 			fmt.Fprintf(stderr, "Warning: %s\n", vr.Warning)
-		} else {
+		default:
 			fmt.Fprintf(stderr, "%s CLI version: %s\n", vr.Provider, vr.Version)
 		}
 	}
@@ -2559,13 +2635,13 @@ func newLaunchPolicyRegistry(enabled []string, stderr io.Writer) (*llm.Registry,
 	registry := llm.NewRegistry()
 	register := func(name string) bool {
 		switch strings.TrimSpace(name) {
-		case "claude":
+		case providerNameClaude:
 			registry.Register(&claude.Provider{})
 			return true
-		case "codex":
+		case providerNameCodex:
 			registry.Register(&codex.Provider{})
 			return true
-		case "opencode":
+		case providerNameOpencode:
 			registry.Register(&opencode.Provider{})
 			return true
 		case "":
@@ -2578,9 +2654,9 @@ func newLaunchPolicyRegistry(enabled []string, stderr io.Writer) (*llm.Registry,
 		}
 	}
 	if enabled == nil {
-		register("claude")
-		register("codex")
-		register("opencode")
+		register(providerNameClaude)
+		register(providerNameCodex)
+		register(providerNameOpencode)
 		return registry, nil
 	}
 	valid := 0
@@ -2601,7 +2677,7 @@ type childServerProcess struct {
 }
 
 func startServerProcess(ctx context.Context, req serverStartRequest) (serverProcess, error) {
-	args := []string{"server", "--config", req.ConfigPath, "--state-dir", req.StateDir}
+	args := []string{cliSubcommandServer, "--config", req.ConfigPath, "--state-dir", req.StateDir}
 	if len(req.EnabledProviders) > 0 {
 		args = append(args, "--providers", strings.Join(req.EnabledProviders, ","))
 	}
@@ -2692,28 +2768,39 @@ func waitForOwnedServerShutdownOrStop(process serverProcess, grace time.Duration
 		if process == nil {
 			return nil
 		}
-		if waiter, ok := process.(serverProcessWaiter); ok {
-			waitCtx := ctx
-			var cancel context.CancelFunc
-			if grace > 0 {
-				waitCtx, cancel = context.WithTimeout(ctx, grace)
-			}
-			if cancel != nil {
-				defer cancel()
-			}
-			err := waiter.Wait(waitCtx)
-			if err == nil {
-				return nil
-			}
-			if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-				return err
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
+		waiter, ok := process.(serverProcessWaiter)
+		if !ok {
+			return process.Stop(ctx)
+		}
+		if err, done := waitForServerProcessExit(ctx, waiter, grace); done {
+			return err
 		}
 		return process.Stop(ctx)
 	}
+}
+
+// waitForServerProcessExit waits for the process to exit on its own within
+// grace. done is true when the wait already produced a final result (clean
+// exit, an unexpected error, or outer context cancellation); done is false
+// when the grace period elapsed and the caller should escalate to Stop.
+func waitForServerProcessExit(ctx context.Context, waiter serverProcessWaiter, grace time.Duration) (err error, done bool) {
+	waitCtx := ctx
+	if grace > 0 {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, grace)
+		defer cancel()
+	}
+	err = waiter.Wait(waitCtx)
+	if err == nil {
+		return nil, true
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return err, true
+	}
+	if ctx.Err() != nil {
+		return ctx.Err(), true
+	}
+	return nil, false
 }
 
 func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool) int {
@@ -2759,7 +2846,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	runtimeServer, err := serverruntime.Start(ctx, serverruntime.Options{
 		Runtime:      boot.runtime,
 		LaunchPolicy: policy,
-		StartMode:    "server",
+		StartMode:    cliSubcommandServer,
 		Owner:        boot.owner,
 		AuthToken:    authToken,
 		Features:     boot.featureManager,
@@ -2771,15 +2858,16 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Events:       boot.eventCh,
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: &serverMutationTarget{
-			orch:          boot.orchestrator,
-			rebaseStarter: boot.orchestrator,
-			cfg:           boot.cfg,
-			configPath:    boot.runtime.Config,
-			store:         boot.featureManager.Store,
-			sessions:      boot.sessionManager,
-			phaseRunner:   boot.phaseRunner,
-			workspaceDir:  boot.workspaceDir,
-			reviewer:      &git.ReviewCommentAdapter{},
+			orch:            boot.orchestrator,
+			rebaseStarter:   boot.orchestrator,
+			cfg:             boot.cfg,
+			configPath:      boot.runtime.Config,
+			store:           boot.featureManager.Store,
+			sessions:        boot.sessionManager,
+			phaseRunner:     boot.phaseRunner,
+			permissionCache: boot.permissionCache,
+			workspaceDir:    boot.workspaceDir,
+			reviewer:        &git.ReviewCommentAdapter{},
 		},
 		RequestShutdown: requestShutdown,
 	})
@@ -2804,7 +2892,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		AuthToken:     authToken,
 		Runtime:       boot.runtime,
 		LaunchPolicy:  policy,
-		StartMode:     "server",
+		StartMode:     cliSubcommandServer,
 		PID:           boot.owner.PID,
 		PGID:          boot.owner.PGID,
 		StartedAt:     runtimeServer.StartedAt(),
@@ -3043,9 +3131,9 @@ func reconcileModelDefaults(cfg *config.Config, registry *llm.Registry, configPa
 // by the same readiness path as any other provider.
 func providerFxModules(enabled []string) []fx.Option {
 	all := map[string]fx.Option{
-		"claude":   claude.Module,
-		"codex":    codex.Module,
-		"opencode": opencode.Module,
+		providerNameClaude:   claude.Module,
+		providerNameCodex:    codex.Module,
+		providerNameOpencode: opencode.Module,
 	}
 
 	if enabled == nil {
@@ -3112,7 +3200,7 @@ func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
 		"planning":       m.Planning,
 		"implementation": m.Implementation,
 		"review":         m.Review,
-		"chat":           m.Utilities,
+		chatName:         m.Utilities,
 		"kb_build":       m.KBBuild,
 	}
 }

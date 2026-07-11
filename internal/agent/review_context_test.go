@@ -24,6 +24,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testBaseBranchRelease is the fixture base-branch name this test uses for
+// testRepoNameWeb wherever the specific branch doesn't matter.
+const testBaseBranchRelease = "release"
+
 func TestBuildPostPublishReviewContext(t *testing.T) {
 	stateDir := t.TempDir()
 
@@ -38,8 +42,8 @@ func TestBuildPostPublishReviewContext(t *testing.T) {
 			"roadmap": roadmapPath,
 		},
 		Repos: []feature.FeatureRepo{
-			{Name: "api", BaseBranch: "main"},
-			{Name: "web", BaseBranch: "release"},
+			{Name: testRepoNameAPI, BaseBranch: defaultTestBranch},
+			{Name: testRepoNameWeb, BaseBranch: testBaseBranchRelease},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{},
 	}
@@ -56,26 +60,26 @@ func TestBuildPostPublishReviewContext(t *testing.T) {
 	}{
 		{
 			name:         "per_repo_rebase",
-			repoName:     "web",
+			repoName:     testRepoNameWeb,
 			cycleType:    feature.CycleRebase,
-			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "rebase-4", "web", "review"),
-			wantDiffBase: "release",
+			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "rebase-4", testRepoNameWeb, "review"),
+			wantDiffBase: testBaseBranchRelease,
 			wantFocus:    `repo "web"`,
 		},
 		{
 			name:         "per_repo_tweak",
-			repoName:     "web",
+			repoName:     testRepoNameWeb,
 			cycleType:    feature.CycleTweak,
-			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "tweak-5", "web", "review"),
-			wantDiffBase: "release",
+			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "tweak-5", testRepoNameWeb, "review"),
+			wantDiffBase: testBaseBranchRelease,
 			wantFocus:    `repo "web"`,
 		},
 		{
 			name:         "per_repo_review_comments",
-			repoName:     "web",
+			repoName:     testRepoNameWeb,
 			cycleType:    feature.CycleReviewComments,
-			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "review-comments", "web", "review"),
-			wantDiffBase: "release",
+			wantArtifact: filepath.Join(stateDir, "feat-review", "runs", "run-001", "review-comments", testRepoNameWeb, "review"),
+			wantDiffBase: testBaseBranchRelease,
 			wantFocus:    "review-comment follow-up",
 		},
 	}

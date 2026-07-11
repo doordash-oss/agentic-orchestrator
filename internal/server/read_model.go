@@ -27,11 +27,71 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
 const maxFeatureDetailHistoricalRuns = 5
+
+// Tool names as reported by the LLM control protocol; shared across
+// read_model.go, session_model.go, sse.go and their tests.
+const (
+	toolNameAskUserQuestion = "AskUserQuestion"
+	toolNameBash            = "Bash"
+	toolNameWrite           = "Write"
+	toolNameEdit            = "Edit"
+	toolNameMultiEdit       = "MultiEdit"
+)
+
+// agentQuestionPrompt is the synthetic question text shown when an
+// AskUserQuestion control request has no readable question of its own.
+const agentQuestionPrompt = "Agent has a question"
+
+// actionInputKindEnum and actionInputKindString are ActionInputDTO.Kind
+// values: the former for inputs whose value must be one of
+// ActionInputDTO.Options, the latter for free-form string inputs.
+const (
+	actionInputKindEnum   = "enum"
+	actionInputKindString = "string"
+)
+
+// disabledCycleActive is the ActionDisabledReasonDTO.Code used when a
+// post-publish action is blocked by another active feature cycle.
+const disabledCycleActive = "cycle_active"
+
+// disabledNotLocalOnly is the ActionDisabledReasonDTO.Code used when merge
+// is requested on a feature that is not local-only.
+const disabledNotLocalOnly = "not_local_only"
+
+// disabledStatusNotAllowed is the ActionDisabledReasonDTO.Code used when an
+// action is blocked solely by the feature's current status.
+const disabledStatusNotAllowed = "status_not_allowed"
+
+// controlRequestStatusPending is the ControlRequestDTO/TranscriptMessageDTO
+// Status value for a control request awaiting a user decision.
+const controlRequestStatusPending = "pending"
+
+// actionCleanup, actionDelete, actionMarkDone, actionMerge, actionPauseStop
+// and the entries below are feature action IDs shared between the action
+// catalog, the mutation dispatcher and the client request builder.
+const (
+	actionCleanup        = "cleanup"
+	actionDelete         = "delete"
+	actionMarkDone       = "mark-done"
+	actionMerge          = "merge"
+	actionPauseStop      = "pause-stop"
+	actionPublish        = "publish"
+	actionRebase         = "rebase"
+	actionRefactor       = "refactor"
+	actionRestart        = "restart"
+	actionResume         = "resume"
+	actionStart          = "start"
+	actionTweak          = "tweak"
+	actionRetry          = "retry"
+	actionReviewComments = "review-comments"
+	actionRewind         = "rewind"
+)
 
 func revisionForAny(v any) string {
 	data, _ := json.Marshal(v)
@@ -76,7 +136,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) FeatureDetailDTO {
 		}
 	}
 	if f.PendingNeedUserInputPath != "" {
-		detail.NeedUserInput = &NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: "feature", Iteration: f.CurrentIteration}
+		detail.NeedUserInput = &NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: entityFeature, Iteration: f.CurrentIteration}
 	}
 	return detail
 }
@@ -210,9 +270,9 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 		}
 		return dto
 	}
-	featureScope := ActionScopeDTO{Type: "feature"}
-	repoOptional := ActionScopeDTO{Type: "feature", RepoSelection: "optional"}
-	repoRequired := ActionScopeDTO{Type: "feature", RepoSelection: "required"}
+	featureScope := ActionScopeDTO{Type: entityFeature}
+	repoOptional := ActionScopeDTO{Type: entityFeature, RepoSelection: "optional"}
+	repoRequired := ActionScopeDTO{Type: entityFeature, RepoSelection: "required"}
 
 	canStart := !running && !activeCycle && (status == feature.StatusCreated ||
 		status == feature.StatusInquireReady ||
@@ -237,40 +297,40 @@ func actionCatalogDTOs(f *feature.Feature) []ActionDTO {
 	canDelete := !running
 
 	return []ActionDTO{
-		action("start", canStart, featureScope, nil, disabledStatusReason(status)),
-		action("pause-stop", canStop, featureScope, nil, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"}),
-		action("resume", canResume, featureScope, nil, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"}),
-		action("restart", canRestart, featureScope, nil, ActionDisabledReasonDTO{Code: "running", Message: "feature must stop before restart"}),
-		action("publish", canPublish, featureScope, nil, publishDisabledReason(f)),
-		action("merge", canMerge, featureScope, nil, mergeDisabledReason(f)),
-		action("rewind", canRewind, featureScope, []ActionInputDTO{
-			{Name: "target_phase", Kind: "enum", Required: true, Options: rewindPhaseOptions(f)},
+		action(actionStart, canStart, featureScope, nil, disabledStatusReason(status)),
+		action(actionPauseStop, canStop, featureScope, nil, ActionDisabledReasonDTO{Code: "not_running", Message: "feature has no active work to pause or stop"}),
+		action(actionResume, canResume, featureScope, nil, ActionDisabledReasonDTO{Code: "not_paused", Message: "feature has no paused session or input gate"}),
+		action(actionRestart, canRestart, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "feature must stop before restart"}),
+		action(actionPublish, canPublish, featureScope, nil, publishDisabledReason(f)),
+		action(actionMerge, canMerge, featureScope, nil, mergeDisabledReason(f)),
+		action(actionRewind, canRewind, featureScope, []ActionInputDTO{
+			{Name: "target_phase", Kind: actionInputKindEnum, Required: true, Options: rewindPhaseOptions(f)},
 			{Name: "roadmap_phase", Kind: "integer", Required: false},
-			{Name: "upgrade_pipeline", Kind: "enum", Required: false, Options: rewindUpgradePipelineOptions(f)},
+			{Name: "upgrade_pipeline", Kind: actionInputKindEnum, Required: false, Options: rewindUpgradePipelineOptions(f)},
 		}, ActionDisabledReasonDTO{Code: "no_rewind_targets", Message: "feature has no valid rewind targets"}),
-		action("rebase", canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, "rebase")),
-		action("review-comments", canPostPublishCycle && f.IsPublishable(), repoRequired, []ActionInputDTO{
-			{Name: "repo", Kind: "string", Required: true},
-			{Name: "mode", Kind: "enum", Required: true, Options: []string{"auto", "address_all"}},
-		}, postPublishCycleDisabledReason(f, "review-comments")),
-		action("tweak", canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, "tweak")),
-		action("refactor", canRefactor, repoOptional, []ActionInputDTO{
-			{Name: "repo", Kind: "string", Required: false},
-			{Name: "prompt", Kind: "string", Required: true, MaxLength: MaxActionTextBytes},
-			{Name: "pipeline", Kind: "enum", Required: false, Options: []string{"medium", "large", "moonshot"}},
-		}, postPublishCycleDisabledReason(f, "refactor")),
-		action("retry", canRetry, featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
-		action("mark-done", canMarkDone, featureScope, nil, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"}),
-		action("cleanup", canCleanup, featureScope, []ActionInputDTO{
-			{Name: "target", Kind: "enum", Required: false, Options: []string{"worktrees", "cycles"}},
-		}, ActionDisabledReasonDTO{Code: "running", Message: "cleanup is disabled while work is running"}),
-		action("delete", canDelete, featureScope, nil, ActionDisabledReasonDTO{Code: "running", Message: "delete is disabled while work is running"}),
+		action(actionRebase, canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, actionRebase)),
+		action(actionReviewComments, canPostPublishCycle && f.IsPublishable(), repoRequired, []ActionInputDTO{
+			{Name: "repo", Kind: actionInputKindString, Required: true},
+			{Name: "mode", Kind: actionInputKindEnum, Required: true, Options: []string{reviewCommentsModeAuto, "address_all"}},
+		}, postPublishCycleDisabledReason(f, actionReviewComments)),
+		action(actionTweak, canPostPublishCycle, featureScope, nil, postPublishCycleDisabledReason(f, actionTweak)),
+		action(actionRefactor, canRefactor, repoOptional, []ActionInputDTO{
+			{Name: "repo", Kind: actionInputKindString, Required: false},
+			{Name: "prompt", Kind: actionInputKindString, Required: true, MaxLength: MaxActionTextBytes},
+			{Name: "pipeline", Kind: actionInputKindEnum, Required: false, Options: []string{string(feature.PipelineMedium), string(feature.PipelineLarge), string(feature.PipelineMoonshot)}},
+		}, postPublishCycleDisabledReason(f, actionRefactor)),
+		action(actionRetry, canRetry, featureScope, nil, ActionDisabledReasonDTO{Code: "not_failed", Message: "retry is only available for failed features"}),
+		action(actionMarkDone, canMarkDone, featureScope, nil, ActionDisabledReasonDTO{Code: "not_complete", Message: "feature is not ready to mark done"}),
+		action(actionCleanup, canCleanup, featureScope, []ActionInputDTO{
+			{Name: "target", Kind: actionInputKindEnum, Required: false, Options: []string{"worktrees", "cycles"}},
+		}, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "cleanup is disabled while work is running"}),
+		action(actionDelete, canDelete, featureScope, nil, ActionDisabledReasonDTO{Code: feature.RepoCycleRunning, Message: "delete is disabled while work is running"}),
 	}
 }
 
 func disabledStatusReason(status feature.Status) ActionDisabledReasonDTO {
 	return ActionDisabledReasonDTO{
-		Code:    "status_not_allowed",
+		Code:    disabledStatusNotAllowed,
 		Message: "action is not available while feature status is " + status.String(),
 	}
 }
@@ -296,7 +356,7 @@ func mergeDisabledReason(f *feature.Feature) ActionDisabledReasonDTO {
 		return disabledStatusReason(feature.StatusCreated)
 	}
 	if f.IsPublishable() {
-		return ActionDisabledReasonDTO{Code: "not_local_only", Message: "merge is only available for local-only features"}
+		return ActionDisabledReasonDTO{Code: disabledNotLocalOnly, Message: "merge is only available for local-only features"}
 	}
 	return disabledStatusReason(f.Status)
 }
@@ -306,9 +366,9 @@ func postPublishCycleDisabledReason(f *feature.Feature, cycle string) ActionDisa
 		return disabledStatusReason(feature.StatusCreated)
 	}
 	if f.HasActiveRepoCycles() || f.ActiveCycleType() != "" {
-		return ActionDisabledReasonDTO{Code: "cycle_active", Message: "another feature cycle is active"}
+		return ActionDisabledReasonDTO{Code: disabledCycleActive, Message: "another feature cycle is active"}
 	}
-	if cycle == "review-comments" && !f.IsPublishable() {
+	if cycle == actionReviewComments && !f.IsPublishable() {
 		return ActionDisabledReasonDTO{Code: "not_publishable", Message: "review-comment actions require a published PR"}
 	}
 	return disabledStatusReason(f.Status)
@@ -773,7 +833,7 @@ func (h *apiHandler) pendingControls() ([]ControlRequestDTO, []ControlRequestDTO
 				sessionID: sess.ID(),
 				index:     i,
 			}
-			if req.Request.ToolName == "AskUserQuestion" {
+			if req.Request.ToolName == toolNameAskUserQuestion {
 				asks = append(asks, entry)
 			} else {
 				perms = append(perms, entry)
@@ -807,7 +867,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 		}
 		if f.PendingNeedUserInputPath != "" {
 			gates = append(gates, orderedNeedInputGate{
-				dto:       NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: "feature", Iteration: f.CurrentIteration},
+				dto:       NeedInputGateDTO{FeatureID: f.ID, Open: true, Scope: entityFeature, Iteration: f.CurrentIteration},
 				featureID: f.ID,
 				created:   f.Created,
 				gateTime:  gateFileTime(f.PendingNeedUserInputPath),
@@ -822,7 +882,7 @@ func (h *apiHandler) featureQueues() ([]HelpQueueDTO, []NeedInputGateDTO) {
 			help = append(help, orderedHelpQueue{
 				dto: HelpQueueDTO{
 					FeatureID: sess.FeatureID(),
-					Question:  "Agent has a question",
+					Question:  agentQuestionPrompt,
 					Pending:   true,
 					Time:      sess.StartedAt(),
 				},
@@ -841,7 +901,7 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 		return false
 	}
 	for _, req := range sess.PendingControlRequests() {
-		if req != nil && req.Request.ToolName == "AskUserQuestion" {
+		if req != nil && req.Request.ToolName == toolNameAskUserQuestion {
 			return true
 		}
 	}
@@ -999,22 +1059,56 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 		FeatureID: sess.FeatureID(),
 		Phase:     sess.Phase().String(),
 		ToolName:  req.Request.ToolName,
-		Status:    "pending",
+		Status:    controlRequestStatusPending,
 		Summary:   safeControlSummary(req),
 	}
-	if req.Request.ToolName == "AskUserQuestion" {
+	if req.Request.ToolName == toolNameAskUserQuestion {
 		dto.Questions = safeAskUserQuestions(sess, req)
 	} else {
 		dto.Input = safeControlInput(req)
+		scope := sess.PermCacheScope()
+		dto.Remember = &PermissionRememberPreviewDTO{
+			Pattern:      safeRememberPattern(req),
+			Scope:        scope,
+			ScopeDisplay: permissionScopeDisplay(scope),
+		}
 	}
 	return dto
+}
+
+func safeRememberPattern(req *llm.ControlRequestMessage) string {
+	if req == nil {
+		return ""
+	}
+	// The snapshot exposes a client-submitted default policy preview, so infer
+	// from sanitized input when possible rather than leaking raw tool arguments.
+	if safeInput := safeControlInput(req); safeInput != nil {
+		if data, err := json.Marshal(safeInput); err == nil {
+			return permission.InferBashPattern(req.Request.ToolName, string(data))
+		}
+	}
+	return permission.InferBashPattern(req.Request.ToolName, safeRememberFallbackInput(req.Request.ToolName))
+}
+
+func safeRememberFallbackInput(toolName string) string {
+	if toolName == toolNameBash {
+		return ""
+	}
+	return "*"
+}
+
+func permissionScopeDisplay(scope string) string {
+	if scope == "" {
+		return "global"
+	}
+	return "repo: " + scope
 }
 
 func safeControlSummary(req *llm.ControlRequestMessage) string {
 	if req == nil {
 		return ""
 	}
-	if req.Request.ToolName == "AskUserQuestion" {
+	if req.Request.ToolName == toolNameAskUserQuestion {
 		var envelope struct {
 			Questions []struct {
 				Question string `json:"question"`
@@ -1077,9 +1171,9 @@ func safeControlInputDetail(toolName string, input json.RawMessage) string {
 		return ""
 	}
 	switch toolName {
-	case "Bash":
+	case toolNameBash:
 		return safeStringField(fields, "command")
-	case "Write", "Edit":
+	case toolNameWrite, toolNameEdit:
 		return firstSafeStringField(fields, "file_path", "path")
 	default:
 		return firstSafeStringField(fields, "description", "summary", "title", "command", "file_path", "path")
@@ -1111,7 +1205,7 @@ const (
 )
 
 func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage) []AskUserQuestionDTO {
-	if req == nil || req.Request.ToolName != "AskUserQuestion" {
+	if req == nil || req.Request.ToolName != toolNameAskUserQuestion {
 		return nil
 	}
 	questions := safeAskUserQuestionsFromInput(req.Request.Input)
@@ -1184,7 +1278,7 @@ func enrichAskUserQuestionDTOConfidence(questions []AskUserQuestionDTO, log port
 	blocks := log.ToolUseBlocks()
 	for i := len(blocks) - 1; i >= 0; i-- {
 		block := blocks[i]
-		if block.Name != "AskUserQuestion" || len(block.Input) == 0 {
+		if block.Name != toolNameAskUserQuestion || len(block.Input) == 0 {
 			continue
 		}
 		source := safeAskUserQuestionsFromInput(block.Input)

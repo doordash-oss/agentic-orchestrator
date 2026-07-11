@@ -146,7 +146,7 @@ func (m *ChatModel) rebuildViewport() {
 	if m.responding {
 		line := m.thinkingLine
 		if line == "" {
-			line = "Thinking..."
+			line = thinkingLineText
 		}
 		b.WriteString(renderAgentThinkingTag(m.spinnerView, line))
 	}
@@ -176,7 +176,7 @@ func (m ChatModel) View() string {
 	switch {
 	case m.hasActiveQuestion():
 		bottom, footer = m.renderQuestionPicker()
-		bottomTitle = "Question"
+		bottomTitle = attentionTypeLabelQuestion
 	case m.responding:
 		bottom = m.input.View()
 		footer = KeyHelpStyle.Render("[esc] Background · [ctrl+c] Cancel · [ctrl+g] Full")

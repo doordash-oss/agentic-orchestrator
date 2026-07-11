@@ -24,6 +24,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testPhaseTimingPlan1, testPhaseTimingPlan2, and testPhaseTimingImpl1 are
+// fixture PhaseTimings/PhaseCosts map keys reused across this file's
+// roadmap-totals test.
+const (
+	testPhaseTimingPlan1 = "phase-1-plan"
+	testPhaseTimingPlan2 = "phase-2-plan"
+	testPhaseTimingImpl1 = "phase-1-impl"
+)
+
 func TestDetailView(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
@@ -246,7 +255,7 @@ func TestDetailViewFooterUsesContextualAttentionLabel(t *testing.T) {
 			name: "permission",
 			f: &feature.Feature{
 				ID: "perm", Slug: "perm", Status: feature.StatusImplementing,
-				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+				PermissionsQueue: []feature.PermissionRequest{{Tool: toolNameBash, Pending: true}},
 				Models:           config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 			},
 			want: "[a] Approve",
@@ -255,7 +264,7 @@ func TestDetailViewFooterUsesContextualAttentionLabel(t *testing.T) {
 			name: "ask user",
 			f: &feature.Feature{
 				ID: "ask", Slug: "ask", Status: feature.StatusImplementing,
-				HelpQueue: []feature.HelpRequest{{Question: "Need input?", Pending: true}},
+				HelpQueue: []feature.HelpRequest{{Question: testQuestionNeedInput, Pending: true}},
 				Models:    config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 			},
 			want: "[a] Answer",
@@ -289,14 +298,14 @@ func TestDetailCompactViewRendersPendingPermissionAttentionBox(t *testing.T) {
 		Slug:   "perm",
 		Status: feature.StatusImplementing,
 		PermissionsQueue: []feature.PermissionRequest{
-			{Tool: "Bash", Args: `{"command":"go test ./internal/tui"}`, Pending: true},
+			{Tool: toolNameBash, Args: `{"command":"go test ./internal/tui"}`, Pending: true}, //nolint:goconst // shared raw-JSON test fixture; not constant-ized per raw-string-fixture policy
 		},
 		Models: config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 	}
 	m := NewDetailModel(f, "")
 
 	view := stripANSI(m.ViewCompact(96))
-	for _, want := range []string{"Permission Request", "Bash: go test ./internal/tui", "[a] Approve", "Waiting for approval"} {
+	for _, want := range []string{attentionTypeLabelPermission, "Bash: go test ./internal/tui", "[a] Approve", "Waiting for approval"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("DetailModel.ViewCompact() missing %q in:\n%s", want, view)
 		}
@@ -845,7 +854,7 @@ func TestDetailViewShowsInFlightRebase(t *testing.T) {
 	if !strings.Contains(rebaseLine, sentinelSpinner) {
 		t.Errorf("expected in-flight rebase row to render the live spinner; got: %q", rebaseLine)
 	}
-	if !strings.Contains(rebaseLine, "42%") {
+	if !strings.Contains(rebaseLine, testContextPct42) {
 		t.Errorf("expected in-flight rebase row to render context percentage; got: %q", rebaseLine)
 	}
 	if !strings.Contains(view, "Tweak #1") {
@@ -1015,10 +1024,10 @@ func TestDetailViewContextPercentage(t *testing.T) {
 		wantAbsent string
 	}{
 		{"no data shows calculating", -1, feature.StatusImplementing, "calculating", ""},
-		{"green 42%", 42, feature.StatusImplementing, "42%", "calculating"},
+		{"green 42%", 42, feature.StatusImplementing, testContextPct42, "calculating"},
 		{"yellow 70%", 70, feature.StatusImplementing, "70%", "calculating"},
 		{"red 85%", 85, feature.StatusImplementing, "85%", "calculating"},
-		{"not shown for completed", 42, feature.StatusCodeReady, "", "42%"},
+		{"not shown for completed", 42, feature.StatusCodeReady, "", testContextPct42},
 		{"calculating not shown for completed", -1, feature.StatusCodeReady, "", "calculating"},
 	}
 	for _, tt := range tests {
@@ -1057,7 +1066,7 @@ func TestDetailViewContextPctInCompact(t *testing.T) {
 	m := NewDetailModel(f, "")
 	m.contextPct = 42
 	compact := m.ViewCompact(80)
-	if !strings.Contains(compact, "42%") {
+	if !strings.Contains(compact, testContextPct42) {
 		t.Error("context percentage should appear in compact view for active implementing feature")
 	}
 }
@@ -1139,17 +1148,17 @@ func TestDetailViewParentPhaseRowsAggregateRoadmapSubphaseTotals(t *testing.T) {
 		ActivePhaseStart:    &activeStart,
 		Models:              config.ModelConfig{Research: "opus", Planning: "opus", Implementation: "opus", Review: "opus"},
 		PhaseTimings: map[string]time.Duration{
-			"plan":         4 * time.Minute,
-			"phase-1-plan": 5 * time.Minute,
-			"phase-2-plan": 6 * time.Minute,
-			"phase-1-impl": 8 * time.Minute,
+			"plan":               4 * time.Minute,
+			testPhaseTimingPlan1: 5 * time.Minute,
+			testPhaseTimingPlan2: 6 * time.Minute,
+			testPhaseTimingImpl1: 8 * time.Minute,
 		},
 		PhaseCosts: map[string]float64{
-			"plan":         1.00,
-			"phase-1-plan": 1.50,
-			"phase-2-plan": 2.00,
-			"phase-1-impl": 0.40,
-			"phase-2-impl": 0.20,
+			"plan":               1.00,
+			testPhaseTimingPlan1: 1.50,
+			testPhaseTimingPlan2: 2.00,
+			testPhaseTimingImpl1: 0.40,
+			"phase-2-impl":       0.20,
 		},
 	}
 

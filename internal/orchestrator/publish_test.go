@@ -177,8 +177,8 @@ func TestOrchestrator_Publish_SelectedAlreadyPublishedRepoRepublishes(t *testing
 		CurrentPhase: feature.PhasePublish,
 		Checkpoints:  feature.Checkpoints{ManualPublish: true},
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", Branch: "feature/republish-selected", BaseBranch: "main"},
-			{Name: "r2", Path: "/tmp/r2", WorktreePath: "/tmp/wt-r2", Branch: "feature/republish-selected", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, Branch: "feature/republish-selected", BaseBranch: mainBranch},
+			{Name: "r2", Path: "/tmp/r2", WorktreePath: "/tmp/wt-r2", Branch: "feature/republish-selected", BaseBranch: mainBranch},
 		},
 		RepoStates: map[string]*feature.RepoState{
 			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/42"},
@@ -217,7 +217,7 @@ func TestOrchestrator_Publish_ManualCodeReadyRepublishesExistingPR(t *testing.T)
 		CurrentPhase: feature.PhasePublish,
 		Checkpoints:  feature.Checkpoints{ManualPublish: true},
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", Branch: "feature/republish-existing", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, Branch: "feature/republish-existing", BaseBranch: mainBranch},
 		},
 		RepoStates: map[string]*feature.RepoState{
 			"r1": {Touched: true, PRURL: "https://github.com/org/r1/pull/42"},
@@ -353,7 +353,7 @@ func TestOrchestrator_PublishRepo_EndToEnd_NoRebaser(t *testing.T) {
 		Slug:   "cool-feature",
 		Status: feature.StatusReviewPassed,
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -404,7 +404,7 @@ func TestOrchestrator_PublishRepo_PullRebaseConflict_Sentinel(t *testing.T) {
 		Slug:   "x",
 		Status: feature.StatusReviewPassed,
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -457,9 +457,9 @@ func TestOrchestrator_PublishRepo_ManualCodeReadyUsesForcePushWithLease(t *testi
 			{
 				Name:         "r1",
 				Path:         "/tmp/r1",
-				WorktreePath: "/tmp/wt-r1",
+				WorktreePath: wtR1Path,
 				Branch:       "feature/manual-publish-rebased",
-				BaseBranch:   "main",
+				BaseBranch:   mainBranch,
 			},
 		},
 		RepoStates: map[string]*feature.RepoState{
@@ -518,7 +518,7 @@ func TestOrchestrator_PublishRepo_UsesPhaseRunnerDescriptionGeneration(t *testin
 		Status: feature.StatusReviewPassed,
 		Models: config.ModelConfig{Planning: "sonnet"},
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -565,7 +565,7 @@ func TestOrchestrator_PublishRepo_FallsBackAndLogsDescriptionGenerationErrors(t 
 		Status: feature.StatusReviewPassed,
 		Models: config.ModelConfig{Planning: "sonnet"},
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -623,7 +623,7 @@ func TestOrchestrator_PublishRepo_DraftPublish_True(t *testing.T) {
 		Name: "draft-feature",
 		Slug: "draft-feature",
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
 		},
 		Checkpoints: feature.Checkpoints{DraftPublish: true},
 	}
@@ -664,7 +664,7 @@ func TestOrchestrator_PublishRepo_DraftPublish_False(t *testing.T) {
 		Name: "no-draft-feature",
 		Slug: "no-draft-feature",
 		Repos: []feature.FeatureRepo{
-			{Name: "r1", Path: "/tmp/r1", WorktreePath: "/tmp/wt-r1", BaseBranch: "main"},
+			{Name: "r1", Path: "/tmp/r1", WorktreePath: wtR1Path, BaseBranch: mainBranch},
 		},
 		// DraftPublish defaults to false
 	}

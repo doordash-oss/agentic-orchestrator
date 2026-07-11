@@ -47,8 +47,8 @@ func newImplEndToEndFeature(id string) *feature.Feature {
 		Status:       feature.StatusPlanReady,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a", Publishable: &unpub},
-			{Name: "repo-b", Path: "/tmp/repo-b", Publishable: &unpub},
+			{Name: repoName, Path: repoAPath, Publishable: &unpub},
+			{Name: repoNameB, Path: repoBPath, Publishable: &unpub},
 		},
 		Pipeline: feature.PipelineLarge,
 	}
@@ -106,8 +106,8 @@ func TestStartFeature_ImplementPhase_AllPassed_CompletesFeature(t *testing.T) {
 		TerminalResult: &agent.OrchestratorResult{
 			FinalStatus: "all_passed",
 			RepoStatuses: map[string]string{
-				"repo-a": "review_passed",
-				"repo-b": "review_passed",
+				repoName: reviewStatusPassed,
+				repoNameB: reviewStatusPassed,
 			},
 		},
 	}
@@ -162,7 +162,7 @@ func TestStartFeature_ImplementPhase_AllPassed_CompletesFeature(t *testing.T) {
 // ---------------------------------------------------------------------------
 // T19. StartFeature_ImplementPhase_Failed_MarksFeatureFailed
 //
-// Same setup but the spy returns FinalStatus: "failed" with LastError:
+// Same setup but the spy returns FinalStatus: finalStatusFailed with LastError:
 // "boom". Asserts: no FeatureCompleted; one FeatureFailed with
 // Message="boom"; one PhaseCompleted{PhaseImplement, Error: <non-nil>}.
 // ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ func TestStartFeature_ImplementPhase_Failed_MarksFeatureFailed(t *testing.T) {
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
-			FinalStatus: "failed",
+			FinalStatus: finalStatusFailed,
 			LastError:   "boom",
 		},
 	}

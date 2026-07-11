@@ -212,7 +212,7 @@ func (c *Client) StartFeature(ctx context.Context, featureID string) (FeatureSta
 
 func (c *Client) ResumeFeature(ctx context.Context, featureID string) (FeatureStartResponse, error) {
 	var out FeatureStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "resume"), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionResume), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
@@ -260,7 +260,7 @@ func (c *Client) ToggleInputNotifications(ctx context.Context, featureID string)
 
 func (c *Client) AnswerPermission(ctx context.Context, req PermissionAnswerRequest) (PermissionAnswerResponse, error) {
 	var out PermissionAnswerResponse
-	err := c.doJSON(ctx, http.MethodPost, "/api/v1/permissions/answer", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, apiPathPermissionsAnswer, nil, req, &out, true)
 	return out, err
 }
 
@@ -290,61 +290,61 @@ func (c *Client) UpdateRuntimeConfig(ctx context.Context, req RuntimeConfigMutat
 
 func (c *Client) PublishFeature(ctx context.Context, featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
 	var out PublishFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "publish"), nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionPublish), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) GeneratePublishDescription(ctx context.Context, featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error) {
 	var out PublishDescriptionResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "publish")+"/description", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionPublish)+"/description", nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) MergeFeature(ctx context.Context, featureID string) (MergeFeatureResponse, error) {
 	var out MergeFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "merge"), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionMerge), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
 func (c *Client) RewindFeature(ctx context.Context, featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error) {
 	var out RewindFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "rewind"), nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRewind), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) RetryFeature(ctx context.Context, featureID string) (RetryFeatureResponse, error) {
 	var out RetryFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "retry"), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRetry), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
 func (c *Client) StartRebase(ctx context.Context, featureID string, req RebaseActionRequest) (RebaseStartResponse, error) {
 	var out RebaseStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "rebase"), nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRebase), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) FetchReviewComments(ctx context.Context, featureID string, req ReviewCommentsFetchRequest) (ReviewCommentsFetchResponse, error) {
 	var out ReviewCommentsFetchResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "review-comments")+"/fetch", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewComments)+"/fetch", nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) StartReviewComments(ctx context.Context, featureID string, req ReviewCommentsActionRequest) (ReviewCommentsStartResponse, error) {
 	var out ReviewCommentsStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "review-comments"), nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewComments), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) StartTweak(ctx context.Context, featureID string, req TweakActionRequest) (TweakStartResponse, error) {
 	var out TweakStartResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "tweak"), nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionTweak), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) FinishTweak(ctx context.Context, featureID string, req TweakFinishRequest) (TweakFinishResponse, error) {
 	var out TweakFinishResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "tweak")+"/finish", nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionTweak)+"/finish", nil, req, &out, true)
 	return out, err
 }
 
@@ -362,19 +362,19 @@ func (c *Client) RestartRefactor(ctx context.Context, featureID string, req Refa
 
 func (c *Client) MarkDone(ctx context.Context, featureID string) (MarkDoneResponse, error) {
 	var out MarkDoneResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "mark-done"), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionMarkDone), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
 func (c *Client) CleanupFeature(ctx context.Context, featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error) {
 	var out CleanupFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "cleanup"), nil, req, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionCleanup), nil, req, &out, true)
 	return out, err
 }
 
 func (c *Client) DeleteFeature(ctx context.Context, featureID string) (DeleteFeatureResponse, error) {
 	var out DeleteFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, "delete"), nil, map[string]any{}, &out, true)
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionDelete), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
@@ -417,7 +417,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	if trusted {
-		req.Header.Set("X-Agentico-Client", "local")
+		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {

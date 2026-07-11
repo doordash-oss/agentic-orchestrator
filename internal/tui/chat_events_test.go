@@ -26,8 +26,8 @@ func TestChatModelApplyEventsFinalizesAssistantTurn(t *testing.T) {
 	m.responding = true
 
 	m = m.ApplyEvents([]chatEvent{
-		{Kind: chatEventAssistantText, Text: "First paragraph."},
-		{Kind: chatEventAssistantText, Text: "Second paragraph."},
+		{Kind: chatEventAssistantText, Text: testAssistantTextFirstParagraph},
+		{Kind: chatEventAssistantText, Text: testAssistantTextSecondParagraph},
 		{Kind: chatEventCompleted},
 	})
 
@@ -40,7 +40,7 @@ func TestChatModelApplyEventsFinalizesAssistantTurn(t *testing.T) {
 	if m.turns[0].InProgress {
 		t.Fatal("assistant turn remained in progress after completed event")
 	}
-	for _, want := range []string{"First paragraph.", "Second paragraph."} {
+	for _, want := range []string{testAssistantTextFirstParagraph, testAssistantTextSecondParagraph} {
 		if !containsPlainText(m.turns[0].Text, want) {
 			t.Fatalf("assistant turn missing %q: %q", want, m.turns[0].Text)
 		}
@@ -56,10 +56,10 @@ func TestChatModelApplyEventsActivatesPendingQuestion(t *testing.T) {
 
 	m = m.ApplyEvents([]chatEvent{{
 		Kind:      chatEventPendingQuestion,
-		RequestID: "ask-1",
+		RequestID: testAskRequestID,
 		Raw:       raw,
 		Questions: []askUserQuestion{{
-			Question: "Pick one",
+			Question: testQuestionPickOne,
 			Options:  []askUserOption{{Label: "A"}, {Label: "B"}},
 		}},
 	}})
@@ -67,7 +67,7 @@ func TestChatModelApplyEventsActivatesPendingQuestion(t *testing.T) {
 	if m.responding {
 		t.Fatal("chat remained responding while waiting on a pending question")
 	}
-	if !m.hasActiveQuestion() || m.pendingAskRequestID != "ask-1" {
+	if !m.hasActiveQuestion() || m.pendingAskRequestID != testAskRequestID {
 		t.Fatalf("pending question was not activated: requestID=%q questions=%+v", m.pendingAskRequestID, m.questions)
 	}
 }

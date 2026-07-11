@@ -27,13 +27,21 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// Fixture session ID and status values used by the single-shot and loop
+// supervision tests below.
+const (
+	inquireSessionID          = "feat-inquire"
+	planStatusApproved        = "approved"
+	statusAwaitingFinalReview = "awaiting_final_review"
+)
+
 func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *testing.T) {
 	sink := newRecordingPhaseCompletionSink()
 	sm := mocks.NewMockSessionManager()
-	sess := mocks.NewMockSessionView("feat-inquire", "feat")
+	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
 	sm.GetSessionFn = func(id string) session.SessionView {
-		if id != "feat-inquire" {
+		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
 		return sess
@@ -43,7 +51,7 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 		Completion: sink,
 		Sessions:   sm,
 	})
-	supervisor.superviseSingleShotSession("feat", "feat-inquire", feature.PhaseInquire)
+	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 
 	sess.StatusChVal <- "SUCCESS"
 
@@ -51,7 +59,7 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	if call.featureID != "feat" {
 		t.Fatalf("featureID = %q, want feat", call.featureID)
 	}
-	if call.input.Phase != feature.PhaseInquire || call.input.SessionID != "feat-inquire" || !call.input.Success {
+	if call.input.Phase != feature.PhaseInquire || call.input.SessionID != inquireSessionID || !call.input.Success {
 		t.Fatalf("completion input = %+v, want inquire success", call.input)
 	}
 	if sess.StopCalled != 1 {
@@ -62,7 +70,7 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 func TestPhaseSupervisorSingleShotDedupe(t *testing.T) {
 	sink := newRecordingPhaseCompletionSink()
 	sm := mocks.NewMockSessionManager()
-	sess := mocks.NewMockSessionView("feat-inquire", "feat")
+	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
 	sm.GetSessionFn = func(string) session.SessionView { return sess }
 
@@ -70,8 +78,8 @@ func TestPhaseSupervisorSingleShotDedupe(t *testing.T) {
 		Completion: sink,
 		Sessions:   sm,
 	})
-	supervisor.superviseSingleShotSession("feat", "feat-inquire", feature.PhaseInquire)
-	supervisor.superviseSingleShotSession("feat", "feat-inquire", feature.PhaseInquire)
+	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
+	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 
 	sess.StatusChVal <- "SUCCESS"
 
@@ -87,14 +95,14 @@ func TestPhaseSupervisorSingleShotDedupe(t *testing.T) {
 
 func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testing.T) {
 	sm := mocks.NewMockSessionManager()
-	first := mocks.NewMockSessionView("feat-inquire", "feat")
+	first := mocks.NewMockSessionView(inquireSessionID, "feat")
 	first.PhaseVal = feature.PhaseInquire
-	retry := mocks.NewMockSessionView("feat-inquire", "feat")
+	retry := mocks.NewMockSessionView(inquireSessionID, "feat")
 	retry.PhaseVal = feature.PhaseInquire
 
 	var getCount atomic.Int32
 	sm.GetSessionFn = func(id string) session.SessionView {
-		if id != "feat-inquire" {
+		if id != inquireSessionID {
 			t.Fatalf("GetSession(%q), want feat-inquire", id)
 		}
 		if getCount.Add(1) == 1 {
@@ -105,23 +113,23 @@ func TestPhaseSupervisorSingleShotAllowsReentrantRetryForSameSessionID(t *testin
 
 	var supervisor *phaseSupervisor
 	sink := newReentrantRetryCompletionSink(func() {
-		supervisor.superviseSingleShotSession("feat", "feat-inquire", feature.PhaseInquire)
+		supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 		retry.StatusChVal <- "SUCCESS"
 	})
 	supervisor = newPhaseSupervisor(phaseSupervisorConfig{
 		Completion: sink,
 		Sessions:   sm,
 	})
-	supervisor.superviseSingleShotSession("feat", "feat-inquire", feature.PhaseInquire)
+	supervisor.superviseSingleShotSession("feat", inquireSessionID, feature.PhaseInquire)
 
 	first.StatusChVal <- "SUCCESS"
 
 	firstCall := sink.wait(t)
-	if firstCall.input.SessionID != "feat-inquire" || !firstCall.input.Success {
+	if firstCall.input.SessionID != inquireSessionID || !firstCall.input.Success {
 		t.Fatalf("first completion = %+v, want successful inquire completion", firstCall.input)
 	}
 	retryCall := sink.wait(t)
-	if retryCall.input.SessionID != "feat-inquire" || !retryCall.input.Success {
+	if retryCall.input.SessionID != inquireSessionID || !retryCall.input.Success {
 		t.Fatalf("retry completion = %+v, want successful retry completion", retryCall.input)
 	}
 	if got := getCount.Load(); got != 2 {
@@ -161,7 +169,7 @@ func TestPhaseSupervisorPlanLoopRoutesPlanResult(t *testing.T) {
 	sink := newRecordingPhaseCompletionSink()
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{Completion: sink})
 	resultCh := make(chan *agent.PlanLoopResult, 1)
-	want := &agent.PlanLoopResult{FinalStatus: "approved", Iterations: 2}
+	want := &agent.PlanLoopResult{FinalStatus: planStatusApproved, Iterations: 2}
 
 	supervisor.supervisePlanLoop("feat-plan", resultCh)
 	resultCh <- want
@@ -176,7 +184,7 @@ func TestPhaseSupervisorImplementationLoopRoutesFirstTerminalResult(t *testing.T
 	sink := newRecordingPhaseCompletionSink()
 	supervisor := newPhaseSupervisor(phaseSupervisorConfig{Completion: sink})
 	resultCh := make(chan *agent.OrchestratorResult, 2)
-	want := &agent.OrchestratorResult{FinalStatus: "awaiting_final_review"}
+	want := &agent.OrchestratorResult{FinalStatus: statusAwaitingFinalReview}
 
 	supervisor.superviseImplementationLoop("feat-impl", resultCh)
 	resultCh <- &agent.OrchestratorResult{FinalStatus: "still_running"}
@@ -201,7 +209,7 @@ func TestPhaseSupervisorSurfacesCompletionErrors(t *testing.T) {
 	resultCh := make(chan *agent.PlanLoopResult, 1)
 
 	supervisor.supervisePlanLoop("feat-plan", resultCh)
-	resultCh <- &agent.PlanLoopResult{FinalStatus: "failed"}
+	resultCh <- &agent.PlanLoopResult{FinalStatus: finalStatusFailed}
 	_ = sink.wait(t)
 
 	select {

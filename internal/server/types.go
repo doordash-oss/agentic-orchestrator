@@ -194,6 +194,8 @@ type PermissionSnapshotResponse = serverapi.PermissionSnapshotResponse
 
 type ControlRequestDTO = serverapi.ControlRequest
 
+type PermissionRememberPreviewDTO = serverapi.PermissionRememberPreview
+
 type AskUserQuestionDTO = serverapi.AskUserQuestion
 
 type AskUserOptionDTO = serverapi.AskUserOption

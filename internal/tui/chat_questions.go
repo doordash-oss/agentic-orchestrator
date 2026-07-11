@@ -96,29 +96,41 @@ func (m *ChatModel) commitAnswer(answer string) {
 	idx := m.currentQuestionIdx
 	q := m.questions[idx]
 	m.collectedAnswers[q.Question] = answer
-	if idx < len(m.questionStates) {
-		st := &m.questionStates[idx]
-		st.scrollOffset = m.questionScrollOffset
-		if m.typingCustom {
-			st.typingCustom = true
-			st.customText = answer
-			st.selectedOption = len(q.Options)
-			st.selectedMulti = nil
-		} else {
-			st.typingCustom = false
-			st.customText = ""
-			st.selectedOption = m.selectedOption
-			if q.MultiSelect {
-				if len(m.selectedMulti) == 0 {
-					st.selectedMulti = map[int]bool{m.selectedOption: true}
-				} else {
-					st.selectedMulti = cloneIntBoolMap(m.selectedMulti)
-				}
-			} else {
-				st.selectedMulti = nil
-			}
-		}
+	if idx >= len(m.questionStates) {
+		return
 	}
+	m.snapshotQuestionState(&m.questionStates[idx], q, answer)
+}
+
+// snapshotQuestionState records the live picker state (selection or custom
+// text) into st after answer is committed for q, so restoreQuestionState can
+// later reconstruct the picker exactly as it was left.
+func (m *ChatModel) snapshotQuestionState(st *questionUIState, q askUserQuestion, answer string) {
+	st.scrollOffset = m.questionScrollOffset
+	if m.typingCustom {
+		st.typingCustom = true
+		st.customText = answer
+		st.selectedOption = len(q.Options)
+		st.selectedMulti = nil
+		return
+	}
+	st.typingCustom = false
+	st.customText = ""
+	st.selectedOption = m.selectedOption
+	st.selectedMulti = m.snapshotSelectedMulti(q)
+}
+
+// snapshotSelectedMulti returns the multi-select snapshot for q: nil for
+// single-select questions, the live selection cloned when non-empty, or the
+// highlighted option alone when nothing has been ticked yet.
+func (m *ChatModel) snapshotSelectedMulti(q askUserQuestion) map[int]bool {
+	if !q.MultiSelect {
+		return nil
+	}
+	if len(m.selectedMulti) == 0 {
+		return map[int]bool{m.selectedOption: true}
+	}
+	return cloneIntBoolMap(m.selectedMulti)
 }
 
 // restoreQuestionState primes the live UI state for the question at idx
@@ -304,6 +316,31 @@ func (m *ChatModel) submitAllQuestionAnswers() tea.Cmd {
 	return tea.Batch(sendCmd, chatRecoveryTickCmd(sess, m.turnCostBaseline))
 }
 
+// appendOptionPreview joins preview beside topBlock, side by side, when
+// there is enough horizontal room within contentWidth. Returns topBlock
+// unchanged if preview is empty or there isn't room.
+func appendOptionPreview(topBlock, preview string, contentWidth int) string {
+	if preview == "" {
+		return topBlock
+	}
+	const gap = 2
+	if maxLineWidth(topBlock)+gap+maxLineWidth(preview) > contentWidth {
+		return topBlock
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, topBlock, strings.Repeat(" ", gap), preview)
+}
+
+// maxLineWidth returns the widest rendered line width across s.
+func maxLineWidth(s string) int {
+	w := 0
+	for _, line := range strings.Split(s, "\n") {
+		if lw := lipgloss.Width(line); lw > w {
+			w = lw
+		}
+	}
+	return w
+}
+
 func chatQuestionHistoryText(q askUserQuestion) string {
 	if text := strings.TrimSpace(q.Question); text != "" {
 		return text
@@ -344,24 +381,7 @@ func (m ChatModel) renderQuestionPicker() (body, footer string) {
 		typeRow
 
 	if m.selectedOption < len(q.Options) {
-		if preview := q.Options[m.selectedOption].Preview; preview != "" {
-			previewW := 0
-			for _, line := range strings.Split(preview, "\n") {
-				if w := lipgloss.Width(line); w > previewW {
-					previewW = w
-				}
-			}
-			leftNaturalW := 0
-			for _, line := range strings.Split(topBlock, "\n") {
-				if w := lipgloss.Width(line); w > leftNaturalW {
-					leftNaturalW = w
-				}
-			}
-			const gap = 2
-			if leftNaturalW+gap+previewW <= contentWidth {
-				topBlock = lipgloss.JoinHorizontal(lipgloss.Top, topBlock, strings.Repeat(" ", gap), preview)
-			}
-		}
+		topBlock = appendOptionPreview(topBlock, q.Options[m.selectedOption].Preview, contentWidth)
 	}
 
 	canBack := m.currentQuestionIdx > 0

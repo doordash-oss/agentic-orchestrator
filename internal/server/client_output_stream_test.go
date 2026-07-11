@@ -46,7 +46,7 @@ func TestSubscribeSessionOutputDeliversIndexedRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	records, errs := c.SubscribeSessionOutput(context.Background(), "sess-1", SessionOutputStreamOptions{})
+	records, errs := c.SubscribeSessionOutput(context.Background(), fixtureSessionID, SessionOutputStreamOptions{})
 
 	select {
 	case rec, ok := <-records:
@@ -90,7 +90,7 @@ func TestSubscribeSessionOutputResumesFromAfterIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	records, errs := c.SubscribeSessionOutput(context.Background(), "sess-1", SessionOutputStreamOptions{AfterIndex: 5})
+	records, errs := c.SubscribeSessionOutput(context.Background(), fixtureSessionID, SessionOutputStreamOptions{AfterIndex: 5})
 
 	select {
 	case _, ok := <-records:
@@ -126,7 +126,7 @@ func TestSubscribeSessionOutputSurfacesStreamError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient failed: %v", err)
 	}
-	_, errs := c.SubscribeSessionOutput(context.Background(), "sess-1", SessionOutputStreamOptions{})
+	_, errs := c.SubscribeSessionOutput(context.Background(), fixtureSessionID, SessionOutputStreamOptions{})
 
 	select {
 	case err, ok := <-errs:

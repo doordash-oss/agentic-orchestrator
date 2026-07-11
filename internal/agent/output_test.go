@@ -65,8 +65,8 @@ func TestReadSessionOutput(t *testing.T) {
 			}
 			if tt.resultMsg != "" {
 				sess.MessageLog().Append(llm.SDKMessage{
-					Type:   "result",
-					Result: &llm.ResultMessage{Subtype: "success", Result: tt.resultMsg},
+					Type:   testResultMessageType,
+					Result: &llm.ResultMessage{Subtype: testResultSuccessValue, Result: tt.resultMsg},
 				})
 			}
 

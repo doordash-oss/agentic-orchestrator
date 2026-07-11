@@ -16,6 +16,30 @@ package permission
 
 import "strings"
 
+// toolNameBash is the tool name Codex/Claude report for shell-command tool calls.
+const toolNameBash = "Bash"
+
+// toolNameEdit is the tool name Codex/Claude report for file-edit tool calls.
+const toolNameEdit = "Edit"
+
+// toolNameNotebookEdit is the tool name Codex/Claude report for notebook-cell edits.
+const toolNameNotebookEdit = "NotebookEdit"
+
+// toolNameWrite is the tool name Codex/Claude report for file-write tool calls.
+const toolNameWrite = "Write"
+
+// Bash tool-pattern literals shared between default rules and tests.
+const (
+	patternBashAny     = "Bash(*)"
+	patternBashLSExact = "Bash(ls -la)"
+	patternBashLS      = "Bash(ls *)"
+	patternBashRm      = "Bash(rm *)"
+	patternBashEcho    = "Bash(echo *)"
+	patternBashGitDiff = "Bash(git diff *)"
+	patternBashNpmTest = "Bash(npm test *)"
+	patternBashGoTest  = "Bash(go test *)"
+)
+
 // Rule represents a cached permission rule.
 type Rule struct {
 	ToolPattern string // e.g. "Bash(npm test *)", "Bash", "Edit(/path/to/file)"
@@ -46,7 +70,7 @@ func (r Rule) Match(toolName, toolInput string) bool {
 
 	// Normalize: extract command from JSON and strip shell chaining
 	input := toolInput
-	if toolName == "Bash" {
+	if toolName == toolNameBash {
 		input = normalizeBashCommand(extractBashCommand(toolInput))
 	}
 

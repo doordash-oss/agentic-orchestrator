@@ -57,12 +57,12 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 		CurrentPhase: feature.PhaseImplement,
 		Pipeline:     feature.PipelineMedium,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a"}, {Name: "repo-b"}, {Name: "repo-c"},
+			{Name: repoName}, {Name: repoNameB}, {Name: repoNameC},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"repo-a": {},
-			"repo-b": {},
-			"repo-c": {},
+			repoName: {},
+			repoNameB: {},
+			repoNameC: {},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -76,7 +76,7 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 		MultiRepoResult: &agent.OrchestratorResult{
 			FinalStatus:       "need_user_input",
 			NeedUserInputPath: gatePath,
-			PausedRepos:       []string{"repo-a", "repo-b", "repo-c"},
+			PausedRepos:       []string{repoName, repoNameB, repoNameC},
 			LastError:         "implementation needs user input",
 		},
 	}); err != nil {
@@ -93,7 +93,7 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 		t.Errorf("Feature.Status = %q, want StatusNeedUserInput (decision dispatcher gates on this)", f.Status)
 	}
 	// Per-repo state untouched: gate is feature-scoped.
-	for _, name := range []string{"repo-a", "repo-b", "repo-c"} {
+	for _, name := range []string{repoName, repoNameB, repoNameC} {
 		if st := f.RepoStates[name]; st != nil && (st.Touched || st.LastError != "") {
 			t.Errorf("RepoStates[%q] = %+v, want untouched (feature-scoped gate must not mutate per-repo state)", name, st)
 		}

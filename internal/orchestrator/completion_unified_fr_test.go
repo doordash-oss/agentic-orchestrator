@@ -447,14 +447,14 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: "/tmp/api", Publishable: &pub},
+			{Name: apiRepoName, Path: apiRepoWorkPath, Publishable: &pub},
 			{Name: "web", Path: "/tmp/web", Publishable: &pub},
 			{Name: "infra", Path: "/tmp/infra", Publishable: &pub},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"api":   {Touched: true},
-			"web":   {Touched: true},
-			"infra": {Touched: true},
+			apiRepoName: {Touched: true},
+			"web":       {Touched: true},
+			"infra":     {Touched: true},
 		},
 		Pipeline: feature.PipelineLarge,
 	}
@@ -491,7 +491,7 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 			// Atomically mark each staged repo as Touched (FR success
 			// stages every repo for the publish loop downstream).
 			_ = fs.Modify(ff.ID, func(target *feature.Feature) error {
-				for _, r := range []string{"api", "web", "infra"} {
+				for _, r := range []string{apiRepoName, "web", "infra"} {
 					if st := target.RepoStates[r]; st != nil {
 						st.Touched = true
 					}
@@ -523,7 +523,7 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 	if len(publishedRepos) != 3 {
 		t.Errorf("publishRepoFn calls = %d (publishedRepos=%v), want 3 (one per repo)", len(publishedRepos), publishedRepos)
 	}
-	for _, name := range []string{"api", "web", "infra"} {
+	for _, name := range []string{apiRepoName, "web", "infra"} {
 		st := f.RepoStates[name]
 		if st == nil {
 			t.Errorf("RepoImpl[%q] = nil after FR", name)
@@ -560,14 +560,14 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 		Pipeline:     feature.PipelineLarge,
 		Checkpoints:  feature.Checkpoints{},
 		Repos: []feature.FeatureRepo{{
-			Name:         "api",
+			Name:         apiRepoName,
 			Path:         repo,
 			WorktreePath: repo,
 			Publishable:  &pub,
 			Branch:       "feature/fr-scrub",
-			BaseBranch:   "main",
+			BaseBranch:   mainBranch,
 		}},
-		RepoStates: map[string]*feature.RepoState{"api": {Touched: true}},
+		RepoStates: map[string]*feature.RepoState{apiRepoName: {Touched: true}},
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
@@ -661,12 +661,12 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		Checkpoints:         feature.Checkpoints{},
 		Repos: []feature.FeatureRepo{
 			{
-				Name:         "api",
+				Name:         apiRepoName,
 				Path:         repoA,
 				WorktreePath: repoA,
 				Publishable:  &pub,
 				Branch:       "feature/fr-roadmap-scrub-api",
-				BaseBranch:   "main",
+				BaseBranch:   mainBranch,
 			},
 			{
 				Name:         "web",
@@ -674,12 +674,12 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 				WorktreePath: repoB,
 				Publishable:  &pub,
 				Branch:       "feature/fr-roadmap-scrub-web",
-				BaseBranch:   "main",
+				BaseBranch:   mainBranch,
 			},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"api": {Touched: true},
-			"web": {Touched: true},
+			apiRepoName: {Touched: true},
+			"web":       {Touched: true},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -757,14 +757,14 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: "/tmp/api", Publishable: &pub},
+			{Name: apiRepoName, Path: apiRepoWorkPath, Publishable: &pub},
 			{Name: "web", Path: "/tmp/web", Publishable: &pub},
 			{Name: "infra", Path: "/tmp/infra", Publishable: &pub},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"api":   {Touched: true},
-			"web":   {Touched: true},
-			"infra": {Touched: true},
+			apiRepoName: {Touched: true},
+			"web":       {Touched: true},
+			"infra":     {Touched: true},
 		},
 		Pipeline: feature.PipelineLarge,
 	}
@@ -803,7 +803,7 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 			// "all_passed" — the orchestrator does not see iteration N.
 			iterations = 2
 			_ = fs.Modify(ff.ID, func(target *feature.Feature) error {
-				for _, r := range []string{"api", "web", "infra"} {
+				for _, r := range []string{apiRepoName, "web", "infra"} {
 					if st := target.RepoStates[r]; st != nil {
 						st.Touched = true
 					}
@@ -836,7 +836,7 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 	if len(publishedRepos) != 3 {
 		t.Errorf("publishRepoFn calls = %d, want 3", len(publishedRepos))
 	}
-	for _, name := range []string{"api", "web", "infra"} {
+	for _, name := range []string{apiRepoName, "web", "infra"} {
 		st := f.RepoStates[name]
 		if st == nil {
 			t.Errorf("RepoImpl[%q] = nil after FR", name)
@@ -863,7 +863,7 @@ func TestOrchestrator_FeatureFinalReview_FixerRepoEditsDoNotTripReadOnlyGuard(t 
 			Path:         repo,
 			WorktreePath: repo,
 			Publishable:  &unpub,
-			BaseBranch:   "main",
+			BaseBranch:   mainBranch,
 		}},
 		RepoStates: map[string]*feature.RepoState{
 			"docs": {Touched: true},
@@ -959,7 +959,7 @@ func TestOrchestrator_FeatureFinalReview_Interrupted_DoesNotMarkFailed(t *testin
 				target.Status = feature.StatusInterrupted
 				return nil
 			})
-			ch <- &agent.OrchestratorResult{FinalStatus: "interrupted"}
+			ch <- &agent.OrchestratorResult{FinalStatus: finalStatusInterrupted}
 		}()
 		return ch, nil
 	})
@@ -999,10 +999,10 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "api", Path: "/tmp/api", Publishable: &pub},
+			{Name: apiRepoName, Path: apiRepoWorkPath, Publishable: &pub},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"api": {Touched: true},
+			apiRepoName: {Touched: true},
 		},
 		Pipeline: feature.PipelineLarge,
 	}
@@ -1038,8 +1038,8 @@ func TestOrchestrator_FeatureFinalReview_FailedProtocolViolationPreserved(t *tes
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{
 			FinalStatus:  "failed",
-			RepoStatuses: map[string]string{"api": "protocol_violation"},
-			FailedRepos:  []string{"api"},
+			RepoStatuses: map[string]string{apiRepoName: agent.BoundedHelperStatusProtocolViolation},
+			FailedRepos:  []string{apiRepoName},
 			LastError:    "protocol violation: final_review_fixer @ /tmp/iter: verification-report.yaml is missing",
 		}
 		return ch, nil

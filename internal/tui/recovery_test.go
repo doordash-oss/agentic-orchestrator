@@ -28,7 +28,7 @@ func tweakRecoveryItem() session.RecoveryItem {
 		PIDFile: session.PIDFile{
 			FeatureID: "test-feat",
 			PID:       12345,
-			Phase:     "implement",
+			Phase:     feature.PhaseImplement.DirName(),
 			Iteration: 1,
 		},
 		ProcessAlive: false,
@@ -46,7 +46,7 @@ func nonTweakRecoveryItem() session.RecoveryItem {
 		PIDFile: session.PIDFile{
 			FeatureID: "test-feat",
 			PID:       12345,
-			Phase:     "implement",
+			Phase:     feature.PhaseImplement.DirName(),
 			Iteration: 1,
 		},
 		ProcessAlive: false,
@@ -134,7 +134,7 @@ func multiRepoTweakRecoveryItem() session.RecoveryItem {
 		PIDFile: session.PIDFile{
 			FeatureID: "test-feat-mr",
 			PID:       12345,
-			Phase:     "implement",
+			Phase:     feature.PhaseImplement.DirName(),
 			Iteration: 1,
 		},
 		ProcessAlive: false,
@@ -200,7 +200,7 @@ func TestRecoveryItem_RepoSuffix_HiddenForSingleRepoFeature(t *testing.T) {
 		PIDFile: session.PIDFile{
 			FeatureID: "feat-1",
 			PID:       12345,
-			Phase:     "implement",
+			Phase:     feature.PhaseImplement.DirName(),
 			Iteration: 1,
 		},
 		Feature: &feature.Feature{
@@ -221,7 +221,7 @@ func TestRecoveryItem_RepoSuffix_RenderedForMultiRepoFeature(t *testing.T) {
 		PIDFile: session.PIDFile{
 			FeatureID: "feat-1",
 			PID:       12345,
-			Phase:     "implement",
+			Phase:     feature.PhaseImplement.DirName(),
 			Iteration: 1,
 		},
 		Feature: &feature.Feature{
@@ -242,7 +242,7 @@ func TestRecoveryItem_RepoSuffix_HiddenWhenRepoNameEmpty(t *testing.T) {
 		PIDFile: session.PIDFile{
 			FeatureID: "feat-1",
 			PID:       12345,
-			Phase:     "implement",
+			Phase:     feature.PhaseImplement.DirName(),
 			Iteration: 1,
 		},
 		Feature: &feature.Feature{

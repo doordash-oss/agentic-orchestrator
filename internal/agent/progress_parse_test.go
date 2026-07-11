@@ -92,7 +92,7 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 		want      IterationState
 		stateNote string
 	}{
-		{"success", "SUCCESS", StateSuccess, ""},
+		{testResultSuccessValue, agentStatusSuccess, StateSuccess, ""},
 		{"retry", "RETRY", StateRetry, ""},
 		{"need_user_input", "NEED_USER_INPUT", StateNeedUserInput, "Plan contradicts worktree."},
 	}
@@ -409,7 +409,7 @@ func TestParseProgressMd_VerificationPathMismatch(t *testing.T) {
 	iterDir := filepath.Join(dir, "iteration-01")
 	_ = os.MkdirAll(iterDir, 0o755)
 	// Cite a wrong path.
-	body := progressMdHappy("SUCCESS", "/wrong/path", "")
+	body := progressMdHappy(agentStatusSuccess, "/wrong/path", "")
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
 	parsed, _ := ParseProgressMd(path, filepath.Join(iterDir, "verification-report.yaml"))
@@ -715,7 +715,7 @@ Plan contradicts the worktree.
 // (e.g. the agent forgot to delete it after answering questions). Both
 // SUCCESS and RETRY must reject the section.
 func TestParseProgressMd_RejectsQuestionsOnSuccessOrRetry(t *testing.T) {
-	for _, state := range []string{"SUCCESS", "RETRY"} {
+	for _, state := range []string{agentStatusSuccess, "RETRY"} {
 		t.Run(state, func(t *testing.T) {
 			dir := t.TempDir()
 			iterDir := filepath.Join(dir, "iteration-01")
@@ -818,8 +818,8 @@ func TestProgressFingerprint_StableAcrossIterationDirs(t *testing.T) {
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a.md")
 	pathB := filepath.Join(dir, "b.md")
-	_ = os.WriteFile(pathA, []byte(progressMdHappy("SUCCESS", "/iter/01", "")), 0o644)
-	_ = os.WriteFile(pathB, []byte(progressMdHappy("SUCCESS", "/iter/02", "")), 0o644)
+	_ = os.WriteFile(pathA, []byte(progressMdHappy(agentStatusSuccess, "/iter/01", "")), 0o644)
+	_ = os.WriteFile(pathB, []byte(progressMdHappy(agentStatusSuccess, "/iter/02", "")), 0o644)
 	fpA, errA := ProgressFingerprint(pathA)
 	fpB, errB := ProgressFingerprint(pathB)
 	if errA != nil || errB != nil {
@@ -834,7 +834,7 @@ func TestProgressFingerprint_ChangesWhenHandoffChanges(t *testing.T) {
 	dir := t.TempDir()
 	pathA := filepath.Join(dir, "a.md")
 	pathB := filepath.Join(dir, "b.md")
-	bodyA := progressMdHappy("SUCCESS", "/iter/01", "")
+	bodyA := progressMdHappy(agentStatusSuccess, "/iter/01", "")
 	bodyB := strings.Replace(bodyA, "did the thing", "did a different thing", 1)
 	_ = os.WriteFile(pathA, []byte(bodyA), 0o644)
 	_ = os.WriteFile(pathB, []byte(bodyB), 0o644)

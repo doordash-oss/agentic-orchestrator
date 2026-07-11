@@ -92,7 +92,7 @@ func newFeatureForTweak(repos ...string) *feature.Feature {
 // The deep module owns the lifecycle stamp so the orchestrator does not
 // have to re-implement it.
 func TestTweakSession_MarkRunning_StampsActiveCycleAndIncrementsCount(t *testing.T) {
-	f := newFeatureForTweak("api")
+	f := newFeatureForTweak(testRepoNameAPI)
 	store := newInMemoryStore(f)
 	ts := &TweakSession{Store: store}
 
@@ -125,7 +125,7 @@ func TestTweakSession_MarkRunning_StampsActiveCycleAndIncrementsCount(t *testing
 // TweakCount. Idempotency matters because the orchestrator's StartTweak
 // can be retried if the dispatch fails partway through.
 func TestTweakSession_MarkRunning_Idempotent(t *testing.T) {
-	f := newFeatureForTweak("api")
+	f := newFeatureForTweak(testRepoNameAPI)
 	store := newInMemoryStore(f)
 	ts := &TweakSession{Store: store}
 
@@ -146,7 +146,7 @@ func TestTweakSession_MarkRunning_Idempotent(t *testing.T) {
 // so the TUI can offer "resume tweak" → fresh session. The entry is NOT
 // cleared (ClearActiveCycle owns that).
 func TestTweakSession_MarkInterrupted_TransitionsStatus(t *testing.T) {
-	f := newFeatureForTweak("api")
+	f := newFeatureForTweak(testRepoNameAPI)
 	f.ActiveCycle = &feature.CycleState{
 		Type:   feature.CycleTweak,
 		Status: feature.RepoCycleRunning,
@@ -173,7 +173,7 @@ func TestTweakSession_MarkInterrupted_TransitionsStatus(t *testing.T) {
 // after a clean PushAll, ClearActiveCycle removes Feature.ActiveCycle so
 // the feature returns to its steady published state.
 func TestTweakSession_ClearActiveCycle_WipesEntry(t *testing.T) {
-	f := newFeatureForTweak("api")
+	f := newFeatureForTweak(testRepoNameAPI)
 	f.SetTweakCount(1)
 	f.SetActiveCycleType(feature.CycleTweak)
 	f.ActiveCycle = &feature.CycleState{
@@ -202,7 +202,7 @@ func TestTweakSession_ClearActiveCycle_WipesEntry(t *testing.T) {
 // CommitAll is invoked, and the returned hadChanges map is empty.
 // Acceptance criterion: "clean end with no changes".
 func TestTweakSession_CommitAll_NoChanges_NoOp(t *testing.T) {
-	f := newFeatureForTweak("api", "backend", "frontend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend", "frontend")
 	pub := mocks.NewMockPublisher()
 	pub.HasUncommittedChangesFn = func(string) (bool, error) { return false, nil }
 	ts := &TweakSession{Publisher: pub}
@@ -226,7 +226,7 @@ func TestTweakSession_CommitAll_NoChanges_NoOp(t *testing.T) {
 // "clean end with changes in one repo" acceptance criterion. Only the
 // dirty repo gets a CommitAll; clean repos are left alone.
 func TestTweakSession_CommitAll_OneRepo_CommitsThatRepoOnly(t *testing.T) {
-	f := newFeatureForTweak("api", "backend", "frontend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend", "frontend")
 	pub := mocks.NewMockPublisher()
 	pub.HasUncommittedChangesFn = func(worktree string) (bool, error) {
 		return worktree == "/tmp/wt/backend", nil
@@ -235,7 +235,7 @@ func TestTweakSession_CommitAll_OneRepo_CommitsThatRepoOnly(t *testing.T) {
 	pub.CommitAllFn = func(worktree, _ string) error {
 		switch worktree {
 		case "/tmp/wt/api":
-			committedRepos["api"] = true
+			committedRepos[testRepoNameAPI] = true
 		case "/tmp/wt/backend":
 			committedRepos["backend"] = true
 		case "/tmp/wt/frontend":
@@ -252,7 +252,7 @@ func TestTweakSession_CommitAll_OneRepo_CommitsThatRepoOnly(t *testing.T) {
 	if !hadChanges["backend"] {
 		t.Errorf("hadChanges[backend] = false, want true")
 	}
-	if hadChanges["api"] {
+	if hadChanges[testRepoNameAPI] {
 		t.Errorf("hadChanges[api] = true, want false (api was clean)")
 	}
 	if hadChanges["frontend"] {
@@ -261,7 +261,7 @@ func TestTweakSession_CommitAll_OneRepo_CommitsThatRepoOnly(t *testing.T) {
 	if !committedRepos["backend"] {
 		t.Error("Publisher.CommitAll was not called against backend's worktree")
 	}
-	if committedRepos["api"] {
+	if committedRepos[testRepoNameAPI] {
 		t.Error("Publisher.CommitAll fired against clean repo api")
 	}
 	if committedRepos["frontend"] {
@@ -274,7 +274,7 @@ func TestTweakSession_CommitAll_OneRepo_CommitsThatRepoOnly(t *testing.T) {
 // of three repos have uncommitted changes; both get CommitAll called;
 // the third (clean) is skipped.
 func TestTweakSession_CommitAll_MultipleRepos(t *testing.T) {
-	f := newFeatureForTweak("api", "backend", "frontend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend", "frontend")
 	pub := mocks.NewMockPublisher()
 	pub.HasUncommittedChangesFn = func(worktree string) (bool, error) {
 		// api + backend are dirty; frontend is clean.
@@ -286,7 +286,7 @@ func TestTweakSession_CommitAll_MultipleRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitAll: %v", err)
 	}
-	if !hadChanges["api"] || !hadChanges["backend"] {
+	if !hadChanges[testRepoNameAPI] || !hadChanges["backend"] {
 		t.Errorf("hadChanges = %+v, want api+backend true", hadChanges)
 	}
 	if hadChanges["frontend"] {
@@ -308,7 +308,7 @@ func TestTweakSession_CommitAll_MultipleRepos(t *testing.T) {
 // no-op when CommitAll reported zero modified repos. PullRebase and
 // Push must not fire — there is nothing to land.
 func TestTweakSession_PushAll_NoModifiedRepos_NoOp(t *testing.T) {
-	f := newFeatureForTweak("api", "backend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend")
 	pub := mocks.NewMockPublisher()
 	reb := mocks.NewMockRebaseOperator()
 	ts := &TweakSession{Publisher: pub, Rebaser: reb}
@@ -332,7 +332,7 @@ func TestTweakSession_PushAll_NoModifiedRepos_NoOp(t *testing.T) {
 // half of "clean end with changes in multiple repos": PushAll runs
 // PullRebase + Push for every modified repo and returns nil.
 func TestTweakSession_PushAll_AllRepos_PullsAndPushes(t *testing.T) {
-	f := newFeatureForTweak("api", "backend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend")
 	pub := mocks.NewMockPublisher()
 	reb := mocks.NewMockRebaseOperator()
 	reb.PullRebaseFn = func(string, string) ports.PullRebaseResult {
@@ -340,7 +340,7 @@ func TestTweakSession_PushAll_AllRepos_PullsAndPushes(t *testing.T) {
 	}
 	ts := &TweakSession{Publisher: pub, Rebaser: reb}
 
-	if err := ts.PushAll(f, map[string]bool{"api": true, "backend": true}); err != nil {
+	if err := ts.PushAll(f, map[string]bool{testRepoNameAPI: true, "backend": true}); err != nil {
 		t.Errorf("PushAll: %v, want nil", err)
 	}
 
@@ -373,7 +373,7 @@ func TestTweakSession_PushAll_AllRepos_PullsAndPushes(t *testing.T) {
 // *FeatureTweakPushError whose Conflicts slice carries the affected
 // repo's branch + RebaseTarget.
 func TestTweakSession_PushAll_PullRebaseConflict_OneRepo_SurfacesConflict(t *testing.T) {
-	f := newFeatureForTweak("api", "backend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend")
 	pub := mocks.NewMockPublisher()
 	reb := mocks.NewMockRebaseOperator()
 	reb.PullRebaseFn = func(worktree, _ string) ports.PullRebaseResult {
@@ -388,14 +388,14 @@ func TestTweakSession_PushAll_PullRebaseConflict_OneRepo_SurfacesConflict(t *tes
 		Rebaser:   reb,
 		ResolveRebaseTarget: func(_ *feature.Feature, repo *feature.FeatureRepo) string {
 			resolveCalls++
-			if repo.Name != "api" {
+			if repo.Name != testRepoNameAPI {
 				t.Errorf("ResolveRebaseTarget called against %q, want \"api\"", repo.Name)
 			}
-			return "master"
+			return testRebaseTargetMaster
 		},
 	}
 
-	err := ts.PushAll(f, map[string]bool{"api": true, "backend": true})
+	err := ts.PushAll(f, map[string]bool{testRepoNameAPI: true, "backend": true})
 	if err == nil {
 		t.Fatal("PushAll: expected *FeatureTweakPushError, got nil")
 	}
@@ -406,13 +406,13 @@ func TestTweakSession_PushAll_PullRebaseConflict_OneRepo_SurfacesConflict(t *tes
 	if len(ftpe.Conflicts) != 1 {
 		t.Fatalf("ftpe.Conflicts = %d entries, want 1", len(ftpe.Conflicts))
 	}
-	if ftpe.Conflicts[0].RepoName != "api" {
-		t.Errorf("Conflicts[0].RepoName = %q, want %q", ftpe.Conflicts[0].RepoName, "api")
+	if ftpe.Conflicts[0].RepoName != testRepoNameAPI {
+		t.Errorf("Conflicts[0].RepoName = %q, want %q", ftpe.Conflicts[0].RepoName, testRepoNameAPI)
 	}
 	if ftpe.Conflicts[0].Branch != "feature/tweak-feat" {
 		t.Errorf("Conflicts[0].Branch = %q, want %q", ftpe.Conflicts[0].Branch, "feature/tweak-feat")
 	}
-	if ftpe.Conflicts[0].RebaseTarget != "master" {
+	if ftpe.Conflicts[0].RebaseTarget != testRebaseTargetMaster {
 		t.Errorf("Conflicts[0].RebaseTarget = %q, want \"master\" (PR base must drive recovery rebase)", ftpe.Conflicts[0].RebaseTarget)
 	}
 	if resolveCalls != 1 {
@@ -451,7 +451,7 @@ func TestTweakSession_PushAll_DeterministicConflictOrder(t *testing.T) {
 		Publisher: mocks.NewMockPublisher(),
 		Rebaser:   reb,
 		ResolveRebaseTarget: func(_ *feature.Feature, _ *feature.FeatureRepo) string {
-			return "master"
+			return testRebaseTargetMaster
 		},
 	}
 
@@ -479,7 +479,7 @@ func TestTweakSession_PushAll_DeterministicConflictOrder(t *testing.T) {
 // rather than Conflicts, so the orchestrator does not route through the
 // rebase UX for a transient push error.
 func TestTweakSession_PushAll_PushFailure_RecordsAsFailure(t *testing.T) {
-	f := newFeatureForTweak("api")
+	f := newFeatureForTweak(testRepoNameAPI)
 	pub := mocks.NewMockPublisher()
 	pub.PushFn = func(string, string) error { return errors.New("auth refused") }
 	reb := mocks.NewMockRebaseOperator()
@@ -488,7 +488,7 @@ func TestTweakSession_PushAll_PushFailure_RecordsAsFailure(t *testing.T) {
 	}
 	ts := &TweakSession{Publisher: pub, Rebaser: reb}
 
-	err := ts.PushAll(f, map[string]bool{"api": true})
+	err := ts.PushAll(f, map[string]bool{testRepoNameAPI: true})
 	if err == nil {
 		t.Fatal("PushAll: expected error, got nil")
 	}
@@ -502,7 +502,7 @@ func TestTweakSession_PushAll_PushFailure_RecordsAsFailure(t *testing.T) {
 	if len(ftpe.Failures) != 1 {
 		t.Fatalf("Failures = %d, want 1", len(ftpe.Failures))
 	}
-	if ftpe.Failures[0].RepoName != "api" {
+	if ftpe.Failures[0].RepoName != testRepoNameAPI {
 		t.Errorf("Failures[0].RepoName = %q, want \"api\"", ftpe.Failures[0].RepoName)
 	}
 }
@@ -518,7 +518,7 @@ func TestTweakSession_PushAll_PushFailure_RecordsAsFailure(t *testing.T) {
 // recovery calls MarkInterrupted. The cycle entry remains so the TUI
 // can offer resume.
 func TestTweakSession_SessionDieMidTweak_TransitionsToInterrupted(t *testing.T) {
-	f := newFeatureForTweak("api", "backend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend")
 	store := newInMemoryStore(f)
 	ts := &TweakSession{Store: store}
 
@@ -568,7 +568,7 @@ func TestTweakSession_SessionDieMidTweak_TransitionsToInterrupted(t *testing.T) 
 // the full deep-module API: MarkRunning → CommitAll (no changes) →
 // PushAll (no-op) → ClearActiveCycle. No commit, no push.
 func TestTweakSession_FullLifecycle_CleanEnd_NoChanges(t *testing.T) {
-	f := newFeatureForTweak("api", "backend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend")
 	store := newInMemoryStore(f)
 	pub := mocks.NewMockPublisher()
 	pub.HasUncommittedChangesFn = func(string) (bool, error) { return false, nil }
@@ -608,7 +608,7 @@ func TestTweakSession_FullLifecycle_CleanEnd_NoChanges(t *testing.T) {
 // (one repo dirty) → PushAll (one repo) → ClearActiveCycle. Exactly one
 // CommitAll, one PullRebase, one Push.
 func TestTweakSession_FullLifecycle_CleanEnd_OneRepo(t *testing.T) {
-	f := newFeatureForTweak("api", "backend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend")
 	store := newInMemoryStore(f)
 	pub := mocks.NewMockPublisher()
 	pub.HasUncommittedChangesFn = func(worktree string) (bool, error) {
@@ -627,7 +627,7 @@ func TestTweakSession_FullLifecycle_CleanEnd_OneRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitAll: %v", err)
 	}
-	if !hadChanges["api"] || hadChanges["backend"] {
+	if !hadChanges[testRepoNameAPI] || hadChanges["backend"] {
 		t.Errorf("hadChanges = %+v, want only api dirty", hadChanges)
 	}
 	if err := ts.PushAll(f, hadChanges); err != nil {
@@ -670,7 +670,7 @@ func TestTweakSession_FullLifecycle_CleanEnd_OneRepo(t *testing.T) {
 // CommitAll (two of three dirty) → PushAll (two repos pulled+pushed) →
 // ClearActiveCycle. Two CommitAll, two PullRebase, two Push.
 func TestTweakSession_FullLifecycle_CleanEnd_MultipleRepos(t *testing.T) {
-	f := newFeatureForTweak("api", "backend", "frontend")
+	f := newFeatureForTweak(testRepoNameAPI, "backend", "frontend")
 	store := newInMemoryStore(f)
 	pub := mocks.NewMockPublisher()
 	pub.HasUncommittedChangesFn = func(worktree string) (bool, error) {
@@ -689,7 +689,7 @@ func TestTweakSession_FullLifecycle_CleanEnd_MultipleRepos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CommitAll: %v", err)
 	}
-	if !hadChanges["api"] || !hadChanges["backend"] {
+	if !hadChanges[testRepoNameAPI] || !hadChanges["backend"] {
 		t.Errorf("hadChanges = %+v, want api+backend true", hadChanges)
 	}
 	if hadChanges["frontend"] {

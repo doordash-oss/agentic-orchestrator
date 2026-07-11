@@ -26,7 +26,7 @@ import (
 func TestSSEMapsShutdownDomainEventToMetadataOnlyRuntimeDTO(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 8})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 8})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 	b.publish(eventDTOFromRuntime(ports.Event{
@@ -38,13 +38,13 @@ func TestSSEMapsShutdownDomainEventToMetadataOnlyRuntimeDTO(t *testing.T) {
 	if dto.APIVersion != APIVersion {
 		t.Fatalf("api_version = %q; want %q", dto.APIVersion, APIVersion)
 	}
-	if dto.ID != "1" || dto.Seq != 1 || dto.Epoch != "epoch-test" {
+	if dto.ID != "1" || dto.Seq != 1 || dto.Epoch != testEventEpoch {
 		t.Fatalf("envelope = id %q seq %d epoch %q; want id/seq 1 and epoch-test", dto.ID, dto.Seq, dto.Epoch)
 	}
-	if dto.Kind != "shutdown.updated" {
+	if dto.Kind != sseEventShutdownUpdated {
 		t.Fatalf("kind = %q; want shutdown.updated", dto.Kind)
 	}
-	if dto.Resource.Type != "runtime" {
+	if dto.Resource.Type != resourceTypeRuntime {
 		t.Fatalf("resource.type = %q; want runtime", dto.Resource.Type)
 	}
 	if dto.Resource.ID != "" || dto.Resource.FeatureID != "" || dto.Resource.Phase != "" {

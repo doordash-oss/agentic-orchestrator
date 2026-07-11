@@ -148,6 +148,8 @@ func TestReadOnlyOutsideRootsBranch(t *testing.T) {
 }
 
 func TestMultiRepoPromptBranches(t *testing.T) {
+	const wantRepoAPI = "**api**"
+
 	repos := []RepoView{{Name: "web", Path: "/repos/web"}, {Name: "api", Path: "/repos/api"}}
 	tests := []struct {
 		name     string
@@ -161,7 +163,7 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 				return DesignUserPrompt(DesignUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
 			},
 			want:     true,
-			wantRepo: "**api**",
+			wantRepo: wantRepoAPI,
 		},
 		{
 			name: "design_target_repositories_block_omitted_when_multi_repo_flag_false",
@@ -181,7 +183,7 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: true, Repos: repos})
 			},
 			want:     true,
-			wantRepo: "**api**",
+			wantRepo: wantRepoAPI,
 		},
 		{
 			name: "roadmap_target_repositories_block_emitted_even_when_multi_repo_flag_false",
@@ -189,7 +191,7 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 				return RoadmapUserPrompt(RoadmapUserInput{Name: "Name", Description: "Desc", MultiRepo: false, Repos: repos})
 			},
 			want:     true,
-			wantRepo: "**api**",
+			wantRepo: wantRepoAPI,
 		},
 		{
 			name: "roadmap_target_repositories_block_emitted_when_only_one_repo",

@@ -35,7 +35,7 @@ func TestLivePreviewAssistantRowsUseMarkdownRenderer(t *testing.T) {
 
 	f := &feature.Feature{Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement}
 	sess := newLivePreviewSession("markdown-preview", feature.PhaseImplement,
-		assistantMessage(llm.ContentBlock{Type: "text", Text: "**Rendered** update\n\n> quoted context"}),
+		assistantMessage(llm.ContentBlock{Type: blockTypeText, Text: "**Rendered** update\n\n> quoted context"}),
 	)
 	view := stripANSI(newLivePreviewModel(f).withSession(sess).withHeight(24).ViewCompact(100))
 

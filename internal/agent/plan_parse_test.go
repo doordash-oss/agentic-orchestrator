@@ -90,9 +90,9 @@ func TestParsePlanTasks_MultiRepo(t *testing.T) {
 		heading string
 		repo    string
 	}{
-		{"### Task 1: Wire the helper", "api"},
-		{"### Task 2: Update the web client", "web"},
-		{"### Task 3: Add a second api task", "api"},
+		{"### Task 1: Wire the helper", testRepoNameAPI},
+		{"### Task 2: Update the web client", testRepoNameWeb},
+		{"### Task 3: Add a second api task", testRepoNameAPI},
 	}
 	for i, w := range want {
 		if tasks[i].Heading != w.heading {
@@ -125,7 +125,7 @@ func TestParsePlanTasks_NoTasksSection(t *testing.T) {
 
 func TestPlanTaskRepos(t *testing.T) {
 	got := PlanTaskRepos(samplePlanMultiRepo)
-	want := []string{"api", "web"}
+	want := []string{testRepoNameAPI, testRepoNameWeb}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("repos = %v, want %v", got, want)
 	}
@@ -216,7 +216,7 @@ func TestParsePlanTasks_FencedTaskHeadingIgnored(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("expected 2 tasks, got %d", len(tasks))
 	}
-	if tasks[0].Repo != "api" || tasks[1].Repo != "web" {
+	if tasks[0].Repo != testRepoNameAPI || tasks[1].Repo != testRepoNameWeb {
 		t.Errorf("repos = [%q %q], want [api web]", tasks[0].Repo, tasks[1].Repo)
 	}
 }

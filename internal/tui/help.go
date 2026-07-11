@@ -27,6 +27,17 @@ import (
 // HelpOverlayCloseMsg signals the help overlay should close.
 type HelpOverlayCloseMsg struct{}
 
+const (
+	helpContextDashboard      = "Dashboard"
+	helpContextDetailPanel    = "Detail Panel"
+	helpContextDetail         = "Detail"
+	helpContextLogs           = "Logs"
+	helpContextPublish        = "Publish"
+	helpContextRecovery       = "Recovery"
+	helpContextWizard         = "Wizard"
+	helpContextReviewComments = "Review Comments"
+)
+
 // HelpBinding represents a single keybinding displayed in the help overlay.
 type HelpBinding struct {
 	Key  string
@@ -60,20 +71,20 @@ func contextualAHelpSection() HelpSection {
 // AllHelpContexts returns the registry of help contexts keyed by name.
 func AllHelpContexts() map[string]ViewHelpContext {
 	return map[string]ViewHelpContext{
-		"Dashboard":       dashboardLeftHelp(),
-		"Detail Panel":    dashboardRightHelp(),
-		"Detail":          detailHelp(),
-		"Wizard":          wizardHelp(),
-		"Publish":         publishHelp(),
-		"Recovery":        recoveryHelp(),
-		"Logs":            logsHelp(),
-		"Review Comments": reviewCommentsHelp(),
+		helpContextDashboard:      dashboardLeftHelp(),
+		helpContextDetailPanel:    dashboardRightHelp(),
+		helpContextDetail:         detailHelp(),
+		helpContextWizard:         wizardHelp(),
+		helpContextPublish:        publishHelp(),
+		helpContextRecovery:       recoveryHelp(),
+		helpContextLogs:           logsHelp(),
+		helpContextReviewComments: reviewCommentsHelp(),
 	}
 }
 
 func dashboardLeftHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Dashboard",
+		Name: helpContextDashboard,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -114,7 +125,7 @@ func dashboardLeftHelp() ViewHelpContext {
 
 func dashboardRightHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Detail Panel",
+		Name: helpContextDetailPanel,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -166,7 +177,7 @@ func dashboardRightHelp() ViewHelpContext {
 
 func detailHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Detail",
+		Name: helpContextDetail,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -273,7 +284,7 @@ func setupDetailHelp(logsAvailable, retryAvailable bool) ViewHelpContext {
 
 func wizardHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Wizard",
+		Name: helpContextWizard,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -300,7 +311,7 @@ func wizardHelp() ViewHelpContext {
 
 func publishHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Publish",
+		Name: helpContextPublish,
 		Sections: []HelpSection{
 			{
 				Title: "ACTIONS",
@@ -316,7 +327,7 @@ func publishHelp() ViewHelpContext {
 
 func recoveryHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Recovery",
+		Name: helpContextRecovery,
 		Sections: []HelpSection{
 			{
 				Title: "ACTIONS",
@@ -333,7 +344,7 @@ func recoveryHelp() ViewHelpContext {
 
 func logsHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Logs",
+		Name: helpContextLogs,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -355,7 +366,7 @@ func logsHelp() ViewHelpContext {
 
 func reviewCommentsHelp() ViewHelpContext {
 	return ViewHelpContext{
-		Name: "Review Comments",
+		Name: helpContextReviewComments,
 		Sections: []HelpSection{
 			{
 				Title: "NAVIGATION",
@@ -373,7 +384,7 @@ func reviewCommentsHelp() ViewHelpContext {
 				Bindings: []HelpBinding{
 					{"Shift+A", "Address all comments"},
 					{"enter", "Address included comments"},
-					{"space", "Include / exclude selected comment"},
+					{keySpace, "Include / exclude selected comment"},
 				},
 			},
 		},

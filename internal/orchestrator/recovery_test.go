@@ -421,7 +421,7 @@ func TestExecuteRecovery_ResumeActionRelaunchesPhase(t *testing.T) {
 		ID:           "feat-a",
 		CurrentPhase: feature.PhaseImplement,
 		Status:       feature.StatusImplementing,
-		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 		Artifacts:    map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
@@ -481,7 +481,7 @@ func TestExecuteRecovery_TweakCycle_SkipsRelaunch(t *testing.T) {
 		ID:           "feat-a",
 		CurrentPhase: feature.PhaseImplement,
 		Status:       feature.StatusImplementing,
-		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 		Artifacts:    map[string]string{"plan": "/tmp/plan.md"},
 	}
 	f.SetActiveCycleType(feature.CycleTweak)
@@ -548,7 +548,7 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 		Status:        feature.StatusInquiring,
 		CurrentPhase:  feature.PhaseInquire,
 		Pipeline:      feature.PipelineMoonshot,
-		Repos:         []feature.FeatureRepo{{Name: "repo-a", Path: filepath.Join(stateDir, "repo-a")}},
+		Repos:         []feature.FeatureRepo{{Name: repoName, Path: filepath.Join(stateDir, repoName)}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
@@ -619,20 +619,20 @@ func TestExecuteRecovery_RepoScopedTweak_SkipsRelaunch(t *testing.T) {
 		Status:       feature.StatusImplementing,
 		// ActiveCycleType deliberately left zero — narrow predicate
 		// (ActiveCycleType == CycleTweak) would miss this case.
-		Repos:     []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}, {Name: "repo-b", Path: "/tmp/repo-b"}},
+		Repos:     []feature.FeatureRepo{{Name: repoName, Path: repoAPath}, {Name: repoNameB, Path: repoBPath}},
 		Artifacts: map[string]string{"plan": "/tmp/plan.md"},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleTweak, Status: "running"},
+			repoName: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning},
 		},
 	}
 
 	items := []ports.RecoveryItem{{
-		PIDFile:  session.PIDFile{PID: 12345, FeatureID: "feat-repo-tweak", RepoName: "repo-a"},
+		PIDFile:  session.PIDFile{PID: 12345, FeatureID: "feat-repo-tweak", RepoName: repoName},
 		Feature:  f,
-		RepoName: "repo-a",
+		RepoName: repoName,
 	}}
 	actions := map[string]ports.RecoveryAction{
-		ports.RecoveryActionKey("feat-repo-tweak", "repo-a"): ports.RecoveryResume,
+		ports.RecoveryActionKey("feat-repo-tweak", repoName): ports.RecoveryResume,
 	}
 
 	fake := &fakeRecoveryOp{}
@@ -727,7 +727,7 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 
 	// Seed fresh KB state.json + index.md for repo-a matched to headCommit so
 	// IsKBFresh returns true, forcing startKB down the allFresh branch.
-	kbDir := agent.KBStateDir(stateDir, "repo-a")
+	kbDir := agent.KBStateDir(stateDir, repoName)
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
 		t.Fatalf("mkdir KB: %v", err)
 	}
@@ -784,7 +784,7 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 		Status:        feature.StatusBuildingKB,
 		CurrentPhase:  feature.PhaseKnowledgeBase,
 		Pipeline:      feature.PipelineMoonshot,
-		Repos:         []feature.FeatureRepo{{Name: "repo-a", Path: repoPath}},
+		Repos:         []feature.FeatureRepo{{Name: repoName, Path: repoPath}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
@@ -792,12 +792,12 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 	}
 
 	items := []ports.RecoveryItem{{
-		PIDFile:  session.PIDFile{PID: 999999997, FeatureID: f.ID, RepoName: "repo-a"},
+		PIDFile:  session.PIDFile{PID: 999999997, FeatureID: f.ID, RepoName: repoName},
 		Feature:  f,
-		RepoName: "repo-a",
+		RepoName: repoName,
 	}}
 	actions := map[string]ports.RecoveryAction{
-		ports.RecoveryActionKey(f.ID, "repo-a"): ports.RecoveryResume,
+		ports.RecoveryActionKey(f.ID, repoName): ports.RecoveryResume,
 	}
 
 	// PhaseRunner: StateDir + CommandRunner required by startKB's
@@ -925,7 +925,7 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/repos/test-repo"}
 	mgr := feature.NewManager(store, cfg)
 	branches := mocks.NewMockBranchOperator()
-	branches.DefaultBranchFn = func(repoPath string) (string, error) { return "main", nil }
+	branches.DefaultBranchFn = func(repoPath string) (string, error) { return mainBranch, nil }
 	branches.HasOriginRemoteFn = func(repoPath string) (bool, error) { return false, nil }
 	branches.BranchNameFn = func(featureSlug string) string { return "feature/" + featureSlug }
 	mgr.Branches = branches

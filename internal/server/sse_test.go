@@ -28,22 +28,34 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
+// testFeatureID is a fake feature resource ID reused across several broker
+// tests in this file.
+const testFeatureID = "F-1"
+
+// testEventEpoch is the fake broker epoch reused across broker/replay tests
+// in this file and sse_shutdown_test.go.
+const testEventEpoch = "epoch-test"
+
+// testEventKindFeatureState is the fake SSEEventDTO.Kind used across broker
+// tests in this file and handler_test.go.
+const testEventKindFeatureState = "feature.state"
+
 func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 4})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
-	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
-	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
+	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
+	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 
 	first := <-ch
 	second := <-ch
-	if first.Seq != 1 || first.ID != "1" || first.Epoch != "epoch-test" {
+	if first.Seq != 1 || first.ID != "1" || first.Epoch != testEventEpoch {
 		t.Fatalf("first event envelope = %+v, want seq/id 1 and epoch-test", first)
 	}
-	if second.Seq != 2 || second.ID != "2" || second.Epoch != "epoch-test" {
+	if second.Seq != 2 || second.ID != "2" || second.Epoch != testEventEpoch {
 		t.Fatalf("second event envelope = %+v, want seq/id 2 and epoch-test", second)
 	}
 	if first.ResourceVersion != 1 || second.ResourceVersion != 2 {
@@ -52,20 +64,19 @@ func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 }
 
 func TestEventBrokerConcurrentPublishAssignsUniqueMonotonicSeqs(t *testing.T) {
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 512})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 512})
 
 	const publishers = 16
 	const perPublisher = 32
 	var wg sync.WaitGroup
 	wg.Add(publishers)
 	for p := 0; p < publishers; p++ {
-		p := p
 		go func() {
 			defer wg.Done()
 			for i := 0; i < perPublisher; i++ {
 				b.publish(SSEEventDTO{
-					Kind:     "feature.state",
-					Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("F-%02d", p)},
+					Kind:     testEventKindFeatureState,
+					Resource: ResourceDTO{Type: entityFeature, ID: fmt.Sprintf("F-%02d", p)},
 				})
 			}
 		}()
@@ -102,12 +113,12 @@ func TestEventBrokerConcurrentPublishAssignsUniqueMonotonicSeqs(t *testing.T) {
 func TestEventBrokerReplayFromCursor(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 4})
-	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
-	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-2"}})
-	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-3"}})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
+	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
+	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: "F-2"}})
+	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: "F-3"}})
 
-	ch, replay, reset := b.subscribeAfter(1, "epoch-test")
+	ch, replay, reset := b.subscribeAfter(1, testEventEpoch)
 	defer b.unsubscribe(ch)
 	if reset != nil {
 		t.Fatalf("subscribeAfter reset = %+v, want replay", *reset)
@@ -123,12 +134,12 @@ func TestEventBrokerReplayFromCursor(t *testing.T) {
 func TestEventBrokerStaleCursorReturnsReset(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 2})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 2})
 	for i := 0; i < 4; i++ {
-		b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
+		b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 	}
 
-	ch, replay, reset := b.subscribeAfter(1, "epoch-test")
+	ch, replay, reset := b.subscribeAfter(1, testEventEpoch)
 	defer b.unsubscribe(ch)
 	if len(replay) != 0 {
 		t.Fatalf("replay len = %d, want reset only", len(replay))
@@ -136,7 +147,7 @@ func TestEventBrokerStaleCursorReturnsReset(t *testing.T) {
 	if reset == nil {
 		t.Fatal("reset = nil, want stream.reset")
 	}
-	if reset.Kind != "stream.reset" || reset.Seq != 4 || reset.Epoch != "epoch-test" {
+	if reset.Kind != sseEventStreamReset || reset.Seq != 4 || reset.Epoch != testEventEpoch {
 		t.Fatalf("reset = %+v, want stream.reset at current seq 4", *reset)
 	}
 }
@@ -144,12 +155,12 @@ func TestEventBrokerStaleCursorReturnsReset(t *testing.T) {
 func TestEventBrokerReplayRingBoundaries(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 3})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 3})
 	for i := 1; i <= 5; i++ {
-		b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("F-%d", i)}})
+		b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fmt.Sprintf("F-%d", i)}})
 	}
 
-	ch, replay, reset := b.subscribeAfter(2, "epoch-test")
+	ch, replay, reset := b.subscribeAfter(2, testEventEpoch)
 	defer b.unsubscribe(ch)
 	if reset != nil {
 		t.Fatalf("exact oldest-1 cursor reset = %+v, want replay", *reset)
@@ -158,13 +169,13 @@ func TestEventBrokerReplayRingBoundaries(t *testing.T) {
 		t.Fatalf("replay seqs from oldest-1 = %v, want [3 4 5]", got)
 	}
 
-	ch, replay, reset = b.subscribeAfter(1, "epoch-test")
+	ch, replay, reset = b.subscribeAfter(1, testEventEpoch)
 	defer b.unsubscribe(ch)
 	if reset == nil || len(replay) != 0 {
 		t.Fatalf("evicted cursor replay=%+v reset=%+v, want reset only", replay, reset)
 	}
 
-	ch, replay, reset = b.subscribeAfter(6, "epoch-test")
+	ch, replay, reset = b.subscribeAfter(6, testEventEpoch)
 	defer b.unsubscribe(ch)
 	if reset == nil || len(replay) != 0 {
 		t.Fatalf("future cursor replay=%+v reset=%+v, want reset only", replay, reset)
@@ -174,8 +185,8 @@ func TestEventBrokerReplayRingBoundaries(t *testing.T) {
 func TestEventBrokerCursorWithoutEpochReturnsReset(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 4})
-	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
+	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 
 	ch, replay, reset := b.subscribeAfter(1, "")
 	defer b.unsubscribe(ch)
@@ -185,7 +196,7 @@ func TestEventBrokerCursorWithoutEpochReturnsReset(t *testing.T) {
 	if reset == nil {
 		t.Fatal("reset = nil, want stream.reset for epoch-less cursor")
 	}
-	if reset.Kind != "stream.reset" || reset.Epoch != "epoch-test" {
+	if reset.Kind != sseEventStreamReset || reset.Epoch != testEventEpoch {
 		t.Fatalf("reset = %+v, want stream.reset with current epoch", *reset)
 	}
 }
@@ -194,14 +205,14 @@ func TestEventBrokerEpochMismatchReturnsReset(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-new", ReplayLimit: 4})
-	b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "F-1"}})
+	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
 
 	ch, replay, reset := b.subscribeAfter(1, "epoch-old")
 	defer b.unsubscribe(ch)
 	if len(replay) != 0 {
 		t.Fatalf("replay len = %d, want reset only on epoch mismatch", len(replay))
 	}
-	if reset == nil || reset.Kind != "stream.reset" || reset.Epoch != "epoch-new" {
+	if reset == nil || reset.Kind != sseEventStreamReset || reset.Epoch != "epoch-new" {
 		t.Fatalf("reset = %+v, want stream.reset with new epoch", reset)
 	}
 }
@@ -209,11 +220,11 @@ func TestEventBrokerEpochMismatchReturnsReset(t *testing.T) {
 func TestEventBrokerThrottlesSessionOutputActivity(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 8})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 8})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
-	activity := SSEEventDTO{Kind: "session.output.activity", Resource: ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"}}
+	activity := SSEEventDTO{Kind: sseEventSessionOutputActivity, Resource: ResourceDTO{Type: resourceTypeSession, ID: fixtureSessionID, FeatureID: fixtureFeatureID}}
 	b.publish(activity)
 	b.publish(activity)
 
@@ -242,19 +253,19 @@ func TestEventBrokerThrottlesSessionOutputActivity(t *testing.T) {
 func TestEventBrokerCoalescedMarkerCarriesTriggeringResource(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 64})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 64})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
 	// Fill the channel to capacity (16) with unrelated events so the next
 	// publish is guaranteed to hit the backpressure branch.
 	for i := 0; i < 16; i++ {
-		b.publish(SSEEventDTO{Kind: "config.updated", Resource: ResourceDTO{Type: "runtime"}})
+		b.publish(SSEEventDTO{Kind: sseEventConfigUpdated, Resource: ResourceDTO{Type: resourceTypeRuntime}})
 	}
 
 	triggering := SSEEventDTO{
-		Kind:     "session.updated",
-		Resource: ResourceDTO{Type: "session", ID: "__chat__", FeatureID: "some-feature"},
+		Kind:     sseEventSessionUpdated,
+		Resource: ResourceDTO{Type: resourceTypeSession, ID: ChatSessionID, FeatureID: "some-feature"},
 	}
 	b.publish(triggering)
 	<-ch
@@ -272,7 +283,7 @@ func TestEventBrokerCoalescedMarkerCarriesTriggeringResource(t *testing.T) {
 		}
 	}
 drained:
-	if last.Kind != "session.updated" {
+	if last.Kind != sseEventSessionUpdated {
 		t.Fatalf("last queued event kind = %q, want the latest coalesced session.updated", last.Kind)
 	}
 	if last.Resource != triggering.Resource {
@@ -283,16 +294,16 @@ drained:
 func TestEventBrokerSlowSubscriberReceivesNewestTerminalState(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 128})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 128})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
 	for i := 0; i < subscriberFIFOSize; i++ {
-		b.publish(SSEEventDTO{Kind: "config.updated", Resource: ResourceDTO{Type: "runtime"}})
+		b.publish(SSEEventDTO{Kind: sseEventConfigUpdated, Resource: ResourceDTO{Type: resourceTypeRuntime}})
 	}
-	resource := ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"}
+	resource := ResourceDTO{Type: resourceTypeSession, ID: fixtureSessionID, FeatureID: fixtureFeatureID}
 	for i := 0; i < 8; i++ {
-		b.publish(SSEEventDTO{Kind: "session.updated", Resource: resource, Summary: fmt.Sprintf("intermediate-%d", i)})
+		b.publish(SSEEventDTO{Kind: sseEventSessionUpdated, Resource: resource, Summary: fmt.Sprintf("intermediate-%d", i)})
 	}
 	b.publish(SSEEventDTO{Kind: "session.ended", Resource: resource, SnapshotRequired: true, Summary: "terminal"})
 
@@ -322,15 +333,15 @@ func TestEventBrokerSlowSubscriberReceivesNewestTerminalState(t *testing.T) {
 func TestEventBrokerCoalescedOverflowDeliversReset(t *testing.T) {
 	t.Parallel()
 
-	b := newEventBrokerForTest(eventBrokerOptions{Epoch: "epoch-test", ReplayLimit: 2048})
+	b := newEventBrokerForTest(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 2048})
 	ch := b.subscribe()
 	defer b.unsubscribe(ch)
 
 	for i := 0; i < subscriberFIFOSize; i++ {
-		b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("queued-%d", i)}})
+		b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fmt.Sprintf("queued-%d", i)}})
 	}
 	for i := 0; i <= maxSubscriberCoalescedEvents; i++ {
-		b.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: fmt.Sprintf("overflow-%d", i)}})
+		b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fmt.Sprintf("overflow-%d", i)}})
 	}
 
 	<-ch
@@ -338,7 +349,7 @@ func TestEventBrokerCoalescedOverflowDeliversReset(t *testing.T) {
 	for {
 		select {
 		case evt := <-ch:
-			if evt.Kind == "stream.reset" {
+			if evt.Kind == sseEventStreamReset {
 				return
 			}
 		default:
@@ -383,7 +394,7 @@ func TestSnapshotThenSubscribeConverges(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for n := 0; n < 5; n++ {
-				b.publish(SSEEventDTO{Kind: "lifecycle.updated", Resource: ResourceDTO{Type: "runtime"}})
+				b.publish(SSEEventDTO{Kind: sseEventLifecycleUpdated, Resource: ResourceDTO{Type: resourceTypeRuntime}})
 			}
 		}()
 
@@ -426,14 +437,14 @@ func TestSnapshotThenSubscribeConverges(t *testing.T) {
 
 // TestEventsConnectedSurvivesRingEvictionForCursorlessClient guards against a
 // regression from the after=0 fix above: a client with no cursor at all must
-// always get "connected" (full resync), never a "stream.reset" (Health-only
+// always get "connected" (full resync), never a sseEventStreamReset (Health-only
 // resync) — even once the broker's ring has evicted its earliest entries.
 func TestEventsConnectedSurvivesRingEvictionForCursorlessClient(t *testing.T) {
 	t.Parallel()
 
 	h := newAPIHandler(HandlerOptions{DisableHostValidation: true})
 	for i := 0; i < defaultEventReplayLimit+10; i++ {
-		h.broker.publish(SSEEventDTO{Kind: "lifecycle.updated", Resource: ResourceDTO{Type: "runtime"}})
+		h.broker.publish(SSEEventDTO{Kind: sseEventLifecycleUpdated, Resource: ResourceDTO{Type: resourceTypeRuntime}})
 	}
 
 	srv := httptest.NewServer(h.routes())
@@ -486,13 +497,13 @@ func TestSessionOutputActivityCarriesCurrentRecordCount(t *testing.T) {
 	t.Parallel()
 
 	msg := session.SDKEventMsg{
-		SessionID:   "sess-1",
-		FeatureID:   "feat-1",
+		SessionID:   fixtureSessionID,
+		FeatureID:   fixtureFeatureID,
 		RecordCount: 3,
 		Message:     llm.SDKMessage{Type: "assistant"},
 	}
 	evt := eventDTOFromRuntime(msg)
-	if evt.Kind != "session.output.activity" || evt.RecordCount != 3 {
+	if evt.Kind != sseEventSessionOutputActivity || evt.RecordCount != 3 {
 		t.Fatalf("eventDTOFromRuntime = %+v, want session.output.activity with RecordCount 3", evt)
 	}
 }

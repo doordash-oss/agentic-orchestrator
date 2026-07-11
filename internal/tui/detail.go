@@ -212,7 +212,7 @@ func (m DetailModel) View() string {
 	// Metadata box
 	metaContent := m.renderMetadataFull(f)
 	metaBox := panelStyle(false).Width(boxWidth).Render(metaContent)
-	metaBox = renderBorderTitle(metaBox, "Info", MutedStyle)
+	metaBox = renderBorderTitle(metaBox, labelInfo, MutedStyle)
 	b.WriteString(" " + metaBox + "\n")
 
 	// Phase progress box
@@ -373,7 +373,7 @@ func (m DetailModel) renderMetadataFull(f *feature.Feature) string {
 		b.WriteString("  " + MutedStyle.Render(filepath.Join(m.stateDir, f.ID)) + "\n")
 	}
 	if totalCost := f.TotalCost(); totalCost > 0 {
-		b.WriteString(LabelStyle.Render("Cost"))
+		b.WriteString(LabelStyle.Render(labelCost))
 		b.WriteString("    " + MutedStyle.Render(formatCost(totalCost)) + "\n")
 	}
 	if line := formatDeferralLine(f); line != "" {
@@ -881,7 +881,7 @@ func (m DetailModel) ViewCompact(width int) string {
 	// Metadata
 	metaContent := m.renderMetadataCompact(f)
 	metaBox := panelStyle(false).Width(width - 4).Render(metaContent)
-	metaBox = renderBorderTitle(metaBox, "Info", MutedStyle)
+	metaBox = renderBorderTitle(metaBox, labelInfo, MutedStyle)
 	b.WriteString(metaBox)
 	b.WriteString("\n")
 
@@ -967,7 +967,7 @@ func (m DetailModel) renderMetadataCompact(f *feature.Feature) string {
 		b.WriteString("  " + MutedStyle.Render(filepath.Join(m.stateDir, f.ID)) + "\n")
 	}
 	if totalCost := f.TotalCost(); totalCost > 0 {
-		b.WriteString(LabelStyle.Render("Cost"))
+		b.WriteString(LabelStyle.Render(labelCost))
 		b.WriteString("    " + MutedStyle.Render(formatCost(totalCost)) + "\n")
 	}
 	return b.String()
@@ -1661,9 +1661,9 @@ func formatValidatorStatuses(statuses map[string]string) string {
 			continue
 		}
 		switch s {
-		case "APPROVED":
+		case validatorStatusApproved:
 			parts = append(parts, SuccessStyle.Render(v.short+" \u2713"))
-		case "CHANGES_REQUESTED":
+		case validatorStatusChangesRequested:
 			parts = append(parts, WarningStyle.Render(v.short+" \u2717"))
 		case "error":
 			parts = append(parts, ErrorStyle.Render(v.short+" !"))

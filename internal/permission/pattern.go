@@ -69,18 +69,18 @@ func normalizeBashCommand(input string) string {
 //
 // For non-Bash tools, returns the exact "ToolName(input)" pattern.
 func InferBashPattern(toolName, toolInput string) string {
-	if toolName != "Bash" {
+	if toolName != toolNameBash {
 		return toolName + "(" + toolInput + ")"
 	}
 
 	input := normalizeBashCommand(strings.TrimSpace(extractBashCommand(toolInput)))
 	if input == "" {
-		return "Bash(*)"
+		return patternBashAny
 	}
 
 	tokens := strings.Fields(input)
 	if len(tokens) == 0 {
-		return "Bash(*)"
+		return patternBashAny
 	}
 
 	binary := tokens[0]

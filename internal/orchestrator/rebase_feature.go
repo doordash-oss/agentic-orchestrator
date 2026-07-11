@@ -242,7 +242,7 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	if !o.shouldContinueFeatureRebase(featureID) {
 		return
 	}
-	if loopErr != nil || result == nil || result.FinalStatus != "review_passed" {
+	if loopErr != nil || result == nil || result.FinalStatus != reviewStatusPassed {
 		o.handleFeatureRebaseDone(featureID, targets, result, loopErr)
 		return
 	}
@@ -522,35 +522,8 @@ func (o *Orchestrator) runRebaseFinalReviewAndPublishPolicy(
 	}
 
 	autoPush := originalStatus == feature.StatusPublished && f.Checkpoints.AutoPublish()
-	if autoPush {
-		if o.deps.Rebaser == nil {
-			o.failChangedRebaseRepos(featureID, changed, errors.New("rebase operator not configured for force push"))
-			_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
-			return
-		}
-		if o.deps.Publisher == nil {
-			o.failChangedRebaseRepos(featureID, changed, errors.New("publisher not configured for committing rebased repos"))
-			_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
-			return
-		}
-		for _, outcome := range changed {
-			if !outcome.Publishable {
-				continue
-			}
-			if err := o.runFeatureRebaseExternalStep(featureID, func() error {
-				if err := o.commitRebaseOutcomeIfDirty(outcome); err != nil {
-					return err
-				}
-				return o.deps.Rebaser.ForcePush(outcome.WorktreePath, outcome.Branch)
-			}); errors.Is(err, errFeatureRebaseStopped) {
-				return
-			} else if err != nil {
-				o.failChangedRebaseRepos(featureID, []HarnessRebaseRepoOutcome{outcome},
-					fmt.Errorf("force push rebased repo %s: %w", outcome.RepoName, err))
-				_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
-				return
-			}
-		}
+	if autoPush && o.runRebaseAutoPushForcePush(featureID, changed) {
+		return
 	}
 
 	if err := o.runFeatureRebaseStateMutation(featureID, func() error {
@@ -581,6 +554,43 @@ func (o *Orchestrator) runRebaseFinalReviewAndPublishPolicy(
 		o.failChangedRebaseRepos(featureID, changed, err)
 		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
 	}
+}
+
+// runRebaseAutoPushForcePush force-pushes each publishable rebased repo when
+// auto-push applies. It handles its own failure bookkeeping; the caller
+// should return immediately when stop is true.
+func (o *Orchestrator) runRebaseAutoPushForcePush(featureID string, changed []HarnessRebaseRepoOutcome) (stop bool) {
+	if o.deps.Rebaser == nil {
+		o.failChangedRebaseRepos(featureID, changed, errors.New("rebase operator not configured for force push"))
+		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		return true
+	}
+	if o.deps.Publisher == nil {
+		o.failChangedRebaseRepos(featureID, changed, errors.New("publisher not configured for committing rebased repos"))
+		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+		return true
+	}
+	for _, outcome := range changed {
+		if !outcome.Publishable {
+			continue
+		}
+		err := o.runFeatureRebaseExternalStep(featureID, func() error {
+			if err := o.commitRebaseOutcomeIfDirty(outcome); err != nil {
+				return err
+			}
+			return o.deps.Rebaser.ForcePush(outcome.WorktreePath, outcome.Branch)
+		})
+		switch {
+		case errors.Is(err, errFeatureRebaseStopped):
+			return true
+		case err != nil:
+			o.failChangedRebaseRepos(featureID, []HarnessRebaseRepoOutcome{outcome},
+				fmt.Errorf("force push rebased repo %s: %w", outcome.RepoName, err))
+			_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
+			return true
+		}
+	}
+	return false
 }
 
 func (o *Orchestrator) commitRebaseOutcomeIfDirty(outcome HarnessRebaseRepoOutcome) error {
@@ -1009,7 +1019,7 @@ func (o *Orchestrator) handleFeatureRebaseDone(
 	}
 
 	switch result.FinalStatus {
-	case "review_passed":
+	case reviewStatusPassed:
 		// Cycle complete: clear any stale LastError on each rebased repo
 		// and clear each per-repo cycle entry. Feature-level harness
 		// conflicts route smart-rebase success through
@@ -1028,16 +1038,16 @@ func (o *Orchestrator) handleFeatureRebaseDone(
 		o.resumePublishAfterPrePRRebase(featureID)
 		return
 
-	case "interrupted", "no_op":
+	case finalStatusInterrupted, finalStatusNoOp:
 		// Interrupted: persisted state preserved for restart. No-op:
 		// nothing to do. Either way, leave the per-repo cycle entries
 		// in place; the harness recovery / next user action handles
 		// them.
 		return
 
-	case "need_user_input":
+	case finalStatusNeedUserInput:
 		gate := &agent.LoopResult{
-			FinalStatus:       "need_user_input",
+			FinalStatus:       finalStatusNeedUserInput,
 			Iterations:        result.Iterations,
 			LastError:         result.LastError,
 			NeedUserInputPath: result.NeedUserInputPath,

@@ -15,17 +15,21 @@
 package permission
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // Store handles persistence of permission rules to JSON files.
 // Files are stored under BaseDir: one "global.json" and one "<repoName>.json" per repo.
 type Store struct {
 	BaseDir string
+	mu      sync.Mutex
 }
 
 func NewStore(baseDir string) *Store {
@@ -50,8 +54,11 @@ const globalScope = "global"
 // "global", preventing collision with the real global scope file.
 const repoGlobalScope = "_repo_global"
 
+// encodedScopePrefix marks repo names that are not safe as a single filename.
+const encodedScopePrefix = "_repo_b64_"
+
 // scopeFor returns the filename scope for a repo name.
-// "" → "global", "global" → "_repo_global", otherwise the repo name itself.
+// "" → "global", "global" → "_repo_global", otherwise a safe filename scope.
 func scopeFor(repoName string) string {
 	if repoName == "" {
 		return globalScope
@@ -59,14 +66,67 @@ func scopeFor(repoName string) string {
 	if repoName == globalScope {
 		return repoGlobalScope
 	}
-	return repoName
+	if isPortableScopeName(repoName) {
+		return repoName
+	}
+	return encodedScopePrefix + base64.RawURLEncoding.EncodeToString([]byte(repoName))
+}
+
+func repoNameForScope(scope string) string {
+	switch {
+	case scope == globalScope:
+		return ""
+	case scope == repoGlobalScope:
+		return globalScope
+	case strings.HasPrefix(scope, encodedScopePrefix):
+		decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(scope, encodedScopePrefix))
+		if err == nil {
+			return string(decoded)
+		}
+	}
+	return scope
+}
+
+func isPortableScopeName(scope string) bool {
+	if scope == "" || scope == "." || scope == ".." {
+		return false
+	}
+	for _, r := range scope {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Store) scopePath(scope string) (string, error) {
+	if !isPortableScopeName(scope) {
+		return "", fmt.Errorf("invalid permission scope filename %q", scope)
+	}
+	path := filepath.Join(s.BaseDir, scope+".json")
+	rel, err := filepath.Rel(s.BaseDir, path)
+	if err != nil {
+		return "", fmt.Errorf("resolve permission scope path: %w", err)
+	}
+	if rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("permission scope %q escapes permissions dir", scope)
+	}
+	return path, nil
 }
 
 // Load reads rules from the scope's JSON file.
 // Returns nil, nil if file doesn't exist.
 // Malformed JSON → logs warning, returns nil, nil.
 func (s *Store) Load(scope string) ([]Rule, error) {
-	path := filepath.Join(s.BaseDir, scope+".json")
+	path, err := s.scopePath(scope)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -82,13 +142,8 @@ func (s *Store) Load(scope string) ([]Rule, error) {
 		log.Printf("warning: corrupt permission file %s: %v", path, err)
 		return nil, nil
 	}
-	// Convert to Rule, setting RepoName from scope (reverse scopeFor mapping)
-	repoName := ""
-	if scope == repoGlobalScope {
-		repoName = globalScope // reverse the escape: "_repo_global" → "global"
-	} else if scope != globalScope {
-		repoName = scope
-	}
+	// Convert to Rule, setting RepoName from scope (reverse scopeFor mapping).
+	repoName := repoNameForScope(scope)
 	rules := make([]Rule, len(pf.Rules))
 	for i, pr := range pf.Rules {
 		rules[i] = Rule{
@@ -102,6 +157,10 @@ func (s *Store) Load(scope string) ([]Rule, error) {
 
 // Save writes rules atomically using os.CreateTemp + os.Rename pattern.
 func (s *Store) Save(scope string, rules []Rule) error {
+	destPath, err := s.scopePath(scope)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(s.BaseDir, 0o755); err != nil {
 		return fmt.Errorf("creating permissions dir: %w", err)
 	}
@@ -135,7 +194,6 @@ func (s *Store) Save(scope string, rules []Rule) error {
 		return fmt.Errorf("closing temp file: %w", err)
 	}
 
-	destPath := filepath.Join(s.BaseDir, scope+".json")
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("renaming temp file: %w", err)
@@ -147,6 +205,9 @@ func (s *Store) Save(scope string, rules []Rule) error {
 // the on-disk global.json. Missing defaults are appended; user-added rules
 // are preserved. On first run the file is created from scratch.
 func (s *Store) EnsureGlobalDefaults() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	defaults := defaultGlobalRules()
 
 	existing, err := s.Load(globalScope)
@@ -180,17 +241,23 @@ func (s *Store) EnsureGlobalDefaults() error {
 }
 
 // AppendRule loads existing rules, appends a new one (skip if duplicate), saves.
-// Deduplication: match on ToolPattern + Effect.
-func (s *Store) AppendRule(scope string, rule Rule) error {
+// Deduplication: match on ToolPattern + Effect within the exact scope.
+func (s *Store) AppendRule(scope string, rule Rule) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	existing, err := s.Load(scope)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for _, r := range existing {
 		if r.ToolPattern == rule.ToolPattern && r.Effect == rule.Effect {
-			return nil // already exists
+			return false, nil // already exists
 		}
 	}
 	existing = append(existing, rule)
-	return s.Save(scope, existing)
+	if err := s.Save(scope, existing); err != nil {
+		return false, err
+	}
+	return true, nil
 }

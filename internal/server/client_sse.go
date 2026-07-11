@@ -84,11 +84,11 @@ func (c *Client) eventLoop(ctx context.Context, opts EventSubscriptionOptions, s
 	reconnects := 0
 	for {
 		if ctx.Err() != nil {
-			return nil
+			return nil //nolint:nilerr // caller-requested cancellation is expected termination, not a failure
 		}
 		err := c.consumeEvents(ctx, opts, signals, &cursor)
 		if ctx.Err() != nil {
-			return nil
+			return nil //nolint:nilerr // caller-requested cancellation is expected termination, not a failure
 		}
 		reconnects++
 		if opts.MaxReconnects > 0 && reconnects > opts.MaxReconnects {
@@ -182,7 +182,7 @@ func (c *Client) dispatchSSEBlock(ctx context.Context, block sseBlock, signals c
 			cursor.epoch = evt.Epoch
 		}
 	}
-	if evt.Kind == "heartbeat" && !evt.SnapshotRequired {
+	if evt.Kind == sseEventHeartbeat && !evt.SnapshotRequired {
 		return nil
 	}
 	signal := RefreshSignal{
@@ -238,14 +238,14 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	// dashboard help badge and the attach question panel. Note: ordinary events
 	// also set snapshot_required, but they carry a specific kind/resource that
 	// the switch below uses to fetch only what changed.
-	if evt.Kind == "connected" || (evt.Kind == "heartbeat" && signal.SnapshotRequired) {
+	if evt.Kind == sseEventConnected || (evt.Kind == sseEventHeartbeat && signal.SnapshotRequired) {
 		return c.fetchFullSnapshot(ctx)
 	}
-	if evt.Kind == "session.output.activity" {
+	if evt.Kind == sseEventSessionOutputActivity {
 		return RefreshSnapshot{}, nil
 	}
 	switch {
-	case evt.Kind == "config.updated":
+	case evt.Kind == sseEventConfigUpdated:
 		if resource.FeatureID != "" {
 			cfg, err := c.FeatureConfig(ctx, resource.FeatureID)
 			return RefreshSnapshot{FeatureConfig: &cfg}, err
@@ -261,7 +261,7 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 	case resource.Type == "live_preview" || evt.Kind == "live_preview.updated":
 		preview, err := c.LivePreview(ctx, resource.FeatureID)
 		return RefreshSnapshot{LivePreview: &preview}, err
-	case resource.Type == "session" || evt.Kind == "session.updated":
+	case resource.Type == resourceTypeSession || evt.Kind == sseEventSessionUpdated:
 		snapshot := RefreshSnapshot{}
 		featureID := resource.FeatureID
 		refreshFeatureDetail := false
@@ -278,31 +278,32 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 			}
 			snapshot.Sessions = &sessions
 		}
-		if featureID != "" && !isUtilityFeatureID(featureID) {
-			prompts, err := c.Prompts(ctx)
+		if featureID == "" || isUtilityFeatureID(featureID) {
+			return snapshot, nil
+		}
+		prompts, err := c.Prompts(ctx)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.Prompts = &prompts
+		preview, err := c.LivePreview(ctx, featureID)
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.LivePreview = &preview
+		if resource.ID == "" && preview.Session != nil && preview.Session.ID != "" {
+			terminal, err := c.hydrateSessionRefreshSnapshot(ctx, &snapshot, preview.Session.ID, &featureID)
 			if err != nil {
 				return snapshot, err
 			}
-			snapshot.Prompts = &prompts
-			preview, err := c.LivePreview(ctx, featureID)
+			refreshFeatureDetail = terminal
+		}
+		if refreshFeatureDetail {
+			feature, err := c.FeatureDetail(ctx, featureID)
 			if err != nil {
 				return snapshot, err
 			}
-			snapshot.LivePreview = &preview
-			if resource.ID == "" && preview.Session != nil && preview.Session.ID != "" {
-				terminal, err := c.hydrateSessionRefreshSnapshot(ctx, &snapshot, preview.Session.ID, &featureID)
-				if err != nil {
-					return snapshot, err
-				}
-				refreshFeatureDetail = terminal
-			}
-			if refreshFeatureDetail {
-				feature, err := c.FeatureDetail(ctx, featureID)
-				if err != nil {
-					return snapshot, err
-				}
-				snapshot.Feature = &feature
-			}
+			snapshot.Feature = &feature
 		}
 		return snapshot, nil
 	case resource.FeatureID != "":
@@ -315,14 +316,14 @@ func (c *Client) FetchRefreshSnapshot(ctx context.Context, signal RefreshSignal)
 			return RefreshSnapshot{Feature: &feature}, err
 		}
 		return RefreshSnapshot{Feature: &feature, LivePreview: &preview}, nil
-	case evt.Kind == "recovery.updated":
+	case evt.Kind == sseEventRecoveryUpdated:
 		health, err := c.Health(ctx)
 		if err != nil {
 			return RefreshSnapshot{Health: &health}, err
 		}
 		recovery, err := c.Recovery(ctx)
 		return RefreshSnapshot{Health: &health, Recovery: &recovery}, err
-	case resource.Type == "runtime" || evt.Kind == "shutdown.updated":
+	case resource.Type == resourceTypeRuntime || evt.Kind == sseEventShutdownUpdated:
 		health, err := c.Health(ctx)
 		return RefreshSnapshot{Health: &health}, err
 	default:
@@ -392,7 +393,7 @@ func (c *Client) hydrateSessionRefreshSnapshot(ctx context.Context, snapshot *Re
 
 func isTerminalSessionStatus(status string) bool {
 	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(status), "-", "_")) {
-	case "done", "completed", "success", "failed", "error":
+	case "done", turnStateCompleted, "success", turnStateFailed, "error":
 		return true
 	default:
 		return false

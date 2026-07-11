@@ -21,6 +21,19 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testRepoNameWorker is a fixture repo-name literal reused across this
+// file's freshness-suffix tests.
+const testRepoNameWorker = "worker"
+
+// reposBlockFreshnessLocalChanges, reposBlockFreshnessInSync, and
+// reposBlockFreshnessLocalOnly are fixture RepoState.Freshness values reused
+// across this file's freshness-suffix tests.
+const (
+	reposBlockFreshnessLocalChanges = "local changes"
+	reposBlockFreshnessInSync       = "in sync"
+	reposBlockFreshnessLocalOnly    = "local only"
+)
+
 // stripANSI removes ANSI colour escape sequences so assertions can match the
 // plain text payload of a rendered row.
 func stripANSI(s string) string {
@@ -231,17 +244,17 @@ func TestRenderReposBlockFreshnessSuffix(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		Status: feature.StatusCodeReady,
-		Repos:  []feature.FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "worker"}},
+		Repos:  []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}, {Name: testRepoNameWorker}},
 		RepoStates: map[string]*feature.RepoState{
-			"api":    {Touched: true, Freshness: "local changes"},
-			"web":    {Touched: true, Freshness: "in sync"},
-			"worker": {Touched: true, Freshness: "local only"},
+			testRepoNameAPI:    {Touched: true, Freshness: reposBlockFreshnessLocalChanges},
+			testRepoNameWeb:    {Touched: true, Freshness: reposBlockFreshnessInSync},
+			testRepoNameWorker: {Touched: true, Freshness: reposBlockFreshnessLocalOnly},
 		},
 	}
 
 	rows := renderReposBlock(f)
 	joined := stripANSI(strings.Join(rows, "\n"))
-	for _, want := range []string{"api", "local changes", "web", "in sync", "worker", "local only"} {
+	for _, want := range []string{testRepoNameAPI, reposBlockFreshnessLocalChanges, testRepoNameWeb, reposBlockFreshnessInSync, testRepoNameWorker, reposBlockFreshnessLocalOnly} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("renderReposBlock() missing %q in:\n%s", want, joined)
 		}
@@ -255,28 +268,28 @@ func TestRenderReposBlockRebaseOperationSuffix(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
 		Status: feature.StatusCodeReady,
-		Repos:  []feature.FeatureRepo{{Name: "api"}, {Name: "web"}},
+		Repos:  []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
 		RepoStates: map[string]*feature.RepoState{
-			"api": {Touched: true, Freshness: "local changes"},
-			"web": {Touched: true, Freshness: "in sync"},
+			testRepoNameAPI: {Touched: true, Freshness: reposBlockFreshnessLocalChanges},
+			testRepoNameWeb: {Touched: true, Freshness: reposBlockFreshnessInSync},
 		},
 		RebaseOperation: &feature.RebaseOperationState{
 			Stage: feature.RebaseStageSmartRebase,
 			Repos: map[string]*feature.RebaseRepoProgress{
-				"api": {Status: feature.RebaseRepoStatusConflict, ConflictFiles: []string{"service.go"}},
-				"web": {Status: feature.RebaseRepoStatusUpToDate},
+				testRepoNameAPI: {Status: feature.RebaseRepoStatusConflict, ConflictFiles: []string{"service.go"}},
+				testRepoNameWeb: {Status: feature.RebaseRepoStatusUpToDate},
 			},
 		},
 	}
 
 	rows := renderReposBlock(f)
 	joined := stripANSI(strings.Join(rows, "\n"))
-	for _, want := range []string{"api", "conflict: service.go", "local changes", "web", "in sync"} {
+	for _, want := range []string{testRepoNameAPI, "conflict: service.go", reposBlockFreshnessLocalChanges, testRepoNameWeb, reposBlockFreshnessInSync} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("renderReposBlock() missing %q in:\n%s", want, joined)
 		}
 	}
-	if strings.Count(joined, "web") != 1 || strings.Count(joined, "in sync") != 1 {
+	if strings.Count(joined, testRepoNameWeb) != 1 || strings.Count(joined, reposBlockFreshnessInSync) != 1 {
 		t.Fatalf("renderReposBlock() should not duplicate up-to-date freshness:\n%s", joined)
 	}
 }

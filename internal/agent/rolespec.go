@@ -480,7 +480,7 @@ func completedImplementationMeta(meta IterationMeta) bool {
 		return false
 	}
 	switch strings.ToLower(strings.TrimSpace(meta.ReviewStatus)) {
-	case strings.ToLower(ReviewApproved.String()), "skipped":
+	case strings.ToLower(ReviewApproved.String()), reviewStatusSkipped:
 		return true
 	default:
 		return false

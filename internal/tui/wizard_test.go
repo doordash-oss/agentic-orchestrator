@@ -699,14 +699,14 @@ func TestWizardFilePasteMsg(t *testing.T) {
 
 	// Simulate successful file paste
 	m, _ = m.Update(FilesPastedMsg{
-		Paths: []string{"/tmp/spec.pdf"},
+		Paths: []string{testPastedFilePath},
 		Names: []string{"spec.pdf"},
 	})
 	if len(m.attachments) != 1 {
 		t.Fatalf("expected 1 attachment, got %d", len(m.attachments))
 	}
-	if m.attachments[0] != "/tmp/spec.pdf" {
-		t.Errorf("attachment path = %q, want %q", m.attachments[0], "/tmp/spec.pdf")
+	if m.attachments[0] != testPastedFilePath {
+		t.Errorf("attachment path = %q, want %q", m.attachments[0], testPastedFilePath)
 	}
 	if !strings.Contains(m.descInput.Value(), "[spec.pdf]") {
 		t.Errorf("expected '[spec.pdf]' in description, got %q", m.descInput.Value())
@@ -763,7 +763,7 @@ func TestWizardMixedImagesAndAttachments(t *testing.T) {
 	// Paste an image and a file
 	m, _ = m.Update(ImagePastedMsg{Path: "/tmp/screenshot.png"})
 	m, _ = m.Update(FilesPastedMsg{
-		Paths: []string{"/tmp/spec.pdf"},
+		Paths: []string{testPastedFilePath},
 		Names: []string{"spec.pdf"},
 	})
 
@@ -3377,7 +3377,7 @@ func TestWizardSummaryModelsExpandedViewShowsSplitPaneTitles(t *testing.T) {
 	m.height = 40
 
 	view := m.View()
-	for _, needle := range []string{"Model Selection", "Phases", "Agents", "Models for", "Research", "opus", "codex"} {
+	for _, needle := range []string{"Model Selection", "Phases", configBoxTitleAgents, "Models for", "Research", "opus", "codex"} { //nolint:goconst // "Phases" is a generic UI-label assertion, not a reusable test concept
 		if !strings.Contains(view, needle) {
 			t.Errorf("expected expanded Models view to contain %q", needle)
 		}

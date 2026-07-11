@@ -65,6 +65,8 @@ const (
 	reviewCommentTypeReviewBody = "review_body"
 )
 
+const reviewCommentsDetailBoxTitle = "Detail"
+
 func reviewCommentItemsFromDTO(comments []server.ReviewCommentDTO) []reviewCommentItem {
 	items := make([]reviewCommentItem, 0, len(comments))
 	for _, c := range comments {
@@ -299,7 +301,7 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 		queueHeight, detailHeight := reviewCommentsNarrowPanelHeights(m.height)
 		queueW := reviewCommentsQueueWidth(m.width)
 		queue := reviewCommentsBox("Queue", m.renderQueue(reviewCommentsPanelContentWidth(queueW), reviewCommentsPanelContentHeight(queueHeight)), queueW, queueHeight, m.focus == reviewCommentsFocusQueue)
-		detail := reviewCommentsBox("Detail", m.detail.View(), queueW, detailHeight, m.focus == reviewCommentsFocusDetail)
+		detail := reviewCommentsBox(reviewCommentsDetailBoxTitle, m.detail.View(), queueW, detailHeight, m.focus == reviewCommentsFocusDetail)
 		lines := make([]string, 0, queueHeight+detailHeight+1)
 		lines = append(lines, queue...)
 		lines = append(lines, "")
@@ -312,7 +314,7 @@ func (m reviewCommentsBrowserModel) renderBody() string {
 	panelHeight := reviewCommentsBodyHeight(m.height, m.status != "")
 	contentHeight := reviewCommentsPanelContentHeight(panelHeight)
 	queue := reviewCommentsBox("Queue", m.renderQueue(reviewCommentsPanelContentWidth(queueW), contentHeight), queueW, panelHeight, m.focus == reviewCommentsFocusQueue)
-	detail := reviewCommentsBox("Detail", m.detail.View(), detailW, panelHeight, m.focus == reviewCommentsFocusDetail)
+	detail := reviewCommentsBox(reviewCommentsDetailBoxTitle, m.detail.View(), detailW, panelHeight, m.focus == reviewCommentsFocusDetail)
 	lines := make([]string, panelHeight)
 	for i := 0; i < panelHeight; i++ {
 		lines[i] = " " + queue[i] + " " + detail[i]

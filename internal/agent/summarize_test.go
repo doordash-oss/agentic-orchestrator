@@ -80,12 +80,12 @@ func TestPhaseRunnerRunSummaryGeneration_UsesUtilitySession(t *testing.T) {
 	sess := newUtilityTestSession()
 	sess.msgLog.Append(mocks.AssistantTextMessage("A concise summary of the feature."))
 	sess.result = &llm.ResultMessage{
-		Type:       "result",
-		Subtype:    "success",
+		Type:       testResultMessageType,
+		Subtype:    testResultSuccessValue,
 		Result:     "done",
-		StopReason: "end_turn",
+		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- "SUCCESS"
+	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	summary, err := runner.pr.RunSummaryGeneration(context.Background(), "test-feature", "test description")

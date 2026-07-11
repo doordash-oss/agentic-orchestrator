@@ -28,6 +28,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+// finalStatusLoopError is the agent.LoopResult.FinalStatus sentinel this
+// package sets when RunImplementationLoop returns a non-nil error alongside
+// a nil-or-partial result (loop infrastructure failure, not a normal outcome).
+const finalStatusLoopError = "error"
+
 // RepoCycleLoopResultInput carries the result of an agent implementation loop
 // for a per-repo cycle (tweak / rebase / review-comments / refactor).
 type RepoCycleLoopResultInput struct {
@@ -182,7 +187,7 @@ func (o *Orchestrator) StartRepoCycleImplement(
 			if result == nil {
 				result = &agent.LoopResult{}
 			}
-			result.FinalStatus = "error"
+			result.FinalStatus = finalStatusLoopError
 			result.LastError = loopErr.Error()
 		}
 		_ = o.HandleRepoCycleLoopDone(featureID, RepoCycleLoopResultInput{
@@ -207,11 +212,11 @@ func (o *Orchestrator) HandleRepoCycleLoopDone(
 	featureID string,
 	input RepoCycleLoopResultInput,
 ) error {
-	if input.Result != nil && input.Result.FinalStatus == "need_user_input" {
+	if input.Result != nil && input.Result.FinalStatus == finalStatusNeedUserInput {
 		cycleType := cycleTypeForRepo(o, featureID, input.RepoName)
 		return o.onRepoCycleNeedUserInput(featureID, input.RepoName, cycleType, input.Result)
 	}
-	if input.Result == nil || input.Result.FinalStatus != "review_passed" {
+	if input.Result == nil || input.Result.FinalStatus != reviewStatusPassed {
 		errMsg := "cycle failed"
 		if input.Result != nil && input.Result.LastError != "" {
 			errMsg = input.Result.LastError
@@ -465,7 +470,7 @@ func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc 
 			if result == nil {
 				result = &agent.LoopResult{}
 			}
-			result.FinalStatus = "error"
+			result.FinalStatus = finalStatusLoopError
 			result.LastError = loopErr.Error()
 		}
 		_ = o.HandleRepoCycleLoopDone(featureID, RepoCycleLoopResultInput{
@@ -537,7 +542,7 @@ func (o *Orchestrator) handleCycleFinalReviewDone(
 	featureID string,
 	result *agent.FeatureFinalReviewResult,
 ) error {
-	if result == nil || result.FinalStatus != "review_passed" {
+	if result == nil || result.FinalStatus != reviewStatusPassed {
 		errMsg := "cycle review failed"
 		if result != nil && result.LastError != "" {
 			errMsg = result.LastError

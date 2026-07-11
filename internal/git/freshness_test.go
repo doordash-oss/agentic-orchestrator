@@ -41,8 +41,8 @@ func TestRepoFreshnessLocalChanges(t *testing.T) {
 		t.Fatalf("write dirty file: %v", err)
 	}
 
-	if got := RepoFreshness(repo); got != "local changes" {
-		t.Errorf("RepoFreshness() = %q, want %q", got, "local changes")
+	if got := RepoFreshness(repo); got != FreshnessLocalChanges {
+		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessLocalChanges)
 	}
 }
 
@@ -52,8 +52,8 @@ func TestRepoFreshnessLocalChangesAhead(t *testing.T) {
 	repo, _ := testutil.InitPublishReadyGitRepo(t)
 	testutil.CommitFile(t, repo, "ahead.txt", "ahead\n", "ahead commit")
 
-	if got := RepoFreshness(repo); got != "local changes" {
-		t.Errorf("RepoFreshness() = %q, want %q", got, "local changes")
+	if got := RepoFreshness(repo); got != FreshnessLocalChanges {
+		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessLocalChanges)
 	}
 }
 
@@ -66,8 +66,8 @@ func TestRepoFreshnessLocalChangesBehind(t *testing.T) {
 	testutil.SimulatePush(t, remoteRepo, bare, "main", "main")
 	runFreshnessGit(t, repo, "fetch", "origin")
 
-	if got := RepoFreshness(repo); got != "local changes" {
-		t.Errorf("RepoFreshness() = %q, want %q", got, "local changes")
+	if got := RepoFreshness(repo); got != FreshnessLocalChanges {
+		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessLocalChanges)
 	}
 }
 
@@ -81,8 +81,8 @@ func TestRepoFreshnessLocalChangesDiverged(t *testing.T) {
 	testutil.SimulatePush(t, remoteRepo, bare, "main", "main")
 	runFreshnessGit(t, repo, "fetch", "origin")
 
-	if got := RepoFreshness(repo); got != "local changes" {
-		t.Errorf("RepoFreshness() = %q, want %q", got, "local changes")
+	if got := RepoFreshness(repo); got != FreshnessLocalChanges {
+		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessLocalChanges)
 	}
 }
 

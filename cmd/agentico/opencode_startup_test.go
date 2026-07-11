@@ -22,6 +22,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
+const installHintOpencode = "curl -fsSL https://opencode.ai/install | bash"
+
 // TestStartupCopyListsOpenCodeAsSupportedProvider is the startup-copy golden:
 // it pins that the usage/help text presents OpenCode as a co-equal selectable
 // provider, and that the no-ready-provider startup message surfaces a missing
@@ -44,14 +46,14 @@ func TestStartupCopyListsOpenCodeAsSupportedProvider(t *testing.T) {
 		Detail: "not logged in.",
 		Remedy: "Run 'claude auth login'",
 	}}
-	openCode := &stubProvider{name: "opencode", hasCLI: false, installHint: "curl -fsSL https://opencode.ai/install | bash"}
+	openCode := &stubProvider{name: providerNameOpencode, hasCLI: false, installHint: installHintOpencode}
 
 	msg := formatNoReadyProviderMessage(
 		[]llm.LLMProvider{claude, openCode},
 		[]providerReadinessIssue{{provider: claude, status: claude.readiness}},
 	)
 	for _, want := range []string{
-		"opencode",
+		providerNameOpencode,
 		"opencode.ai/install",
 	} {
 		if !strings.Contains(msg, want) {
@@ -74,10 +76,10 @@ func TestProviderFxModules_DefaultIncludesOpenCode(t *testing.T) {
 // --providers opt-in selects exactly the named providers, including OpenCode
 // alone or alongside the others.
 func TestProviderFxModules_ExplicitProvidersFlagHonorsOpenCode(t *testing.T) {
-	if got := len(providerFxModules([]string{"opencode"})); got != 1 {
+	if got := len(providerFxModules([]string{providerNameOpencode})); got != 1 {
 		t.Fatalf("providerFxModules([opencode]) = %d modules, want 1", got)
 	}
-	if got := len(providerFxModules([]string{"claude", "codex", "opencode"})); got != 3 {
+	if got := len(providerFxModules([]string{"claude", "codex", providerNameOpencode})); got != 3 {
 		t.Fatalf("providerFxModules([claude codex opencode]) = %d modules, want 3", got)
 	}
 }
@@ -89,7 +91,7 @@ func TestProviderFxModules_MixedListWithOpenCodeAnyPositionTrimmed(t *testing.T)
 	if got := len(providerFxModules([]string{" opencode ", " claude "})); got != 2 {
 		t.Fatalf("providerFxModules([ opencode , claude ]) = %d modules, want 2 (trimmed, opencode leading)", got)
 	}
-	if got := len(providerFxModules([]string{"codex", "opencode"})); got != 2 {
+	if got := len(providerFxModules([]string{"codex", providerNameOpencode})); got != 2 {
 		t.Fatalf("providerFxModules([codex opencode]) = %d modules, want 2", got)
 	}
 }
@@ -99,8 +101,8 @@ func TestProviderFxModules_MixedListWithOpenCodeAnyPositionTrimmed(t *testing.T)
 // not ready, filtering OpenCode out of routing.
 func TestCheckRequiredProviders_OpenCodeUnreadyFallsBackToReadyProvider(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, installHint: "install claude", hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
-	r.Register(&stubProvider{name: "opencode", hasCLI: true, installHint: "curl -fsSL https://opencode.ai/install | bash", hasReadiness: true, readiness: llm.ProviderReadiness{
+	r.Register(&stubProvider{name: "claude", models: []string{modelNameOpus}, hasCLI: true, installHint: installHintClaude, hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
+	r.Register(&stubProvider{name: providerNameOpencode, hasCLI: true, installHint: installHintOpencode, hasReadiness: true, readiness: llm.ProviderReadiness{
 		Ready:  false,
 		Detail: "no provider is configured",
 		Remedy: "Run 'opencode auth login'",
@@ -116,7 +118,7 @@ func TestCheckRequiredProviders_OpenCodeUnreadyFallsBackToReadyProvider(t *testi
 	if len(detected) != 1 || detected[0].Name() != "claude" {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
 	}
-	if len(notices) != 1 || !strings.Contains(notices[0], "opencode") || !strings.Contains(notices[0], "Starting with claude only") {
+	if len(notices) != 1 || !strings.Contains(notices[0], providerNameOpencode) || !strings.Contains(notices[0], "Starting with claude only") {
 		t.Fatalf("notices = %v, want an opencode startup notice", notices)
 	}
 	// After filtering, an explicit opencode selection no longer resolves.
@@ -130,7 +132,7 @@ func TestCheckRequiredProviders_OpenCodeUnreadyFallsBackToReadyProvider(t *testi
 // provider and is not ready.
 func TestCheckRequiredProviders_OpenCodeOnlyUnreadyFails(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "opencode", hasCLI: true, installHint: "curl -fsSL https://opencode.ai/install | bash", hasReadiness: true, readiness: llm.ProviderReadiness{
+	r.Register(&stubProvider{name: providerNameOpencode, hasCLI: true, installHint: installHintOpencode, hasReadiness: true, readiness: llm.ProviderReadiness{
 		Ready:  false,
 		Detail: "no provider is configured",
 		Remedy: "Run 'opencode auth login'",
@@ -143,7 +145,7 @@ func TestCheckRequiredProviders_OpenCodeOnlyUnreadyFails(t *testing.T) {
 	if !filtered {
 		t.Fatal("filtered = false, want true")
 	}
-	if !strings.Contains(err.Error(), "opencode") {
+	if !strings.Contains(err.Error(), providerNameOpencode) {
 		t.Fatalf("error = %q, want it to reference opencode", err.Error())
 	}
 }
@@ -155,9 +157,9 @@ func TestCheckRequiredProviders_OpenCodeOnlyUnreadyFails(t *testing.T) {
 // report Ready, so this isolates the version gate as the cause of exclusion.
 func TestCheckRequiredProviders_OpenCodeTooOldFallsBackToReadyProvider(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
+	r.Register(&stubProvider{name: "claude", models: []string{modelNameOpus}, hasCLI: true, hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
 	r.Register(&stubProvider{
-		name: "opencode", hasCLI: true, installHint: "curl -fsSL https://opencode.ai/install | bash",
+		name: providerNameOpencode, hasCLI: true, installHint: installHintOpencode,
 		hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true},
 		version: "1.17.8", minVersion: [3]int{1, 17, 9}, enforceMinVersion: true,
 	})
@@ -172,7 +174,7 @@ func TestCheckRequiredProviders_OpenCodeTooOldFallsBackToReadyProvider(t *testin
 	if len(detected) != 1 || detected[0].Name() != "claude" {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
 	}
-	if len(notices) != 1 || !strings.Contains(notices[0], "opencode") ||
+	if len(notices) != 1 || !strings.Contains(notices[0], providerNameOpencode) ||
 		!strings.Contains(notices[0], "1.17.8") || !strings.Contains(notices[0], "1.17.9") ||
 		!strings.Contains(notices[0], "Starting with claude only") {
 		t.Fatalf("notices = %v, want a too-old opencode startup notice citing the installed and minimum versions", notices)
@@ -191,7 +193,7 @@ func TestCheckRequiredProviders_OpenCodeTooOldFallsBackToReadyProvider(t *testin
 func TestCheckRequiredProviders_OpenCodeOnlyTooOldFails(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubProvider{
-		name: "opencode", hasCLI: true, installHint: "curl -fsSL https://opencode.ai/install | bash",
+		name: providerNameOpencode, hasCLI: true, installHint: installHintOpencode,
 		hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true},
 		version: "1.17.8", minVersion: [3]int{1, 17, 9}, enforceMinVersion: true,
 	})
@@ -203,7 +205,7 @@ func TestCheckRequiredProviders_OpenCodeOnlyTooOldFails(t *testing.T) {
 	if !filtered {
 		t.Fatal("filtered = false, want true")
 	}
-	if !strings.Contains(err.Error(), "opencode") || !strings.Contains(err.Error(), "1.17.9") {
+	if !strings.Contains(err.Error(), providerNameOpencode) || !strings.Contains(err.Error(), "1.17.9") {
 		t.Fatalf("error = %q, want it to reference opencode and the minimum version", err.Error())
 	}
 }
@@ -216,7 +218,7 @@ func TestCheckRequiredProviders_OpenCodeOnlyTooOldFails(t *testing.T) {
 func TestCheckRequiredProviders_OpenCodeReadyAtMinVersionIncluded(t *testing.T) {
 	r := llm.NewRegistry()
 	r.Register(&stubProvider{
-		name: "opencode", hasCLI: true, installHint: "curl -fsSL https://opencode.ai/install | bash",
+		name: providerNameOpencode, hasCLI: true, installHint: installHintOpencode,
 		hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true},
 		version: "1.17.9", minVersion: [3]int{1, 17, 9}, enforceMinVersion: true,
 	})
@@ -228,7 +230,7 @@ func TestCheckRequiredProviders_OpenCodeReadyAtMinVersionIncluded(t *testing.T) 
 	if filtered {
 		t.Fatal("filtered = true, want false (the only provider is ready and at the minimum version)")
 	}
-	if len(detected) != 1 || detected[0].Name() != "opencode" {
+	if len(detected) != 1 || detected[0].Name() != providerNameOpencode {
 		t.Fatalf("detected = %v, want opencode included", providerNames(detected))
 	}
 	if len(notices) != 0 {
@@ -243,8 +245,8 @@ func TestCheckRequiredProviders_OpenCodeReadyAtMinVersionIncluded(t *testing.T) 
 // on a ready provider when the OpenCode CLI is missing entirely.
 func TestCheckRequiredProviders_OpenCodeMissingFallsBack(t *testing.T) {
 	r := llm.NewRegistry()
-	r.Register(&stubProvider{name: "claude", models: []string{"opus"}, hasCLI: true, hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
-	r.Register(&stubProvider{name: "opencode", hasCLI: false, installHint: "curl -fsSL https://opencode.ai/install | bash"})
+	r.Register(&stubProvider{name: "claude", models: []string{modelNameOpus}, hasCLI: true, hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
+	r.Register(&stubProvider{name: providerNameOpencode, hasCLI: false, installHint: installHintOpencode})
 
 	detected, _, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
@@ -256,7 +258,7 @@ func TestCheckRequiredProviders_OpenCodeMissingFallsBack(t *testing.T) {
 	if len(detected) != 1 || detected[0].Name() != "claude" {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
 	}
-	if len(notices) != 1 || !strings.Contains(notices[0], "opencode") || !strings.Contains(notices[0], "opencode.ai/install") {
+	if len(notices) != 1 || !strings.Contains(notices[0], providerNameOpencode) || !strings.Contains(notices[0], "opencode.ai/install") {
 		t.Fatalf("notices = %v, want a missing-opencode install notice", notices)
 	}
 }

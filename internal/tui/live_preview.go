@@ -35,6 +35,17 @@ const (
 	livePreviewToolResultSuffix       = "[...]"
 )
 
+const (
+	labelCost      = "Cost"
+	labelFeatureID = "Feature ID"
+	labelInfo      = "Info"
+)
+
+const (
+	validatorStatusApproved         = "APPROVED"
+	validatorStatusChangesRequested = "CHANGES_REQUESTED"
+)
+
 // LivePreviewModel renders the normal live dashboard right panel. It is a
 // compact status shell, not the full attach transcript.
 type LivePreviewModel struct {
@@ -123,7 +134,7 @@ type livePreviewMetadataItem struct {
 
 func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, contextPct int) []livePreviewMetadataItem {
 	items := []livePreviewMetadataItem{
-		{label: "Feature ID", value: livePreviewFeatureID(f)},
+		{label: labelFeatureID, value: livePreviewFeatureID(f)},
 		{label: "Repos", value: livePreviewReposSummary(f)},
 	}
 	if prLinks := livePreviewPRLinks(f); prLinks != "" {
@@ -142,7 +153,7 @@ func livePreviewMetadataItems(f *feature.Feature, sess session.SessionView, cont
 	items = append(items,
 		livePreviewMetadataItem{label: "Phase Model", value: livePreviewPhaseModel(f, sess)},
 		livePreviewMetadataItem{label: "Elapsed", value: livePreviewElapsedText(f)},
-		livePreviewMetadataItem{label: "Cost", value: livePreviewCostText(f)},
+		livePreviewMetadataItem{label: labelCost, value: livePreviewCostText(f)},
 	)
 	return items
 }
@@ -587,7 +598,7 @@ func activityLineFromMessage(f *feature.Feature, sess session.SessionView, msg l
 			return "Using " + toolName + "...", true
 		}
 		if hasThinkingBlock(msg.Assistant.Message.Content) {
-			return "Thinking...", true
+			return thinkingLineText, true
 		}
 	}
 	return "", false
@@ -744,7 +755,7 @@ func livePreviewTranscriptRows(msgs []llm.SDKMessage, includeStreamingRows bool)
 				case block.IsText():
 					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptAssistant, text: block.Text})
 				case block.IsThinking():
-					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptTask, text: "Thinking..."})
+					appendRow(livePreviewTranscriptRow{kind: livePreviewTranscriptTask, text: thinkingLineText})
 				case block.IsToolUse():
 					if block.ID != "" && block.Name != "" {
 						toolNames[block.ID] = block.Name
@@ -788,7 +799,7 @@ func normalizeLivePreviewTranscriptRowText(row livePreviewTranscriptRow) string 
 }
 
 func livePreviewToolUseRow(block llm.ContentBlock) livePreviewTranscriptRow {
-	if block.Name == "AskUserQuestion" {
+	if block.Name == toolNameAskUserQuestion {
 		return livePreviewTranscriptRow{kind: livePreviewTranscriptQuestion, text: "AskUser: " + livePreviewAskUserSummary(block.Input)}
 	}
 	text := block.Name
@@ -891,10 +902,10 @@ func livePreviewControlRequestRow(req *llm.ControlRequestMessage) livePreviewTra
 	if req.Request.Subtype == "hook_callback" {
 		return livePreviewTranscriptRow{}
 	}
-	if req.Request.ToolName == "AskUserQuestion" {
+	if req.Request.ToolName == toolNameAskUserQuestion {
 		return livePreviewTranscriptRow{kind: livePreviewTranscriptQuestion, text: "AskUser: " + livePreviewAskUserSummary(req.Request.Input)}
 	}
-	if req.Request.Subtype == "can_use_tool" && req.Request.ToolName != "" {
+	if req.Request.Subtype == controlRequestSubtypeCanUseTool && req.Request.ToolName != "" {
 		text := "Permission: " + req.Request.ToolName
 		if detail := livePreviewToolInputSummary(req.Request.ToolName, req.Request.Input); detail != "" {
 			text += ": " + detail
@@ -1208,9 +1219,9 @@ func livePreviewValidatorStatusStyle(status string) lipgloss.Style {
 
 func livePreviewValidatorStatusKind(status string) string {
 	switch strings.ToUpper(status) {
-	case "APPROVED":
+	case validatorStatusApproved:
 		return "approved"
-	case "CHANGES_REQUESTED", "FAILED", "ERROR":
+	case validatorStatusChangesRequested, "FAILED", "ERROR":
 		return "failed"
 	default:
 		return "running"
@@ -1245,7 +1256,7 @@ func livePreviewToolInputSummary(toolName string, input json.RawMessage) string 
 	if len(input) == 0 {
 		return ""
 	}
-	if toolName == "AskUserQuestion" {
+	if toolName == toolNameAskUserQuestion {
 		return livePreviewAskUserSummary(input)
 	}
 
@@ -1255,19 +1266,19 @@ func livePreviewToolInputSummary(toolName string, input json.RawMessage) string 
 	}
 
 	switch toolName {
-	case "Bash":
+	case toolNameBash:
 		return stringField(parsed, "command")
-	case "Read", "Write", "Edit", "MultiEdit":
+	case toolNameRead, toolNameWrite, toolNameEdit, toolNameMultiEdit:
 		return stringField(parsed, "file_path")
-	case "Glob":
+	case toolNameGlob:
 		return joinNonEmpty(stringField(parsed, "pattern"), stringField(parsed, "path"))
-	case "Grep":
+	case toolNameGrep:
 		return joinNonEmpty(stringField(parsed, "pattern"), stringField(parsed, "path"))
 	case "LS":
 		return stringField(parsed, "path")
 	case "WebFetch":
 		return stringField(parsed, "url")
-	case "Agent", "Task":
+	case toolNameAgent, "Task":
 		return firstNonEmpty(stringField(parsed, "description"), stringField(parsed, "prompt"))
 	}
 	return livePreviewJSONSummary(input)

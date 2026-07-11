@@ -38,6 +38,36 @@ const (
 	streamWriteTimeout           = 5 * time.Second
 )
 
+// SSE event-kind literals shared between the broker, the client's refresh
+// dispatcher (client_sse.go) and their tests.
+const (
+	// sseEventConnected is the synthetic full-resync event kind sent to a
+	// client with no replay cursor.
+	sseEventConnected = "connected"
+	// sseEventConfigUpdated is the event kind for a feature or runtime
+	// config change.
+	sseEventConfigUpdated = "config.updated"
+	// sseEventHeartbeat is the periodic keep-alive event kind.
+	sseEventHeartbeat = "heartbeat"
+	// sseEventLifecycleUpdated is the catch-all/default event kind for a
+	// feature or runtime lifecycle change with no more specific kind.
+	sseEventLifecycleUpdated = "lifecycle.updated"
+	// sseEventRecoveryUpdated is the event kind for a recovery-scan change.
+	sseEventRecoveryUpdated = "recovery.updated"
+	// sseEventSessionOutputActivity is the event kind for a session output
+	// append; it carries no snapshot-worthy resource change.
+	sseEventSessionOutputActivity = "session.output.activity"
+	// sseEventSessionUpdated is the event kind for a session lifecycle change.
+	sseEventSessionUpdated = "session.updated"
+	// sseEventShutdownUpdated is the event kind for a runtime shutdown
+	// schedule change.
+	sseEventShutdownUpdated = "shutdown.updated"
+	// sseEventStreamReset is the event kind sent when the client's replay
+	// cursor has fallen outside the broker's retained buffer, forcing a full
+	// resync.
+	sseEventStreamReset = "stream.reset"
+)
+
 type eventBroker struct {
 	mu                 sync.Mutex
 	nextSeq            uint64
@@ -161,7 +191,7 @@ func (b *eventBroker) publish(evt SSEEventDTO) {
 }
 
 func (b *eventBroker) shouldPublishEventLocked(evt SSEEventDTO) bool {
-	if evt.Kind != "session.output.activity" {
+	if evt.Kind != sseEventSessionOutputActivity {
 		return true
 	}
 	key := resourceKey(evt.Resource)
@@ -310,10 +340,10 @@ func (b *eventBroker) streamResetEventLocked() SSEEventDTO {
 		ID:               strconv.FormatUint(seq, 10),
 		Seq:              seq,
 		Epoch:            b.epoch,
-		Kind:             "stream.reset",
+		Kind:             sseEventStreamReset,
 		At:               time.Now().UTC(),
-		Resource:         ResourceDTO{Type: "runtime"},
-		Revision:         revisionForAny(ResourceDTO{Type: "runtime"}),
+		Resource:         ResourceDTO{Type: resourceTypeRuntime},
+		Revision:         revisionForAny(ResourceDTO{Type: resourceTypeRuntime}),
 		SnapshotRequired: true,
 	}
 }
@@ -332,23 +362,24 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch, replay, reset := h.broker.subscribeAfter(after, epoch)
 	defer h.broker.unsubscribe(ch)
 
-	if !hasCursor {
+	switch {
+	case !hasCursor:
 		// No cursor at all: always a full resync. A client with no cursor
 		// wants a snapshot marker, not a replay/reset decision keyed off a
 		// wire value (after=0) that's indistinguishable from a genuine
 		// "I read as_of_seq=0" cursor — see subscribeAfter/replayAfterLocked,
 		// which now correctly treats after=0 as a real low-water-mark.
-		connected := h.broker.snapshotRequiredEvent("connected", ResourceDTO{Type: "runtime"})
-		if err := writeSSE(w, "connected", connected); err != nil {
+		connected := h.broker.snapshotRequiredEvent(sseEventConnected, ResourceDTO{Type: resourceTypeRuntime})
+		if err := writeSSE(w, sseEventConnected, connected); err != nil {
 			return
 		}
 		flusher.Flush()
-	} else if reset != nil {
+	case reset != nil:
 		if err := writeSSE(w, reset.Kind, *reset); err != nil {
 			return
 		}
 		flusher.Flush()
-	} else {
+	default:
 		for _, evt := range replay {
 			if err := writeSSE(w, evt.Kind, evt); err != nil {
 				return
@@ -378,12 +409,12 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 				ID:               strconv.FormatUint(seq, 10),
 				Seq:              seq,
 				Epoch:            epoch,
-				Kind:             "heartbeat",
+				Kind:             sseEventHeartbeat,
 				At:               now.UTC(),
-				Resource:         ResourceDTO{Type: "runtime"},
+				Resource:         ResourceDTO{Type: resourceTypeRuntime},
 				SnapshotRequired: false,
 			}
-			if err := writeSSE(w, "heartbeat", evt); err != nil {
+			if err := writeSSE(w, sseEventHeartbeat, evt); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -454,49 +485,49 @@ func eventDTOFromRuntime(msg interface{}) SSEEventDTO {
 		return eventDTOFromDomain(ev)
 	case session.SDKEventMsg:
 		if ev.Message.ControlRequest != nil {
-			if ev.Message.ControlRequest.Request.ToolName == "AskUserQuestion" {
-				return snapshotRequiredEventDTO("prompt.updated", ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
+			if ev.Message.ControlRequest.Request.ToolName == toolNameAskUserQuestion {
+				return snapshotRequiredEventDTO("prompt.updated", ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 			} else {
-				return snapshotRequiredEventDTO("permission.updated", ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
+				return snapshotRequiredEventDTO("permission.updated", ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 			}
 		}
 		return SSEEventDTO{
 			APIVersion:       APIVersion,
-			Kind:             "session.output.activity",
+			Kind:             sseEventSessionOutputActivity,
 			At:               time.Now().UTC(),
-			Resource:         ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()},
-			Revision:         revisionForAny(ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()}),
+			Resource:         ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()},
+			Revision:         revisionForAny(ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()}),
 			SnapshotRequired: false,
 			RecordCount:      ev.RecordCount,
 		}
 	case session.SessionDoneMsg:
-		return snapshotRequiredEventDTO("session.updated", ResourceDTO{Type: "session", ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
+		return snapshotRequiredEventDTO(sseEventSessionUpdated, ResourceDTO{Type: resourceTypeSession, ID: ev.SessionID, FeatureID: ev.FeatureID, Phase: ev.Phase.String()})
 	default:
-		return snapshotRequiredEventDTO("lifecycle.updated", ResourceDTO{Type: "runtime"})
+		return snapshotRequiredEventDTO(sseEventLifecycleUpdated, ResourceDTO{Type: resourceTypeRuntime})
 	}
 }
 
 func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
-	kind := "lifecycle.updated"
-	resourceType := "feature"
+	kind := sseEventLifecycleUpdated
+	resourceType := entityFeature
 	switch ev.Type {
 	case ports.FeatureConfigChanged:
-		kind = "config.updated"
+		kind = sseEventConfigUpdated
 	case ports.NeedUserInputRequired:
 		kind = "prompt.updated"
 	case ports.RecoveryScanned, ports.RecoveryExecuted:
-		kind = "recovery.updated"
-		resourceType = "runtime"
+		kind = sseEventRecoveryUpdated
+		resourceType = resourceTypeRuntime
 	case ports.RuntimeShutdownStarted:
-		kind = "shutdown.updated"
-		resourceType = "runtime"
+		kind = sseEventShutdownUpdated
+		resourceType = resourceTypeRuntime
 	case ports.SessionOutput:
-		kind = "session.output.activity"
-		resourceType = "session"
+		kind = sseEventSessionOutputActivity
+		resourceType = resourceTypeSession
 	case ports.RepoStatusChanged:
-		kind = "lifecycle.updated"
+		kind = sseEventLifecycleUpdated
 	case ports.FeatureFailed:
-		kind = "lifecycle.updated"
+		kind = sseEventLifecycleUpdated
 	}
 	phase := ev.Phase.String()
 	if ev.Phase == feature.Phase(0) && phase == feature.PhaseResearch.String() {
@@ -504,7 +535,7 @@ func eventDTOFromDomain(ev ports.Event) SSEEventDTO {
 	}
 	resource := ResourceDTO{Type: resourceType, FeatureID: ev.FeatureID, Phase: phase}
 	var dto SSEEventDTO
-	if kind == "session.output.activity" {
+	if kind == sseEventSessionOutputActivity {
 		dto = SSEEventDTO{
 			APIVersion:       APIVersion,
 			Kind:             kind,

@@ -55,7 +55,7 @@ func TestArtifactManagerWriteFiles(t *testing.T) {
 		Iteration:   1,
 		StartedAt:   time.Now(),
 		Duration:    5 * time.Second,
-		AgentStatus: "SUCCESS",
+		AgentStatus: agentStatusSuccess,
 	}
 	if err := am.WriteMeta(iterDir, meta); err != nil {
 		t.Fatalf("write meta: %v", err)
@@ -73,7 +73,7 @@ func TestArtifactManagerWriteSummary(t *testing.T) {
 	meta1 := IterationMeta{Iteration: 1, AgentStatus: "RETRY", MadeProgress: true, Duration: 3 * time.Second}
 	meta2 := IterationMeta{
 		Iteration:    2,
-		AgentStatus:  "SUCCESS",
+		AgentStatus:  agentStatusSuccess,
 		MadeProgress: true,
 		Duration:     5 * time.Second,
 		Context: &ContextMeta{
@@ -166,7 +166,7 @@ func TestArtifactManagerLatestIteration(t *testing.T) {
 	iterDir1, _ := am.CreateIterationDir(1)
 	am.WriteMeta(iterDir1, IterationMeta{Iteration: 1, AgentStatus: "RETRY"})
 	iterDir3, _ := am.CreateIterationDir(3)
-	am.WriteMeta(iterDir3, IterationMeta{Iteration: 3, AgentStatus: "SUCCESS"})
+	am.WriteMeta(iterDir3, IterationMeta{Iteration: 3, AgentStatus: agentStatusSuccess})
 
 	if got := am.LatestIteration(); got != 3 {
 		t.Errorf("expected 3, got %d", got)
@@ -220,7 +220,7 @@ func TestRestartIterationResolution(t *testing.T) {
 			name:              "fully done: meta.yaml written with ReviewStatus=APPROVED → advance to N+1",
 			writePhaseDone:    true,
 			writeMeta:         true,
-			reviewStatus:      "APPROVED",
+			reviewStatus:      agentStatusApproved,
 			wantLatestIter:    1,
 			wantSkipImplement: false,
 		},
@@ -239,7 +239,7 @@ func TestRestartIterationResolution(t *testing.T) {
 				}
 			}
 			if tc.writeMeta {
-				if err := am.WriteMeta(it1, IterationMeta{Iteration: 1, AgentStatus: "SUCCESS", ReviewStatus: tc.reviewStatus}); err != nil {
+				if err := am.WriteMeta(it1, IterationMeta{Iteration: 1, AgentStatus: agentStatusSuccess, ReviewStatus: tc.reviewStatus}); err != nil {
 					t.Fatalf("write meta: %v", err)
 				}
 			}
@@ -330,7 +330,7 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 	meta := IterationMeta{
 		Iteration:    1,
 		AgentStatus:  "FAILED",
-		ReviewStatus: "CHANGES_REQUESTED",
+		ReviewStatus: agentStatusChangesRequested,
 		MadeProgress: true,
 		Duration:     3 * time.Second,
 		Context: &ContextMeta{
@@ -353,7 +353,7 @@ func TestArtifactManagerReadMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read meta: %v", err)
 	}
-	if got.Iteration != 1 || got.AgentStatus != "FAILED" || got.ReviewStatus != "CHANGES_REQUESTED" {
+	if got.Iteration != 1 || got.AgentStatus != "FAILED" || got.ReviewStatus != agentStatusChangesRequested {
 		t.Errorf("read meta mismatch: %+v", got)
 	}
 	if got.Context == nil || got.Context.Provider != "codex" || got.Context.HandoffPct != 81 {
@@ -438,10 +438,10 @@ func TestCycleTestingContractPath_PerRepo(t *testing.T) {
 		ID:        "feat1",
 		ActiveRun: 1,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"web": {Type: feature.CycleTweak, Count: 3},
+			testRepoNameWeb: {Type: feature.CycleTweak, Count: 3},
 		},
 	}
-	got := CycleTestingContractPath("/tmp/state", f, "web", feature.CycleTweak)
+	got := CycleTestingContractPath("/tmp/state", f, testRepoNameWeb, feature.CycleTweak)
 	want := "/tmp/state/feat1/runs/run-001/tweak-3/web/testing-contract.yaml"
 	if got != want {
 		t.Errorf("CycleTestingContractPath = %q, want %q", got, want)

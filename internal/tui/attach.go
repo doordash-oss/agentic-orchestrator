@@ -88,6 +88,10 @@ const (
 	interruptToastDuration = 10 * time.Second
 )
 
+// thinkingLineText is the transient status line shown while the agent is
+// generating without a specific tool/task activity to report.
+const thinkingLineText = "Thinking..."
+
 func (f attachFilter) String() string {
 	switch f {
 	case filterNoTools:
@@ -202,7 +206,7 @@ func (m *AttachModel) enrichAskUserQuestionConfidence(questions []askUserQuestio
 	blocks := m.sess.MessageLog().ToolUseBlocks()
 	for i := len(blocks) - 1; i >= 0; i-- {
 		block := blocks[i]
-		if block.Name != "AskUserQuestion" || len(block.Input) == 0 {
+		if block.Name != toolNameAskUserQuestion || len(block.Input) == 0 {
 			continue
 		}
 		source := parseAskUserQuestions(block.Input)
@@ -306,22 +310,6 @@ const (
 	statusWaiting        presentationStatus = "waiting"
 )
 
-// validatorTabStatus maps validator status strings (the values written to
-// f.ValidatorStatuses) onto the presentationStatus tokens used by the attach
-// tab bar.
-func validatorTabStatus(status string) presentationStatus {
-	switch status {
-	case "APPROVED":
-		return statusReviewPassed
-	case "CHANGES_REQUESTED", "FAILED", "error":
-		return statusFailed
-	case "running":
-		return statusImplementing
-	default:
-		return statusPending
-	}
-}
-
 // abbreviateRepoName shortens a repo name for tab-bar display.
 func abbreviateRepoName(name string) string {
 	suffixes := []string{"-service", "-runner", "-platform", "-extract"}
@@ -386,6 +374,15 @@ type attachFileChange struct {
 type attachFileEvent struct {
 	afterMessageCount int
 	change            attachFileChange
+}
+
+type permissionAnswerFailedMsg struct {
+	requestID string
+	toolName  string
+	toolInput json.RawMessage
+	pattern   string
+	choice    int
+	err       error
 }
 
 // AttachModel is a Bubbletea model for the structured attach view.
@@ -535,6 +532,10 @@ type AttachModel struct {
 	fileIndexWorkDir string     // work dir the index was built for (stale detection)
 }
 
+type explicitPermissionResponder interface {
+	RespondToPermissionDecision(requestID, decision, rememberPattern, rememberScope string) error
+}
+
 const (
 	attachViewportMessageLimit = 1000
 	attachViewportFileLimit    = 200
@@ -647,7 +648,7 @@ func NewAttachModel(tabs []repoTab, initialIdx int, featureID string, width, hei
 		for i, scanMsg := range allMsgs {
 			if scanMsg.Assistant != nil {
 				for _, block := range scanMsg.Assistant.Message.Content {
-					if block.IsToolUse() && block.Name == "AskUserQuestion" {
+					if block.IsToolUse() && block.Name == toolNameAskUserQuestion {
 						// Check if a subsequent message answered this question:
 						// look for a non-error tool_result with matching
 						// tool_use_id, or a plain user message (text response).
@@ -992,7 +993,7 @@ func (m *AttachModel) restoreThinkingLine() {
 			}
 			for _, block := range msg.Assistant.Message.Content {
 				if block.IsThinking() {
-					m.thinkingLine = "Thinking..."
+					m.thinkingLine = thinkingLineText
 					m.lastActivityAt = time.Now()
 					m.turnActive = true
 					return
@@ -1129,7 +1130,7 @@ func (m *AttachModel) restorePendingAskUserQuestions(sess session.SessionView) {
 		return
 	}
 	for _, cr := range sess.PendingControlRequests() {
-		if cr == nil || cr.Request.ToolName != "AskUserQuestion" {
+		if cr == nil || cr.Request.ToolName != toolNameAskUserQuestion {
 			continue
 		}
 		if !controlRequestStillPending(sess, cr.RequestID) {
@@ -1148,7 +1149,7 @@ func (m *AttachModel) restorePendingPermission(sess session.SessionView) bool {
 		return false
 	}
 	for _, cr := range sess.PendingControlRequests() {
-		if cr == nil || cr.Request.ToolName == "AskUserQuestion" {
+		if cr == nil || cr.Request.ToolName == toolNameAskUserQuestion {
 			continue
 		}
 		if !controlRequestStillPending(sess, cr.RequestID) {
@@ -1285,7 +1286,7 @@ func (m *AttachModel) sendChatInput() tea.Cmd {
 	m.turnActive = true
 	m.lastActivityAt = time.Now()
 	if m.thinkingLine == "" {
-		m.thinkingLine = "Thinking..."
+		m.thinkingLine = thinkingLineText
 	}
 	// Sending a new message is the user's answer to the interrupt toast —
 	// clear it so it doesn't linger after they've moved on.
@@ -1589,7 +1590,7 @@ func (m *AttachModel) submitAllAnswers() tea.Cmd {
 	m.turnActive = true
 	m.lastActivityAt = time.Now()
 	if m.thinkingLine == "" {
-		m.thinkingLine = "Thinking..."
+		m.thinkingLine = thinkingLineText
 	}
 
 	// Clear session state synchronously so re-attaching before the async
@@ -1640,6 +1641,19 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case permissionAnswerFailedMsg:
+		m.pendingPermRequestID = msg.requestID
+		m.pendingPermToolName = msg.toolName
+		m.pendingPermToolInput = append(json.RawMessage(nil), msg.toolInput...)
+		m.permMenuPattern = msg.pattern
+		m.permMenuChoice = msg.choice
+		m.showPermMenu = true
+		if msg.err != nil {
+			m.interruptToast = "Permission answer failed: " + firstLine(msg.err.Error())
+			m.interruptToastAt = time.Now()
+		}
+		m.updateViewport()
+		return m, nil
 	case tea.KeyPressMsg:
 		// Multi-repo tab navigation (tab/shift+tab)
 		if len(m.repoTabs) > 1 {
@@ -2188,7 +2202,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 				if !controlRequestStillPending(m.sess, sdkMsg.ControlRequest.RequestID) {
 					continue
 				}
-				if sdkMsg.ControlRequest.Request.ToolName == "AskUserQuestion" {
+				if sdkMsg.ControlRequest.Request.ToolName == toolNameAskUserQuestion {
 					// Route AskUserQuestion control_requests to multi-choice UI
 					if questions := m.parseAskUserQuestionsForDisplay(sdkMsg.ControlRequest.Request.Input); len(questions) > 0 {
 						m.activateAskUserQuestions(questions, sdkMsg.ControlRequest.RequestID, sdkMsg.ControlRequest.Request.Input)
@@ -2207,7 +2221,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 				m.markAgentProgress()
 				for _, block := range sdkMsg.Assistant.Message.Content {
 					if block.IsThinking() {
-						m.thinkingLine = "Thinking..."
+						m.thinkingLine = thinkingLineText
 					}
 					if block.IsToolUse() {
 						m.thinkingLine = fmt.Sprintf("Using %s...", block.Name)
@@ -2218,7 +2232,7 @@ func (m AttachModel) Update(msg tea.Msg) (AttachModel, tea.Cmd) {
 			if sdkMsg.StreamDeltaType != "" {
 				m.markAgentProgress()
 				if sdkMsg.StreamDeltaType == "thinking" {
-					m.thinkingLine = "Thinking..."
+					m.thinkingLine = thinkingLineText
 				}
 			}
 			if sdkMsg.ToolProgress != nil {
@@ -3013,16 +3027,28 @@ func (m AttachModel) Done() bool {
 func (m *AttachModel) executePermChoice() tea.Cmd {
 	reqID := m.pendingPermRequestID
 	toolName := m.pendingPermToolName
-	toolInput := string(m.pendingPermToolInput)
+	toolInputRaw := append(json.RawMessage(nil), m.pendingPermToolInput...)
+	toolInput := string(toolInputRaw)
 	repoName := m.permRepoName
 	choice := m.permMenuChoice
+	pattern := m.permMenuPattern
 	featureID := m.sess.FeatureID()
+	fail := func(err error) tea.Msg {
+		return permissionAnswerFailedMsg{
+			requestID: reqID,
+			toolName:  toolName,
+			toolInput: toolInputRaw,
+			pattern:   pattern,
+			choice:    choice,
+			err:       err,
+		}
+	}
 
 	// Emit permission resolution before clearing state
 	if sc, ok := m.sessionSpanContext(); ok && m.observer != nil {
-		decisionStr := "allow"
+		decisionStr := permission.DecisionAllowOnce
 		if choice == 1 {
-			decisionStr = "allow_remember"
+			decisionStr = permission.DecisionAllowRemember
 		} else if choice == 2 {
 			decisionStr = "deny"
 		}
@@ -3040,22 +3066,69 @@ func (m *AttachModel) executePermChoice() tea.Cmd {
 	switch choice {
 	case 0: // Allow
 		return func() tea.Msg {
-			_ = m.sess.RespondToControl(reqID, true, "")
+			var err error
+			if responder, ok := m.sess.(explicitPermissionResponder); ok {
+				err = responder.RespondToPermissionDecision(reqID, permission.DecisionAllowOnce, "", "")
+			} else {
+				_, err = permission.NewAnswerService(m.permCache, nil).Answer(permission.AnswerRequest{
+					RequestID: reqID,
+					Decision:  permission.DecisionAllowOnce,
+				}, func(requestID string, allow bool, reason string) error {
+					return m.sess.RespondToControl(requestID, allow, reason)
+				})
+			}
+			if err != nil {
+				return fail(err)
+			}
 			m.sess.ResetWaitingStatus()
 			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
 		}
 	case 1: // Allow & Remember
 		return func() tea.Msg {
-			_ = m.sess.RespondToControl(reqID, true, "")
-			if m.permCache != nil {
-				m.permCache.RememberAllow(toolName, toolInput, repoName)
+			var err error
+			if responder, ok := m.sess.(explicitPermissionResponder); ok {
+				err = responder.RespondToPermissionDecision(reqID, permission.DecisionAllowRemember, pattern, repoName)
+			} else {
+				var audit *permission.AuditSink
+				if m.permCache != nil && m.permCache.StoreRef() != nil {
+					audit = permission.NewAuditSink(m.permCache.StoreRef().BaseDir)
+				}
+				_, err = permission.NewAnswerService(m.permCache, audit).Answer(permission.AnswerRequest{
+					RequestID:        reqID,
+					SessionID:        m.sess.ID(),
+					FeatureID:        m.sess.FeatureID(),
+					ToolName:         toolName,
+					ToolInput:        toolInput,
+					Decision:         permission.DecisionAllowRemember,
+					RememberPattern:  pattern,
+					RememberScope:    repoName,
+					RememberScopeSet: true,
+				}, func(requestID string, allow bool, reason string) error {
+					return m.sess.RespondToControl(requestID, allow, reason)
+				})
+			}
+			if err != nil {
+				return fail(err)
 			}
 			m.sess.ResetWaitingStatus()
 			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
 		}
 	case 2: // Deny
 		return func() tea.Msg {
-			_ = m.sess.RespondToControl(reqID, false, "denied by user")
+			var err error
+			if responder, ok := m.sess.(explicitPermissionResponder); ok {
+				err = responder.RespondToPermissionDecision(reqID, permission.DecisionDeny, "", "")
+			} else {
+				_, err = permission.NewAnswerService(m.permCache, nil).Answer(permission.AnswerRequest{
+					RequestID: reqID,
+					Decision:  permission.DecisionDeny,
+				}, func(requestID string, allow bool, reason string) error {
+					return m.sess.RespondToControl(requestID, allow, reason)
+				})
+			}
+			if err != nil {
+				return fail(err)
+			}
 			m.sess.ResetWaitingStatus()
 			return HelpResolvedMsg{FeatureID: featureID, RequestID: reqID}
 		}
@@ -3264,7 +3337,7 @@ func (m AttachModel) switchToTab(idx int) (AttachModel, tea.Cmd) {
 			for i, scanMsg := range allMsgs {
 				if scanMsg.Assistant != nil {
 					for _, block := range scanMsg.Assistant.Message.Content {
-						if block.IsToolUse() && block.Name == "AskUserQuestion" {
+						if block.IsToolUse() && block.Name == toolNameAskUserQuestion {
 							answered := false
 							for j := i + 1; j < len(allMsgs); j++ {
 								laterMsg := allMsgs[j]
@@ -3611,7 +3684,7 @@ func (m AttachModel) renderSpinnerLine() string {
 	}
 	line := strings.Join(strings.Fields(strings.ReplaceAll(m.thinkingLine, "\r", "\n")), " ")
 	if line == "" {
-		line = "Thinking..."
+		line = thinkingLineText
 	}
 
 	// A turn is considered in progress from the moment the user sends
@@ -3824,7 +3897,7 @@ func renderAttachMessages(msgs []llm.SDKMessage, filter attachFilter, viewportWi
 			if msg.ControlRequest.Request.Subtype == "hook_callback" {
 				continue
 			}
-			if msg.ControlRequest.Request.Subtype == "can_use_tool" && msg.ControlRequest.Request.ToolName != "" {
+			if msg.ControlRequest.Request.Subtype == controlRequestSubtypeCanUseTool && msg.ControlRequest.Request.ToolName != "" {
 				if filter >= filterNoTools {
 					continue
 				}
@@ -3922,7 +3995,7 @@ func renderAttachDelegationToolUse(block llm.ContentBlock, viewportWidth int) st
 
 func isAttachDelegationTool(name string) bool {
 	switch name {
-	case "Agent", "Task", "TaskCreate":
+	case toolNameAgent, "Task", toolNameTaskCreate:
 		return true
 	default:
 		return false
@@ -3971,7 +4044,7 @@ func renderAttachTaskNotification(msg *llm.TaskNotificationMessage) string {
 	if detail := firstNonEmpty(msg.Summary, msg.OutputFile, msg.TaskID); detail != "" {
 		line += ": " + detail
 	}
-	return attachTaskStyle(status == "failed" || status == "error").Render("  [task] "+line) + "\n"
+	return attachTaskStyle(status == string(statusFailed) || status == "error").Render("  [task] "+line) + "\n"
 }
 
 func attachTaskStyle(warning bool) lipgloss.Style {
@@ -4231,13 +4304,13 @@ func fileChangesFromToolUse(block llm.ContentBlock) []attachFileChange {
 	}
 	input := jsonObjectFields(block.Input)
 	switch block.Name {
-	case "Edit", "MultiEdit", "Write":
+	case toolNameEdit, toolNameMultiEdit, toolNameWrite:
 		path := firstNonEmptyString(input, "file_path", "path", "target_file")
 		if path == "" {
 			return nil
 		}
 		op := "update"
-		if block.Name == "Write" && strings.TrimSpace(firstNonEmptyString(input, "old_string")) == "" {
+		if block.Name == toolNameWrite && strings.TrimSpace(firstNonEmptyString(input, "old_string")) == "" {
 			op = "write"
 		}
 		detail := buildToolUseFileChangeDetail(block.Name, input)
@@ -4269,9 +4342,9 @@ func fileChangesFromToolProgress(progress llm.ToolProgressMessage) []attachFileC
 	}
 	var path string
 	switch progress.ToolName {
-	case "Write", "Edit":
+	case toolNameWrite, toolNameEdit:
 		path = extractFilePathFromProgress(progress.Data)
-	case "Bash":
+	case toolNameBash:
 		path = extractExplicitProgressFile(progress.Data)
 	default:
 		return nil
@@ -4372,12 +4445,12 @@ func buildToolUseFileChangeDetail(toolName string, fields map[string]interface{}
 	newString := firstNonEmptyString(fields, "new_string", "newText", "content")
 
 	switch toolName {
-	case "Edit", "MultiEdit":
+	case toolNameEdit, toolNameMultiEdit:
 		if oldString == "" && newString == "" {
 			return ""
 		}
 		return truncateFileChangeDetail(formatSimpleReplacement(oldString, newString))
-	case "Write":
+	case toolNameWrite:
 		if newString == "" {
 			return ""
 		}
@@ -4549,15 +4622,15 @@ func formatPermissionDetail(toolName string, input json.RawMessage) string {
 	}
 
 	switch toolName {
-	case "Bash":
+	case toolNameBash:
 		if cmd, ok := parsed["command"].(string); ok {
 			return cmd
 		}
-	case "Write":
+	case toolNameWrite:
 		if fp, ok := parsed["file_path"].(string); ok {
 			return fp
 		}
-	case "Edit":
+	case toolNameEdit:
 		if fp, ok := parsed["file_path"].(string); ok {
 			return fp
 		}

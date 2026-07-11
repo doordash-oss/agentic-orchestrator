@@ -37,6 +37,26 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 )
 
+// keyX are tea.KeyPressMsg.String() tokens for bubbletea key names shared
+// across the chat, API app and help-overlay key handling.
+const (
+	keyDown  = "down"
+	keyLeft  = "left"
+	keyRight = "right"
+	keySpace = "space"
+	keyEnter = "enter"
+	keyEsc   = "esc"
+	keyPgUp  = "pgup"
+)
+
+// subtypePartial is the llm AssistantMessage/SDKMessage.Subtype value for an
+// in-progress streaming delta (as opposed to a finalized turn).
+const subtypePartial = "partial"
+
+// resultSubtypeError is the llm.ResultMessage.Subtype (and mirrored
+// TranscriptMessageDTO status) value for an error-terminated turn.
+const resultSubtypeError = "error"
+
 // ChatExitMsg signals the chat view should close.
 type ChatExitMsg struct{}
 
@@ -336,6 +356,92 @@ func (m *ChatModel) syncAutoPickedTurns() {
 	}
 }
 
+// handleActiveQuestionKeyPress handles a key press while an active question
+// is showing its option picker (not the freeform-text entry mode).
+func (m ChatModel) handleActiveQuestionKeyPress(msg tea.KeyPressMsg) (ChatModel, tea.Cmd) {
+	q := m.questions[m.currentQuestionIdx]
+	if questionUsesDirectFreeform(q) {
+		m.typingCustom = true
+		return m, nil
+	}
+	numOptions := len(q.Options)
+	switch msg.String() {
+	case "up", "k":
+		if m.selectedOption > 0 {
+			m.selectedOption--
+			m.updateChatQuestionScrollOffset()
+		}
+		return m, nil
+	case keyDown, "j":
+		if m.selectedOption < numOptions {
+			m.selectedOption++
+			m.updateChatQuestionScrollOffset()
+		}
+		return m, nil
+	case keyLeft, "h":
+		if m.currentQuestionIdx > 0 {
+			m.advanceQuestionOpts(-1, true)
+		}
+		return m, nil
+	case keyRight, "l":
+		if _, answered := m.collectedAnswers[q.Question]; answered {
+			m.advanceQuestionOpts(1, true)
+		}
+		return m, nil
+	case " ", keySpace:
+		m.toggleSelectedMulti()
+		return m, nil
+	case keyEnter:
+		return m.handleActiveQuestionEnter(q, numOptions)
+	case keyEsc:
+		if m.fullscreen {
+			m.fullscreen = false
+			return m, nil
+		}
+		return m, func() tea.Msg { return ChatExitMsg{} }
+	}
+	return m, nil
+}
+
+// handleActiveQuestionEnter handles pressing enter on the option picker: it
+// commits the selected option(s) if one is selected, or otherwise switches
+// to freeform custom-text entry (restoring any previously typed draft).
+func (m ChatModel) handleActiveQuestionEnter(q askUserQuestion, numOptions int) (ChatModel, tea.Cmd) {
+	if m.selectedOption < numOptions {
+		m.commitAnswer(m.selectedAnswerText(q))
+		m.advanceQuestionOpts(1, false)
+		return m, nil
+	}
+	m.selectedMulti = nil
+	m.typingCustom = true
+	if m.currentQuestionIdx < len(m.questionStates) {
+		if prior := m.questionStates[m.currentQuestionIdx].customText; prior != "" {
+			m.input.SetValue(prior)
+		}
+	}
+	return m, nil
+}
+
+// selectedAnswerText renders the currently selected option(s) as the answer
+// text to commit: the comma-joined labels of checked options for multi-select
+// questions (falling back to the highlighted option if none are checked), or
+// the highlighted option's label otherwise.
+func (m ChatModel) selectedAnswerText(q askUserQuestion) string {
+	if !q.MultiSelect {
+		return q.Options[m.selectedOption].Label
+	}
+	var labels []string
+	for i := range q.Options {
+		if m.selectedMulti[i] {
+			labels = append(labels, q.Options[i].Label)
+		}
+	}
+	if len(labels) == 0 {
+		labels = []string{q.Options[m.selectedOption].Label}
+	}
+	return strings.Join(labels, ", ")
+}
+
 func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -347,12 +453,12 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 		}
 		if m.onRecapSlot() {
 			switch msg.String() {
-			case "enter":
+			case keyEnter:
 				return m, m.submitAllQuestionAnswers()
-			case "left", "h":
+			case keyLeft, "h":
 				m.advanceQuestionOpts(-1, false)
 				return m, nil
-			case "esc":
+			case keyEsc:
 				if m.fullscreen {
 					m.fullscreen = false
 					return m, nil
@@ -362,75 +468,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			return m, nil
 		}
 		if m.hasActiveQuestion() && !m.typingCustom {
-			q := m.questions[m.currentQuestionIdx]
-			if questionUsesDirectFreeform(q) {
-				m.typingCustom = true
-				return m, nil
-			}
-			numOptions := len(q.Options)
-			switch msg.String() {
-			case "up", "k":
-				if m.selectedOption > 0 {
-					m.selectedOption--
-					m.updateChatQuestionScrollOffset()
-				}
-				return m, nil
-			case "down", "j":
-				if m.selectedOption < numOptions {
-					m.selectedOption++
-					m.updateChatQuestionScrollOffset()
-				}
-				return m, nil
-			case "left", "h":
-				if m.currentQuestionIdx > 0 {
-					m.advanceQuestionOpts(-1, true)
-				}
-				return m, nil
-			case "right", "l":
-				if _, answered := m.collectedAnswers[q.Question]; answered {
-					m.advanceQuestionOpts(1, true)
-				}
-				return m, nil
-			case " ", "space":
-				m.toggleSelectedMulti()
-				return m, nil
-			case "enter":
-				if m.selectedOption < numOptions {
-					var answer string
-					if q.MultiSelect {
-						var labels []string
-						for i := range q.Options {
-							if m.selectedMulti[i] {
-								labels = append(labels, q.Options[i].Label)
-							}
-						}
-						if len(labels) == 0 {
-							labels = []string{q.Options[m.selectedOption].Label}
-						}
-						answer = strings.Join(labels, ", ")
-					} else {
-						answer = q.Options[m.selectedOption].Label
-					}
-					m.commitAnswer(answer)
-					m.advanceQuestionOpts(1, false)
-					return m, nil
-				}
-				m.selectedMulti = nil
-				m.typingCustom = true
-				if m.currentQuestionIdx < len(m.questionStates) {
-					if prior := m.questionStates[m.currentQuestionIdx].customText; prior != "" {
-						m.input.SetValue(prior)
-					}
-				}
-				return m, nil
-			case "esc":
-				if m.fullscreen {
-					m.fullscreen = false
-					return m, nil
-				}
-				return m, func() tea.Msg { return ChatExitMsg{} }
-			}
-			return m, nil
+			return m.handleActiveQuestionKeyPress(msg)
 		}
 		if m.hasActiveQuestion() && m.typingCustom {
 			switch {
@@ -441,7 +479,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				m.input, cmd = m.input.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 				m.syncChatInputHeight()
 				return m, cmd
-			case msg.String() == "esc":
+			case msg.String() == keyEsc:
 				if questionUsesDirectFreeform(m.questions[m.currentQuestionIdx]) {
 					m.input.Reset()
 					m.syncChatInputHeight()
@@ -449,7 +487,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 				m.typingCustom = false
 				return m, nil
-			case msg.String() == "enter":
+			case msg.String() == keyEnter:
 				text := strings.TrimSpace(m.input.Value())
 				if text != "" {
 					m.input.Reset()
@@ -474,7 +512,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			m.syncChatInputHeight()
 			return m, cmd
 
-		case "esc":
+		case keyEsc:
 			if m.fullscreen {
 				m.fullscreen = false
 				return m, nil
@@ -506,7 +544,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			return m, func() tea.Msg { return ChatExitMsg{} }
 
-		case "enter":
+		case keyEnter:
 			if m.responding {
 				return m, nil
 			}
@@ -585,7 +623,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				hasText := false
 				for _, block := range sdkMsg.Assistant.Message.Content {
 					if block.IsText() && block.Text != "" {
-						m.setInProgressAgentText(block.Text, sdkMsg.Subtype == "partial")
+						m.setInProgressAgentText(block.Text, sdkMsg.Subtype == subtypePartial)
 						hasText = true
 					}
 					if block.IsThinking() && block.Thinking != "" {
@@ -620,7 +658,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 					m.turnCostBaseline = m.sess.Cost()
 				}
 			}
-			if sdkMsg.ControlRequest != nil && sdkMsg.ControlRequest.Request.ToolName == "AskUserQuestion" && sdkMsg.ControlRequest.RequestID != m.pendingAskRequestID {
+			if sdkMsg.ControlRequest != nil && sdkMsg.ControlRequest.Request.ToolName == toolNameAskUserQuestion && sdkMsg.ControlRequest.RequestID != m.pendingAskRequestID {
 				if _, alreadyAnswered := m.answeredAskRequestIDs[sdkMsg.ControlRequest.RequestID]; alreadyAnswered {
 					continue
 				}
@@ -736,7 +774,7 @@ func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 			Model:           m.chatModel,
 			Prompt:          prompt,
 			SystemPrompt:    m.systemPrompt,
-			DisallowedTools: []string{"Edit", "Write", "NotebookEdit", "Bash"},
+			DisallowedTools: []string{toolNameEdit, toolNameWrite, "NotebookEdit", toolNameBash},
 			WorkDir:         m.workDir,
 			PermHandler:     &session.ReadOnlyHandler{},
 			Phase:           utilskill.PhaseAll, // chat gets all utility skills for answering user questions
@@ -747,7 +785,7 @@ func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 			return chatSendErrorMsg{err: fmt.Errorf("error starting session: %w", err)}
 		}
 		sessOpts.Kind = ports.KindChat
-		sessOpts.Label = "chat"
+		sessOpts.Label = ports.KindChat.String()
 		sessOpts.InitialPrompt = prompt
 		sess, err := m.sessionMgr.StartSession(chatSessionID, "", feature.PhaseResearch, cmd, m.workDir, env, sessOpts)
 		if err != nil {
@@ -786,7 +824,7 @@ func chatErrorResponseText(messages []llm.SDKMessage) (string, bool) {
 		return "", false
 	}
 	if lastText == "" {
-		lastText = "Session error"
+		lastText = sessionErrorFallbackText
 	}
 	return lastText, true
 }
@@ -795,7 +833,7 @@ func chatResultIsError(result *llm.ResultMessage) bool {
 	if result == nil {
 		return false
 	}
-	return result.IsError || result.Subtype == "error" || result.Subtype == "max_budget"
+	return result.IsError || result.Subtype == resultSubtypeError || result.Subtype == "max_budget"
 }
 
 // chatRecoveryTickCmd schedules a chatRecoveryTickMsg after chatRecoveryInterval.

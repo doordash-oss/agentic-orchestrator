@@ -36,7 +36,7 @@ func TestSyncTextareaHeight(t *testing.T) {
 		want     int
 	}{
 		{"empty collapses to min", "", 1, 6, 1},
-		{"single line stays at min", "hello", 1, 6, 1},
+		{"single line stays at min", "hello", 1, 6, 1}, //nolint:goconst // arbitrary filler text coincidentally shared with an unrelated chat-turn test fixture
 		{"two lines grows to two", "hello\nworld", 1, 6, 2},
 		{"caps at maxLines", "1\n2\n3\n4\n5\n6\n7\n8", 1, 6, 6},
 	}

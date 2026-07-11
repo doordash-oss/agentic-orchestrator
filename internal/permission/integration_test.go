@@ -29,51 +29,51 @@ func TestInferThenMatch_Integration(t *testing.T) {
 	handler := &CachingHandler{
 		Inner:    inner,
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 
-	// Simulate: user runs "npm test --coverage", presses "r"
-	cache.RememberAllow("Bash", "npm test --coverage", "my-repo")
+	// Simulate: user runs testNpmTestCoverage, presses "r"
+	cache.RememberAllow(toolNameBash, testNpmTestCoverage, testMyRepo)
 
 	// Verify the inferred pattern
 	rules := cache.Rules()
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(rules))
 	}
-	if rules[0].ToolPattern != "Bash(npm test *)" {
-		t.Errorf("inferred pattern = %q, want %q", rules[0].ToolPattern, "Bash(npm test *)")
+	if rules[0].ToolPattern != patternBashNpmTest {
+		t.Errorf("inferred pattern = %q, want %q", rules[0].ToolPattern, patternBashNpmTest)
 	}
 
 	// The SAME command should be auto-approved
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "npm test --coverage",
+		ToolName:  toolNameBash,
+		Input:     testNpmTestCoverage,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("same command: behavior = %q, want allow", decision.Behavior)
 	}
 
 	// A DIFFERENT npm test variant should also be auto-approved
 	decision, err = handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_2",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "npm test src/",
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("different suffix: behavior = %q, want allow", decision.Behavior)
 	}
 
 	// A completely different command should still defer
 	decision, err = handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_3",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "npm install",
 	})
 	if err != nil {
@@ -92,52 +92,52 @@ func TestInferThenMatch_JSONPayload_Integration(t *testing.T) {
 	handler := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 
 	// Simulate: TUI "r" keybinding passes raw JSON from pendingPermToolInput
-	jsonInput := `{"command":"npm test --coverage"}`
-	cache.RememberAllow("Bash", jsonInput, "my-repo")
+	jsonInput := testJSONNpmTestCoverage
+	cache.RememberAllow(toolNameBash, jsonInput, testMyRepo)
 
 	// Verify the inferred pattern extracts the command and builds a wildcard
 	rules := cache.Rules()
 	if len(rules) != 1 {
 		t.Fatalf("expected 1 rule, got %d", len(rules))
 	}
-	if rules[0].ToolPattern != "Bash(npm test *)" {
-		t.Errorf("inferred pattern = %q, want %q", rules[0].ToolPattern, "Bash(npm test *)")
+	if rules[0].ToolPattern != patternBashNpmTest {
+		t.Errorf("inferred pattern = %q, want %q", rules[0].ToolPattern, patternBashNpmTest)
 	}
 
 	// The SAME command (JSON payload) should be auto-approved
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     `{"command":"npm test --coverage"}`,
+		ToolName:  toolNameBash,
+		Input:     testJSONNpmTestCoverage,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool same command: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("same command: behavior = %q, want allow", decision.Behavior)
 	}
 
 	// A DIFFERENT npm test variant (JSON) should also be auto-approved
 	decision, err = handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_2",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     `{"command":"npm test src/"}`,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool different suffix: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("different suffix: behavior = %q, want allow", decision.Behavior)
 	}
 
 	// A completely different command (JSON) should still defer
 	decision, err = handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_3",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     `{"command":"npm install"}`,
 	})
 	if err != nil {
@@ -154,35 +154,35 @@ func TestCachingHandler_Integration(t *testing.T) {
 	// Inner handler always defers (empty behavior).
 	inner := &mockHandler{behavior: ""}
 
-	// Handler 1: wraps the mock with repo scope "my-repo".
+	// Handler 1: wraps the mock with repo scope testMyRepo.
 	handler1 := &CachingHandler{
 		Inner:    inner,
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 
-	// Pre-load an allow rule for "npm test".
-	cache.RememberAllow("Bash", "npm test", "my-repo")
+	// Pre-load an allow rule for testNpmTest.
+	cache.RememberAllow(toolNameBash, testNpmTest, testMyRepo)
 
 	// Step 1: cached rule should produce an allow decision.
 	req1 := ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "npm test",
+		ToolName:  toolNameBash,
+		Input:     testNpmTest,
 	}
 	decision, err := handler1.CanUseTool(req1)
 	if err != nil {
 		t.Fatalf("step 1: CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("step 1: behavior = %q, want allow", decision.Behavior)
 	}
 
-	// Step 2: no cached rule for "rm -rf /" — should defer.
+	// Step 2: no cached rule for testRmRfRoot — should defer.
 	req2 := ports.ToolPermissionRequest{
 		RequestID: "req_2",
-		ToolName:  "Bash",
-		Input:     "rm -rf /",
+		ToolName:  toolNameBash,
+		Input:     testRmRfRoot,
 	}
 	decision, err = handler1.CanUseTool(req2)
 	if err != nil {
@@ -192,15 +192,15 @@ func TestCachingHandler_Integration(t *testing.T) {
 		t.Errorf("step 2: behavior = %q, want empty (defer)", decision.Behavior)
 	}
 
-	// Step 3: remember "rm -rf /" as allowed.
-	cache.RememberAllow("Bash", "rm -rf /", "my-repo")
+	// Step 3: remember testRmRfRoot as allowed.
+	cache.RememberAllow(toolNameBash, testRmRfRoot, testMyRepo)
 
 	// Step 4: now the same request should be allowed.
 	decision, err = handler1.CanUseTool(req2)
 	if err != nil {
 		t.Fatalf("step 4: CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("step 4: behavior = %q, want allow", decision.Behavior)
 	}
 
@@ -209,7 +209,7 @@ func TestCachingHandler_Integration(t *testing.T) {
 	handler2 := &CachingHandler{
 		Inner:    inner2,
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 
 	// The rule remembered via handler1's cache should be visible to handler2.
@@ -217,7 +217,7 @@ func TestCachingHandler_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step 5: CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("step 5: behavior = %q, want allow (cross-session sharing)", decision.Behavior)
 	}
 }
@@ -238,67 +238,67 @@ func TestPersistence_EndToEnd(t *testing.T) {
 	}
 
 	// 2. Import repo settings
-	if err := ImportRepoSettings(repoDir, "my-repo", s); err != nil {
+	if err := ImportRepoSettings(repoDir, testMyRepo, s); err != nil {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
 
 	// 3. Create cache and load
 	cache := NewCache(s)
-	cache.LoadAndMerge("my-repo")
+	cache.LoadAndMerge(testMyRepo)
 
 	// 4. Verify imported rule auto-approves
 	h := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 	decision, err := h.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "go test ./...",
+		ToolName:  toolNameBash,
+		Input:     testGoTestDotDotDot,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("imported rule: behavior = %q, want allow", decision.Behavior)
 	}
 
 	// 5. Remember a new rule
-	cache.RememberAllow("Bash", "npm test", "my-repo")
+	cache.RememberAllow(toolNameBash, testNpmTest, testMyRepo)
 
 	// 6. Simulate restart: new cache, same store
 	cache2 := NewCache(s)
-	cache2.LoadAndMerge("my-repo")
+	cache2.LoadAndMerge(testMyRepo)
 
-	// 7. Verify "npm test" survived the "restart"
+	// 7. Verify testNpmTest survived the "restart"
 	h2 := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cache2,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 	decision, err = h2.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_2",
-		ToolName:  "Bash",
-		Input:     "npm test",
+		ToolName:  toolNameBash,
+		Input:     testNpmTest,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool (restart): %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("remembered rule after restart: behavior = %q, want allow", decision.Behavior)
 	}
 
 	// 8. Verify imported rule also survived
 	decision, err = h2.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_3",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     "go build ./...",
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool (import after restart): %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("imported rule after restart: behavior = %q, want allow", decision.Behavior)
 	}
 }
@@ -312,29 +312,29 @@ func TestBootstrapDefaults_AvailableToCachingHandlerOnFirstLoad(t *testing.T) {
 	}
 
 	cache := NewCache(s)
-	cache.LoadAndMerge("my-repo")
+	cache.LoadAndMerge(testMyRepo)
 
 	handler := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_ls",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     `{"command":"git diff --stat"}`,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool(git diff): %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("git diff behavior = %q, want allow", decision.Behavior)
 	}
 
 	decision, err = handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_rm",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     `{"command":"rm -rf /tmp/bootstrap-defaults"}`,
 	})
 	if err != nil {
@@ -361,37 +361,37 @@ func TestImport_AvailableToFirstSession(t *testing.T) {
 	}
 
 	// Synchronous import + load (mirrors creation + TUI handler flow)
-	if err := ImportRepoSettings(repoDir, "my-repo", s); err != nil {
+	if err := ImportRepoSettings(repoDir, testMyRepo, s); err != nil {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
 	cache := NewCache(s)
-	cache.LoadAndMerge("my-repo")
+	cache.LoadAndMerge(testMyRepo)
 
 	// Immediately create a handler (mirrors permHandlerFor)
 	h := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 
 	// Should auto-approve matching command
 	decision, err := h.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_1",
-		ToolName:  "Bash",
-		Input:     "go test ./...",
+		ToolName:  toolNameBash,
+		Input:     testGoTestDotDotDot,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
 	}
-	if decision.Behavior != "allow" {
+	if decision.Behavior != DecisionAllow {
 		t.Errorf("first session: behavior = %q, want allow", decision.Behavior)
 	}
 
 	// Should NOT auto-approve unmatched command
 	decision, err = h.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req_2",
-		ToolName:  "Bash",
-		Input:     "rm -rf /",
+		ToolName:  toolNameBash,
+		Input:     testRmRfRoot,
 	})
 	if err != nil {
 		t.Fatalf("CanUseTool: %v", err)
@@ -418,18 +418,18 @@ func TestGlobalSeededRules_CoexistWithRepoImportsAndRememberedApprovals_AfterRes
 	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(settingsJSON), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	if err := ImportRepoSettings(repoDir, "my-repo", store); err != nil {
+	if err := ImportRepoSettings(repoDir, testMyRepo, store); err != nil {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
 
 	cache := NewCache(store)
-	cache.LoadAndMerge("my-repo")
-	cache.RememberAllow("Bash", `{"command":"npm test --coverage"}`, "my-repo")
+	cache.LoadAndMerge(testMyRepo)
+	cache.RememberAllow(toolNameBash, testJSONNpmTestCoverage, testMyRepo)
 
 	repoHandler := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cache,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 	otherRepoHandler := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
@@ -437,20 +437,20 @@ func TestGlobalSeededRules_CoexistWithRepoImportsAndRememberedApprovals_AfterRes
 		RepoName: "other-repo",
 	}
 
-	assertDecisionBehavior(t, repoHandler, `{"command":"ls -la"}`, "allow")
-	assertDecisionBehavior(t, repoHandler, "go test ./...", "allow")
-	assertDecisionBehavior(t, repoHandler, `{"command":"npm test src/"}`, "allow")
-	assertDecisionBehavior(t, otherRepoHandler, `{"command":"ls -la"}`, "allow")
-	assertDecisionBehavior(t, otherRepoHandler, "go test ./...", "")
+	assertDecisionBehavior(t, repoHandler, testJSONLsLa, DecisionAllow)
+	assertDecisionBehavior(t, repoHandler, testGoTestDotDotDot, DecisionAllow)
+	assertDecisionBehavior(t, repoHandler, `{"command":"npm test src/"}`, DecisionAllow)
+	assertDecisionBehavior(t, otherRepoHandler, testJSONLsLa, DecisionAllow)
+	assertDecisionBehavior(t, otherRepoHandler, testGoTestDotDotDot, "")
 	assertDecisionBehavior(t, otherRepoHandler, `{"command":"npm test src/"}`, "")
 
 	cacheAfterRestart := NewCache(store)
-	cacheAfterRestart.LoadAndMerge("my-repo")
+	cacheAfterRestart.LoadAndMerge(testMyRepo)
 
 	repoHandlerAfterRestart := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cacheAfterRestart,
-		RepoName: "my-repo",
+		RepoName: testMyRepo,
 	}
 	otherRepoHandlerAfterRestart := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
@@ -458,11 +458,11 @@ func TestGlobalSeededRules_CoexistWithRepoImportsAndRememberedApprovals_AfterRes
 		RepoName: "other-repo",
 	}
 
-	assertDecisionBehavior(t, repoHandlerAfterRestart, `{"command":"ls -la"}`, "allow")
-	assertDecisionBehavior(t, repoHandlerAfterRestart, "go test ./...", "allow")
-	assertDecisionBehavior(t, repoHandlerAfterRestart, `{"command":"npm test src/"}`, "allow")
-	assertDecisionBehavior(t, otherRepoHandlerAfterRestart, `{"command":"ls -la"}`, "allow")
-	assertDecisionBehavior(t, otherRepoHandlerAfterRestart, "go test ./...", "")
+	assertDecisionBehavior(t, repoHandlerAfterRestart, testJSONLsLa, DecisionAllow)
+	assertDecisionBehavior(t, repoHandlerAfterRestart, testGoTestDotDotDot, DecisionAllow)
+	assertDecisionBehavior(t, repoHandlerAfterRestart, `{"command":"npm test src/"}`, DecisionAllow)
+	assertDecisionBehavior(t, otherRepoHandlerAfterRestart, testJSONLsLa, DecisionAllow)
+	assertDecisionBehavior(t, otherRepoHandlerAfterRestart, testGoTestDotDotDot, "")
 	assertDecisionBehavior(t, otherRepoHandlerAfterRestart, `{"command":"npm test src/"}`, "")
 }
 
@@ -471,7 +471,7 @@ func assertDecisionBehavior(t *testing.T, handler *CachingHandler, input, want s
 
 	decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
 		RequestID: "req",
-		ToolName:  "Bash",
+		ToolName:  toolNameBash,
 		Input:     input,
 	})
 	if err != nil {

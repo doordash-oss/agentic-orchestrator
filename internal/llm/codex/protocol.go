@@ -42,6 +42,28 @@ var nextID atomic.Int64
 // what a user sees inside Codex itself.
 const codexContextBaselineTokens = 12000
 
+// codexItemTypeFileChange is the ItemUnion.Type discriminator for a Codex
+// thread item representing a file mutation (item/started, item/completed).
+const codexItemTypeFileChange = "fileChange"
+
+// codexFileChangeOperationWrite and codexFileChangeOperationUpdate are the
+// normalized llm.FileChangeEvent.Operation values produced by
+// normalizeFileChangeOperation, and also the raw FileChangeKind.Type /
+// CommandAction.Type values reported by Codex for a write-style action.
+const (
+	codexFileChangeOperationWrite  = "write"
+	codexFileChangeOperationUpdate = "update"
+)
+
+// codexToolNameWrite is the llm.ToolProgressMessage.ToolName Codex reports
+// for file-change tool activity, mirroring Claude's "Write" tool name so
+// downstream consumers treat it consistently across providers.
+const codexToolNameWrite = "Write"
+
+// codexRoleAssistant is the llm.SDKMessage/AssistantMessage Type and
+// llm.ConversationMsg Role value for assistant-authored content.
+const codexRoleAssistant = "assistant"
+
 // Protocol implements llm.Protocol for the Codex app-server JSON-RPC protocol.
 type Protocol struct {
 	opts llm.ProtocolOpts
@@ -607,7 +629,7 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 				RequestID: strconv.Itoa(id),
 				Request: llm.ControlRequest{
 					Subtype:  "can_use_tool",
-					ToolName: "Write",
+					ToolName: codexToolNameWrite,
 					Input:    json.RawMessage(inputJSON),
 				},
 			},
@@ -728,13 +750,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 
 		return llm.SDKMessage{
-			Type:    "assistant",
+			Type:    codexRoleAssistant,
 			Subtype: "partial",
 			Assistant: &llm.AssistantMessage{
-				Type:    "assistant",
+				Type:    codexRoleAssistant,
 				Subtype: "partial",
 				Message: llm.ConversationMsg{
-					Role: "assistant",
+					Role: codexRoleAssistant,
 					Content: []llm.ContentBlock{
 						{Type: "text", Text: accumulated},
 					},
@@ -977,7 +999,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			ToolProgress: &llm.ToolProgressMessage{
 				Type:      "tool_progress",
 				ToolUseID: delta.ItemID,
-				ToolName:  "Write",
+				ToolName:  codexToolNameWrite,
 				Data:      delta.Delta,
 			},
 		}, true
@@ -988,13 +1010,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return llm.SDKMessage{}, false
 		}
 		return llm.SDKMessage{
-			Type:    "assistant",
+			Type:    codexRoleAssistant,
 			Subtype: "partial",
 			Assistant: &llm.AssistantMessage{
-				Type:    "assistant",
+				Type:    codexRoleAssistant,
 				Subtype: "partial",
 				Message: llm.ConversationMsg{
-					Role: "assistant",
+					Role: codexRoleAssistant,
 					Content: []llm.ContentBlock{
 						{Type: "thinking", Thinking: delta.Delta},
 					},
@@ -1065,11 +1087,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.mu.Unlock()
 
 			return llm.SDKMessage{
-				Type: "assistant",
+				Type: codexRoleAssistant,
 				Assistant: &llm.AssistantMessage{
-					Type: "assistant",
+					Type: codexRoleAssistant,
 					Message: llm.ConversationMsg{
-						Role: "assistant",
+						Role: codexRoleAssistant,
 						Content: []llm.ContentBlock{
 							{Type: "text", Text: completed.Item.Text},
 						},
@@ -1087,13 +1109,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 				},
 				FileReads: p.fileReadEventsForCommand(completed.Item),
 			}, true
-		case "fileChange":
+		case codexItemTypeFileChange:
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
 					Type:      "tool_progress",
 					ToolUseID: completed.Item.ID,
-					ToolName:  "Write",
+					ToolName:  codexToolNameWrite,
 				},
 				FileChanges: fileChangeEventsForItem(completed.Item),
 			}, true
@@ -1108,7 +1130,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 		p.mu.Lock()
 		isMainItem := p.isMainThread(started.ThreadID)
-		if isMainItem && (started.Item.Type == "commandExecution" || started.Item.Type == "fileChange") {
+		if isMainItem && (started.Item.Type == "commandExecution" || started.Item.Type == codexItemTypeFileChange) {
 			p.turnHadToolUse = true
 		}
 		p.mu.Unlock()
@@ -1125,13 +1147,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					ToolName:  "Bash",
 				},
 			}, true
-		case "fileChange":
+		case codexItemTypeFileChange:
 			return llm.SDKMessage{
 				Type: "tool_progress",
 				ToolProgress: &llm.ToolProgressMessage{
 					Type:      "tool_progress",
 					ToolUseID: started.Item.ID,
-					ToolName:  "Write",
+					ToolName:  codexToolNameWrite,
 				},
 			}, true
 		default:
@@ -1166,13 +1188,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			errText = fmt.Sprintf("%s (%s)", errText, errNotif.Error.ErrorInfo.RawKind)
 		}
 		return llm.SDKMessage{
-			Type:    "assistant",
+			Type:    codexRoleAssistant,
 			Subtype: "partial",
 			Assistant: &llm.AssistantMessage{
-				Type:    "assistant",
+				Type:    codexRoleAssistant,
 				Subtype: "partial",
 				Message: llm.ConversationMsg{
-					Role: "assistant",
+					Role: codexRoleAssistant,
 					Content: []llm.ContentBlock{
 						{Type: "text", Text: fmt.Sprintf("[codex error] %s", errText)},
 					},
@@ -1253,16 +1275,16 @@ func fileChangeEventsForItem(item ItemUnion) []llm.FileChangeEvent {
 
 func normalizeFileChangeOperation(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case "add", "create", "write":
-		return "write"
+	case "add", "create", codexFileChangeOperationWrite:
+		return codexFileChangeOperationWrite
 	case "delete", "remove":
 		return "delete"
 	case "move", "rename":
 		return "rename"
-	case "update", "modify", "modified":
-		return "update"
+	case codexFileChangeOperationUpdate, "modify", "modified":
+		return codexFileChangeOperationUpdate
 	default:
-		return "update"
+		return codexFileChangeOperationUpdate
 	}
 }
 

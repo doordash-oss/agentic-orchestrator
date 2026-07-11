@@ -103,23 +103,55 @@ type topLevelRoute struct {
 	handler func(*apiHandler) http.HandlerFunc
 }
 
+const (
+	apiPathHealth          = "/api/v1/health"
+	apiPathFeatures        = "/api/v1/features"
+	apiPathConfigRuntime   = "/api/v1/config/runtime"
+	apiPathWorkspaceBrowse = "/api/v1/workspace/browse"
+	apiPathCatalogModels   = "/api/v1/catalog/models"
+	apiPathPrompts         = "/api/v1/prompts"
+	apiPathPermissions     = "/api/v1/permissions"
+	apiPathSessions        = "/api/v1/sessions"
+	apiPathRecovery        = "/api/v1/recovery"
+	apiPathRecoveryActions = "/api/v1/recovery/actions"
+	apiPathShutdown        = "/api/v1/shutdown"
+	apiPathEvents          = "/api/v1/events"
+)
+
+// routeSegmentConfig is the feature sub-route segment for the per-feature
+// config endpoint, shared between the route matcher and the mutation
+// preflight allow-list.
+const routeSegmentConfig = "config"
+
+// entityFeature is the resource/entity-type name for a feature. It's used as
+// a generic-error-message noun and as the DTO discriminator for "feature"
+// scoped resources (ResourceDTO.Type, ActionScopeDTO.Type, etc).
+const entityFeature = "feature"
+
+// resourceTypeSession and resourceTypeRuntime are the other ResourceDTO.Type
+// discriminator values, alongside entityFeature.
+const (
+	resourceTypeSession = "session"
+	resourceTypeRuntime = "runtime"
+)
+
 var topLevelServerRoutes = []topLevelRoute{
-	{"/api/v1/health", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleHealth) }},
-	{"/api/v1/features", func(h *apiHandler) http.HandlerFunc { return h.handleFeaturesRoot }},
-	{"/api/v1/features/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
-	{"/api/v1/config/runtime", func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
-	{"/api/v1/workspace/browse", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleWorkspaceBrowse) }},
-	{"/api/v1/catalog/models", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
-	{"/api/v1/prompts", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
-	{"/api/v1/prompts/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
-	{"/api/v1/permissions", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},
-	{"/api/v1/permissions/", func(h *apiHandler) http.HandlerFunc { return h.handlePermissionMutationRoutes }},
-	{"/api/v1/sessions", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionList) }},
-	{"/api/v1/sessions/", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionRoutes) }},
-	{"/api/v1/recovery", func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
-	{"/api/v1/recovery/actions", func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
-	{"/api/v1/shutdown", func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
-	{"/api/v1/events", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
+	{apiPathHealth, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleHealth) }},
+	{apiPathFeatures, func(h *apiHandler) http.HandlerFunc { return h.handleFeaturesRoot }},
+	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
+	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
+	{apiPathWorkspaceBrowse, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleWorkspaceBrowse) }},
+	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
+	{apiPathPrompts, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePrompts) }},
+	{apiPathPrompts + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePromptMutationRoutes }},
+	{apiPathPermissions, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handlePermissions) }},
+	{apiPathPermissions + "/", func(h *apiHandler) http.HandlerFunc { return h.handlePermissionMutationRoutes }},
+	{apiPathSessions, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionList) }},
+	{apiPathSessions + "/", func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleSessionRoutes) }},
+	{apiPathRecovery, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryRoute }},
+	{apiPathRecoveryActions, func(h *apiHandler) http.HandlerFunc { return h.handleRecoveryActionRoute }},
+	{apiPathShutdown, func(h *apiHandler) http.HandlerFunc { return h.handleShutdownMutationRoute }},
+	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
 }
 
 func (h *apiHandler) routes() http.Handler {
@@ -142,11 +174,11 @@ func (h *apiHandler) routes() http.Handler {
 		}
 		h.setSequenceHeader(w)
 		escaped := r.URL.EscapedPath()
-		if strings.HasPrefix(escaped, "/api/v1/features/") {
+		if strings.HasPrefix(escaped, apiPathFeatures+"/") {
 			h.handleFeatureRoutes(w, r)
 			return
 		}
-		if strings.HasPrefix(escaped, "/api/v1/sessions/") {
+		if strings.HasPrefix(escaped, apiPathSessions+"/") {
 			methodHandler(h.handleSessionRoutes)(w, r)
 			return
 		}
@@ -189,7 +221,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request) {
-	parts := splitPath(strings.TrimPrefix(r.URL.Path, "/api/v1/features/"))
+	parts := splitPath(strings.TrimPrefix(r.URL.Path, apiPathFeatures+"/"))
 	if invalidPathParts(parts) || len(parts) == 0 || !validEntityID(parts[0]) {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid feature id", nil)
 		return
@@ -206,7 +238,7 @@ func (h *apiHandler) handleFeatureRoutes(w http.ResponseWriter, r *http.Request)
 	switch {
 	case len(parts) == 1:
 		h.handleFeatureDetail(w, r, featureID)
-	case len(parts) == 2 && parts[1] == "config":
+	case len(parts) == 2 && parts[1] == routeSegmentConfig:
 		h.handleFeatureConfig(w, r, featureID)
 	case len(parts) == 2 && parts[1] == "live-preview":
 		h.handleLivePreview(w, r, featureID)
@@ -253,7 +285,7 @@ func (h *apiHandler) handleFeatureDetail(w http.ResponseWriter, r *http.Request,
 }
 
 func (h *apiHandler) handleSessionRoutes(w http.ResponseWriter, r *http.Request) {
-	parts := splitPath(strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/"))
+	parts := splitPath(strings.TrimPrefix(r.URL.Path, apiPathSessions+"/"))
 	if invalidPathParts(parts) || len(parts) == 0 || !validEntityID(parts[0]) {
 		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid session id", nil)
 		return
@@ -390,13 +422,12 @@ func validEntityID(id string) bool {
 }
 
 func writeStoreError(w http.ResponseWriter, err error, id string) {
-	const entity = "feature"
-	target := map[string]any{entity + "_id": id}
+	target := map[string]any{entityFeature + "_id": id}
 	if errors.Is(err, os.ErrNotExist) {
-		writeAPIError(w, http.StatusNotFound, "not_found", entity+" not found", target)
+		writeAPIError(w, http.StatusNotFound, "not_found", entityFeature+" not found", target)
 		return
 	}
-	writeAPIError(w, http.StatusInternalServerError, "internal_error", "read "+entity, target)
+	writeAPIError(w, http.StatusInternalServerError, "internal_error", "read "+entityFeature, target)
 }
 
 func (h *apiHandler) responseMeta(revision string) ResponseMeta {
@@ -464,7 +495,7 @@ func isAllowedLoopbackHost(raw string) bool {
 	}
 	host = strings.Trim(host, "[]")
 	switch strings.ToLower(host) {
-	case "127.0.0.1", "localhost", "::1":
+	case "127.0.0.1", hostLocalhost, "::1":
 		return true
 	default:
 		return false
@@ -490,7 +521,7 @@ func authRequiredPath(path string) bool {
 	// token, and a stale/rotated token there must not make a genuinely
 	// healthy, running server look dead and invite a Replace attempt
 	// against it (see discoveryHealth in discovery.go).
-	return strings.HasPrefix(path, "/api/v1/") && path != "/api/v1/health"
+	return strings.HasPrefix(path, "/api/v1/") && path != apiPathHealth
 }
 
 // sseTokenFallbackAllowed reports whether the given path may authenticate via
@@ -500,7 +531,7 @@ func authRequiredPath(path string) bool {
 // for these paths because the access_token query parameter is a bearer
 // credential and must never be persisted to a log, trace span, or crash report.
 func sseTokenFallbackAllowed(path string) bool {
-	return path == "/api/v1/events" || strings.HasSuffix(path, "/output/stream")
+	return path == apiPathEvents || strings.HasSuffix(path, "/output/stream")
 }
 
 func constantTimeEqual(got, want string) bool {

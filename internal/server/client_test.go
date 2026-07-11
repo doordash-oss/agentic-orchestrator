@@ -25,8 +25,41 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+)
+
+// testFeatureConfigPath is the fixture path for feat-1's config route, used
+// across several client tests in this file.
+const testFeatureConfigPath = "/api/v1/features/feat-1/config"
+
+// Route and fixture literals reused across the fake-server test cases in
+// this file.
+const (
+	routeGetHealth             = "GET /api/v1/health"
+	routeGetFeatures           = "GET /api/v1/features"
+	routeGetPrompts            = "GET /api/v1/prompts"
+	routeGetSessions           = "GET /api/v1/sessions"
+	routeGetSession1           = "GET /api/v1/sessions/sess-1"
+	routeGetSession1Transcript = "GET /api/v1/sessions/sess-1/transcript"
+	routeGetLivePreview        = "GET /api/v1/features/feat-1/live-preview"
+
+	testFeatureName     = "Client cutover"
+	testRuntimeStateDir = "/runtime/features"
+
+	inquirenessAlways = "always"
+
+	sessionStatusWaitingHelp = "WaitingHelp"
+	sessionStatusDone        = "Done"
+	featureStatusCodeReady   = "CodeReady"
+
+	// fixtureRecoveryItemKey is the fake RecoveryItem.Key / recovery action
+	// map key used across recovery fixtures in this file.
+	fixtureRecoveryItemKey = "feat-1:api"
+	// fixtureRecoverySnapshotID is the fake RecoverySnapshot.SnapshotID used
+	// across recovery fixtures in this file.
+	fixtureRecoverySnapshotID = "recovery-snapshot-1"
 )
 
 func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
@@ -37,57 +70,57 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	var sawPublishDescriptionTrustedHeader bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/health":
+		case routeGetHealth:
 			writeJSON(w, http.StatusOK, HealthResponse{APIVersion: APIVersion, Status: "ok"})
-		case "GET /api/v1/features":
-			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion, Features: []FeatureSummary{{ID: "feat-1", Name: "Client cutover"}}})
+		case routeGetFeatures:
+			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion, Features: []FeatureSummary{{ID: fixtureFeatureID, Name: testFeatureName}}})
 		case "GET /api/v1/features/feat-1":
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1", Name: "Client cutover"})})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: fixtureFeatureID, Name: testFeatureName})})
 		case "GET /api/v1/config/runtime":
-			writeJSON(w, http.StatusOK, RuntimeConfigResponse{APIVersion: APIVersion, Runtime: RuntimeIdentity{StateDir: "/runtime/features"}})
+			writeJSON(w, http.StatusOK, RuntimeConfigResponse{APIVersion: APIVersion, Runtime: RuntimeIdentity{StateDir: testRuntimeStateDir}})
 		case "GET /api/v1/features/feat-1/config":
-			writeJSON(w, http.StatusOK, FeatureConfigResponse{APIVersion: APIVersion, FeatureID: "feat-1"})
+			writeJSON(w, http.StatusOK, FeatureConfigResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID})
 		case "GET /api/v1/catalog/models":
-			writeJSON(w, http.StatusOK, ModelCatalogResponse{APIVersion: APIVersion, ProviderOrder: []string{"codex"}})
-		case "GET /api/v1/prompts":
+			writeJSON(w, http.StatusOK, ModelCatalogResponse{APIVersion: APIVersion, ProviderOrder: []string{providerCodex}})
+		case routeGetPrompts:
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
 		case "GET /api/v1/permissions":
 			writeJSON(w, http.StatusOK, PermissionSnapshotResponse{APIVersion: APIVersion})
-		case "GET /api/v1/sessions":
-			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{{ID: "sess-1", FeatureID: "feat-1"}}})
-		case "GET /api/v1/sessions/sess-1":
-			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1"}, CursorDTO{})})
-		case "GET /api/v1/sessions/sess-1/transcript":
+		case routeGetSessions:
+			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{{ID: fixtureSessionID, FeatureID: fixtureFeatureID}}})
+		case routeGetSession1:
+			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID}, CursorDTO{})})
+		case routeGetSession1Transcript:
 			if got := r.URL.Query().Get("offset"); got != "2" {
 				t.Errorf("transcript offset = %q, want 2", got)
 			}
 			writeJSON(w, http.StatusOK, TranscriptResponse{APIVersion: APIVersion, Cursor: CursorDTO{Start: 2, End: 3}})
 		case "GET /api/v1/features/feat-1/runs/1/artifacts":
-			writeJSON(w, http.StatusOK, ArtifactListResponse{APIVersion: APIVersion, Artifacts: []ArtifactDTO{{ID: "plan", RunNumber: 1}}})
+			writeJSON(w, http.StatusOK, ArtifactListResponse{APIVersion: APIVersion, Artifacts: []ArtifactDTO{{ID: targetPhasePlan, RunNumber: 1}}})
 		case "GET /api/v1/features/feat-1/runs/1/artifacts/plan":
 			if got := r.URL.Query().Get("limit"); got != "8" {
 				t.Errorf("artifact limit = %q, want 8", got)
 			}
-			writeJSON(w, http.StatusOK, TextContentResponse{APIVersion: APIVersion, ID: "plan", Text: "phase"})
+			writeJSON(w, http.StatusOK, TextContentResponse{APIVersion: APIVersion, ID: targetPhasePlan, Text: "phase"})
 		case "GET /api/v1/features/feat-1/runs/1/logs/session":
-			writeJSON(w, http.StatusOK, TextContentResponse{APIVersion: APIVersion, ID: "session", Text: "log"})
-		case "GET /api/v1/features/feat-1/live-preview":
-			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}})
+			writeJSON(w, http.StatusOK, TextContentResponse{APIVersion: APIVersion, ID: logIDSession, Text: "log"})
+		case routeGetLivePreview:
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}})
 		case "GET /api/v1/recovery":
 			writeJSON(w, http.StatusOK, RecoverySnapshotResponse{
 				APIVersion: APIVersion,
-				SnapshotID: "recovery-snapshot-1",
+				SnapshotID: fixtureRecoverySnapshotID,
 				Items: []RecoveryItemDTO{{
-					Key:            "feat-1:api",
-					FeatureID:      "feat-1",
-					RepoName:       "api",
-					Phase:          "implement",
-					DefaultAction:  "skip",
-					AllowedActions: []string{"resume", "kill", "skip"},
+					Key:            fixtureRecoveryItemKey,
+					FeatureID:      fixtureFeatureID,
+					RepoName:       repoNameAPI,
+					Phase:          targetPhaseImplement,
+					DefaultAction:  recoveryActionSkip,
+					AllowedActions: []string{actionResume, recoveryActionKill, recoveryActionSkip},
 				}},
 			})
 		case "POST /api/v1/features":
-			sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+			sawTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 			var req CreateFeatureRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode create request: %v", err)
@@ -95,9 +128,9 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if req.Name != "New feature" {
 				t.Errorf("create request name = %q, want New feature", req.Name)
 			}
-			writeJSON(w, http.StatusCreated, CreateFeatureResponse{APIVersion: APIVersion, FeatureID: "feat-created", Result: "created"})
+			writeJSON(w, http.StatusCreated, CreateFeatureResponse{APIVersion: APIVersion, FeatureID: "feat-created", Result: resultCreated})
 		case "POST /api/v1/features/feat-1/actions/resume":
-			sawResumeTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+			sawResumeTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 			var req map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode resume request: %v", err)
@@ -105,19 +138,19 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if len(req) != 0 {
 				t.Errorf("resume request = %+v, want empty JSON object", req)
 			}
-			writeJSON(w, http.StatusOK, FeatureStartResponse{APIVersion: APIVersion, FeatureID: "feat-1", Result: "started"})
+			writeJSON(w, http.StatusOK, FeatureStartResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, Result: resultStarted})
 		case "POST /api/v1/recovery/actions":
-			sawRecoveryTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+			sawRecoveryTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 			var req RecoveryActionRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode recovery request: %v", err)
 			}
-			if req.SnapshotID != "recovery-snapshot-1" || req.Actions["feat-1:api"] != "resume" {
+			if req.SnapshotID != fixtureRecoverySnapshotID || req.Actions[fixtureRecoveryItemKey] != actionResume {
 				t.Errorf("recovery request = %+v, want snapshot action resume", req)
 			}
-			writeJSON(w, http.StatusOK, RecoveryActionResponse{APIVersion: APIVersion, Result: "recovered"})
+			writeJSON(w, http.StatusOK, RecoveryActionResponse{APIVersion: APIVersion, Result: resultRecovered})
 		case "POST /api/v1/prompts/chat/start":
-			sawChatTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+			sawChatTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 			var req ChatStartRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode chat request: %v", err)
@@ -125,17 +158,17 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 			if req.Message != "What is running?" {
 				t.Errorf("chat request message = %q, want prompt", req.Message)
 			}
-			writeJSON(w, http.StatusOK, ChatStartResponse{APIVersion: APIVersion, SessionID: "chat-1", Result: "started"})
+			writeJSON(w, http.StatusOK, ChatStartResponse{APIVersion: APIVersion, SessionID: "chat-1", Result: resultStarted})
 		case "POST /api/v1/features/feat-1/actions/publish/description":
-			sawPublishDescriptionTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+			sawPublishDescriptionTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 			var req PublishDescriptionRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode publish description request: %v", err)
 			}
-			if req.Model != "sonnet" || req.FeatureName != "Client cutover" {
+			if req.Model != modelSonnet || req.FeatureName != testFeatureName {
 				t.Errorf("publish description request = %+v, want model and feature context", req)
 			}
-			writeJSON(w, http.StatusOK, PublishDescriptionResponse{APIVersion: APIVersion, FeatureID: "feat-1", Title: "Client cutover", Body: "AI body", Result: "generated"})
+			writeJSON(w, http.StatusOK, PublishDescriptionResponse{APIVersion: APIVersion, FeatureID: fixtureFeatureID, Title: testFeatureName, Body: "AI body", Result: resultGenerated})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -154,13 +187,13 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	if features, err := client.Features(ctx); err != nil || len(features.Features) != 1 {
 		t.Fatalf("Features() = %+v, %v; want one feature", features, err)
 	}
-	if detail, err := client.FeatureDetail(ctx, "feat-1"); err != nil || detail.Feature.ID != "feat-1" {
+	if detail, err := client.FeatureDetail(ctx, fixtureFeatureID); err != nil || detail.Feature.ID != fixtureFeatureID {
 		t.Fatalf("FeatureDetail() = %+v, %v; want feat-1", detail, err)
 	}
 	if _, err := client.RuntimeConfig(ctx); err != nil {
 		t.Fatalf("RuntimeConfig() error = %v", err)
 	}
-	if _, err := client.FeatureConfig(ctx, "feat-1"); err != nil {
+	if _, err := client.FeatureConfig(ctx, fixtureFeatureID); err != nil {
 		t.Fatalf("FeatureConfig() error = %v", err)
 	}
 	if _, err := client.ModelCatalog(ctx); err != nil {
@@ -175,87 +208,127 @@ func TestClientFetchesTypedSnapshotsAndActionResults(t *testing.T) {
 	if _, err := client.Sessions(ctx); err != nil {
 		t.Fatalf("Sessions() error = %v", err)
 	}
-	if _, err := client.SessionDetail(ctx, "sess-1"); err != nil {
+	if _, err := client.SessionDetail(ctx, fixtureSessionID); err != nil {
 		t.Fatalf("SessionDetail() error = %v", err)
 	}
-	if _, err := client.Transcript(ctx, "sess-1", CursorQuery{Cursor: 2, Limit: 10}); err != nil {
+	if _, err := client.Transcript(ctx, fixtureSessionID, CursorQuery{Cursor: 2, Limit: 10}); err != nil {
 		t.Fatalf("Transcript() error = %v", err)
 	}
-	if _, err := client.ArtifactList(ctx, "feat-1", 1); err != nil {
+	if _, err := client.ArtifactList(ctx, fixtureFeatureID, 1); err != nil {
 		t.Fatalf("ArtifactList() error = %v", err)
 	}
-	if _, err := client.ArtifactContent(ctx, "feat-1", 1, "plan", TextQuery{Limit: 8}); err != nil {
+	if _, err := client.ArtifactContent(ctx, fixtureFeatureID, 1, targetPhasePlan, TextQuery{Limit: 8}); err != nil {
 		t.Fatalf("ArtifactContent() error = %v", err)
 	}
-	if _, err := client.LogContent(ctx, "feat-1", 1, "session", TextQuery{}); err != nil {
+	if _, err := client.LogContent(ctx, fixtureFeatureID, 1, logIDSession, TextQuery{}); err != nil {
 		t.Fatalf("LogContent() error = %v", err)
 	}
-	if _, err := client.LivePreview(ctx, "feat-1"); err != nil {
+	if _, err := client.LivePreview(ctx, fixtureFeatureID); err != nil {
 		t.Fatalf("LivePreview() error = %v", err)
 	}
 	recovery, err := client.Recovery(ctx)
 	if err != nil {
 		t.Fatalf("Recovery() error = %v", err)
 	}
-	if recovery.SnapshotID != "recovery-snapshot-1" || len(recovery.Items) != 1 || recovery.Items[0].Key != "feat-1:api" {
+	if recovery.SnapshotID != fixtureRecoverySnapshotID || len(recovery.Items) != 1 || recovery.Items[0].Key != fixtureRecoveryItemKey {
 		t.Fatalf("Recovery() = %+v; want typed recovery snapshot", recovery)
 	}
 	created, err := client.CreateFeature(ctx, CreateFeatureRequest{Name: "New feature"})
 	if err != nil {
 		t.Fatalf("CreateFeature() error = %v", err)
 	}
-	if created.FeatureID != "feat-created" || created.Result != "created" || !sawTrustedHeader {
+	if created.FeatureID != "feat-created" || created.Result != resultCreated || !sawTrustedHeader {
 		t.Fatalf("CreateFeature() = %+v trusted=%v, want created with trusted header", created, sawTrustedHeader)
 	}
-	resumed, err := client.ResumeFeature(ctx, "feat-1")
+	resumed, err := client.ResumeFeature(ctx, fixtureFeatureID)
 	if err != nil {
 		t.Fatalf("ResumeFeature() error = %v", err)
 	}
-	if resumed.FeatureID != "feat-1" || resumed.Result != "started" || !sawResumeTrustedHeader {
+	if resumed.FeatureID != fixtureFeatureID || resumed.Result != resultStarted || !sawResumeTrustedHeader {
 		t.Fatalf("ResumeFeature() = %+v trusted=%v, want started with trusted header", resumed, sawResumeTrustedHeader)
 	}
 	recovered, err := client.ExecuteRecovery(ctx, RecoveryActionRequest{
-		SnapshotID: "recovery-snapshot-1",
-		Actions:    map[string]string{"feat-1:api": "resume"},
+		SnapshotID: fixtureRecoverySnapshotID,
+		Actions:    map[string]string{fixtureRecoveryItemKey: actionResume},
 	})
 	if err != nil {
 		t.Fatalf("ExecuteRecovery() error = %v", err)
 	}
-	if recovered.Result != "recovered" || !sawRecoveryTrustedHeader {
+	if recovered.Result != resultRecovered || !sawRecoveryTrustedHeader {
 		t.Fatalf("ExecuteRecovery() = %+v trusted=%v, want recovered with trusted header", recovered, sawRecoveryTrustedHeader)
 	}
 	chat, err := client.StartChat(ctx, ChatStartRequest{Message: "What is running?"})
 	if err != nil {
 		t.Fatalf("StartChat() error = %v", err)
 	}
-	if chat.SessionID != "chat-1" || chat.Result != "started" || !sawChatTrustedHeader {
+	if chat.SessionID != "chat-1" || chat.Result != resultStarted || !sawChatTrustedHeader {
 		t.Fatalf("StartChat() = %+v trusted=%v, want chat session with trusted header", chat, sawChatTrustedHeader)
 	}
-	desc, err := client.GeneratePublishDescription(ctx, "feat-1", PublishDescriptionRequest{Model: "sonnet", FeatureName: "Client cutover"})
+	desc, err := client.GeneratePublishDescription(ctx, fixtureFeatureID, PublishDescriptionRequest{Model: modelSonnet, FeatureName: testFeatureName})
 	if err != nil {
 		t.Fatalf("GeneratePublishDescription() error = %v", err)
 	}
-	if desc.FeatureID != "feat-1" || desc.Title != "Client cutover" || desc.Body != "AI body" || desc.Result != "generated" || !sawPublishDescriptionTrustedHeader {
+	if desc.FeatureID != fixtureFeatureID || desc.Title != testFeatureName || desc.Body != "AI body" || desc.Result != resultGenerated || !sawPublishDescriptionTrustedHeader {
 		t.Fatalf("GeneratePublishDescription() = %+v trusted=%v, want generated description with trusted header", desc, sawPublishDescriptionTrustedHeader)
+	}
+}
+
+func TestClientAnswerPermissionSendsExplicitRememberFields(t *testing.T) {
+	t.Parallel()
+
+	var got PermissionAnswerRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != apiPathPermissionsAnswer {
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		writeJSON(w, http.StatusOK, PermissionAnswerResponse{
+			RequestID: got.RequestID,
+			SessionID: got.SessionID,
+			Decision:  got.Decision,
+			Result:    resultAnswered,
+		})
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+	scope := "agentic-orchestrator"
+	_, err = client.AnswerPermission(context.Background(), PermissionAnswerRequest{
+		RequestID:       fixturePermissionRequestID,
+		SessionID:       fixtureSessionID,
+		Decision:        decisionAllowRemember,
+		RememberPattern: testRememberPattern,
+		RememberScope:   &scope,
+	})
+	if err != nil {
+		t.Fatalf("AnswerPermission() error = %v", err)
+	}
+	if got.Decision != decisionAllowRemember || got.RememberPattern != testRememberPattern || got.RememberScope == nil || *got.RememberScope != scope {
+		t.Fatalf("request = %+v, want explicit remember fields", got)
 	}
 }
 
 func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 	t.Run("read_returns_structured_feature_config", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet || r.URL.Path != "/api/v1/features/feat-1/config" {
+			if r.Method != http.MethodGet || r.URL.Path != testFeatureConfigPath {
 				t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 			}
 			writeJSON(w, http.StatusOK, FeatureConfigResponse{
 				APIVersion: APIVersion,
-				FeatureID:  "feat-1",
+				FeatureID:  fixtureFeatureID,
 				Current: FeatureConfigDTO{
-					Inquireness: "always",
-					Pipeline:    "large",
+					Inquireness: inquirenessAlways,
+					Pipeline:    string(feature.PipelineLarge),
 					Checkpoints: CheckpointsDTO{ManualPublish: true},
 				},
 				Defaults: FeatureConfigDTO{Inquireness: "auto"},
-				Original: FeatureConfigDTO{Pipeline: "medium"},
+				Original: FeatureConfigDTO{Pipeline: string(feature.PipelineMedium)},
 				Publish: PublishabilityDTO{
 					ManualPublish: true,
 					Repos:         map[string]bool{"app": true},
@@ -268,11 +341,11 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient() error = %v", err)
 		}
-		config, err := client.FeatureConfig(context.Background(), "feat-1")
+		config, err := client.FeatureConfig(context.Background(), fixtureFeatureID)
 		if err != nil {
 			t.Fatalf("FeatureConfig() error = %v", err)
 		}
-		if config.FeatureID != "feat-1" || config.Current.Inquireness != "always" || config.Current.Pipeline != "large" {
+		if config.FeatureID != fixtureFeatureID || config.Current.Inquireness != inquirenessAlways || config.Current.Pipeline != string(feature.PipelineLarge) {
 			t.Fatalf("FeatureConfig() = %+v, want structured current config for feat-1", config)
 		}
 		if !config.Current.Checkpoints.ManualPublish || !config.Publish.ManualPublish || !config.Publish.Repos["app"] {
@@ -283,23 +356,23 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 	t.Run("update_posts_typed_request_and_returns_action_result", func(t *testing.T) {
 		var sawTrustedHeader bool
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/config" {
+			if r.Method != http.MethodPost || r.URL.Path != testFeatureConfigPath {
 				t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 			}
-			sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
-			if got := r.Header.Get("Content-Type"); got != "application/json" {
+			sawTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			if got := r.Header.Get("Content-Type"); got != contentTypeJSON {
 				t.Fatalf("Content-Type = %q, want application/json", got)
 			}
 			var req FeatureConfigMutationRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode update request: %v", err)
 			}
-			if req.Inquireness != "always" || string(req.Pipeline) != "large" {
+			if req.Inquireness != inquirenessAlways || req.Pipeline != feature.PipelineLarge {
 				t.Fatalf("update request = %+v, want inquireness always pipeline large", req)
 			}
 			writeJSON(w, http.StatusOK, FeatureConfigUpdateResponse{
-				APIVersion: APIVersion, FeatureID: "feat-1",
-				Result: "updated",
+				APIVersion: APIVersion, FeatureID: fixtureFeatureID,
+				Result: resultUpdated,
 			})
 		}))
 		defer srv.Close()
@@ -308,30 +381,30 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient() error = %v", err)
 		}
-		updated, err := client.UpdateFeatureConfig(context.Background(), "feat-1", FeatureConfigMutationRequest{
-			Inquireness: "always",
-			Pipeline:    "large",
+		updated, err := client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{
+			Inquireness: inquirenessAlways,
+			Pipeline:    feature.PipelineLarge,
 		})
 		if err != nil {
 			t.Fatalf("UpdateFeatureConfig() error = %v", err)
 		}
-		if updated.FeatureID != "feat-1" || updated.Result != "updated" || !sawTrustedHeader {
+		if updated.FeatureID != fixtureFeatureID || updated.Result != resultUpdated || !sawTrustedHeader {
 			t.Fatalf("UpdateFeatureConfig() = %+v trusted=%v, want updated result with trusted header", updated, sawTrustedHeader)
 		}
 	})
 
 	t.Run("update_returns_structured_api_error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/config" {
+			if r.Method != http.MethodPost || r.URL.Path != testFeatureConfigPath {
 				t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 			}
 			writeJSON(w, http.StatusConflict, ErrorResponse{
 				APIVersion: APIVersion,
 				Error: ErrorDTO{
-					Code:    "conflict",
+					Code:    errCodeConflict,
 					Message: "feature is busy",
 					Status:  http.StatusConflict,
-					Target:  map[string]any{"feature_id": "feat-1"},
+					Target:  map[string]any{"feature_id": fixtureFeatureID},
 				},
 			})
 		}))
@@ -341,15 +414,15 @@ func TestClientFeatureConfigReadAndUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewClient() error = %v", err)
 		}
-		_, err = client.UpdateFeatureConfig(context.Background(), "feat-1", FeatureConfigMutationRequest{Inquireness: "always"})
+		_, err = client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{Inquireness: inquirenessAlways})
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) {
 			t.Fatalf("UpdateFeatureConfig() error = %v, want APIError", err)
 		}
-		if apiErr.Code != "conflict" || apiErr.Status != http.StatusConflict || apiErr.Method != http.MethodPost || apiErr.Path != "/api/v1/features/feat-1/config" {
+		if apiErr.Code != errCodeConflict || apiErr.Status != http.StatusConflict || apiErr.Method != http.MethodPost || apiErr.Path != testFeatureConfigPath {
 			t.Fatalf("APIError = %+v, want method/path scoped conflict", apiErr)
 		}
-		if apiErr.Target["feature_id"] != "feat-1" {
+		if apiErr.Target["feature_id"] != fixtureFeatureID {
 			t.Fatalf("APIError target = %+v, want feature_id feat-1", apiErr.Target)
 		}
 	})
@@ -361,7 +434,7 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 		if r.Method != http.MethodPatch || r.URL.Path != "/api/v1/config/runtime" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
-		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 		var req RuntimeConfigMutationRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode update request: %v", err)
@@ -370,7 +443,7 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 			t.Fatalf("workspace roots request = %+v, want supplied roots", req.WorkspaceRoots)
 		}
 		writeJSON(w, http.StatusOK, RuntimeConfigUpdateResponse{
-			APIVersion: APIVersion, Result: "updated",
+			APIVersion: APIVersion, Result: resultUpdated,
 		})
 	}))
 	defer srv.Close()
@@ -384,7 +457,7 @@ func TestClientRuntimeConfigUpdateSendsWorkspaceRoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateRuntimeConfig() error = %v", err)
 	}
-	if updated.Result != "updated" || !sawTrustedHeader {
+	if updated.Result != resultUpdated || !sawTrustedHeader {
 		t.Fatalf("UpdateRuntimeConfig() = %+v trusted=%v, want updated trusted result", updated, sawTrustedHeader)
 	}
 }
@@ -395,20 +468,20 @@ func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/actions/rewind" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
-		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
+		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
 		var req RewindFeatureRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode rewind request: %v", err)
 		}
-		if req.TargetPhase != "inquire" || req.RoadmapPhase != 2 || string(req.UpgradePipeline) != "large" {
+		if req.TargetPhase != targetPhaseInquire || req.RoadmapPhase != 2 || req.UpgradePipeline != feature.PipelineLarge {
 			t.Fatalf("rewind request = %+v, want inquire roadmap phase 2 large upgrade", req)
 		}
 		writeJSON(w, http.StatusOK, RewindFeatureResponse{
-			APIVersion: APIVersion, FeatureID: "feat-1",
-			Result:          "rewound",
-			TargetPhase:     "inquire",
+			APIVersion: APIVersion, FeatureID: fixtureFeatureID,
+			Result:          resultRewound,
+			TargetPhase:     targetPhaseInquire,
 			RoadmapPhase:    2,
-			UpgradePipeline: "large",
+			UpgradePipeline: string(feature.PipelineLarge),
 		})
 	}))
 	defer srv.Close()
@@ -417,15 +490,15 @@ func TestClientRewindFeatureSendsUpgradePipeline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	rewound, err := client.RewindFeature(context.Background(), "feat-1", RewindFeatureRequest{
-		TargetPhase:     "inquire",
+	rewound, err := client.RewindFeature(context.Background(), fixtureFeatureID, RewindFeatureRequest{
+		TargetPhase:     targetPhaseInquire,
 		RoadmapPhase:    2,
-		UpgradePipeline: "large",
+		UpgradePipeline: feature.PipelineLarge,
 	})
 	if err != nil {
 		t.Fatalf("RewindFeature() error = %v", err)
 	}
-	if rewound.FeatureID != "feat-1" || rewound.Result != "rewound" || !sawTrustedHeader {
+	if rewound.FeatureID != fixtureFeatureID || rewound.Result != resultRewound || !sawTrustedHeader {
 		t.Fatalf("RewindFeature() = %+v trusted=%v, want rewound trusted result", rewound, sawTrustedHeader)
 	}
 }
@@ -436,8 +509,8 @@ func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/shutdown" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
-		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == "local"
-		if got := r.Header.Get("Content-Type"); got != "application/json" {
+		sawTrustedHeader = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+		if got := r.Header.Get("Content-Type"); got != contentTypeJSON {
 			t.Fatalf("Content-Type = %q, want application/json", got)
 		}
 		var req map[string]any
@@ -448,7 +521,7 @@ func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
 			t.Fatalf("shutdown request = %+v, want empty JSON object", req)
 		}
 		writeJSON(w, http.StatusOK, ShutdownResponse{
-			APIVersion: APIVersion, Result: "shutdown_scheduled",
+			APIVersion: APIVersion, Result: resultShutdownScheduled,
 		})
 	}))
 	defer srv.Close()
@@ -461,7 +534,7 @@ func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
-	if shutdown.Result != "shutdown_scheduled" || !sawTrustedHeader {
+	if shutdown.Result != resultShutdownScheduled || !sawTrustedHeader {
 		t.Fatalf("Shutdown() = %+v trusted=%v, want shutdown_scheduled trusted result", shutdown, sawTrustedHeader)
 	}
 }
@@ -469,7 +542,7 @@ func TestClientShutdownPostsTrustedMutationAndReturnsResult(t *testing.T) {
 func TestClientReturnsStructuredErrorsMalformedResponsesAndTimeouts(t *testing.T) {
 	t.Run("structured_error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, http.StatusConflict, ErrorResponse{APIVersion: APIVersion, Error: ErrorDTO{Code: "conflict", Message: "busy", Status: http.StatusConflict}})
+			writeJSON(w, http.StatusConflict, ErrorResponse{APIVersion: APIVersion, Error: ErrorDTO{Code: errCodeConflict, Message: "busy", Status: http.StatusConflict}})
 		}))
 		defer srv.Close()
 		client, err := NewClient(ClientOptions{BaseURL: srv.URL})
@@ -481,7 +554,7 @@ func TestClientReturnsStructuredErrorsMalformedResponsesAndTimeouts(t *testing.T
 		if !errors.As(err, &apiErr) {
 			t.Fatalf("Features() error = %v, want APIError", err)
 		}
-		if apiErr.Code != "conflict" || apiErr.Status != http.StatusConflict {
+		if apiErr.Code != errCodeConflict || apiErr.Status != http.StatusConflict {
 			t.Fatalf("APIError = %+v, want conflict 409", apiErr)
 		}
 	})
@@ -518,12 +591,12 @@ func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 	t.Parallel()
 
 	messages := []llm.SDKMessage{
-		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "first transcript row"}}}}},
-		{Type: "assistant", Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "second transcript row"}}}}},
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "first transcript row"}}}}},
+		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "second transcript row"}}}}},
 	}
 	handler := NewHandler(HandlerOptions{
 		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			id: "sess-1", featureID: "feat-1", messages: messages,
+			id: fixtureSessionID, featureID: fixtureFeatureID, messages: messages,
 		}}},
 		DisableHostValidation: true,
 	})
@@ -534,14 +607,14 @@ func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	first, err := client.Transcript(context.Background(), "sess-1", CursorQuery{Limit: 1})
+	first, err := client.Transcript(context.Background(), fixtureSessionID, CursorQuery{Limit: 1})
 	if err != nil {
 		t.Fatalf("Transcript(first) error = %v", err)
 	}
 	if first.Cursor.Start != 0 || first.Cursor.End != 1 || len(first.Messages) != 1 || first.Messages[0].Text != "first transcript row" {
 		t.Fatalf("Transcript(first) = cursor %+v messages %+v; want first row", first.Cursor, first.Messages)
 	}
-	second, err := client.Transcript(context.Background(), "sess-1", CursorQuery{Cursor: first.Cursor.End, Limit: 1})
+	second, err := client.Transcript(context.Background(), fixtureSessionID, CursorQuery{Cursor: first.Cursor.End, Limit: 1})
 	if err != nil {
 		t.Fatalf("Transcript(second) error = %v", err)
 	}
@@ -557,7 +630,7 @@ func TestClientSendsBearerTokenOnReadsMutationsAndEvents(t *testing.T) {
 			t.Fatalf("%s %s Authorization = %q, want bearer token", r.Method, r.URL.Path, r.Header.Get("Authorization"))
 		}
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/features":
+		case routeGetFeatures:
 			sawReadAuth.Store(true)
 			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion})
 		case "POST /api/v1/shutdown":
@@ -573,7 +646,7 @@ func TestClientSendsBearerTokenOnReadsMutationsAndEvents(t *testing.T) {
 	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
-	client, err := NewClient(ClientOptions{BaseURL: srv.URL, Token: "test-token"})
+	client, err := NewClient(ClientOptions{BaseURL: srv.URL, Token: testAuthToken})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
@@ -598,7 +671,7 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 	var secondAfter atomic.Value
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v1/events":
+		case apiPathEvents:
 			w.Header().Set("Content-Type", "text/event-stream")
 			flusher := w.(http.Flusher)
 			n := eventConnections.Add(1)
@@ -612,9 +685,9 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 			flusher.Flush()
 			<-r.Context().Done()
 		case "/api/v1/features/feat-1":
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1"})})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: fixtureFeatureID})})
 		case "/api/v1/features/feat-1/live-preview":
-			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}})
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}})
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
@@ -631,18 +704,18 @@ func TestClientSSEReconnectAndSnapshotRefresh(t *testing.T) {
 		ReconnectDelay:    10 * time.Millisecond,
 	})
 	first := waitRefreshSignal(t, signals)
-	if first.Event.Kind != "connected" || !first.SnapshotRequired {
+	if first.Event.Kind != sseEventConnected || !first.SnapshotRequired {
 		t.Fatalf("first signal = %+v, want connected snapshot", first)
 	}
 	second := waitRefreshSignal(t, signals)
-	if second.Event.Kind != "lifecycle.updated" || second.Resource.FeatureID != "feat-1" {
+	if second.Event.Kind != sseEventLifecycleUpdated || second.Resource.FeatureID != fixtureFeatureID {
 		t.Fatalf("second signal = %+v, want feature lifecycle update for feat-1", second)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), second)
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != "feat-1" || snapshot.LivePreview == nil {
+	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != fixtureFeatureID || snapshot.LivePreview == nil {
 		t.Fatalf("FetchRefreshSnapshot() = %+v, want feature and live preview snapshots", snapshot)
 	}
 	if got, _ := secondAfter.Load().(string); got != "1" {
@@ -665,7 +738,7 @@ func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testin
 	var sawSnapshotClient atomic.Bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v1/events":
+		case apiPathEvents:
 			if r.Header.Get("X-Test-Client") == "events" {
 				sawEventClient.Store(true)
 			}
@@ -684,12 +757,12 @@ func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testin
 			if r.Header.Get("X-Test-Client") == "snapshot" {
 				sawSnapshotClient.Store(true)
 			}
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1"})})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: fixtureFeatureID})})
 		case "/api/v1/features/feat-1/live-preview":
 			if r.Header.Get("X-Test-Client") == "snapshot" {
 				sawSnapshotClient.Store(true)
 			}
-			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}})
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}})
 		default:
 			t.Fatalf("unexpected request %s", r.URL.Path)
 		}
@@ -711,18 +784,18 @@ func TestClientSSEReconnectSnapshotRefreshCanUseDistinctClientInstance(t *testin
 		ReconnectDelay:    10 * time.Millisecond,
 	})
 	first := waitRefreshSignal(t, signals)
-	if first.Event.Kind != "connected" || !first.SnapshotRequired {
+	if first.Event.Kind != sseEventConnected || !first.SnapshotRequired {
 		t.Fatalf("first signal = %+v, want connected snapshot", first)
 	}
 	second := waitRefreshSignal(t, signals)
-	if second.Event.Kind != "lifecycle.updated" || second.Resource.FeatureID != "feat-1" {
+	if second.Event.Kind != sseEventLifecycleUpdated || second.Resource.FeatureID != fixtureFeatureID {
 		t.Fatalf("second signal = %+v, want feature lifecycle update for feat-1", second)
 	}
 	snapshot, err := snapshotClient.FetchRefreshSnapshot(context.Background(), second)
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != "feat-1" || snapshot.LivePreview == nil {
+	if snapshot.Feature == nil || snapshot.Feature.Feature.ID != fixtureFeatureID || snapshot.LivePreview == nil {
 		t.Fatalf("FetchRefreshSnapshot() = %+v, want feature snapshot", snapshot)
 	}
 	if !sawEventClient.Load() || !sawSnapshotClient.Load() {
@@ -746,13 +819,13 @@ func TestClientFetchRefreshSnapshotIgnoresSessionOutputActivity(t *testing.T) {
 	var sawLivePreview bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/sessions/sess-1":
+		case routeGetSession1:
 			sawSessionDetail = true
 			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
-				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1"},
+				SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID},
 				CursorDTO{Total: 53, Start: 0, End: 53},
 			)})
-		case "GET /api/v1/sessions/sess-1/transcript":
+		case routeGetSession1Transcript:
 			sawTranscript = true
 			if got := r.URL.Query().Get("offset"); got != "3" {
 				t.Errorf("transcript offset = %q, want 3", got)
@@ -763,13 +836,13 @@ func TestClientFetchRefreshSnapshotIgnoresSessionOutputActivity(t *testing.T) {
 			writeJSON(w, http.StatusOK, TranscriptResponse{
 				APIVersion: APIVersion,
 				Cursor:     CursorDTO{Total: 53, Start: 3, End: 53},
-				Messages:   []TranscriptMessageDTO{{Index: 52, Role: "assistant", Type: "text", Text: "fresh tail"}},
+				Messages:   []TranscriptMessageDTO{{Index: 52, Role: roleAssistant, Type: blockTypeText, Text: "fresh tail"}},
 			})
-		case "GET /api/v1/prompts":
+		case routeGetPrompts:
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
-		case "GET /api/v1/features/feat-1/live-preview":
+		case routeGetLivePreview:
 			sawLivePreview = true
-			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}, Activity: "Using Bash..."})
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}, Activity: "Using Bash..."})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -782,8 +855,8 @@ func TestClientFetchRefreshSnapshotIgnoresSessionOutputActivity(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "session.output.activity"},
-		Resource: ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"},
+		Event:    SSEEventDTO{Kind: sseEventSessionOutputActivity},
+		Resource: ResourceDTO{Type: resourceTypeSession, ID: fixtureSessionID, FeatureID: fixtureFeatureID},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
@@ -802,18 +875,18 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *tes
 	var sawLivePreview bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/sessions/sess-1":
+		case routeGetSession1:
 			sawSessionDetail = true
 			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
-				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Running"},
+				SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: "Running"},
 				CursorDTO{},
 			)})
-		case "GET /api/v1/prompts":
+		case routeGetPrompts:
 			sawPrompts = true
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
-		case "GET /api/v1/features/feat-1/live-preview":
+		case routeGetLivePreview:
 			sawLivePreview = true
-			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}, Activity: "Working"})
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}, Activity: "Working"})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -826,19 +899,19 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForSessionUpdate(t *tes
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "session.updated"},
-		Resource: ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"},
+		Event:    SSEEventDTO{Kind: sseEventSessionUpdated},
+		Resource: ResourceDTO{Type: resourceTypeSession, ID: fixtureSessionID, FeatureID: fixtureFeatureID},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "sess-1" {
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != fixtureSessionID {
 		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want sess-1 detail", snapshot.Session, sawSessionDetail)
 	}
 	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.AskUserQuestions) != 0 {
 		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want empty prompt snapshot to clear stale client prompts", snapshot.Prompts, sawPrompts)
 	}
-	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" {
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != fixtureFeatureID {
 		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want feat-1 preview", snapshot.LivePreview, sawLivePreview)
 	}
 }
@@ -849,19 +922,19 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForFeatureScopedSession
 	var sawLivePreview bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/sessions":
+		case routeGetSessions:
 			sawSessions = true
 			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
-				{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+				{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: sessionStatusWaitingHelp},
 			}})
-		case "GET /api/v1/prompts":
+		case routeGetPrompts:
 			sawPrompts = true
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion, HelpQueue: []HelpQueueDTO{
-				{FeatureID: "feat-1", Question: "Agent has a question", Pending: true},
+				{FeatureID: fixtureFeatureID, Question: agentQuestionPrompt, Pending: true},
 			}})
-		case "GET /api/v1/features/feat-1/live-preview":
+		case routeGetLivePreview:
 			sawLivePreview = true
-			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: "feat-1"}, Activity: "Waiting"})
+			writeJSON(w, http.StatusOK, LivePreviewResponse{APIVersion: APIVersion, Feature: FeatureSummary{ID: fixtureFeatureID}, Activity: "Waiting"})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -874,8 +947,8 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForFeatureScopedSession
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "session.updated"},
-		Resource: ResourceDTO{Type: "session", FeatureID: "feat-1"},
+		Event:    SSEEventDTO{Kind: sseEventSessionUpdated},
+		Resource: ResourceDTO{Type: resourceTypeSession, FeatureID: fixtureFeatureID},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
@@ -886,7 +959,7 @@ func TestClientFetchRefreshSnapshotIncludesPromptSnapshotForFeatureScopedSession
 	if !sawPrompts || snapshot.Prompts == nil || len(snapshot.Prompts.HelpQueue) != 1 {
 		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want prompt snapshot for feature-scoped session update", snapshot.Prompts, sawPrompts)
 	}
-	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" {
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != fixtureFeatureID {
 		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want feat-1 preview", snapshot.LivePreview, sawLivePreview)
 	}
 }
@@ -899,34 +972,34 @@ func TestClientFetchRefreshSnapshotHydratesLivePreviewSessionForFeatureScopedSes
 	var sawTranscript bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/sessions":
+		case routeGetSessions:
 			sawSessions = true
 			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
-				{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+				{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: sessionStatusWaitingHelp},
 			}})
-		case "GET /api/v1/prompts":
+		case routeGetPrompts:
 			sawPrompts = true
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
-		case "GET /api/v1/features/feat-1/live-preview":
+		case routeGetLivePreview:
 			sawLivePreview = true
 			writeJSON(w, http.StatusOK, LivePreviewResponse{
 				APIVersion: APIVersion,
-				Feature:    FeatureSummary{ID: "feat-1"},
-				Session:    &SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+				Feature:    FeatureSummary{ID: fixtureFeatureID},
+				Session:    &SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: sessionStatusWaitingHelp},
 				Activity:   "Waiting",
 			})
-		case "GET /api/v1/sessions/sess-1":
+		case routeGetSession1:
 			sawSessionDetail = true
 			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
-				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "WaitingHelp"},
+				SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: sessionStatusWaitingHelp},
 				CursorDTO{Total: 7, Start: 0, End: 7},
 			)})
-		case "GET /api/v1/sessions/sess-1/transcript":
+		case routeGetSession1Transcript:
 			sawTranscript = true
 			writeJSON(w, http.StatusOK, TranscriptResponse{
 				APIVersion: APIVersion,
 				Cursor:     CursorDTO{Total: 7, Start: 0, End: 7},
-				Messages:   []TranscriptMessageDTO{{Index: 6, Role: "assistant", Type: "text", Text: "Choose?"}},
+				Messages:   []TranscriptMessageDTO{{Index: 6, Role: roleAssistant, Type: blockTypeText, Text: askUserQuestionSampleText}},
 			})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
@@ -940,8 +1013,8 @@ func TestClientFetchRefreshSnapshotHydratesLivePreviewSessionForFeatureScopedSes
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "session.updated"},
-		Resource: ResourceDTO{Type: "session", FeatureID: "feat-1"},
+		Event:    SSEEventDTO{Kind: sseEventSessionUpdated},
+		Resource: ResourceDTO{Type: resourceTypeSession, FeatureID: fixtureFeatureID},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
@@ -952,13 +1025,13 @@ func TestClientFetchRefreshSnapshotHydratesLivePreviewSessionForFeatureScopedSes
 	if !sawPrompts || snapshot.Prompts == nil {
 		t.Fatalf("FetchRefreshSnapshot() prompts = %+v, sawPrompts=%v; want prompt snapshot", snapshot.Prompts, sawPrompts)
 	}
-	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Session == nil || snapshot.LivePreview.Session.ID != "sess-1" {
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Session == nil || snapshot.LivePreview.Session.ID != fixtureSessionID {
 		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want sess-1 preview", snapshot.LivePreview, sawLivePreview)
 	}
-	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "sess-1" {
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != fixtureSessionID {
 		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want live preview session detail", snapshot.Session, sawSessionDetail)
 	}
-	if !sawTranscript || snapshot.Transcript == nil || len(snapshot.Transcript.Messages) != 1 || snapshot.Transcript.Messages[0].Text != "Choose?" {
+	if !sawTranscript || snapshot.Transcript == nil || len(snapshot.Transcript.Messages) != 1 || snapshot.Transcript.Messages[0].Text != askUserQuestionSampleText {
 		t.Fatalf("FetchRefreshSnapshot() transcript = %+v, sawTranscript=%v; want live preview session transcript", snapshot.Transcript, sawTranscript)
 	}
 }
@@ -967,25 +1040,25 @@ func TestClientFetchRefreshSnapshotResnapshotsPromptsOnConnected(t *testing.T) {
 	var sawFeatures, sawPrompts, sawPermissions, sawSessions bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/features":
+		case routeGetFeatures:
 			sawFeatures = true
 			writeJSON(w, http.StatusOK, FeatureListResponse{APIVersion: APIVersion, Features: []FeatureSummary{
-				{ID: "feat-1", Status: "Designing"},
+				{ID: fixtureFeatureID, Status: "Designing"},
 			}})
-		case "GET /api/v1/prompts":
+		case routeGetPrompts:
 			sawPrompts = true
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion, AskUserQuestions: []ControlRequestDTO{
-				{RequestID: "req-1", FeatureID: "feat-1", ToolName: "AskUserQuestion", Status: "pending"},
+				{RequestID: "req-1", FeatureID: fixtureFeatureID, ToolName: toolNameAskUserQuestion, Status: controlRequestStatusPending},
 			}})
 		case "GET /api/v1/permissions":
 			sawPermissions = true
 			writeJSON(w, http.StatusOK, PermissionSnapshotResponse{APIVersion: APIVersion})
-		case "GET /api/v1/sessions":
+		case routeGetSessions:
 			sawSessions = true
 			writeJSON(w, http.StatusOK, SessionListResponse{APIVersion: APIVersion, Sessions: []SessionSummaryDTO{
-				{ID: "feat-1-design", FeatureID: "feat-1", Status: "WaitingHelp"},
+				{ID: "feat-1-design", FeatureID: fixtureFeatureID, Status: sessionStatusWaitingHelp},
 			}})
-		case "GET /api/v1/health":
+		case routeGetHealth:
 			writeJSON(w, http.StatusOK, HealthResponse{APIVersion: APIVersion})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
@@ -1003,8 +1076,8 @@ func TestClientFetchRefreshSnapshotResnapshotsPromptsOnConnected(t *testing.T) {
 	// events, so this (re)connect is the only chance to pull the pending
 	// question into the prompt snapshot that drives the dashboard help badge.
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:            SSEEventDTO{Kind: "connected", Resource: ResourceDTO{Type: "runtime"}, SnapshotRequired: true},
-		Resource:         ResourceDTO{Type: "runtime"},
+		Event:            SSEEventDTO{Kind: sseEventConnected, Resource: ResourceDTO{Type: resourceTypeRuntime}, SnapshotRequired: true},
+		Resource:         ResourceDTO{Type: resourceTypeRuntime},
 		SnapshotRequired: true,
 	})
 	if err != nil {
@@ -1030,24 +1103,24 @@ func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.
 	var sawFeatureDetail bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/sessions/sess-1":
+		case routeGetSession1:
 			sawSessionDetail = true
 			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
-				SessionSummaryDTO{ID: "sess-1", FeatureID: "feat-1", Status: "Done"},
+				SessionSummaryDTO{ID: fixtureSessionID, FeatureID: fixtureFeatureID, Status: sessionStatusDone},
 				CursorDTO{Total: 0, Start: 0, End: 0},
 			)})
-		case "GET /api/v1/prompts":
+		case routeGetPrompts:
 			writeJSON(w, http.StatusOK, PromptSnapshotResponse{APIVersion: APIVersion})
-		case "GET /api/v1/features/feat-1/live-preview":
+		case routeGetLivePreview:
 			sawLivePreview = true
 			writeJSON(w, http.StatusOK, LivePreviewResponse{
 				APIVersion: APIVersion,
-				Feature:    FeatureSummary{ID: "feat-1", Status: "CodeReady", CurrentPhase: "publish"},
-				Activity:   "Done",
+				Feature:    FeatureSummary{ID: fixtureFeatureID, Status: featureStatusCodeReady, CurrentPhase: actionPublish},
+				Activity:   sessionStatusDone,
 			})
 		case "GET /api/v1/features/feat-1":
 			sawFeatureDetail = true
-			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: "feat-1", Status: "CodeReady", CurrentPhase: "publish"})})
+			writeJSON(w, http.StatusOK, FeatureDetailResponse{APIVersion: APIVersion, Feature: testFeatureDetail(FeatureSummary{ID: fixtureFeatureID, Status: featureStatusCodeReady, CurrentPhase: actionPublish})})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
@@ -1060,19 +1133,19 @@ func TestClientFetchRefreshSnapshotIncludesFeatureForTerminalSession(t *testing.
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "session.updated"},
-		Resource: ResourceDTO{Type: "session", ID: "sess-1", FeatureID: "feat-1"},
+		Event:    SSEEventDTO{Kind: sseEventSessionUpdated},
+		Resource: ResourceDTO{Type: resourceTypeSession, ID: fixtureSessionID, FeatureID: fixtureFeatureID},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "sess-1" {
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != fixtureSessionID {
 		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want sess-1 detail", snapshot.Session, sawSessionDetail)
 	}
-	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != "feat-1" || snapshot.LivePreview.Activity != "Done" {
+	if !sawLivePreview || snapshot.LivePreview == nil || snapshot.LivePreview.Feature.ID != fixtureFeatureID || snapshot.LivePreview.Activity != sessionStatusDone {
 		t.Fatalf("FetchRefreshSnapshot() live preview = %+v, sawLivePreview=%v; want terminal preview", snapshot.LivePreview, sawLivePreview)
 	}
-	if !sawFeatureDetail || snapshot.Feature == nil || snapshot.Feature.Feature.Status != "CodeReady" || snapshot.Feature.Feature.CurrentPhase != "publish" {
+	if !sawFeatureDetail || snapshot.Feature == nil || snapshot.Feature.Feature.Status != featureStatusCodeReady || snapshot.Feature.Feature.CurrentPhase != actionPublish {
 		t.Fatalf("FetchRefreshSnapshot() feature = %+v, sawFeatureDetail=%v; want refreshed feature detail", snapshot.Feature, sawFeatureDetail)
 	}
 }
@@ -1085,7 +1158,7 @@ func TestClientFetchRefreshSnapshotSkipsLivePreviewForChatSession(t *testing.T) 
 		case "GET /api/v1/sessions/__chat__":
 			sawSessionDetail = true
 			writeJSON(w, http.StatusOK, SessionDetailResponse{APIVersion: APIVersion, Session: testSessionDetail(
-				SessionSummaryDTO{ID: "__chat__", FeatureID: "__chat__"},
+				SessionSummaryDTO{ID: ChatSessionID, FeatureID: ChatSessionID},
 				CursorDTO{Total: 2, Start: 0, End: 2},
 			)})
 		case "GET /api/v1/sessions/__chat__/transcript":
@@ -1094,8 +1167,8 @@ func TestClientFetchRefreshSnapshotSkipsLivePreviewForChatSession(t *testing.T) 
 				APIVersion: APIVersion,
 				Cursor:     CursorDTO{Total: 2, Start: 0, End: 2},
 				Messages: []TranscriptMessageDTO{
-					{Index: 0, Role: "assistant", Type: "text", Text: "monthly spend limit"},
-					{Index: 1, Role: "system", Type: "result", Status: "error", Redacted: true},
+					{Index: 0, Role: roleAssistant, Type: blockTypeText, Text: "monthly spend limit"},
+					{Index: 1, Role: roleSystem, Type: "result", Status: "error", Redacted: true},
 				},
 			})
 		default:
@@ -1110,13 +1183,13 @@ func TestClientFetchRefreshSnapshotSkipsLivePreviewForChatSession(t *testing.T) 
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "session.updated"},
-		Resource: ResourceDTO{Type: "session", ID: "__chat__", FeatureID: "__chat__"},
+		Event:    SSEEventDTO{Kind: sseEventSessionUpdated},
+		Resource: ResourceDTO{Type: resourceTypeSession, ID: ChatSessionID, FeatureID: ChatSessionID},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)
 	}
-	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != "__chat__" {
+	if !sawSessionDetail || snapshot.Session == nil || snapshot.Session.Session.ID != ChatSessionID {
 		t.Fatalf("FetchRefreshSnapshot() session = %+v, sawSessionDetail=%v; want chat detail", snapshot.Session, sawSessionDetail)
 	}
 	if !sawTranscript || snapshot.Transcript == nil || len(snapshot.Transcript.Messages) != 2 {
@@ -1132,7 +1205,7 @@ func TestClientFetchRefreshSnapshotIncludesRecoveryForRecoveryUpdates(t *testing
 	var sawRecovery bool
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /api/v1/health":
+		case routeGetHealth:
 			sawHealth = true
 			writeJSON(w, http.StatusOK, HealthResponse{APIVersion: APIVersion, Status: "ok"})
 		case "GET /api/v1/recovery":
@@ -1141,16 +1214,16 @@ func TestClientFetchRefreshSnapshotIncludesRecoveryForRecoveryUpdates(t *testing
 				APIVersion: APIVersion,
 				SnapshotID: "recovery-snapshot-2",
 				Items: []RecoveryItemDTO{{
-					Key:            "feat-1:api",
-					FeatureID:      "feat-1",
-					FeatureName:    "Client cutover",
-					RepoName:       "api",
-					Phase:          "implement",
+					Key:            fixtureRecoveryItemKey,
+					FeatureID:      fixtureFeatureID,
+					FeatureName:    testFeatureName,
+					RepoName:       repoNameAPI,
+					Phase:          targetPhaseImplement,
 					Iteration:      8,
 					PID:            4321,
 					ProcessAlive:   true,
-					DefaultAction:  "kill",
-					AllowedActions: []string{"kill", "skip"},
+					DefaultAction:  recoveryActionKill,
+					AllowedActions: []string{recoveryActionKill, recoveryActionSkip},
 				}},
 			})
 		default:
@@ -1165,8 +1238,8 @@ func TestClientFetchRefreshSnapshotIncludesRecoveryForRecoveryUpdates(t *testing
 		t.Fatalf("NewClient() error = %v", err)
 	}
 	snapshot, err := client.FetchRefreshSnapshot(context.Background(), RefreshSignal{
-		Event:    SSEEventDTO{Kind: "recovery.updated"},
-		Resource: ResourceDTO{Type: "runtime"},
+		Event:    SSEEventDTO{Kind: sseEventRecoveryUpdated},
+		Resource: ResourceDTO{Type: resourceTypeRuntime},
 	})
 	if err != nil {
 		t.Fatalf("FetchRefreshSnapshot() error = %v", err)

@@ -215,12 +215,12 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	sess := newUtilityTestSession()
 	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))
 	sess.result = &llm.ResultMessage{
-		Type:       "result",
-		Subtype:    "success",
+		Type:       testResultMessageType,
+		Subtype:    testResultSuccessValue,
 		Result:     "done",
-		StopReason: "end_turn",
+		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- "SUCCESS"
+	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	prCtx := PRContext{FeatureName: "test", Roadmap: "plan content"}

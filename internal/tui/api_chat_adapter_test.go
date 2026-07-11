@@ -22,6 +22,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
+// testTurnStateWaitingInput, testControlStatusPending, and testTurnStateFailed
+// are SessionDetailDTO/ControlRequestDTO fixture values for this file's tests.
+const (
+	testTurnStateWaitingInput = "waiting_input"
+	testControlStatusPending  = "pending"
+	testTurnStateFailed       = "failed"
+)
+
 func TestAPIChatEventsFromSnapshotNormalizesTranscriptAndCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -29,12 +37,12 @@ func TestAPIChatEventsFromSnapshotNormalizesTranscriptAndCompletion(t *testing.T
 	detail := apiTestSessionDetail(server.SessionSummaryDTO{
 		ID:        chatSessionID,
 		FeatureID: chatSessionID,
-		Status:    "Running",
-		TurnState: "waiting_input",
+		Status:    session.SessionRunning.String(),
+		TurnState: testTurnStateWaitingInput,
 	})
 	transcript := &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-		{Index: 0, BlockIndex: 0, Role: "assistant", Type: "text", Text: "First paragraph."},
-		{Index: 0, BlockIndex: 1, Role: "assistant", Type: "text", Text: "Second paragraph."},
+		{Index: 0, BlockIndex: 0, Role: roleAssistant, Type: blockTypeText, Text: testAssistantTextFirstParagraph},
+		{Index: 0, BlockIndex: 1, Role: roleAssistant, Type: blockTypeText, Text: testAssistantTextSecondParagraph},
 	}}
 
 	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
@@ -45,7 +53,7 @@ func TestAPIChatEventsFromSnapshotNormalizesTranscriptAndCompletion(t *testing.T
 	})
 
 	assertChatEventKinds(t, events, chatEventAssistantText, chatEventAssistantText, chatEventCompleted)
-	if events[0].Text != "First paragraph." || events[1].Text != "Second paragraph." {
+	if events[0].Text != testAssistantTextFirstParagraph || events[1].Text != testAssistantTextSecondParagraph {
 		t.Fatalf("assistant text events = %#v, want both transcript fragments", events)
 	}
 }
@@ -57,11 +65,11 @@ func TestAPIChatEventsFromSnapshotEmitsNoAnswerCompletion(t *testing.T) {
 	detail := apiTestSessionDetail(server.SessionSummaryDTO{
 		ID:        chatSessionID,
 		FeatureID: chatSessionID,
-		Status:    "Running",
-		TurnState: "waiting_input",
+		Status:    session.SessionRunning.String(),
+		TurnState: testTurnStateWaitingInput,
 	})
 	transcript := &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-		{Index: 0, Role: "system", Type: "tool_progress", Tool: "Read", Redacted: true},
+		{Index: 0, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: toolNameRead, Redacted: true},
 	}}
 
 	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
@@ -82,21 +90,21 @@ func TestAPIChatEventsFromSnapshotPendingAskUserSuppressesCompletion(t *testing.
 
 	active := newTestAPIChatSession()
 	askControl := server.ControlRequestDTO{
-		RequestID: "ask-1",
+		RequestID: testAskRequestID,
 		SessionID: chatSessionID,
 		FeatureID: chatSessionID,
-		ToolName:  "AskUserQuestion",
-		Status:    "pending",
+		ToolName:  toolNameAskUserQuestion,
+		Status:    testControlStatusPending,
 		Questions: []server.AskUserQuestionDTO{{
-			Question: "Pick a direction",
-			Options:  []server.AskUserOptionDTO{{Label: "Alpha"}, {Label: "Beta"}},
+			Question: testQuestionPickDirection,
+			Options:  []server.AskUserOptionDTO{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}},
 		}},
 	}
 	detail := apiTestSessionDetailWith(
 		server.SessionSummaryDTO{
 			ID:        chatSessionID,
 			FeatureID: chatSessionID,
-			Status:    "WaitingHelp",
+			Status:    session.SessionWaitingHelp.String(),
 		},
 		server.SessionDetailDTO{
 			PendingControls: []server.ControlRequestDTO{askControl},
@@ -110,7 +118,7 @@ func TestAPIChatEventsFromSnapshotPendingAskUserSuppressesCompletion(t *testing.
 	})
 
 	assertChatEventKinds(t, events, chatEventPendingQuestion)
-	if events[0].RequestID != "ask-1" || len(events[0].Questions) != 1 || events[0].Questions[0].Question != "Pick a direction" {
+	if events[0].RequestID != testAskRequestID || len(events[0].Questions) != 1 || events[0].Questions[0].Question != testQuestionPickDirection {
 		t.Fatalf("pending question event = %#v, want parsed AskUser question", events[0])
 	}
 }
@@ -123,8 +131,8 @@ func TestAPIChatEventsFromSnapshotFailedWithoutTranscriptEmitsError(t *testing.T
 		server.SessionSummaryDTO{
 			ID:        chatSessionID,
 			FeatureID: chatSessionID,
-			Status:    "Failed",
-			TurnState: "failed",
+			Status:    session.SessionFailed.String(),
+			TurnState: testTurnStateFailed,
 		},
 		server.SessionDetailDTO{
 			SafeError: "process exited with code 1",
@@ -149,7 +157,7 @@ func TestAPIChatAnswerEchoSuppressesLocalTranscriptEcho(t *testing.T) {
 	active := newTestAPIChatSession()
 	active.client = &fakeTUIAPIClient{}
 	raw := json.RawMessage(`{"questions":[{"question":"Pick a direction"}]}`)
-	if err := active.RespondToAskUser("ask-1", raw, map[string]string{"Pick a direction": "nothing"}, nil); err != nil {
+	if err := active.RespondToAskUser(testAskRequestID, raw, map[string]string{testQuestionPickDirection: "nothing"}, nil); err != nil {
 		t.Fatalf("RespondToAskUser() error = %v", err)
 	}
 	if !apiHasLocalUserEcho(active.log, "nothing") {
@@ -161,10 +169,10 @@ func TestAPIChatAnswerEchoSuppressesLocalTranscriptEcho(t *testing.T) {
 		Detail: apiTestSessionDetail(server.SessionSummaryDTO{
 			ID:        chatSessionID,
 			FeatureID: chatSessionID,
-			Status:    "Running",
+			Status:    session.SessionRunning.String(),
 		}),
 		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
-			{Index: 1, Role: "user", Type: "text", Text: "nothing", LocallyAppended: true},
+			{Index: 1, Role: roleUser, Type: blockTypeText, Text: "nothing", LocallyAppended: true},
 		}},
 	})
 

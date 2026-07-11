@@ -30,10 +30,48 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+)
+
+// Test-fixture literals reused across several cases in this file.
+const (
+	testFeaturePermissionID = "feat-permission"
+	testFeatureHelpID       = "feat-help"
+	testAskRequestID        = "ask-1"
+	testWorkspaceDir        = "/workspace"
+	testRepoAWorktreePath   = "/tmp/repo-a-worktree"
+
+	wireTypeControlRequest = "control_request"
+	wireSubtypeCanUseTool  = "can_use_tool"
+
+	decisionAllowRemember     = "allow_remember"
+	rememberPatternBashGoTest = "Bash(go test *)"
+
+	labelUseFullInput = "Use the full input (Recommended)"
+
+	testResearchModelNew       = "new-research"
+	testImplementationModelNew = "new-implementation"
+	testPlanningModelDefault   = "default-planning"
+
+	testInquirenessHigh = "high"
+	testInquirenessNone = "none"
+
+	testModelCodexGPT54     = "codex:gpt-5.4"
+	testModelClaudeSonnet   = "claude:sonnet"
+	testModelCodexGPT54Mini = "codex:gpt-5.4-mini"
+
+	testSessionPermissionID = "session-permission"
+	testPermRequestID       = "perm-1"
+	testRepoAName           = "repo-a"
+	testSessionAskID        = "session-ask"
+	testSessionHelpID       = "session-help"
+	testReviewerLogin       = "reviewer"
+
+	reviewCommentsModeAddressAll = "address_all"
 )
 
 func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *testing.T) {
@@ -42,23 +80,23 @@ func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *
 		decision  string
 		wantAllow bool
 	}{
-		{name: "allow", decision: "allow", wantAllow: true},
+		{name: "allow once", decision: "allow_once", wantAllow: true},
 		{name: "deny", decision: "deny", wantAllow: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
 			sess := &mutationTargetSessionView{
-				id:        "session-permission",
-				featureID: "feat-permission",
+				id:        testSessionPermissionID,
+				featureID: testFeaturePermissionID,
 				phase:     feature.PhaseImplement,
 				status:    ports.SessionWaitingPermission,
 				active:    true,
 				pending: []*llm.ControlRequestMessage{{
-					Type:      "control_request",
-					RequestID: "perm-1",
+					Type:      wireTypeControlRequest,
+					RequestID: testPermRequestID,
 					Request: llm.ControlRequest{
-						Subtype:  "can_use_tool",
-						ToolName: "Bash",
+						Subtype:  wireSubtypeCanUseTool,
+						ToolName: toolNameBash,
 						Input:    input,
 					},
 				}},
@@ -70,8 +108,8 @@ func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *
 			}
 
 			result, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
-				RequestID: "perm-1",
-				SessionID: "session-permission",
+				RequestID: testPermRequestID,
+				SessionID: testSessionPermissionID,
 				Decision:  tc.decision,
 			})
 			if err != nil {
@@ -82,17 +120,212 @@ func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *
 				t.Fatalf("RespondToControl calls = %d, want 1", len(sess.controlCalls))
 			}
 			call := sess.controlCalls[0]
-			if call.requestID != "perm-1" || call.allow != tc.wantAllow {
+			if call.requestID != testPermRequestID || call.allow != tc.wantAllow {
 				t.Fatalf("RespondToControl call = %+v, want request perm-1 allow=%v", call, tc.wantAllow)
 			}
 			if !jsonEqual(call.originalInput, input) {
 				t.Fatalf("RespondToControl original input = %s, want %s", call.originalInput, input)
 			}
-			if result.RequestID != "perm-1" || result.SessionID != "session-permission" || result.Decision != tc.decision || result.Result != "answered" {
+			if result.RequestID != testPermRequestID || result.SessionID != testSessionPermissionID || result.Decision != tc.decision || result.Result != resultAnswered {
 				t.Fatalf("AnswerPermission() result = %+v; want request/session/decision answer", result)
 			}
 			assertJSONDoesNotContain(t, result, "go test ./cmd/agentico")
 		})
+	}
+}
+
+func TestServerMutationTargetAnswerPermissionRejectsLegacyAllow(t *testing.T) {
+	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
+	sess := &mutationTargetSessionView{
+		id:        testSessionPermissionID,
+		featureID: testFeaturePermissionID,
+		phase:     feature.PhaseImplement,
+		status:    ports.SessionWaitingPermission,
+		active:    true,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      wireTypeControlRequest,
+			RequestID: testPermRequestID,
+			Request: llm.ControlRequest{
+				Subtype:  wireSubtypeCanUseTool,
+				ToolName: toolNameBash,
+				Input:    input,
+			},
+		}},
+	}
+	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+	target := serverMutationTarget{
+		orch:     mutationTargetOrchestrator(sessions),
+		sessions: sessions,
+	}
+
+	_, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+		RequestID: testPermRequestID,
+		SessionID: testSessionPermissionID,
+		Decision:  "allow",
+	})
+	if err == nil {
+		t.Fatal("AnswerPermission() error = nil, want legacy allow rejected")
+	}
+	if len(sess.controlCalls) != 0 {
+		t.Fatalf("RespondToControl calls = %d, want none", len(sess.controlCalls))
+	}
+}
+
+func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t *testing.T) {
+	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
+	permDir := t.TempDir()
+	cache := permission.NewCache(permission.NewStore(permDir))
+	sess := &mutationTargetSessionView{
+		id:             testSessionPermissionID,
+		featureID:      testFeaturePermissionID,
+		phase:          feature.PhaseImplement,
+		status:         ports.SessionWaitingPermission,
+		active:         true,
+		permCacheScope: testRepoAName,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      wireTypeControlRequest,
+			RequestID: testPermRequestID,
+			Request: llm.ControlRequest{
+				Subtype:  wireSubtypeCanUseTool,
+				ToolName: toolNameBash,
+				Input:    input,
+			},
+		}},
+		onRespondControl: func() error {
+			if _, ok := cache.Check(toolNameBash, string(input), testRepoAName); !ok {
+				t.Fatal("rule was not persisted before answering")
+			}
+			return nil
+		},
+	}
+	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+	target := serverMutationTarget{
+		orch:            mutationTargetOrchestrator(sessions),
+		sessions:        sessions,
+		permissionCache: cache,
+	}
+	scope := testRepoAName
+
+	result, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+		RequestID:       testPermRequestID,
+		SessionID:       testSessionPermissionID,
+		Decision:        decisionAllowRemember,
+		RememberPattern: rememberPatternBashGoTest,
+		RememberScope:   &scope,
+	})
+	if err != nil {
+		t.Fatalf("AnswerPermission() error = %v", err)
+	}
+	if len(sess.controlCalls) != 1 || !sess.controlCalls[0].allow {
+		t.Fatalf("RespondToControl calls = %+v, want one allow", sess.controlCalls)
+	}
+	if result.Decision != decisionAllowRemember || result.Result != resultAnswered {
+		t.Fatalf("AnswerPermission() result = %+v, want remembered answer", result)
+	}
+	if _, ok := cache.Check(toolNameBash, string(input), testRepoAName); !ok {
+		t.Fatal("remembered rule missing after answer")
+	}
+	auditRaw, err := os.ReadFile(filepath.Join(permDir, "remember-audit.jsonl"))
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	if !strings.Contains(string(auditRaw), `"result":"success"`) {
+		t.Fatalf("audit log = %s, want success event", auditRaw)
+	}
+}
+
+func TestServerMutationTargetAnswerPermissionAllowRememberPersistenceFailureDoesNotAnswer(t *testing.T) {
+	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
+	permDir := filepath.Join(t.TempDir(), "permissions")
+	if err := os.WriteFile(permDir, []byte("not a dir"), 0o600); err != nil {
+		t.Fatalf("write blocking permission path: %v", err)
+	}
+	cache := permission.NewCache(permission.NewStore(permDir))
+	sess := &mutationTargetSessionView{
+		id:        testSessionPermissionID,
+		featureID: testFeaturePermissionID,
+		phase:     feature.PhaseImplement,
+		status:    ports.SessionWaitingPermission,
+		active:    true,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      wireTypeControlRequest,
+			RequestID: testPermRequestID,
+			Request: llm.ControlRequest{
+				Subtype:  wireSubtypeCanUseTool,
+				ToolName: toolNameBash,
+				Input:    input,
+			},
+		}},
+	}
+	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+	target := serverMutationTarget{
+		orch:            mutationTargetOrchestrator(sessions),
+		sessions:        sessions,
+		permissionCache: cache,
+	}
+	scope := testRepoAName
+
+	_, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+		RequestID:       testPermRequestID,
+		SessionID:       testSessionPermissionID,
+		Decision:        decisionAllowRemember,
+		RememberPattern: rememberPatternBashGoTest,
+		RememberScope:   &scope,
+	})
+	if err == nil {
+		t.Fatal("AnswerPermission() error = nil, want persistence failure")
+	}
+	if len(sess.controlCalls) != 0 {
+		t.Fatalf("RespondToControl calls = %+v, want none", sess.controlCalls)
+	}
+}
+
+func TestServerMutationTargetAnswerPermissionAllowRememberDuplicateReturnsAlreadyExisted(t *testing.T) {
+	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
+	permDir := t.TempDir()
+	cache := permission.NewCache(permission.NewStore(permDir))
+	if _, err := cache.RememberAllowPattern(rememberPatternBashGoTest, testRepoAName); err != nil {
+		t.Fatalf("seed remembered rule: %v", err)
+	}
+	sess := &mutationTargetSessionView{
+		id:        testSessionPermissionID,
+		featureID: testFeaturePermissionID,
+		phase:     feature.PhaseImplement,
+		status:    ports.SessionWaitingPermission,
+		active:    true,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      wireTypeControlRequest,
+			RequestID: testPermRequestID,
+			Request: llm.ControlRequest{
+				Subtype:  wireSubtypeCanUseTool,
+				ToolName: toolNameBash,
+				Input:    input,
+			},
+		}},
+	}
+	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
+	target := serverMutationTarget{
+		orch:            mutationTargetOrchestrator(sessions),
+		sessions:        sessions,
+		permissionCache: cache,
+	}
+	scope := testRepoAName
+
+	result, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+		RequestID:       testPermRequestID,
+		SessionID:       testSessionPermissionID,
+		Decision:        decisionAllowRemember,
+		RememberPattern: rememberPatternBashGoTest,
+		RememberScope:   &scope,
+	})
+	if err != nil {
+		t.Fatalf("AnswerPermission() error = %v", err)
+	}
+	if got, ok := result.Get("already_existed"); !ok || got != true {
+		t.Fatalf("already_existed = %v (found %t), want true", got, ok)
+	}
+	if _, err := os.Stat(filepath.Join(permDir, "remember-audit.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("audit stat error = %v, want duplicate to skip audit", err)
 	}
 }
 
@@ -103,17 +336,17 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 		"Rollout plan?": "Dark launch first",
 	}
 	sess := &mutationTargetSessionView{
-		id:        "session-ask",
+		id:        testSessionAskID,
 		featureID: "feat-ask",
 		phase:     feature.PhaseInquire,
 		status:    ports.SessionWaitingHelp,
 		active:    true,
 		pending: []*llm.ControlRequestMessage{{
-			Type:      "control_request",
-			RequestID: "ask-1",
+			Type:      wireTypeControlRequest,
+			RequestID: testAskRequestID,
 			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
-				ToolName: "AskUserQuestion",
+				Subtype:  wireSubtypeCanUseTool,
+				ToolName: toolNameAskUserQuestion,
 				Input:    input,
 			},
 		}},
@@ -125,8 +358,8 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 	}
 
 	result, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
-		RequestID: "ask-1",
-		SessionID: "session-ask",
+		RequestID: testAskRequestID,
+		SessionID: testSessionAskID,
 		Answers:   answers,
 	})
 	if err != nil {
@@ -137,7 +370,7 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 		t.Fatalf("RespondToAskUser calls = %d, want 1", len(sess.askCalls))
 	}
 	call := sess.askCalls[0]
-	if call.requestID != "ask-1" {
+	if call.requestID != testAskRequestID {
 		t.Fatalf("RespondToAskUser requestID = %q, want ask-1", call.requestID)
 	}
 	if !jsonEqual(call.questions, input) {
@@ -146,7 +379,7 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 	if !reflect.DeepEqual(call.answers, answers) {
 		t.Fatalf("RespondToAskUser answers = %v, want %v", call.answers, answers)
 	}
-	if result.RequestID != "ask-1" || result.SessionID != "session-ask" || result.Result != "answered" {
+	if result.RequestID != testAskRequestID || result.SessionID != testSessionAskID || result.Result != resultAnswered {
 		t.Fatalf("AnswerAskUser() result = %+v; want request/session answer", result)
 	}
 	assertJSONDoesNotContain(t, result, "Postgres with read replicas", "Dark launch first")
@@ -159,7 +392,7 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 		"questions": []map[string]any{{
 			"question": fullQuestion,
 			"options": []map[string]string{{
-				"label": "Use the full input (Recommended)",
+				"label": labelUseFullInput,
 			}},
 		}},
 	})
@@ -167,17 +400,17 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 		t.Fatalf("marshal input: %v", err)
 	}
 	sess := &mutationTargetSessionView{
-		id:        "session-ask",
+		id:        testSessionAskID,
 		featureID: "feat-ask",
 		phase:     feature.PhaseInquire,
 		status:    ports.SessionWaitingHelp,
 		active:    true,
 		pending: []*llm.ControlRequestMessage{{
-			Type:      "control_request",
-			RequestID: "ask-1",
+			Type:      wireTypeControlRequest,
+			RequestID: testAskRequestID,
 			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
-				ToolName: "AskUserQuestion",
+				Subtype:  wireSubtypeCanUseTool,
+				ToolName: toolNameAskUserQuestion,
 				Input:    input,
 			},
 		}},
@@ -189,10 +422,10 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 	}
 
 	_, err = target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
-		RequestID: "ask-1",
-		SessionID: "session-ask",
+		RequestID: testAskRequestID,
+		SessionID: testSessionAskID,
 		Answers: map[string]string{
-			truncatedQuestion: "Use the full input (Recommended)",
+			truncatedQuestion: labelUseFullInput,
 		},
 	})
 	if err != nil {
@@ -203,7 +436,7 @@ func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *test
 		t.Fatalf("RespondToAskUser calls = %d, want 1", len(sess.askCalls))
 	}
 	call := sess.askCalls[0]
-	if got := call.answers[fullQuestion]; got != "Use the full input (Recommended)" {
+	if got := call.answers[fullQuestion]; got != labelUseFullInput {
 		t.Fatalf("RespondToAskUser answers[%q] = %q; want selected answer in %v", fullQuestion, got, call.answers)
 	}
 	if _, ok := call.answers[truncatedQuestion]; ok {
@@ -219,7 +452,7 @@ func TestServerMutationTargetStartRebaseStartsFeatureRebasePromptly(t *testing.T
 	if err != nil {
 		t.Fatalf("StartRebase error = %v", err)
 	}
-	if resp.FeatureID != "feat-rebase" || resp.Result != "started" || resp.CycleType != string(feature.CycleRebase) {
+	if resp.FeatureID != "feat-rebase" || resp.Result != resultStarted || resp.CycleType != string(feature.CycleRebase) {
 		t.Fatalf("StartRebase response = %+v, want started feature rebase", resp)
 	}
 	if resp.SessionID != "" {
@@ -242,8 +475,8 @@ func (f *fakeFeatureRebaseStarter) StartFeatureRebase(featureID string) error {
 
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
 	sess := &mutationTargetSessionView{
-		id:        "session-help",
-		featureID: "feat-help",
+		id:        testSessionHelpID,
+		featureID: testFeatureHelpID,
 		phase:     feature.PhaseImplement,
 		status:    ports.SessionWaitingHelp,
 		active:    true,
@@ -255,8 +488,8 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 	}
 
 	result, err := target.SendHelp(serverruntime.HelpAnswerRequest{
-		FeatureID: "feat-help",
-		SessionID: "session-help",
+		FeatureID: testFeatureHelpID,
+		SessionID: testSessionHelpID,
 		Message:   "Please use the existing migration path.",
 	})
 	if err != nil {
@@ -266,7 +499,7 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 	if !reflect.DeepEqual(sess.sentMessages, []string{"Please use the existing migration path."}) {
 		t.Fatalf("SendUserMessage calls = %v, want addressed help text", sess.sentMessages)
 	}
-	if result.FeatureID != "feat-help" || result.SessionID != "session-help" || result.Result != "sent" {
+	if result.FeatureID != testFeatureHelpID || result.SessionID != testSessionHelpID || result.Result != resultSent {
 		t.Fatalf("SendHelp() result = %+v; want feature/session sent", result)
 	}
 	assertJSONDoesNotContain(t, result, "Please use the existing migration path.")
@@ -291,7 +524,7 @@ func TestServerMutationTargetStartChatStartsReadOnlyInteractiveUtilitySession(t 
 		cfg:          cfg,
 		sessions:     sessions,
 		phaseRunner:  phaseRunner,
-		workspaceDir: "/workspace",
+		workspaceDir: testWorkspaceDir,
 	}
 
 	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "What is running?"})
@@ -299,38 +532,38 @@ func TestServerMutationTargetStartChatStartsReadOnlyInteractiveUtilitySession(t 
 		t.Fatalf("StartChat() error = %v", err)
 	}
 
-	if result.SessionID != serverChatSessionID || result.Result != "started" {
+	if result.SessionID != serverChatSessionID || result.Result != resultStarted {
 		t.Fatalf("StartChat() result = %+v, want chat session started", result)
 	}
 	if len(captured) != 1 {
 		t.Fatalf("BuildSession calls = %d, want 1", len(captured))
 	}
 	build := captured[0]
-	if build.Model != "cheap-chat" || build.WorkDir != "/workspace" || build.Phase != utilskill.PhaseAll || build.TurnMode != ports.TurnModeInteractive {
+	if build.Model != "cheap-chat" || build.WorkDir != testWorkspaceDir || build.Phase != utilskill.PhaseAll || build.TurnMode != ports.TurnModeInteractive {
 		t.Fatalf("BuildSession opts = %+v, want utility interactive chat in workspace", build)
 	}
 	if build.EffortLevel != llm.EffortLow {
 		t.Fatalf("BuildSession EffortLevel = %q, want low for AMA utility chat", build.EffortLevel)
 	}
-	for _, tool := range []string{"Edit", "Write", "NotebookEdit", "Bash"} {
+	for _, tool := range []string{"Edit", "Write", "NotebookEdit", toolNameBash} {
 		if !slices.Contains(build.DisallowedTools, tool) {
 			t.Fatalf("BuildSession DisallowedTools = %v, missing %s", build.DisallowedTools, tool)
 		}
 	}
-	if !strings.Contains(build.Prompt, "What is running?") || !strings.Contains(build.Prompt, filepath.Join(skillsDir, "chat", "SKILL.md")) {
+	if !strings.Contains(build.Prompt, "What is running?") || !strings.Contains(build.Prompt, filepath.Join(skillsDir, chatName, "SKILL.md")) {
 		t.Fatalf("BuildSession prompt = %q, want chat skill instruction and user message", build.Prompt)
 	}
 	if len(sessions.startCalls) != 1 {
 		t.Fatalf("StartSession calls = %d, want 1", len(sessions.startCalls))
 	}
 	start := sessions.startCalls[0]
-	if start.id != serverChatSessionID || start.featureID != serverChatSessionID || start.phase != feature.PhaseResearch || start.workdir != "/workspace" {
+	if start.id != serverChatSessionID || start.featureID != serverChatSessionID || start.phase != feature.PhaseResearch || start.workdir != testWorkspaceDir {
 		t.Fatalf("StartSession call = %+v, want chat utility identity and research session in workspace", start)
 	}
-	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != "chat" || start.opts.InitialPrompt != build.Prompt {
+	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != chatName || start.opts.InitialPrompt != build.Prompt {
 		t.Fatalf("StartSession opts = %+v, want chat-kind interactive session with initial prompt", start.opts)
 	}
-	if start.opts.StderrPath != filepath.Join(stateDir, "chat", "stderr.log") {
+	if start.opts.StderrPath != filepath.Join(stateDir, chatName, "stderr.log") {
 		t.Fatalf("StartSession StderrPath = %q, want chat stderr capture", start.opts.StderrPath)
 	}
 	assertJSONDoesNotContain(t, result, "What is running?")
@@ -417,10 +650,10 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
 		Defaults: config.DefaultsConfig{
 			Models: config.ModelConfig{
-				Research:       "new-research",
-				Implementation: "new-implementation",
+				Research:       testResearchModelNew,
+				Implementation: testImplementationModelNew,
 			},
-			Inquireness:   "high",
+			Inquireness:   testInquirenessHigh,
 			MaxIterations: 8,
 			Checkpoints: config.Checkpoints{
 				RoadmapReview:   true,
@@ -432,13 +665,13 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 		t.Fatalf("RuntimeConfig() error = %v", err)
 	}
 
-	if cfg.Defaults.Models.Research != "new-research" {
+	if cfg.Defaults.Models.Research != testResearchModelNew {
 		t.Fatalf("in-memory research model = %q, want new-research", cfg.Defaults.Models.Research)
 	}
-	if cfg.Defaults.Models.Implementation != "new-implementation" {
+	if cfg.Defaults.Models.Implementation != testImplementationModelNew {
 		t.Fatalf("in-memory implementation model = %q, want new-implementation", cfg.Defaults.Models.Implementation)
 	}
-	if cfg.Defaults.MaxIterations != 8 || cfg.Defaults.Inquireness != "high" || !cfg.Defaults.Checkpoints.RoadmapReview || !cfg.Defaults.Checkpoints.PhasePlanReview {
+	if cfg.Defaults.MaxIterations != 8 || cfg.Defaults.Inquireness != testInquirenessHigh || !cfg.Defaults.Checkpoints.RoadmapReview || !cfg.Defaults.Checkpoints.PhasePlanReview {
 		t.Fatalf("in-memory defaults = %+v, want requested changes", cfg.Defaults)
 	}
 
@@ -446,15 +679,15 @@ func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *test
 	if err != nil {
 		t.Fatalf("Load config error = %v", err)
 	}
-	if loaded.Defaults.Models.Research != "new-research" ||
-		loaded.Defaults.Models.Implementation != "new-implementation" ||
+	if loaded.Defaults.Models.Research != testResearchModelNew ||
+		loaded.Defaults.Models.Implementation != testImplementationModelNew ||
 		loaded.Defaults.MaxIterations != 8 ||
-		loaded.Defaults.Inquireness != "high" ||
+		loaded.Defaults.Inquireness != testInquirenessHigh ||
 		!loaded.Defaults.Checkpoints.RoadmapReview ||
 		!loaded.Defaults.Checkpoints.PhasePlanReview {
 		t.Fatalf("persisted defaults = %+v, want requested changes", loaded.Defaults)
 	}
-	if result.Result != "updated" {
+	if result.Result != resultUpdated {
 		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
 	}
 }
@@ -493,7 +726,7 @@ func TestServerMutationTargetRuntimeConfigPersistsWorkspaceRootsAndDiscoversRepo
 	if len(loaded.WorkspaceRoots) != 1 || loaded.WorkspaceRoots[0] != root {
 		t.Fatalf("persisted workspace roots = %+v, want %q", loaded.WorkspaceRoots, root)
 	}
-	if result.Result != "updated" {
+	if result.Result != resultUpdated {
 		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
 	}
 }
@@ -533,10 +766,10 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	stateDir := filepath.Join(runtimeDir, "features")
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	cfg.Defaults.Models = config.ModelConfig{
 		Research:       "default-research",
-		Planning:       "default-planning",
+		Planning:       testPlanningModelDefault,
 		Implementation: "default-implementation",
 		Review:         "default-review",
 		Utilities:      "default-utilities",
@@ -561,17 +794,17 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
 		Name:         "REST durable options",
 		Description:  "create via REST",
-		Repos:        []string{"repo-a"},
+		Repos:        []string{testRepoAName},
 		ExitCriteria: "all acceptance checks pass",
-		Inquireness:  "none",
+		Inquireness:  testInquirenessNone,
 		Models: config.ModelConfig{
 			Research:       "claude:opus",
-			Implementation: "codex:gpt-5.4",
+			Implementation: testModelCodexGPT54,
 			KBBuild:        "claude:haiku",
 		},
 		Attachments:             []string{attachment},
 		UseCurrentBranch:        true,
-		UseCurrentBranchPerRepo: map[string]bool{"repo-a": true},
+		UseCurrentBranchPerRepo: map[string]bool{testRepoAName: true},
 		RiskLevel:               feature.RiskHigh,
 		Pipeline:                feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{
@@ -596,8 +829,8 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	if created.Description != "create via REST" || created.ExitCriteria != "all acceptance checks pass" || created.Inquireness != feature.InquirenessNone {
 		t.Fatalf("created feature text config = desc:%q exit:%q inq:%q", created.Description, created.ExitCriteria, created.Inquireness)
 	}
-	if created.Models.Research != "claude:opus" || created.Models.Planning != "default-planning" ||
-		created.Models.Implementation != "codex:gpt-5.4" || created.Models.KBBuild != "claude:haiku" {
+	if created.Models.Research != "claude:opus" || created.Models.Planning != testPlanningModelDefault ||
+		created.Models.Implementation != testModelCodexGPT54 || created.Models.KBBuild != "claude:haiku" {
 		t.Fatalf("created feature models = %+v; want REST selections over defaults", created.Models)
 	}
 	if created.Pipeline != feature.PipelineMedium || created.CurrentPhase != feature.PhasePlan || created.RiskLevel != feature.RiskHigh {
@@ -632,10 +865,10 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		t.Fatalf("Load config: %v", err)
 	}
 	pref := loaded.Defaults.PipelinePreferences["medium"]
-	if pref.Models.Implementation != "codex:gpt-5.4" || pref.Models.Planning != "default-planning" || pref.Inquireness != "none" {
+	if pref.Models.Implementation != testModelCodexGPT54 || pref.Models.Planning != testPlanningModelDefault || pref.Inquireness != testInquirenessNone {
 		t.Fatalf("persisted pipeline preference = %+v; want REST model/inquireness selections", pref)
 	}
-	gates := loaded.Repos["repo-a"].PipelineGates["medium"]
+	gates := loaded.Repos[testRepoAName].PipelineGates["medium"]
 	if gates.InquiryReview || !gates.RoadmapReview || !gates.PhasePlanReview || gates.ManualPublish {
 		t.Fatalf("persisted repo gates = %+v; want normalized medium gates with manual publish false", gates)
 	}
@@ -692,7 +925,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	stateDir := filepath.Join(runtimeDir, "features")
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config error = %v", err)
 	}
@@ -712,7 +945,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 
 	result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
 		Name:     "REST queued setup",
-		Repos:    []string{"repo-a"},
+		Repos:    []string{testRepoAName},
 		Pipeline: feature.PipelineMedium,
 	})
 	if err != nil {
@@ -738,7 +971,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	failWorktree := true
@@ -750,7 +983,7 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
-	f, err := manager.Create("Retry setup via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("Retry setup via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		QueueSetup: true,
 		Pipeline:   feature.PipelineMedium,
 	})
@@ -775,7 +1008,7 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	if err != nil {
 		t.Fatalf("Load retried feature: %v", err)
 	}
-	if result.Result != "retried" || result.FeatureID != f.ID {
+	if result.Result != resultRetried || result.FeatureID != f.ID {
 		t.Fatalf("RetryFeature() result = %+v, want retried feature", result)
 	}
 	if updated.Status != feature.StatusPlanning || updated.CurrentPhase != feature.PhasePlan {
@@ -790,10 +1023,10 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("rewind review via REST", "old desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{Pipeline: feature.PipelineMedium})
+	f, err := manager.Create("rewind review via REST", "old desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{Pipeline: feature.PipelineMedium})
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
@@ -818,7 +1051,7 @@ func TestServerMutationTargetReviewDecisionRewindProceedsFromExistingRewind(t *t
 
 	if _, err := target.ReviewDecision(f.ID, serverruntime.ReviewDecisionRequest{
 		Decision: "proceed",
-		Phase:    "plan",
+		Phase:    phaseNamePlan,
 		IsRewind: true,
 	}); err != nil {
 		t.Fatalf("ReviewDecision() error = %v", err)
@@ -844,13 +1077,13 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	configPath := filepath.Join(runtimeDir, "config.yaml")
 	stateDir := filepath.Join(runtimeDir, "features")
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	if err := config.Save(configPath, cfg); err != nil {
 		t.Fatalf("Save config error = %v", err)
 	}
 	store := feature.NewStore(stateDir)
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("config via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("config via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		Pipeline:    feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{ManualPublish: true},
 	})
@@ -875,10 +1108,10 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 
 	result, err := target.UpdateFeatureConfig(f.ID, serverruntime.FeatureConfigMutationRequest{
 		Models: config.ModelConfig{
-			Implementation: "claude:sonnet",
-			Review:         "codex:gpt-5.4-mini",
+			Implementation: testModelClaudeSonnet,
+			Review:         testModelCodexGPT54Mini,
 		},
-		Inquireness: "high",
+		Inquireness: testInquirenessHigh,
 		Pipeline:    feature.PipelineMedium,
 		Checkpoints: feature.Checkpoints{
 			InquiryReview:   true,
@@ -891,7 +1124,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	if err != nil {
 		t.Fatalf("UpdateFeatureConfig() error = %v", err)
 	}
-	if result.FeatureID != f.ID || result.Result != "updated" {
+	if result.FeatureID != f.ID || result.Result != resultUpdated {
 		t.Fatalf("UpdateFeatureConfig() result = %+v; want updated feature", result)
 	}
 
@@ -903,7 +1136,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 	if updated.Checkpoints != wantCheckpoints {
 		t.Fatalf("updated feature checkpoints = %+v, want %+v", updated.Checkpoints, wantCheckpoints)
 	}
-	if updated.Models.Implementation != "claude:sonnet" || updated.Models.Review != "codex:gpt-5.4-mini" || updated.Inquireness != feature.InquirenessHigh {
+	if updated.Models.Implementation != testModelClaudeSonnet || updated.Models.Review != testModelCodexGPT54Mini || updated.Inquireness != feature.InquirenessHigh {
 		t.Fatalf("updated feature config = models:%+v inq:%q; want REST edit", updated.Models, updated.Inquireness)
 	}
 
@@ -912,10 +1145,10 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 		t.Fatalf("Load config: %v", err)
 	}
 	pref := loaded.Defaults.PipelinePreferences["medium"]
-	if pref.Models.Implementation != "claude:sonnet" || pref.Models.Review != "codex:gpt-5.4-mini" || pref.Inquireness != "high" {
+	if pref.Models.Implementation != testModelClaudeSonnet || pref.Models.Review != testModelCodexGPT54Mini || pref.Inquireness != testInquirenessHigh {
 		t.Fatalf("persisted preference = %+v; want updated feature config", pref)
 	}
-	gates := loaded.Repos["repo-a"].PipelineGates["medium"]
+	gates := loaded.Repos[testRepoAName].PipelineGates["medium"]
 	if gates.InquiryReview || gates.DesignReview || !gates.RoadmapReview || !gates.PhasePlanReview || gates.ManualPublish {
 		t.Fatalf("persisted repo gates = %+v; want normalized medium gates", gates)
 	}
@@ -924,7 +1157,7 @@ func TestServerMutationTargetUpdateFeatureConfigPersistsRuntimePreferences(t *te
 func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata(t *testing.T) {
 	target, manager, store, f := newPublishActionTarget(t)
 	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
-		if featureID != f.ID || repoName != "repo-a" {
+		if featureID != f.ID || repoName != testRepoAName {
 			t.Fatalf("publish repo call = %s/%s, want %s/repo-a", featureID, repoName, f.ID)
 		}
 		prURL := "https://github.com/acme/repo-a/pull/12"
@@ -934,7 +1167,7 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 		return prURL, nil
 	})
 
-	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{"repo-a"}})
+	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{testRepoAName}})
 	if err != nil {
 		t.Fatalf("publishAction() error = %v", err)
 	}
@@ -974,12 +1207,12 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 	if !errors.As(err, &actionConflict) {
 		t.Fatalf("publishAction() error = %T %v; want ActionConflictError", err, err)
 	}
-	if result.FeatureID != f.ID || result.Result != "conflict" {
+	if result.FeatureID != f.ID || result.Result != resultConflict {
 		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
 	}
 	assertTarget(t, actionConflict.Target, map[string]any{
-		"conflict":      "publish",
-		"repo":          "repo-a",
+		resultConflict:  phaseNamePublish,
+		repoConflictKey: testRepoAName,
 		"branch":        "feature/publish-conflict",
 		"rebase_target": "main",
 	})
@@ -988,10 +1221,10 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("rewind via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("rewind via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
 	})
 	if err != nil {
@@ -1000,7 +1233,7 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusCodeReady
 		ff.CurrentPhase = feature.PhasePublish
-		ff.RepoStates = map[string]*feature.RepoState{"repo-a": {Touched: true}}
+		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true}}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
@@ -1010,7 +1243,7 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 		store: store,
 	}
 
-	result, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: "implement"})
+	result, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: phaseNameImplement})
 	if err != nil {
 		t.Fatalf("rewindAction() error = %v", err)
 	}
@@ -1022,7 +1255,7 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 	if updated.Status != feature.StatusPlanNeedsReview || !updated.IsRewind {
 		t.Fatalf("rewound feature status/is_rewind = %s/%v, want PlanNeedsReview/true", updated.Status, updated.IsRewind)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != "implement" || result.EffectivePhase != "implement" || result.WarningCount != 0 {
+	if result.FeatureID != f.ID || result.TargetPhase != phaseNameImplement || result.EffectivePhase != phaseNameImplement || result.WarningCount != 0 {
 		t.Fatalf("RewindFeature() result = %+v; want effective implement rewind", result)
 	}
 }
@@ -1030,10 +1263,10 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("rewind stops sessions", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("rewind stops sessions", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
 	})
 	if err != nil {
@@ -1068,7 +1301,7 @@ func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T)
 		store: store,
 	}
 
-	if _, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: "plan"}); err != nil {
+	if _, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: phaseNamePlan}); err != nil {
 		t.Fatalf("rewindAction() error = %v", err)
 	}
 
@@ -1083,10 +1316,10 @@ func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T)
 func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("upgrade rewind via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("upgrade rewind via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
 	})
 	if err != nil {
@@ -1114,7 +1347,7 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 	}
 
 	result, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{
-		TargetPhase:     "inquire",
+		TargetPhase:     phaseNameInquire,
 		UpgradePipeline: feature.PipelineLarge,
 	})
 	if err != nil {
@@ -1131,7 +1364,7 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 	if got := strings.Join(sessions.stopCalls, ","); got != "session-upgrade-rewind" {
 		t.Fatalf("StopSession calls = %q, want session-upgrade-rewind", got)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != "inquire" || result.UpgradePipeline != "large" || result.EffectivePhase != feature.PhaseKnowledgeBase.DirName() || result.Result != "rewound" {
+	if result.FeatureID != f.ID || result.TargetPhase != phaseNameInquire || result.UpgradePipeline != "large" || result.EffectivePhase != feature.PhaseKnowledgeBase.DirName() || result.Result != "rewound" {
 		t.Fatalf("RewindFeature() result = %+v; want large KB rewind", result)
 	}
 }
@@ -1139,10 +1372,10 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("failed upgrade rewind via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("failed upgrade rewind via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		Pipeline: feature.PipelineMoonshot,
 	})
 	if err != nil {
@@ -1170,7 +1403,7 @@ func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testi
 	}
 
 	result, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{
-		TargetPhase:     "inquire",
+		TargetPhase:     phaseNameInquire,
 		UpgradePipeline: feature.PipelineLarge,
 	})
 	if err == nil {
@@ -1187,7 +1420,7 @@ func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testi
 	if updated.Pipeline != feature.PipelineMoonshot || updated.Status != feature.StatusImplementing {
 		t.Fatalf("feature pipeline/status = %s/%s, want unchanged moonshot/implementing", updated.Pipeline, updated.Status)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != "inquire" || result.UpgradePipeline != "large" || result.Result != "failed" {
+	if result.FeatureID != f.ID || result.TargetPhase != phaseNameInquire || result.UpgradePipeline != "large" || result.Result != resultFailed {
 		t.Fatalf("RewindFeature() failure result = %+v; want failed upgrade response", result)
 	}
 }
@@ -1195,10 +1428,10 @@ func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testi
 func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("restart via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	f, err := manager.Create("restart via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
@@ -1252,10 +1485,10 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("refactor with evidence", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	f, err := manager.Create("refactor with evidence", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
@@ -1290,7 +1523,7 @@ func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testin
 	target := serverMutationTarget{orch: orch, store: store}
 
 	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
-		Repo:        "repo-a",
+		Repo:        testRepoAName,
 		Prompt:      "use the attached evidence",
 		Images:      []string{img},
 		Attachments: []string{doc},
@@ -1325,10 +1558,10 @@ func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testin
 func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("moonshot refactor", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("moonshot refactor", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		Pipeline:    feature.PipelineMoonshot,
 		Checkpoints: feature.DefaultCheckpointsForProfile(feature.PipelineMoonshot),
 	})
@@ -1358,7 +1591,7 @@ func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *tes
 	target := serverMutationTarget{orch: orch, store: store}
 
 	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
-		Repo:     "repo-a",
+		Repo:     testRepoAName,
 		Prompt:   "make the small follow-up change",
 		Pipeline: feature.PipelineMedium,
 	}); err != nil {
@@ -1380,10 +1613,10 @@ func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *tes
 func TestServerMutationTargetStartRefactorUsesRequestedPipelineEffort(t *testing.T) {
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("moonshot feature", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
+	f, err := manager.Create("moonshot feature", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 		Pipeline: feature.PipelineMoonshot,
 	})
 	if err != nil {
@@ -1416,7 +1649,7 @@ func TestServerMutationTargetStartRefactorUsesRequestedPipelineEffort(t *testing
 	target := serverMutationTarget{orch: orch, store: store}
 
 	if _, err := target.StartRefactor(f.ID, serverruntime.RefactorActionRequest{
-		Repo:     "repo-a",
+		Repo:     testRepoAName,
 		Prompt:   "make the small follow-up change",
 		Pipeline: feature.PipelineMedium,
 	}); err != nil {
@@ -1435,33 +1668,33 @@ func TestServerMutationTargetStartRefactorUsesRequestedPipelineEffort(t *testing
 
 func TestServerMutationTargetReviewCommentsFetchFiltersAndStartStages(t *testing.T) {
 	target, store, f := newReviewCommentsActionTarget(t)
-	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, "repo-a", []int{100}); err != nil {
+	if err := agent.SaveAddressedIDsForRepo(store.BaseDir, f, testRepoAName, []int{100}); err != nil {
 		t.Fatalf("SaveAddressedIDsForRepo: %v", err)
 	}
 
-	resp, err := target.FetchReviewComments(f.ID, serverruntime.ReviewCommentsFetchRequest{Repo: "repo-a"})
+	resp, err := target.FetchReviewComments(f.ID, serverruntime.ReviewCommentsFetchRequest{Repo: testRepoAName})
 	if err != nil {
 		t.Fatalf("FetchReviewComments() error = %v", err)
 	}
-	if len(resp.Comments) != 1 || resp.Comments[0].ID != 101 || resp.Comments[0].RepoName != "repo-a" {
+	if len(resp.Comments) != 1 || resp.Comments[0].ID != 101 || resp.Comments[0].RepoName != testRepoAName {
 		t.Fatalf("FetchReviewComments() comments = %+v; want only unaddressed repo-tagged comment 101", resp.Comments)
 	}
-	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a"); err == nil {
+	if _, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName); err == nil {
 		t.Fatalf("FetchReviewComments staged comments; want fetch to remain read-only")
 	}
 
-	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{Repo: "repo-a", Mode: "address_all"})
+	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{Repo: testRepoAName, Mode: reviewCommentsModeAddressAll})
 	if err == nil {
 		t.Fatal("StartReviewComments() error = nil; want dispatch error from nil phase runner after staging")
 	}
-	if result.FeatureID != f.ID || result.Repo != "repo-a" || result.Mode != "address_all" || result.CycleType != string(feature.CycleReviewComments) || result.Result != "failed" {
+	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewCommentsModeAddressAll || result.CycleType != string(feature.CycleReviewComments) || result.Result != resultFailed {
 		t.Fatalf("StartReviewComments() result = %+v; want failed staged review-comments", result)
 	}
-	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a")
+	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
 	if err != nil {
 		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
 	}
-	if staged.Mode != "address_all" || len(staged.Comments) != 1 || staged.Comments[0].ID != 101 || staged.Comments[0].RepoName != "repo-a" {
+	if staged.Mode != reviewCommentsModeAddressAll || len(staged.Comments) != 1 || staged.Comments[0].ID != 101 || staged.Comments[0].RepoName != testRepoAName {
 		t.Fatalf("staged review comments = %+v; want address_all with comment 101", staged)
 	}
 }
@@ -1472,16 +1705,16 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	reviewer.fetchCalls = 0
 
 	result, err := target.StartReviewComments(f.ID, serverruntime.ReviewCommentsActionRequest{
-		Repo: "repo-a",
-		Mode: "auto",
+		Repo: testRepoAName,
+		Mode: reviewModeAuto,
 		Comments: []serverruntime.ReviewCommentDTO{{
 			ID:        202,
 			Type:      ports.CommentTypeReview,
-			RepoName:  "repo-a",
+			RepoName:  testRepoAName,
 			Path:      "internal/tui/api_app.go",
 			Line:      42,
 			Body:      "use the previewed set",
-			UserLogin: "reviewer",
+			UserLogin: testReviewerLogin,
 			DiffHunk:  "@@ -1 +1 @@\n-old\n+new",
 		}},
 	})
@@ -1491,14 +1724,14 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 	if reviewer.fetchCalls != 0 {
 		t.Fatalf("FetchPRComments calls = %d; want 0 when comments are provided by preview", reviewer.fetchCalls)
 	}
-	if result.FeatureID != f.ID || result.Repo != "repo-a" || result.Mode != "auto" || result.Source != "provided" || result.CommentCount != 1 || result.Result != "failed" {
+	if result.FeatureID != f.ID || result.Repo != testRepoAName || result.Mode != reviewModeAuto || result.Source != "provided" || result.CommentCount != 1 || result.Result != resultFailed {
 		t.Fatalf("StartReviewComments() result = %+v; want failed provided preview", result)
 	}
-	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, "repo-a")
+	staged, err := agent.LoadReviewCommentsForRepo(store.BaseDir, f, testRepoAName)
 	if err != nil {
 		t.Fatalf("LoadReviewCommentsForRepo: %v", err)
 	}
-	if staged.Mode != "auto" || len(staged.Comments) != 1 || staged.Comments[0].ID != 202 || staged.Comments[0].DiffHunk == "" || staged.Comments[0].User.Login != "reviewer" {
+	if staged.Mode != reviewModeAuto || len(staged.Comments) != 1 || staged.Comments[0].ID != 202 || staged.Comments[0].DiffHunk == "" || staged.Comments[0].User.Login != testReviewerLogin {
 		t.Fatalf("staged review comments = %+v; want provided previewed comment 202", staged)
 	}
 }
@@ -1506,11 +1739,11 @@ func TestServerMutationTargetReviewCommentsStartUsesProvidedPreviewedComments(t 
 func TestServerMutationTargetFinishTweakFinalReviewStartsCycleReview(t *testing.T) {
 	target, orch, publisher, f := newTweakFinishActionTarget(t, true)
 
-	result, err := target.FinishTweak(f.ID, serverruntime.TweakFinishRequest{Decision: "final-review", HadChanges: true})
+	result, err := target.FinishTweak(f.ID, serverruntime.TweakFinishRequest{Decision: phaseNameFinalReview, HadChanges: true})
 	if err != nil {
 		t.Fatalf("FinishTweak(final-review) error = %v", err)
 	}
-	if result.FeatureID != f.ID || result.Decision != "final-review" || !result.HadChanges || result.Result != "review_started" {
+	if result.FeatureID != f.ID || result.Decision != phaseNameFinalReview || !result.HadChanges || result.Result != "review_started" {
 		t.Fatalf("FinishTweak() result = %+v; want review_started final-review", result)
 	}
 	if got := countMockCalls(publisher.Calls, "CommitAll"); got != 0 {
@@ -1532,11 +1765,11 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 	t.Run("cleanup cycles", func(t *testing.T) {
 		target, store, f, _ := newCleanupActionTarget(t)
 
-		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: "cycles"})
+		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: cleanupTargetCycles})
 		if err != nil {
 			t.Fatalf("CleanupFeature(cycles) error = %v", err)
 		}
-		if result.FeatureID != f.ID || result.Target != "cycles" || result.Result != "cleaned" {
+		if result.FeatureID != f.ID || result.Target != cleanupTargetCycles || result.Result != resultCleaned {
 			t.Fatalf("CleanupFeature(cycles) result = %+v; want cleaned cycles", result)
 		}
 		updated, err := store.Load(f.ID)
@@ -1551,14 +1784,14 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 	t.Run("cleanup worktrees", func(t *testing.T) {
 		target, store, f, worktrees := newCleanupActionTarget(t)
 
-		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: "worktrees"})
+		result, err := target.CleanupFeature(f.ID, serverruntime.CleanupActionRequest{Target: cleanupTargetWorktrees})
 		if err != nil {
 			t.Fatalf("CleanupFeature(worktrees) error = %v", err)
 		}
-		if result.FeatureID != f.ID || result.Target != "worktrees" || result.Result != "cleaned" {
+		if result.FeatureID != f.ID || result.Target != cleanupTargetWorktrees || result.Result != resultCleaned {
 			t.Fatalf("CleanupFeature(worktrees) result = %+v; want cleaned worktrees", result)
 		}
-		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != "/tmp/repo-a-worktree" || worktrees.removeCalls[0].deleteBranch {
+		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || worktrees.removeCalls[0].deleteBranch {
 			t.Fatalf("worktree remove calls = %+v; want one non-branch-deleting cleanup", worktrees.removeCalls)
 		}
 		updated, err := store.Load(f.ID)
@@ -1580,7 +1813,7 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if result.FeatureID != f.ID || result.Result != "deleted" {
 			t.Fatalf("DeleteFeature() result = %+v; want deleted feature", result)
 		}
-		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != "/tmp/repo-a-worktree" || !worktrees.removeCalls[0].deleteBranch {
+		if len(worktrees.removeCalls) != 1 || worktrees.removeCalls[0].path != testRepoAWorktreePath || !worktrees.removeCalls[0].deleteBranch {
 			t.Fatalf("worktree remove calls = %+v; want one branch-deleting delete", worktrees.removeCalls)
 		}
 		if _, err := store.Load(f.ID); err == nil {
@@ -1593,10 +1826,10 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("publish via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	f, err := manager.Create("publish via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
@@ -1608,7 +1841,7 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 			ff.Repos[i].Publishable = &publishable
 			ff.Repos[i].Branch = "feature/publish-via-rest"
 		}
-		ff.RepoStates = map[string]*feature.RepoState{"repo-a": {Touched: true}}
+		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true}}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
@@ -1621,10 +1854,10 @@ func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("review comments via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	f, err := manager.Create("review comments via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
@@ -1635,7 +1868,7 @@ func newReviewCommentsActionTarget(t *testing.T) (serverMutationTarget, *feature
 		for i := range ff.Repos {
 			ff.Repos[i].Publishable = &publishable
 		}
-		ff.RepoStates = map[string]*feature.RepoState{"repo-a": {Touched: true, PRURL: "https://github.com/acme/repo-a/pull/12"}}
+		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true, PRURL: "https://github.com/acme/repo-a/pull/12"}}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
@@ -1656,10 +1889,10 @@ func newTweakFinishActionTarget(t *testing.T, dirty bool) (serverMutationTarget,
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	f, err := manager.Create("tweak finish via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	f, err := manager.Create("tweak finish via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
@@ -1670,7 +1903,7 @@ func newTweakFinishActionTarget(t *testing.T, dirty bool) (serverMutationTarget,
 		ff.Repos[0].Branch = "feature/tweak-finish"
 		ff.ActiveCycle = &feature.CycleState{Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1}
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1},
+			testRepoAName: {Type: feature.CycleTweak, Status: feature.RepoCycleRunning, Count: 1},
 		}
 		return nil
 	}); err != nil {
@@ -1702,21 +1935,21 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
-	cfg.Repos["repo-a"] = config.RepoConfig{Path: filepath.Join(runtimeDir, "repo-a")}
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: filepath.Join(runtimeDir, testRepoAName)}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	worktrees := &fakeWorktreeOperator{}
 	manager.Worktrees = worktrees
-	f, err := manager.Create("cleanup via REST", "desc", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil)
+	f, err := manager.Create("cleanup via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
 	if err != nil {
 		t.Fatalf("Create feature: %v", err)
 	}
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.Status = feature.StatusPublished
 		ff.CurrentPhase = feature.PhasePublish
-		ff.Repos[0].WorktreePath = "/tmp/repo-a-worktree"
+		ff.Repos[0].WorktreePath = testRepoAWorktreePath
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleRebase, Status: feature.RepoCycleFailed},
+			testRepoAName: {Type: feature.CycleRebase, Status: feature.RepoCycleFailed},
 		}
 		return nil
 	}); err != nil {
@@ -1781,7 +2014,7 @@ func reviewComment(id int, body string) ports.ReviewComment {
 		CreatedAt: "2026-06-13T12:00:00Z",
 		Type:      ports.CommentTypeReview,
 	}
-	comment.User.Login = "reviewer"
+	comment.User.Login = testReviewerLogin
 	return comment
 }
 
@@ -1897,15 +2130,17 @@ func (m *mutationTargetSessionManager) Shutdown()            {}
 func (m *mutationTargetSessionManager) IsShuttingDown() bool { return false }
 
 type mutationTargetSessionView struct {
-	id           string
-	featureID    string
-	phase        feature.Phase
-	status       ports.SessionStatus
-	active       bool
-	pending      []*llm.ControlRequestMessage
-	sentMessages []string
-	controlCalls []mutationTargetControlCall
-	askCalls     []mutationTargetAskUserCall
+	id               string
+	featureID        string
+	phase            feature.Phase
+	status           ports.SessionStatus
+	active           bool
+	permCacheScope   string
+	pending          []*llm.ControlRequestMessage
+	sentMessages     []string
+	controlCalls     []mutationTargetControlCall
+	askCalls         []mutationTargetAskUserCall
+	onRespondControl func() error
 }
 
 type mutationTargetControlCall struct {
@@ -1925,7 +2160,7 @@ func (s *mutationTargetSessionView) ID() string                   { return s.id 
 func (s *mutationTargetSessionView) FeatureID() string            { return s.featureID }
 func (s *mutationTargetSessionView) Phase() feature.Phase         { return s.phase }
 func (s *mutationTargetSessionView) RepoName() string             { return "" }
-func (s *mutationTargetSessionView) PermCacheScope() string       { return "" }
+func (s *mutationTargetSessionView) PermCacheScope() string       { return s.permCacheScope }
 func (s *mutationTargetSessionView) Kind() ports.SessionKind      { return ports.KindPhase }
 func (s *mutationTargetSessionView) Label() string                { return "" }
 func (s *mutationTargetSessionView) Status() ports.SessionStatus  { return s.status }
@@ -1962,7 +2197,7 @@ func (s *mutationTargetSessionView) AttachCh() <-chan llm.SDKMessage { return ni
 func (s *mutationTargetSessionView) Done() <-chan struct{}           { return nil }
 func (s *mutationTargetSessionView) HasPendingAskUserQuestion() bool {
 	for _, pending := range s.pending {
-		if pending != nil && pending.Request.ToolName == "AskUserQuestion" {
+		if pending != nil && pending.Request.ToolName == toolNameAskUserQuestion {
 			return true
 		}
 	}
@@ -1973,6 +2208,11 @@ func (s *mutationTargetSessionView) SendUserMessage(text string) error {
 	return nil
 }
 func (s *mutationTargetSessionView) RespondToControl(requestID string, allow bool, reason string) error {
+	if s.onRespondControl != nil {
+		if err := s.onRespondControl(); err != nil {
+			return err
+		}
+	}
 	var original json.RawMessage
 	for _, pending := range s.pending {
 		if pending != nil && pending.RequestID == requestID {

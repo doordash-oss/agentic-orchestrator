@@ -90,10 +90,18 @@ func (h *apiHandler) handleRecoveryActionRoute(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if resp.Result == "" {
-		resp.Result = "recovered"
+		resp.Result = resultRecovered
 	}
 	writeActionJSON(w, http.StatusOK, &resp)
 }
+
+// recoveryActionKill and recoveryActionSkip are RecoveryItemDTO action-name
+// strings for ports.RecoveryKill/ports.RecoverySkip, shared between the DTO
+// builder and action decoder.
+const (
+	recoveryActionKill = "kill"
+	recoveryActionSkip = "skip"
+)
 
 func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {
 	dto := RecoveryItemDTO{
@@ -110,12 +118,12 @@ func recoveryItemDTO(item ports.RecoveryItem) RecoveryItemDTO {
 		dto.FeatureName = item.Feature.Name
 	}
 	if dto.Tweak {
-		dto.DefaultAction = "kill"
-		dto.AllowedActions = []string{"kill"}
+		dto.DefaultAction = recoveryActionKill
+		dto.AllowedActions = []string{recoveryActionKill}
 		return dto
 	}
-	dto.DefaultAction = "skip"
-	dto.AllowedActions = []string{"resume", "kill", "skip"}
+	dto.DefaultAction = recoveryActionSkip
+	dto.AllowedActions = []string{actionResume, recoveryActionKill, recoveryActionSkip}
 	return dto
 }
 
@@ -148,10 +156,10 @@ func decodeRecoveryActions(items []ports.RecoveryItem, raw map[string]string) (m
 	allowed := make(map[string]map[string]ports.RecoveryAction, len(items))
 	for _, item := range items {
 		key := ports.RecoveryActionKey(item.PIDFile.FeatureID, item.RepoName)
-		itemAllowed := map[string]ports.RecoveryAction{"kill": ports.RecoveryKill}
+		itemAllowed := map[string]ports.RecoveryAction{recoveryActionKill: ports.RecoveryKill}
 		if !ports.IsRecoveryTweakSession(item) {
-			itemAllowed["resume"] = ports.RecoveryResume
-			itemAllowed["skip"] = ports.RecoverySkip
+			itemAllowed[actionResume] = ports.RecoveryResume
+			itemAllowed[recoveryActionSkip] = ports.RecoverySkip
 		}
 		allowed[key] = itemAllowed
 	}

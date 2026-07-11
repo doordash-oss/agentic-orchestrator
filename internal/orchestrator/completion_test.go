@@ -98,7 +98,7 @@ func newKBRetryFixture(t *testing.T, featureID string, repoNames ...string) kbRe
 	}
 	lc.MarkRepoKBCompletedFn = func(id, repoName string) error {
 		return fs.Modify(id, func(ff *feature.Feature) error {
-			ff.KBStatus[repoName] = "completed"
+			ff.KBStatus[repoName] = kbStatusCompleted
 			return nil
 		})
 	}
@@ -160,7 +160,7 @@ func loadKBRetryFeature(t *testing.T, fix kbRetryFixture) *feature.Feature {
 // advance is NOT called. Just MarkRepoKBCompleted is recorded.
 func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) {
 	stateDir := t.TempDir()
-	writeKBCompletionArtifacts(t, stateDir, "repo-a", true, true)
+	writeKBCompletionArtifacts(t, stateDir, repoName, true, true)
 
 	f := &feature.Feature{
 		ID:           "feat-kb1",
@@ -168,8 +168,8 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) 
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		Pipeline:     feature.PipelineLarge,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -216,7 +216,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) 
 // clears ForceKBRebuild, and drives advanceToNextPhase.
 func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 	stateDir := t.TempDir()
-	writeKBCompletionArtifacts(t, stateDir, "repo-a", true, true)
+	writeKBCompletionArtifacts(t, stateDir, repoName, true, true)
 
 	f := &feature.Feature{
 		ID:             "feat-kb2",
@@ -225,7 +225,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 		Pipeline:       feature.PipelineLarge,
 		ForceKBRebuild: true,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
+			{Name: repoName, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -292,11 +292,11 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 }
 
 func TestOrchestrator_HandlePhaseCompletion_KB_MissingPhaseCompleteProtocolViolation(t *testing.T) {
-	fix := newKBRetryFixture(t, "feat-no-marker", "repo-a", "repo-b", "repo-c")
-	writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", false, true)
+	fix := newKBRetryFixture(t, "feat-no-marker", repoName, repoNameB, "repo-c")
+	writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, false, true)
 	fix.runner.sm.FeatureSessionsFn = func(id string) []session.SessionView {
 		return []session.SessionView{
-			newStubSessionHandle(id+"-kb-repo-b", id, feature.PhaseKnowledgeBase, "repo-b"),
+			newStubSessionHandle(id+"-kb-repo-b", id, feature.PhaseKnowledgeBase, repoNameB),
 			newStubSessionHandle(id+"-kb-repo-c", id, feature.PhaseKnowledgeBase, "repo-c"),
 		}
 	}
@@ -316,7 +316,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_MissingPhaseCompleteProtocolViola
 	if reloaded.FailureType != "" || reloaded.LastError != "" {
 		t.Fatalf("FailureType/LastError = %q/%q, want empty", reloaded.FailureType, reloaded.LastError)
 	}
-	if got := reloaded.KBStatus["repo-a"]; got != "running" {
+	if got := reloaded.KBStatus[repoName]; got != "running" {
 		t.Fatalf("KBStatus[repo-a] = %q, want unchanged running", got)
 	}
 	sidecar := readKBRetrySidecar(t, fix.kbDir, fix.feature.ID)
@@ -332,7 +332,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_MissingPhaseCompleteProtocolViola
 	if got := len(fix.runner.capturedByPhase(feature.PhaseKnowledgeBase)); got != 1 {
 		t.Fatalf("KB retry starts = %d, want 1", got)
 	}
-	if got := fix.runner.capturedByPhase(feature.PhaseKnowledgeBase)[0].RepoName; got != "repo-a" {
+	if got := fix.runner.capturedByPhase(feature.PhaseKnowledgeBase)[0].RepoName; got != repoName {
 		t.Fatalf("retried repo = %q, want repo-a", got)
 	}
 	if got := len(fix.runner.sm.StopCalls); got != 0 {
@@ -354,8 +354,8 @@ func TestOrchestrator_HandlePhaseCompletion_KB_MissingPhaseCompleteProtocolViola
 }
 
 func TestOrchestrator_HandlePhaseCompletion_KB_MissingIndexProtocolViolation(t *testing.T) {
-	fix := newKBRetryFixture(t, "feat-no-index", "repo-a")
-	writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", true, false)
+	fix := newKBRetryFixture(t, "feat-no-index", repoName)
+	writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, true, false)
 
 	if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
 		Phase:     feature.PhaseKnowledgeBase,
@@ -369,7 +369,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_MissingIndexProtocolViolation(t *
 	if reloaded.FailureType != "" || reloaded.LastError != "" {
 		t.Fatalf("FailureType/LastError = %q/%q, want empty", reloaded.FailureType, reloaded.LastError)
 	}
-	if got := reloaded.KBStatus["repo-a"]; got != "running" {
+	if got := reloaded.KBStatus[repoName]; got != "running" {
 		t.Fatalf("KBStatus[repo-a] = %q, want unchanged running", got)
 	}
 	sidecar := readKBRetrySidecar(t, fix.kbDir, fix.feature.ID)
@@ -392,8 +392,8 @@ func TestOrchestrator_HandlePhaseCompletion_KB_MissingIndexProtocolViolation(t *
 }
 
 func TestOrchestrator_HandlePhaseCompletion_KB_RetryThenSuccessCompletesRepo(t *testing.T) {
-	fix := newKBRetryFixture(t, "feat-retry-success", "repo-a")
-	writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", false, true)
+	fix := newKBRetryFixture(t, "feat-retry-success", repoName)
+	writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, false, true)
 
 	if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
 		Phase:     feature.PhaseKnowledgeBase,
@@ -405,7 +405,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_RetryThenSuccessCompletesRepo(t *
 	releaseKBLockForRetry(t, fix.kbDir, fix.feature.ID)
 	drainEvents(fix.orchestrator)
 
-	writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", true, true)
+	writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, true, true)
 	if err := fix.orchestrator.HandlePhaseCompletion(fix.feature.ID, orchestrator.PhaseCompletionInput{
 		Phase:     feature.PhaseKnowledgeBase,
 		SessionID: fix.feature.ID + "-kb-repo-a",
@@ -418,7 +418,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_RetryThenSuccessCompletesRepo(t *
 		t.Fatalf("sidecar stat err = %v, want removed", err)
 	}
 	reloaded := loadKBRetryFeature(t, fix)
-	if got := reloaded.KBStatus["repo-a"]; got != "completed" {
+	if got := reloaded.KBStatus[repoName]; got != kbStatusCompleted {
 		t.Fatalf("KBStatus[repo-a] = %q, want completed", got)
 	}
 	if got := countLifecycleCalls(fix.lifecycle, "MarkRepoKBCompleted"); got != 1 {
@@ -435,11 +435,11 @@ func TestOrchestrator_HandlePhaseCompletion_KB_RetryThenSuccessCompletesRepo(t *
 }
 
 func TestOrchestrator_HandlePhaseCompletion_KB_ThirdViolationTerminates(t *testing.T) {
-	fix := newKBRetryFixture(t, "feat-third-violation", "repo-a", "repo-b")
-	writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", false, true)
+	fix := newKBRetryFixture(t, "feat-third-violation", repoName, repoNameB)
+	writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, false, true)
 	fix.runner.sm.FeatureSessionsFn = func(id string) []session.SessionView {
 		return []session.SessionView{
-			newStubSessionHandle(id+"-kb-repo-b", id, feature.PhaseKnowledgeBase, "repo-b"),
+			newStubSessionHandle(id+"-kb-repo-b", id, feature.PhaseKnowledgeBase, repoNameB),
 		}
 	}
 
@@ -468,7 +468,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_ThirdViolationTerminates(t *testi
 	if reloaded.LastError != wantErr {
 		t.Fatalf("LastError = %q, want %q", reloaded.LastError, wantErr)
 	}
-	if got := reloaded.KBStatus["repo-a"]; got != "failed: "+wantErr {
+	if got := reloaded.KBStatus[repoName]; got != "failed: "+wantErr {
 		t.Fatalf("KBStatus[repo-a] = %q, want failed with terminal error", got)
 	}
 	sidecar := readKBRetrySidecar(t, fix.kbDir, fix.feature.ID)
@@ -495,8 +495,8 @@ func TestOrchestrator_HandlePhaseCompletion_KB_ThirdViolationTerminates(t *testi
 
 func TestOrchestrator_HandlePhaseCompletion_KB_SidecarScoping(t *testing.T) {
 	t.Run("stale_active_run_resets", func(t *testing.T) {
-		fix := newKBRetryFixture(t, "feat-stale-run", "repo-a")
-		writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", false, true)
+		fix := newKBRetryFixture(t, "feat-stale-run", repoName)
+		writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, false, true)
 		if err := agent.WriteProtocolRetrySidecarAt(fix.kbDir, agent.KBProtocolRetrySidecarFilename(fix.feature.ID), agent.ProtocolRetrySidecar{
 			Role:          agent.RoleKnowledgeBaseBuilder,
 			ActiveRun:     fix.feature.ActiveRun + 1,
@@ -526,8 +526,8 @@ func TestOrchestrator_HandlePhaseCompletion_KB_SidecarScoping(t *testing.T) {
 	})
 
 	t.Run("matching_active_run_terminates", func(t *testing.T) {
-		fix := newKBRetryFixture(t, "feat-matching-run", "repo-a")
-		writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", false, true)
+		fix := newKBRetryFixture(t, "feat-matching-run", repoName)
+		writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, false, true)
 		if err := agent.WriteProtocolRetrySidecarAt(fix.kbDir, agent.KBProtocolRetrySidecarFilename(fix.feature.ID), agent.ProtocolRetrySidecar{
 			Role:          agent.RoleKnowledgeBaseBuilder,
 			ActiveRun:     fix.feature.ActiveRun,
@@ -557,8 +557,8 @@ func TestOrchestrator_HandlePhaseCompletion_KB_SidecarScoping(t *testing.T) {
 	})
 
 	t.Run("other_feature_sidecar_ignored", func(t *testing.T) {
-		fix := newKBRetryFixture(t, "feat-current", "repo-a")
-		writeKBCompletionArtifacts(t, fix.runner.stateDir, "repo-a", false, true)
+		fix := newKBRetryFixture(t, "feat-current", repoName)
+		writeKBCompletionArtifacts(t, fix.runner.stateDir, repoName, false, true)
 		otherFilename := agent.KBProtocolRetrySidecarFilename("feat-other")
 		otherSidecar := agent.ProtocolRetrySidecar{
 			Role:          agent.RoleKnowledgeBaseBuilder,
@@ -598,7 +598,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_SidecarScoping(t *testing.T) {
 }
 
 func TestOrchestrator_HandlePhaseCompletion_KB_SessionCrashDoesNotReadSidecar(t *testing.T) {
-	fix := newKBRetryFixture(t, "feat-crash", "repo-a")
+	fix := newKBRetryFixture(t, "feat-crash", repoName)
 	if err := os.MkdirAll(fix.kbDir, 0o755); err != nil {
 		t.Fatalf("mkdir kb dir: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Terminal_Interrupted(t *testing.T
 		Status:       feature.StatusInterrupted,
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		Pipeline:     feature.PipelineLarge,
-		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	lc := lifecycleForFeature(f)
 	lc.AllKBsCompletedFn = func(id string) (bool, error) { return true, nil }
@@ -669,7 +669,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 		Status:       feature.StatusBuildingKB,
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		Pipeline:     feature.PipelineLarge,
-		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
+		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
 	lc := lifecycleForFeature(f)
 	lc.MarkRepoKBFailedFn = func(id, repo, msg string) error { return nil }
@@ -1089,11 +1089,11 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseRepoMutationProtocolVio
 			repoPath := testutil.InitGitRepo(t)
 			if err := fix.store.Modify(fix.feature.ID, func(ff *feature.Feature) error {
 				ff.Repos = []feature.FeatureRepo{{
-					Name:         "repo-a",
+					Name:         repoName,
 					Path:         repoPath,
 					WorktreePath: repoPath,
-					Branch:       "main",
-					BaseBranch:   "main",
+					Branch:       mainBranch,
+					BaseBranch:   mainBranch,
 				}}
 				return nil
 			}); err != nil {
@@ -1148,7 +1148,7 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseRepoMutationProtocolVio
 				t.Fatalf("read violation patch: %v", err)
 			}
 			patchText := string(patch)
-			for _, want := range []string{"repo-a", "README.md", "# Testu", "stray.md"} {
+			for _, want := range []string{repoName, "README.md", "# Testu", "stray.md"} {
 				if !strings.Contains(patchText, want) {
 					t.Fatalf("violation patch missing %q:\n%s", want, patchText)
 				}
@@ -1166,11 +1166,11 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseRepoMutationRestoresPre
 	repoPath := testutil.InitGitRepo(t)
 	if err := fix.store.Modify(fix.feature.ID, func(ff *feature.Feature) error {
 		ff.Repos = []feature.FeatureRepo{{
-			Name:         "repo-a",
+			Name:         repoName,
 			Path:         repoPath,
 			WorktreePath: repoPath,
-			Branch:       "main",
-			BaseBranch:   "main",
+			Branch:       mainBranch,
+			BaseBranch:   mainBranch,
 		}}
 		return nil
 	}); err != nil {
@@ -1805,7 +1805,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Failed(t *testing.T) {
 	if err := o.HandlePhaseCompletion("feat-plan-err", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhasePlan,
 		PlanResult: &agent.PlanLoopResult{
-			FinalStatus: "failed",
+			FinalStatus: finalStatusFailed,
 			LastError:   "validator exploded",
 		},
 	}); err != nil {
@@ -1870,7 +1870,7 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Interrupted_NoOp(t *testing.T) 
 
 	if err := o.HandlePhaseCompletion("feat-plan-int", orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
-		PlanResult: &agent.PlanLoopResult{FinalStatus: "interrupted"},
+		PlanResult: &agent.PlanLoopResult{FinalStatus: finalStatusInterrupted},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
@@ -1909,8 +1909,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_NotPublish
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a", Publishable: &unpub},
-			{Name: "repo-b", Path: "/tmp/repo-b", Publishable: &unpub},
+			{Name: repoName, Path: repoAPath, Publishable: &unpub},
+			{Name: repoNameB, Path: repoBPath, Publishable: &unpub},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1944,8 +1944,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -1983,8 +1983,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -2048,7 +2048,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed(t *testing.T)
 	if err := o.HandlePhaseCompletion("feat-multi-err", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{
-			FinalStatus: "failed",
+			FinalStatus: finalStatusFailed,
 			LastError:   "multi-repo blew up",
 		},
 	}); err != nil {
@@ -2258,8 +2258,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -2275,11 +2275,11 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 	if err := o.HandlePhaseCompletion("feat-multi-maxit", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{
-			FinalStatus: "failed",
+			FinalStatus: finalStatusFailed,
 			LastError:   "one repo hit iteration cap",
 			RepoStatuses: map[string]string{
-				"repo-a": "max_iterations",
-				"repo-b": "failed",
+				repoName: "max_iterations",
+				repoNameB: finalStatusFailed,
 			},
 		},
 	}); err != nil {
@@ -2297,7 +2297,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_ProtocolViola
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
+			{Name: repoName, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -2313,10 +2313,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_ProtocolViola
 	if err := o.HandlePhaseCompletion("feat-multi-protocol", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{
-			FinalStatus: "failed",
+			FinalStatus: finalStatusFailed,
 			LastError:   "protocol violation: implementer @ /tmp/iter: progress.md is missing",
 			RepoStatuses: map[string]string{
-				"repo-a": "protocol_violation",
+				repoName: "protocol_violation",
 			},
 		},
 	}); err != nil {
@@ -2333,7 +2333,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_SafetyRail_Pr
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
+			{Name: repoName, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -2349,10 +2349,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_SafetyRail_Pr
 	if err := o.HandlePhaseCompletion("feat-multi-safety-rail", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
 		MultiRepoResult: &agent.OrchestratorResult{
-			FinalStatus: "failed",
+			FinalStatus: finalStatusFailed,
 			LastError:   "3 consecutive agent failures",
 			RepoStatuses: map[string]string{
-				"repo-a": "safety_rail",
+				repoName: "safety_rail",
 			},
 		},
 	}); err != nil {
@@ -2372,7 +2372,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
+			{Name: repoName, Path: repoAPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -2390,7 +2390,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 		MultiRepoResult: &agent.OrchestratorResult{
 			FinalStatus:  "failed",
 			LastError:    "build error",
-			RepoStatuses: map[string]string{"repo-a": "failed"},
+			RepoStatuses: map[string]string{repoName: "failed"},
 		},
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
@@ -2413,8 +2413,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_RoutesT
 		CurrentRoadmapPhase: 3,
 		TotalRoadmapPhases:  3,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -2459,8 +2459,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_Publish
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -3120,8 +3120,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_Idempotent
 		Status:       feature.StatusReviewPassed, // already transitioned by a prior caller
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)

@@ -21,26 +21,26 @@ package permission
 // commands and excludes mutating, build, test, and write-capable operations.
 func defaultGlobalRules() []Rule {
 	return []Rule{
-		{ToolPattern: "Bash(ls *)", Effect: "allow"},
-		{ToolPattern: "Bash(pwd *)", Effect: "allow"},
-		{ToolPattern: "Bash(cat *)", Effect: "allow"},
-		{ToolPattern: "Bash(head *)", Effect: "allow"},
-		{ToolPattern: "Bash(tail *)", Effect: "allow"},
-		{ToolPattern: "Bash(wc *)", Effect: "allow"},
-		{ToolPattern: "Bash(grep *)", Effect: "allow"},
-		{ToolPattern: "Bash(rg *)", Effect: "allow"},
-		{ToolPattern: "Bash(stat *)", Effect: "allow"},
-		{ToolPattern: "Bash(file *)", Effect: "allow"},
-		{ToolPattern: "Bash(find *)", Effect: "allow"},
-		{ToolPattern: "Bash(du *)", Effect: "allow"},
-		{ToolPattern: "Bash(git status *)", Effect: "allow"},
-		{ToolPattern: "Bash(git diff *)", Effect: "allow"},
-		{ToolPattern: "Bash(git log *)", Effect: "allow"},
-		{ToolPattern: "Bash(git show *)", Effect: "allow"},
+		{ToolPattern: patternBashLS, Effect: DecisionAllow},
+		{ToolPattern: "Bash(pwd *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(cat *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(head *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(tail *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(wc *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(grep *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(rg *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(stat *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(file *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(find *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(du *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(git status *)", Effect: DecisionAllow},
+		{ToolPattern: patternBashGitDiff, Effect: DecisionAllow},
+		{ToolPattern: "Bash(git log *)", Effect: DecisionAllow},
+		{ToolPattern: "Bash(git show *)", Effect: DecisionAllow},
 		// agentico's own read-only artifact-validation preflight, which every
 		// agent session runs before phase_complete (see rolespec_prompt.go). The
 		// prompt invokes it as the quoted env var, so the pattern matches that
 		// exact prefix.
-		{ToolPattern: `Bash("$AGENTICO_BIN" validate-artifacts *)`, Effect: "allow"},
+		{ToolPattern: `Bash("$AGENTICO_BIN" validate-artifacts *)`, Effect: DecisionAllow},
 	}
 }

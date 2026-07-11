@@ -123,13 +123,15 @@ func TestStoreList(t *testing.T) {
 }
 
 func TestStoreReadPathsDoNotWaitForInFlightModify(t *testing.T) {
+	const featureNameOriginal = "Original"
+
 	// Not parallel: the test intentionally holds a Store.Modify goroutine open
 	// while asserting read-path responsiveness.
 	dir := t.TempDir()
 	store := NewStore(dir)
 	f := &Feature{
 		ID:            "responsive-read",
-		Name:          "Original",
+		Name:          featureNameOriginal,
 		Slug:          "responsive-read",
 		Status:        StatusCreated,
 		SchemaVersion: SchemaVersionCurrent,
@@ -196,10 +198,10 @@ func TestStoreReadPathsDoNotWaitForInFlightModify(t *testing.T) {
 		if len(got.features) != 1 {
 			t.Fatalf("features len = %d, want 1", len(got.features))
 		}
-		if got.features[0].Name != "Original" {
+		if got.features[0].Name != featureNameOriginal {
 			t.Fatalf("listed name = %q, want last committed name Original", got.features[0].Name)
 		}
-		if got.loaded.Name != "Original" {
+		if got.loaded.Name != featureNameOriginal {
 			t.Fatalf("loaded name = %q, want last committed name Original", got.loaded.Name)
 		}
 	case <-time.After(time.Second):

@@ -27,6 +27,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// Fixture path/PR-URL for the "agentic" repo used across this file's tests.
+const (
+	agenticRepoPath = "/tmp/agentic"
+	agenticPRURL    = "https://github.com/example/agentic/pull/1"
+)
+
 func TestAggregateReviewCommentTargetsSkipsNonThreadedComments(t *testing.T) {
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -38,16 +44,16 @@ func TestAggregateReviewCommentTargetsSkipsNonThreadedComments(t *testing.T) {
 		ActiveRun:     1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{
-			{Name: "agentic", Path: "/tmp/agentic", Branch: "feature/review-comments-filter"},
+			{Name: agenticRepoName, Path: agenticRepoPath, Branch: "feature/review-comments-filter"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"agentic": {Touched: true, PRURL: "https://github.com/example/agentic/pull/1"},
+			agenticRepoName: {Touched: true, PRURL: agenticPRURL},
 		},
 	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	if err := agent.SaveReviewCommentsForRepo(stateDir, f, "agentic", agent.ReviewCommentsData{
+	if err := agent.SaveReviewCommentsForRepo(stateDir, f, agenticRepoName, agent.ReviewCommentsData{
 		Mode: "auto",
 		Comments: []ports.ReviewComment{
 			{ID: 1, Type: ports.CommentTypeReview, CreatedAt: "2026-07-07T10:00:00Z"},
@@ -82,13 +88,13 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) 
 		Status:        feature.StatusPublished,
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos: []feature.FeatureRepo{
-			{Name: "agentic", Path: "/tmp/agentic", Branch: "feature/review-comments-need-user-input"},
+			{Name: agenticRepoName, Path: agenticRepoPath, Branch: "feature/review-comments-need-user-input"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"agentic": {Touched: true, PRURL: "https://github.com/example/agentic/pull/1"},
+			agenticRepoName: {Touched: true, PRURL: agenticPRURL},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"agentic": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning, Count: 1},
+			agenticRepoName: {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning, Count: 1},
 		},
 	}
 	if err := store.Save(f); err != nil {
@@ -98,15 +104,15 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) 
 	o := New(Deps{Lifecycle: mgr, Store: store}, Hooks{})
 	o.handleFeatureReviewCommentsDone(featureID,
 		[]agent.ReviewCommentsRepoTarget{{
-			RepoName: "agentic",
-			PRURL:    "https://github.com/example/agentic/pull/1",
+			RepoName: agenticRepoName,
+			PRURL:    agenticPRURL,
 			Comments: []ports.ReviewComment{{ID: 1}},
 		}},
 		&agent.ReviewCommentsLoopResult{
 			FinalStatus:       "need_user_input",
 			LastError:         "Reviewer request conflicts with product decision.",
 			NeedUserInputPath: gatePath,
-			Repos:             []string{"agentic"},
+			Repos:             []string{agenticRepoName},
 		},
 		nil,
 	)
@@ -115,7 +121,7 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) 
 	if err != nil {
 		t.Fatalf("load feature: %v", err)
 	}
-	rc := got.RepoCycles["agentic"]
+	rc := got.RepoCycles[agenticRepoName]
 	if rc == nil {
 		t.Fatal("RepoCycles[agentic] missing")
 	}
@@ -128,7 +134,7 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPausesCycle(t *testing.T) 
 	if rc.LastError != "Reviewer request conflicts with product decision." {
 		t.Errorf("LastError = %q", rc.LastError)
 	}
-	if st := got.RepoStates["agentic"]; st == nil || st.LastError != "" {
+	if st := got.RepoStates[agenticRepoName]; st == nil || st.LastError != "" {
 		t.Errorf("RepoStates[agentic] = %+v, want no failure", st)
 	}
 }
@@ -143,15 +149,15 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPersistenceErrorFailsCycle
 	o := New(Deps{Lifecycle: lifecycle, Store: store}, Hooks{})
 	o.handleFeatureReviewCommentsDone("feat-review-comments-nui",
 		[]agent.ReviewCommentsRepoTarget{{
-			RepoName: "agentic",
-			PRURL:    "https://github.com/example/agentic/pull/1",
+			RepoName: agenticRepoName,
+			PRURL:    agenticPRURL,
 			Comments: []ports.ReviewComment{{ID: 1}},
 		}},
 		&agent.ReviewCommentsLoopResult{
 			FinalStatus:       "need_user_input",
 			LastError:         "Reviewer request conflicts with product decision.",
 			NeedUserInputPath: filepath.Join(t.TempDir(), "need-user-input.yaml"),
-			Repos:             []string{"agentic"},
+			Repos:             []string{agenticRepoName},
 		},
 		nil,
 	)
@@ -166,7 +172,7 @@ func TestHandleFeatureReviewCommentsDone_NeedUserInputPersistenceErrorFailsCycle
 	if failCall == nil {
 		t.Fatal("FailRepoCycle was not called")
 	}
-	if got := failCall.Args[1]; got != "agentic" {
+	if got := failCall.Args[1]; got != agenticRepoName {
 		t.Fatalf("FailRepoCycle repo = %v, want agentic", got)
 	}
 	msg, _ := failCall.Args[2].(string)

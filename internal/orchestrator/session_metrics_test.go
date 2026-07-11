@@ -38,7 +38,7 @@ func TestAttachDropReport_IncludesRunNumber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	obs := observe.New(true, stateDir, false, "", false, "agentic")
+	obs := observe.New(true, stateDir, false, "", false, agenticRepoName)
 	fs := mocks.NewMockFeatureStore()
 	fs.LoadFn = func(id string) (*feature.Feature, error) {
 		if id != featureID {
@@ -85,7 +85,7 @@ func TestAttachDropReport_IncludesRunNumber(t *testing.T) {
 // degrades to nil when the feature store is nil, matching the "reporter is
 // optional" contract.
 func TestNewAttachDropObserver_NilStoreReturnsNil(t *testing.T) {
-	obs := observe.New(true, t.TempDir(), false, "", false, "agentic")
+	obs := observe.New(true, t.TempDir(), false, "", false, agenticRepoName)
 	if got := newAttachDropObserver(obs, nil); got != nil {
 		t.Errorf("expected nil reporter when fs is nil, got %+v", got)
 	}

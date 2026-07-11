@@ -118,7 +118,7 @@ func TestPublishSteps(t *testing.T) {
 
 	// Step 1: Diff
 	view := m.View()
-	if !strings.Contains(view, "Diff Review") {
+	if !strings.Contains(view, diffReviewTitle) {
 		t.Error("expected diff review step")
 	}
 

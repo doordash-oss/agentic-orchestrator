@@ -32,6 +32,26 @@ const (
 	defaultTextLimit          = int64(64 * 1024)
 	maxTextLimit              = int64(256 * 1024)
 	descriptionReviewArtifact = "description-review"
+
+	// contentCategoryArtifact is the ArtifactDTO.Category value for a plain
+	// (non-log) artifact.
+	contentCategoryArtifact = "artifact"
+
+	// artifactIDErrorField is the error-detail map key naming the artifact ID
+	// involved in a content-lookup failure.
+	artifactIDErrorField = "artifact_id"
+
+	// sessionIDErrorField is the error-detail map key naming the session ID
+	// involved in a session-lookup failure.
+	sessionIDErrorField = "session_id"
+
+	// phaseNameDescription is the "publish description" phase/subaction name,
+	// shared between the description-review artifact's Phase field and the
+	// actions/publish/description mutation route in mutation.go.
+	phaseNameDescription = "description"
+
+	// logIDSession is the "session" log stream ID in handleLogContent's log map.
+	logIDSession = "session"
 )
 
 func (h *apiHandler) handleArtifactList(w http.ResponseWriter, r *http.Request, featureID string, runNumber int) {
@@ -87,17 +107,17 @@ func (h *apiHandler) handleArtifactContent(w http.ResponseWriter, r *http.Reques
 			h.writeTextFileSlice(w, r, artifactID, path)
 			return
 		}
-		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{"artifact_id": artifactID})
+		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{artifactIDErrorField: artifactID})
 		return
 	}
 	rel, ok := run.Artifacts[artifactID]
 	if !ok {
-		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{"artifact_id": artifactID})
+		writeAPIError(w, http.StatusNotFound, "not_found", "artifact not found", map[string]any{artifactIDErrorField: artifactID})
 		return
 	}
 	path, ok := resolveRunArtifactPath(h.store.RunDir(featureID, runNumber), rel)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid artifact target", map[string]any{"artifact_id": artifactID})
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid artifact target", map[string]any{artifactIDErrorField: artifactID})
 		return
 	}
 	h.writeTextFileSlice(w, r, artifactID, path)
@@ -118,9 +138,9 @@ func (h *apiHandler) descriptionReviewArtifactDTO(f *feature.Feature, run *featu
 	return ArtifactDTO{
 		ID:               descriptionReviewArtifact,
 		Type:             artifactType(path),
-		Category:         "artifact",
+		Category:         contentCategoryArtifact,
 		RunNumber:        runNumber,
-		Phase:            "description",
+		Phase:            phaseNameDescription,
 		Path:             path,
 		Size:             info.Size(),
 		ModifiedAt:       info.ModTime().UTC(),
@@ -167,9 +187,9 @@ func (h *apiHandler) handleLogContent(w http.ResponseWriter, r *http.Request, fe
 		return
 	}
 	logs := map[string]string{
-		"session": filepath.Join("logs", "session.log"),
-		"phase":   filepath.Join("logs", "phase.log"),
-		"observe": "events.jsonl",
+		logIDSession: filepath.Join("logs", "session.log"),
+		"phase":      filepath.Join("logs", "phase.log"),
+		"observe":    "events.jsonl",
 	}
 	rel, ok := logs[logID]
 	if !ok {
@@ -360,7 +380,7 @@ func artifactType(path string) string {
 	case ".yaml", ".yml":
 		return "yaml"
 	case ".txt", ".log", ".jsonl":
-		return "text"
+		return blockTypeText
 	default:
 		return "unknown"
 	}
@@ -370,7 +390,7 @@ func artifactCategory(path string) string {
 	if strings.Contains(path, "log") {
 		return "log"
 	}
-	return "artifact"
+	return contentCategoryArtifact
 }
 
 func artifactPhase(path string) string {

@@ -30,11 +30,78 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
+// testRepoPath is a fake repo path used across redaction tests in this file
+// and read_api_contract_test.go to assert secrets never leak into responses.
+const testRepoPath = "/repo/path"
+
+// Shared test-only fixture literals used across this file, client_test.go,
+// sse_test.go, discovery_test.go, read_api_contract_test.go and
+// openapi_contract_test.go.
+const (
+	// worktreePathLiteral is a fake worktree path asserted to never leak.
+	worktreePathLiteral = "/worktree/path"
+	// runtimeDirLiteral is the fake RuntimeIdentity.RuntimeDir used in tests.
+	runtimeDirLiteral = "/runtime"
+	// repoNameSelf is the fake name for this repo's own entry in test fixtures.
+	repoNameSelf = "agentic-orchestrator"
+	// repoNameAPI and repoNameWeb are fake secondary repo names used in
+	// multi-repo fixtures.
+	repoNameAPI = "api"
+	repoNameWeb = "web"
+	// contentTypeJSON is the expected JSON Content-Type response header value.
+	contentTypeJSON = "application/json"
+	// askUserQuestionSampleText is a sample AskUserQuestion prompt used across
+	// question-related fixtures.
+	askUserQuestionSampleText = "Choose?"
+	// testRuntimeConfigPath is the fake RuntimeIdentity.Config path used
+	// across most fixtures in this package's tests.
+	testRuntimeConfigPath = "/runtime/config.yaml"
+	// fixtureFeatureID is the standard fake feature ID used throughout this
+	// package's HTTP-level tests.
+	fixtureFeatureID = "feat-1"
+	// fixtureFeatureIDAlt is a second fake feature ID used where a test needs
+	// to distinguish it from fixtureFeatureID.
+	fixtureFeatureIDAlt = "feat-001"
+	// providerCodex and providerClaude are fake LLM provider name literals
+	// used across launch-policy and catalog fixtures.
+	providerCodex  = "codex"
+	providerClaude = "claude"
+	// secretBranchLiteral is a fake branch name asserted to never leak into
+	// responses.
+	secretBranchLiteral = "feature/secret"
+	// modelGPT54, modelGPT54Mini and modelSonnet are fake catalog model ID
+	// literals used across model-catalog fixtures.
+	modelGPT54     = "gpt-5.4"
+	modelGPT54Mini = "gpt-5.4-mini"
+	modelSonnet    = "sonnet"
+	// decisionKey is the PermissionAnswerRequest JSON body map key for the
+	// decision field, used across permission-answer fixtures.
+	decisionKey = "decision"
+	// testRememberPattern is a fake permission remember_pattern value used
+	// across remember-scope fixtures.
+	testRememberPattern = "Bash(go test *)"
+	// rememberPatternKey is the PermissionAnswerRequest JSON body map key for
+	// the remember_pattern field, used across remember-scope fixtures.
+	rememberPatternKey = "remember_pattern"
+	// fixturePermissionRequestID is the standard fake PermissionRequest.ID
+	// used throughout this package's HTTP-level tests.
+	fixturePermissionRequestID = "perm-1"
+	// fixtureSessionID is the standard fake session ID used throughout this
+	// package's HTTP-level tests.
+	fixtureSessionID = "sess-1"
+	// testAuthToken is the standard fake bearer token used throughout this
+	// package's HTTP-level tests.
+	testAuthToken = "test-token"
+	// requestIDKey is the PermissionAnswerRequest JSON body map key for the
+	// request_id field, used across permission-answer fixtures.
+	requestIDKey = "request_id"
+)
+
 func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 	f := &feature.Feature{
-		ID:                  "feat-001",
+		ID:                  fixtureFeatureIDAlt,
 		Name:                "Feature One",
 		Slug:                "feature-one",
 		Status:              feature.StatusImplementing,
@@ -47,11 +114,11 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 		TotalRoadmapPhases:  5,
 		Checkpoints:         feature.Checkpoints{ManualPublish: true},
 		Repos: []feature.FeatureRepo{
-			{Name: "agentic-orchestrator", Path: "/repo/path", WorktreePath: "/worktree/path", Branch: "feature/secret"},
+			{Name: repoNameSelf, Path: testRepoPath, WorktreePath: worktreePathLiteral, Branch: secretBranchLiteral},
 		},
 	}
 	handler := NewHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/runtime/features", Config: "/runtime/config.yaml"},
+		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return []*feature.Feature{f}, nil
 		}),
@@ -94,11 +161,11 @@ func TestFeatureListDTOShapeAndNoAuthentication(t *testing.T) {
 	if !got.Checkpoints.ManualPublish {
 		t.Fatalf("summary checkpoints = %+v; want manual_publish=true", got.Checkpoints)
 	}
-	if len(got.Repos) != 1 || got.Repos[0] != "agentic-orchestrator" {
+	if len(got.Repos) != 1 || got.Repos[0] != repoNameSelf {
 		t.Fatalf("summary repos = %v; want repo names only", got.Repos)
 	}
 	raw := w.Body.String()
-	for _, forbidden := range []string{"/repo/path", "/worktree/path", "feature/secret", "models", "exit_criteria", "permissions_queue"} {
+	for _, forbidden := range []string{testRepoPath, worktreePathLiteral, secretBranchLiteral, "models", "exit_criteria", "permissions_queue"} {
 		if strings.Contains(raw, forbidden) {
 			t.Fatalf("response leaks internal field %q in:\n%s", forbidden, raw)
 		}
@@ -109,13 +176,13 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	t.Parallel()
 
 	handler := newAPIHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/runtime/features", Config: "/runtime/config.yaml"},
+		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return nil, nil
 		}),
 		DisableHostValidation: true,
 	})
-	handler.broker.publish(SSEEventDTO{Kind: "feature.state", Resource: ResourceDTO{Type: "feature", ID: "feat-1"}})
+	handler.broker.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: fixtureFeatureID}})
 
 	w := httptest.NewRecorder()
 	handler.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
@@ -134,10 +201,172 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	}
 }
 
+func TestPermissionAnswerRejectsLegacyAndMissingRememberScope(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(HandlerOptions{
+		Mutations:             permissionAnswerMutationTarget{},
+		DisableHostValidation: true,
+	})
+	tests := []struct {
+		name        string
+		body        map[string]string
+		wantMessage string
+	}{
+		{
+			name:        "legacy allow decision",
+			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: "allow"},
+			wantMessage: errMessageInvalidDecision,
+		},
+		{
+			name:        "uppercase allow once decision",
+			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: "ALLOW_ONCE"},
+			wantMessage: errMessageInvalidDecision,
+		},
+		{
+			name:        "whitespace allow once decision",
+			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: " allow_once "},
+			wantMessage: errMessageInvalidDecision,
+		},
+		{
+			name:        "allow remember without scope",
+			body:        map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern},
+			wantMessage: "remember_scope is required for allow_remember",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			payload, err := json.Marshal(tc.body)
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, apiPathPermissionsAnswer, bytes.NewReader(payload))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status = %d; want 400", resp.StatusCode)
+			}
+			var body ErrorResponse
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if body.Error.Code != errCodeBadRequest || body.Error.Message != tc.wantMessage {
+				t.Fatalf("error = %+v, want bad_request %q", body.Error, tc.wantMessage)
+			}
+		})
+	}
+}
+
+func TestPermissionAnswerAcceptsExplicitDecisions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                string
+		body                map[string]string
+		wantDecision        string
+		wantRememberPattern string
+		wantRememberScope   *string
+	}{
+		{
+			name:         "allow once",
+			body:         map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowOnce},
+			wantDecision: decisionAllowOnce,
+		},
+		{
+			name:         decisionDeny,
+			body:         map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionDeny},
+			wantDecision: decisionDeny,
+		},
+		{
+			name:                "allow remember with scope",
+			body:                map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern, "remember_scope": repoNameSelf},
+			wantDecision:        decisionAllowRemember,
+			wantRememberPattern: testRememberPattern,
+			wantRememberScope:   stringPtr(repoNameSelf),
+		},
+		{
+			name:                "allow remember with empty global scope",
+			body:                map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionAllowRemember, rememberPatternKey: testRememberPattern, "remember_scope": ""},
+			wantDecision:        decisionAllowRemember,
+			wantRememberPattern: testRememberPattern,
+			wantRememberScope:   stringPtr(""),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var received []PermissionAnswerRequest
+			handler := NewHandler(HandlerOptions{
+				Mutations:             permissionAnswerMutationTarget{received: &received},
+				DisableHostValidation: true,
+			})
+			payload, err := json.Marshal(tc.body)
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, apiPathPermissionsAnswer, bytes.NewReader(payload))
+			req.Header.Set("Content-Type", contentTypeJSON)
+			req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d; want 200", resp.StatusCode)
+			}
+			if len(received) != 1 {
+				t.Fatalf("received %d permission answers, want 1", len(received))
+			}
+			got := received[0]
+			if got.Decision != tc.wantDecision || got.RememberPattern != tc.wantRememberPattern {
+				t.Fatalf("request = %+v, want decision %q remember pattern %q", got, tc.wantDecision, tc.wantRememberPattern)
+			}
+			switch {
+			case tc.wantRememberScope == nil && got.RememberScope != nil:
+				t.Fatalf("remember scope = %q, want nil", *got.RememberScope)
+			case tc.wantRememberScope != nil && got.RememberScope == nil:
+				t.Fatalf("remember scope = nil, want %q", *tc.wantRememberScope)
+			case tc.wantRememberScope != nil && *got.RememberScope != *tc.wantRememberScope:
+				t.Fatalf("remember scope = %q, want %q", *got.RememberScope, *tc.wantRememberScope)
+			}
+		})
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+type permissionAnswerMutationTarget struct {
+	MutationTarget
+	received *[]PermissionAnswerRequest
+}
+
+func (t permissionAnswerMutationTarget) AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error) {
+	if t.received != nil {
+		*t.received = append(*t.received, req)
+	}
+	return PermissionAnswerResponse{
+		RequestID: req.RequestID,
+		SessionID: req.SessionID,
+		Decision:  req.Decision,
+		Result:    resultAnswered,
+	}, nil
+}
+
 func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 	t.Parallel()
 	handler := NewHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/runtime/features", Config: "/runtime/config.yaml"},
+		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return nil, nil
 		}),
@@ -161,7 +390,7 @@ func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 		{ID: "bad-001", Err: errors.New("parsing feature file: duplicate key")},
 	}}
 	handler = NewHandler(HandlerOptions{
-		Runtime: RuntimeIdentity{RuntimeDir: "/runtime", StateDir: "/runtime/features", Config: "/runtime/config.yaml"},
+		Runtime: RuntimeIdentity{RuntimeDir: runtimeDirLiteral, StateDir: testRuntimeStateDir, Config: testRuntimeConfigPath},
 		Features: featureListerFunc(func() ([]*feature.Feature, error) {
 			return []*feature.Feature{{ID: "good-001", Name: "Good", Slug: "good", Status: feature.StatusCreated, ActiveRun: 1, RunCount: 1}}, partial
 		}),
@@ -244,10 +473,10 @@ func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
 
 	reg := llm.NewRegistry()
 	reg.Register(fakeProvider{
-		name: "codex",
+		name: providerCodex,
 		catalog: []llm.ModelInfo{
-			{ID: "gpt-5.4", Category: "capable"},
-			{ID: "gpt-5.4-mini", Category: "balanced"},
+			{ID: modelGPT54, Category: "capable"},
+			{ID: modelGPT54Mini, Category: "balanced"},
 		},
 	})
 	handler := NewHandler(HandlerOptions{Registry: reg, DisableHostValidation: true})
@@ -262,8 +491,8 @@ func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	chatModels := body.PhaseProviderModels[string(llm.PhaseChat)]["codex"]
-	if len(chatModels) != 1 || chatModels[0] != "gpt-5.4-mini" {
+	chatModels := body.PhaseProviderModels[string(llm.PhaseChat)][providerCodex]
+	if len(chatModels) != 1 || chatModels[0] != modelGPT54Mini {
 		t.Fatalf("chat utility models = %+v, want discovered balanced utility model", chatModels)
 	}
 }

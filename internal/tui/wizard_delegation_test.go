@@ -593,7 +593,7 @@ func TestWizardReviewDelegation_ModelsEditorRendersAssignmentsAndChoices(t *test
 	needles := []string{
 		"Model Selection",
 		"Phase",
-		"Agent",
+		toolNameAgent,
 		"Model",
 		"Research",
 		"Planning",

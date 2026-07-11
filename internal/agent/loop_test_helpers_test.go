@@ -23,6 +23,64 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// defaultTestBranch is the base/target branch name used across this
+// package's tests wherever the specific name doesn't matter.
+const defaultTestBranch = "main"
+
+// testMockIdentifier is the sentinel value tests use to name the mock
+// provider/CLI/session in test doubles (ProviderName, command argv[0],
+// SessionID) wherever the specific name doesn't matter.
+const testMockIdentifier = "mock"
+
+// testResultSuccessValue is the placeholder "success" string tests use for
+// llm.ResultMessage.Subtype (and, where the exact text is arbitrary, .Result)
+// wherever the specific value doesn't matter.
+const testResultSuccessValue = "success"
+
+// testResultMessageType is the SDKMessage/ResultMessage.Type discriminator
+// value tests use to build a mock "result" message.
+const testResultMessageType = "result"
+
+// testStopReasonEndTurn is the llm.ResultMessage.StopReason value tests use
+// for a normal (non-tool-use) turn completion.
+const testStopReasonEndTurn = "end_turn"
+
+// testRepoPathAPI is the fixture worktree path tests use for the
+// testRepoNameAPI repo wherever the specific path doesn't matter.
+const testRepoPathAPI = "/tmp/api"
+
+// testRepoWorktreePathAPI is the fixture worktree path (distinct from
+// testRepoPathAPI) tests use for the testRepoNameAPI repo's WorktreePath.
+const testRepoWorktreePathAPI = "/tmp/api-wt"
+
+// testRebaseTargetMaster is the fixture rebase-target branch name tests use
+// wherever the specific branch doesn't matter (distinct from
+// defaultTestBranch so tests can exercise a non-default target).
+const testRebaseTargetMaster = "master"
+
+// testAxisGrounding is the fixture plan-validation axis name tests use
+// wherever the specific axis doesn't matter.
+const testAxisGrounding = "grounding"
+
+// testRepoNameAPI, testRepoNameWeb, and testRepoNameInfra are the fixture
+// repo names tests use across this package wherever a repo (often multiple,
+// alongside each other) is needed but the specific name doesn't matter.
+const (
+	testRepoNameAPI   = "api"
+	testRepoNameWeb   = "web"
+	testRepoNameInfra = "infra"
+)
+
+// Cycle Communication Contract path-template snippets. These describe the
+// well-known artifact paths a cross-repo cycle prompt must reference, and
+// are checked verbatim in both the rebase-loop and review-comments-loop
+// prompt tests.
+const (
+	wantProgressPathTemplate           = "`progress.md`: `{phase_dir}/progress.md`"
+	wantVerificationReportPathTemplate = "`verification-report.yaml`: `{iteration_dir}/verification-report.yaml`"
+	wantPhaseCompletePathTemplate      = "`phase_complete`: `{iteration_dir}/phase_complete`"
+)
+
 type loopTestFeatureOptions struct {
 	Name           string
 	Slug           string
@@ -46,7 +104,7 @@ func newLoopTestFeature(t *testing.T, stateDir, featureID string, repoNames []st
 		repos = append(repos, feature.FeatureRepo{
 			Name:       name,
 			Path:       repoDir,
-			BaseBranch: "main",
+			BaseBranch: defaultTestBranch,
 		})
 		repoPaths = append(repoPaths, repoDir)
 		repoStates[name] = &feature.RepoState{

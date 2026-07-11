@@ -316,7 +316,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 					errMsg := planErr.Error()
 					_ = markActiveCycleFailedRefactor(cfg.FeatureStore, cfg.Feature.ID, errMsg)
 					return &RefactorFeatureLoopResult{
-						FinalStatus: "protocol_violation",
+						FinalStatus: BoundedHelperStatusProtocolViolation,
 						LastError:   errMsg,
 						ArtifactDir: artifactDir,
 					}, nil
@@ -495,7 +495,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 	}
 
 	switch loopResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		// Cycle success: every staged repo transitions to
 		// Touched (staged for FR) atomically; ActiveCycle clears.
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
@@ -505,7 +505,7 @@ func RunRefactorFeatureLoop(cfg RefactorFeatureLoopConfig, sm ports.SessionManag
 		})
 		_ = clearActiveCycle(cfg.FeatureStore, cfg.Feature.ID)
 		return &RefactorFeatureLoopResult{
-			FinalStatus: "review_passed",
+			FinalStatus: finalStatusReviewPassed,
 			Iterations:  loopResult.Iterations,
 			Repos:       stagedRepos,
 			ArtifactDir: artifactDir,

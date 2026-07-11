@@ -25,6 +25,13 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
+// testRepoNameOrchestrator and testRepoNameWeb are fixture repo-name
+// literals used across this file's repo-list/repo-state tests.
+const (
+	testRepoNameOrchestrator = "agentic-orchestrator"
+	testRepoNameWeb          = "web"
+)
+
 func TestDashboardSelectFeature(t *testing.T) {
 	t.Parallel()
 	features := []*feature.Feature{
@@ -68,9 +75,9 @@ func TestDashboardClipsLongFailureDetailLinesToTerminalWidth(t *testing.T) {
 		CurrentPhase: feature.PhaseFinalReview,
 		FailureType:  feature.FailureProtocolViolation,
 		LastError:    "protocol violation: final_review_reviewer @ /Users/ivar.lazzaro/.agentic-workflow/worktrees/agentico-mcp-server/agentic-orchestrator/runs/run-001/final-review/iteration-02: dropped critical SDK message (type=result) after 5s on full attachCh",
-		Repos:        []feature.FeatureRepo{{Name: "agentic-orchestrator"}},
+		Repos:        []feature.FeatureRepo{{Name: testRepoNameOrchestrator}},
 		RepoStates: map[string]*feature.RepoState{
-			"agentic-orchestrator": {Touched: true, LastError: "dropped critical SDK message (type=result) after 5s on full attachCh"},
+			testRepoNameOrchestrator: {Touched: true, LastError: "dropped critical SDK message (type=result) after 5s on full attachCh"},
 		},
 	}
 	m := dashboardWithSelectedFeature(f)
@@ -444,7 +451,7 @@ func TestDashboardAttentionOnlyCountsPending(t *testing.T) {
 				{Question: "Old question", Answer: "Answered", Pending: false},
 			},
 			PermissionsQueue: []feature.PermissionRequest{
-				{Tool: "Bash", Args: "go test", Pending: false},
+				{Tool: toolNameBash, Args: "go test", Pending: false},
 			},
 		},
 		{
@@ -503,7 +510,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			name: "pending permission",
 			f: &feature.Feature{
 				ID: "permission", Name: "permission", Slug: "permission", Status: feature.StatusImplementing,
-				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+				PermissionsQueue: []feature.PermissionRequest{{Tool: toolNameBash, Pending: true}},
 			},
 			wantAwait: true,
 		},
@@ -646,7 +653,7 @@ func TestDashboardFooterContextualActionLabels(t *testing.T) {
 			name: "permission",
 			f: &feature.Feature{
 				ID: "permission", Name: "permission", Slug: "permission", Status: feature.StatusImplementing,
-				PermissionsQueue: []feature.PermissionRequest{{Tool: "Bash", Pending: true}},
+				PermissionsQueue: []feature.PermissionRequest{{Tool: toolNameBash, Pending: true}},
 			},
 			want: "[a] Approve",
 		},
@@ -1703,7 +1710,7 @@ func TestActivePublishedCycleStatus_FeatureRebaseNoRepoSuffix(t *testing.T) {
 	f := &feature.Feature{
 		Status:           feature.StatusCodeReady,
 		CurrentIteration: 2,
-		Repos:            []feature.FeatureRepo{{Name: "api"}, {Name: "web"}},
+		Repos:            []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
 		ActiveCycle:      &feature.CycleState{Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
 	}
 

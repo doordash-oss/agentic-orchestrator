@@ -37,6 +37,50 @@ const (
 	livePreviewTranscriptMessageLimit = 80
 )
 
+// roleAssistant, roleSystem and roleUser are the transcript role/message-type
+// values for assistant, system and user turns.
+const (
+	roleAssistant = "assistant"
+	roleSystem    = "system"
+	roleUser      = "user"
+)
+
+// toolUsageFileChangeDetail is the placeholder file-change detail used when a
+// tool-use block doesn't carry a more specific description.
+const toolUsageFileChangeDetail = "Captured from tool usage."
+
+// transcriptTypeControlRequest, transcriptTypeToolProgress,
+// transcriptTypeTaskStarted, transcriptTypeTaskProgress and
+// transcriptTypeTaskNotification are TranscriptMessageDTO.Type values for
+// redacted system rows.
+const (
+	transcriptTypeControlRequest   = "control_request"
+	transcriptTypeToolProgress     = "tool_progress"
+	transcriptTypeTaskStarted      = "task_started"
+	transcriptTypeTaskProgress     = "task_progress"
+	transcriptTypeTaskNotification = "task_notification"
+)
+
+// blockTypeText and blockTypeToolUse are TranscriptMessageDTO.Type values for
+// conversational content blocks.
+const (
+	blockTypeText    = "text"
+	blockTypeToolUse = "tool_use"
+)
+
+// fileChangeOpUpdate is the FileChangeDTO.Operation value for an in-place
+// file update (as opposed to create/delete).
+const fileChangeOpUpdate = "update"
+
+// turnStateRunning, turnStateCompleted and turnStateFailed are
+// sessionTurnState() values; the latter two are terminal and consumed by
+// client_sse.go's isTerminalSessionStatus.
+const (
+	turnStateRunning   = "running"
+	turnStateCompleted = "completed"
+	turnStateFailed    = "failed"
+)
+
 func (h *apiHandler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 	sessions := h.allSessions()
 	summaries := make([]SessionSummaryDTO, 0, len(sessions))
@@ -54,7 +98,7 @@ func (h *apiHandler) handleSessionList(w http.ResponseWriter, r *http.Request) {
 func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request, sessionID string) {
 	sess := h.getSession(sessionID)
 	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	detail := sessionDetailFromSummary(sessionSummaryDTO(sess))
@@ -79,14 +123,14 @@ func (h *apiHandler) handleSessionDetail(w http.ResponseWriter, r *http.Request,
 func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, sessionID string) {
 	sess := h.getSession(sessionID)
 	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	total := sess.MessageLog().Len()
 	offset := int(parseInt64Query(r, "offset", 0))
 	limit := int(parseInt64Query(r, "limit", 100))
 	if offset < 0 || limit <= 0 || limit > 500 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid transcript bounds", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid transcript bounds", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	if offset > total {
@@ -107,21 +151,21 @@ func (h *apiHandler) handleTranscript(w http.ResponseWriter, r *http.Request, se
 func (h *apiHandler) handleSessionOutput(w http.ResponseWriter, r *http.Request, sessionID string) {
 	sess := h.getSession(sessionID)
 	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	path := sess.LogFilePath()
 	if path == "" {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session output not found", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusNotFound, "not_found", "session output not found", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	resp, err := h.sessionOutputResponse(sessionID, path, parseInt64Query(r, "from", 0), parseInt64Query(r, "limit", defaultTextLimit), !sess.IsActive())
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read session output", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusInternalServerError, "internal_error", "read session output", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	if resp.Offset < 0 || resp.NextOffset < 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output bounds", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output bounds", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	revision := revisionForAny(resp)
@@ -149,12 +193,12 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 	}
 	sess := h.getSession(sessionID)
 	if sess == nil {
-		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusNotFound, "not_found", "session not found", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	fromOffset := sessionOutputStreamOffset(r)
 	if fromOffset < 0 {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output offset", map[string]any{"session_id": sessionID})
+		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid output offset", map[string]any{sessionIDErrorField: sessionID})
 		return
 	}
 	from := int(fromOffset)
@@ -364,7 +408,7 @@ func sessionTurnState(sess ports.SessionView) string {
 	}
 	switch sess.Status() {
 	case ports.SessionRunning:
-		return "running"
+		return turnStateRunning
 	case ports.SessionWaitingPermission:
 		return "waiting_permission"
 	case ports.SessionWaitingHelp:
@@ -373,9 +417,9 @@ func sessionTurnState(sess ports.SessionView) string {
 		}
 		return "waiting_input"
 	case ports.SessionDone:
-		return "completed"
+		return turnStateCompleted
 	case ports.SessionFailed:
-		return "failed"
+		return turnStateFailed
 	default:
 		return ""
 	}
@@ -400,27 +444,27 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 		index := start + i
 		switch {
 		case msg.Assistant != nil:
-			out = append(out, conversationDTOs(index, "assistant", msg.Assistant.Message.Content, root, false, false, "", 0)...)
+			out = append(out, conversationDTOs(index, roleAssistant, msg.Assistant.Message.Content, root, false, false, "", 0)...)
 		case msg.User != nil:
-			out = append(out, conversationDTOs(index, "user", msg.User.Message.Content, root, msg.LocallyAppended, msg.AutoPicked, msg.AutoPickQuestion, msg.AutoPickConfidence)...)
+			out = append(out, conversationDTOs(index, roleUser, msg.User.Message.Content, root, msg.LocallyAppended, msg.AutoPicked, msg.AutoPickQuestion, msg.AutoPickConfidence)...)
 		case msg.ControlRequest != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "control_request", Tool: msg.ControlRequest.Request.ToolName, Status: "pending", Redacted: true})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeControlRequest, Tool: msg.ControlRequest.Request.ToolName, Status: controlRequestStatusPending, Redacted: true})
 		case msg.Result != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "result", Status: msg.Result.Subtype, Redacted: true})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: "result", Status: msg.Result.Subtype, Redacted: true})
 		case msg.ToolProgress != nil:
 			if rows := fileChangeDTOsFromSDKFileChanges(index, msg.ToolProgress.ToolName, msg.FileChanges, root); len(rows) > 0 {
 				out = append(out, rows...)
 				continue
 			}
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "tool_progress", Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
 		case msg.TaskStarted != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "task_started", Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeTaskStarted, Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
 		case msg.TaskProgress != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "task_progress", Redacted: true, Task: taskDTOFromProgress(msg.TaskProgress)})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeTaskProgress, Redacted: true, Task: taskDTOFromProgress(msg.TaskProgress)})
 		case msg.TaskNotification != nil:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: "task_notification", Status: msg.TaskNotification.Status, Redacted: true, Task: taskDTOFromNotification(msg.TaskNotification)})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: transcriptTypeTaskNotification, Status: msg.TaskNotification.Status, Redacted: true, Task: taskDTOFromNotification(msg.TaskNotification)})
 		default:
-			out = append(out, TranscriptMessageDTO{Index: index, Role: "system", Type: msg.Type, Redacted: true})
+			out = append(out, TranscriptMessageDTO{Index: index, Role: roleSystem, Type: msg.Type, Redacted: true})
 		}
 	}
 	return out
@@ -431,12 +475,12 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 	for blockIndex, block := range blocks {
 		switch {
 		case block.IsText():
-			userLocal := role == "user" && locallyAppended
+			userLocal := role == roleUser && locallyAppended
 			out = append(out, TranscriptMessageDTO{
 				Index:              index,
 				BlockIndex:         blockIndex,
 				Role:               role,
-				Type:               "text",
+				Type:               blockTypeText,
 				Text:               safeTranscriptText(block.Text, role, locallyAppended),
 				LocallyAppended:    userLocal,
 				AutoPicked:         userLocal && autoPicked,
@@ -448,7 +492,7 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 				Index:      index,
 				BlockIndex: blockIndex,
 				Role:       role,
-				Type:       "tool_use",
+				Type:       blockTypeToolUse,
 				Tool:       block.Name,
 				Redacted:   true,
 				FileChange: fileChangeDTOFromToolUse(block, workDir),
@@ -467,10 +511,10 @@ func conversationDTOs(index int, role string, blocks []llm.ContentBlock, workDir
 }
 
 func safeTranscriptText(text, role string, locallyAppended bool) string {
-	if role == "user" && !locallyAppended {
+	if role == roleUser && !locallyAppended {
 		return safeTranscriptPrompt(text)
 	}
-	if role == "assistant" {
+	if role == roleAssistant {
 		return safeDisplayText(text, 0)
 	}
 	return safeDisplayText(text, 500)
@@ -570,18 +614,18 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 	}
 	input := transcriptJSONFields(block.Input)
 	switch block.Name {
-	case "Edit", "MultiEdit", "Write":
+	case toolNameEdit, toolNameMultiEdit, toolNameWrite:
 		path := firstTranscriptString(input, "file_path", "path", "target_file")
 		if path == "" {
 			return nil
 		}
-		op := "update"
-		if block.Name == "Write" && strings.TrimSpace(firstTranscriptString(input, "old_string")) == "" {
+		op := fileChangeOpUpdate
+		if block.Name == toolNameWrite && strings.TrimSpace(firstTranscriptString(input, "old_string")) == "" {
 			op = "write"
 		}
 		detail := transcriptToolUseFileChangeDetail(block.Name, input)
 		if detail == "" {
-			detail = "Captured from tool usage."
+			detail = toolUsageFileChangeDetail
 		}
 		return &FileChangeDTO{
 			Path:      safeTranscriptPath(workDir, path),
@@ -593,7 +637,7 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 		if path == "" {
 			return nil
 		}
-		return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: "delete", Detail: "Captured from tool usage."}
+		return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: "delete", Detail: toolUsageFileChangeDetail}
 	case "Move", "Rename":
 		newPath := firstTranscriptString(input, "new_path", "destination_path", "to", "path")
 		if newPath == "" {
@@ -603,7 +647,7 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 			Path:      safeTranscriptPath(workDir, newPath),
 			OldPath:   safeTranscriptPath(workDir, firstTranscriptString(input, "old_path", "source_path", "from")),
 			Operation: "rename",
-			Detail:    "Captured from tool usage.",
+			Detail:    toolUsageFileChangeDetail,
 		}
 	default:
 		return nil
@@ -611,7 +655,7 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 }
 
 func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *FileChangeDTO {
-	if progress == nil || (progress.ToolName != "Write" && progress.ToolName != "Edit") {
+	if progress == nil || (progress.ToolName != toolNameWrite && progress.ToolName != toolNameEdit) {
 		return nil
 	}
 	path := extractTranscriptFilePathFromProgress(progress.Data)
@@ -622,7 +666,7 @@ func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir st
 	if detail == "" {
 		detail = "Captured from tool activity."
 	}
-	return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: "update", Detail: detail}
+	return &FileChangeDTO{Path: safeTranscriptPath(workDir, path), Operation: fileChangeOpUpdate, Detail: detail}
 }
 
 func fileChangeDTOsFromSDKFileChanges(index int, toolName string, changes []llm.FileChangeEvent, workDir string) []TranscriptMessageDTO {
@@ -637,9 +681,9 @@ func fileChangeDTOsFromSDKFileChanges(index int, toolName string, changes []llm.
 		}
 		rows = append(rows, TranscriptMessageDTO{
 			Index:      index,
-			Role:       "system",
-			Type:       "tool_progress",
-			Tool:       firstNonEmpty(toolName, "Write"),
+			Role:       roleSystem,
+			Type:       transcriptTypeToolProgress,
+			Tool:       firstNonEmpty(toolName, toolNameWrite),
 			Redacted:   true,
 			FileChange: dto,
 		})
@@ -654,7 +698,7 @@ func fileChangeDTOFromSDKFileChange(change llm.FileChangeEvent, workDir string) 
 	}
 	op := strings.TrimSpace(change.Operation)
 	if op == "" {
-		op = "update"
+		op = fileChangeOpUpdate
 	}
 	detail := safeDisplayText(truncateTranscriptFileChangeDetail(change.Detail), 2000)
 	if detail == "" {
@@ -674,16 +718,16 @@ func fileChangeDTOFromSDKFileChange(change llm.FileChangeEvent, workDir string) 
 func transcriptToolUseFileChangeDetail(toolName string, fields map[string]interface{}) string {
 	oldString := firstTranscriptString(fields, "old_string", "oldText")
 	newString := firstTranscriptString(fields, "new_string", "newText", "content")
-	if oldString == "" && newString == "" && toolName == "MultiEdit" {
+	if oldString == "" && newString == "" && toolName == toolNameMultiEdit {
 		return transcriptMultiEditDetail(fields)
 	}
 	switch toolName {
-	case "Edit", "MultiEdit":
+	case toolNameEdit, toolNameMultiEdit:
 		if oldString == "" && newString == "" {
 			return ""
 		}
 		return formatTranscriptReplacement(oldString, newString)
-	case "Write":
+	case toolNameWrite:
 		if newString == "" {
 			return ""
 		}

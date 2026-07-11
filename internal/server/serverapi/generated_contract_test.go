@@ -14,7 +14,11 @@
 
 package serverapi
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestGeneratedDTOResponsesExposeConcreteFields(t *testing.T) {
 	health := HealthResponse{}
@@ -60,4 +64,20 @@ func TestGeneratedDTOResponsesExposeConcreteFields(t *testing.T) {
 
 	transcript := TranscriptResponse{}
 	transcript.Messages = []TranscriptMessage{{Index: 1}}
+}
+
+func TestGeneratedPermissionAnswerRequestPreservesEmptyRememberScope(t *testing.T) {
+	scope := ""
+	body, err := json.Marshal(PermissionAnswerRequest{
+		RequestID:       "perm-1",
+		Decision:        AllowRemember,
+		RememberPattern: "Bash(go test *)",
+		RememberScope:   &scope,
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if !strings.Contains(string(body), `"remember_scope":""`) {
+		t.Fatalf("body = %s, want explicit empty remember_scope", body)
+	}
 }

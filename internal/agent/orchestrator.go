@@ -144,7 +144,7 @@ func RunMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (
 	if err != nil {
 		return nil, err
 	}
-	if implResult.FinalStatus != "review_passed" {
+	if implResult.FinalStatus != finalStatusReviewPassed {
 		return phaseLoopResultToOrchestratorResult(cfg, implResult), nil
 	}
 	return &OrchestratorResult{FinalStatus: "awaiting_final_review"}, nil
@@ -222,7 +222,7 @@ func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*
 	}
 
 	switch frResult.FinalStatus {
-	case "review_passed":
+	case finalStatusReviewPassed:
 		return &OrchestratorResult{FinalStatus: "all_passed"}, nil
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}, nil

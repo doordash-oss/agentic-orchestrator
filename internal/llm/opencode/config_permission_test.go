@@ -136,12 +136,12 @@ func TestRootGlobs_EmitsLeadingSlashStrippedAbsoluteForm(t *testing.T) {
 // opencode#20045).
 func TestRootGlobs_EmitsSymlinkResolvedAbsoluteForm(t *testing.T) {
 	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	if err := os.MkdirAll(filepath.Join(real, "kb"), 0o755); err != nil {
+	realDir := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "kb"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(base, "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realDir, link); err != nil {
 		t.Skipf("symlinks unavailable on this platform: %v", err)
 	}
 
@@ -151,9 +151,9 @@ func TestRootGlobs_EmitsSymlinkResolvedAbsoluteForm(t *testing.T) {
 	// t.TempDir() itself can traverse a symlink (e.g. macOS's own /var ->
 	// /private/var), so the expected resolved form must go through
 	// EvalSymlinks too rather than assuming real/kb is already canonical.
-	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(real, "kb"))
+	resolvedRoot, err := filepath.EvalSymlinks(filepath.Join(realDir, "kb"))
 	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", filepath.Join(real, "kb"), err)
+		t.Fatalf("EvalSymlinks(%q): %v", filepath.Join(realDir, "kb"), err)
 	}
 	wantAbs := resolvedRoot
 	wantAbsGlob := resolvedRoot + "/**"
@@ -183,19 +183,19 @@ func TestRootGlobs_EmitsSymlinkResolvedAbsoluteForm(t *testing.T) {
 // falls through to the catch-all deny without the resolved-relative variant.
 func TestRootGlobs_EmitsSymlinkResolvedRelativeForm(t *testing.T) {
 	base := t.TempDir()
-	real := filepath.Join(base, "real")
-	if err := os.MkdirAll(filepath.Join(real, "a", "b"), 0o755); err != nil {
+	realDir := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "a", "b"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(base, "link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realDir, link); err != nil {
 		t.Skipf("symlinks unavailable on this platform: %v", err)
 	}
 
 	// workDir still traverses the symlink; root is already the resolved form —
 	// the asymmetry OpenCode's inconsistent path handling can produce.
 	workDir := filepath.Join(link, "a")
-	root := filepath.Join(real, "a", "b")
+	root := filepath.Join(realDir, "a", "b")
 
 	rawRel, err := filepath.Rel(workDir, root)
 	if err != nil {

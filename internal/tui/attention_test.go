@@ -49,11 +49,11 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 				PendingReviewPhase:       &reviewPhase,
 				PendingNeedUserInputPath: "/tmp/need-user-input.yaml",
 				PermissionsQueue: []feature.PermissionRequest{
-					{Tool: "Bash", Args: `{"command":"go test ./internal/tui"}`, Pending: true},
+					{Tool: toolNameBash, Args: `{"command":"go test ./internal/tui"}`, Pending: true}, //nolint:goconst // shared raw-JSON test fixture; not constant-ized per raw-string-fixture policy
 				},
 				HelpQueue: []feature.HelpRequest{{Question: "Which branch?", Pending: true}},
 			},
-			sess:        pendingAttentionSession("perm-review", session.SessionWaitingPermission, pendingPermissionControlRequestForAttention("perm-1", "Bash", `{"command":"go test ./internal/tui"}`)),
+			sess:        pendingAttentionSession("perm-review", session.SessionWaitingPermission, pendingPermissionControlRequestForAttention("perm-1", toolNameBash, `{"command":"go test ./internal/tui"}`)),
 			wantKind:    attentionReview,
 			wantCTA:     "Review",
 			wantSummary: "Plan needs review",
@@ -66,7 +66,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 				PendingNeedUserInputPath: "/tmp/need-user-input.yaml",
 				HelpQueue:                []feature.HelpRequest{{Question: "Pick a path?", Pending: true}},
 			},
-			sess:        pendingAttentionSession("ask-review", session.SessionWaitingHelp, pendingAskUserControlRequestForAttention("ask-1", "Pick a path?")),
+			sess:        pendingAttentionSession("ask-review", session.SessionWaitingHelp, pendingAskUserControlRequestForAttention(testAskRequestID, "Pick a path?")),
 			wantKind:    attentionReview,
 			wantCTA:     "Review",
 			wantSummary: "Plan needs review",
@@ -163,11 +163,11 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 			f: &feature.Feature{
 				Status: feature.StatusInterrupted,
 				PermissionsQueue: []feature.PermissionRequest{
-					{Tool: "Bash", Args: `{"command":"go test ./internal/tui"}`, Pending: true},
+					{Tool: toolNameBash, Args: `{"command":"go test ./internal/tui"}`, Pending: true},
 				},
 				HelpQueue: []feature.HelpRequest{{Question: "Which branch?", Pending: true}},
 			},
-			sess:     pendingAttentionSession("stopped-session", session.SessionWaitingPermission, pendingPermissionControlRequestForAttention("perm-stale", "Bash", `{"command":"go test ./internal/tui"}`)),
+			sess:     pendingAttentionSession("stopped-session", session.SessionWaitingPermission, pendingPermissionControlRequestForAttention("perm-stale", toolNameBash, `{"command":"go test ./internal/tui"}`)),
 			wantKind: attentionNone,
 		},
 		{
@@ -184,7 +184,7 @@ func TestComputeFeatureAttentionPriority(t *testing.T) {
 		{
 			name:        "session ask user supplies question summary",
 			f:           &feature.Feature{Status: feature.StatusImplementing},
-			sess:        pendingAttentionSession("ask-session", session.SessionWaitingHelp, pendingAskUserControlRequestForAttention("ask-1", "Which formatter?")),
+			sess:        pendingAttentionSession("ask-session", session.SessionWaitingHelp, pendingAskUserControlRequestForAttention(testAskRequestID, "Which formatter?")),
 			wantKind:    attentionAskUser,
 			wantCTA:     "Answer",
 			wantSummary: "Which formatter?",
@@ -269,7 +269,7 @@ func pendingPermissionControlRequestForAttention(requestID, toolName, input stri
 	return &llm.ControlRequestMessage{
 		RequestID: requestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
+			Subtype:  controlRequestSubtypeCanUseTool,
 			ToolName: toolName,
 			Input:    json.RawMessage(input),
 		},
@@ -286,8 +286,8 @@ func pendingAskUserControlRequestForAttention(requestID, question string) *llm.C
 	return &llm.ControlRequestMessage{
 		RequestID: requestID,
 		Request: llm.ControlRequest{
-			Subtype:  "can_use_tool",
-			ToolName: "AskUserQuestion",
+			Subtype:  controlRequestSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
 			Input:    raw,
 		},
 	}

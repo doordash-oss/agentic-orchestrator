@@ -44,7 +44,7 @@ Some details.
 
 func TestPhaseScope_MultiRepoTagged(t *testing.T) {
 	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "infra"}},
+		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}, {Name: testRepoNameInfra}},
 	}
 	plan := `## Tasks
 
@@ -62,14 +62,14 @@ Body for web.
 	if !got.ScopeOK() {
 		t.Fatalf("expected ScopeOK, got issues: %s", got.IssueSummary())
 	}
-	if !reflect.DeepEqual(got.Repos, []string{"api", "web"}) {
+	if !reflect.DeepEqual(got.Repos, []string{testRepoNameAPI, testRepoNameWeb}) {
 		t.Fatalf("repos = %v, want [api web]", got.Repos)
 	}
 }
 
 func TestPhaseScope_MultiRepoUntaggedTaskRejected(t *testing.T) {
 	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{{Name: "api"}, {Name: "web"}},
+		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
 	}
 	plan := `## Tasks
 
@@ -99,7 +99,7 @@ Body.
 
 func TestPhaseScope_RepoNotInFeature(t *testing.T) {
 	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{{Name: "api"}, {Name: "web"}},
+		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
 	}
 	plan := `## Tasks
 
@@ -125,7 +125,7 @@ Body.
 
 func TestPhaseScope_EmptyPlan(t *testing.T) {
 	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{{Name: "api"}},
+		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}},
 	}
 	got := PhaseScopeFromText(feat, "# Plan\n\nNo tasks here.\n")
 	if got.ScopeOK() {
@@ -138,7 +138,7 @@ func TestPhaseScope_EmptyPlan(t *testing.T) {
 
 func TestPhaseScope_PartialSubset(t *testing.T) {
 	feat := &feature.Feature{
-		Repos: []feature.FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "infra"}},
+		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}, {Name: testRepoNameInfra}},
 	}
 	plan := `## Tasks
 
@@ -151,7 +151,7 @@ Body.
 	if !got.ScopeOK() {
 		t.Fatalf("expected OK, got %s", got.IssueSummary())
 	}
-	if !reflect.DeepEqual(got.Repos, []string{"api"}) {
+	if !reflect.DeepEqual(got.Repos, []string{testRepoNameAPI}) {
 		t.Fatalf("expected [api] (partial subset), got %v", got.Repos)
 	}
 }
@@ -169,12 +169,12 @@ Body.
 	if err := os.WriteFile(planPath, []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	feat := &feature.Feature{Repos: []feature.FeatureRepo{{Name: "api"}, {Name: "web"}}}
+	feat := &feature.Feature{Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}}}
 	res, err := PhaseScope(feat, planPath)
 	if err != nil {
 		t.Fatalf("PhaseScope: %v", err)
 	}
-	if !res.ScopeOK() || !reflect.DeepEqual(res.Repos, []string{"api"}) {
+	if !res.ScopeOK() || !reflect.DeepEqual(res.Repos, []string{testRepoNameAPI}) {
 		t.Fatalf("PhaseScope file path: repos=%v ok=%v", res.Repos, res.ScopeOK())
 	}
 }

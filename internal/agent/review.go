@@ -40,9 +40,9 @@ func (s ReviewStatus) IsApproved() bool {
 func (s ReviewStatus) String() string {
 	switch s {
 	case ReviewApproved:
-		return "APPROVED"
+		return agentStatusApproved
 	case ReviewChangesRequested:
-		return "CHANGES_REQUESTED"
+		return agentStatusChangesRequested
 	case ReviewFailed:
 		return "FAILED"
 	default:
@@ -103,9 +103,13 @@ var reviewRequiredSections = []string{
 // reviewVerdictTokens is the closed set of strings the harness will route on.
 // Anything else under `## Verdict` is a protocol violation.
 var reviewVerdictTokens = map[string]ReviewStatus{
-	"APPROVED":          ReviewApproved,
-	"CHANGES_REQUESTED": ReviewChangesRequested,
+	agentStatusApproved:         ReviewApproved,
+	agentStatusChangesRequested: ReviewChangesRequested,
 }
+
+// reviewStatusSkipped marks IterationMeta.ReviewStatus when the per-iteration
+// review gate was intentionally not run (e.g. SkipIterationReview).
+const reviewStatusSkipped = "skipped"
 
 // ParsedReviewFeedback is the structured view of a review-feedback.md the
 // harness uses for routing the bounded review/validation helper. Body holds

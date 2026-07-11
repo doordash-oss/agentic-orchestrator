@@ -38,12 +38,12 @@ func TestRunBoundedHelper_SuccessWithoutPhaseComplete(t *testing.T) {
 		mocks.InitMessage(),
 		mocks.AssistantTextMessage("Research complete"),
 		{
-			Type: "result",
+			Type: testResultMessageType,
 			Result: &llm.ResultMessage{
-				Type:         "result",
-				Subtype:      "success",
-				Result:       "success",
-				StopReason:   "end_turn",
+				Type:         testResultMessageType,
+				Subtype:      testResultSuccessValue,
+				Result:       testResultSuccessValue,
+				StopReason:   testStopReasonEndTurn,
 				TotalCostUSD: 0.12,
 				Usage: &llm.Usage{
 					InputTokens:  11,
@@ -76,7 +76,7 @@ func TestRunBoundedHelper_SuccessWithoutPhaseComplete(t *testing.T) {
 	if result.Output != "Research complete" {
 		t.Errorf("result.Output = %q, want %q", result.Output, "Research complete")
 	}
-	if result.Result == nil || result.Result.StopReason != "end_turn" {
+	if result.Result == nil || result.Result.StopReason != testStopReasonEndTurn {
 		t.Fatalf("result.Result = %#v, want end_turn success result", result.Result)
 	}
 	if result.Usage.InputTokens != 11 || result.Usage.OutputTokens != 7 {
@@ -90,12 +90,12 @@ func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
 		mocks.InitMessage(),
 		mocks.AssistantTextMessage("Review complete"),
 		{
-			Type: "result",
+			Type: testResultMessageType,
 			Result: &llm.ResultMessage{
-				Type:         "result",
-				Subtype:      "success",
-				Result:       "success",
-				StopReason:   "end_turn",
+				Type:         testResultMessageType,
+				Subtype:      testResultSuccessValue,
+				Result:       testResultSuccessValue,
+				StopReason:   testStopReasonEndTurn,
 				TotalCostUSD: 0.12,
 			},
 		},
@@ -234,11 +234,11 @@ func TestRunBoundedHelper_FailsOnEmptyRequiredOutput(t *testing.T) {
 	pr, cleanup := newMockBoundedHelperRunner(t, []llm.SDKMessage{
 		mocks.InitMessage(),
 		{
-			Type: "result",
+			Type: testResultMessageType,
 			Result: &llm.ResultMessage{
-				Type:       "result",
-				Subtype:    "success",
-				StopReason: "end_turn",
+				Type:       testResultMessageType,
+				Subtype:    testResultSuccessValue,
+				StopReason: testStopReasonEndTurn,
 				Usage: &llm.Usage{
 					InputTokens:  3,
 					OutputTokens: 0,
@@ -312,7 +312,7 @@ func (s *boundedNudgeSession) Stop() error { s.stopCalls++; return nil }
 // turn writes the marker.
 func TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes(t *testing.T) {
 	phaseDir := t.TempDir()
-	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
@@ -332,7 +332,7 @@ func TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes(t *testing.T) {
 	}()
 
 	// First turn ends without phase_complete → expect a nudge.
-	sess.statusC <- "SUCCESS"
+	sess.statusC <- agentStatusSuccess
 	select {
 	case <-sess.nudges:
 	case <-time.After(2 * time.Second):
@@ -343,7 +343,7 @@ func TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
-	sess.statusC <- "SUCCESS"
+	sess.statusC <- agentStatusSuccess
 
 	select {
 	case result := <-resultCh:
@@ -362,7 +362,7 @@ func TestRunBoundedHelper_NudgesOnMissingArtifactsThenFinalizes(t *testing.T) {
 // rather than a protocol violation.
 func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T) {
 	phaseDir := t.TempDir()
-	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
@@ -384,7 +384,7 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 	}()
 
 	// First turn ends without the marker → expect a nudge.
-	sess.statusC <- "SUCCESS"
+	sess.statusC <- agentStatusSuccess
 	select {
 	case <-sess.nudges:
 	case <-time.After(2 * time.Second):
@@ -393,11 +393,11 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 
 	// The nudged turn writes BOTH the required contract artifact and the
 	// marker, then ends its turn.
-	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 	if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
 		t.Fatalf("write marker: %v", err)
 	}
-	sess.statusC <- "SUCCESS"
+	sess.statusC <- agentStatusSuccess
 
 	select {
 	case result := <-resultCh:
@@ -414,7 +414,7 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 // protocol violation, even with the capability armed.
 func TestRunBoundedHelper_DoneBranchDoesNotNudge(t *testing.T) {
 	phaseDir := t.TempDir()
-	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
@@ -471,12 +471,12 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 		if len(sessionIDs) == 1 {
 			return newTerminalStatusTestSession(ports.SessionFailed), nil
 		}
-		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", "APPROVED"))
+		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 		if err := os.WriteFile(filepath.Join(phaseDir, PhaseCompleteFile), nil, 0o644); err != nil {
 			t.Fatalf("write marker: %v", err)
 		}
 		sess := newUtilityTestSession()
-		sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+		sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
 		sess.statusCh <- agentStatusSuccess
 		return sess, nil
 	}
@@ -506,7 +506,7 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 // finalizes as a protocol violation.
 func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 	phaseDir := t.TempDir()
-	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"})
+	sess := newBoundedNudgeSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
@@ -528,7 +528,7 @@ func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 
 	// Each end_turn without the marker, up to the cap, draws a nudge.
 	for i := 0; i < maxFinishOrViolateNudges; i++ {
-		sess.statusC <- "SUCCESS"
+		sess.statusC <- agentStatusSuccess
 		select {
 		case <-sess.nudges:
 		case <-time.After(2 * time.Second):
@@ -537,7 +537,7 @@ func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 	}
 
 	// One more end_turn beyond the cap finalizes as a protocol violation.
-	sess.statusC <- "SUCCESS"
+	sess.statusC <- agentStatusSuccess
 	select {
 	case result := <-resultCh:
 		if result.Status != BoundedHelperStatusProtocolViolation {
@@ -567,7 +567,7 @@ func newMockBoundedHelperRunner(t *testing.T, messages []llm.SDKMessage) (*Phase
 	}
 
 	mockProv := &mocks.MockProvider{
-		ProviderName: "mock",
+		ProviderName: testMockIdentifier,
 		Models:       []string{"test-model"},
 		CLIDetected:  true,
 		CommandArgs:  []string{"cat"},

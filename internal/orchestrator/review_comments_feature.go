@@ -228,7 +228,7 @@ func (o *Orchestrator) handleFeatureReviewCommentsDone(
 	}
 
 	switch result.FinalStatus {
-	case "review_passed":
+	case reviewStatusPassed:
 		// Cycle complete: commit + push each touched repo's branch,
 		// then walk the aggregated resolutions and dispatch per-PR
 		// replies. The legacy per-repo CompleteRepoCycle path runs
@@ -257,15 +257,15 @@ func (o *Orchestrator) handleFeatureReviewCommentsDone(
 		}
 		return
 
-	case "interrupted", "no_op":
+	case finalStatusInterrupted, finalStatusNoOp:
 		// Persisted state preserved for restart. Leave per-repo
 		// cycle entries in place; the harness recovery / next user
 		// action handles them.
 		return
 
-	case "need_user_input":
+	case finalStatusNeedUserInput:
 		gate := &agent.LoopResult{
-			FinalStatus:       "need_user_input",
+			FinalStatus:       finalStatusNeedUserInput,
 			Iterations:        result.Iterations,
 			LastError:         result.LastError,
 			NeedUserInputPath: result.NeedUserInputPath,

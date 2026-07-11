@@ -150,7 +150,7 @@ func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T)
 			ExitCode:         &exitCode,
 			CommandActions: []CommandAction{
 				{Type: "read", Path: "/tmp/state/guidelines/go/index.md"},
-				{Type: "write", Path: "/tmp/state/output.txt"},
+				{Type: codexFileChangeOperationWrite, Path: "/tmp/state/output.txt"},
 				{Type: "read", Path: ""},
 			},
 		},
@@ -220,7 +220,7 @@ func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
 	if msg.ToolProgress == nil {
 		t.Fatal("msg.ToolProgress is nil, want non-nil")
 	}
-	if msg.ToolProgress.ToolUseID != "call_write" || msg.ToolProgress.ToolName != "Write" {
+	if msg.ToolProgress.ToolUseID != "call_write" || msg.ToolProgress.ToolName != codexToolNameWrite {
 		t.Fatalf("ToolProgress = %+v, want call_write Write", msg.ToolProgress)
 	}
 	if len(msg.FileChanges) != 1 {
@@ -230,7 +230,7 @@ func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
 	if change.Path != "/tmp/test/README.md" {
 		t.Fatalf("FileChanges[0].Path = %q", change.Path)
 	}
-	if change.Operation != "update" {
+	if change.Operation != codexFileChangeOperationUpdate {
 		t.Fatalf("FileChanges[0].Operation = %q, want update", change.Operation)
 	}
 	if !change.HasDiffPatch {
@@ -914,7 +914,7 @@ func TestTurnCompleted_BlankAgentMessageDoesNotEraseWellFormedQuestion(t *testin
 	if !ok {
 		t.Fatal("question item parseNotification ok = false, want true")
 	}
-	if msg.Type != "assistant" {
+	if msg.Type != codexRoleAssistant {
 		t.Fatalf("question item Type = %q, want assistant", msg.Type)
 	}
 

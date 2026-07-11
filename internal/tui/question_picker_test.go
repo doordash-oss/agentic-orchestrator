@@ -20,6 +20,13 @@ import (
 	"testing"
 )
 
+// testOptionLabelStaging and testOptionLabelProduction are fixture option
+// labels reused across this file's rendering assertions.
+const (
+	testOptionLabelStaging    = "staging"
+	testOptionLabelProduction = "production"
+)
+
 func TestParseAskUserQuestions(t *testing.T) {
 	t.Parallel()
 	input := json.RawMessage(`{"questions":[{"question":"Pick one","multiSelect":false,"options":[{"label":"A"},{"label":"B"}]}]}`)
@@ -27,8 +34,8 @@ func TestParseAskUserQuestions(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
-	if got[0].Question != "Pick one" || len(got[0].Options) != 2 {
-		t.Errorf("got[0] = %+v, want Question=%q with 2 options", got[0], "Pick one")
+	if got[0].Question != testQuestionPickOne || len(got[0].Options) != 2 {
+		t.Errorf("got[0] = %+v, want Question=%q with 2 options", got[0], testQuestionPickOne)
 	}
 }
 
@@ -53,10 +60,10 @@ func TestQuestionVisibleWindowPureNoScrollNeeded(t *testing.T) {
 
 func TestRenderQuestionOptionsBlockMarksSelectedRow(t *testing.T) {
 	t.Parallel()
-	opts := []askUserOption{{Label: "staging"}, {Label: "production"}}
+	opts := []askUserOption{{Label: testOptionLabelStaging}, {Label: testOptionLabelProduction}}
 	q := askUserQuestion{Question: "Which env?", Options: opts}
 	out := renderQuestionOptionsBlock(q, 1, nil, 0, 2, false, false)
-	if !strings.Contains(out, "production") || !strings.Contains(out, "staging") {
+	if !strings.Contains(out, testOptionLabelProduction) || !strings.Contains(out, testOptionLabelStaging) {
 		t.Fatalf("rendered block missing option labels: %q", out)
 	}
 	// The selected row (index 1, "production") gets the "> " cursor; the
@@ -64,7 +71,7 @@ func TestRenderQuestionOptionsBlockMarksSelectedRow(t *testing.T) {
 	lines := strings.Split(out, "\n")
 	foundCursorOnProduction := false
 	for _, line := range lines {
-		if strings.Contains(line, "production") && strings.HasPrefix(strings.TrimLeft(line, "\x1b[0123456789;m"), "> ") {
+		if strings.Contains(line, testOptionLabelProduction) && strings.HasPrefix(strings.TrimLeft(line, "\x1b[0123456789;m"), "> ") {
 			foundCursorOnProduction = true
 		}
 	}

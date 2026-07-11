@@ -658,7 +658,7 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 		}
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, feature.FailureProtocolViolation, errMsg)
-	case "interrupted":
+	case finalStatusInterrupted:
 		// Interrupted runs are driven by InterruptFeature; nothing to do.
 		return nil
 	default:
@@ -815,7 +815,7 @@ func (o *Orchestrator) onImplementCompleted(featureID string, input PhaseComplet
 	if input.MultiRepoResult != nil {
 		return o.onMultiRepoImplementDone(featureID, input.MultiRepoResult)
 	}
-	if input.ImplementResult != nil && input.ImplementResult.FinalStatus == "need_user_input" {
+	if input.ImplementResult != nil && input.ImplementResult.FinalStatus == finalStatusNeedUserInput {
 		return o.onSingleRepoNeedUserInput(featureID, input.ImplementResult)
 	}
 	errMsg := "implement completion missing multi-repo result"
@@ -836,17 +836,17 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 	}
 
 	switch result.FinalStatus {
-	case "all_passed", "awaiting_final_review":
+	case finalStatusAllPassed, "awaiting_final_review":
 		// "all_passed" is the inline Final Review path. "awaiting_final_review"
 		// means every touched repo is staged for the deferred end-of-feature
 		// Final Review pass. onMultiReposPassed dispatches that review for the
 		// final-or-non-roadmap path before MarkCodeReady.
 		return o.onMultiReposPassed(featureID, f)
-	case "interrupted":
+	case finalStatusInterrupted:
 		// Graceful shutdown — shutdownFeatures will transition the feature to
 		// StatusInterrupted. We must NOT mark the feature Failed here.
 		return nil
-	case "need_user_input":
+	case finalStatusNeedUserInput:
 		// Under SchemaVersionCurrent = 4 the NEED_USER_INPUT gate is
 		// feature-scoped (Feature.PendingNeedUserInputPath). Persist the
 		// gate path and transition the feature into StatusNeedUserInput so
@@ -871,7 +871,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 		if summary == "" {
 			var paused []string
 			for repoName, status := range result.RepoStatuses {
-				if status == "need_user_input" {
+				if status == finalStatusNeedUserInput {
 					paused = append(paused, repoName)
 				}
 			}
@@ -895,7 +895,7 @@ func (o *Orchestrator) onMultiRepoImplementDone(featureID string, result *agent.
 			Message:   summary,
 		})
 		return nil
-	case "plan_revision_required":
+	case finalStatusPlanRevisionRequired:
 		return o.routeMissingEvidencePlanRevision(featureID, f, result.PlanRevisionFeedback)
 	case "failed":
 		errMsg := result.LastError
@@ -1395,7 +1395,7 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)
 	}
 	switch res.FinalStatus {
-	case "all_passed":
+	case finalStatusAllPassed:
 		// Roll status back to ReviewPassed so the trailing MarkCodeReady /
 		// auto-publish path in onMultiReposPassed sees the same precondition
 		// as before the FR detour.
@@ -1406,7 +1406,7 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		}
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return nil
-	case "interrupted":
+	case finalStatusInterrupted:
 		// Shutdown handler will land the feature in StatusInterrupted; nothing
 		// to do here beyond surfacing the phase-completed event. Return the
 		// sentinel so onMultiReposPassed and surfaceDispatchCompletionError
@@ -1416,7 +1416,7 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
-	case "plan_revision_required":
+	case finalStatusPlanRevisionRequired:
 		errMsg := "final review requested unsupported phase-plan revision"
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
 		return o.markFinalReviewFailedWithEvent(featureID, feature.FailureInfrastructure, errMsg)

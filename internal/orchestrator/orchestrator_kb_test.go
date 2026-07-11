@@ -107,8 +107,8 @@ func TestOrchestrator_StartKB_MixedFresh(t *testing.T) {
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		Pipeline:     feature.PipelineLarge,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-a", Path: "/tmp/repo-a"},
-			{Name: "repo-b", Path: "/tmp/repo-b"},
+			{Name: repoName, Path: repoAPath},
+			{Name: repoNameB, Path: repoBPath},
 		},
 	}
 	lc := lifecycleForFeature(f)
@@ -549,7 +549,7 @@ func TestOrchestrator_OnKBCompleted_FailureOnInterruptedFeature_DoesNotMarkFaile
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		Pipeline:     feature.PipelineLarge,
 		Repos: []feature.FeatureRepo{
-			{Name: "agentic", Path: "/tmp/agentic"},
+			{Name: agenticRepoName, Path: "/tmp/agentic"},
 		},
 	}
 	lc := lifecycleForFeature(f)

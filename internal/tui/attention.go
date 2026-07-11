@@ -35,6 +35,50 @@ const (
 	attentionWatch
 )
 
+const ctaLabelAnswer = "Answer"
+
+// toolNameAskUserQuestion is the ToolName reported on control requests and
+// tool-use blocks for the built-in AskUserQuestion tool.
+const toolNameAskUserQuestion = "AskUserQuestion"
+
+// toolNameBash is the ToolName reported for shell command execution.
+const toolNameBash = "Bash"
+
+// toolNameAgent is the ToolName reported for sub-agent delegation.
+const toolNameAgent = "Agent"
+
+// toolNameRead is the ToolName reported for file-read operations.
+const toolNameRead = "Read"
+
+// toolNameEdit is the ToolName reported for file-edit operations.
+const toolNameEdit = "Edit"
+
+// toolNameWrite is the ToolName reported for file-write operations.
+const toolNameWrite = "Write"
+
+// toolNameGlob is the ToolName reported for filesystem glob lookups.
+const toolNameGlob = "Glob"
+
+// toolNameGrep is the ToolName reported for content search operations.
+const toolNameGrep = "Grep"
+
+// toolNameMultiEdit is the ToolName reported for multi-region file edits.
+const toolNameMultiEdit = "MultiEdit"
+
+// toolNameTaskCreate is the ToolName reported for sub-task creation.
+const toolNameTaskCreate = "TaskCreate"
+
+// roleAssistant is the message Role/Type reported for assistant-authored
+// SDK messages.
+const roleAssistant = "assistant"
+
+// msgTypeControlRequest is the SDKMessage.Type reported for control-request
+// (permission/AskUser/hook) envelopes.
+const msgTypeControlRequest = "control_request"
+
+const attentionTypeLabelPermission = "Permission Request"
+const attentionTypeLabelQuestion = "Question"
+
 type featureAttention struct {
 	Kind       attentionKind
 	CTALabel   string
@@ -64,15 +108,15 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 			return featureAttention{
 				Kind:      attentionPermission,
 				CTALabel:  "Approve",
-				TypeLabel: "Permission Request",
+				TypeLabel: attentionTypeLabelPermission,
 				Summary:   summary,
 			}
 		}
 		if summary, ok := pendingAskUserSummary(f, sess); ok {
 			return featureAttention{
 				Kind:      attentionAskUser,
-				CTALabel:  "Answer",
-				TypeLabel: "Question",
+				CTALabel:  ctaLabelAnswer,
+				TypeLabel: attentionTypeLabelQuestion,
 				Summary:   summary,
 			}
 		}
@@ -80,7 +124,7 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 	if f.Status == feature.StatusNeedUserInput {
 		return featureAttention{
 			Kind:      attentionNeedUserInput,
-			CTALabel:  "Answer",
+			CTALabel:  ctaLabelAnswer,
 			TypeLabel: "Input Required",
 			Summary:   "Feature-level input gate",
 			GatePath:  f.PendingNeedUserInputPath,
@@ -90,7 +134,7 @@ func computeFeatureAttention(f *feature.Feature, sess session.SessionView) featu
 		cycle := cycles[0]
 		return featureAttention{
 			Kind:      attentionNeedUserInput,
-			CTALabel:  "Answer",
+			CTALabel:  ctaLabelAnswer,
 			TypeLabel: "Input Required",
 			Summary:   fmt.Sprintf("%s input gate for %s", cycle.CycleType, cycle.RepoName),
 			RepoName:  cycle.RepoName,
@@ -241,13 +285,13 @@ func pendingAskUserSummary(f *feature.Feature, sess session.SessionView) (string
 
 func firstPendingPermissionControlRequest(sess session.SessionView) *llm.ControlRequestMessage {
 	return firstPendingControlRequest(sess, func(cr *llm.ControlRequestMessage) bool {
-		return cr.Request.ToolName != "" && cr.Request.ToolName != "AskUserQuestion"
+		return cr.Request.ToolName != "" && cr.Request.ToolName != toolNameAskUserQuestion
 	})
 }
 
 func firstPendingAskUserControlRequest(sess session.SessionView) *llm.ControlRequestMessage {
 	return firstPendingControlRequest(sess, func(cr *llm.ControlRequestMessage) bool {
-		return cr.Request.ToolName == "AskUserQuestion"
+		return cr.Request.ToolName == toolNameAskUserQuestion
 	})
 }
 
@@ -326,9 +370,9 @@ func reviewArtifactLabel(f *feature.Feature) string {
 	case feature.StatusInquiryNeedsReview:
 		return "Inquiry"
 	case feature.StatusResearchNeedsReview:
-		return "Research"
+		return feature.PhaseResearch.String()
 	case feature.StatusDesignNeedsReview:
-		return "Design"
+		return feature.PhaseDesign.String()
 	default:
 		return "Artifact"
 	}

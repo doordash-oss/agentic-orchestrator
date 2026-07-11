@@ -94,7 +94,7 @@ func TestOrchestrator_StartFeatureRunsQueuedSetupBeforeFirstPhase(t *testing.T) 
 		ID:       "feat-setup-start",
 		Status:   feature.StatusSettingUpWorktrees,
 		Pipeline: feature.PipelineMedium,
-		Repos:    []feature.FeatureRepo{{Name: "repo-a", Branch: "feature/setup-start"}},
+		Repos:    []feature.FeatureRepo{{Name: repoName, Branch: "feature/setup-start"}},
 	}
 	f.SetRun(&feature.Run{
 		RunNumber: 1,
@@ -138,7 +138,7 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 		ID:       "feat-setup-fail",
 		Status:   feature.StatusSettingUpWorktrees,
 		Pipeline: feature.PipelineMedium,
-		Repos:    []feature.FeatureRepo{{Name: "repo-a", Branch: "feature/setup-fail"}},
+		Repos:    []feature.FeatureRepo{{Name: repoName, Branch: "feature/setup-fail"}},
 	}
 	f.SetRun(&feature.Run{
 		RunNumber: 1,

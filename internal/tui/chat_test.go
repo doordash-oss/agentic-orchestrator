@@ -31,6 +31,21 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
+// testQuestionFirst and testQuestionSecond are fixture question texts reused
+// across this file's multi-question test tables.
+const (
+	testQuestionFirst  = "First?"
+	testQuestionSecond = "Second?"
+)
+
+// testQuestionPickOne is a fixture AskUserQuestion prompt reused across this
+// file, chat_events_test.go and question_picker_test.go.
+const testQuestionPickOne = "Pick one"
+
+// testQuestionPickDirection is a fixture AskUserQuestion prompt reused
+// across this file, api_app_test.go and api_chat_adapter_test.go.
+const testQuestionPickDirection = "Pick a direction"
+
 // chatTurnsContainText reports whether any turn's Text contains substr.
 func chatTurnsContainText(turns []chatTurn, substr string) bool {
 	for _, turn := range turns {
@@ -264,7 +279,7 @@ func TestChatMsgsMsgStreaming(t *testing.T) {
 	msgs := chatMsgsMsg{
 		messages: []llm.SDKMessage{
 			{
-				Type: "assistant",
+				Type: roleAssistant,
 				Assistant: &llm.AssistantMessage{
 					Message: llm.ConversationMsg{
 						Content: []llm.ContentBlock{
@@ -304,13 +319,13 @@ func TestChatMsgsMsgAppendsNonPartialAssistantTextFragments(t *testing.T) {
 
 	messages := []llm.SDKMessage{
 		{
-			Type: "assistant",
+			Type: roleAssistant,
 			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
 				Content: []llm.ContentBlock{{Type: "text", Text: "## Feature State\n\nStatus discrepancy: feature.yaml says CodeReady."}},
 			}},
 		},
 		{
-			Type: "assistant",
+			Type: roleAssistant,
 			Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
 				Content: []llm.ContentBlock{{Type: "text", Text: "Run 001 (single run) is complete and published."}},
 			}},
@@ -342,7 +357,7 @@ func TestChatMsgsMsgSnapshotDrivenModeDoesNotPollSessionChannel(t *testing.T) {
 	updated, cmd := m.Update(chatMsgsMsg{
 		messages: []llm.SDKMessage{
 			{
-				Type: "assistant",
+				Type: roleAssistant,
 				Assistant: &llm.AssistantMessage{
 					Message: llm.ConversationMsg{
 						Content: []llm.ContentBlock{{Type: "text", Text: "Snapshot answer"}},
@@ -470,7 +485,7 @@ func TestChatStartSessionUsesCallback(t *testing.T) {
 		t.Errorf("expected low effort for chat, got %q", capturedOpts.EffortLevel)
 	}
 	// Check disallowed tools
-	expectedDisallowed := []string{"Edit", "Write", "NotebookEdit", "Bash"}
+	expectedDisallowed := []string{toolNameEdit, toolNameWrite, "NotebookEdit", toolNameBash}
 	if !reflect.DeepEqual(capturedOpts.DisallowedTools, expectedDisallowed) {
 		t.Errorf("expected disallowed tools %v, got %v", expectedDisallowed, capturedOpts.DisallowedTools)
 	}
@@ -653,7 +668,7 @@ func TestChatStartSession_SkillReadInstruction(t *testing.T) {
 
 func TestChatModelAppendsUserAndAgentTurns(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
-	m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: "hello"})
+	m.turns = append(m.turns, chatTurn{Role: chatTurnUser, Text: "hello"}) //nolint:goconst // arbitrary filler text coincidentally shared with an unrelated textarea test fixture
 	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "**hi**", InProgress: false})
 	m.rebuildViewport()
 	content := m.viewport.View()
@@ -715,7 +730,7 @@ func TestRenderAgentThinkingTagKeepsStableAgentLabel(t *testing.T) {
 
 func TestChatModelActivatesQuestionPicker(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
-	m.activateQuestions([]askUserQuestion{{Question: "Pick one", Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
+	m.activateQuestions([]askUserQuestion{{Question: testQuestionPickOne, Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
 	if !m.hasActiveQuestion() {
 		t.Fatal("expected an active question after activateQuestions")
 	}
@@ -727,8 +742,8 @@ func TestChatModelActivatesQuestionPicker(t *testing.T) {
 func TestChatModelQuestionNavAndSubmit(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{
-		{Question: "First?", Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
-		{Question: "Second?", Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
+		{Question: testQuestionFirst, Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
+		{Question: testQuestionSecond, Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
 	}, "req-1", nil)
 
 	// Move selection down to "B" and submit it.
@@ -738,7 +753,7 @@ func TestChatModelQuestionNavAndSubmit(t *testing.T) {
 	if m.currentQuestionIdx != 1 {
 		t.Fatalf("currentQuestionIdx = %d, want 1 after submitting question 1", m.currentQuestionIdx)
 	}
-	if got := m.collectedAnswers["First?"]; got != "B" {
+	if got := m.collectedAnswers[testQuestionFirst]; got != "B" {
 		t.Errorf("collectedAnswers[First?] = %q, want %q", got, "B")
 	}
 
@@ -753,10 +768,10 @@ func TestChatModelQuestionNavAndSubmit(t *testing.T) {
 func TestChatModelSubmitQuestionAnswersAddsPromptAndAnswerToHistory(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{
-		{Question: "Pick a direction", Options: []askUserOption{{Label: "Alpha"}, {Label: "Beta"}}},
+		{Question: testQuestionPickDirection, Options: []askUserOption{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}}},
 	}, "req-1", nil)
 	m.selectedOption = 1
-	m.commitAnswer("Beta")
+	m.commitAnswer(testOptionLabelBeta)
 	m.advanceQuestionOpts(1, false)
 
 	if cmd := m.submitAllQuestionAnswers(); cmd != nil {
@@ -766,10 +781,10 @@ func TestChatModelSubmitQuestionAnswersAddsPromptAndAnswerToHistory(t *testing.T
 	if m.hasActiveQuestion() {
 		t.Fatal("question remained active after submit")
 	}
-	if got := chatTurnTextCount(m.turns, chatTurnAgent, "Pick a direction"); got != 1 {
+	if got := chatTurnTextCount(m.turns, chatTurnAgent, testQuestionPickDirection); got != 1 {
 		t.Fatalf("agent question history count = %d, want 1: %+v", got, m.turns)
 	}
-	if got := chatTurnTextCount(m.turns, chatTurnUser, "Beta"); got != 1 {
+	if got := chatTurnTextCount(m.turns, chatTurnUser, testOptionLabelBeta); got != 1 {
 		t.Fatalf("user answer history count = %d, want 1: %+v", got, m.turns)
 	}
 }
@@ -806,7 +821,7 @@ func chatTurnTextCount(turns []chatTurn, role chatTurnRole, text string) int {
 func TestChatModelRenderQuestionPickerShowsFreeformRow(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{
-		{Question: "Pick one", Options: []askUserOption{{Label: "Alpha"}, {Label: "Beta"}}},
+		{Question: testQuestionPickOne, Options: []askUserOption{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}}},
 	}, "req-1", nil)
 
 	body, _ := m.renderQuestionPicker()
@@ -870,12 +885,12 @@ func TestChatModelDoesNotDuplicateActiveAskUserQuestion(t *testing.T) {
 	m.responding = true
 
 	updated, _ := m.Update(chatMsgsMsg{messages: []llm.SDKMessage{{
-		Type: "control_request",
+		Type: msgTypeControlRequest,
 		ControlRequest: &llm.ControlRequestMessage{
-			RequestID: "ask-1",
+			RequestID: testAskRequestID,
 			Request: llm.ControlRequest{
-				Subtype:  "can_use_tool",
-				ToolName: "AskUserQuestion",
+				Subtype:  controlRequestSubtypeCanUseTool,
+				ToolName: toolNameAskUserQuestion,
 				Input:    input,
 			},
 		},
@@ -923,7 +938,7 @@ func TestChatModelViewBoxesActiveQuestionPanel(t *testing.T) {
 func TestChatModelRenderQuestionPickerFreeformInput(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{
-		{Question: "Pick one", Options: []askUserOption{{Label: "Alpha"}, {Label: "Beta"}}},
+		{Question: testQuestionPickOne, Options: []askUserOption{{Label: testOptionLabelAlpha}, {Label: testOptionLabelBeta}}},
 	}, "req-1", nil)
 
 	downKey := tea.KeyPressMsg{Code: 'j', Text: "j"}
@@ -942,7 +957,7 @@ func TestChatModelRenderQuestionPickerFreeformInput(t *testing.T) {
 	}
 
 	body, _ := m.renderQuestionPicker()
-	if strings.Contains(body, "Alpha") || strings.Contains(body, "Beta") {
+	if strings.Contains(body, testOptionLabelAlpha) || strings.Contains(body, testOptionLabelBeta) {
 		t.Fatal("expected freeform render to hide the stale option list")
 	}
 	if !strings.Contains(body, m.input.View()) {
@@ -956,8 +971,8 @@ func TestChatModelRenderQuestionPickerFreeformInput(t *testing.T) {
 func TestChatModelBackNavRestoresQ0Selection(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{
-		{Question: "First?", Options: []askUserOption{{Label: "A"}, {Label: "B"}, {Label: "C"}}},
-		{Question: "Second?", Options: []askUserOption{{Label: "D"}, {Label: "E"}}},
+		{Question: testQuestionFirst, Options: []askUserOption{{Label: "A"}, {Label: "B"}, {Label: "C"}}},
+		{Question: testQuestionSecond, Options: []askUserOption{{Label: "D"}, {Label: "E"}}},
 	}, "req-1", nil)
 
 	m.selectedOption = 2
@@ -985,13 +1000,13 @@ func TestChatModelBackNavRestoresQ0Selection(t *testing.T) {
 func TestChatModelPickerScrollFollowsSelection(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	options := []askUserOption{
-		{Label: "Alpha", Description: "First option"},
-		{Label: "Beta", Description: "Second option"},
-		{Label: "Gamma", Description: "Third option"},
+		{Label: testOptionLabelAlpha, Description: "First option"},
+		{Label: testOptionLabelBeta, Description: "Second option"},
+		{Label: testOptionLabelGamma, Description: "Third option"},
 		{Label: "Delta", Description: "Fourth option"},
 		{Label: "Epsilon", Description: "Fifth option"},
 	}
-	m.activateQuestions([]askUserQuestion{{Question: "Pick a direction", Options: options}}, "req-1", nil)
+	m.activateQuestions([]askUserQuestion{{Question: testQuestionPickDirection, Options: options}}, "req-1", nil)
 
 	contentWidth := max(m.width-6, 40)
 	optionArea := max(len(options), 3)
@@ -1015,8 +1030,8 @@ func TestChatModelPickerScrollFollowsSelection(t *testing.T) {
 func TestChatModelRecapSlotLeftGoesBack(t *testing.T) {
 	m := NewChatModel(80, 20, nil, "", "", nil, "", "")
 	m.activateQuestions([]askUserQuestion{
-		{Question: "First?", Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
-		{Question: "Second?", Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
+		{Question: testQuestionFirst, Options: []askUserOption{{Label: "A"}, {Label: "B"}}},
+		{Question: testQuestionSecond, Options: []askUserOption{{Label: "C"}, {Label: "D"}}},
 	}, "req-1", nil)
 	m.commitAnswer("A")
 	m.advanceQuestionOpts(1, false)
@@ -1043,15 +1058,15 @@ func TestChatModelRecapSlotLeftGoesBack(t *testing.T) {
 func TestChatModelSyncAutoPickedTurns(t *testing.T) {
 	sess := mocks.NewMockSessionView("__chat__", "")
 	sess.MessageLog().Append(llm.SDKMessage{
-		Type:               "user",
+		Type:               roleUser,
 		LocallyAppended:    true,
 		AutoPicked:         true,
 		AutoPickQuestion:   "Which environment?",
 		AutoPickConfidence: 0.85,
 		User: &llm.UserMessage{
 			Message: llm.ConversationMsg{
-				Role:    "user",
-				Content: []llm.ContentBlock{{Type: "text", Text: "production"}},
+				Role:    roleUser,
+				Content: []llm.ContentBlock{{Type: blockTypeText, Text: "production"}}, //nolint:goconst // arbitrary fixture text coincidentally shared with an unrelated env-option-label test
 			},
 		},
 	})
@@ -1111,14 +1126,14 @@ func TestChatModelFullscreenToggleWorksWhileQuestionActive(t *testing.T) {
 		{
 			name: "option picker",
 			setup: func(m ChatModel) ChatModel {
-				m.activateQuestions([]askUserQuestion{{Question: "Pick one", Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
+				m.activateQuestions([]askUserQuestion{{Question: testQuestionPickOne, Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
 				return m
 			},
 		},
 		{
 			name: "recap",
 			setup: func(m ChatModel) ChatModel {
-				m.activateQuestions([]askUserQuestion{{Question: "Pick one", Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
+				m.activateQuestions([]askUserQuestion{{Question: testQuestionPickOne, Options: []askUserOption{{Label: "A"}, {Label: "B"}}}}, "req-1", nil)
 				m.commitAnswer("A")
 				m.advanceQuestionOpts(1, false)
 				return m

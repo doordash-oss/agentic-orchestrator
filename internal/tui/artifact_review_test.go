@@ -1139,7 +1139,7 @@ func TestArtifactReview_StopSessionClearsPendingMessages(t *testing.T) {
 
 	// Simulate a pending permission prompt
 	m.pendingPermRequestID = "perm-123"
-	m.pendingPermToolName = "Write"
+	m.pendingPermToolName = toolNameWrite
 	m.pendingPermToolInput = `{"path":"/tmp/x"}`
 
 	// Detach — StopSession is called

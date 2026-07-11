@@ -30,6 +30,18 @@ const (
 	phaseSupervisorStatusAPIError = "API_ERROR"
 )
 
+// Shared FinalStatus values reported by agent implementation/rebase/review
+// loops (agent.OrchestratorResult, agent.RebaseLoopResult, etc.).
+const (
+	reviewStatusPassed              = "review_passed"
+	finalStatusAllPassed            = "all_passed"
+	finalStatusPlanRevisionRequired = "plan_revision_required"
+	finalStatusFailed               = "failed"
+	finalStatusInterrupted          = "interrupted"
+	finalStatusNeedUserInput        = "need_user_input"
+	finalStatusNoOp                 = "no_op"
+)
+
 type phaseCompletionSink interface {
 	HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error
 }
@@ -163,7 +175,7 @@ func singleShotStatusFromResult(result *llm.ResultMessage) string {
 	if result.IsSuccess() {
 		return phaseSupervisorStatusSuccess
 	}
-	if result.Subtype == "error" || result.IsError {
+	if result.Subtype == "error" || result.IsError { //nolint:goconst // llm.ResultMessage.Subtype wire value, unrelated to this package's FinalStatus vocabulary
 		return phaseSupervisorStatusAPIError
 	}
 	return phaseSupervisorStatusFailed
@@ -207,7 +219,7 @@ func (s *phaseSupervisor) superviseImplementationLoop(featureID string, resultCh
 				continue
 			}
 			switch res.FinalStatus {
-			case "all_passed", "awaiting_final_review", "failed", "need_user_input", "plan_revision_required", "interrupted":
+			case finalStatusAllPassed, "awaiting_final_review", finalStatusFailed, finalStatusNeedUserInput, finalStatusPlanRevisionRequired, finalStatusInterrupted:
 				s.complete(featureID, PhaseCompletionInput{
 					Phase:           feature.PhaseImplement,
 					MultiRepoResult: res,

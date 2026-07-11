@@ -79,7 +79,7 @@ func TestIsFeatureQuiescent(t *testing.T) {
 		{"failed", &feature.Feature{Status: feature.StatusFailed}, true},
 		{"created", &feature.Feature{Status: feature.StatusCreated}, true},
 		{"code-ready", &feature.Feature{Status: feature.StatusCodeReady}, true},
-		{"implementing", &feature.Feature{Status: feature.StatusImplementing}, false},
+		{"implementing", &feature.Feature{Status: feature.StatusImplementing}, false}, //nolint:goconst // test case label coincidentally matches an unrelated presentationStatus value
 		{"plan-needs-review", &feature.Feature{Status: feature.StatusPlanNeedsReview}, false},
 		{
 			"active repo cycle",
@@ -171,7 +171,7 @@ func TestEditConfig_StaleModel_RendersUnavailable(t *testing.T) {
 func TestEditConfig_TabCyclesSegmentedTabs(t *testing.T) {
 	m := newTestEditConfigModel(&feature.Feature{
 		ID:          "f1",
-		Name:        "tab",
+		Name:        "tab", //nolint:goconst // arbitrary fixture name coincidentally matches the unrelated "tab" key-code literal used throughout production key handling
 		Inquireness: feature.InquirenessMedium,
 	})
 	if m.activeTab != tabModels {

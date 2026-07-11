@@ -23,6 +23,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
+// providerNameClaude identifies the Claude CLI provider in ports.ToolPermissionRequest.ProviderName.
+const providerNameClaude = "claude"
+
 // DefaultWriteGuardBytes is the byte threshold above which the SizeGuardHandler
 // denies Claude `Write` tool calls. Large Writes (observed at ~50KB, sometimes
 // smaller) have repeatedly hung the server-side tool call for minutes and then
@@ -47,10 +50,10 @@ type SizeGuardHandler struct {
 
 // CanUseTool enforces the Write payload limit for Claude, then delegates.
 func (h *SizeGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	if h.MaxBytes > 0 && req.ProviderName == "claude" && req.ToolName == "Write" {
+	if h.MaxBytes > 0 && req.ProviderName == providerNameClaude && req.ToolName == toolNameWrite {
 		if n, ok := writeContentSize(req.Input); ok && n > h.MaxBytes {
 			return ports.PermissionDecision{
-				Behavior: "deny",
+				Behavior: DecisionDeny,
 				Reason: fmt.Sprintf(
 					"Write blocked: content payload %d bytes exceeds %d-byte limit. "+
 						"Large Writes have repeatedly hung the Claude tool-call stream and dropped the turn with nothing written. "+
@@ -89,7 +92,7 @@ type AutoApproveHandler struct{}
 
 // CanUseTool always returns allow.
 func (h *AutoApproveHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return ports.PermissionDecision{Behavior: "allow"}, nil
+	return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 }
 
 // AcceptEditsHandler auto-approves read-only tools and file edit/write tools,
@@ -105,15 +108,15 @@ func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// File modification tools — auto-approve (matches Claude Code acceptEdits)
-	case "Edit", "Write", "NotebookEdit":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// Agent spawning — auto-approve (subagents are sandboxed)
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 	}
 
 	// Everything else (Bash, etc.) — defer to TUI
@@ -145,12 +148,12 @@ type CreateWithinRootsHandler struct {
 
 // CanUseTool approves an in-root touch/mkdir; everything else defers to Inner.
 func (h *CreateWithinRootsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	if req.ToolName == "Bash" {
+	if req.ToolName == toolNameBash {
 		if targets, ok := touchCommandTargets(req.Input); ok && allPathsWithinRoots(targets, h.Roots) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 		if targets, ok := mkdirCommandTargets(req.Input); ok && allPathsWithinRoots(targets, h.Roots) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 	}
 	return h.Inner.CanUseTool(req)
@@ -290,18 +293,18 @@ func (h *PlanReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.P
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// Agent spawning — auto-approve (subagents are sandboxed)
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// File modification tools — only auto-approve for the plan file
-	case "Edit", "Write", "NotebookEdit":
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
 		if h.AllowedPath != "" && toolInputContainsPath(req.Input, h.AllowedPath) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
-		return ports.PermissionDecision{Behavior: "deny", Reason: "only the plan file may be modified during plan review"}, nil
+		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "only the plan file may be modified during plan review"}, nil
 	}
 
 	// Everything else (Bash, etc.) — defer to TUI
@@ -326,19 +329,19 @@ func (h *ReadOnlyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Per
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// Agent spawning — auto-approve (subagents are sandboxed)
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// File modification tools — hard deny
-	case "Edit", "Write", "NotebookEdit":
-		return ports.PermissionDecision{Behavior: "deny", Reason: "chat is read-only"}, nil
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
+		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
 	}
 
 	// Everything else (Bash, etc.) — hard deny for safety
-	return ports.PermissionDecision{Behavior: "deny", Reason: "chat is read-only"}, nil
+	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
 }
 
 // ReviewFeedbackHandler auto-approves read-only tools and file edits ONLY to
@@ -363,19 +366,19 @@ func (h *ReviewFeedbackHandler) CanUseTool(req ports.ToolPermissionRequest) (por
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
-	case "Edit", "Write", "NotebookEdit":
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
 		if h.AllowedPath != "" && toolInputContainsPath(req.Input, h.AllowedPath) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
-		return ports.PermissionDecision{Behavior: "deny", Reason: "review helper may only write the review-feedback.md handoff file"}, nil
+		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "review helper may only write the review-feedback.md handoff file"}, nil
 	}
 
-	return ports.PermissionDecision{Behavior: "deny", Reason: "review helper is read-only except for review-feedback.md"}, nil
+	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "review helper is read-only except for review-feedback.md"}, nil
 }
 
 // BoundedHelperArtifactHandler auto-approves read-only inspection tools,
@@ -397,36 +400,36 @@ type BoundedHelperArtifactHandler struct {
 func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	switch req.ToolName {
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory", "WebSearch", "WebFetch":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// Sub-agent spawning — auto-approve. Spawned sub-agents inherit the
 	// provider's depth-1 profile (no sub-sub-agents) and cannot mutate the
 	// worktree, matching the research-phase treatment.
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
-	case "Bash":
+	case toolNameBash:
 		if h.Sandboxed || boundedHelperReadOnlyBashAllowed(req.Input) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 		return ports.PermissionDecision{
-			Behavior: "deny",
+			Behavior: DecisionDeny,
 			Reason:   "bounded helper shell access is limited to read-only inspection commands",
 		}, nil
 
-	case "Edit", "Write", "NotebookEdit":
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
 		path, ok := toolInputFilePath(req.Input)
 		if ok && h.pathAllowed(path) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 		return ports.PermissionDecision{
-			Behavior: "deny",
+			Behavior: DecisionDeny,
 			Reason:   "bounded helper may write only declared artifacts in its helper directory",
 		}, nil
 	}
 
 	return ports.PermissionDecision{
-		Behavior: "deny",
+		Behavior: DecisionDeny,
 		Reason:   "bounded helper may not mutate undeclared files",
 	}, nil
 }
@@ -577,18 +580,18 @@ func (h *RewindReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory",
 		"WebSearch", "WebFetch",
 		"TodoWrite", "TaskCreate", "TaskGet", "TaskList", "TaskUpdate":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// Agent spawning — auto-approve (subagents are sandboxed)
 	case "Agent":
-		return ports.PermissionDecision{Behavior: "allow"}, nil
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 
 	// File modification tools — only auto-approve for the allowed artifact file
-	case "Edit", "Write", "NotebookEdit":
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
 		if h.AllowedPath != "" && toolInputContainsPath(req.Input, h.AllowedPath) {
-			return ports.PermissionDecision{Behavior: "allow"}, nil
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
-		return ports.PermissionDecision{Behavior: "deny", Reason: "only the artifact file may be modified during rewind review"}, nil
+		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "only the artifact file may be modified during rewind review"}, nil
 	}
 
 	// Everything else (Bash, etc.) — defer to TUI
@@ -600,5 +603,5 @@ type DenyAllHandler struct{}
 
 // CanUseTool always returns deny.
 func (h *DenyAllHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return ports.PermissionDecision{Behavior: "deny", Reason: "all tools denied"}, nil
+	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "all tools denied"}, nil
 }

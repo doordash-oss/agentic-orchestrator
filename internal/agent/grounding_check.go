@@ -29,6 +29,11 @@ import (
 // EXISTS file-existence is left to the LLM judge — the hand-coded path
 // parser was structurally brittle to repo-prefixed References and produced
 // false positives that corrupted planner revisions.
+
+// groundingSectionHeading is the ATX heading that opens a plan's Grounding
+// table.
+const groundingSectionHeading = "## Grounding"
+
 type GroundingCheckResult struct {
 	HasSection bool
 	Findings   []GroundingFinding
@@ -106,7 +111,7 @@ func CheckGroundingTableRoots(planPath string, worktreeRoots []string) Grounding
 // CheckGroundingTableRepos resolves named worktree roots, routing
 // `<repo>:<path>` and `<repo>/<path>` references to the matching root.
 func CheckGroundingTableRepos(planPath string, roots []GroundingRoot) GroundingCheckResult {
-	body := extractPlanSection(planPath, "## Grounding")
+	body := extractPlanSection(planPath, groundingSectionHeading)
 	if len(body) == 0 {
 		return GroundingCheckResult{HasSection: false}
 	}

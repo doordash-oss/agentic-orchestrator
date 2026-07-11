@@ -17,8 +17,20 @@ package tui
 import (
 	"strings"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+)
+
+// turnStateX are normalizedTurnState() wire tokens for
+// SessionDetailDTO.TurnState.
+const (
+	turnStateRunning           = "running"
+	turnStateWaitingInput      = "waiting_input"
+	turnStateWaitingQuestion   = "waiting_question"
+	turnStateWaitingPermission = "waiting_permission"
+	turnStateCompleted         = "completed"
+	turnStateFailed            = "failed"
 )
 
 type apiChatSnapshotInput struct {
@@ -31,6 +43,9 @@ type apiChatSnapshotInput struct {
 }
 
 const apiChatNoAnswerText = "No answer was returned before the chat session became ready for the next message."
+
+// sessionErrorFallbackText is shown when a failed session has no SafeError set.
+const sessionErrorFallbackText = "Session error"
 
 func apiChatEventsFromSnapshot(in apiChatSnapshotInput) []chatEvent {
 	if in.Session == nil {
@@ -64,7 +79,7 @@ func (s *apiSessionView) applyAPIChatSessionState(detail server.SessionDetailDTO
 	pending := apiControlRequestMessages(controls)
 	hasAskUser := false
 	for _, req := range pending {
-		if req != nil && req.Request.ToolName == "AskUserQuestion" {
+		if req != nil && req.Request.ToolName == toolNameAskUserQuestion {
 			hasAskUser = true
 			break
 		}
@@ -123,19 +138,7 @@ func (s *apiSessionView) apiChatTranscriptEvents(transcript *server.TranscriptRe
 			continue
 		}
 		if previous, ok := s.lastTranscriptRows[key]; ok {
-			if previous == signature {
-				continue
-			}
-			if hasMsg {
-				if key == s.lastTranscriptTailKey && apiCanUpdateLastTranscriptLogMessage(s.log) {
-					s.log.UpdateLast(msg)
-				} else {
-					s.log.Append(msg)
-					s.lastTranscriptTailKey = key
-				}
-			}
-			s.lastTranscriptRows[key] = signature
-			if hasEvent {
+			if s.updateKnownAPIChatTranscriptRow(key, signature, previous, msg, hasMsg) && hasEvent {
 				events = append(events, event)
 			}
 			continue
@@ -152,6 +155,26 @@ func (s *apiSessionView) apiChatTranscriptEvents(transcript *server.TranscriptRe
 	return collapseAPIChatErrorEvents(events)
 }
 
+// updateKnownAPIChatTranscriptRow updates the log entry for a transcript row
+// that was already seen. It returns false (and does nothing else) when the
+// row's signature is unchanged; otherwise it applies the new message to the
+// log and records the new signature, returning true.
+func (s *apiSessionView) updateKnownAPIChatTranscriptRow(key, signature, previous string, msg llm.SDKMessage, hasMsg bool) bool {
+	if previous == signature {
+		return false
+	}
+	if hasMsg {
+		if key == s.lastTranscriptTailKey && apiCanUpdateLastTranscriptLogMessage(s.log) {
+			s.log.UpdateLast(msg)
+		} else {
+			s.log.Append(msg)
+			s.lastTranscriptTailKey = key
+		}
+	}
+	s.lastTranscriptRows[key] = signature
+	return true
+}
+
 func (s *apiSessionView) rememberAPIChatTranscriptRow(row server.TranscriptMessageDTO, key, signature string) {
 	if row.Index > s.lastTranscriptMessage {
 		s.lastTranscriptMessage = row.Index
@@ -165,12 +188,12 @@ func (s *apiSessionView) rememberAPIChatTranscriptRow(row server.TranscriptMessa
 
 func apiChatEventFromTranscriptRow(row server.TranscriptMessageDTO) (chatEvent, bool) {
 	switch row.Type {
-	case "text":
+	case blockTypeText:
 		text := strings.TrimSpace(row.Text)
 		if text == "" {
 			return chatEvent{}, false
 		}
-		if row.Role == "user" {
+		if row.Role == roleUser {
 			return chatEvent{
 				Kind:       chatEventUserText,
 				Text:       text,
@@ -179,31 +202,31 @@ func apiChatEventFromTranscriptRow(row server.TranscriptMessageDTO) (chatEvent, 
 			}, true
 		}
 		return chatEvent{Kind: chatEventAssistantText, Text: text}, true
-	case "tool_use", "tool_progress":
+	case blockTypeToolUse, transcriptTypeToolProgress:
 		if row.Tool == "" {
 			return chatEvent{}, false
 		}
 		return chatEvent{Kind: chatEventToolActivity, ToolName: row.Tool}, true
-	case "task_started", "task_progress":
+	case transcriptTypeTaskStarted, transcriptTypeTaskProgress:
 		if row.Task == nil {
 			return chatEvent{}, false
 		}
 		return chatEvent{Kind: chatEventToolActivity, Text: apiChatTaskActivityText(row.Task)}, true
-	case "task_notification":
+	case transcriptTypeTaskNotification:
 		if row.Task == nil {
 			return chatEvent{}, false
 		}
 		return chatEvent{Kind: chatEventToolActivity, Text: apiChatTaskActivityText(row.Task)}, true
-	case "result":
+	case transcriptTypeResult:
 		if apiTranscriptResultIsError(row.Status) {
 			text := strings.TrimSpace(row.Text)
 			if text == "" {
-				text = "Session error"
+				text = sessionErrorFallbackText
 			}
 			return chatEvent{Kind: chatEventError, Text: text}, true
 		}
 		return chatEvent{Kind: chatEventCompleted}, true
-	case "status":
+	case transcriptTypeStatus:
 		if strings.TrimSpace(row.Text) == "" {
 			return chatEvent{}, false
 		}
@@ -222,7 +245,7 @@ func collapseAPIChatErrorEvents(events []chatEvent) []chatEvent {
 				lastAssistantText = events[i].Text
 			}
 		case chatEventError:
-			if events[i].Text == "Session error" && strings.TrimSpace(lastAssistantText) != "" {
+			if events[i].Text == sessionErrorFallbackText && strings.TrimSpace(lastAssistantText) != "" {
 				events[i].Text = lastAssistantText
 			}
 		}
@@ -248,7 +271,7 @@ func apiChatTaskActivityText(task *server.TaskDTO) string {
 
 func apiTranscriptResultIsError(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "error", "failed", "failure", "max_budget":
+	case resultSubtypeError, turnStateFailed, "failure", "max_budget":
 		return true
 	default:
 		return false
@@ -258,7 +281,7 @@ func apiTranscriptResultIsError(status string) bool {
 func apiChatPendingQuestionEvents(controls []server.ControlRequestDTO) []chatEvent {
 	var events []chatEvent
 	for _, req := range controls {
-		if req.ToolName != "AskUserQuestion" || !isPendingControlStatus(req.Status) {
+		if req.ToolName != toolNameAskUserQuestion || !isPendingControlStatus(req.Status) {
 			continue
 		}
 		raw := apiControlRequestInput(req)
@@ -281,9 +304,9 @@ func apiChatSnapshotReadyForNextMessage(detail server.SessionDetailDTO, controls
 		return false
 	}
 	switch normalizedTurnState(detail.TurnState) {
-	case "waiting_input":
+	case turnStateWaitingInput:
 		return true
-	case "waiting_question", "waiting_permission", "running", "completed", "failed":
+	case turnStateWaitingQuestion, turnStateWaitingPermission, turnStateRunning, turnStateCompleted, turnStateFailed:
 		return false
 	default:
 		return apiSessionStatus(detail.Status) == ports.SessionWaitingHelp
@@ -291,7 +314,7 @@ func apiChatSnapshotReadyForNextMessage(detail server.SessionDetailDTO, controls
 }
 
 func apiChatSnapshotFailed(detail server.SessionDetailDTO) bool {
-	if normalizedTurnState(detail.TurnState) == "failed" {
+	if normalizedTurnState(detail.TurnState) == turnStateFailed {
 		return true
 	}
 	return apiSessionStatus(detail.Status) == ports.SessionFailed
@@ -301,20 +324,20 @@ func apiChatFailureText(detail server.SessionDetailDTO) string {
 	if text := strings.TrimSpace(detail.SafeError); text != "" {
 		return text
 	}
-	return "Session error"
+	return sessionErrorFallbackText
 }
 
 func apiSessionStatusFromTurnState(turnState string) (ports.SessionStatus, bool) {
 	switch normalizedTurnState(turnState) {
-	case "running":
+	case turnStateRunning:
 		return ports.SessionRunning, true
-	case "waiting_input", "waiting_question":
+	case turnStateWaitingInput, turnStateWaitingQuestion:
 		return ports.SessionWaitingHelp, true
-	case "waiting_permission":
+	case turnStateWaitingPermission:
 		return ports.SessionWaitingPermission, true
-	case "completed":
+	case turnStateCompleted:
 		return ports.SessionDone, true
-	case "failed":
+	case turnStateFailed:
 		return ports.SessionFailed, true
 	default:
 		return ports.SessionRunning, false

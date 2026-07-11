@@ -450,7 +450,11 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PermissionAnswerRequest"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -928,6 +932,23 @@ components:
         target:
           type: object
           additionalProperties: true
+    PermissionAnswerRequest:
+      type: object
+      required: [request_id, decision]
+      properties:
+        request_id:
+          type: string
+        session_id:
+          type: string
+        decision:
+          type: string
+          enum: [allow_once, allow_remember, deny]
+        remember_pattern:
+          type: string
+        remember_scope:
+          type: string
+          description: Existing permission cache scope. Empty string means global.
+          x-go-type-skip-optional-pointer: false
     Resource:
       type: object
       required: [type]
@@ -2505,6 +2526,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AskUserOption"
+    PermissionRememberPreview:
+      type: object
+      required: [pattern, scope, scope_display]
+      properties:
+        pattern:
+          type: string
+        scope:
+          type: string
+          description: Existing permission cache scope. Empty string means global.
+        scope_display:
+          type: string
     ControlRequest:
       type: object
       required: [request_id, tool_name, status]
@@ -2530,6 +2562,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AskUserQuestion"
+        remember:
+          $ref: "#/components/schemas/PermissionRememberPreview"
+          x-go-type-skip-optional-pointer: false
     SessionDetail:
       allOf:
         - $ref: "#/components/schemas/SessionSummary"

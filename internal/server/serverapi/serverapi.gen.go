@@ -30,6 +30,27 @@ const (
 	SseAccessTokenScopes sSEAccessTokenContextKey = "sseAccessToken.Scopes"
 )
 
+// Defines values for PermissionAnswerRequestDecision.
+const (
+	AllowOnce     PermissionAnswerRequestDecision = "allow_once"
+	AllowRemember PermissionAnswerRequestDecision = "allow_remember"
+	Deny          PermissionAnswerRequestDecision = "deny"
+)
+
+// Valid indicates whether the value is a known member of the PermissionAnswerRequestDecision enum.
+func (e PermissionAnswerRequestDecision) Valid() bool {
+	switch e {
+	case AllowOnce:
+		return true
+	case AllowRemember:
+		return true
+	case Deny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FeatureAction.
 const (
 	FeatureActionCleanup        FeatureAction = "cleanup"
@@ -747,15 +768,16 @@ type Context struct {
 
 // ControlRequest defines model for ControlRequest.
 type ControlRequest struct {
-	FeatureID string                 `json:"feature_id,omitempty"`
-	Input     map[string]interface{} `json:"input,omitempty"`
-	Phase     string                 `json:"phase,omitempty"`
-	Questions []AskUserQuestion      `json:"questions,omitempty"`
-	RequestID string                 `json:"request_id"`
-	SessionID string                 `json:"session_id,omitempty"`
-	Status    string                 `json:"status"`
-	Summary   string                 `json:"summary,omitempty"`
-	ToolName  string                 `json:"tool_name"`
+	FeatureID string                     `json:"feature_id,omitempty"`
+	Input     map[string]interface{}     `json:"input,omitempty"`
+	Phase     string                     `json:"phase,omitempty"`
+	Questions []AskUserQuestion          `json:"questions,omitempty"`
+	Remember  *PermissionRememberPreview `json:"remember,omitempty"`
+	RequestID string                     `json:"request_id"`
+	SessionID string                     `json:"session_id,omitempty"`
+	Status    string                     `json:"status"`
+	Summary   string                     `json:"summary,omitempty"`
+	ToolName  string                     `json:"tool_name"`
 }
 
 // Cost defines model for Cost.
@@ -1138,6 +1160,20 @@ type Owner struct {
 	Version   string    `json:"version,omitempty"`
 }
 
+// PermissionAnswerRequest defines model for PermissionAnswerRequest.
+type PermissionAnswerRequest struct {
+	Decision        PermissionAnswerRequestDecision `json:"decision"`
+	RememberPattern string                          `json:"remember_pattern,omitempty"`
+
+	// RememberScope Existing permission cache scope. Empty string means global.
+	RememberScope *string `json:"remember_scope,omitempty"`
+	RequestID     string  `json:"request_id"`
+	SessionID     string  `json:"session_id,omitempty"`
+}
+
+// PermissionAnswerRequestDecision defines model for PermissionAnswerRequest.Decision.
+type PermissionAnswerRequestDecision string
+
 // PermissionAnswerResponse defines model for PermissionAnswerResponse.
 type PermissionAnswerResponse struct {
 	APIVersion           string                 `json:"api_version"`
@@ -1147,6 +1183,15 @@ type PermissionAnswerResponse struct {
 	Result               string                 `json:"result"`
 	SessionID            string                 `json:"session_id"`
 	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// PermissionRememberPreview defines model for PermissionRememberPreview.
+type PermissionRememberPreview struct {
+	Pattern string `json:"pattern"`
+
+	// Scope Existing permission cache scope. Empty string means global.
+	Scope        string `json:"scope"`
+	ScopeDisplay string `json:"scope_display"`
 }
 
 // PermissionSnapshotResponse defines model for PermissionSnapshotResponse.
@@ -1923,9 +1968,6 @@ type StopFeatureLegacyParams struct {
 // StopFeatureLegacyParamsXAgenticoClient defines parameters for StopFeatureLegacy.
 type StopFeatureLegacyParamsXAgenticoClient string
 
-// AnswerPermissionJSONBody defines parameters for AnswerPermission.
-type AnswerPermissionJSONBody map[string]interface{}
-
 // AnswerPermissionParams defines parameters for AnswerPermission.
 type AnswerPermissionParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -2064,7 +2106,7 @@ type StartFeatureLegacyJSONRequestBody StartFeatureLegacyJSONBody
 type StopFeatureLegacyJSONRequestBody StopFeatureLegacyJSONBody
 
 // AnswerPermissionJSONRequestBody defines body for AnswerPermission for application/json ContentType.
-type AnswerPermissionJSONRequestBody AnswerPermissionJSONBody
+type AnswerPermissionJSONRequestBody = PermissionAnswerRequest
 
 // AnswerAskUserPromptJSONRequestBody defines body for AnswerAskUserPrompt for application/json ContentType.
 type AnswerAskUserPromptJSONRequestBody AnswerAskUserPromptJSONBody

@@ -97,17 +97,19 @@ const chatRecoveryInterval = 2 * time.Second
 const chatSessionID = server.ChatSessionID
 
 const (
-	chatInputMinLines          = 1
-	chatInputMaxLines          = 6
-	chatBorderHeight           = 2
-	chatFooterHeight           = 1
-	chatBottomPanelFooterGap   = 1
-	chatTranscriptInputGapRows = 2
-	chatBottomPanelFrameHeight = 2
-	chatBottomPanelHFrame      = 4
-	chatMinViewportHeight      = 1
-	chatQuestionMinOptionLines = 6
-	chatActivePromptMaxHeight  = 24
+	chatInputMinLines                  = 1
+	chatInputMaxLines                  = 6
+	chatBorderHeight                   = 2
+	chatFooterHeight                   = 1
+	chatBottomPanelFooterGap           = 1
+	chatTranscriptInputGapRows         = 2
+	chatBottomPanelFrameHeight         = 2
+	chatBottomPanelHFrame              = 4
+	chatMinViewportHeight              = 1
+	chatQuestionMinOptionLines         = 6
+	chatActivePromptMaxHeight          = 24
+	chatActivePromptPreferredBodyLines = 14
+	chatActivePromptMaxBodyLines       = 16
 )
 
 // chatThinkingStyle styles the thinking/progress status line.

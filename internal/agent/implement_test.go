@@ -163,6 +163,61 @@ func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
 	}
 }
 
+func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
+	planDir := t.TempDir()
+	planPath := filepath.Join(planDir, "phase-plan.md")
+	if err := os.WriteFile(planPath, []byte("# Phase plan\n"), 0o644); err != nil {
+		t.Fatalf("write plan: %v", err)
+	}
+	feedback := "# Multi-Validator Plan Review\n\n" +
+		"**Overall: CHANGES_REQUESTED** (1/2 validators approved)\n\n" +
+		"## Structural Validator -- ERROR\n\n" +
+		"running Structural validation session: protocol violation: validation-structural-feedback.md: review-feedback.md missing required section \"## Suggestions\"\n"
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      1,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: ReviewChangesRequested.String(),
+	}); err != nil {
+		t.Fatalf("write rejected plan attempt meta: %v", err)
+	}
+	feedbackPath := filepath.Join(planDir, "attempt-01", "validation-feedback.md")
+	if err := os.WriteFile(feedbackPath, []byte(feedback), 0o644); err != nil {
+		t.Fatalf("write validation feedback: %v", err)
+	}
+	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
+		Attempt:      2,
+		AgentStatus:  agentStatusSuccess,
+		ReviewStatus: ReviewApproved.String(),
+	}); err != nil {
+		t.Fatalf("write approved plan attempt meta: %v", err)
+	}
+
+	prompt := BuildImplementPrompt(
+		planPath,
+		"Relevant tests pass",
+		"/tmp/progress.md",
+		"/tmp/verification-report.yaml",
+		"/tmp/testing-contract.yaml",
+		"",
+		"",
+		"",
+		"",
+		"",
+		nil,
+		2,
+	)
+
+	for _, unexpected := range []string{
+		"Approved plan revision context",
+		"Multi-Validator Plan Review",
+		"review-feedback.md missing required section",
+	} {
+		if strings.Contains(prompt, unexpected) {
+			t.Fatalf("prompt included stale validator feedback %q:\n%s", unexpected, prompt)
+		}
+	}
+}
+
 func TestImplementationPromptsIgnoreLegacyTagsButKeepVisualReferences(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

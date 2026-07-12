@@ -1160,6 +1160,9 @@ func implementationPlanRevisionFeedback(planPath string, iteration int) string {
 	if feedbackAttempt == 0 || strings.TrimSpace(feedback) == "" {
 		return ""
 	}
+	if len(MissingEvidenceRequirements(feedback)) == 0 {
+		return ""
+	}
 	if LatestCompletedPlanAttempt(planDir) <= feedbackAttempt {
 		return ""
 	}

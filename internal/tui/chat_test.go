@@ -983,6 +983,34 @@ func TestChatModelQuestionViewFitsAllocatedPanel(t *testing.T) {
 	}
 }
 
+func TestChatModelFullscreenQuestionReservesTranscriptSpace(t *testing.T) {
+	m := NewChatModel(120, 60, nil, "", "", nil, "", "")
+	m.fullscreen = true
+	m.turns = append(m.turns,
+		chatTurn{Role: chatTurnUser, Text: "yo?"},
+		chatTurn{Role: chatTurnAgent, Text: "I can help with Agentic Orchestrator usage, codebase exploration, or debugging."},
+	)
+	m.rebuildViewport()
+	m.activateQuestions([]askUserQuestion{{
+		Question: "What would you like help with?",
+		Options: []askUserOption{
+			{Label: "Agentic Orchestrator usage", Description: "Quick answers on features, phases, and workflows."},
+			{Label: "Codebase exploration", Description: "Search and explain how the internals work."},
+			{Label: "Debugging an issue", Description: "Trace errors, inspect feature state, and read logs."},
+			{Label: "Something else"},
+		},
+	}}, "req-1", nil)
+	m = m.resize(120, 60)
+
+	if got := m.viewport.Height(); got < 8 {
+		t.Fatalf("fullscreen active question viewport height = %d, want at least 8 transcript rows", got)
+	}
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "I can help with Agentic Orchestrator") {
+		t.Fatalf("fullscreen active question view hid the prior agent response:\n%s", view)
+	}
+}
+
 // TestChatModelRenderQuestionPickerFreeformInput covers Finding 1: once the
 // cursor reaches the freeform slot and enter is pressed, typingCustom must
 // switch the rendered body to the input box instead of continuing to show

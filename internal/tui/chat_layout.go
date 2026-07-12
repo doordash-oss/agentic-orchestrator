@@ -134,19 +134,41 @@ func (m ChatModel) minimumQuestionBodyHeight(contentWidth int) int {
 
 func (m ChatModel) activeQuestionBodyHeight(contentWidth int) int {
 	bodyHeight := m.minimumQuestionBodyHeight(contentWidth)
-	if maxBodyHeight := m.maxBottomBodyHeight(); maxBodyHeight > bodyHeight {
+	maxBodyHeight := min(chatActivePromptMaxBodyLines, m.maxQuestionBodyHeightWithTranscriptReserve())
+	if maxBodyHeight < 1 {
+		return 1
+	}
+	bodyHeight = max(bodyHeight, min(chatActivePromptPreferredBodyLines, maxBodyHeight))
+	if bodyHeight > maxBodyHeight {
 		bodyHeight = maxBodyHeight
 	}
 	return bodyHeight
 }
 
-func (m ChatModel) maxBottomBodyHeight() int {
+func (m ChatModel) maxQuestionBodyHeightWithTranscriptReserve() int {
 	gapRows := m.desiredTranscriptInputGapRows()
-	maxPanelHeight := m.height - chatBorderHeight - chatMinViewportHeight - gapRows
+	reserveRows := m.activeQuestionTranscriptReserveRows()
+	maxPanelHeight := m.height - chatBorderHeight - reserveRows - gapRows
 	if maxPanelHeight < chatBottomPanelHeight(1) {
 		maxPanelHeight = m.height - chatBorderHeight - chatMinViewportHeight
 	}
 	return max(maxPanelHeight-chatFooterHeight-chatBottomPanelFooterGap-chatBottomPanelFrameHeight, 1)
+}
+
+func (m ChatModel) activeQuestionTranscriptReserveRows() int {
+	if len(m.turns) == 0 && !m.responding {
+		return chatMinViewportHeight
+	}
+	switch {
+	case m.height >= 40:
+		return 8
+	case m.height >= 24:
+		return 6
+	case m.height >= 16:
+		return 4
+	default:
+		return chatMinViewportHeight
+	}
 }
 
 func (m ChatModel) minimumPermissionBodyHeight() int {

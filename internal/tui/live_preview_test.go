@@ -181,9 +181,9 @@ func TestContextualAActionHint(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotHint, gotLead := contextualAActionHint(tt.f)
+			gotHint, gotLead := contextualAActionHintFor(tt.f, nil)
 			if gotHint != tt.wantHint || gotLead != tt.wantLead {
-				t.Errorf("contextualAActionHint(%s) = (%q, %v), want (%q, %v)", tt.name, gotHint, gotLead, tt.wantHint, tt.wantLead)
+				t.Errorf("contextualAActionHintFor(%s) = (%q, %v), want (%q, %v)", tt.name, gotHint, gotLead, tt.wantHint, tt.wantLead)
 			}
 		})
 	}

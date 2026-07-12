@@ -20,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -505,7 +505,7 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 	assertJSONDoesNotContain(t, result, "Please use the existing migration path.")
 }
 
-func TestServerMutationTargetStartChatStartsReadOnlyInteractiveUtilitySession(t *testing.T) {
+func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSubagents(t *testing.T) {
 	stateDir := t.TempDir()
 	skillsDir := filepath.Join(stateDir, "skills")
 	var captured []agent.BuildSessionOpts
@@ -545,10 +545,11 @@ func TestServerMutationTargetStartChatStartsReadOnlyInteractiveUtilitySession(t 
 	if build.EffortLevel != llm.EffortLow {
 		t.Fatalf("BuildSession EffortLevel = %q, want low for AMA utility chat", build.EffortLevel)
 	}
-	for _, tool := range []string{"Edit", "Write", "NotebookEdit", toolNameBash} {
-		if !slices.Contains(build.DisallowedTools, tool) {
-			t.Fatalf("BuildSession DisallowedTools = %v, missing %s", build.DisallowedTools, tool)
-		}
+	if !reflect.DeepEqual(build.DisallowedTools, []string{"Task"}) {
+		t.Fatalf("BuildSession DisallowedTools = %v, want only Task disabled for AMA", build.DisallowedTools)
+	}
+	if _, ok := build.PermHandler.(*session.AMAHandler); !ok {
+		t.Fatalf("BuildSession PermHandler = %T, want *session.AMAHandler", build.PermHandler)
 	}
 	if !strings.Contains(build.Prompt, "What is running?") || !strings.Contains(build.Prompt, filepath.Join(skillsDir, chatName, "SKILL.md")) {
 		t.Fatalf("BuildSession prompt = %q, want chat skill instruction and user message", build.Prompt)
@@ -1204,7 +1205,7 @@ func TestServerMutationTargetPublishActionPreservesConflictRoutingMetadata(t *te
 }
 
 func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testing.T) {
-	store, manager, _, f := newMutationTestFeature(t, "rewind via REST", feature.CreateOptions{
+	store, manager, f := newMutationTestFeature(t, "rewind via REST", feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
 	}, feature.StatusCodeReady, feature.PhasePublish)
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
@@ -1236,7 +1237,7 @@ func TestServerMutationTargetRewindActionReturnsEffectiveTargetMetadata(t *testi
 }
 
 func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T) {
-	store, manager, _, f := newMutationTestFeature(t, "rewind stops sessions", feature.CreateOptions{
+	store, manager, f := newMutationTestFeature(t, "rewind stops sessions", feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
 	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
@@ -1274,7 +1275,7 @@ func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T)
 }
 
 func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
-	store, manager, _, f := newMutationTestFeature(t, "upgrade rewind via REST", feature.CreateOptions{
+	store, manager, f := newMutationTestFeature(t, "upgrade rewind via REST", feature.CreateOptions{
 		Pipeline: feature.PipelineMedium,
 	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
@@ -1315,7 +1316,7 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 }
 
 func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testing.T) {
-	store, manager, _, f := newMutationTestFeature(t, "failed upgrade rewind via REST", feature.CreateOptions{
+	store, manager, f := newMutationTestFeature(t, "failed upgrade rewind via REST", feature.CreateOptions{
 		Pipeline: feature.PipelineMoonshot,
 	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
@@ -1413,7 +1414,7 @@ func TestServerMutationTargetRestartFeatureDispatchesPhaseWork(t *testing.T) {
 }
 
 func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testing.T) {
-	store, manager, _, f := newMutationTestFeature(t, "refactor with evidence", feature.CreateOptions{}, feature.StatusPublished, feature.PhasePublish)
+	store, manager, f := newMutationTestFeature(t, "refactor with evidence", feature.CreateOptions{}, feature.StatusPublished, feature.PhasePublish)
 
 	attachDir := t.TempDir()
 	img := filepath.Join(attachDir, "clip.png")
@@ -1472,7 +1473,7 @@ func TestServerMutationTargetStartRefactorPersistsImagesAndAttachments(t *testin
 }
 
 func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *testing.T) {
-	store, manager, _, f := newMutationTestFeature(t, "moonshot refactor", feature.CreateOptions{
+	store, manager, f := newMutationTestFeature(t, "moonshot refactor", feature.CreateOptions{
 		Pipeline:    feature.PipelineMoonshot,
 		Checkpoints: feature.DefaultCheckpointsForProfile(feature.PipelineMoonshot),
 	}, feature.StatusPublished, feature.PhasePublish)
@@ -1512,7 +1513,7 @@ func TestServerMutationTargetStartRefactorDoesNotPersistRequestedPipeline(t *tes
 }
 
 func TestServerMutationTargetStartRefactorUsesRequestedPipelineEffort(t *testing.T) {
-	store, manager, _, f := newMutationTestFeature(t, "moonshot feature", feature.CreateOptions{
+	store, manager, f := newMutationTestFeature(t, "moonshot feature", feature.CreateOptions{
 		Pipeline: feature.PipelineMoonshot,
 	}, feature.StatusPublished, feature.PhasePublish)
 
@@ -1710,7 +1711,7 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 
 // newMutationTestFeature builds a store/manager with testRepoAName registered,
 // creates a feature with createOpts, and sets its status/phase via store.Modify.
-func newMutationTestFeature(t *testing.T, name string, createOpts feature.CreateOptions, status feature.Status, phase feature.Phase) (*feature.Store, *feature.Manager, *config.Config, *feature.Feature) {
+func newMutationTestFeature(t *testing.T, name string, createOpts feature.CreateOptions, status feature.Status, phase feature.Phase) (*feature.Store, *feature.Manager, *feature.Feature) {
 	t.Helper()
 	runtimeDir := t.TempDir()
 	cfg := config.NewDefault()
@@ -1728,7 +1729,7 @@ func newMutationTestFeature(t *testing.T, name string, createOpts feature.Create
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
 	}
-	return store, manager, cfg, f
+	return store, manager, f
 }
 
 // newRESTCreateFeatureTarget builds the serverMutationTarget shared by the

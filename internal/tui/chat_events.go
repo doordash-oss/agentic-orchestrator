@@ -17,6 +17,9 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
 type chatEventKind int
@@ -26,6 +29,7 @@ const (
 	chatEventUserText
 	chatEventToolActivity
 	chatEventPendingQuestion
+	chatEventPendingPermission
 	chatEventCompleted
 	chatEventError
 )
@@ -38,6 +42,7 @@ type chatEvent struct {
 	RequestID  string
 	Raw        json.RawMessage
 	Questions  []askUserQuestion
+	Remember   *server.PermissionRememberPreviewDTO
 	AutoPicked bool
 	Confidence float64
 }
@@ -63,6 +68,8 @@ func (m ChatModel) ApplyEvents(events []chatEvent) ChatModel {
 			}
 		case chatEventPendingQuestion:
 			m.applyPendingQuestionEvent(event)
+		case chatEventPendingPermission:
+			m.applyPendingPermissionEvent(event)
 		case chatEventCompleted:
 			m.finalizeInProgressTurn()
 			m.responding = false
@@ -89,6 +96,35 @@ func (m ChatModel) ApplyEvents(events []chatEvent) ChatModel {
 	return m
 }
 
+func (m *ChatModel) applyPendingPermissionEvent(event chatEvent) {
+	if event.RequestID != "" {
+		if _, alreadyAnswered := m.answeredPermRequestIDs[event.RequestID]; alreadyAnswered {
+			return
+		}
+		if event.RequestID == m.pendingPermRequestID {
+			m.responding = false
+			m.thinkingLine = ""
+			return
+		}
+	}
+	if event.RequestID == "" || event.ToolName == "" || m.hasActiveQuestion() || m.hasActivePermission() {
+		return
+	}
+	m.finalizeInProgressTurn()
+	m.pendingPermRequestID = event.RequestID
+	m.pendingPermToolName = event.ToolName
+	m.pendingPermSummary = event.Text
+	m.pendingPermInput = event.Raw
+	m.pendingPermRemember = event.Remember
+	m.responding = false
+	m.thinkingLine = ""
+	if m.sess != nil {
+		m.turnCostBaseline = m.sess.Cost()
+	}
+	m.rebuildViewport()
+	*m = m.resize(m.width, m.height)
+}
+
 func (m *ChatModel) applyPendingQuestionEvent(event chatEvent) {
 	if event.RequestID != "" {
 		if _, alreadyAnswered := m.answeredAskRequestIDs[event.RequestID]; alreadyAnswered {
@@ -107,11 +143,71 @@ func (m *ChatModel) applyPendingQuestionEvent(event chatEvent) {
 	if len(questions) == 0 || m.hasActiveQuestion() || askUserQuestionsAlreadyAutoPicked(m.sess, questions) {
 		return
 	}
-	m.finalizeInProgressTurn()
+	m.finalizeInProgressTurnBeforeQuestion(questions)
 	m.activateQuestions(questions, event.RequestID, event.Raw)
 	m.responding = false
 	m.thinkingLine = ""
 	if m.sess != nil {
 		m.turnCostBaseline = m.sess.Cost()
 	}
+}
+
+func (m *ChatModel) finalizeInProgressTurnBeforeQuestion(questions []askUserQuestion) {
+	n := len(m.turns)
+	if n == 0 || m.turns[n-1].Role != chatTurnAgent || !m.turns[n-1].InProgress {
+		return
+	}
+	trimmed, ok := trimStreamedAskUserDraft(m.turns[n-1].Text, questions)
+	if !ok {
+		m.finalizeInProgressTurn()
+		return
+	}
+	if strings.TrimSpace(trimmed) == "" {
+		m.turns = m.turns[:n-1]
+		return
+	}
+	m.turns[n-1].Text = trimmed
+	m.turns[n-1].InProgress = false
+}
+
+func trimStreamedAskUserDraft(text string, questions []askUserQuestion) (string, bool) {
+	if strings.TrimSpace(text) == "" || len(questions) == 0 {
+		return text, false
+	}
+	if idx, ok := firstAskUserDraftMatch(text, questions, false); ok {
+		return strings.TrimSpace(text[:idx]), true
+	}
+	if idx, ok := firstAskUserDraftMatch(text, questions, true); ok {
+		return strings.TrimSpace(text[:idx]), true
+	}
+	return text, false
+}
+
+func firstAskUserDraftMatch(text string, questions []askUserQuestion, includeOptions bool) (int, bool) {
+	lowerText := strings.ToLower(text)
+	cut := len(text)
+	found := false
+	for _, q := range questions {
+		candidates := []string{q.Question, q.RawQuestion, q.Header}
+		if includeOptions {
+			for _, opt := range q.Options {
+				candidates = append(candidates, opt.Label)
+			}
+		}
+		for _, candidate := range candidates {
+			candidate = strings.TrimSpace(candidate)
+			if candidate == "" {
+				continue
+			}
+			idx := strings.Index(text, candidate)
+			if idx < 0 {
+				idx = strings.Index(lowerText, strings.ToLower(candidate))
+			}
+			if idx >= 0 && idx < cut {
+				cut = idx
+				found = true
+			}
+		}
+	}
+	return cut, found
 }

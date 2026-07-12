@@ -62,7 +62,7 @@ func TestRenderQuestionOptionsBlockMarksSelectedRow(t *testing.T) {
 	t.Parallel()
 	opts := []askUserOption{{Label: testOptionLabelStaging}, {Label: testOptionLabelProduction}}
 	q := askUserQuestion{Question: "Which env?", Options: opts}
-	out := renderQuestionOptionsBlock(q, 1, nil, 0, 2, false, false)
+	out := renderQuestionOptionsBlock(q, 1, nil, 0, 2, false, false, 80)
 	if !strings.Contains(out, testOptionLabelProduction) || !strings.Contains(out, testOptionLabelStaging) {
 		t.Fatalf("rendered block missing option labels: %q", out)
 	}

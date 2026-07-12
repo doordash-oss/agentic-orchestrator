@@ -31,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -106,6 +107,7 @@ const (
 	chatBottomPanelHFrame      = 4
 	chatMinViewportHeight      = 1
 	chatQuestionMinOptionLines = 6
+	chatActivePromptMaxHeight  = 24
 )
 
 // chatThinkingStyle styles the thinking/progress status line.
@@ -171,7 +173,15 @@ type ChatModel struct {
 	// autoPickedSeen dedups auto-picked messages already synced into m.turns,
 	// keyed by autoPickedMessageKey.
 	autoPickedSeen map[string]struct{}
-	inputHeight    int // current input textarea height in lines (1-6)
+	// Permission picker state. AMA surfaces top-level tool permissions inline
+	// instead of relying on the feature-panel permission overlay.
+	pendingPermRequestID   string
+	pendingPermToolName    string
+	pendingPermSummary     string
+	pendingPermInput       json.RawMessage
+	pendingPermRemember    *server.PermissionRememberPreviewDTO
+	answeredPermRequestIDs map[string]struct{}
+	inputHeight            int // current input textarea height in lines (1-6)
 	// turnCostBaseline is the Cost() pointer observed at the moment the
 	// current turn started. The recovery tick clears responding when
 	// sess.Cost() no longer matches this baseline — i.e. a new Result was
@@ -467,6 +477,26 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.hasActivePermission() {
+			switch msg.String() {
+			case "y":
+				return m.submitPermissionDecision(permission.DecisionAllowOnce)
+			case "A":
+				if m.pendingPermRemember != nil {
+					return m.submitPermissionDecision(permission.DecisionAllowRemember)
+				}
+				return m, nil
+			case "n":
+				return m.submitPermissionDecision(permission.DecisionDeny)
+			case keyEsc:
+				if m.fullscreen {
+					m.fullscreen = false
+					return m, nil
+				}
+				return m, func() tea.Msg { return ChatExitMsg{} }
+			}
+			return m, nil
+		}
 		if m.hasActiveQuestion() && !m.typingCustom {
 			return m.handleActiveQuestionKeyPress(msg)
 		}
@@ -664,7 +694,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 				}
 				questions := parseAskUserQuestions(sdkMsg.ControlRequest.Request.Input)
 				if len(questions) > 0 && !m.hasActiveQuestion() && !askUserQuestionsAlreadyAutoPicked(m.sess, questions) {
-					m.finalizeInProgressTurn()
+					m.finalizeInProgressTurnBeforeQuestion(questions)
 					m.activateQuestions(questions, sdkMsg.ControlRequest.RequestID, sdkMsg.ControlRequest.Request.Input)
 					m.responding = false
 					m.thinkingLine = ""
@@ -672,6 +702,17 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 						m.turnCostBaseline = m.sess.Cost()
 					}
 				}
+			}
+			if sdkMsg.ControlRequest != nil && sdkMsg.ControlRequest.Request.ToolName != toolNameAskUserQuestion {
+				toolName := sdkMsg.ControlRequest.Request.ToolName
+				input := sdkMsg.ControlRequest.Request.Input
+				m.applyPendingPermissionEvent(chatEvent{
+					Kind:      chatEventPendingPermission,
+					RequestID: sdkMsg.ControlRequest.RequestID,
+					ToolName:  toolName,
+					Text:      formatPermissionDetail(toolName, input),
+					Raw:       input,
+				})
 			}
 		}
 		m.syncAutoPickedTurns()
@@ -774,9 +815,9 @@ func (m ChatModel) startSessionCmd(initialQuestion string) tea.Cmd {
 			Model:           m.chatModel,
 			Prompt:          prompt,
 			SystemPrompt:    m.systemPrompt,
-			DisallowedTools: []string{toolNameEdit, toolNameWrite, "NotebookEdit", toolNameBash},
+			DisallowedTools: []string{"Task"},
 			WorkDir:         m.workDir,
-			PermHandler:     &session.ReadOnlyHandler{},
+			PermHandler:     &session.AMAHandler{},
 			Phase:           utilskill.PhaseAll, // chat gets all utility skills for answering user questions
 			TurnMode:        ports.TurnModeInteractive,
 			EffortLevel:     llm.EffortLow,

@@ -27,7 +27,7 @@ func TestSSEMapsShutdownDomainEventToMetadataOnlyRuntimeDTO(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 8})
-	ch := b.subscribe()
+	ch, _, _ := b.subscribeAfter(0, "")
 	defer b.unsubscribe(ch)
 	b.publish(eventDTOFromRuntime(ports.Event{
 		Type:    ports.RuntimeShutdownStarted,

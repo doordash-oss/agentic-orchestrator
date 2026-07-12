@@ -32,11 +32,11 @@ type (
 // directly, without forcing a second migration. Domain code should prefer
 // importing the permission package directly.
 type (
-	AutoApproveHandler    = permission.AutoApproveHandler
-	AcceptEditsHandler    = permission.AcceptEditsHandler
-	PlanReviewHandler     = permission.PlanReviewHandler
-	ReadOnlyHandler       = permission.ReadOnlyHandler
-	ReviewFeedbackHandler = permission.ReviewFeedbackHandler
-	RewindReviewHandler   = permission.RewindReviewHandler
-	DenyAllHandler        = permission.DenyAllHandler
+	AutoApproveHandler  = permission.AutoApproveHandler
+	AcceptEditsHandler  = permission.AcceptEditsHandler
+	AMAHandler          = permission.AMAHandler
+	PlanReviewHandler   = permission.PlanReviewHandler
+	ReadOnlyHandler     = permission.ReadOnlyHandler
+	RewindReviewHandler = permission.RewindReviewHandler
+	DenyAllHandler      = permission.DenyAllHandler
 )

@@ -44,7 +44,7 @@ func TestEventBrokerAssignsMonotonicEnvelopeFields(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 4})
-	ch := b.subscribe()
+	ch, _, _ := b.subscribeAfter(0, "")
 	defer b.unsubscribe(ch)
 
 	b.publish(SSEEventDTO{Kind: testEventKindFeatureState, Resource: ResourceDTO{Type: entityFeature, ID: testFeatureID}})
@@ -221,7 +221,7 @@ func TestEventBrokerThrottlesSessionOutputActivity(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 8})
-	ch := b.subscribe()
+	ch, _, _ := b.subscribeAfter(0, "")
 	defer b.unsubscribe(ch)
 
 	activity := SSEEventDTO{Kind: sseEventSessionOutputActivity, Resource: ResourceDTO{Type: resourceTypeSession, ID: fixtureSessionID, FeatureID: fixtureFeatureID}}
@@ -254,7 +254,7 @@ func TestEventBrokerCoalescedMarkerCarriesTriggeringResource(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 64})
-	ch := b.subscribe()
+	ch, _, _ := b.subscribeAfter(0, "")
 	defer b.unsubscribe(ch)
 
 	// Fill the channel to capacity (16) with unrelated events so the next
@@ -295,7 +295,7 @@ func TestEventBrokerSlowSubscriberReceivesNewestTerminalState(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 128})
-	ch := b.subscribe()
+	ch, _, _ := b.subscribeAfter(0, "")
 	defer b.unsubscribe(ch)
 
 	for i := 0; i < subscriberFIFOSize; i++ {
@@ -334,7 +334,7 @@ func TestEventBrokerCoalescedOverflowDeliversReset(t *testing.T) {
 	t.Parallel()
 
 	b := newEventBrokerWithOptions(eventBrokerOptions{Epoch: testEventEpoch, ReplayLimit: 2048})
-	ch := b.subscribe()
+	ch, _, _ := b.subscribeAfter(0, "")
 	defer b.unsubscribe(ch)
 
 	for i := 0; i < subscriberFIFOSize; i++ {
@@ -378,7 +378,7 @@ func TestSnapshotThenSubscribeConverges(t *testing.T) {
 		// is only closed once it's already removed from b.subs under the
 		// broker's lock — a bare close here would race a concurrent
 		// publish still holding the lock and iterating b.subs to send.
-		baseline := b.subscribe()
+		baseline, _, _ := b.subscribeAfter(0, "")
 		var baselineEvents []SSEEventDTO
 		baselineDone := make(chan struct{})
 		go func() {

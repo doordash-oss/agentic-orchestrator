@@ -651,14 +651,8 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 		cycleType = rc.Type
 	}
 
-	workDir := repo.WorktreePath
-	if workDir == "" {
-		workDir = repo.Path
-	}
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
+	workDir := repoWorkDir(*repo)
+	branch := repoBranch(f, *repo)
 
 	// Publisher/Rebaser may be nil in unit tests that exercise the lifecycle
 	// plumbing without wiring git adapters; skip the commit/rebase/push when
@@ -847,14 +841,8 @@ func (o *Orchestrator) CompleteRefactorRepoCycle(featureID, repoName string) err
 		return fmt.Errorf("repo %q not found in feature", repoName)
 	}
 
-	workDir := repo.WorktreePath
-	if workDir == "" {
-		workDir = repo.Path
-	}
-	branch := repo.Branch
-	if branch == "" {
-		branch = "feature/" + f.Slug
-	}
+	workDir := repoWorkDir(*repo)
+	branch := repoBranch(f, *repo)
 
 	// Publisher/Rebaser may be nil in unit tests that exercise the lifecycle
 	// plumbing without wiring git adapters; skip the commit/push when absent

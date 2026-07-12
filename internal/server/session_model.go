@@ -346,10 +346,7 @@ func (h *apiHandler) getSession(sessionID string) ports.SessionView {
 	if h.sessions == nil {
 		return nil
 	}
-	if sess := h.sessions.GetSession(sessionID); sess != nil {
-		return sess
-	}
-	return nil
+	return h.sessions.GetSession(sessionID)
 }
 
 func sessionSummaryDTO(sess ports.SessionView) SessionSummaryDTO {

@@ -377,7 +377,7 @@ func (m ChatModel) renderQuestionPicker() (body, footer string) {
 		typeRow = lipgloss.NewStyle().Render(fmt.Sprintf("  %d. Type something.", typeIdx+1))
 	}
 	topBlock := lipgloss.NewStyle().Bold(true).Render(questionPromptText(q.Question, contentWidth)) + "\n\n" +
-		renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow) +
+		renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow, contentWidth) +
 		typeRow
 
 	if m.selectedOption < len(q.Options) {
@@ -392,8 +392,6 @@ func (m ChatModel) renderQuestionPicker() (body, footer string) {
 
 func (m ChatModel) questionOptionArea(q askUserQuestion, contentWidth int) int {
 	promptLines := questionPromptLineCount(q.Question, contentWidth)
-	contentHeight := max(m.height-chatBorderHeight, 1)
-	bottomGapRows := m.transcriptInputGapRows(chatBottomPanelHeight(m.minimumQuestionBodyHeight(contentWidth)))
-	available := contentHeight - m.viewport.Height() - bottomGapRows - chatBottomPanelFrameHeight - chatFooterHeight - chatBottomPanelFooterGap - promptLines - 1 - 1
+	available := m.activeQuestionBodyHeight(contentWidth) - promptLines - 1 - 1
 	return max(available, 1)
 }

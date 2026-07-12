@@ -126,11 +126,6 @@ func newEventBrokerWithOptions(opts eventBrokerOptions) *eventBroker {
 	}
 }
 
-func (b *eventBroker) subscribe() chan SSEEventDTO {
-	ch, _, _ := b.subscribeAfter(0, "")
-	return ch
-}
-
 func (b *eventBroker) subscribeAfter(after uint64, epoch string) (chan SSEEventDTO, []SSEEventDTO, *SSEEventDTO) {
 	ch := make(chan SSEEventDTO, subscriberFIFOSize)
 	b.mu.Lock()

@@ -1041,17 +1041,17 @@ func TestPromptPermissionSnapshotsPreserveFIFOOrdering(t *testing.T) {
 	handler := NewHandler(opts)
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
-	if got, want := requestIDsFromJSON(t, prompts["ask_user_questions"]), []string{"old-ask", "new-ask"}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := stringFieldFromJSON(t, prompts["ask_user_questions"], requestIDKey), []string{"old-ask", "new-ask"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt ask_user_questions order = %v; want %v", got, want)
 	}
-	if got, want := questionsFromJSON(t, prompts["help_queue"]), []string{"oldest help", "newest help"}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey), []string{"oldest help", "newest help"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt help_queue order = %v; want %v", got, want)
 	}
-	if got, want := featureIDsFromJSON(t, prompts["need_user_inputs"]), []string{oldest.ID, newest.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := stringFieldFromJSON(t, prompts["need_user_inputs"], "feature_id"), []string{oldest.ID, newest.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt need_user_inputs order = %v; want %v", got, want)
 	}
 	permissions := getJSONMap(t, handler, apiPathPermissions)
-	if got, want := requestIDsFromJSON(t, permissions["requests"]), []string{"old-perm", "new-perm"}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := stringFieldFromJSON(t, permissions["requests"], requestIDKey), []string{"old-perm", "new-perm"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("permissions requests order = %v; want %v", got, want)
 	}
 }
@@ -1073,10 +1073,10 @@ func TestPromptSnapshotIncludesWaitingHelpSessionWithoutControlRequest(t *testin
 	handler := NewHandler(opts)
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
-	if got, want := questionsFromJSON(t, prompts["help_queue"]), []string{agentQuestionPrompt}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := stringFieldFromJSON(t, prompts["help_queue"], questionFieldKey), []string{agentQuestionPrompt}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("prompt help_queue = %v; want %v for WaitingHelp session without control request", got, want)
 	}
-	if got := requestIDsFromJSON(t, prompts["ask_user_questions"]); len(got) != 0 {
+	if got := stringFieldFromJSON(t, prompts["ask_user_questions"], requestIDKey); len(got) != 0 {
 		t.Fatalf("prompt ask_user_questions = %v; want empty without control request", got)
 	}
 }
@@ -2217,32 +2217,12 @@ func actionDTOByID(t *testing.T, actions []ActionDTO, id string) ActionDTO {
 	return ActionDTO{}
 }
 
-func requestIDsFromJSON(t *testing.T, raw any) []string {
+func stringFieldFromJSON(t *testing.T, raw any, key string) []string {
 	t.Helper()
 	items := raw.([]any)
 	out := make([]string, 0, len(items))
 	for _, item := range items {
-		out = append(out, item.(map[string]any)[requestIDKey].(string))
-	}
-	return out
-}
-
-func questionsFromJSON(t *testing.T, raw any) []string {
-	t.Helper()
-	items := raw.([]any)
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		out = append(out, item.(map[string]any)[questionFieldKey].(string))
-	}
-	return out
-}
-
-func featureIDsFromJSON(t *testing.T, raw any) []string {
-	t.Helper()
-	items := raw.([]any)
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		out = append(out, item.(map[string]any)["feature_id"].(string))
+		out = append(out, item.(map[string]any)[key].(string))
 	}
 	return out
 }

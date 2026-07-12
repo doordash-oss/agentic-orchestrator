@@ -23,11 +23,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// TestDetailDesignSnapshot renders the detail view for a feature currently in
-// the Design phase and writes the rendered text to the iteration evidence dir
-// when AGENTIC_SNAPSHOT_PATH is set. Without that env var, it still asserts
-// that the rendered view shows the canonical "Design" label between Research
-// and Plan, so the behavior is pinned for future runs.
+// TestDetailDesignSnapshot renders the compact detail view for a feature
+// currently in the Design phase and writes the rendered text to the
+// iteration evidence dir when AGENTIC_SNAPSHOT_PATH is set. Without that env
+// var, it still asserts that the rendered view shows the canonical "Design"
+// label between Research and Plan, so the behavior is pinned for future runs.
 func TestDetailDesignSnapshot(t *testing.T) {
 	t.Parallel()
 	f := &feature.Feature{
@@ -45,7 +45,7 @@ func TestDetailDesignSnapshot(t *testing.T) {
 		},
 	}
 	m := NewDetailModel(f, "")
-	view := m.View()
+	view := m.ViewCompact(80)
 
 	for _, want := range []string{"Research", "Design", "Planning"} {
 		if !strings.Contains(view, want) {

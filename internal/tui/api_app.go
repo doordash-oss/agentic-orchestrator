@@ -1424,8 +1424,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case msg.Text == "R":
 		return m.confirmResumeAll()
 	case msg.Text == "N":
-		if m.selectedFeature == "" {
-			m.statusMessage = statusMsgNoFeatureSelected
+		if !m.requireSelectedFeature() {
 			return m, nil
 		}
 		return m, m.toggleAPIInputNotificationsCmd(m.selectedFeature)
@@ -1475,8 +1474,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		return m.confirmSelectedFeatureAction(mutationKindFeatureCleanup), nil
 	case "e":
-		if m.selectedFeature == "" {
-			m.statusMessage = statusMsgNoFeatureSelected
+		if !m.requireSelectedFeature() {
 			return m, nil
 		}
 		if f := m.selectedAPIDashboardFeature(); !canEditFeatureConfig(f) {
@@ -1510,11 +1508,7 @@ func (m APIAppModel) handleAPIKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.openAskUserPrompt(), nil
 	}
 	switch msg.Code {
-	case tea.KeyEnter:
-		return m.handleAPIDashboardListKey(msg)
-	case tea.KeyUp:
-		return m.handleAPIDashboardListKey(msg)
-	case tea.KeyDown:
+	case tea.KeyEnter, tea.KeyUp, tea.KeyDown:
 		return m.handleAPIDashboardListKey(msg)
 	}
 	return m, nil
@@ -3453,7 +3447,16 @@ func (m APIAppModel) applyAPIAttachSessionsSnapshot(msg apiAttachSessionsSnapsho
 	}
 	m.ApplyRefreshSnapshot(server.RefreshSnapshot{Sessions: &msg.sessions})
 	if m.attach != nil && m.attach.featureID == msg.featureID {
-		return m.rebuildAPIAttachTabs()
+		var cmds []tea.Cmd
+		var rebuildCmd tea.Cmd
+		m, rebuildCmd = m.rebuildAPIAttachTabs()
+		if rebuildCmd != nil {
+			cmds = append(cmds, rebuildCmd)
+		}
+		if detailCmd := m.fetchAttachMissingSessionDetailsCmd(msg.featureID); detailCmd != nil {
+			cmds = append(cmds, detailCmd)
+		}
+		return m, tea.Batch(cmds...)
 	}
 	if msg.openIfClosed {
 		model, cmd := m.openAPIAttachForFeatureFromCache(msg.featureID, false)
@@ -4214,6 +4217,12 @@ func (m APIAppModel) renderAPIRecovery() string {
 	return b.String()
 }
 
+const (
+	recoveryLabelResume = "[R]esume"
+	recoveryLabelKill   = "[K]ill"
+	recoveryLabelSkip   = "[S]kip"
+)
+
 func apiRecoveryActionLabel(action string) string {
 	switch action {
 	case recoveryActionResume:
@@ -4763,9 +4772,19 @@ func copyBoolMap(in map[string]bool) map[string]bool {
 	return out
 }
 
+// requireSelectedFeature reports whether a feature is currently selected. If
+// not, it sets the standard "no feature selected" status message so the
+// caller can bail out with that message already in place.
+func (m *APIAppModel) requireSelectedFeature() bool {
+	if m.selectedFeature != "" {
+		return true
+	}
+	m.statusMessage = statusMsgNoFeatureSelected
+	return false
+}
+
 func (m APIAppModel) openNeedInputPrompt() APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	gate, ok := m.selectedNeedInputGate(m.selectedFeature)
@@ -4782,8 +4801,7 @@ func (m APIAppModel) openNeedInputPrompt() APIAppModel {
 }
 
 func (m APIAppModel) openPermissionPrompt() APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	req, ok := m.selectedPendingPermission(m.selectedFeature)
@@ -4800,8 +4818,7 @@ func (m APIAppModel) openPermissionPrompt() APIAppModel {
 }
 
 func (m APIAppModel) openHelpPrompt() APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	help, ok := m.selectedPendingHelp(m.selectedFeature)
@@ -4819,8 +4836,7 @@ func (m APIAppModel) openHelpPrompt() APIAppModel {
 }
 
 func (m APIAppModel) openAskUserPrompt() APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	req, ok := m.selectedPendingAskUser(m.selectedFeature)
@@ -4845,8 +4861,7 @@ func (m APIAppModel) openAskUserPrompt() APIAppModel {
 }
 
 func (m APIAppModel) openPublishAction() APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	f := m.selectedAPIDashboardFeature()
@@ -4925,8 +4940,7 @@ func (m APIAppModel) runAPIPublishDescription(ctx context.Context, featureID, mo
 }
 
 func (m APIAppModel) openRepoCycleAction(kind string) APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	if !m.selectedActionReady(kind) {
@@ -4947,8 +4961,7 @@ func (m APIAppModel) openRepoCycleAction(kind string) APIAppModel {
 }
 
 func (m APIAppModel) openRewindPanel() APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	if blocked, message := m.selectedFeatureActionLocallyBlocked(mutationKindFeatureRewind); blocked {
@@ -5364,20 +5377,24 @@ func (m APIAppModel) openAPIAttachForFeatureFromCache(featureID string, refreshS
 	m.statusMessage = ""
 	var liveCmd tea.Cmd
 	var detailCmd tea.Cmd
+	activeSessionID := ""
 	if sess, ok := tabs[initialIdx].sess.(*apiSessionView); ok {
+		activeSessionID = sess.ID()
 		liveCmd = m.startLiveSessionOutput(sess)
 		detailCmd = m.fetchAttachSessionDetailCmd(sess.ID())
 	}
 	var sessionsCmd tea.Cmd
+	var missingDetailCmd tea.Cmd
 	if refreshSessions {
 		sessionsCmd = m.fetchAttachSessionsCmd(featureID, false)
+	} else {
+		missingDetailCmd = m.fetchAttachMissingSessionDetailsCmd(featureID, activeSessionID)
 	}
-	return m, tea.Batch(sessionsCmd, attach.Init(), liveCmd, detailCmd)
+	return m, tea.Batch(sessionsCmd, attach.Init(), liveCmd, detailCmd, missingDetailCmd)
 }
 
 func (m APIAppModel) openAPIContextualAction() (tea.Model, tea.Cmd) {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m, nil
 	}
 	if f := m.selectedAPIDashboardFeature(); f != nil && f.Status.IsNeedsReview() {
@@ -5672,8 +5689,7 @@ func (m APIAppModel) selectedContentSnapshot() (apiFeatureContentSnapshot, bool)
 }
 
 func (m APIAppModel) openReviewCommentsPreview() (APIAppModel, tea.Cmd) {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m, nil
 	}
 	if !m.selectedActionReady(mutationKindFeatureReviewComments) {
@@ -5701,8 +5717,7 @@ func (m APIAppModel) openRefactorPrompt() APIAppModel {
 }
 
 func (m APIAppModel) openRefactorPromptFor(restart bool) APIAppModel {
-	if m.selectedFeature == "" {
-		m.statusMessage = statusMsgNoFeatureSelected
+	if !m.requireSelectedFeature() {
 		return m
 	}
 	kind := mutationKindFeatureRefactorStart
@@ -5825,24 +5840,9 @@ func (m APIAppModel) selectedRepoActionOptions(kind string) []apiRepoActionOptio
 			})
 		}
 	}
-	for _, feature := range m.featureList.Features {
-		if feature.ID != m.selectedFeature {
-			continue
-		}
-		for _, repo := range feature.Repos {
-			if _, ok := byName[repo]; !ok {
-				add(apiRepoActionOption{Name: repo})
-			}
-		}
-	}
-	for _, feature := range m.snapshot.Features {
-		if feature.ID != m.selectedFeature {
-			continue
-		}
-		for _, repo := range feature.Repos {
-			if _, ok := byName[repo]; !ok {
-				add(apiRepoActionOption{Name: repo})
-			}
+	for _, repo := range m.selectedFeatureRepoNames() {
+		if _, ok := byName[repo]; !ok {
+			add(apiRepoActionOption{Name: repo})
 		}
 	}
 	options := make([]apiRepoActionOption, 0, len(order))
@@ -5938,17 +5938,27 @@ func (m APIAppModel) selectedReviewCommentsRepo() string {
 			}
 		}
 	}
+	if repos := m.selectedFeatureRepoNames(); len(repos) > 0 {
+		return repos[0]
+	}
+	return ""
+}
+
+// selectedFeatureRepoNames returns the repo names declared on the currently
+// selected feature, looking first in the cached feature list and falling
+// back to the last full snapshot.
+func (m APIAppModel) selectedFeatureRepoNames() []string {
 	for _, feature := range m.featureList.Features {
-		if feature.ID == m.selectedFeature && len(feature.Repos) > 0 {
-			return feature.Repos[0]
+		if feature.ID == m.selectedFeature {
+			return feature.Repos
 		}
 	}
 	for _, feature := range m.snapshot.Features {
-		if feature.ID == m.selectedFeature && len(feature.Repos) > 0 {
-			return feature.Repos[0]
+		if feature.ID == m.selectedFeature {
+			return feature.Repos
 		}
 	}
-	return ""
+	return nil
 }
 
 func (m APIAppModel) selectedFeatureName() string {
@@ -6950,6 +6960,38 @@ func (m APIAppModel) fetchAttachSessionsCmd(featureID string, openIfClosed bool)
 			openIfClosed: openIfClosed,
 		}
 	}
+}
+
+func (m APIAppModel) fetchAttachMissingSessionDetailsCmd(featureID string, skipSessionIDs ...string) tea.Cmd {
+	if featureID == "" || m.client == nil {
+		return nil
+	}
+	skip := make(map[string]bool, len(skipSessionIDs))
+	for _, id := range skipSessionIDs {
+		if id != "" {
+			skip[id] = true
+		}
+	}
+	seen := map[string]bool{}
+	var cmds []tea.Cmd
+	for _, tab := range m.apiAttachTabsForFeature(featureID) {
+		sess, ok := tab.sess.(*apiSessionView)
+		if !ok || sess == nil {
+			continue
+		}
+		sessionID := sess.ID()
+		if sessionID == "" || skip[sessionID] || seen[sessionID] {
+			continue
+		}
+		seen[sessionID] = true
+		if _, ok := m.sessionDetails[sessionID]; ok {
+			continue
+		}
+		if cmd := m.fetchAttachSessionDetailCmd(sessionID); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m APIAppModel) fetchAttachSessionDetailCmd(sessionID string) tea.Cmd {

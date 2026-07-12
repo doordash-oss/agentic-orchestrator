@@ -201,10 +201,6 @@ func (a featureAttention) ActivityLine() string {
 	}
 }
 
-func contextualAActionHint(f *feature.Feature) (hint string, lead bool) {
-	return contextualAActionHintFor(f, nil)
-}
-
 func contextualAActionHintFor(f *feature.Feature, sess session.SessionView) (hint string, lead bool) {
 	att := computeFeatureAttention(f, sess)
 	return att.FooterHint(), att.RequiresUser()

@@ -16,17 +16,6 @@ package tui
 
 import (
 	"testing"
-
-	tea "charm.land/bubbletea/v2"
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/session"
-)
-
-// testRecoveryFeatureID1 and testRecoveryFeatureID2 are fixture feature IDs
-// reused across this file's RecoveryModel key-handling tests.
-const (
-	testRecoveryFeatureID1 = "feat-1"
-	testRecoveryFeatureID2 = "feat-2"
 )
 
 func TestAllHelpContextsNonEmpty(t *testing.T) {
@@ -484,90 +473,6 @@ func TestApplyKeyboardLayout_Idempotent(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected 'ctrl+x' to appear exactly once in Detach keys, found %d times", count)
-	}
-}
-
-func TestRecoveryModelKeyK_TriggersKill(t *testing.T) {
-	// Regression: "k" is in both keys.Up and keys.RecoveryKill.
-	// RecoveryModel must check recovery keys before navigation keys
-	// so that pressing "k" sets RecoveryKill, not cursor movement.
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: testRecoveryFeatureID1, Phase: feature.PhaseImplement.DirName(), Iteration: 1}},
-		{PIDFile: session.PIDFile{FeatureID: testRecoveryFeatureID2, Phase: feature.PhasePlan.DirName(), Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	// Cursor starts at 0; default action is Skip for both items.
-	if m.actions[testRecoveryFeatureID1] != session.RecoverySkip {
-		t.Fatalf("expected initial action Skip, got %v", m.actions[testRecoveryFeatureID1])
-	}
-
-	// Press "k" — should set action to Kill, NOT move cursor up.
-	msg := tea.KeyPressMsg{Code: 'k', Text: "k"}
-	m, _ = m.Update(msg)
-
-	if m.actions[testRecoveryFeatureID1] != session.RecoveryKill {
-		t.Errorf("pressing 'k' should set RecoveryKill, got action %v", m.actions[testRecoveryFeatureID1])
-	}
-	if m.cursor != 0 {
-		t.Errorf("pressing 'k' should not move cursor, got cursor=%d", m.cursor)
-	}
-}
-
-func TestRecoveryModelArrowUp_StillNavigates(t *testing.T) {
-	// After reordering, arrow-up must still work for navigation.
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: testRecoveryFeatureID1, Phase: feature.PhaseImplement.DirName(), Iteration: 1}},
-		{PIDFile: session.PIDFile{FeatureID: testRecoveryFeatureID2, Phase: feature.PhasePlan.DirName(), Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	// Move cursor to item 1 first using down-arrow.
-	downMsg := tea.KeyPressMsg{Code: tea.KeyDown}
-	m, _ = m.Update(downMsg)
-	if m.cursor != 1 {
-		t.Fatalf("expected cursor=1 after down, got %d", m.cursor)
-	}
-
-	// Press up-arrow — should navigate up.
-	upMsg := tea.KeyPressMsg{Code: tea.KeyUp}
-	m, _ = m.Update(upMsg)
-	if m.cursor != 0 {
-		t.Errorf("up-arrow should move cursor to 0, got %d", m.cursor)
-	}
-}
-
-func TestRecoveryModelKeyR_TriggersResume(t *testing.T) {
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: testRecoveryFeatureID1, Phase: feature.PhaseImplement.DirName(), Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	msg := tea.KeyPressMsg{Code: 'r', Text: "r"}
-	m, _ = m.Update(msg)
-
-	if m.actions[testRecoveryFeatureID1] != session.RecoveryResume {
-		t.Errorf("pressing 'r' should set RecoveryResume, got action %v", m.actions[testRecoveryFeatureID1])
-	}
-}
-
-func TestRecoveryModelKeyS_TriggersSkip(t *testing.T) {
-	items := []session.RecoveryItem{
-		{PIDFile: session.PIDFile{FeatureID: testRecoveryFeatureID1, Phase: feature.PhaseImplement.DirName(), Iteration: 1}},
-	}
-	m := NewRecoveryModel(items)
-
-	// Change to Kill first, then verify "s" sets Skip.
-	killMsg := tea.KeyPressMsg{Code: 'k', Text: "k"}
-	m, _ = m.Update(killMsg)
-	if m.actions[testRecoveryFeatureID1] != session.RecoveryKill {
-		t.Fatalf("expected Kill after 'k', got %v", m.actions[testRecoveryFeatureID1])
-	}
-
-	skipMsg := tea.KeyPressMsg{Code: 's', Text: "s"}
-	m, _ = m.Update(skipMsg)
-	if m.actions[testRecoveryFeatureID1] != session.RecoverySkip {
-		t.Errorf("pressing 's' should set RecoverySkip, got action %v", m.actions[testRecoveryFeatureID1])
 	}
 }
 

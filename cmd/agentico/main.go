@@ -26,6 +26,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1211,10 +1212,10 @@ func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest) (se
 		Model:           model,
 		Prompt:          prompt,
 		SystemPrompt:    t.buildChatContext(),
-		DisallowedTools: []string{"Edit", "Write", "NotebookEdit", toolNameBash},
+		DisallowedTools: []string{"Task"},
 		WorkDir:         workDir,
 		PIDDir:          chatDir,
-		PermHandler:     &session.ReadOnlyHandler{},
+		PermHandler:     &session.AMAHandler{},
 		Phase:           utilskill.PhaseAll,
 		TurnMode:        ports.TurnModeInteractive,
 		EffortLevel:     llm.EffortLow,
@@ -1284,14 +1285,14 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 	}
 	changed := mergeRuntimeDefaultsMutation(&cfg.Defaults, req.Defaults)
 	if req.WorkspaceRoots != nil {
-		if !sameStringSlice(cfg.WorkspaceRoots, *req.WorkspaceRoots) {
+		if !slices.Equal(cfg.WorkspaceRoots, *req.WorkspaceRoots) {
 			changed = true
 		}
 		cfg.WorkspaceRoots = append([]string(nil), (*req.WorkspaceRoots)...)
 		config.DiscoverReposFromRoots(cfg)
 	}
 	if req.UI != nil {
-		if !sameStringSlice(cfg.UI.CollapsedSections, req.UI.CollapsedSections) {
+		if !slices.Equal(cfg.UI.CollapsedSections, req.UI.CollapsedSections) {
 			cfg.UI.CollapsedSections = append([]string(nil), req.UI.CollapsedSections...)
 			changed = true
 		}
@@ -2038,18 +2039,6 @@ func setIfChanged[T comparable](dst *T, val T) bool {
 		return false
 	}
 	*dst = val
-	return true
-}
-
-func sameStringSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
 	return true
 }
 

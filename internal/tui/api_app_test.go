@@ -1623,6 +1623,47 @@ func TestAPIAppModelAttachRefreshRestoresMissingKnowledgeBaseRepoTabs(t *testing
 	}
 }
 
+func TestAPIAppModelAttachRefreshLoadsPromptForSiblingKnowledgeBaseTabs(t *testing.T) {
+	t.Parallel()
+
+	dbaccess := server.SessionSummaryDTO{ID: "feat-kb-dbaccess", FeatureID: testFeatureIDActive, Phase: "Knowledge Base", Repo: "dbaccess", Kind: testSessionKindAgent, Status: testSessionStatusRunning}
+	dbmesh := server.SessionSummaryDTO{ID: "feat-kb-dbmesh", FeatureID: testFeatureIDActive, Phase: "Knowledge Base", Repo: "dbmesh", Kind: testSessionKindAgent, Status: testSessionStatusRunning}
+	taulu := server.SessionSummaryDTO{ID: "feat-kb-taulu", FeatureID: testFeatureIDActive, Phase: "Knowledge Base", Repo: "taulu", Kind: testSessionKindAgent, Status: testSessionStatusRunning}
+	const dbmeshPrompt = "Map the dbmesh repository and include exact file paths."
+	client := &fakeTUIAPIClient{
+		features: server.FeatureListResponse{Features: []server.FeatureSummary{
+			{ID: testFeatureIDActive, Name: testFeatureNameActiveWork, Slug: testFeatureSlugActiveWork, Status: testFeatureStatusImplementing, CurrentPhase: "Knowledge Base", CreatedAt: time.Now()},
+		}},
+		sessions: server.SessionListResponse{Sessions: []server.SessionSummaryDTO{dbaccess, dbmesh, taulu}},
+		sessionDetailsByID: map[string]server.SessionDetailResponse{
+			dbaccess.ID: {Session: apiTestSessionDetailWith(dbaccess, server.SessionDetailDTO{InitialPrompt: "Map the dbaccess repository."})},
+			dbmesh.ID:   {Session: apiTestSessionDetailWith(dbmesh, server.SessionDetailDTO{InitialPrompt: dbmeshPrompt})},
+			taulu.ID:    {Session: apiTestSessionDetailWith(taulu, server.SessionDetailDTO{InitialPrompt: "Map the taulu repository."})},
+		},
+	}
+	app := newTestAPIAppModel(t, client)
+
+	model, cmd := app.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if cmd == nil {
+		t.Fatal("Update(a) returned nil command, want attach init plus session refresh")
+	}
+	refresh := apiTestAttachSessionsSnapshotMsg(t, cmd)
+	model, cmd = model.(APIAppModel).Update(refresh)
+	detailMsgs := apiTestRefreshSnapshotMsgs(t, cmd)
+	for _, msg := range detailMsgs {
+		model, _ = model.(APIAppModel).Update(msg)
+	}
+
+	model, _ = model.(APIAppModel).updateAPIAttach(tea.KeyPressMsg{Code: tea.KeyTab})
+	switched := model.(APIAppModel)
+	if got := switched.attach.ActiveRepoName(); got != "dbmesh" {
+		t.Fatalf("active repo after tab = %q, want dbmesh", got)
+	}
+	if view := stripANSI(switched.attach.View()); !strings.Contains(view, dbmeshPrompt) {
+		t.Fatalf("dbmesh attach view missing initial prompt %q:\n%s", dbmeshPrompt, view)
+	}
+}
+
 func apiTestAttachSessionsSnapshotMsg(t *testing.T, cmd tea.Cmd) apiAttachSessionsSnapshotMsg {
 	t.Helper()
 	if cmd == nil {
@@ -1646,6 +1687,34 @@ func apiTestAttachSessionsSnapshotMsg(t *testing.T, cmd tea.Cmd) apiAttachSessio
 	}
 	t.Fatalf("batch command did not include apiAttachSessionsSnapshotMsg: %#v", msg)
 	return apiAttachSessionsSnapshotMsg{}
+}
+
+func apiTestRefreshSnapshotMsgs(t *testing.T, cmd tea.Cmd) []apiRefreshSnapshotMsg {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("command is nil")
+	}
+	var out []apiRefreshSnapshotMsg
+	apiTestCollectRefreshSnapshotMsgs(cmd(), &out)
+	if len(out) == 0 {
+		t.Fatal("command did not produce any apiRefreshSnapshotMsg")
+	}
+	return out
+}
+
+func apiTestCollectRefreshSnapshotMsgs(msg tea.Msg, out *[]apiRefreshSnapshotMsg) {
+	switch msg := msg.(type) {
+	case nil:
+		return
+	case apiRefreshSnapshotMsg:
+		*out = append(*out, msg)
+	case tea.BatchMsg:
+		for _, child := range msg {
+			if child != nil {
+				apiTestCollectRefreshSnapshotMsgs(child(), out)
+			}
+		}
+	}
 }
 
 // TestApplyTranscriptRowStreamThenSnapshotDoesNotDuplicate is the property
@@ -7192,7 +7261,7 @@ func TestAPIAppModelPublishRepoSelectorSendsSelectedRepos(t *testing.T) {
 func TestAPIAppModelRebaseDoesNotOpenRepoSelector(t *testing.T) {
 	t.Parallel()
 
-	client := apiRepoSelectorClient(testCycleTypeRebase, apiTestActionResponse{})
+	client := apiRepoSelectorClient(testCycleTypeRebase)
 	app := newTestAPIAppModel(t, client)
 
 	model, cmd := app.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
@@ -7225,7 +7294,7 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 	t.Run(testActionIDTweak, func(t *testing.T) {
 		t.Parallel()
 
-		client := apiRepoSelectorClient(testActionIDTweak, apiTestActionResponse{})
+		client := apiRepoSelectorClient(testActionIDTweak)
 		app := newTestAPIAppModel(t, client)
 
 		model, cmd := app.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
@@ -7265,7 +7334,7 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 	t.Run("review comments", func(t *testing.T) {
 		t.Parallel()
 
-		client := apiRepoSelectorClient(actionIDReviewComments, apiTestActionResponse{})
+		client := apiRepoSelectorClient(actionIDReviewComments)
 		client.reviewCommentsResponse = server.ReviewCommentsFetchResponse{FeatureID: testFeatureIDActive, Repo: testRepoNameWeb}
 		app := newTestAPIAppModel(t, client)
 
@@ -7288,7 +7357,7 @@ func TestAPIAppModelReviewAndRefactorRepoSelectorsUseSelectedRepo(t *testing.T) 
 	t.Run(testPipelineRefactor, func(t *testing.T) {
 		t.Parallel()
 
-		client := apiRepoSelectorClient(testPipelineRefactor, apiTestActionResponse{})
+		client := apiRepoSelectorClient(testPipelineRefactor)
 		app := newTestAPIAppModel(t, client)
 
 		model, cmd := app.Update(tea.KeyPressMsg{Code: 'F', Text: "F"})
@@ -7886,7 +7955,8 @@ func apiTestShowingAskUserPrompt(m APIAppModel) bool {
 	return m.askUserPromptActive || (m.attach != nil && m.attach.HasActiveQuestion())
 }
 
-func apiRepoSelectorClient(actionID string, accepted apiTestActionResponse) *fakeTUIAPIClient {
+func apiRepoSelectorClient(actionID string) *fakeTUIAPIClient {
+	accepted := apiTestActionResponse{}
 	action := server.ActionDTO{
 		ID:      actionID,
 		Enabled: true,

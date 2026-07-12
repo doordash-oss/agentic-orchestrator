@@ -431,6 +431,24 @@ func TestBuildCommand_NormalModeAsksForMediatedSurfaces(t *testing.T) {
 	}
 }
 
+func TestBuildCommand_DisallowedTaskDeniesOpenCodeTaskSurface(t *testing.T) {
+	p := New()
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
+		Model:           "anthropic/claude-sonnet-4-5",
+		DisallowedTools: []string{"Task"},
+	})
+	if err != nil {
+		t.Fatalf("BuildCommand() error: %v", err)
+	}
+	perm := parseConfigContent(t, configContentValue(t, env)).Permission
+	if got := permString(t, perm, "task"); got != "deny" {
+		t.Fatalf("permission[task] = %q, want deny when Task is disallowed", got)
+	}
+	if got := permString(t, perm, "bash"); got != "ask" {
+		t.Fatalf("permission[bash] = %q, want unaffected ask", got)
+	}
+}
+
 // TestBuildCommand_DangerousSkipAllowsToolsButAsksQuestions proves dangerous-skip
 // mode configures OpenCode to allow the permissioned tool surfaces
 // noninteractively, while user questions remain "ask" so AskUserQuestion-style

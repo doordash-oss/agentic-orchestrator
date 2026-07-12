@@ -28,16 +28,11 @@ const toolNameNotebookEdit = "NotebookEdit"
 // toolNameWrite is the tool name Codex/Claude report for file-write tool calls.
 const toolNameWrite = "Write"
 
-// Bash tool-pattern literals shared between default rules and tests.
+// Bash tool-pattern literals used by production code (defaults.go, pattern.go).
 const (
 	patternBashAny     = "Bash(*)"
-	patternBashLSExact = "Bash(ls -la)"
 	patternBashLS      = "Bash(ls *)"
-	patternBashRm      = "Bash(rm *)"
-	patternBashEcho    = "Bash(echo *)"
 	patternBashGitDiff = "Bash(git diff *)"
-	patternBashNpmTest = "Bash(npm test *)"
-	patternBashGoTest  = "Bash(go test *)"
 )
 
 // Rule represents a cached permission rule.

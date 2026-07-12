@@ -63,6 +63,11 @@ func apiChatEventsFromSnapshot(in apiChatSnapshotInput) []chatEvent {
 			events = append(events, event)
 		}
 	}
+	for _, event := range apiChatPendingPermissionEvents(controls) {
+		if !chatEventsContainPendingPermission(events, event.RequestID) {
+			events = append(events, event)
+		}
+	}
 	if in.WasResponding && apiChatSnapshotFailed(in.Detail) && !chatEventsEndTurn(events) {
 		events = append(events, chatEvent{Kind: chatEventError, Text: apiChatFailureText(in.Detail)})
 	}
@@ -76,7 +81,7 @@ func apiChatEventsFromSnapshot(in apiChatSnapshotInput) []chatEvent {
 }
 
 func (s *apiSessionView) applyAPIChatSessionState(detail server.SessionDetailDTO, controls []server.ControlRequestDTO) {
-	s.applyAPISessionState(detail, controls, apiSessionStateUpdate{useTurnState: true, forceInitialPrompt: true})
+	s.applyAPISessionState(detail, controls, apiSessionStateUpdate{useTurnState: true, forceInitialPrompt: true, setRememberPreviews: true})
 }
 
 func (s *apiSessionView) apiChatTranscriptEvents(transcript *server.TranscriptResponse) []chatEvent {
@@ -116,6 +121,7 @@ func (s *apiSessionView) apiChatTranscriptEvents(transcript *server.TranscriptRe
 		}
 		if previous, ok := s.lastTranscriptRows[key]; ok {
 			if s.updateKnownAPIChatTranscriptRow(key, signature, previous, msg, hasMsg) && hasEvent {
+				event = markAPIChatUpdatedTranscriptEvent(row, event)
 				events = append(events, event)
 			}
 			continue
@@ -130,6 +136,13 @@ func (s *apiSessionView) apiChatTranscriptEvents(transcript *server.TranscriptRe
 		}
 	}
 	return collapseAPIChatErrorEvents(events)
+}
+
+func markAPIChatUpdatedTranscriptEvent(row server.TranscriptMessageDTO, event chatEvent) chatEvent {
+	if event.Kind == chatEventAssistantText && row.Role == roleAssistant {
+		event.Partial = true
+	}
+	return event
 }
 
 // updateKnownAPIChatTranscriptRow updates the log entry for a transcript row
@@ -276,6 +289,24 @@ func apiChatPendingQuestionEvents(controls []server.ControlRequestDTO) []chatEve
 	return events
 }
 
+func apiChatPendingPermissionEvents(controls []server.ControlRequestDTO) []chatEvent {
+	var events []chatEvent
+	for _, req := range controls {
+		if req.ToolName == toolNameAskUserQuestion || !isPendingControlStatus(req.Status) {
+			continue
+		}
+		events = append(events, chatEvent{
+			Kind:      chatEventPendingPermission,
+			RequestID: req.RequestID,
+			ToolName:  req.ToolName,
+			Text:      strings.TrimSpace(req.Summary),
+			Raw:       permissionInputRaw(req.Input),
+			Remember:  req.Remember,
+		})
+	}
+	return events
+}
+
 func apiChatSnapshotReadyForNextMessage(detail server.SessionDetailDTO, controls []server.ControlRequestDTO) bool {
 	if len(controls) > 0 {
 		return false
@@ -327,7 +358,7 @@ func normalizedTurnState(turnState string) string {
 
 func chatEventsEndTurn(events []chatEvent) bool {
 	for _, event := range events {
-		if event.Kind == chatEventCompleted || event.Kind == chatEventError || event.Kind == chatEventPendingQuestion {
+		if event.Kind == chatEventCompleted || event.Kind == chatEventError || event.Kind == chatEventPendingQuestion || event.Kind == chatEventPendingPermission {
 			return true
 		}
 	}
@@ -346,6 +377,15 @@ func chatEventsHaveAssistantText(events []chatEvent) bool {
 func chatEventsContainPendingQuestion(events []chatEvent, requestID string) bool {
 	for _, event := range events {
 		if event.Kind == chatEventPendingQuestion && (requestID == "" || event.RequestID == requestID) {
+			return true
+		}
+	}
+	return false
+}
+
+func chatEventsContainPendingPermission(events []chatEvent, requestID string) bool {
+	for _, event := range events {
+		if event.Kind == chatEventPendingPermission && (requestID == "" || event.RequestID == requestID) {
 			return true
 		}
 	}

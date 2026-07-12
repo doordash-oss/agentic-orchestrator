@@ -79,7 +79,7 @@ const catchAllPattern = "*"
 //     roots: when roots are known, each becomes a path-pattern map allowing the
 //     mode decision inside "<root>/**" and explicitly denying everything else;
 //     with no known roots they fall back to the mode decision as a plain value.
-func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string) map[string]any {
+func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, readRoots []string, disallowedTools ...[]string) map[string]any {
 	toolDecision := "ask"
 	if dangerouslySkipPerms {
 		toolDecision = "allow"
@@ -97,7 +97,41 @@ func permissionConfig(dangerouslySkipPerms bool, workDir string, writableRoots, 
 	for _, key := range fileEditPermKeys {
 		perm[key] = editDecision
 	}
+	if len(disallowedTools) > 0 {
+		applyDisallowedTools(perm, disallowedTools[0])
+	}
 	return perm
+}
+
+func applyDisallowedTools(perm map[string]any, tools []string) {
+	for _, tool := range tools {
+		switch normalizedToolName(tool) {
+		case "bash":
+			perm[permKeyBash] = "deny"
+		case "task", "agent":
+			perm[permKeyTask] = "deny"
+		case "webfetch":
+			perm[permKeyWebfetch] = "deny"
+		case "websearch":
+			perm[permKeyWebsearch] = "deny"
+		case "skill":
+			perm[permKeySkill] = "deny"
+		case "edit":
+			perm[permKeyEdit] = "deny"
+		case "write":
+			perm[permKeyWrite] = "deny"
+		case "applypatch", "apply_patch":
+			perm[permKeyApplyPatch] = "deny"
+		case "read":
+			perm[permKeyRead] = "deny"
+		case "externaldirectory", "external_directory":
+			perm[permKeyExternal] = "deny"
+		}
+	}
+}
+
+func normalizedToolName(tool string) string {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(tool), " ", ""))
 }
 
 // readPermission returns the permission value for the read surface.

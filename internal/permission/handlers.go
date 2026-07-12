@@ -242,7 +242,7 @@ func pathWithinRoots(path string, roots []string) bool {
 // (AutoApproveHandler, AcceptEditsHandler, or CachingHandler over one of
 // those — optionally already wrapped in a SizeGuardHandler via Guarded).
 // Any other handler shape — bounded helpers, plan/rewind/review-feedback
-// sessions, chat's ReadOnlyHandler — is returned unchanged, since those exist
+// sessions, restricted read-only sessions — is returned unchanged, since those exist
 // specifically to restrict writes below the general writable-root policy and
 // must not be loosened by this exception.
 func WrapGeneralPhaseHandlerWithSafeCreate(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
@@ -266,8 +266,8 @@ func isGeneralPhaseHandler(h ports.PermissionHandler) bool {
 	}
 }
 
-// singlePathWriteDecision implements the shared shape behind PlanReviewHandler,
-// ReviewFeedbackHandler, and RewindReviewHandler: auto-approve read-only tools
+// singlePathWriteDecision implements the shared shape behind PlanReviewHandler
+// and RewindReviewHandler: auto-approve read-only tools
 // and Agent spawning, auto-approve Edit/Write/NotebookEdit only for
 // allowedPath, deny with denyReason otherwise. Everything else (Bash, etc.) is
 // denied with fallbackReason, or deferred to the TUI when fallbackReason is
@@ -314,8 +314,8 @@ func toolInputContainsPath(input, allowedPath string) bool {
 	return strings.Contains(input, allowedPath)
 }
 
-// ReadOnlyHandler auto-approves read-only tools and Agent spawning,
-// but hard-denies all file modification tools. Used by the "Ask me Anything" chat.
+// ReadOnlyHandler auto-approves read-only tools and Agent spawning, but
+// hard-denies all file modification tools.
 type ReadOnlyHandler struct{}
 
 // CanUseTool approves reads; denies all writes.
@@ -337,27 +337,23 @@ func (h *ReadOnlyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Per
 	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
 }
 
-// ReviewFeedbackHandler auto-approves read-only tools and file edits ONLY to
-// the specified review-feedback.md path. All other write operations are
-// hard-denied. Used by the bounded review/validation helper so the reviewer
-// can produce its structured handoff file (the harness then parses the file
-// deterministically) while still being prevented from touching the rest of
-// the worktree.
-//
-// Structurally identical to PlanReviewHandler / RewindReviewHandler; the type
-// is kept distinct so the deny-reason text and the wiring site stay
-// self-documenting (a stack trace through ReviewFeedbackHandler.CanUseTool
-// makes the call site obvious).
-type ReviewFeedbackHandler struct {
-	AllowedPath string // absolute path to the review-feedback.md file the reviewer must produce
-}
+// AMAHandler is used by the Ask Me Anything chat. It auto-approves read-only
+// inspection, disables delegation, and leaves other top-level tools for the
+// user-facing permission UI.
+type AMAHandler struct{}
 
-// CanUseTool approves reads and edits to the review-feedback file; denies
-// every other write or shell tool so the reviewer cannot mutate the worktree.
-func (h *ReviewFeedbackHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return singlePathWriteDecision(req, h.AllowedPath,
-		"review helper may only write the review-feedback.md handoff file",
-		"review helper is read-only except for review-feedback.md"), nil
+// CanUseTool approves safe reads, denies subagent delegation, and defers
+// diagnostics or mutations such as Bash/Edit/Write to the caller.
+func (h *AMAHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if isReadOnlyTool(req.ToolName) {
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+	}
+	switch req.ToolName {
+	case "Agent", "Task":
+		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "AMA chat does not support sub-agents"}, nil
+	default:
+		return ports.PermissionDecision{}, nil
+	}
 }
 
 // BoundedHelperArtifactHandler auto-approves read-only inspection tools,

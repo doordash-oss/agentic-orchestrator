@@ -2672,7 +2672,7 @@ func (m AttachModel) renderQuestion() string {
 	top.WriteString("\n\n")
 
 	start, end, needAbove, needBelow := m.questionVisibleWindow()
-	top.WriteString(renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow))
+	top.WriteString(renderQuestionOptionsBlock(q, m.selectedOption, m.selectedMulti, start, end, needAbove, needBelow, contentW))
 
 	top.WriteString(separatorStyle.Render("  ────────────────────────────"))
 	top.WriteByte('\n')

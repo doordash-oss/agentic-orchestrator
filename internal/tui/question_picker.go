@@ -293,7 +293,7 @@ func questionPromptText(question string, width int) string {
 	}
 	lines := questionPromptVisualLines(question, width)
 	if len(lines) <= questionPromptMaxLines {
-		return question
+		return strings.Join(lines, "\n")
 	}
 	return strings.Join(lines[:questionPromptMaxLines-1], "\n") + "\n..."
 }
@@ -378,7 +378,7 @@ func questionVisibleWindowPure(options []askUserOption, selectedOption, scrollOf
 // portion of attach.go's renderQuestion — cursor + bold-brand highlight on
 // the focused row, "[ ]"/"[x]" checkboxes when MultiSelect, muted
 // description/confidence lines, and "N more above/below" scroll indicators.
-func renderQuestionOptionsBlock(q askUserQuestion, selectedOption int, selectedMulti map[int]bool, start, end int, needAbove, needBelow bool) string {
+func renderQuestionOptionsBlock(q askUserQuestion, selectedOption int, selectedMulti map[int]bool, start, end int, needAbove, needBelow bool, contentWidth int) string {
 	selectedLabel := lipgloss.NewStyle().Foreground(colorBrand).Bold(true)
 	normalLabel := lipgloss.NewStyle()
 	descStyle := MutedStyle
@@ -401,18 +401,15 @@ func renderQuestionOptionsBlock(q askUserQuestion, selectedOption int, selectedM
 			if selectedMulti[i] {
 				checkbox = "[x] "
 			}
-			b.WriteString(labelStyle.Render(fmt.Sprintf("%s%d. %s%s", cursor, i+1, checkbox, opt.Label)))
+			writeWrappedQuestionLine(&b, labelStyle.Render(fmt.Sprintf("%s%d. %s%s", cursor, i+1, checkbox, opt.Label)), contentWidth)
 		} else {
-			b.WriteString(labelStyle.Render(fmt.Sprintf("%s%d. %s", cursor, i+1, opt.Label)))
+			writeWrappedQuestionLine(&b, labelStyle.Render(fmt.Sprintf("%s%d. %s", cursor, i+1, opt.Label)), contentWidth)
 		}
-		b.WriteByte('\n')
 		if opt.Description != "" {
-			b.WriteString(descStyle.Render(fmt.Sprintf("     %s", opt.Description)))
-			b.WriteByte('\n')
+			writeWrappedQuestionLine(&b, descStyle.Render(fmt.Sprintf("     %s", opt.Description)), contentWidth)
 		}
 		if opt.Confidence != nil {
-			b.WriteString(descStyle.Render(fmt.Sprintf("     Confidence: %.2f", *opt.Confidence)))
-			b.WriteByte('\n')
+			writeWrappedQuestionLine(&b, descStyle.Render(fmt.Sprintf("     Confidence: %.2f", *opt.Confidence)), contentWidth)
 		}
 	}
 	if needBelow {
@@ -420,6 +417,11 @@ func renderQuestionOptionsBlock(q askUserQuestion, selectedOption int, selectedM
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func writeWrappedQuestionLine(b *strings.Builder, rendered string, width int) {
+	b.WriteString(wrapForViewport(rendered, width))
+	b.WriteByte('\n')
 }
 
 // renderQuestionFooterHint renders the contextual footer hint below a

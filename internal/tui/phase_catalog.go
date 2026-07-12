@@ -418,10 +418,6 @@ func findModelInfo(infos []llm.ModelInfo, id string) (llm.ModelInfo, bool) {
 	return llm.ModelInfo{}, false
 }
 
-func (c PhaseModelCatalog) modelInfoMatches(info llm.ModelInfo, value string) bool {
-	return modelInfoMatches(info, value)
-}
-
 func modelInfoMatches(info llm.ModelInfo, value string) bool {
 	if strings.EqualFold(info.ID, value) {
 		return true

@@ -139,10 +139,6 @@ func (m *DashboardModel) ConsumeWantNewFeature() bool {
 	return false
 }
 
-func (m DashboardModel) Init() tea.Cmd {
-	return nil
-}
-
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
@@ -262,29 +258,6 @@ const (
 	layoutStandard                   // 80-120 cols: split panels 35/65
 	layoutWide                       // > 120 cols: split panels 30/70
 )
-
-// effectivePanelHeight computes the content area height for the feature list panel
-// using the same formula as View(). This allows scroll state to be pre-computed during Update.
-func (m DashboardModel) effectivePanelHeight() int {
-	w := m.width
-	h := m.height
-	if w < 40 {
-		w = 80
-	}
-	if h < 10 {
-		h = 24
-	}
-
-	header := m.renderHeader(w)
-	footer := m.renderFooter()
-	headerH := lipgloss.Height(header)
-	footerH := lipgloss.Height(footer) + 2
-	panelHeight := h - headerH - footerH
-	if panelHeight < 6 {
-		panelHeight = 6
-	}
-	return panelHeight
-}
 
 func (m DashboardModel) getLayoutMode() layoutMode {
 	switch {
@@ -1060,40 +1033,6 @@ func (m DashboardModel) SelectedSection() string {
 		}
 	}
 	return ""
-}
-
-func (m DashboardModel) SelectedFeatureID() string {
-	f := m.SelectedFeature()
-	if f != nil {
-		return f.ID
-	}
-	return ""
-}
-
-func (m *DashboardModel) SelectFeatureID(featureID string) bool {
-	for i, item := range m.visibleItems {
-		if item.kind == listItemFeature && item.feature != nil && item.feature.ID == featureID {
-			m.cursor = i
-			m.computeCursorLine()
-			m.updateScrollState(0)
-			m.syncPreview()
-			return true
-		}
-	}
-	return false
-}
-
-func (m *DashboardModel) SetFeatures(features []*feature.Feature) {
-	sortFeatures(features)
-	m.features = features
-	m.buildVisibleItems()
-	if m.cursor >= len(m.visibleItems) {
-		m.cursor = max(0, len(m.visibleItems)-1)
-	}
-	m.computeCursorLine()
-	m.scrollOffset = 0
-	m.updateScrollState(0)
-	m.syncPreview()
 }
 
 // SetWelcomeSkipped marks that the user skipped the welcome flow, enabling

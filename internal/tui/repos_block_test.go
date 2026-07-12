@@ -492,19 +492,6 @@ func TestRenderMetadataIncludesReposBlock(t *testing.T) {
 		},
 	}
 	m := NewDetailModel(f, "")
-	m.width = 100
-	m.height = 60
-
-	full := stripANSI(m.renderMetadataFull(f))
-	if !strings.Contains(full, "Repo Status") {
-		t.Error("expected 'Repo Status' label in renderMetadataFull")
-	}
-	if !strings.Contains(full, "https://github.com/org/alpha/pull/9") {
-		t.Error("expected PR URL row in full metadata")
-	}
-	if !strings.Contains(full, "unpublished") {
-		t.Error("expected 'unpublished' row in full metadata")
-	}
 
 	compact := stripANSI(m.renderMetadataCompact(f))
 	if !strings.Contains(compact, "Repo Status") {

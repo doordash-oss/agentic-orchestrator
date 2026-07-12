@@ -644,29 +644,31 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		if !decodeMutationJSON(w, r, &req) {
 			return true
 		}
-		noArgActions := []struct {
-			action        string
+		var (
+			resp          any
+			err           error
 			defaultResult string
-			call          func(string) (any, error)
-		}{
-			{actionMerge, "merged", func(id string) (any, error) { r, err := h.mutations.MergeFeature(id); return &r, err }},
-			{actionRetry, "retried", func(id string) (any, error) { r, err := h.mutations.RetryFeature(id); return &r, err }},
-			{actionMarkDone, "done", func(id string) (any, error) { r, err := h.mutations.MarkDone(id); return &r, err }},
-			{actionDelete, "deleted", func(id string) (any, error) { r, err := h.mutations.DeleteFeature(id); return &r, err }},
+		)
+		switch action {
+		case actionMerge:
+			r, mergeErr := h.mutations.MergeFeature(featureID)
+			resp, err, defaultResult = &r, mergeErr, "merged"
+		case actionRetry:
+			r, retryErr := h.mutations.RetryFeature(featureID)
+			resp, err, defaultResult = &r, retryErr, "retried"
+		case actionMarkDone:
+			r, markDoneErr := h.mutations.MarkDone(featureID)
+			resp, err, defaultResult = &r, markDoneErr, "done"
+		case actionDelete:
+			r, deleteErr := h.mutations.DeleteFeature(featureID)
+			resp, err, defaultResult = &r, deleteErr, "deleted"
 		}
-		for _, entry := range noArgActions {
-			if entry.action != action {
-				continue
-			}
-			resp, err := entry.call(featureID)
-			if err != nil {
-				writeMutationError(w, err)
-				return true
-			}
-			defaultActionFields(resp, featureID, entry.defaultResult)
-			writeActionJSON(w, http.StatusOK, resp)
-			break
+		if err != nil {
+			writeMutationError(w, err)
+			return true
 		}
+		defaultActionFields(resp, featureID, defaultResult)
+		writeActionJSON(w, http.StatusOK, resp)
 	case actionRewind:
 		if subaction != "" {
 			return false
@@ -690,12 +692,7 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return false
 		}
 		var req RebaseActionRequest
-		fields, ok := decodeMutationObject(w, r)
-		if !ok {
-			return true
-		}
-		if len(fields) > 0 {
-			writeAPIError(w, http.StatusBadRequest, "bad_request", "rebase request body must be an empty object", nil)
+		if !decodeMutationJSON(w, r, &req) {
 			return true
 		}
 		resp, err := h.mutations.StartRebase(featureID, req)
@@ -1227,7 +1224,7 @@ func (h *apiHandler) requireTrustedMutation(w http.ResponseWriter, r *http.Reque
 }
 
 // classifyDecodeError maps a JSON decode error to the (status, code,
-// message) triple used by decodeMutationJSON and decodeMutationObject.
+// message) triple used by decodeMutationJSON.
 func classifyDecodeError(err error) (status int, code, message string) {
 	status = http.StatusBadRequest
 	code = errCodeBadRequest
@@ -1260,22 +1257,4 @@ func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
 		return false
 	}
 	return true
-}
-
-func decodeMutationObject(w http.ResponseWriter, r *http.Request) (map[string]json.RawMessage, bool) {
-	limited := http.MaxBytesReader(w, r.Body, MaxMutationBodyBytes)
-	defer limited.Close()
-	dec := json.NewDecoder(limited)
-	var fields map[string]json.RawMessage
-	if err := dec.Decode(&fields); err != nil {
-		status, code, message := classifyDecodeError(err)
-		writeAPIError(w, status, code, message, nil)
-		return nil, false
-	}
-	var extra struct{}
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeAPIError(w, http.StatusBadRequest, "bad_request", "invalid JSON request", nil)
-		return nil, false
-	}
-	return fields, true
 }

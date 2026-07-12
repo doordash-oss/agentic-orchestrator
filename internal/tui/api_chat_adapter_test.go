@@ -123,6 +123,79 @@ func TestAPIChatEventsFromSnapshotPendingAskUserSuppressesCompletion(t *testing.
 	}
 }
 
+func TestAPIChatTranscriptRowUpdateEmitsPartialAssistantText(t *testing.T) {
+	t.Parallel()
+
+	active := newTestAPIChatSession()
+	detail := apiTestSessionDetail(server.SessionSummaryDTO{
+		ID:        chatSessionID,
+		FeatureID: chatSessionID,
+		Status:    session.SessionRunning.String(),
+		TurnState: turnStateRunning,
+	})
+
+	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
+		Session: active,
+		Detail:  detail,
+		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+			{Index: 1, BlockIndex: 0, Role: roleAssistant, Type: blockTypeText, Text: "What would you like"},
+		}},
+	})
+	assertChatEventKinds(t, events, chatEventAssistantText)
+	if events[0].Partial {
+		t.Fatalf("first transcript row event unexpectedly partial: %#v", events[0])
+	}
+
+	events = apiChatEventsFromSnapshot(apiChatSnapshotInput{
+		Session: active,
+		Detail:  detail,
+		Transcript: &server.TranscriptResponse{Messages: []server.TranscriptMessageDTO{
+			{Index: 1, BlockIndex: 0, Role: roleAssistant, Type: blockTypeText, Text: "What would you like me to help you with?"},
+		}},
+	})
+
+	assertChatEventKinds(t, events, chatEventAssistantText)
+	if !events[0].Partial {
+		t.Fatalf("updated transcript row event Partial=false, want partial replacement: %#v", events[0])
+	}
+}
+
+func TestAPIChatEventsFromSnapshotPendingPermissionSuppressesCompletion(t *testing.T) {
+	t.Parallel()
+
+	active := newTestAPIChatSession()
+	permControl := server.ControlRequestDTO{
+		RequestID: testPermissionRequestIDPerm1,
+		SessionID: chatSessionID,
+		FeatureID: chatSessionID,
+		ToolName:  toolNameBash,
+		Status:    testControlStatusPending,
+		Summary:   "ps -p 74045",
+		Input:     map[string]interface{}{"command": "ps -p 74045"},
+	}
+	detail := apiTestSessionDetailWith(
+		server.SessionSummaryDTO{
+			ID:        chatSessionID,
+			FeatureID: chatSessionID,
+			Status:    session.SessionWaitingPermission.String(),
+		},
+		server.SessionDetailDTO{
+			PendingControls: []server.ControlRequestDTO{permControl},
+		})
+
+	events := apiChatEventsFromSnapshot(apiChatSnapshotInput{
+		Session:       active,
+		Detail:        detail,
+		Controls:      []server.ControlRequestDTO{permControl},
+		WasResponding: true,
+	})
+
+	assertChatEventKinds(t, events, chatEventPendingPermission)
+	if events[0].RequestID != testPermissionRequestIDPerm1 || events[0].ToolName != toolNameBash || events[0].Text != "ps -p 74045" {
+		t.Fatalf("pending permission event = %#v, want Bash permission with summary", events[0])
+	}
+}
+
 func TestAPIChatEventsFromSnapshotFailedWithoutTranscriptEmitsError(t *testing.T) {
 	t.Parallel()
 

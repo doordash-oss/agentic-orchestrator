@@ -338,16 +338,9 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
-// ExpandHome expands a leading ~/ in a path to the user's home directory.
+// ExpandHome expands a leading "~" or "~/" in a path to the user's home directory.
 func ExpandHome(path string) string {
-	if !strings.HasPrefix(path, "~/") {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	return filepath.Join(home, path[2:])
+	return workspace.ExpandHome(path)
 }
 
 // DiscoverReposFromRoots scans all workspace roots for git repositories and

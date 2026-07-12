@@ -22,9 +22,8 @@ import (
 )
 
 // chatPanelHeight returns the docked-mode panel height for the given total
-// terminal height. The floor is smaller when there's no conversation to
-// show yet; the ceiling (18 rows / 35% of height) is unchanged from before
-// this method existed as a free function of total height only.
+// terminal height. Empty chats stay compact, ordinary conversations keep the
+// 18-row dock ceiling, and active prompts can grow taller so controls fit.
 func (m ChatModel) chatPanelHeight(totalHeight int) int {
 	h := totalHeight * 35 / 100
 	floor := 10
@@ -33,9 +32,9 @@ func (m ChatModel) chatPanelHeight(totalHeight int) int {
 		floor = 5
 		ceiling = 8
 	}
-	if m.hasActiveQuestion() {
+	if m.hasActiveQuestion() || m.hasActivePermission() {
 		floor = max(floor, m.minimumQuestionPanelHeight())
-		ceiling = 18
+		ceiling = chatActivePromptMaxHeight
 	}
 	if h < floor {
 		h = floor
@@ -74,7 +73,9 @@ func (m ChatModel) resize(w, h int) ChatModel {
 	inputHeight := m.currentInputHeight()
 	bottomHeight := inputHeight
 	if m.hasActiveQuestion() {
-		bottomHeight = m.minimumQuestionBodyHeight(contentWidth)
+		bottomHeight = m.activeQuestionBodyHeight(contentWidth)
+	} else if m.hasActivePermission() {
+		bottomHeight = m.minimumPermissionBodyHeight()
 	}
 	bottomPanelHeight := chatBottomPanelHeight(bottomHeight)
 	gapRows := m.transcriptInputGapRows(bottomPanelHeight)
@@ -105,6 +106,12 @@ func (m ChatModel) panelHeightFor(bottomPanelHeight int) int {
 }
 
 func (m ChatModel) minimumPanelHeight() int {
+	if m.hasActiveQuestion() {
+		return m.minimumQuestionPanelHeight()
+	}
+	if m.hasActivePermission() {
+		return m.panelHeightFor(chatBottomPanelHeight(m.minimumPermissionBodyHeight()))
+	}
 	return m.panelHeightFor(chatBottomPanelHeight(m.currentInputHeight()))
 }
 
@@ -123,6 +130,27 @@ func (m ChatModel) minimumQuestionBodyHeight(contentWidth int) int {
 		return promptLines + 1 + m.currentInputHeight()
 	}
 	return promptLines + 1 + chatQuestionMinOptionLines + 1
+}
+
+func (m ChatModel) activeQuestionBodyHeight(contentWidth int) int {
+	bodyHeight := m.minimumQuestionBodyHeight(contentWidth)
+	if maxBodyHeight := m.maxBottomBodyHeight(); maxBodyHeight > bodyHeight {
+		bodyHeight = maxBodyHeight
+	}
+	return bodyHeight
+}
+
+func (m ChatModel) maxBottomBodyHeight() int {
+	gapRows := m.desiredTranscriptInputGapRows()
+	maxPanelHeight := m.height - chatBorderHeight - chatMinViewportHeight - gapRows
+	if maxPanelHeight < chatBottomPanelHeight(1) {
+		maxPanelHeight = m.height - chatBorderHeight - chatMinViewportHeight
+	}
+	return max(maxPanelHeight-chatFooterHeight-chatBottomPanelFooterGap-chatBottomPanelFrameHeight, 1)
+}
+
+func (m ChatModel) minimumPermissionBodyHeight() int {
+	return 4
 }
 
 func (m ChatModel) desiredTranscriptInputGapRows() int {
@@ -167,7 +195,11 @@ func (m *ChatModel) syncChatInputHeight() {
 
 func (m ChatModel) View() string {
 	vpContent := m.viewport.View()
-	if len(m.turns) == 0 && !m.responding && !m.hasActiveQuestion() {
+	vpContent = lipgloss.NewStyle().
+		Width(m.viewport.Width()).
+		Height(m.viewport.Height()).
+		Render(vpContent)
+	if len(m.turns) == 0 && !m.responding && !m.hasActiveQuestion() && !m.hasActivePermission() {
 		vpContent = lipgloss.NewStyle().
 			Foreground(colorSurface).
 			Height(m.viewport.Height()).
@@ -178,7 +210,13 @@ func (m ChatModel) View() string {
 	switch {
 	case m.hasActiveQuestion():
 		bottom, footer = m.renderQuestionPicker()
+		bottom = lipgloss.NewStyle().
+			Height(m.activeQuestionBodyHeight(chatBottomPanelContentWidth(m.chatContentWidth()))).
+			Render(bottom)
 		bottomTitle = attentionTypeLabelQuestion
+	case m.hasActivePermission():
+		bottom, footer = m.renderPermissionPrompt()
+		bottomTitle = attentionTypeLabelPermission
 	case m.responding:
 		bottom = m.input.View()
 		footer = KeyHelpStyle.Render("[esc] Background · [ctrl+c] Cancel · [ctrl+g] Full")

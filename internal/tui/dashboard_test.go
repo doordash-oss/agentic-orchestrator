@@ -21,9 +21,31 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
+
+// testPanelHeight mirrors the feature-list panel height formula computed
+// inline by DashboardModel.View(), so scroll tests can seed panelHeight
+// before manually driving cursor movement through Update.
+func testPanelHeight(m DashboardModel) int {
+	w := m.width
+	h := m.height
+	if w < 40 {
+		w = 80
+	}
+	if h < 10 {
+		h = 24
+	}
+	headerH := lipgloss.Height(m.renderHeader(w))
+	footerH := lipgloss.Height(m.renderFooter()) + 2
+	panelHeight := h - headerH - footerH
+	if panelHeight < 6 {
+		panelHeight = 6
+	}
+	return panelHeight
+}
 
 // testRepoNameOrchestrator and testRepoNameWeb are fixture repo-name
 // literals used across this file's repo-list/repo-state tests.
@@ -31,6 +53,15 @@ const (
 	testRepoNameOrchestrator = "agentic-orchestrator"
 	testRepoNameWeb          = "web"
 )
+
+// selectedFeatureID returns the ID of the currently selected feature, or ""
+// if the cursor is not on a feature row.
+func selectedFeatureID(m DashboardModel) string {
+	if f := m.SelectedFeature(); f != nil {
+		return f.ID
+	}
+	return ""
+}
 
 func TestDashboardSelectFeature(t *testing.T) {
 	t.Parallel()
@@ -42,25 +73,25 @@ func TestDashboardSelectFeature(t *testing.T) {
 
 	// Cursor 0 is now the IN PROGRESS section header
 	if m.SelectedSection() != "inProgress" {
-		t.Errorf("expected inProgress section header at cursor 0, got section=%q feature=%s", m.SelectedSection(), m.SelectedFeatureID())
+		t.Errorf("expected inProgress section header at cursor 0, got section=%q feature=%s", m.SelectedSection(), selectedFeatureID(m))
 	}
 
 	// Move down to first feature
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.SelectedFeatureID() != "feat-1" {
-		t.Errorf("expected feat-1 selected after first down, got %s", m.SelectedFeatureID())
+	if selectedFeatureID(m) != "feat-1" {
+		t.Errorf("expected feat-1 selected after first down, got %s", selectedFeatureID(m))
 	}
 
 	// Move down to second feature
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
-	if m.SelectedFeatureID() != "feat-2" {
-		t.Errorf("expected feat-2 selected after second down, got %s", m.SelectedFeatureID())
+	if selectedFeatureID(m) != "feat-2" {
+		t.Errorf("expected feat-2 selected after second down, got %s", selectedFeatureID(m))
 	}
 
 	// Move up back to first feature
 	m, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
-	if m.SelectedFeatureID() != "feat-1" {
-		t.Errorf("expected feat-1 selected after up, got %s", m.SelectedFeatureID())
+	if selectedFeatureID(m) != "feat-1" {
+		t.Errorf("expected feat-1 selected after up, got %s", selectedFeatureID(m))
 	}
 }
 
@@ -298,9 +329,11 @@ func TestGhostCTADisappearsWithFeatures(t *testing.T) {
 	}
 
 	// Add a feature
-	m.SetFeatures([]*feature.Feature{
+	m = NewDashboardModel([]*feature.Feature{
 		{ID: "feat-1", Name: "test", Slug: "test-feature", Status: feature.StatusImplementing, Created: time.Now()},
-	})
+	}, "")
+	m.width = 120
+	m.height = 30
 	view = m.View()
 	if strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should disappear when features exist")
@@ -380,10 +413,10 @@ func TestPersistedSetupFeatureRendersAsSelectableInProgressRow(t *testing.T) {
 	}
 	m := NewDashboardModel([]*feature.Feature{f}, "")
 
-	if !m.SelectFeatureID(f.ID) {
+	if !m.selectFeature(f.ID) {
 		t.Fatalf("setup feature was not selectable")
 	}
-	if got := m.SelectedFeatureID(); got != f.ID {
+	if got := selectedFeatureID(m); got != f.ID {
 		t.Fatalf("selected feature = %q, want %q", got, f.ID)
 	}
 
@@ -415,7 +448,9 @@ func TestGhostCTAReappearsAfterDeletion(t *testing.T) {
 	}
 
 	// Remove all features
-	m.SetFeatures([]*feature.Feature{})
+	m = NewDashboardModel([]*feature.Feature{}, "")
+	m.width = 120
+	m.height = 30
 	view = m.View()
 	if !strings.Contains(view, "Create your first feature") {
 		t.Error("ghost CTA should reappear after all features are deleted")
@@ -996,7 +1031,7 @@ func TestScrollOffset(t *testing.T) {
 	m.height = 24
 
 	// Set panel height so scroll state is computed during Update
-	m.updateScrollState(m.effectivePanelHeight())
+	m.updateScrollState(testPanelHeight(m))
 
 	// Navigate to the bottom
 	for i := 0; i < len(m.visibleItems)-1; i++ {
@@ -1030,7 +1065,7 @@ func TestScrollIndicatorsDontOverwriteSelectedRow(t *testing.T) {
 	m := NewDashboardModel(features, "")
 	m.width = 100
 	m.height = 24
-	panelHeight := m.effectivePanelHeight()
+	panelHeight := testPanelHeight(m)
 	m.updateScrollState(panelHeight)
 
 	// Navigate down until scroll kicks in
@@ -1089,7 +1124,7 @@ func TestScrollUpKeepsCursorVisible(t *testing.T) {
 	m := NewDashboardModel(features, "")
 	m.width = 100
 	m.height = 24
-	panelHeight := m.effectivePanelHeight()
+	panelHeight := testPanelHeight(m)
 	m.updateScrollState(panelHeight)
 
 	// Navigate down well past the panel height to trigger scrolling

@@ -85,7 +85,8 @@ type EditConfigModel struct {
 }
 
 // NewEditConfigModel constructs the overlay for the given feature. The
-// caller builds the catalog via BuildPhaseModelCatalog at modal-open time;
+// caller builds the catalog from the server's model-catalog response (see
+// apiPhaseModelCatalog/apiFeatureModelCatalog) at modal-open time;
 // provisionalPublishable is derived from f.IsPublishable().
 //
 // Re-entrancy + crash recovery: constructor only, no persisted state. Safe

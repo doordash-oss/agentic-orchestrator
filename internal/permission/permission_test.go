@@ -187,7 +187,6 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 		"ReadOnlyHandler":                     &ReadOnlyHandler{},
 		"PlanReviewHandler":                   &PlanReviewHandler{AllowedPath: marker},
 		"RewindReviewHandler":                 &RewindReviewHandler{AllowedPath: marker},
-		"ReviewFeedbackHandler":               &ReviewFeedbackHandler{AllowedPath: marker},
 	} {
 		t.Run(name, func(t *testing.T) {
 			wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})

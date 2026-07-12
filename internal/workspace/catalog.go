@@ -107,7 +107,7 @@ func DiscoverReposFromRoots(roots []string, explicitRepoPaths map[string]string)
 	seenRoots := make(map[string]bool, len(roots))
 	var tuples []repoTuple
 	for _, root := range roots {
-		expanded := expandHome(root)
+		expanded := ExpandHome(root)
 		resolved, err := filepath.Abs(expanded)
 		if err != nil {
 			resolved = expanded
@@ -212,7 +212,7 @@ func countImmediateRepos(path string, showHidden bool) int {
 }
 
 func resolvePath(path string) string {
-	path = expandHome(path)
+	path = ExpandHome(path)
 	if path == "" {
 		home, err := os.UserHomeDir()
 		if err == nil && home != "" {
@@ -225,7 +225,8 @@ func resolvePath(path string) string {
 	return path
 }
 
-func expandHome(path string) string {
+// ExpandHome expands a leading "~" or "~/" in a path to the user's home directory.
+func ExpandHome(path string) string {
 	if path == "~" {
 		home, err := os.UserHomeDir()
 		if err != nil || home == "" {

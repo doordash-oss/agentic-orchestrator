@@ -484,10 +484,14 @@ func TestChatStartSessionUsesCallback(t *testing.T) {
 	if capturedOpts.EffortLevel != llm.EffortLow {
 		t.Errorf("expected low effort for chat, got %q", capturedOpts.EffortLevel)
 	}
-	// Check disallowed tools
-	expectedDisallowed := []string{toolNameEdit, toolNameWrite, "NotebookEdit", toolNameBash}
+	// AMA can request top-level diagnostics through permissions, but cannot
+	// delegate to sub-agents.
+	expectedDisallowed := []string{"Task"}
 	if !reflect.DeepEqual(capturedOpts.DisallowedTools, expectedDisallowed) {
 		t.Errorf("expected disallowed tools %v, got %v", expectedDisallowed, capturedOpts.DisallowedTools)
+	}
+	if _, ok := capturedOpts.PermHandler.(*session.AMAHandler); !ok {
+		t.Errorf("expected AMA permission handler, got %T", capturedOpts.PermHandler)
 	}
 	// Verify it returned a terminal error message (since our callback returned an error).
 	errMsg, ok := msg.(chatSendErrorMsg)
@@ -928,6 +932,54 @@ func TestChatModelViewBoxesActiveQuestionPanel(t *testing.T) {
 	}
 	if questionIdx, promptIdx := strings.Index(view, " Question "), strings.Index(view, "What would you like to explore next?"); questionIdx < 0 || promptIdx < questionIdx {
 		t.Fatalf("Question box title should appear before the prompt:\n%s", view)
+	}
+}
+
+func TestChatModelActiveQuestionPanelGetsMoreDockedHeight(t *testing.T) {
+	m := NewChatModel(100, 20, nil, "", "", nil, "", "")
+	m.activateQuestions([]askUserQuestion{{
+		Question: "What would you like me to help you with?",
+		Options: []askUserOption{
+			{Label: "Ask about Agentic Orchestrator features", Description: "Quick answers from the user guide and codebase."},
+			{Label: "Search the codebase", Description: "Find files, patterns, and trace code paths."},
+			{Label: "Debug an issue", Description: "Inspect local state and logs."},
+			{Label: "Review current progress", Description: "Summarize the selected feature and recent run status."},
+		},
+	}}, "req-1", nil)
+
+	if got := m.chatPanelHeight(80); got <= 18 {
+		t.Fatalf("active question chatPanelHeight(80) = %d, want more than the ordinary 18-line dock", got)
+	}
+}
+
+func TestChatModelQuestionViewFitsAllocatedPanel(t *testing.T) {
+	m := NewChatModel(72, 20, nil, "", "", nil, "", "")
+	m.turns = append(m.turns, chatTurn{Role: chatTurnAgent, Text: "Ready."})
+	m.activateQuestions([]askUserQuestion{{
+		Question: "Which very long Agentic Orchestrator investigation path should the AMA session take before answering?",
+		Options: []askUserOption{
+			{
+				Label:       "Search the codebase for the complete AMA permission and AskUserQuestion control flow",
+				Description: "Trace API snapshots, transcript updates, pending controls, and inline picker rendering without overflowing the panel.",
+			},
+			{
+				Label:       "Inspect current logs and state",
+				Description: "Use read-only diagnostics to identify the stuck session and explain the result.",
+			},
+			{
+				Label:       "Explain the user guide",
+				Description: "Summarize the relevant behavior from docs and code.",
+			},
+		},
+	}}, "req-1", nil)
+	m = m.resize(72, m.chatPanelHeight(80))
+
+	view := m.View()
+	if got := lipgloss.Height(view); got > m.height {
+		t.Fatalf("question chat view height = %d, want <= allocated height %d:\n%s", got, m.height, stripANSI(view))
+	}
+	if got := maxLineWidth(view); got > m.width {
+		t.Fatalf("question chat view width = %d, want <= allocated width %d:\n%s", got, m.width, stripANSI(view))
 	}
 }
 

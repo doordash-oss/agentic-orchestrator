@@ -278,16 +278,26 @@ func (s *reviewSessionService) resolveContext(featureID string) (reviewSessionCo
 	if ctx.artifactID == "" {
 		return reviewSessionContext{}, fmt.Errorf("review artifact is unavailable")
 	}
-	rel, ok := run.Artifacts[ctx.artifactID]
-	if !ok && f.Artifacts != nil {
-		rel, ok = f.Artifacts[ctx.artifactID]
-	}
-	if !ok {
-		return reviewSessionContext{}, fmt.Errorf("review artifact %q not found", ctx.artifactID)
-	}
-	path, ok := resolveRunArtifactPath(ctx.runDir, rel)
-	if !ok {
-		return reviewSessionContext{}, fmt.Errorf("invalid review artifact target")
+	var path string
+	if ctx.artifactID == descriptionReviewArtifact {
+		var ok bool
+		path, ok = descriptionReviewArtifactPathForRun(f.ID, ctx.runDir, f.EffectivePipeline(), run)
+		if !ok {
+			return reviewSessionContext{}, fmt.Errorf("review artifact %q not found", ctx.artifactID)
+		}
+	} else {
+		rel, ok := run.Artifacts[ctx.artifactID]
+		if !ok && f.Artifacts != nil {
+			rel, ok = f.Artifacts[ctx.artifactID]
+		}
+		if !ok {
+			return reviewSessionContext{}, fmt.Errorf("review artifact %q not found", ctx.artifactID)
+		}
+		var okPath bool
+		path, okPath = resolveRunArtifactPath(ctx.runDir, rel)
+		if !okPath {
+			return reviewSessionContext{}, fmt.Errorf("invalid review artifact target")
+		}
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {

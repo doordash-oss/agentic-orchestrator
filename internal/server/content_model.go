@@ -149,19 +149,26 @@ func (h *apiHandler) descriptionReviewArtifactDTO(f *feature.Feature, run *featu
 }
 
 func (h *apiHandler) descriptionReviewArtifactPath(f *feature.Feature, run *feature.Run) (string, bool) {
-	if h == nil || h.store == nil || f == nil || run == nil || !run.IsRewind || run.PendingReviewPhase == nil {
+	if h == nil || h.store == nil || f == nil || run == nil {
+		return "", false
+	}
+	return descriptionReviewArtifactPathForRun(f.ID, h.store.RunDir(f.ID, run.RunNumber), f.EffectivePipeline(), run)
+}
+
+func descriptionReviewArtifactPathForRun(featureID, runDir string, pipeline feature.PipelineProfile, run *feature.Run) (string, bool) {
+	if strings.TrimSpace(featureID) == "" || strings.TrimSpace(runDir) == "" || run == nil || !run.IsRewind || run.PendingReviewPhase == nil {
 		return "", false
 	}
 	switch *run.PendingReviewPhase {
 	case feature.PhaseInquire:
 	case feature.PhasePlan:
-		if f.EffectivePipeline() != feature.PipelineMedium {
+		if pipeline != feature.PipelineMedium {
 			return "", false
 		}
 	default:
 		return "", false
 	}
-	featureDir := filepath.Dir(filepath.Dir(h.store.RunDir(f.ID, run.RunNumber)))
+	featureDir := filepath.Dir(filepath.Dir(runDir))
 	path := filepath.Join(featureDir, "description-review.md")
 	return safePathUnderBase(featureDir, path)
 }

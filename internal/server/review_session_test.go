@@ -126,6 +126,52 @@ func TestReviewSessionServiceCreateDoesNotExposeSourcePath(t *testing.T) {
 	}
 }
 
+func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToInquire(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	target := feature.PhaseInquire
+	f := &feature.Feature{
+		ID:           "feat-rewind-description-review",
+		Name:         "Rewind description review",
+		Status:       feature.StatusPromptNeedsReview,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		ActiveRun:    1,
+		RunCount:     1,
+		Pipeline:     feature.PipelineMoonshot,
+	}
+	f.SetRun(&feature.Run{
+		RunNumber:          1,
+		PendingReviewPhase: &target,
+		IsRewind:           true,
+		Artifacts:          map[string]string{},
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	descPath := filepath.Join(store.BaseDir, f.ID, "description-review.md")
+	if err := os.WriteFile(descPath, []byte("edited prompt\n"), 0o644); err != nil {
+		t.Fatalf("write description-review.md: %v", err)
+	}
+	service := newReviewSessionService(store, nil)
+
+	resp, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if resp.ReviewMode != reviewModeRewind || resp.TargetPhase != feature.PhaseInquire.DirName() {
+		t.Fatalf("review target = mode %q phase %q, want rewind inquire", resp.ReviewMode, resp.TargetPhase)
+	}
+	if resp.ArtifactID != descriptionReviewArtifact {
+		t.Fatalf("ArtifactID = %q, want %q", resp.ArtifactID, descriptionReviewArtifact)
+	}
+	if resp.Text != "edited prompt\n" {
+		t.Fatalf("Text = %q, want description review content", resp.Text)
+	}
+	if resp.CanIterate {
+		t.Fatalf("CanIterate = true, want false for rewind review")
+	}
+}
+
 func TestReviewSessionServiceCreateSuppressesIterateForApprovedPlanAttempt(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	if err := agent.WritePlanAttemptMeta(filepath.Dir(planPath), agent.PlanAttemptMeta{

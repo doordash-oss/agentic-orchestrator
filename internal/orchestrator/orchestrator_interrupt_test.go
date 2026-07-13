@@ -308,7 +308,7 @@ func TestOrchestrator_InterruptAllRunning_PublishedWithCycles(t *testing.T) {
 		Status:   feature.StatusPublished,
 		KBStatus: kb,
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"r1": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+			"r1": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 			"r2": {Type: feature.CycleReviewComments, Status: feature.RepoCycleReviewing},
 			"r3": {Type: feature.CycleReviewComments, Status: kbStatusCompleted},
 		},

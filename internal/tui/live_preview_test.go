@@ -72,7 +72,7 @@ func TestLivePreviewEligible(t *testing.T) {
 			f: &feature.Feature{
 				Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 				},
 			},
 			want: true,
@@ -559,11 +559,11 @@ func TestLivePreviewTailBannerLabel(t *testing.T) {
 				CurrentIteration: 2,
 				Repos:            []feature.FeatureRepo{{Name: "api"}},
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 				},
 			},
 			sess: newLivePreviewSession("cycle", feature.PhaseImplement),
-			want: "Current: Rebasing [2]",
+			want: "Current: Addressing Review Comments [2]",
 		},
 		{
 			name: "feature rebase cycle context",
@@ -776,13 +776,13 @@ func TestLivePreviewUpperMetadataShowsReposFeatureIDAndLinkedPRs(t *testing.T) {
 			"repo-b": {Touched: true, PRURL: "https://github.com/org/repo-b/pull/43"},
 		},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"repo-a": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+			"repo-a": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 		},
 	}
 	raw := newLivePreviewModel(f).withHeight(24).ViewCompact(100)
 	view := stripANSI(raw)
 
-	for _, want := range []string{labelFeatureID, "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Rebasing", "Phase Model", "agent-model", "Elapsed", labelCost} { //nolint:goconst // "Elapsed" is a generic UI-label assertion, not a reusable test concept
+	for _, want := range []string{labelFeatureID, "feat-meta", "Repos", "repo-a, repo-b", "PRs", "#42", "#43", "Phase", "Implement", "Status", "Addressing Review Comments", "Phase Model", "agent-model", "Elapsed", labelCost} { //nolint:goconst // "Elapsed" is a generic UI-label assertion, not a reusable test concept
 		if !strings.Contains(view, want) {
 			t.Fatalf("live preview metadata missing %q in:\n%s", want, view)
 		}

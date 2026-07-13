@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator — rebase.go owns the per-repo rebase cycle lifecycle.
+// Package orchestrator — rebase.go owns feature-level rebase helpers.
 package orchestrator
 
 import (
@@ -34,13 +34,6 @@ type HarnessRebaseRepoOutcome struct {
 	WorktreePath  string
 	Branch        string
 }
-
-// ErrRebaseIncomplete is returned when CompleteRebase observes a worktree
-// still mid-rebase (rebase-merge / rebase-apply dir present). The caller
-// must not transition the feature past the rebase cycle — the branch
-// pointer is still stale and a force-push would silently push nothing
-// useful, leaving the PR in its pre-rebase conflict state.
-var ErrRebaseIncomplete = errors.New("rebase: worktree still has an unfinished rebase (run `git rebase --continue` or `--abort` before completing)")
 
 // resolveRebaseTarget picks the base ref a follow-up rebase should target
 // for the given repo. The order matches the auto-rebase path so conflict

@@ -3545,7 +3545,7 @@ func TestRepoCycleMethods(t *testing.T) {
 	}
 
 	t.Run("StartRepoCycle", func(t *testing.T) {
-		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleRebase); err != nil {
+		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
 			t.Fatal(err)
 		}
 		got, _ := mgr.Get(f.ID)
@@ -3553,8 +3553,8 @@ func TestRepoCycleMethods(t *testing.T) {
 			t.Errorf("status = %v, want Published", got.Status)
 		}
 		rc := got.RepoCycles["test-repo"]
-		if rc == nil || rc.Type != feature.CycleRebase || rc.Status != "running" {
-			t.Errorf("repo cycle = %+v, want running rebase", rc)
+		if rc == nil || rc.Type != feature.CycleReviewComments || rc.Status != "running" {
+			t.Errorf("repo cycle = %+v, want running review-comments", rc)
 		}
 	})
 
@@ -3571,7 +3571,7 @@ func TestRepoCycleMethods(t *testing.T) {
 			t.Fatalf("MarkRepoCycleReviewing: %v", err)
 		}
 		// Starting a new cycle on the same repo should be blocked
-		err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleRebase)
+		err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments)
 		if err == nil {
 			t.Error("expected error for cycle start while reviewing")
 		}
@@ -3586,7 +3586,7 @@ func TestRepoCycleMethods(t *testing.T) {
 		}
 		// Restore to running for subsequent subtests
 		_ = mgr.CompleteRepoCycle(f.ID, "test-repo")
-		_ = mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleRebase)
+		_ = mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments)
 	})
 
 	t.Run("StartRepoCycle_DifferentRepo", func(t *testing.T) {
@@ -5391,7 +5391,7 @@ func TestMarkRepoCycleReviewing(t *testing.T) {
 	}
 
 	t.Run("Success", func(t *testing.T) {
-		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleRebase); err != nil {
+		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
 			t.Fatal(err)
 		}
 		if err := mgr.MarkRepoCycleReviewing(f.ID, "test-repo"); err != nil {
@@ -5420,7 +5420,7 @@ func TestMarkRepoCycleReviewing(t *testing.T) {
 
 	t.Run("ErrorWrongRepo", func(t *testing.T) {
 		// Start a cycle only for test-repo, then ask for a non-existent repo
-		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleRebase); err != nil {
+		if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
 			t.Fatal(err)
 		}
 		err := mgr.MarkRepoCycleReviewing(f.ID, "no-such-repo")
@@ -5451,7 +5451,7 @@ func TestRemoveRepoCycle(t *testing.T) {
 	if err := mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
 		f.RepoCycles = map[string]*feature.RepoCycleState{
 			apiRepoName: {Type: feature.CycleReviewComments, Status: "running"},
-			"backend":   {Type: feature.CycleRebase, Status: "running"},
+			"backend":   {Type: feature.CycleReviewComments, Status: "running"},
 		}
 		return nil
 	}); err != nil {
@@ -5496,9 +5496,9 @@ func TestHasActiveRepoCycles_TreatsNeedUserInputAsActive(t *testing.T) {
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
 			"test-repo": {
-				Type:                     feature.CycleRebase,
+				Type:                     feature.CycleReviewComments,
 				Status:                   feature.RepoCycleNeedUserInput,
-				PendingNeedUserInputPath: "/tmp/rebase.yaml",
+				PendingNeedUserInputPath: "/tmp/review-comments.yaml",
 			},
 		}
 		return nil
@@ -5583,7 +5583,7 @@ func TestHasActiveRepoCycles_ReviewingIsActive(t *testing.T) {
 	}
 
 	// Start a repo cycle and mark it as reviewing
-	if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleRebase); err != nil {
+	if err := mgr.StartRepoCycle(f.ID, "test-repo", feature.CycleReviewComments); err != nil {
 		t.Fatal(err)
 	}
 	if err := mgr.MarkRepoCycleReviewing(f.ID, "test-repo"); err != nil {

@@ -13,10 +13,9 @@
 // limitations under the License.
 
 // Package agent — rebase_loop.go is the unified feature-level rebase cycle
-// loop under SchemaVersionCurrent = 4. The legacy per-repo rebase entry
-// (Orchestrator.StartRebase + per-repo StartRepoCycleImplement(CycleRebase))
-// is replaced by RunRebaseLoop: a single iterative loop that rebases every
-// `Feature.Repos` branch behind master in one Claude session.
+// loop under SchemaVersionCurrent = 4. RunRebaseLoop is a single iterative
+// loop that rebases every participating `Feature.Repos` branch in one Claude
+// session.
 //
 // Topology:
 //

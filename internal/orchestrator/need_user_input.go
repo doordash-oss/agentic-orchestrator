@@ -21,7 +21,6 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -201,9 +200,6 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 			return errors.New("cannot resume: every question must have a non-empty answer before resume")
 		}
 		resumeRepos := []string{d.RepoName}
-		if rc.Type == feature.CycleRebase {
-			resumeRepos = repoCycleGateRepos(f, feature.CycleRebase, gatePath, d.RepoName)
-		}
 		// Clear the paused-gate fields but preserve Count, PlanPath, and
 		// Type so the restart seam reuses the existing cycle record. Set
 		// status back to Running so HasActiveRepoCycles still treats the
@@ -253,9 +249,6 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 			summary = fmt.Sprintf("user aborted at need-user-input gate for cycle on repo %s", d.RepoName)
 		}
 		abortRepos := []string{d.RepoName}
-		if rc.Type == feature.CycleRebase {
-			abortRepos = repoCycleGateRepos(f, feature.CycleRebase, gatePath, d.RepoName)
-		}
 		// FailRepoCycle clears the gate path and, for refactor cycles, the
 		// feature-level RefactorPrompt. The parent feature stays Published.
 		for _, name := range abortRepos {
@@ -273,26 +266,6 @@ func (o *Orchestrator) handleRepoCycleNeedUserInputDecision(featureID string, d 
 	default:
 		return fmt.Errorf("unknown need-user-input decision %q (want resume|abort)", d.Decision)
 	}
-}
-
-func repoCycleGateRepos(f *feature.Feature, cycleType feature.RepoCycleType, gatePath, fallback string) []string {
-	var names []string
-	if f != nil {
-		for name, rc := range f.RepoCycles {
-			if rc == nil ||
-				rc.Type != cycleType ||
-				rc.Status != feature.RepoCycleNeedUserInput ||
-				rc.PendingNeedUserInputPath != gatePath {
-				continue
-			}
-			names = append(names, name)
-		}
-	}
-	if len(names) == 0 && fallback != "" {
-		names = append(names, fallback)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // handleFeatureNeedUserInputDecision implements the original single-repo /

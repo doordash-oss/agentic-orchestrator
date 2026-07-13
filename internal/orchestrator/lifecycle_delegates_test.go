@@ -444,57 +444,6 @@ func TestOrchestrator_RestartPhase_PublishedWithRepoCycles_ReturnsRestartList(t 
 	assertLifecycleCall(t, lc, "ClearRepoCycles")
 }
 
-func TestOrchestrator_RestartPhase_InterruptedWithRepoCycles_ReturnsRestartList(t *testing.T) {
-	tmp := t.TempDir()
-	planPath := filepath.Join(tmp, "rebase-plan.md")
-	if err := os.WriteFile(planPath, []byte("rebase plan"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Status:       feature.StatusInterrupted,
-		CurrentPhase: feature.PhasePublish,
-		Repos: []feature.FeatureRepo{
-			{Name: repoName},
-		},
-		RepoStates: map[string]*feature.RepoState{
-			repoName: {Touched: true, PRURL: "https://github.com/example/repo/pull/1"},
-		},
-		RepoCycles: map[string]*feature.RepoCycleState{
-			repoName: {Type: feature.CycleRebase, Status: feature.RepoCycleInterrupted, PlanPath: planPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	outcome, err := o.RestartPhase("feat-1", 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase: %v", err)
-	}
-	if outcome.Action != orchestrator.RestartDispatchRepoCycles {
-		t.Fatalf("Action = %v, want RestartDispatchRepoCycles", outcome.Action)
-	}
-	if len(outcome.RepoCycleRestarts) != 1 {
-		t.Fatalf("expected 1 repo-cycle restart, got %d", len(outcome.RepoCycleRestarts))
-	}
-	if outcome.RepoCycleRestarts[0].RepoName != repoName {
-		t.Errorf("RepoName = %q, want repo-a", outcome.RepoCycleRestarts[0].RepoName)
-	}
-	if outcome.RepoCycleRestarts[0].PlanContent != "rebase plan" {
-		t.Errorf("PlanContent = %q, want %q", outcome.RepoCycleRestarts[0].PlanContent, "rebase plan")
-	}
-	if f.Status != feature.StatusPublished {
-		t.Errorf("Status after restart preparation = %v, want Published", f.Status)
-	}
-	assertLifecycleCall(t, lc, "ClearRepoCycles")
-}
-
 // TestOrchestrator_RestartPhase_RunningResearch_TransitionsToInterrupted
 // ---------------------------------------------------------------------------
 // A feature actively running the research phase moves to StatusInterrupted

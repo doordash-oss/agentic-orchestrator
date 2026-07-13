@@ -1961,10 +1961,10 @@ func TestPendingUserInputCycles_ReturnsPausedCycles(t *testing.T) {
 		Status: StatusPublished,
 		RepoCycles: map[string]*RepoCycleState{
 			"repo-a": {
-				Type:                     CycleRebase,
+				Type:                     CycleReviewComments,
 				Status:                   RepoCycleNeedUserInput,
 				Iteration:                2,
-				PendingNeedUserInputPath: "/tmp/rebase/repo-a/iteration-02/need-user-input.yaml",
+				PendingNeedUserInputPath: "/tmp/review-comments/repo-a/iteration-02/need-user-input.yaml",
 			},
 			"repo-b": {Type: CycleReviewComments, Status: RepoCycleRunning},
 			"repo-c": {
@@ -1981,7 +1981,7 @@ func TestPendingUserInputCycles_ReturnsPausedCycles(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("PendingUserInputCycles() len = %d, want 2 (got %+v)", len(got), got)
 	}
-	if got[0].RepoName != "repo-a" || got[0].CycleType != CycleRebase {
+	if got[0].RepoName != "repo-a" || got[0].CycleType != CycleReviewComments {
 		t.Fatalf("PendingUserInputCycles()[0] = %+v", got[0])
 	}
 	if got[1].RepoName != "repo-c" || got[1].CycleType != CycleRefactor {

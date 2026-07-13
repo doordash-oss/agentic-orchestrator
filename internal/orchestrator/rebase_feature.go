@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator wires feature-level rebase flows. The public
-// StartFeatureRebase entry runs the harness across every repo first; the
-// private startFeatureRebase helper preserves the legacy smart-rebase loop
-// dispatch used by conflict-resume paths.
+// Package orchestrator wires feature-level rebase flows. StartFeatureRebase
+// runs the harness across every repo first, then routes conflicts through one
+// coordinated smart-rebase loop before final review and publish policy.
 package orchestrator
 
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -206,8 +203,8 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	}
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
-		targets := rebaseTargetsFromHarnessOutcomes(nil, conflicted)
-		o.handleFeatureRebaseDone(featureID, targets, nil, fmt.Errorf("load feature: %w", err))
+		o.failChangedRebaseRepos(featureID, conflicted, fmt.Errorf("load feature: %w", err))
+		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
 		return
 	}
 
@@ -216,13 +213,15 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 	if ok, err := o.markFeatureRebaseStageIfContinuing(featureID, feature.RebaseStageSmartRebase); !ok {
 		return
 	} else if err != nil {
-		o.handleFeatureRebaseDone(featureID, targets, nil, fmt.Errorf("mark smart rebase stage: %w", err))
+		o.failChangedRebaseRepos(featureID, conflicted, fmt.Errorf("mark smart rebase stage: %w", err))
+		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
 		return
 	}
 
 	cfg, err := o.rebaseLoopConfigForFeature(f, targets, false)
 	if err != nil {
-		o.handleFeatureRebaseDone(featureID, targets, nil, err)
+		o.failChangedRebaseRepos(featureID, conflicted, err)
+		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
 		return
 	}
 	beforeFingerprints := o.featureRebaseWorktreeFingerprints(f)
@@ -243,7 +242,8 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 		return
 	}
 	if loopErr != nil || result == nil || result.FinalStatus != reviewStatusPassed {
-		o.handleFeatureRebaseDone(featureID, targets, result, loopErr)
+		o.failChangedRebaseRepos(featureID, conflicted, smartRebaseFailureCause(result, loopErr))
+		_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
 		return
 	}
 
@@ -268,12 +268,32 @@ func (o *Orchestrator) startCoordinatedSmartRebase(
 			return
 		}
 		if err != nil {
-			o.handleFeatureRebaseDone(featureID, targets, nil, fmt.Errorf("mark context repo changed: %w", err))
+			o.failChangedRebaseRepos(featureID, []HarnessRebaseRepoOutcome{outcome}, fmt.Errorf("mark context repo changed: %w", err))
+			_ = o.clearFeatureRebaseOperationIfContinuing(featureID)
 			return
 		}
 		changed = append(changed, outcome)
 	}
 	o.runRebaseFinalReviewAndPublishPolicy(featureID, changed)
+}
+
+func smartRebaseFailureCause(result *agent.RebaseLoopResult, loopErr error) error {
+	if loopErr != nil {
+		return loopErr
+	}
+	if result == nil {
+		return errors.New("smart rebase failed without a result")
+	}
+	if result.LastError != "" {
+		return errors.New(result.LastError)
+	}
+	if result.NeedUserInputPath != "" {
+		return fmt.Errorf("smart rebase stopped for need_user_input: %s", result.NeedUserInputPath)
+	}
+	if result.FinalStatus != "" {
+		return fmt.Errorf("smart rebase finished with status %s", result.FinalStatus)
+	}
+	return errors.New("smart rebase failed")
 }
 
 func (o *Orchestrator) featureRebaseWorktreeFingerprints(f *feature.Feature) map[string]string {
@@ -810,197 +830,12 @@ func (o *Orchestrator) clearRebaseSuccessState(
 	return nil
 }
 
-// startFeatureRebase launches the unified rebase cycle. Resolves the
-// behind subset by inspecting every Feature.Repos branch via the Rebaser
-// port, builds the agent.RebaseLoopConfig, and runs RunRebaseLoop in a
-// background goroutine tracked by cycleWG. The hintRepoName +
-// hintConflictFiles arguments come from the TUI's per-repo conflict
-// callback (the legacy entry shape) and are folded into the matching
-// behind-subset target so the rebase plan emits the
-// "rebase-already-in-progress" template for the conflicted repo.
-//
-// hintRebaseTarget overrides the target ref for the hint repo when set
-// (the TUI resolves it before dispatching). Other behind repos use
-// resolveRebaseTarget for their target.
-//
-// Returns "" + nil on successful dispatch (no stable session ID; the
-// inner loop owns per-iteration IDs). Returns ("", err) on dispatch
-// failure (no behind repos, repo lookup error, etc.).
-func (o *Orchestrator) startFeatureRebase(
-	featureID, hintRepoName, hintRebaseTarget string,
-	hintConflictFiles []string,
-) (string, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return "", fmt.Errorf("load feature: %w", err)
-	}
-	if activeRepoCycleOfType(f, hintRepoName, feature.CycleRebase) {
-		return "", nil
-	}
-
-	// Enumerate the behind subset. A hint with conflict context is forced in
-	// because the harness already attempted a rebase and found a conflict.
-	// Plain hints are probed like every other repo so a selected up-to-date
-	// branch does not spend an agent cycle.
-	behind := o.resolveBehindSubset(f, hintRepoName, hintRebaseTarget, hintConflictFiles)
-	if len(behind) == 0 {
-		// Nothing to rebase. This can happen when the hint repo's branch
-		// actually advanced between detection and dispatch (rare race).
-		// Surface as a clean no-op via the legacy event channel so the
-		// TUI clears its "starting rebase" status.
-		return "", fmt.Errorf("rebase: no behind repos for feature %s", featureID)
-	}
-
-	// Open per-repo cycle entries for every behind repo so existing TUI
-	// rendering paths (RepoCycles[name].Status == "running") light up while
-	// the feature-level rebase loop runs.
-	for _, t := range behind {
-		if err := o.deps.Lifecycle.StartRepoCycle(featureID, t.RepoName, feature.CycleRebase); err != nil {
-			freshF, getErr := o.deps.Lifecycle.Get(featureID)
-			if getErr == nil && activeRepoCycleOfType(freshF, t.RepoName, feature.CycleRebase) {
-				return "", nil
-			}
-			return "", fmt.Errorf("start rebase cycle for %s: %w", t.RepoName, err)
-		}
-	}
-	// Reload the feature so RebaseCount and per-repo cycle Counts reflect
-	// the StartRepoCycle writes.
-	f, err = o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return "", fmt.Errorf("reload feature: %w", err)
-	}
-
-	// Stage the rebase plan synchronously so callers (TUI, tests) can read
-	// it immediately after this method returns. The async loop's plan
-	// write below will overwrite with identical content — the operation
-	// is idempotent.
-	if err := o.stageRebasePlanArtifacts(f, behind); err != nil {
-		return "", fmt.Errorf("stage rebase plan: %w", err)
-	}
-
-	cfg, err := o.rebaseLoopConfigForFeature(f, behind, false)
-	if err != nil {
-		return "", err
-	}
-
-	sm := o.deps.Sessions
-	o.cycleWG.Go(func() {
-		runRebaseLoop := o.runRebaseLoopFn
-		if runRebaseLoop == nil {
-			runRebaseLoop = agent.RunRebaseLoop
-		}
-		result, loopErr := runRebaseLoop(cfg, sm)
-		o.handleFeatureRebaseDone(featureID, behind, result, loopErr)
-	})
-
-	return "", nil
-}
-
-// stageRebasePlanArtifacts writes the rebase-plan.md synchronously so
-// the orchestrator's caller can read it before the async loop runs. The
-// loop overwrites with the same content; we reuse the agent helper so
-// the format stays in one place.
-//
-// The artifact dir is `runs/run-N/rebase-N+1/` — the loop bumps
-// RebaseCount inside its own goroutine, so this method computes the
-// next rebase-N name by speculating one-ahead. That speculation is
-// safe because RebaseCount is monotonic and only the rebase loop bumps
-// it; no other code path can race ahead of us between this stage write
-// and the loop's bump.
-func (o *Orchestrator) stageRebasePlanArtifacts(
-	f *feature.Feature,
-	behind []agent.RebaseRepoTarget,
-) error {
-	nextRebaseDir := filepath.Join(
-		agent.ActiveRunDir(o.stateDir(), f),
-		fmt.Sprintf("rebase-%d", f.RebaseCount()+1),
-	)
-	if err := os.MkdirAll(nextRebaseDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", nextRebaseDir, err)
-	}
-	planPath := filepath.Join(nextRebaseDir, "rebase-plan.md")
-	if err := os.WriteFile(planPath, []byte(agent.BuildMultiRepoRebasePlan(behind)), 0o644); err != nil {
-		return fmt.Errorf("write rebase-plan.md: %w", err)
-	}
-	return nil
-}
-
-// resolveBehindSubset enumerates every Feature.Repos branch behind its
-// base branch, building the RebaseRepoTarget slice the loop expects. The
-// hint repo is included unconditionally only when conflict context is
-// present; otherwise it is probed via the RebaseOperator like every other
-// repo. Repos that are up-to-date are skipped silently. The Rebaser
-// dependency may be nil in tests that don't wire git adapters; in that
-// case only conflict-context hints are included.
-func (o *Orchestrator) resolveBehindSubset(
-	f *feature.Feature,
-	hintRepoName, hintRebaseTarget string,
-	hintConflictFiles []string,
-) []agent.RebaseRepoTarget {
-	var out []agent.RebaseRepoTarget
-	prURLs := f.PRURLs()
-
-	for i := range f.Repos {
-		repo := &f.Repos[i]
-		worktreeDir := repoWorkDir(*repo)
-
-		isHintRepo := repo.Name == hintRepoName
-		hasConflictContext := isHintRepo && (hintRebaseTarget != "" || len(hintConflictFiles) > 0)
-		if hasConflictContext {
-			target := hintRebaseTarget
-			if target == "" {
-				target = o.resolveRebaseTarget(f, repo)
-			}
-			out = append(out, agent.RebaseRepoTarget{
-				RepoName:      repo.Name,
-				RebaseTarget:  target,
-				ConflictFiles: hintConflictFiles,
-				PRURL:         prURLs[repo.Name],
-			})
-			continue
-		}
-
-		// Probe other repos via the Rebaser port. Skip when the dep is
-		// not wired (tests) — we rely on the TUI's hint to be
-		// authoritative in that case.
-		if o.deps.Rebaser == nil {
-			continue
-		}
-		target := o.resolveRebaseTarget(f, repo)
-		if target == "" {
-			continue
-		}
-
-		// Best-effort fetch so the IsBehind* probe sees fresh refs. A
-		// Fetch failure should not block the rebase cycle dispatch —
-		// the inner agent will retry git operations itself.
-		_ = o.deps.Rebaser.Fetch(worktreeDir)
-
-		var behind bool
-		if f.IsPublishable() {
-			behind, _ = o.deps.Rebaser.IsBehindRemote(worktreeDir, target)
-		} else {
-			behind, _ = o.deps.Rebaser.IsBehindLocal(worktreeDir, target)
-		}
-		if !behind {
-			continue
-		}
-		out = append(out, agent.RebaseRepoTarget{
-			RepoName:      repo.Name,
-			RebaseTarget:  target,
-			ConflictFiles: nil,
-			PRURL:         prURLs[repo.Name],
-		})
-	}
-	return out
-}
-
 // handleFeatureCycleDone implements the routing shared by
-// handleFeatureRebaseDone, handleFeatureRefactorDone, and
-// handleFeatureReviewCommentsDone: the three unified-cycle loops share the
+// handleFeatureRefactorDone and handleFeatureReviewCommentsDone: the unified
+// review-comments/refactor loops share the
 // same FinalStatus vocabulary and non-success handling. The caller reduces
 // its concrete *XLoopResult to the primitive fields below; errPrefix labels
-// failure messages (e.g. "rebase"). onPassed/onNeedUserInput/onFailure carry
+// failure messages (e.g. "review-comments"). onPassed/onNeedUserInput/onFailure carry
 // the logic that genuinely differs per cycle type (success finalisation,
 // which repos get a need-user-input gate and how, extra cleanup on
 // failure); onNeedUserInput always receives a gate with Iterations set.
@@ -1064,104 +899,4 @@ func (o *Orchestrator) handleFeatureCycleDone(
 			onFailure()
 		}
 	}
-}
-
-// handleFeatureRebaseDone routes the unified rebase loop's result back
-// into the per-repo legacy plumbing so the TUI's existing event chain
-// (RebaseRepoCycleResultMsg, RepoCycleLoopDoneMsg, etc.) keeps working.
-// On success: per-repo CompleteRepoCycle clears each cycle entry. On
-// failure: per-repo FailRepoCycle records the conflict for the user.
-func (o *Orchestrator) handleFeatureRebaseDone(
-	featureID string,
-	behind []agent.RebaseRepoTarget,
-	result *agent.RebaseLoopResult,
-	loopErr error,
-) {
-	repoNames := make([]string, 0, len(behind))
-	for _, t := range behind {
-		repoNames = append(repoNames, t.RepoName)
-	}
-
-	dispatchFailed := loopErr != nil || result == nil
-	var finalStatus, lastError, needUserInputPath string
-	var iterations int
-	if result != nil {
-		finalStatus = result.FinalStatus
-		iterations = result.Iterations
-		lastError = result.LastError
-		needUserInputPath = result.NeedUserInputPath
-	}
-
-	o.handleFeatureCycleDone(featureID, repoNames, "rebase", dispatchFailed, loopErr,
-		finalStatus, iterations, lastError, needUserInputPath,
-		func() {
-			// Cycle complete: clear any stale LastError on each rebased repo
-			// and clear each per-repo cycle entry. Feature-level harness
-			// conflicts route smart-rebase success through
-			// runRebaseFinalReviewAndPublishPolicy before reaching publish.
-			_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-				for _, name := range repoNames {
-					if st, ok := ff.RepoStates[name]; ok && st != nil {
-						st.LastError = ""
-					}
-				}
-				return nil
-			})
-			for _, name := range repoNames {
-				_ = o.deps.Lifecycle.CompleteRepoCycle(featureID, name)
-			}
-			o.resumePublishAfterPrePRRebase(featureID)
-		},
-		func(gate *agent.LoopResult) {
-			for _, name := range repoNames {
-				o.recordRepoCycleNeedUserInput(featureID, name, feature.CycleRebase, gate)
-			}
-			if err := o.deps.Store.Modify(featureID, func(f *feature.Feature) error {
-				if f.PendingNeedUserInputPath == gate.NeedUserInputPath {
-					f.PendingNeedUserInputPath = ""
-				}
-				return nil
-			}); err != nil {
-				for _, name := range repoNames {
-					o.failRepoCycleGatePersistence(featureID, name,
-						fmt.Errorf("rebase: clear stale feature-level need-user-input gate: %w", err))
-				}
-			}
-		},
-		nil,
-	)
-}
-
-func activeRepoCycleOfType(f *feature.Feature, repoName string, cycleType feature.RepoCycleType) bool {
-	if f == nil || repoName == "" {
-		return false
-	}
-	rc, ok := f.RepoCycles[repoName]
-	if !ok || rc == nil || rc.Type != cycleType {
-		return false
-	}
-	switch rc.Status {
-	case feature.RepoCycleRunning, feature.RepoCycleReviewing, feature.RepoCycleNeedUserInput:
-		return true
-	default:
-		return false
-	}
-}
-
-func (o *Orchestrator) resumePublishAfterPrePRRebase(featureID string) {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil || f == nil {
-		return
-	}
-	if f.Status != feature.StatusCodeReady || !f.IsPublishable() || !f.Checkpoints.AutoPublish() {
-		return
-	}
-	if f.HasActiveRepoCycles() || f.AllReposPublished() {
-		return
-	}
-	publishFn := o.publishFn
-	if publishFn == nil {
-		publishFn = o.Publish
-	}
-	_ = publishFn(featureID)
 }

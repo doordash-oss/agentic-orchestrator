@@ -450,17 +450,17 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 
 	cycleGatePath := filepath.Join(store.RunDir(f.ID, 1), "cycles", repoNameSelf, "iteration-02", "need-user-input.yaml")
 	if err := agent.WriteNeedUserInputRecord(cycleGatePath, agent.NeedUserInputRecord{
-		Summary:   "Resolve rebase conflict policy.",
+		Summary:   "Resolve review comment policy.",
 		Iteration: 2,
 		Questions: []agent.NeedUserInputQuestion{
-			{Index: 1, Prompt: "Keep branch behavior or target behavior?", Answer: "Keep branch behavior"},
+			{Index: 1, Prompt: "Reply now or leave unresolved?", Answer: "Reply now"},
 		},
 	}); err != nil {
 		t.Fatalf("WriteNeedUserInputRecord(cycle gate) error = %v", err)
 	}
 	f.RepoCycles = map[string]*feature.RepoCycleState{
 		repoNameSelf: {
-			Type:                     feature.CycleRebase,
+			Type:                     feature.CycleReviewComments,
 			Status:                   feature.RepoCycleNeedUserInput,
 			Iteration:                2,
 			PendingNeedUserInputPath: cycleGatePath,
@@ -493,11 +493,11 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 		t.Fatalf("need_user_inputs length = %d; want feature and cycle gates", len(gates))
 	}
 	cycleGate := gates[1].(map[string]any)
-	if cycleGate["repo_name"] != repoNameSelf || cycleGate["cycle_type"] != string(feature.CycleRebase) {
+	if cycleGate["repo_name"] != repoNameSelf || cycleGate["cycle_type"] != string(feature.CycleReviewComments) {
 		t.Fatalf("cycle gate routing = %+v; want repo/cycle routing", cycleGate)
 	}
 	cycleQuestions := cycleGate["questions"].([]any)
-	if len(cycleQuestions) != 1 || cycleQuestions[0].(map[string]any)["answer"] != "Keep branch behavior" {
+	if len(cycleQuestions) != 1 || cycleQuestions[0].(map[string]any)["answer"] != "Reply now" {
 		t.Fatalf("cycle gate questions = %+v", cycleQuestions)
 	}
 }
@@ -957,7 +957,7 @@ func TestFeatureDetailActionCatalogStateMatrix(t *testing.T) {
 		{
 			name: "published active cycle",
 			f: actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable, map[string]*feature.RepoCycleState{
-				repoNameSelf: {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+				repoNameSelf: {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 			}),
 			want: map[string]struct {
 				enabled      bool

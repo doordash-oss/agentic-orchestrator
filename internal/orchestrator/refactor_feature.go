@@ -47,7 +47,7 @@ type RefactorEvidence struct {
 // "" + nil on successful dispatch (no stable session ID; the inner loop
 // owns per-iteration IDs); returns ("", err) on dispatch failure.
 //
-// Mirrors startFeatureRebase / startFeatureReviewComments in shape: the
+// Mirrors startFeatureReviewComments in shape: the
 // orchestrator stamps RefactorCount + RefactorPrompt synchronously, opens
 // per-repo cycle entries for the legacy TUI rendering paths, then runs
 // the agent loop in a background goroutine tracked by cycleWG.

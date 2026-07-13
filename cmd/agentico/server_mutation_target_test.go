@@ -1811,7 +1811,7 @@ func newCleanupActionTarget(t *testing.T) (serverMutationTarget, *feature.Store,
 		ff.CurrentPhase = feature.PhasePublish
 		ff.Repos[0].WorktreePath = testRepoAWorktreePath
 		ff.RepoCycles = map[string]*feature.RepoCycleState{
-			testRepoAName: {Type: feature.CycleRebase, Status: feature.RepoCycleFailed},
+			testRepoAName: {Type: feature.CycleReviewComments, Status: feature.RepoCycleFailed},
 		}
 		return nil
 	}); err != nil {

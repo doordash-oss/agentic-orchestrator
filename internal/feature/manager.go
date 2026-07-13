@@ -905,10 +905,13 @@ func activeNonRebaseCycleType(f *Feature) RepoCycleType {
 	return f.ActiveCycleType()
 }
 
-// StartRepoCycle starts a per-repo post-publish cycle (rebase/review-comments).
+// StartRepoCycle starts a per-repo post-publish cycle.
 // The feature stays StatusPublished; only the per-repo cycle state is set.
 func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycleType) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
+		if cycleType == CycleRebase {
+			return fmt.Errorf("per-repo rebase cycles are not supported; use StartFeatureRebaseOperation")
+		}
 		if f.RepoCycles == nil {
 			f.RepoCycles = make(map[string]*RepoCycleState)
 		}
@@ -916,21 +919,10 @@ func (m *Manager) StartRepoCycle(featureID, repoName string, cycleType RepoCycle
 			return fmt.Errorf("%s is already running a %s cycle", repoName, existing.Type)
 		}
 
-		count := 1
-		switch cycleType {
-		case CycleRebase:
-			// Count existing rebase cycles for this repo
-			for _, rc := range f.RepoCycles {
-				if rc.Type == CycleRebase {
-					count++
-				}
-			}
-		}
-
 		f.RepoCycles[repoName] = &RepoCycleState{
 			Type:   cycleType,
 			Status: RepoCycleRunning,
-			Count:  count,
+			Count:  1,
 		}
 		return nil
 	})

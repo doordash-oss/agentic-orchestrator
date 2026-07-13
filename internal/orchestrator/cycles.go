@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package orchestrator owns post-publish rebase/review-comments/refactor
-// cycle lifecycle methods for multi-repo features.
+// Package orchestrator owns post-publish review-comments/refactor cycle
+// lifecycle methods for multi-repo features.
 package orchestrator
 
 import (
@@ -42,35 +42,15 @@ type RepoCycleLoopResultInput struct {
 }
 
 // StartRepoCycleImplement launches an implementation loop for a per-repo
-// post-publish cycle (rebase / review-comments). The feature stays
-// StatusPublished; cycle state is tracked in RepoCycles. planContent is the
-// pre-computed plan body: for CycleRebase it is the "extra" text
-// merged into the BuildRebasePlan template; for
-// CycleReviewComments it is the final plan markdown written verbatim. For
-// CycleRebase, conflictFiles (when non-empty) selects the
-// "rebase-already-in-progress" template in BuildRebasePlan so the agent
-// resumes the existing rebase instead of starting one from scratch.
-//
-// CycleRebase is routed to feature-level RunRebaseLoop: the per-repo entry
-// is preserved as the API for callers (TUI), but the loop expands to every
-// behind Feature.Repos branch and stamps them atomically. The repoName
-// argument is used as a hint to scope conflict files to the right repo; the
-// loop autonomously discovers any other behind branches via the Rebaser port.
+// post-publish cycle. Rebase is feature-level only; callers must use
+// StartFeatureRebase for that flow.
 //
 // Ports startRepoCycleImplementCmd (app.go:6659-6784).
 func (o *Orchestrator) StartRepoCycleImplement(
 	featureID, repoName string,
 	cycleType feature.RepoCycleType,
 	planContent string,
-	conflictFiles ...string,
 ) (string, error) {
-	if cycleType == feature.CycleRebase {
-		// The repoName + conflictFiles from the TUI's per-repo conflict callback
-		// are folded in via the behind-subset enumerator; planContent is the
-		// rebase target ref the TUI resolved before dispatching.
-		return o.startFeatureRebase(featureID, repoName, planContent, conflictFiles)
-	}
-
 	if cycleType == feature.CycleReviewComments {
 		// The repoName from the TUI is purely a hint — the loop aggregates
 		// unaddressed comments across every Feature.Repos PR. planContent is
@@ -80,119 +60,7 @@ func (o *Orchestrator) StartRepoCycleImplement(
 		return o.startFeatureReviewComments(featureID, repoName)
 	}
 
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return "", fmt.Errorf("load feature: %w", err)
-	}
-
-	// Find the repo
-	var repo *feature.FeatureRepo
-	for i := range f.Repos {
-		if f.Repos[i].Name == repoName {
-			repo = &f.Repos[i]
-			break
-		}
-	}
-	if repo == nil {
-		return "", fmt.Errorf("repo %q not found in feature", repoName)
-	}
-
-	baseDir := o.stateDir()
-	workDir := repo.WorktreePath
-	if workDir == "" {
-		workDir = repo.Path
-	}
-
-	// Start the per-repo cycle FIRST to set the count for enumerated dir names
-	if err := o.deps.Lifecycle.StartRepoCycle(featureID, repoName, cycleType); err != nil {
-		return "", fmt.Errorf("start cycle: %w", err)
-	}
-
-	// Re-read to get the cycle count
-	f, err = o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return "", fmt.Errorf("reload feature: %w", err)
-	}
-	var cycleCount int
-	if rc, ok := f.RepoCycles[repoName]; ok {
-		cycleCount = rc.Count
-	}
-	cycleDirName := feature.RepoCycleDirName(cycleType, cycleCount)
-	cycleBaseDir := filepath.Join(agent.ActiveRunDir(baseDir, f), cycleDirName, repoName)
-
-	// Build plan in the enumerated cycle directory (e.g. review-comments-1/<repoName>/).
-	// Note: CycleRebase is intercepted at the top of this method and routed
-	// to the unified feature-level loop; only ReviewComments still
-	// uses the per-repo cycle subdir under slices 5-7.
-	var planDir, planPath string
-	switch cycleType {
-	case feature.CycleReviewComments:
-		planDir = cycleBaseDir
-		_ = os.MkdirAll(planDir, 0o755)
-		planPath = filepath.Join(planDir, "review-plan.md")
-		// planContent is the full plan content for review comments
-		_ = os.WriteFile(planPath, []byte(planContent), 0o644)
-	}
-	_ = o.deps.Lifecycle.SetRepoCyclePlanPath(featureID, repoName, planPath)
-
-	// Build KBInfos for the repo
-	kbInfos := o.computeKBInfos(f)
-
-	// Build artifact dir for this cycle (same as plan dir)
-	artifactDir := cycleBaseDir
-	_ = os.MkdirAll(artifactDir, 0o755)
-
-	pr := o.deps.PhaseRunner
-	if pr == nil {
-		return "", errors.New("phase runner not configured")
-	}
-
-	cfg := agent.ImplementConfig{
-		Feature:                    f,
-		FeatureStore:               o.deps.Store,
-		WorkDir:                    workDir,
-		PlanPath:                   planPath,
-		KBInfos:                    kbInfos,
-		MaxIterations:              f.MaxIterations,
-		MaxConsecFails:             3,
-		MaxConsecNoProgress:        3,
-		ExitCriteria:               f.ExitCriteria,
-		Model:                      f.Models.Implementation,
-		ReviewModel:                f.Models.Review,
-		ArtifactDir:                artifactDir,
-		StateDir:                   filepath.Join(baseDir, featureID),
-		RepoName:                   repoName,
-		DesignArtifactPath:         f.DesignArtifactPath(),
-		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
-		PermissionCache:            pr.PermissionCache,
-		BuildSession:               pr.BuildSession,
-		AskingClause:               pr.AskingClauseForModel(f.Models.Implementation),
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
-		SkillsDir:                  pr.SkillsDir,
-		GuidelinesDir:              pr.GuidelinesDir,
-		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
-		Observer:                   pr.Observer,
-	}
-
-	sm := o.deps.Sessions
-	o.cycleWG.Go(func() {
-		result, loopErr := agent.RunImplementationLoop(cfg, sm)
-		if loopErr != nil {
-			if result == nil {
-				result = &agent.LoopResult{}
-			}
-			result.FinalStatus = finalStatusLoopError
-			result.LastError = loopErr.Error()
-		}
-		_ = o.HandleRepoCycleLoopDone(featureID, RepoCycleLoopResultInput{
-			RepoName: repoName,
-			Result:   result,
-		})
-	})
-
-	// No stable session ID for iteration-based loops; the loop owns the
-	// per-iteration IDs via BuildSession.
-	return "", nil
+	return "", fmt.Errorf("unsupported repo implementation cycle %q", cycleType)
 }
 
 // HandleRepoCycleLoopDone processes the completion of a per-repo cycle
@@ -249,12 +117,9 @@ func cycleTypeForRepo(o *Orchestrator, featureID, repoName string) feature.RepoC
 
 // restartPausedRepoCycle dispatches a paused cycle to its cycle-type-specific
 // restart seam. The cycle entry's Type is the source of truth; UI hints in
-// the decision record are diagnostic only. Loop-based cycles (rebase /
-// review-comments) re-enter through restartRepoCycleImplement; refactor
-// re-enters through restartRefactorRepoCycle (the gate-only sibling of
-// RestartRefactorCycle that bypasses the concurrent-refactor guard and the
-// StartRepoCycle re-init so the existing entry is reused in place). Cycle
-// Count and PlanPath survive the round-trip on every type.
+// the decision record are diagnostic only. Review-comments re-enters through
+// restartRepoCycleImplement; refactor re-enters through restartRefactorRepoCycle.
+// Cycle Count and PlanPath survive the round-trip on every type.
 func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -265,8 +130,6 @@ func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error 
 		return fmt.Errorf("no cycle entry for repo %q", repoName)
 	}
 	switch rc.Type {
-	case feature.CycleRebase:
-		return o.restartPausedFeatureRebase(featureID, repoName)
 	case feature.CycleReviewComments:
 		_, err := o.restartRepoCycleImplement(featureID, repoName, rc)
 		return err
@@ -275,71 +138,6 @@ func (o *Orchestrator) restartPausedRepoCycle(featureID, repoName string) error 
 	default:
 		return fmt.Errorf("unsupported cycle type %q for repo %q", rc.Type, repoName)
 	}
-}
-
-// restartPausedFeatureRebase re-launches the unified rebase loop after an
-// answered NEED_USER_INPUT gate. Unlike legacy per-repo cycle restarts, rebase
-// owns every behind repo in one flat artifact directory, so resume must route
-// through RunRebaseLoop with ResumeExistingCycle rather than the generic
-// per-repo RunImplementationLoop wrapper.
-func (o *Orchestrator) restartPausedFeatureRebase(featureID, repoName string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
-	if err != nil {
-		return fmt.Errorf("load feature: %w", err)
-	}
-	behind, err := o.activeRebaseTargets(f)
-	if err != nil {
-		return err
-	}
-	if len(behind) == 0 {
-		return fmt.Errorf("no active rebase cycles to resume for repo %q", repoName)
-	}
-
-	cfg, err := o.rebaseLoopConfigForFeature(f, behind, true)
-	if err != nil {
-		return err
-	}
-
-	sm := o.deps.Sessions
-	o.cycleWG.Go(func() {
-		runRebaseLoop := o.runRebaseLoopFn
-		if runRebaseLoop == nil {
-			runRebaseLoop = agent.RunRebaseLoop
-		}
-		result, loopErr := runRebaseLoop(cfg, sm)
-		o.handleFeatureRebaseDone(featureID, behind, result, loopErr)
-	})
-	return nil
-}
-
-func (o *Orchestrator) activeRebaseTargets(f *feature.Feature) ([]agent.RebaseRepoTarget, error) {
-	if f == nil {
-		return nil, errors.New("feature is nil")
-	}
-	prURLs := f.PRURLs()
-	var out []agent.RebaseRepoTarget
-	for i := range f.Repos {
-		repo := &f.Repos[i]
-		rc, ok := f.RepoCycles[repo.Name]
-		if !ok || rc == nil || rc.Type != feature.CycleRebase {
-			continue
-		}
-		switch rc.Status {
-		case feature.RepoCycleRunning, feature.RepoCycleNeedUserInput:
-		default:
-			continue
-		}
-		target := o.resolveRebaseTarget(f, repo)
-		if target == "" {
-			return nil, fmt.Errorf("resolve rebase target for repo %q", repo.Name)
-		}
-		out = append(out, agent.RebaseRepoTarget{
-			RepoName:     repo.Name,
-			RebaseTarget: target,
-			PRURL:        prURLs[repo.Name],
-		})
-	}
-	return out, nil
 }
 
 // restartRefactorRepoCycle re-launches a refactor loop for a paused refactor
@@ -379,10 +177,10 @@ func (o *Orchestrator) restartRefactorRepoCycle(featureID, repoName string, rc *
 }
 
 // restartRepoCycleImplement re-launches an autonomous cycle implementation
-// loop for a paused rebase / review-comments cycle. Reuses the persisted
-// PlanPath and Count rather than calling StartRepoCycle (which would
-// increment the count and enumerate a new directory). Returns the session
-// id (always "" for loop-based cycles) and any launch error.
+// loop for a paused review-comments cycle. Reuses the persisted PlanPath and
+// Count rather than calling StartRepoCycle (which would increment the count
+// and enumerate a new directory). Returns the session id (always "" for
+// loop-based cycles) and any launch error.
 func (o *Orchestrator) restartRepoCycleImplement(featureID, repoName string, rc *feature.RepoCycleState) (string, error) {
 	if rc == nil {
 		return "", fmt.Errorf("nil cycle state for repo %q", repoName)
@@ -579,8 +377,8 @@ func (o *Orchestrator) failCycleAcrossRepos(featureID, errMsg string) error {
 }
 
 // CompleteRepoCycle finalizes a per-repo post-publish cycle by dispatching
-// to the cycle-type-specific finalization (commit + push/force-push +
-// CompleteRepoCycle/CompleteRefactor). All failures call FailRepoCycle.
+// to the cycle-type-specific finalization. Rebase completion is owned by the
+// feature-level rebase publish policy.
 //
 // Ports completeRebaseRepoCycleCmd (app.go:6870-6901) and
 // completeReviewCommentsRepoCycleCmd (app.go:6944-6982).
@@ -633,36 +431,6 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 	}
 
 	switch cycleType {
-	case feature.CycleRebase:
-		// Guard: refuse to complete the rebase cycle if the worktree is still
-		// mid-rebase. The agent may have resolved files but never run
-		// `git rebase --continue`, in which case the branch pointer is still
-		// stale; force-pushing now would push the pre-rebase head and silently
-		// leave the PR in its unmerged state.
-		if o.deps.Rebaser != nil {
-			if inProgress, _ := o.deps.Rebaser.RebaseInProgress(workDir); inProgress {
-				_ = o.deps.Lifecycle.FailRepoCycle(featureID, repoName, ErrRebaseIncomplete.Error())
-				return fmt.Errorf("complete repo cycle: %w", ErrRebaseIncomplete)
-			}
-		}
-		// Commit any leftover conflict resolutions, then force-push.
-		commitAll("Resolve rebase conflicts")
-		if o.deps.Rebaser != nil {
-			if err := o.deps.Rebaser.ForcePush(workDir, branch); err != nil {
-				_ = o.deps.Lifecycle.FailRepoCycle(featureID, repoName, "force push: "+err.Error())
-				return fmt.Errorf("force push: %w", err)
-			}
-		}
-		// The feature stays StatusPublished — post-publish rebase cycle state
-		// lives in RepoCycles[repoName] and is cleared by CompleteRepoCycle.
-		// Promoting the feature to StatusCodeReady here would regress
-		// published-only flows (review-comments, subsequent cycles) and
-		// contradicts the unified per-repo cycle model.
-		if err := o.deps.Lifecycle.CompleteRepoCycle(featureID, repoName); err != nil {
-			return fmt.Errorf("complete repo cycle: %w", err)
-		}
-		return nil
-
 	case feature.CycleReviewComments:
 		commitAll("Address review comments")
 		pullRebase()
@@ -683,11 +451,7 @@ func (o *Orchestrator) CompleteRepoCycle(featureID, repoName string) error {
 		return o.CompleteRefactorRepoCycle(featureID, repoName)
 	}
 
-	// Unknown cycle type — best-effort cycle completion.
-	if err := o.deps.Lifecycle.CompleteRepoCycle(featureID, repoName); err != nil {
-		return fmt.Errorf("complete repo cycle: %w", err)
-	}
-	return nil
+	return fmt.Errorf("unsupported repo cycle type %q for repo %q", cycleType, repoName)
 }
 
 // DispatchRepoCycle is the top-level entry point for launching any per-repo
@@ -702,7 +466,7 @@ func (o *Orchestrator) DispatchRepoCycle(
 	planContent string,
 ) (string, error) {
 	switch cycleType {
-	case feature.CycleRebase, feature.CycleReviewComments:
+	case feature.CycleReviewComments:
 		return o.StartRepoCycleImplement(featureID, repoName, cycleType, planContent)
 	case feature.CycleRefactor:
 		// Refactor cycles are launched via StartRefactorCycle — DispatchRepoCycle

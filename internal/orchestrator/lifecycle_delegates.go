@@ -680,7 +680,7 @@ func (o *Orchestrator) ExtendFailedPhaseBudget(featureID string, maxIterationsDe
 	})
 }
 
-// RepoCycleRestart describes one non-refactor repo cycle that needs to be
+// RepoCycleRestart describes one review-comments repo cycle that needs to be
 // re-launched after a restart. The TUI consumes these and dispatches a
 // restartRepoCycleMsg for each.
 type RepoCycleRestart struct {
@@ -698,9 +698,9 @@ type RefactorRestart struct {
 }
 
 // CollectAndClearRepoCycleRestarts snapshots the feature's RepoCycles map,
-// reads each cycle's plan file from disk, clears the cycle state, and returns
-// per-cycle restart descriptors the TUI must dispatch. At most one refactor
-// cycle is returned (only one refactor runs at a time).
+// reads each review-comments cycle's plan file from disk, clears the cycle
+// state, and returns restart descriptors the TUI must dispatch. At most one
+// refactor cycle is returned (only one refactor runs at a time).
 func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]RepoCycleRestart, *RefactorRestart, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -739,7 +739,7 @@ func (o *Orchestrator) CollectAndClearRepoCycleRestarts(featureID string) ([]Rep
 				RepoName: c.repoName,
 				Prompt:   prompt,
 			}
-		default:
+		case feature.CycleReviewComments:
 			data, _ := os.ReadFile(c.planPath)
 			restarts = append(restarts, RepoCycleRestart{
 				RepoName:    c.repoName,

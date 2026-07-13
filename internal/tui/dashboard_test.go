@@ -513,7 +513,7 @@ func TestDashboardAttentionOnlyCountsPending(t *testing.T) {
 			Status: feature.StatusPublished, Created: time.Now().Add(-5 * time.Hour),
 			RepoCycles: map[string]*feature.RepoCycleState{
 				"api": {
-					Type:                     feature.CycleRebase,
+					Type:                     feature.CycleReviewComments,
 					Status:                   feature.RepoCycleNeedUserInput,
 					PendingNeedUserInputPath: "/tmp/api/need-user-input.yaml",
 				},
@@ -572,7 +572,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			f: &feature.Feature{
 				ID: "cycle", Name: "cycle", Slug: "cycle", Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleNeedUserInput, PendingNeedUserInputPath: "/tmp/gate.yaml"},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleNeedUserInput, PendingNeedUserInputPath: "/tmp/gate.yaml"},
 				},
 			},
 			wantAwait: true,
@@ -587,7 +587,7 @@ func TestDashboardFeatureRowUsesAwaitingGlyphForAttentionStates(t *testing.T) {
 			f: &feature.Feature{
 				ID: "active-cycle", Name: "active-cycle", Slug: "active-cycle", Status: feature.StatusPublished,
 				RepoCycles: map[string]*feature.RepoCycleState{
-					"api": {Type: feature.CycleRebase, Status: feature.RepoCycleRunning},
+					"api": {Type: feature.CycleReviewComments, Status: feature.RepoCycleRunning},
 				},
 			},
 			wantSpinner: true,
@@ -1675,7 +1675,7 @@ func TestActivePublishedCycleStatus_NoSuffixForSingleRepo(t *testing.T) {
 		Status: feature.StatusPublished,
 		Repos:  []feature.FeatureRepo{{Name: "payments"}},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"payments": {Type: feature.CycleRebase, Status: "running"},
+			"payments": {Type: feature.CycleReviewComments, Status: "running"},
 		},
 	}
 	label, _, ok := activePublishedCycleStatus(f)
@@ -1723,7 +1723,7 @@ func TestActivePublishedCycleStatus_SuffixForMultiRepo(t *testing.T) {
 		Status: feature.StatusPublished,
 		Repos:  []feature.FeatureRepo{{Name: "payments"}, {Name: "worker"}},
 		RepoCycles: map[string]*feature.RepoCycleState{
-			"payments": {Type: feature.CycleRebase, Status: "running"},
+			"payments": {Type: feature.CycleReviewComments, Status: "running"},
 		},
 	}
 	label, _, ok := activePublishedCycleStatus(f)
